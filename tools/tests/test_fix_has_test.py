@@ -40,6 +40,13 @@ def test_test_files():
     assert gate.test_files(["docs/testing.md", "src/latest.py"]) == []
 
 
+def test_the_gate_itself_is_not_a_test_file():
+    # its name ends in _test.py: a fix to the gate alone used to count as shipping a test
+    assert gate.test_files(["tools/fix_has_test.py"]) == []
+    problems, _ = gate.check([gate.Commit("a" * 40, "fix: gate", ["tools/fix_has_test.py"])])
+    assert problems and "a fix without a regression test" in problems[0]
+
+
 def test_check_classifies_commits():
     commits = [
         gate.Commit("a" * 40, "fix: no test", ["homelabnext/x.py"]),

@@ -55,6 +55,10 @@ FIXES_TRAILER = re.compile(r"^Fixes:\s*\S", re.M | re.I)
 WAIVER = re.compile(r"^No-regression-test:[ \t]*(?P<why>\S.{7,})$", re.M | re.I)
 TEST_PATH = re.compile(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|_test\.py$")
 TEST_MODULE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
+#: files whose names look like tests but are not: this gate's own source ends in ``_test.py``, so
+#: a fix to the gate counted as shipping a test (itself), and --prove staged the fixed gate on the
+#: parent and collected its helper functions as tests
+NOT_TESTS = frozenset({"tools/fix_has_test.py"})
 
 
 @dataclass
@@ -83,7 +87,7 @@ def waiver(message: str) -> str | None:
 
 
 def test_files(files: list[str]) -> list[str]:
-    return [f for f in files if TEST_PATH.search(f)]
+    return [f for f in files if TEST_PATH.search(f) and f not in NOT_TESTS]
 
 
 def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
