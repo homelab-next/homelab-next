@@ -147,6 +147,39 @@ def test_an_event_file_that_sets_a_key_twice_is_refused(lab):
         load_register(lab / "lessons")
 
 
+def test_an_event_file_with_an_unhashable_key_is_a_problem_not_a_crash(lab):
+    d = lab / "lessons" / evd("LL-005")
+    (d / "20261020T093000Z-recurrence-agent-example-checker.yml").write_text("? [a]\n: 1\n")
+    problems = []
+    ev.read_events(d, problems)
+    assert any("found unhashable key" in p for p in problems), problems
+    with pytest.raises(RegisterError, match="found unhashable key"):
+        load_register(lab / "lessons")
+
+
+def test_a_record_with_an_unhashable_key_is_a_problem_not_a_crash():
+    problems = []
+    assert records.parse_record("---\n? [a]\n: 1\n---\nbody\n", "x.md", "lessons", problems) is None
+    assert any("found unhashable key" in p for p in problems), problems
+
+
+def test_a_single_file_register_with_an_unhashable_key_is_refused(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text("? [a]\n: 1\n")
+    with pytest.raises(RegisterError, match="found unhashable key"):
+        load_register(reg, "invariants")
+
+
+def test_the_unique_key_loaders_report_an_unhashable_key_as_a_yaml_error():
+    import yaml
+
+    from homelabnext._yaml import UniqueKeyLoader, UniqueKeyStrDateLoader
+
+    for loader in (UniqueKeyLoader, UniqueKeyStrDateLoader):
+        with pytest.raises(yaml.YAMLError, match="found unhashable key"):
+            yaml.load("? [a]\n: 1\n", Loader=loader)
+
+
 def test_a_single_file_register_that_sets_a_key_twice_is_refused(tmp_path):
     reg = tmp_path / "invariants.yml"
     text = (REPO / "examples/registers/invariants.yml").read_text()
