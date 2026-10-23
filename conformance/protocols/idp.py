@@ -6,13 +6,22 @@ product (OIDC provider, signed JWTs, opaque introspection), a token that was alt
 revoked, empty or garbage is *always* ``InvalidToken`` - never a crash, never accepted, whether
 or not a scope is required.
 
-Scopes are opaque tokens - the grammar of an OAuth ``scope`` (RFC 6749 section 3.3), which a JWT
-carries space-delimited: each is a non-empty string with no whitespace, compared exactly and
-case-sensitively, and a token holds a set of them.  ``issue`` refuses an empty scope or one that
-contains whitespace (``"read admin"`` would read back as two scopes, ``admin`` among them).
-``required_scope`` names one scope exactly: it is granted only when it is one of the token's
-scopes - never by matching part of one, or another case of one - so ``""``, ``"READ"`` for
-``read`` and ``"read admin"`` are each ``Forbidden`` for every valid token.
+Scopes are opaque tokens with the grammar of an OAuth ``scope-token`` (RFC 6749 section 3.3,
+``1*( %x21 / %x23-5B / %x5D-7E )``), which a JWT carries space-delimited: printable ASCII with no
+space, compared exactly - codepoint for codepoint, case-sensitive, no Unicode normalisation - and
+a token holds a set of them.  ``issue`` takes a list of them: it refuses a scope outside that
+grammar (``""``, ``"read admin"``, which would read back as two scopes, a fullwidth look-alike of
+``read``) with ``ValueError``, and a bare string for the list (``"read"`` is not ``['read']``,
+and never ``('r', 'e', 'a', 'd')``) with ``TypeError`` or ``ValueError``.  ``required_scope`` names
+one scope exactly: it is granted only when it is one of the token's scopes - never by matching
+part of one, another case or another normalisation of one - so ``"READ"`` for ``read`` is
+``Forbidden``; a required scope outside the grammar (``""``, ``" read"``, ``"read admin"``) is
+never granted (``Forbidden``, or ``ValueError`` for a misconfigured route).  A forged token is
+``InvalidToken`` whatever scope is required: the signature is checked before any claim is read.
+
+A provider that adds default scopes to every token (Keycloak adds ``profile`` and ``email``, and
+``openid`` where requested, unless the client's default client scopes are removed) returns more
+scopes than were asked for, and fails the exact round trip; configure the test client without them.
 
 Expiry allows at most one second of leeway: a token must fail to verify once one second has
 passed beyond its ttl, so a JWT library's clock-skew allowance must be configured at or below 1s.

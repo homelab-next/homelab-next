@@ -90,6 +90,9 @@ REVIEWED = {
         "empty-scope-is-no-scope",
         "scope-case-insensitive",
         "space-delimited-scopes",
+        "bare-string-scopes-split-into-characters",
+        "bare-string-scopes-split-on-spaces",
+        "scope-checked-before-signature",
     },
     "lake-query": {"interpolated-params"},
     "object-store": {
@@ -173,6 +176,15 @@ def test_the_reference_idp_refuses_a_ttl_that_never_ends():
     for ttl in (float("nan"), float("inf")):
         with pytest.raises(ValueError):
             p.issue("user", ["read"], ttl)
+
+
+def test_the_reference_idp_refuses_a_bare_string_for_the_scope_list():
+    """``issue("u", "read", ttl)`` granted the scopes ``('r', 'e', 'a', 'd')``, so a check for
+    ``r`` passed; a bare string is now refused."""
+    from conformance.fakes.identity import FakeIdentityProvider
+
+    with pytest.raises(TypeError):
+        FakeIdentityProvider().issue("user", "read", 60)
 
 
 def test_the_reference_secret_store_refuses_a_lease_that_never_ends():

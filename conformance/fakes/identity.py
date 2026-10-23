@@ -9,9 +9,12 @@ import hashlib
 import hmac
 import json
 import math
+import re
 from collections.abc import Callable, Sequence
 
 from conformance.protocols.idp import Claims, Forbidden, InvalidToken
+
+_SCOPE_TOKEN = re.compile(r"[\x21\x23-\x5b\x5d-\x7e]+")
 
 
 def _b64(raw: bytes) -> str:
@@ -48,10 +51,14 @@ class FakeIdentityProvider:
 
     @staticmethod
     def _check_scopes(scopes: Sequence[str]) -> None:
-        # opaque OAuth scope tokens: a space inside one would read back as two scopes
+        # a bare str is a sequence of characters: refused, never read as ('r', 'e', 'a', 'd')
+        if isinstance(scopes, str | bytes):
+            raise TypeError("scopes is a list of scope tokens, not a string")
+        # RFC 6749 section 3.3 scope-token: 1*( %x21 / %x23-5B / %x5D-7E ), so no whitespace (a
+        # space inside one would read back as two scopes) and no non-ASCII look-alike
         for s in scopes:
-            if not isinstance(s, str) or not s or any(c.isspace() for c in s):
-                raise ValueError("a scope is a non-empty string with no whitespace")
+            if not isinstance(s, str) or not _SCOPE_TOKEN.fullmatch(s):
+                raise ValueError("a scope is an RFC 6749 scope-token: printable ASCII, no space")
 
     def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
         if not subject:
@@ -234,3 +241,36 @@ class SpaceDelimitedScopeIdentityProvider(FakeIdentityProvider):
         if required_scope is not None and required_scope not in held:
             raise Forbidden(f"missing scope {required_scope!r}")
         return claims
+
+
+class CharacterScopesIdentityProvider(FakeIdentityProvider):
+    """Defect (the reference fake did this): a bare string is taken as the scope list, so
+    ``issue("u", "read", ttl)`` grants the scopes ``('r', 'e', 'a', 'd')``."""
+
+    @staticmethod
+    def _check_scopes(scopes: Sequence[str]) -> None:
+        FakeIdentityProvider._check_scopes(list(scopes))
+
+
+class OAuthStringScopesIdentityProvider(FakeIdentityProvider):
+    """Defect: ``issue`` accepts the OAuth wire form, one space-delimited string, for the scope
+    list (``"read admin"`` -> ``('read', 'admin')``)."""
+
+    def issue(self, subject: str, scopes: Sequence[str], ttl: float) -> str:
+        return super().issue(subject, scopes.split() if isinstance(scopes, str) else scopes, ttl)
+
+
+class ScopeBeforeSignatureIdentityProvider(FakeIdentityProvider):
+    """Defect: a scope gate reads the unverified payload before the signature is checked (the
+    ``verify_signature=False`` routing idiom), so a forged token lacking the scope is Forbidden
+    instead of InvalidToken."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        if required_scope is not None and isinstance(token, str) and token.count(".") == 2:
+            try:
+                body = self._parse(token.split(".")[1])
+            except InvalidToken:
+                body = None
+            if isinstance(body, dict) and required_scope not in body.get("scp", []):
+                raise Forbidden(f"missing scope {required_scope!r}")
+        return super().verify(token, required_scope)
