@@ -610,13 +610,16 @@ def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
     generated configs must stay covered: a generator change that made every registry fail
     would otherwise read as a clean run with nothing generated."""
     out, err = io.StringIO(), io.StringIO()
-    assert lint.main([str(REPO), "--json"], out=out, err=err) == 0, out.getvalue()
+    # with a caddy binary, one scan also runs the semantic check (CI's test job has none)
+    caddy = ["--caddy", CADDY_BIN] if CADDY_BIN else []
+    assert lint.main([str(REPO), "--json", *caddy], out=out, err=err) == 0, out.getvalue()
     doc = json.loads(out.getvalue())
     # a git checkout lists its files with git; an export (sdist, git archive) is walked
     assert doc["findings"] == [] and doc["discovery"] == (
         "git" if (REPO / ".git").exists() else "walk"
     )
     assert doc["generated"] >= 6
+    assert doc["adapted"] >= (7 if CADDY_BIN else 0)
 
 
 # ---------------------------------------------------------------- a path past the auth route
@@ -1667,11 +1670,246 @@ def test_live_caddy_adapt(text, rules):
     assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == rules
 
 
-@live
-def test_live_the_tree_passes_the_semantic_check():
-    out, err = io.StringIO(), io.StringIO()
-    assert lint.main([str(REPO), "--json", "--caddy", CADDY_BIN], out=out, err=err) == 0, (
-        out.getvalue()
+# ---------------------------------------------------------------- review round 3 (VERIFY2)
+
+R3 = """\
+(hnx_forward_auth) {
+	route {
+		request_header -*authentik*
+		forward_auth %s {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+}
+app.lab.example {
+	request_header -*authentik*
+	import hnx_forward_auth
+	%s
+}
+"""
+
+
+def _r3(body: str, idp: str = "idp:9443") -> list[tuple[str, int]]:
+    return [(f.rule, f.line) for f in lint.lint_caddy(R3 % (idp, body))]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # VERIFY2 SF1: a * field rewrites the IdP's X-Authentik-Username with the client's value
+        # (live on 2.11.7 and 2.11.1: the upstream got X-Authentik-Username: forged-evil)
+        ("reverse_proxy app:8080 {\n\t\theader_up * alice {http.request.header.X-Evil}\n\t}", [("reset", 14)]),
+        ("route {\n\t\trequest_header * * alice {http.request.header.X-Evil}\n\t}\n\treverse_proxy app:8080", [("reset", 14)]),
+        ("reverse_proxy app:8080 {\n\t\theader_up X-Auth* ^.*$ {header.X-Evil}\n\t}", [("reset", 14)]),
+        # a wildcard that cannot match an identity header, or a literal value, is not one
+        ("reverse_proxy app:8080 {\n\t\theader_up X-Request-* a {header.X-Evil}\n\t}", []),
+        ("reverse_proxy app:8080 {\n\t\theader_up * http:// https://\n\t}", []),
+    ],
+)  # fmt: skip
+def test_a_wildcard_field_with_a_placeholder_value_is_a_reset(body, expected):
+    assert _r3(body) == expected
+
+
+@pytest.mark.parametrize(
+    ("idp", "body", "expected"),
+    [
+        # VERIFY2 SF2: the client picks the IdP (live: mallory/admins from the attacker's IdP)
+        ("{http.request.header.X-Idp}", "reverse_proxy app:8080", [("dial", 4)]),
+        ("{query.idp}", "reverse_proxy app:8080", [("dial", 4)]),
+        # the IdP's identity headers sent to a host the client picks
+        ("idp:9443", "reverse_proxy {http.request.header.X-Upstream}", [("dial", 13)]),
+        ("idp:9443", "reverse_proxy {\n\t\tto {header.X-To}\n\t}", [("dial", 13)]),
+        # an operator's environment is not the client's
+        ("{$IDP_DIAL}", "reverse_proxy {$APP_DIAL} {env.APP_BACKUP}", []),
+    ],
+)  # fmt: skip
+def test_a_dial_the_request_chooses_is_a_finding(idp, body, expected):
+    assert _r3(body, idp) == expected
+
+
+def test_a_placeholder_dial_outside_a_forward_auth_site_is_not_this_rule():
+    assert (
+        lint.lint_caddy("app.lab.example {\n\treverse_proxy {http.request.header.X-U}\n}\n") == []
     )
-    doc = json.loads(out.getvalue())
-    assert doc["adapted"] >= 7 and doc["findings"] == []
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # VERIFY2 SF3: live, the FastCGI app got HTTP_X_AUTHENTIK_EMAIL and REMOTE_USER = forged-evil
+        ("reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv HTTP_X_AUTHENTIK_EMAIL {http.request.header.X-Evil}\n\t\t\tenv REMOTE_USER {http.request.header.X-Evil}\n\t\t}\n\t}",
+         [("reset", 15), ("reset", 16)]),
+        ("php_fastcgi app:9000 {\n\t\tenv HTTP_X_AUTHENTIK_EMAIL x\n\t}", [("reset", 14)]),
+        ("php_fastcgi app:9000 {\n\t\tenv AUTH_TYPE Basic\n\t}", [("reset", 14)]),
+        ("php_fastcgi app:9000 {\n\t\tenv APP_THEME {header.X-Theme}\n\t}", [("reset", 14)]),
+        # an ordinary variable with an operator value is fine
+        ("php_fastcgi app:9000 {\n\t\tenv APP_ENV production\n\t\tenv DB_PASS {env.DB_PASS}\n\t}", []),
+    ],
+)  # fmt: skip
+def test_a_fastcgi_identity_variable_or_client_value_is_a_reset(body, expected):
+    assert _r3(body) == expected
+
+
+EXPOSED = """\
+(hnx_forward_auth) {
+	route {
+		request_header -*authentik*
+		forward_auth authentik-server:9000 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+}
+authentik.lab.example {
+	reverse_proxy authentik-server:9000
+}
+a.lab.example {
+	request_header -*authentik*
+	reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
+	import hnx_forward_auth
+	reverse_proxy http://app:8080
+}
+%s {
+	reverse_proxy app:8080
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("site", "expected"),
+    [
+        # VERIFY2 SF6: the same app on another host or listener, without auth (live: the
+        # client's forged identity reached the upstream through b.test and through :19104)
+        ("b.lab.example", [("exposure", 20)]),
+        ("http://:8081", [("exposure", 20)]),
+        # a path-scoped block of the same host: Caddy 2.11.7 orders it first (more specific), so
+        # /api/ never reaches forward_auth
+        ("a.lab.example/api/*", [("exposure", 20)]),
+    ],
+)
+def test_an_authed_upstream_served_again_without_auth_is_exposure(site, expected):
+    assert [(f.rule, f.line) for f in lint.lint_caddy(EXPOSED % site)] == expected
+
+
+def test_exposure_is_excused_only_by_an_allowlist_entry_naming_it(tmp_path):
+    (tmp_path / "Caddyfile").write_text(EXPOSED % "b.lab.example")
+    allow = tmp_path / "allow.yml"
+    allow.write_text(
+        "allow:\n  - path: Caddyfile\n    rules: [exposure]\n    reason: b is a public status page\n"
+    )
+    assert lint.scan(tmp_path, lint.load_allowlist(allow))[0] == []
+    allow.write_text("allow:\n  - path: Caddyfile\n    rules: [reset]\n    reason: wrong rule\n")
+    assert {f.rule for f in lint.scan(tmp_path, lint.load_allowlist(allow))[0]} == {
+        "exposure",
+        "allowlist",
+    }
+
+
+def _json_site(*handlers: dict, host: str = "app.lab.example") -> dict:
+    return _route(_sub(_route(*handlers)), match=[{"host": [host]}], terminal=True)
+
+
+def test_json_wildcard_dial_fastcgi_and_exposure():
+    star = _proxy(
+        replace={"*": [{"search_regexp": "alice", "replace": "{http.request.header.X-Evil}"}]}
+    )
+    assert [
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), star)))
+    ] == ["reset"]
+    idp = _fa(*IDS, dial="{http.request.header.X-Idp}")
+    assert [
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), idp, _proxy())))
+    ] == ["dial"]
+    fcgi = _proxy("app:9000")
+    fcgi["transport"] = {
+        "protocol": "fastcgi",
+        "env": {"REMOTE_USER": "{http.request.header.X-Evil}"},
+    }
+    assert [
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi)))
+    ] == ["reset"]
+    authed = _json_site(_del("*authentik*"), _fa(*IDS), _proxy("app:8080"))
+    other = _json_site(_proxy("app:8080"), host="b.lab.example")
+    idp_site = _json_site(_proxy("idp:9443"), host="login.lab.example")
+    assert [r for r, _ in lint.judge_json(_config(authed, other, idp_site))] == ["exposure"]
+
+
+def test_json_identity_sets_nested_in_handle_response_are_judged():
+    """VERIFY2 SF4: a subroute or an invoke inside the auth's handle_response, and intercept's
+    handle_response, were never walked (live: X-Authentik-Groups: forged-evil)."""
+    evil = {
+        "handle": [
+            {
+                "handler": "headers",
+                "request": {"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}},
+            }
+        ]
+    }
+    nested = _fa(*IDS)
+    nested["handle_response"][0]["routes"].append({"handle": [_sub(evil)]})
+    assert [
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), nested, _proxy())))
+    ] == ["reset"]
+    invoked = _fa(*IDS)
+    invoked["handle_response"][0]["routes"].append(
+        {"handle": [{"handler": "invoke", "name": "setid"}]}
+    )
+    doc = _config(_json_site(_del("*authentik*"), invoked, _proxy()), named_routes={"setid": evil})
+    assert [r for r, _ in lint.judge_json(doc)] == ["reset"]
+    intercept = {"handler": "intercept", "handle_response": [{"routes": [evil]}]}
+    doc = _config(_json_site(_del("*authentik*"), _fa(*IDS), intercept, _proxy()))
+    assert [r for r, _ in lint.judge_json(doc)] == ["reset"]
+
+
+def test_a_handle_response_that_copies_nothing_is_not_a_forward_auth():
+    """VERIFY2 SF5: X-Accel-Redirect (a reverse_proxy whose handle_response serves a file) was
+    read as a forward_auth with no strip before it."""
+    accel = _proxy("app:8000")
+    accel["handle_response"] = [{"match": {"headers": {"X-Accel-Redirect": ["*"]}}, "routes": [
+        {"handle": [{"handler": "rewrite", "uri": "{http.reverse_proxy.header.X-Accel-Redirect}"},
+                    {"handler": "file_server", "root": "/srv/protected"}]}]}]  # fmt: skip
+    assert lint.judge_json(_config(_json_site(accel))) == []
+
+
+ACCEL = """\
+app.lab.example {
+	reverse_proxy app:8000 {
+		@accel header X-Accel-Redirect *
+		handle_response @accel {
+			root * /srv/protected
+			rewrite * {rp.header.X-Accel-Redirect}
+			file_server
+		}
+	}
+}
+"""
+
+
+def test_a_comment_does_not_make_a_template_and_a_required_check_refuses_a_template(tmp_path):
+    """VERIFY2 N1: `# see ${DOCS}` turned the semantic check off for the file, silently."""
+    assert not lint._templated(GOOD + "# see ${DOCS} and {{ x }}\n")
+    assert lint._templated(GOOD.replace("idp:9443", "{{ idp }}"))
+    (tmp_path / "Caddyfile.j2").write_text(GOOD.replace("idp:9443", "{{ idp }}"))
+    (tmp_path / "Caddyfile").write_text(GOOD + "# see ${DOCS}\n")
+    adapter = lint.Adapter(_fake_caddy(tmp_path, _config(AUTH_ROUTE)))
+    found, counts = lint.scan(tmp_path, adapter=adapter)
+    assert found == [] and counts["adapted"] == 1 and counts["text_only"] == 1
+    found, _ = lint.scan(tmp_path, adapter=adapter, required=True)
+    assert [(f.path, f.rule) for f in found] == [("Caddyfile.j2", "semantic")]
+
+
+@live
+@pytest.mark.parametrize(
+    ("text", "rules"),
+    [
+        (ACCEL, set()),  # VERIFY2 fp f4
+        (R3 % ("idp:9443", "reverse_proxy app:8080 {\n\t\theader_up * alice {http.request.header.X-Evil}\n\t}"), {"reset"}),
+        (R3 % ("{http.request.header.X-Idp}", "reverse_proxy app:8080"), {"dial"}),
+        (EXPOSED % "b.lab.example", {"exposure"}),
+        (EXPOSED % "a.lab.example/api/*", {"exposure"}),
+    ],
+)  # fmt: skip
+def test_live_round3_shapes(text, rules):
+    doc, err = lint.Adapter(CADDY_BIN).adapt(text, None)
+    assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == rules

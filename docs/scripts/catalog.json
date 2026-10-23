@@ -57,7 +57,7 @@
     {
       "exit": {
         "0": "clean",
-        "1": "a finding (strip, reset, parse, coverage, generate, semantic, pin or allowlist)",
+        "1": "a finding (strip, reset, dial, exposure, parse, coverage, generate, semantic, pin or allowlist)",
         "2": "usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)"
       },
       "id": "caddy-lint",
