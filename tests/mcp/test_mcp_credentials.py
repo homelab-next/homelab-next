@@ -88,6 +88,11 @@ FOUND = [
     (["--user=admin:fakeHunter13Pw"], {}),
     (["--username", "admin:fakepw"], {}),
     (["--proxy-user=admin:fakepw"], {}),
+    # attached -u and httpie's -a user:password
+    (["-uadmin:fakepw"], {}),
+    (["-u=admin:fakepw"], {}),
+    (["-a", "admin:fakepw"], {}),
+    (["-a", "admin:12345"], {}),
 ]  # fmt: skip
 
 #: (args, settings) of a record: none of these is a credential
@@ -136,6 +141,12 @@ ACCEPTED = [
     (["-port", "8080"], {}),
     (["--user", "1000:1000"], {}),  # uid:gid, not user:password
     (["--user", "analyst"], {}),
+    (["-u1000:1000"], {}),  # uid:gid attached
+    (["-uanalyst"], {}),
+    (["-a", "0.0.0.0:8080"], {}),  # a listen address, not user:password
+    (["-a", "localhost:8080"], {}),
+    (["-a", "api.example.com:443"], {}),
+    (["-a"], {}),
     # round 3 (9): import keeps a reference, a URL list and a user agent as they are
     (["--header", "Authorization: Bearer secret:mcp/srv-token"], {}),
     (["--header=Authorization: Bearer secret:mcp/srv-token"], {}),
@@ -272,3 +283,23 @@ def test_looks_secret_both_ways():
     assert credentials.credential_name("DB_PASSWORD")
     assert not credentials.credential_name("--no-auth")
     assert not credentials.credential_name("--token-file")
+
+
+@pytest.mark.parametrize(
+    ("args", "flag"),
+    [
+        (["-uadmin:fakepw"], "-u"),
+        (["-u=admin:fakepw"], "-u"),
+        (["-a", "admin:fakepw"], "-a"),
+        (["--user", "admin:fakepw"], "--user"),
+    ],
+)
+def test_scan_args_finds_attached_and_short_user_password_forms(args, flag):
+    """curl's attached ``-uUSER:PW`` and httpie's ``-a USER:PW`` are ``--user USER:PW``."""
+    (finding,) = credentials.scan_args(args)
+    assert finding.flag == flag and finding.index == len(args) - 1
+
+
+@pytest.mark.parametrize("args", [["-u1000:1000"], ["-a", "0.0.0.0:8080"], ["-uanalyst"]])
+def test_scan_args_leaves_uid_gid_and_listen_addresses(args):
+    assert credentials.scan_args(args) == []

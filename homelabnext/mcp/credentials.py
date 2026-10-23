@@ -397,19 +397,35 @@ def _short_value_credential(flag: str, value: str) -> bool:
     return False
 
 
-#: flags whose ``user:password`` value carries a password, like ``-u`` (curl and kin)
-_USER_FLAGS = frozenset(("--user", "--username", "--proxy-user", "--basic-auth", "--userpass"))
+#: flags whose ``user:password`` value carries a password, like ``-u`` (curl and kin; ``-a`` is
+#: httpie's ``--auth``)
+_USER_FLAGS = frozenset(
+    ("--user", "--username", "--proxy-user", "--basic-auth", "--userpass", "-a")
+)
+#: a ``host:port`` listen address, which ``-a`` takes in other tools (``-a 0.0.0.0:8080``)
+_HOST_PORT = re.compile(
+    r"(?:[0-9.]+|\[[0-9A-Fa-f:.]+\]|localhost|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)?:[0-9]{1,5}"
+)
 
 
 def _user_password(flag: str, value: str) -> bool:
-    """``--user user:password`` / ``--user=user:password``: a password after the colon (a
-    numeric ``uid:gid`` is not one)."""
+    """``--user user:password`` / ``--user=user:password`` / ``-a user:password``: a password
+    after the colon (a numeric ``uid:gid`` is not one, nor a ``host:port`` after ``-a``)."""
     return (
         flag.lower() in _USER_FLAGS
         and bool(re.search(r":.", value))
         and "://" not in value
         and not re.fullmatch(r"[0-9]+:[0-9]+", value)
+        and not (flag == "-a" and _HOST_PORT.fullmatch(value))
     )
+
+
+def _attached_user(arg: str) -> bool:
+    """``-uUSER:PASSWORD`` / ``-u=USER:PASSWORD`` (curl and kin): ``-u`` with its
+    ``user:password`` attached, read like ``-u user:password`` (a numeric ``uid:gid`` is not
+    one)."""
+    m = re.fullmatch(r"-u=?([^-=\s].*)", arg)
+    return bool(m) and _user_password("--user", m.group(1))
 
 
 def _after_credential_flag(prev: str, value: str) -> bool:
@@ -494,6 +510,9 @@ def scan_args(args: Iterable[str]) -> list[Finding]:
             continue
         if _attached_password(a):
             out.append(Finding(i, "flag-value", "-p"))
+            continue
+        if _attached_user(a):
+            out.append(Finding(i, "flag-value", "-u"))
             continue
         if is_flag(a):
             continue  # a flag's own name
