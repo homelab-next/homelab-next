@@ -6,6 +6,7 @@
 
 /.github/                 @PeteSampras
 /tools/                   @PeteSampras
+/examples/private-overlay/ @PeteSampras
 /conformance/             @PeteSampras
 /constraints/             @PeteSampras
 /.gitleaks.toml           @PeteSampras
