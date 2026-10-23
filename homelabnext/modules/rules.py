@@ -372,6 +372,7 @@ def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
     included), no acting capability (``cap:broker`` included) and no acting tier.  The overlay
     that selects the module may grant its agent the broker in its own ceiling policy and spec."""
     from homelabnext.agent.readers import broker_problems, default_classes
+    from homelabnext.mcp import servers
 
     c = doc.get("contributes", {})
     if not c.get("mcp_servers") and not c.get("agents"):
@@ -396,6 +397,9 @@ def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
                 f"{e['file']}: MCP record declares acts_via: a module's record never does (broker "
                 "is only the broker's own front; a direct exception is only the overlay's)"
             )
+        # its classes are floored as the catalog check floors them: a run_command classed read
+        # is an acting tool declared down, not a reading one
+        out += servers.floor_problems(rec, e["file"], only)
 
     def acts(sid: str) -> bool:
         return any(set(t.get("classes") or ()) & only for t in records[sid].get("tools") or ())

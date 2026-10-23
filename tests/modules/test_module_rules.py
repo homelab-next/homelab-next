@@ -118,6 +118,19 @@ def test_a_module_contributes_no_acting_record_and_no_acts_via(tmp_path):
     assert mr.broker_rule_problems(doc, mod, _load) == []
 
 
+def test_a_module_record_cannot_declare_an_acting_tool_down(tmp_path):
+    """VERIFY1: the same record with run_command classed read passed both module rules, because
+    "acting" was only what the record declared. Its classes are floored as the catalog's are."""
+    doc, mod = _collector(tmp_path)
+    probe = mod / "mcp/external-collector-probe.yml"
+    rec = _load(probe)
+    rec["tools"].append({"name": "run_command", "classes": ["read"], "approval": False})
+    _write(probe, rec)
+    needle = "tool run_command acts by its name"
+    assert any(needle in p for p in mr.broker_rule_problems(doc, mod, _load))
+    assert any(needle in p for p in mr.module_problems(doc, mod, {}, _load, (tmp_path,)))
+
+
 def test_a_module_agent_holds_no_acting_grant(tmp_path):
     doc, mod = _collector(tmp_path)
     agent = doc["contributes"]["agents"][0]
