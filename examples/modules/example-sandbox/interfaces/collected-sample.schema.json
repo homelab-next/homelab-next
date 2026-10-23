@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/modules/example-sandbox/collected-sample/1.0",
+  "title": "Collected sample sidecar",
+  "description": "The JSON sidecar a producer writes under meta/ for each file under files/ (interface sample-handoff 1.0, owned by the consuming sandbox, which decides what it needs to detonate a file safely): what a sandbox needs to decide whether and how to detonate the file, without trusting the file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sha256",
+    "size",
+    "collected_at",
+    "source_service"
+  ],
+  "properties": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "collected_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "source_service": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "declared_type": {
+      "type": "string",
+      "maxLength": 64
+    }
+  }
+}

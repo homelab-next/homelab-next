@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the object-store suite runs
+# through the shared S3 adapter, which resolves the endpoint through the registry (never a URL here).
+#   hnx conform run object-store --target examples/modules/other-object-store/conformance/target.yml
+name: other-object-store
+capabilities:
+  object-store:
+    adapter: homelabnext.conform.adapters.s3:make_object_store
+    config: {namespace: conformance}
+    features: [metadata]

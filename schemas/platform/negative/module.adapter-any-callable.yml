@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: Apache-2.0
+# An adapter is the module's own code or a shared conformance adapter, never any importable callable.
+manifest_version: '1.0'
+id: example-object-store
+kind: provider
+title: Object store on Northwind Objects
+description: Fills the object-store slot with Northwind Objects, an S3-compatible store; proved by the
+  object-store conformance suite through the shared S3 adapter.
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.2.0
+origin:
+  kind: in-tree
+product:
+  name: northwind-objects
+  display: Northwind Objects
+  aliases:
+  - nwobjects
+  version: 3.1.4
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+- secret: secret:example-object-store/access-key
+  identity: key-pair
+  holder: consumers
+  purpose: the template of the per-consumer key pairs the store issues at bind time
+- secret: secret:example-object-store/admin-token
+  identity: token
+  holder: provider
+  purpose: the store's own admin API, used by the role only
+requires:
+  capabilities:
+  - cap: cap:secrets
+    version: '1.0'
+    purpose: the admin token and the issued key pairs are read by name at run time
+  hosts:
+  - role: store
+    kind: vm
+    footprint:
+      cpu: 2
+      memory_mb: 1024
+      disk_gb: 200
+    roles:
+    - role:example_object_store
+    purpose: runs the store
+provides:
+  slots:
+    object-store:
+      formats:
+      - format: s3
+        version: '2006-03-01'
+      adapter: subprocess:Popen
+      features:
+      - metadata
+      conformance:
+        target: conformance/target.yml
+      migration:
+        formats:
+        - object-tree
+        export: role:example_object_store
+        import: role:example_object_store
+contributes:
+  roles:
+  - file: roles/example_object_store
+  services:
+  - file: registry/services.yml
+  preflight:
+  - role: role:example_object_store
+    hook: readiness
+config:
+  data_dir:
+    type: path
+    description: where the store keeps its data, relative to the module's data root on the host
+    default: objects
+    overlay: optional
+lifecycle:
+  install:
+    playbook: playbooks/install.yml
+  upgrade:
+    playbook: playbooks/upgrade.yml
+    note: a pinned version bump; the role's upgrade hook records it
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit:
+    - inventory
+    - playbooks
+    - live-refs
+    - monitoring
+    - secret-names
+    - dns
+    - contributions

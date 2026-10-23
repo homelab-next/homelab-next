@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# A module's lake table, as examples/modules/external-collector/lake/sessions.table.yml.
+id: table:external_collector.sessions
+owner: external-collector
+schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0
+retention_days: 180
+maintenance:
+  compact: true
+  expire_snapshots_days: 7
+freshness:
+  cadence: batch
+  stale_after_s: 172800

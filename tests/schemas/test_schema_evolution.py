@@ -15,7 +15,15 @@ SCHEMAS = [
     p
     for p in sc.schema_files(ROOT, OWNED)
     if p.relative_to(ROOT / "schemas").as_posix() != "platform/service.json"
+    and not sc.is_draft(json.loads(p.read_text()))
 ]
+#: schemas still drafts (x-draft: proposed, no loader or pilot yet): no frozen baseline, free to
+#: change until their ADR is accepted; joining or leaving this set is a reviewed change
+DRAFTS = {
+    "platform/module.schema.json",
+    "platform/lake_table.schema.json",
+    "platform/module_selection.schema.json",
+}
 
 
 def _major(path) -> int:
@@ -229,3 +237,311 @@ def test_the_newline_guard_rejects_what_python_alone_accepted():
     old, new = {"pattern": "^[a-z]+$"}, {"pattern": "^[a-z]+$(?!\\n)"}
     assert sc.errors_for(old, "abc\n", REG) == []  # the defect, under Python's re
     assert sc.errors_for(new, "abc\n", REG) and sc.errors_for(new, "abc", REG) == []
+
+
+# ----- draft schemas (x-draft): not frozen until their ADR is accepted -----
+def test_the_draft_schemas_are_exactly_the_listed_ones():
+    found = {
+        p.relative_to(ROOT / "schemas").as_posix()
+        for p in sc.schema_files(ROOT)
+        if sc.is_draft(json.loads(p.read_text()))
+    }
+    assert found == DRAFTS
+
+
+@pytest.mark.parametrize("rel", sorted(DRAFTS))
+def test_a_draft_has_no_frozen_copy_and_passes_strict(rel):
+    path = ROOT / "schemas" / rel
+    _, major, minor = sc.parse_id(json.loads(path.read_text()))
+    assert not sc.frozen_path(ROOT, path, major, minor).is_file()
+    assert sc.check_schema(ROOT, path, sc.build_registry(ROOT), strict=True) == []
+
+
+def _draft_repo(tmp_path):
+    """A copy of the schemas where platform/module is a draft with no frozen copy."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas/platform/module.schema.json"
+    s = json.loads(p.read_text())
+    s["x-draft"] = "ADR-0027 (proposed): a test draft"
+    p.write_text(json.dumps(s))
+    sc.frozen_path(tmp_path, p, 1, 0).unlink(missing_ok=True)
+    return p
+
+
+def test_a_frozen_copy_of_a_draft_is_an_error(tmp_path):
+    p = _draft_repo(tmp_path)
+    dest = sc.frozen_path(tmp_path, p, 1, 0)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(p.read_text())
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("draft schema has a frozen copy" in x.message for x in probs)
+
+
+def test_freeze_skips_a_draft_and_removing_x_draft_requires_a_baseline(tmp_path):
+    p = _draft_repo(tmp_path)
+    assert all("module.schema.json" not in str(w) for w in sc.freeze(tmp_path))
+    s = json.loads(p.read_text())
+    del s["x-draft"]
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("no frozen baseline" in x.message for x in probs)
+
+
+def test_an_empty_x_draft_is_refused(tmp_path):
+    p = _draft_repo(tmp_path)
+    s = json.loads(p.read_text())
+    s["x-draft"] = " "
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("x-draft must say why" in x.message for x in probs)
+
+
+def _bump(s, version):
+    s["$id"] = s["$id"].rsplit("/", 1)[0] + "/" + version
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "platform/guest.schema.json",
+        "platform/swap_record.schema.json",
+        "platform/capability.schema.json",
+    ],
+)
+def test_x_draft_on_a_released_major_is_refused_even_with_a_minor_bump(tmp_path, rel):
+    """Negative: x-draft cannot lift the additivity gate off a frozen schema, whatever the version."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas" / rel
+    s = json.loads(p.read_text())
+    _, major, minor = sc.parse_id(s)
+    optional = next(k for k in s["properties"] if k not in s.get("required", []))
+    s["properties"].pop(optional)  # a non-additive change
+    _bump(s, f"{major}.{minor + 1}")
+    s["x-draft"] = "ADR-0000 (proposed): a planted bypass"
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=[rel])
+    assert any("x-draft on a released major" in x.message for x in probs), probs
+    # a new major may still be drafted: it has no frozen baseline of its own major
+    _bump(s, f"{major + 1}.0")
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=[rel])
+    assert not any("x-draft on a released major" in x.message for x in probs), probs
+
+
+def _copy_schemas(tmp_path):
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    return tmp_path / "schemas/platform"
+
+
+def _rename(d, old, new):
+    (d / f"{old}.schema.json").rename(d / f"{new}.schema.json")
+    for kind in ("examples", "negative"):
+        for f in list((d / kind).glob(f"{old}.*")):
+            f.rename(d / kind / (new + f.name[len(old) :]))
+
+
+def test_baselines_follow_the_id_not_the_file_name(tmp_path):
+    """Negative: renaming capability.schema.json does not shed its frozen 1.0 baseline, so x-draft
+    with a breaking change is still refused."""
+    d = _copy_schemas(tmp_path)
+    s = json.loads((d / "capability.schema.json").read_text())
+    s["properties"].pop(next(k for k in s["properties"] if k not in s.get("required", [])))
+    s["x-draft"] = "ADR-0000 (proposed): a planted rename"
+    (d / "capability.schema.json").write_text(json.dumps(s))
+    _rename(d, "capability", "capability_v2")
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("draft schema has a frozen copy of its own version" in m for m in probs), probs
+    assert any("x-draft on a released major" in m for m in probs), probs
+
+
+def test_two_files_with_one_id_are_refused(tmp_path):
+    """Negative: a second file carrying swap_record 1.1's $id would win $ref resolution."""
+    d = _copy_schemas(tmp_path)
+    (d / "zzswap_record.schema.json").write_text((d / "swap_record.schema.json").read_text())
+    for kind in ("examples", "negative"):
+        for f in (d / kind).glob("swap_record.*"):
+            (d / kind / ("zz" + f.name)).write_text(f.read_text())
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("/platform/swap_record/1.1 is also carried by" in m for m in probs), probs
+
+
+def test_a_frozen_name_no_live_schema_carries_is_refused(tmp_path):
+    """Negative: renaming a schema's $id orphans its frozen copies."""
+    d = _copy_schemas(tmp_path)
+    s = json.loads((d / "capability.schema.json").read_text())
+    s["$id"] = s["$id"].replace("/platform/capability/", "/platform/capability-renamed/")
+    (d / "capability.schema.json").write_text(json.dumps(s))
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("frozen platform/capability is carried by no live schema" in m for m in probs)
+
+
+def test_frozen_is_append_only_against_the_base(tmp_path):
+    """Negative: with --base, deleting capability 1.0's only frozen copy (which lifts the gate for a
+    draft) or editing a frozen file is refused; adding one is not."""
+    import subprocess
+
+    _copy_schemas(tmp_path)
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", "schemas")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+    assert sc.frozen_lost(tmp_path, "HEAD") == []
+    (tmp_path / "schemas/_frozen/1.0/platform/capability.schema.json").unlink()
+    g = tmp_path / "schemas/_frozen/1.0/platform/guest.schema.json"
+    g.write_text(g.read_text() + " ")
+    (tmp_path / "schemas/_frozen/1.0/platform/new.schema.json").write_text("{}")
+    probs = {p.where: p.message for p in sc.frozen_lost(tmp_path, "HEAD")}
+    assert "removed" in probs["schemas/_frozen/1.0/platform/capability.schema.json"]
+    assert "changed" in probs["schemas/_frozen/1.0/platform/guest.schema.json"]
+    assert len(probs) == 2
+    assert sc.main(["--root", str(tmp_path), "--base", "HEAD"]) == 1
+
+
+def _git_repo(tmp_path):
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                *a,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    return git
+
+
+def test_ci_base_is_the_pr_base_or_the_push_tip_or_head_parent(tmp_path):
+    """A pull request's unreadable base is an error, never a skip; a push whose previous tip is
+    zero (a new branch) or gone (a force-push) falls back to HEAD^; a root commit has none."""
+    git = _git_repo(tmp_path)
+    (tmp_path / "a").write_text("1")
+    git("add", "a")
+    git("commit", "-qm", "one")
+    one = git("rev-parse", "HEAD")
+    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA) == (
+        None,
+        "none: a root commit (a new branch: the push's previous tip is zero)",
+    )
+    (tmp_path / "a").write_text("2")
+    git("commit", "-qam", "two")
+    assert sc.ci_base(tmp_path, "pull_request", one, "") == (one, "the pull request's base")
+    for bad in ("", "f" * 40):
+        with pytest.raises(ValueError, match="pull request's base"):
+            sc.ci_base(tmp_path, "pull_request", bad, "")
+    assert sc.ci_base(tmp_path, "push", "", one) == (one, "the push's previous tip")
+    assert sc.ci_base(tmp_path, "push", "", sc.ZERO_SHA) == (
+        one,
+        "HEAD^ (a new branch: the push's previous tip is zero)",
+    )
+    assert sc.ci_base(tmp_path, "push", "", "f" * 40) == (
+        one,
+        f"HEAD^ (the push's previous tip {'f' * 40} is not fetchable (a force-push))",
+    )
+    for event in ("merge_group", "workflow_dispatch", "schedule", "pull_request_target", ""):
+        with pytest.raises(ValueError, match="only push and pull_request have a base rule"):
+            sc.ci_base(tmp_path, event, one, one)
+
+
+def test_ci_base_refuses_a_shallow_push_with_no_parent(tmp_path):
+    """Negative: in a depth-1 clone HEAD^ is missing because history was cut, not because HEAD is
+    a root commit, so a push there is an error rather than a pass with no base."""
+    import subprocess
+
+    src = tmp_path / "src"
+    src.mkdir()
+    git = _git_repo(src)
+    for n in ("1", "2"):
+        (src / "a").write_text(n)
+        git("add", "a")
+        git("commit", "-qm", n)
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{src}", str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    with pytest.raises(ValueError, match="the checkout is shallow"):
+        sc.ci_base(shallow, "push", "", sc.ZERO_SHA)
+
+
+def test_ci_base_from_the_environment_prints_the_base_and_fails_a_bad_pr_base(
+    tmp_path, monkeypatch, capsys
+):
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    git = _git_repo(tmp_path)
+    git("add", "schemas")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "schemas/_frozen/1.0/platform/capability.schema.json").unlink()
+    git("commit", "-qam", "drop capability's only frozen copy")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("HNX_PUSH_BEFORE", sc.ZERO_SHA)  # a branch creation: HEAD^ instead
+    assert sc.main(["--root", str(tmp_path), "--ci-base"]) == 1
+    out = capsys.readouterr().out
+    assert f"append-only _frozen/ base: {base} (HEAD^" in out
+    assert "capability.schema.json: frozen at" in out and "removed" in out
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("HNX_PR_BASE", "f" * 40)
+    assert sc.main(["--root", str(tmp_path), "--ci-base"]) == 1
+    assert "is not readable" in capsys.readouterr().err
+
+
+def test_frozen_symlinks_and_byte_changes_are_refused(tmp_path):
+    """Negative: a symlinked baseline is refused; a CRLF rewrite that a text filter would hide is
+    still a change (hash-object --no-filters); a quoted (non-ASCII) frozen path is read exactly
+    (ls-tree -z), so an untouched one is not reported."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    fz = tmp_path / "schemas/_frozen/1.0/platform"
+    (fz / "capabilité.json").write_text("{}")
+    (tmp_path / ".gitattributes").write_text("*.json text eol=crlf\n")
+    git = _git_repo(tmp_path)
+    git("add", ".")
+    git("commit", "-qm", "base")
+    assert sc.frozen_lost(tmp_path, "HEAD") == []
+    g = fz / "guest.schema.json"
+    g.write_bytes(g.read_bytes().replace(b"\n", b"\r\n"))
+    c = fz / "capability.schema.json"
+    c.unlink()
+    c.symlink_to(tmp_path / "schemas/platform/capability.schema.json")
+    probs = {p.where: p.message for p in sc.frozen_lost(tmp_path, "HEAD")}
+    assert "changed" in probs["schemas/_frozen/1.0/platform/guest.schema.json"]
+    assert "now a symlink" in probs["schemas/_frozen/1.0/platform/capability.schema.json"]
+    assert len(probs) == 2
+    probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
+    assert "a frozen baseline is a symlink (copy the file)" in probs
+
+
+def test_a_symlinked_frozen_root_is_refused(tmp_path):
+    """Negative: schemas/_frozen itself as a symlink (to a copy that could be edited freely)."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    real = tmp_path / "elsewhere"
+    (tmp_path / "schemas/_frozen").rename(real)
+    (tmp_path / "schemas/_frozen").symlink_to(real)
+    probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
+    assert "schemas/_frozen is a symlink (it is a directory)" in probs

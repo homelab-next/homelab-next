@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry rows (platform/service, the services map) the external data collector contributes. Row
+# names and status source ids are bound to the module id. A feature fills no slot, so its row's
+# capability alias is the module id itself (module ids and slot names never overlap). host names
+# a module host role (requires.hosts); the site's placement maps it to a registry host. The row
+# has no public_hostname: a public route needs auth and an overlay grant (docs/modules.md).
+services:
+  external-collector-receiver:
+    capability: external-collector
+    impl: external-collector
+    host: receiver
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    upstreams: [samples, lake-catalog]
+    owner: detection-team
+    version: "0.2.0"
+    tls: internal
+    tags: [detection, external]
+    status_sources:
+      - id: external-collector-freshness
+        kind: poll-file
+        target: {file: build/status/external-collector-freshness.json}
+        interval_s: 300
+        timeout_s: 10
+        mapping:
+          state: fresh
+          states: {"true": ok, "false": fail}
+        what: Whether new collector sessions landed in the lake within the table's own batch window.

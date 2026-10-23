@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Registry rows (platform/service, the services map) this provider contributes. A provider's row is
+# keyed by its slot and renamed to the instance at bind time (objects, samples), so consumers keep
+# resolving the instance name across a swap; version is filled from product.version, never repeated
+# here. host names the module's host role.
+services:
+  object-store:
+    capability: object-store
+    impl: tailspin-blobs
+    host: store
+    protocol: https
+    port: 9000
+    health: {kind: http, path: /health/live}
+    owner: platform-team
+    tls: internal
+    tags: [storage]

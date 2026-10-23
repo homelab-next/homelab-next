@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Profile spec for `hnx agent compile` (docs/agent.md). Event-driven: the module's agent block
+# names a trigger (the sample-handoff interface) instead of a calendar; the runtime hands it the
+# report as an untrusted prompt slot, so the reader holds no object-store grant. No ceiling here.
+id: profile:example-sandbox-analyst
+persona: persona:example-sandbox-analyst
+model_role: mdl:main-reasoner
+capabilities: [cap:records]
+tier: read
+data_tier: local-only
+reads_untrusted: true
+budgets: {max_input_tokens: 24000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 10}

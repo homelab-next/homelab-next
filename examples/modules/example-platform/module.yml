@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# A fictional platform appliance ("Fabrikam Platform") that fills the trust-root and core
+# slots a site needs: secrets, identity, the front door (edge), dns, backup, the bus, the broker,
+# records and a job scheduler. Each of these is a privileged or required core slot, so each entry
+# has a conformance target (none may be provisional) and the module joins the human review tier.
+manifest_version: "1.0"
+id: example-platform
+kind: provider
+title: Core slots on Fabrikam Platform
+description: Fills secrets, idp, edge, dns, backup, events, broker, records, orchestration with Fabrikam Platform (fictional).
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: fabrikam-platform
+  display: Fabrikam Platform
+  version: 7.2.1
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:example-platform/admin-token
+    identity: token
+    holder: provider
+    purpose: the appliance's own admin API, used by its role only
+  - secret: secret:example-platform/bus-client
+    identity: key-pair
+    holder: consumers
+    purpose: the template of the per-consumer bus credentials issued at bind time
+identifiers:
+  - {kind: dns-name, name: auth, on_remove: keep}
+  - {kind: dns-name, name: records, on_remove: keep}
+requires:
+  hosts:
+    - role: platform
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 3072, disk_gb: 200}
+      roles: [role:example_platform]
+      purpose: runs Fabrikam Platform
+provides:
+  slots:
+    secrets:
+      adapter: hnx_modules.example_platform.secrets:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [json], export: role:example_platform, import: role:example_platform}
+    idp:
+      adapter: hnx_modules.example_platform.idp:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [json], export: role:example_platform, import: role:example_platform}
+    edge:
+      adapter: hnx_modules.example_platform.edge:make
+      conformance: {target: conformance/target.yml}
+    dns:
+      adapter: hnx_modules.example_platform.dns:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [zone-file], export: role:example_platform, import: role:example_platform}
+    backup:
+      adapter: hnx_modules.example_platform.backup:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [object-tree], export: role:example_platform, import: role:example_platform}
+    events:
+      formats:
+        - {format: cloudevents, version: '1.0'}
+      adapter: hnx_modules.example_platform.events:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [jsonl], export: role:example_platform, import: role:example_platform}
+    broker:
+      formats:
+        - {format: action-request, version: '1.0'}
+      adapter: hnx_modules.example_platform.broker:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [jsonl], export: role:example_platform, import: role:example_platform}
+    records:
+      formats:
+        - {format: markdown-records, version: '1.0'}
+      adapter: hnx_modules.example_platform.records:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [markdown-tree], export: role:example_platform, import: role:example_platform}
+    orchestration:
+      adapter: hnx_modules.example_platform.orchestration:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [jsonl], export: role:example_platform, import: role:example_platform}
+contributes:
+  roles:
+    - file: roles/example_platform
+  preflight:
+    - {role: role:example_platform, hook: readiness}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, contributions]

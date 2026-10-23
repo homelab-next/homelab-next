@@ -11,7 +11,10 @@ tests on a laptop with no network and no private context.
    (Settings -> Emails); CI rejects any other author or committer e-mail. Commits authored by a
    GitHub App bot (Dependabot) are exempt; the maintainer who merges them takes the sign-off.
 2. **Every schema change ships an example and a negative** (an input that must be rejected).
-   Evolution is additive within a major version (ADR-0001).
+   Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
+   may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
+   change until the ADR is accepted, when removing `x-draft` and `tools/schema_check.py --freeze`
+   freeze it.
 3. **Every library ships a fake**, and the fake passes the conformance test for its capability.
 4. **No raw endpoints.** Addresses come from the registry; an unset endpoint raises, it never
    defaults (ADR-0002). `tools/no_raw_endpoints.py` gates this.

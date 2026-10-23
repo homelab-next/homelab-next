@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# A provisional provider entry says why it has no conformance target.
+manifest_version: '1.0'
+id: example-static-host
+kind: provider
+title: Static hosting on Wingtip Pages
+description: Fills the static-hosting slot with Wingtip Pages, a hosted static site service that the publishing
+  module pushes gated content to.
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.2.0
+origin:
+  kind: in-tree
+product:
+  name: wingtip-pages
+  display: Wingtip Pages
+  version: '2026.10'
+licence:
+  kind: subscription
+  tier: free (one site, no access rules)
+  expires: '2027-01-31'
+credentials:
+- secret: secret:example-static-host/deploy-token
+  identity: token
+  holder: granted
+  purpose: deploys the site; readable only by the identity the overlay grants (the publish gate)
+control_plane:
+- kind: site-settings
+  reader: hnx_modules.example_static_host.control:read_settings
+  description: the hosted site's domain, cache and access settings, held by the hosting service
+requires:
+  capabilities:
+  - cap: cap:secrets
+    version: '1.0'
+    purpose: the deploy token is read by name
+provides:
+  slots:
+    static-hosting:
+      adapter: hnx_modules.example_static_host.adapter:make_site
+      provisional: true

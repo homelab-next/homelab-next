@@ -11,6 +11,12 @@ registers:
 fleet_unit_specs:
   - "**/fleet_units.yml"
   - "**/fleet_units/*.yml"
+# fleet_units specs that are not this tree's jobs: the fictional module examples (ADR-0027 draft)
+# name module code the repository does not ship, so their execs resolve to nothing here; the
+# module contract tests validate them with fleet_units.validate and the module rules instead
+# (namespaced names, no root, no hardening opt-out, no direct paging)
+fleet_unit_specs_exclude:
+  - "examples/modules/**"
 
 # active scripts with no caller in the tree
 uncalled:

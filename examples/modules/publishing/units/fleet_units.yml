@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# fleet_units spec (homelabnext.generators.fleet_units): the publishing run, gate first. Its name is
+# bound to the module id; it runs as a dynamic user with the full hardening block (no root, no
+# opt-out without an overlay grant) and pages only through the notify slot's recovery pair, never
+# directly. Example module specs are validated by tests/schemas/test_module_1_0.py, not by the
+# script-reality gate (tools/scripts.allow.yml), since the module's code is named, not shipped.
+- name: publishing-run
+  description: Gate every publishable item and push what passes to static hosting
+  exec: /usr/local/libexec/hnx-modules/publishing/run --gate --push
+  on_calendar: "*-*-* 05:40:00 UTC"
+  read_write_paths: [/var/lib/hnx-modules/publishing]
+  pages_directly: false

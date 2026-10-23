@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# A core module (fictional draft): the module loader's own manifest. It owns the criteria that
+# guard the rules no module may contribute about itself: that only a module the overlay grants
+# `publish` may reach the static-hosting slot, and that every interface has exactly one owner.
+# The loader does not exist yet, so the criteria are manual and deferred until it does.
+manifest_version: "1.0"
+id: core-modules
+kind: core
+title: Module loader
+description: Reads every module manifest, checks it against the site's selection and grants, and
+  generates the core registries from their contributions.
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+requires: {}
+contributes:
+  invariants:
+    - file: invariants/criteria.yml

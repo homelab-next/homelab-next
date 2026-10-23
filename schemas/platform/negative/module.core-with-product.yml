@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# A core module names no product.
+manifest_version: '1.0'
+id: core-staff
+kind: core
+title: Staff agents
+description: The staff agents every lab runs, starting with the weekly scorecard of response metrics.
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.1.0
+origin:
+  kind: in-tree
+requires:
+  capabilities:
+  - cap: cap:records
+    version: '1.0'
+    purpose: every staff agent files one note per run
+  - cap: cap:orchestration
+    version: '1.0'
+    purpose: runs the staff agents' jobs
+  - cap: cap:agent-runtime
+    provisional: true
+    purpose: the runtime staff jobs are dispatched to
+  model_roles:
+  - role: mdl:main-reasoner
+    purpose: the scorecard's weekly summary
+prefers:
+  capabilities:
+  - cap: cap:cases
+    version: '1.0'
+    features:
+    - alert-promotes-case
+    purpose: the scorecard measures time to open and close cases from the case store
+    fallback:
+      behaviour: the scorecard reports the case metrics as not measured instead of measuring a case store
+        that is not there
+contributes:
+  agents:
+  - key: core-staff-scorecard
+    profile: profile:core-staff-scorecard
+    charter: agents/core-staff-scorecard.md
+    spec: agents/core-staff-scorecard.spec.yml
+    needs:
+    - cap: cap:cases
+      access: read
+      scope:
+      - cases/
+    - cap: cap:records
+      access: write
+      scope:
+      - findings/core-staff/
+    tools:
+    - cases.list
+    - records.write_note
+    prompts:
+      real: prompts/core-staff-scorecard.real.yml
+    schedule:
+      on_calendar: Mon *-*-* 07:20:00 UTC
+    roster:
+      recall: true
+    lanes:
+      real:
+        writes:
+        - findings/core-staff/
+product:
+  name: northwind-objects
+  display: Northwind Objects
+  version: '1.0'

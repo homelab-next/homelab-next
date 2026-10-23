@@ -90,13 +90,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          fetch-depth: 0  # the base commit, for the append-only _frozen/ check
           persist-credentials: false
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
           extras: dev
-      - name: schema contracts (examples, negatives, additive evolution, frozen baselines)
-        run: python tools/schema_check.py --strict
+      - name: schema contracts (examples, negatives, additive evolution, frozen baselines, append-only _frozen/)
+        # a pull request's base must be readable (an error, never a skip); a push compares with
+        # its previous tip, or HEAD^ when that is zero (a new branch) or gone (a force-push); any
+        # other event, or a shallow checkout with no base, is an error; the step prints the base
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/schema_check.py --strict --ci-base
+      - name: generated module schemas, examples and negatives are current
+        run: python -m homelabnext.schemas --check
       - name: no raw endpoints
         run: python tools/no_raw_endpoints.py .
       - name: helpers are shared, not copied (M-03)
@@ -259,13 +268,48 @@ jobs:
           extras: yaml  # the register tooling parses YAML
           install-project: "false"
       - name: no record vanished relative to the base, no key twice, every record has its uid
+        # the same base rule as the schemas job: a pull request's base must be readable; a push
+        # falls back to HEAD^ when its previous tip is zero or gone; other events and a shallow
+        # checkout are errors; the base used is printed
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            make ids-check PY=python BASE="$BASE"
+          base=""
+          zero=0000000000000000000000000000000000000000
+          case "$EVENT" in
+            pull_request)
+              if ! base=$(git rev-parse --verify --quiet "${PR_BASE:-0}^{commit}"); then
+                echo "::error::the pull request's base ${PR_BASE:-(unset)} is not readable"
+                exit 1
+              fi ;;
+            push)
+              if [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] \
+                 && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
+                :
+              elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
+                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
+                # checkout of depth > 1 would also land here (latent: every job fetches in full)
+                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+                  echo "a new branch (the push's previous tip is zero): HEAD^"
+                else
+                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
+                fi
+              elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+                echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
+                exit 1
+              else
+                base=""
+              fi ;;
+            *)
+              echo "::error::event ${EVENT:-(unset)}: only push and pull_request have a base rule"
+              exit 1 ;;
+          esac
+          echo "register ids: base ${base:-none (a root commit)}"
+          if [ -n "$base" ]; then
+            make ids-check PY=python BASE="$base"
           else
             make ids-check PY=python
           fi
@@ -285,16 +329,49 @@ jobs:
           python-version: "3.12"
           extras: test,ansible  # a fix to an ansible plugin proves its test like any other
       - name: every fix ships a regression test that fails without the fix
+        # the same base rule as the schemas and register-ids jobs: a pull request's base must be
+        # readable; a push falls back to HEAD^ when its previous tip is zero or gone; other events
+        # and a shallow checkout are errors; the base used is printed
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
-             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            python tools/fix_has_test.py --range "$BASE..$HEAD_SHA" --prove
-          else
-            echo "no base commit (new branch): nothing to compare"
+          base=""
+          zero=0000000000000000000000000000000000000000
+          case "$EVENT" in
+            pull_request)
+              if ! base=$(git rev-parse --verify --quiet "${PR_BASE:-0}^{commit}"); then
+                echo "::error::the pull request's base ${PR_BASE:-(unset)} is not readable"
+                exit 1
+              fi ;;
+            push)
+              if [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] \
+                 && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
+                :
+              elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
+                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
+                # checkout of depth > 1 would also land here (latent: every job fetches in full)
+                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+                  echo "a new branch (the push's previous tip is zero): HEAD^"
+                else
+                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
+                fi
+              elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+                echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
+                exit 1
+              else
+                base=""
+              fi ;;
+            *)
+              echo "::error::event ${EVENT:-(unset)}: only push and pull_request have a base rule"
+              exit 1 ;;
+          esac
+          echo "regression tests: base ${base:-none (a root commit)}"
+          if [ -n "$base" ]; then
+            python tools/fix_has_test.py --range "$base..$HEAD_SHA" --prove
           fi
 
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a

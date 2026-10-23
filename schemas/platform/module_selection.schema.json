@@ -1,0 +1,656 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/module_selection/1.0",
+  "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
+  "title": "Module selection",
+  "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, and the grants a module cannot give itself. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "hosts",
+    "slots"
+  ],
+  "properties": {
+    "profile": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "hosts": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "capacity"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "vm",
+              "lxc",
+              "host",
+              "external"
+            ]
+          },
+          "isolated": {
+            "type": "boolean"
+          },
+          "capacity": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cpu",
+              "memory_mb",
+              "disk_gb"
+            ],
+            "properties": {
+              "cpu": {
+                "type": "number",
+                "minimum": 0.1
+              },
+              "memory_mb": {
+                "type": "integer",
+                "minimum": 16
+              },
+              "disk_gb": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "gpu_memory_mb": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "resources": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "kind"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 32,
+                  "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                },
+                "kind": {
+                  "type": "string",
+                  "maxLength": 32,
+                  "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                }
+              }
+            }
+          },
+          "headroom": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memory_mb": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "description": "A site host; capacity stands in for its platform/guest resources."
+      }
+    },
+    "slots": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "enum": [
+              "none",
+              "pass-through"
+            ]
+          },
+          {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "provider",
+                "instance"
+              ],
+              "properties": {
+                "provider": {
+                  "allOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 48,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    },
+                    {
+                      "not": {
+                        "pattern": "-shadow$"
+                      }
+                    }
+                  ],
+                  "description": "A module id."
+                },
+                "instance": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                },
+                "placement": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                  },
+                  "description": "<host role> -> <site host>."
+                },
+                "config": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9_]{0,63}$(?!\\n)"
+                  },
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "boolean"
+                    ]
+                  },
+                  "description": "Real values for the module's config keys; a secret-typed value is a secret name in the module's own namespace or one it is granted in grants.secrets (loader)."
+                }
+              }
+            },
+            "minItems": 1
+          }
+        ]
+      }
+    },
+    "features": {
+      "type": "object",
+      "propertyNames": {
+        "allOf": [
+          {
+            "type": "string",
+            "maxLength": 48,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+          },
+          {
+            "not": {
+              "pattern": "-shadow$"
+            }
+          }
+        ],
+        "description": "A module id."
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "placement": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "description": "<host role> -> <site host>."
+          },
+          "config": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Real values for the module's config keys; a secret-typed value is a secret name in the module's own namespace or one it is granted in grants.secrets (loader)."
+          },
+          "agents": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lanes"
+              ],
+              "properties": {
+                "lanes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    },
+                    "shadow": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    }
+                  },
+                  "description": "Each lane bound to exactly one orchestration instance."
+                }
+              }
+            },
+            "description": "Per agent key the module contributes (an unknown key is refused by the loader)."
+          }
+        },
+        "description": "One module's placement, real config values and lane bindings."
+      }
+    },
+    "core": {
+      "type": "object",
+      "propertyNames": {
+        "allOf": [
+          {
+            "type": "string",
+            "maxLength": 48,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+          },
+          {
+            "not": {
+              "pattern": "-shadow$"
+            }
+          }
+        ],
+        "description": "A module id."
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "placement": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "description": "<host role> -> <site host>."
+          },
+          "config": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            },
+            "description": "Real values for the module's config keys; a secret-typed value is a secret name in the module's own namespace or one it is granted in grants.secrets (loader)."
+          },
+          "agents": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lanes"
+              ],
+              "properties": {
+                "lanes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    },
+                    "shadow": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    }
+                  },
+                  "description": "Each lane bound to exactly one orchestration instance."
+                }
+              }
+            },
+            "description": "Per agent key the module contributes (an unknown key is refused by the loader)."
+          }
+        },
+        "description": "One module's placement, real config values and lane bindings."
+      }
+    },
+    "providers": {
+      "type": "object",
+      "propertyNames": {
+        "allOf": [
+          {
+            "type": "string",
+            "maxLength": 48,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+          },
+          {
+            "not": {
+              "pattern": "-shadow$"
+            }
+          }
+        ],
+        "description": "A module id."
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "lanes"
+              ],
+              "properties": {
+                "lanes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "real"
+                  ],
+                  "properties": {
+                    "real": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    },
+                    "shadow": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+                    }
+                  },
+                  "description": "Each lane bound to exactly one orchestration instance."
+                }
+              }
+            },
+            "description": "Per agent key the module contributes (an unknown key is refused by the loader)."
+          }
+        }
+      },
+      "description": "Lane bindings for a selected provider's agents (its placement and config are per slot instance)."
+    },
+    "grants": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "publish": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "description": "Modules that may require, prefer or fall back to cap:static-hosting."
+        },
+        "egress": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "internet",
+                      "external"
+                    ]
+                  },
+                  {
+                    "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+                  }
+                ]
+              },
+              "minItems": 1
+            }
+          },
+          "description": "<module>: {<host role>: [targets]}: each internet or authority-service target the role may reach, and external for a role that runs outside the lab. A grant names its targets, so a manifest cannot widen a granted role's egress."
+        },
+        "internet_facing": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "minItems": 1
+          },
+          "description": "Host roles inside the lab (not kind external) that may be internet-facing."
+        },
+        "secrets": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^secret:[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:/[a-z][a-z0-9_-]*)+$(?!\\n)"
+            },
+            "minItems": 1
+          },
+          "description": "Granted credentials (holder: granted) a module may read."
+        },
+        "public_routes": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "minItems": 1
+          },
+          "description": "Service rows that may carry a public_hostname."
+        },
+        "shared_config": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "cap:edge",
+                "cap:idp"
+              ]
+            },
+            "minItems": 1
+          },
+          "description": "Privileged shared components a module may configure."
+        },
+        "units": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "minItems": 1
+          },
+          "description": "Units that may run as root or opt out of hardening."
+        }
+      },
+      "description": "Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant."
+    }
+  }
+}

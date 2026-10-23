@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every agent's real lane is bound.
+profile: single-box
+hosts:
+  box:
+    kind: host
+    capacity:
+      cpu: 16
+      memory_mb: 16384
+      disk_gb: 1000
+      gpu_memory_mb: 8192
+    resources:
+    - name: gpu0
+      kind: gpu
+    headroom:
+      memory_mb: 2048
+  collector-edge:
+    kind: external
+    capacity:
+      cpu: 1
+      memory_mb: 1024
+      disk_gb: 25
+    headroom:
+      memory_mb: 256
+slots:
+  secrets:
+  - provider: example-platform
+    instance: platform
+    placement:
+      platform: box
+  idp:
+  - provider: example-platform
+    instance: platform
+  edge:
+  - provider: example-platform
+    instance: platform
+  dns:
+  - provider: example-platform
+    instance: platform
+  backup:
+  - provider: example-platform
+    instance: platform
+  events:
+  - provider: example-platform
+    instance: platform
+  broker:
+  - provider: example-platform
+    instance: platform
+  records:
+  - provider: example-platform
+    instance: platform
+  orchestration:
+  - provider: example-platform
+    instance: platform
+  agent-runtime:
+  - provider: example-agent-runtime
+    instance: runtime
+    placement:
+      runtime: box
+  inference:
+  - provider: example-inference
+    instance: inference
+    placement:
+      server: box
+  object-store:
+  - provider: example-object-store
+    instance: samples
+    placement:
+      store: box
+  siem-source:
+  - provider: example-siem-suite
+    instance: siem
+    placement:
+      suite: box
+  hot-index:
+  - provider: example-siem-suite
+    instance: siem
+  detections:
+  - provider: example-siem-suite
+    instance: siem
+  notify:
+  - provider: example-siem-suite
+    instance: siem
+  log-pipeline: pass-through
+  lake-catalog: none
+  lake-query: none
+features:
+  external-collector:
+    placement:
+      edge: collector-edge
+      receiver: box
+    config:
+      edge_region: region-example-1
+      mode: quiet
+    agents:
+      external-collector-analyst:
+        lanes:
+          shadow: platform
+core:
+  core-staff:
+    agents:
+      core-staff-scorecard:
+        lanes:
+          real: platform
+grants:
+  egress:
+    external-collector:
+      edge:
+      - external

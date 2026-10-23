@@ -84,6 +84,9 @@ class AllowError(ValueError):
 class Allow:
     registers: list[str] = field(default_factory=lambda: list(DEFAULT_REGISTERS))
     fleet_unit_specs: list[str] = field(default_factory=lambda: list(DEFAULT_FLEET_SPECS))
+    #: globs under fleet_unit_specs that are not this tree's scheduled jobs (the fictional module
+    #: examples, whose code is named but not shipped); their own tests validate them instead
+    fleet_unit_specs_exclude: list[str] = field(default_factory=list)
     uncalled: dict[str, str] = field(default_factory=dict)
     not_in_runner: dict[str, str] = field(default_factory=dict)
     external_exec: dict[str, str] = field(default_factory=dict)
@@ -107,7 +110,7 @@ def load_allow(root: pathlib.Path, path: str | None = None) -> Allow:
     if unknown:
         raise AllowError(f"{p.name}: unknown key(s) {sorted(unknown)}")
     allow = Allow()
-    for key in ("registers", "fleet_unit_specs"):
+    for key in ("registers", "fleet_unit_specs", "fleet_unit_specs_exclude"):
         if key in doc:
             v = doc[key]
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
@@ -135,6 +138,8 @@ class Reality:
     unresolved_exec: list[tuple[str, str]] = field(default_factory=list)  # (caller, exec)
     criterion_ids: set[str] = field(default_factory=set)
     problems: list[str] = field(default_factory=list)  # sources that could not be read
+    #: fleet_unit_specs_exclude globs that skipped at least one spec (the rest are stale)
+    excludes_used: set[str] = field(default_factory=set)
 
 
 # ---- helpers ---------------------------------------------------------------------------------
@@ -378,6 +383,10 @@ def _fleet_units(real: Reality, idx: _Index, allow: Allow) -> None:
             continue
         if not any(_glob(rel, g) for g in allow.fleet_unit_specs):
             continue
+        hit = [g for g in allow.fleet_unit_specs_exclude if _glob(rel, g)]
+        if hit:
+            real.excludes_used.update(hit)
+            continue
         try:
             entries = _yaml(idx.root / rel) or []
         except Exception as exc:
@@ -546,6 +555,11 @@ def reality_problems(cat: Catalog, real: Reality, allow: Allow) -> list[str]:
     out += [
         f"{ALLOW_FILE}: external_exec {ex} matches no scheduled exec (stale entry)"
         for ex in sorted(set(allow.external_exec) - used_exec)
+    ]
+    out += [
+        f"{ALLOW_FILE}: fleet_unit_specs_exclude {g} skips no fleet_units spec (stale entry)"
+        for g in allow.fleet_unit_specs_exclude
+        if g not in real.excludes_used
     ]
     out += [p for p in cat.problems if "duplicate script id" in p]
     known = cat.by_id()

@@ -53,8 +53,11 @@ component-tests:
 hermetic-lint:
 	$(PY) tools/hermetic_lint.py
 
+# the generated module-manifest schemas, examples and negatives match their generators
+# BASE=<rev> also checks that schemas/_frozen/ is append-only against it (CI: the PR base)
 schemas:
-	$(PY) $(SCHEMA_CHECK) --strict
+	$(PY) $(SCHEMA_CHECK) --strict $(if $(BASE),--base $(BASE))
+	$(PY) -m homelabnext.schemas --check
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages

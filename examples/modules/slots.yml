@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# The slot registry as the capability descriptor 1.1 would carry it (docs/modules.md, "Slot
+# registry"), for the slots these examples use. In the repository each slot is its own
+# platform/capability record; one file keeps the draft readable. Nothing here names a provider:
+# which modules implement a slot is derived from their manifests, never listed.
+#   stage            the SOC pipeline stage (1-10), or null for a core slot outside the pipeline
+#   contract         the protocol in conformance/protocols/, or null (then the slot is provisional)
+#   stateful         true: every provider entry carries a migration in one of export_formats
+#   formats          the boundary formats in and out (what pass-through is computed from)
+#   required_in_core a site must select a provider (never none or pass-through)
+#   privileged       a trust root: never provisional, always a conformance run and human review
+#   pass_through     the stage may be skipped when its neighbours' formats meet
+slots:
+  siem-source:         {stage: 1, contract: null, stateful: false, formats: {in: [], out: [ocsf]}}
+  log-pipeline:        {stage: 2, contract: null, stateful: false, formats: {in: [ocsf], out: [ocsf]}, pass_through: true}
+  object-store:        {stage: 3, contract: object_store.py, stateful: true, export_formats: [object-tree], formats: {in: [s3], out: [s3]}}
+  lake-catalog:        {stage: 3, contract: lake.py, stateful: true, export_formats: [parquet], formats: {in: [ocsf], out: [ocsf]}}
+  lake-query:          {stage: 3, contract: lake.py, stateful: false, formats: {in: [sql], out: [sql]}}
+  hot-index:           {stage: 3, contract: null, stateful: true, export_formats: [jsonl], formats: {in: [ocsf], out: [ocsf]}}
+  detections:          {stage: 4, contract: detections.py, stateful: true, export_formats: [sigma], formats: {in: [sigma, ocsf], out: [ocsf]}}
+  cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}}
+  exposure-management: {stage: 8, contract: null, stateful: false, formats: {in: [], out: [sarif, ocsf]}}
+  static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}}
+  secrets:             {stage: null, contract: secrets.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true}
+  idp:                 {stage: null, contract: idp.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true}
+  edge:                {stage: null, contract: edge.py, stateful: false, required_in_core: true, privileged: true}
+  dns:                 {stage: null, contract: dns.py, stateful: true, export_formats: [zone-file], required_in_core: true}
+  backup:              {stage: null, contract: backup.py, stateful: true, export_formats: [object-tree], required_in_core: true}
+  notify:              {stage: null, contract: notify.py, stateful: false, required_in_core: true}
+  events:              {stage: 6, contract: events.py, stateful: true, export_formats: [jsonl], required_in_core: true, formats: {in: [cloudevents], out: [cloudevents]}}
+  broker:              {stage: 6, contract: broker.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true}
+  orchestration:       {stage: 6, contract: orchestration.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true}
+  records:             {stage: 9, contract: records.py, stateful: true, export_formats: [markdown-tree], required_in_core: true, privileged: true}
+  agent-runtime:       {stage: null, contract: null, stateful: false, required_in_core: true}
+  inference:           {stage: null, contract: inference.py, stateful: false, required_in_core: true}

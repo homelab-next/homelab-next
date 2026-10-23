@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# A lake provider (fictional "Proseware Lake") that fills the catalog and the query slots. The
+# catalog is stateful (Parquet export), the query engine is not, so only the catalog entry carries
+# a migration.
+manifest_version: "1.0"
+id: example-lake
+kind: provider
+title: The lake on Proseware Lake
+description: Fills lake-catalog, lake-query with Proseware Lake (fictional).
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: proseware-lake
+  display: Proseware Lake
+  version: 1.6.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:example-lake/catalog-token
+    identity: token
+    holder: consumers
+    purpose: the template of the per-consumer catalog tokens issued at bind time
+identifiers:
+  - {kind: lake-namespace, name: lake, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:object-store
+      version: "1.0"
+      purpose: the object-store slot this provider stores into or reads by name
+  hosts:
+    - role: lake
+      kind: vm
+      footprint: {cpu: 4, memory_mb: 4096, disk_gb: 500}
+      roles: [role:example_lake]
+      purpose: runs Proseware Lake
+provides:
+  slots:
+    lake-catalog:
+      formats:
+        - {format: ocsf, version: 1.3.0}
+      adapter: hnx_modules.example_lake.lake_catalog:make
+      conformance: {target: conformance/target.yml}
+      migration: {formats: [parquet], export: role:example_lake, import: role:example_lake}
+    lake-query:
+      formats:
+        - {format: sql, version: portable-1}
+      adapter: hnx_modules.example_lake.lake_query:make
+      conformance: {target: conformance/target.yml}
+contributes:
+  roles:
+    - file: roles/example_lake
+  preflight:
+    - {role: role:example_lake, hook: readiness}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, contributions]

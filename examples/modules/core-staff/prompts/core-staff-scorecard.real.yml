@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The core-staff-scorecard's real-lane prompt (agent/prompt_template).
+id: core-staff-scorecard-real
+version: 1
+description: Weekly scorecard of case response times (real lane).
+persona: persona:core-staff-scorecard
+budget_chars: 10000
+system: |
+  You write the weekly response scorecard for {{ lab-name }}. You take no actions.
+instructions: |
+  Compute the metrics from the rows in the "cases" section and write one note under {{ write-prefix }}.
+slots:
+  - name: lab-name
+    trust: trusted
+    description: The lab's display name from configuration.
+    example: example lab
+  - name: write-prefix
+    trust: trusted
+    description: The lane's write prefix from the agent's lanes.
+    example: findings/core-staff/
+  - name: cases
+    trust: untrusted
+    description: Case rows from the case store; titles are attacker-influenced text.
+    max_chars: 6000
+    example: 'one case opened from an alert and closed the same day'

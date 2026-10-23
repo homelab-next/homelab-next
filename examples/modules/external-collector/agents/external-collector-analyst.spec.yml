@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Profile spec for `hnx agent compile` (docs/agent.md). The profile id is bound to the module id.
+# The ceiling is never here: a module agent compiles only against the separately owned ceiling
+# policy in the site's overlay, never the spec's fallback ceiling. The spec is the one source of the
+# model role and the capabilities; the agent block's needs only narrow them to scopes. A reader of
+# untrusted text holds no acting capability: it sees sample sidecars through the module's own
+# read-only probe (last_batch), never through the object store, which is file-write.
+id: profile:external-collector-analyst
+persona: persona:external-collector-analyst
+model_role: mdl:main-reasoner
+capabilities: [cap:lake-query, cap:records]
+tier: read
+data_tier: local-only
+reads_untrusted: true
+budgets: {max_input_tokens: 48000, max_output_tokens: 3000, max_runtime_s: 900, max_tool_calls: 30}

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# A platform/lake_table record (draft 1.0): the sessions table this module owns. Its namespace is
+# the module id (external_collector); columns come from the OCSF class schema, never from here.
+id: table:external_collector.sessions
+owner: external-collector
+schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0
+retention_days: 180
+maintenance: {compact: true, expire_snapshots_days: 7}
+freshness: {cadence: batch, stale_after_s: 172800}

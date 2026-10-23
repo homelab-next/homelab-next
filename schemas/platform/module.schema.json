@@ -1,0 +1,2740 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/module/1.0",
+  "x-draft": "ADR-0027 (proposed): no loader or pilot yet; not frozen, may change before acceptance",
+  "title": "Module manifest",
+  "description": "One provider, feature or core module (ADR-0027, proposed; docs/modules.md): <modules>/<id>/module.yml. A provider fills slots with one product (the only place a product name may appear); a feature is an optional, removable mission naming slots, model roles, interfaces and host roles; a core module (id core-*) is always installed and is the home of the staff agents and other core consumers, so a swap's dependants re-check sees them. Every name a module claims is bound to its id; authority is never contributed. The loader that enforces the rules JSON Schema cannot express does not exist yet; docs/modules.md lists them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "id",
+    "kind",
+    "title",
+    "description",
+    "owner",
+    "author",
+    "status",
+    "version",
+    "origin",
+    "requires"
+  ],
+  "properties": {
+    "manifest_version": {
+      "const": "1.0",
+      "description": "The manifest schema's version, so a loader can tell a 1.0 manifest from a later one."
+    },
+    "id": {
+      "$ref": "#/$defs/module_id"
+    },
+    "kind": {
+      "enum": [
+        "provider",
+        "feature",
+        "core"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "owner": {
+      "$ref": "#/$defs/slug",
+      "description": "Owning team; the licence probe pages it."
+    },
+    "author": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+$(?!\\n)",
+      "description": "issuer:subject of whoever wrote the manifest. Reviews are never in the manifest: the overlay holds them, keyed by the module's tree digest."
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "active",
+        "deprecated",
+        "retired"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "description": "Why it is deprecated or retired."
+    },
+    "replaced_by": {
+      "$ref": "#/$defs/module_id",
+      "description": "Another module (never itself; loader)."
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$(?!\\n)",
+      "description": "The module's own version (semantic versioning)."
+    },
+    "origin": {
+      "$ref": "#/$defs/origin"
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "group"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "group": {
+          "$ref": "#/$defs/slug"
+        }
+      },
+      "description": "Feature only: membership of a bundle the site installs together (on the member, never a list)."
+    },
+    "product": {
+      "$ref": "#/$defs/product"
+    },
+    "licence": {
+      "$ref": "#/$defs/licence"
+    },
+    "credentials": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/credential"
+      },
+      "description": "Provider only: every credential the product holds or is given, in the module's own secret namespace."
+    },
+    "control_plane": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "reader",
+          "description"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/slug"
+          },
+          "reader": {
+            "$ref": "#/$defs/own_code_ref"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      },
+      "description": "Provider only: configuration the vendor holds outside the repository, read by the module's own code for the conformance run."
+    },
+    "identifiers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      },
+      "description": "Identifiers that are state, not code."
+    },
+    "requires": {
+      "$ref": "#/$defs/requires"
+    },
+    "prefers": {
+      "$ref": "#/$defs/prefers"
+    },
+    "interfaces": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/interface_definition"
+      },
+      "description": "Interfaces this module owns."
+    },
+    "provides": {
+      "$ref": "#/$defs/provides"
+    },
+    "egress": {
+      "$ref": "#/$defs/egress"
+    },
+    "contributes": {
+      "$ref": "#/$defs/contributes"
+    },
+    "data": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/dataset"
+      },
+      "description": "Datasets the module owns."
+    },
+    "config": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$(?!\\n)"
+      },
+      "patternProperties": {
+        "(?:^|_)(?:password|passwd|token|secret|credential|credentials|key|api_?key|private_?key)(?:_|$)": {
+          "properties": {
+            "type": {
+              "const": "secret"
+            }
+          },
+          "description": "A key named like a credential is of type secret: its default is a secret name, never a literal."
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/config_key"
+      },
+      "description": "Configuration keys with fictional defaults; the overlay sets the real values."
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "deprecated",
+              "retired"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "requires": {
+            "properties": {
+              "hosts": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "hosts"
+            ]
+          }
+        },
+        "required": [
+          "requires"
+        ]
+      },
+      "then": {
+        "required": [
+          "lifecycle"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "provider"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "product",
+          "licence",
+          "provides"
+        ],
+        "properties": {
+          "provides": {
+            "required": [
+              "slots"
+            ]
+          },
+          "id": {
+            "not": {
+              "pattern": "^core-"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "bundle"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "feature"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "provides": {
+            "not": {
+              "required": [
+                "slots"
+              ]
+            }
+          },
+          "id": {
+            "not": {
+              "pattern": "^core-"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "product"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "licence"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "credentials"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "control_plane"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "core"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "id": {
+            "pattern": "^core-"
+          },
+          "origin": {
+            "properties": {
+              "kind": {
+                "const": "in-tree"
+              }
+            }
+          },
+          "status": {
+            "not": {
+              "const": "retired"
+            }
+          },
+          "provides": {
+            "not": {
+              "required": [
+                "slots"
+              ]
+            }
+          },
+          "lifecycle": {
+            "not": {
+              "required": [
+                "remove"
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "product"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "licence"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "credentials"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "control_plane"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "bundle"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "replaced_by"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "module_id": {
+      "allOf": [
+        {
+          "type": "string",
+          "maxLength": 48,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        {
+          "not": {
+            "enum": [
+              "all",
+              "any",
+              "core",
+              "hnx",
+              "hnx-modules",
+              "homelabnext",
+              "lab",
+              "module",
+              "modules",
+              "none",
+              "overlay",
+              "pass-through",
+              "self",
+              "shared",
+              "site"
+            ]
+          }
+        },
+        {
+          "not": {
+            "pattern": "-shadow$"
+          }
+        }
+      ],
+      "description": "A module id: its directory name, never a reserved word, never ending in -shadow (the suffix names an agent's shadow lane, <root>/<id>-shadow/). Every name the module claims (tables, det ids, units, roles, data prefixes, secrets, agent and profile ids, criteria) is bound to it; the loader checks the binding."
+    },
+    "rel_path": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*/?$(?!\\n)",
+      "description": "A path inside the module's directory: no leading slash, no empty, '.' or '..' segment, no dot-file (.git). The loader also resolves it (realpath) inside the module directory and refuses symlinks and non-regular files."
+    },
+    "cap_ref": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+    },
+    "mdl_ref": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+    },
+    "svc_ref": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+    },
+    "profile_ref": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "table_ref": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^table:[a-z][a-z0-9]*(?:_[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*$(?!\\n)",
+      "description": "A full lake table id, table:<namespace>.<name>; a module's namespace is its id with - as _."
+    },
+    "role_ref": {
+      "type": "string",
+      "maxLength": 96,
+      "pattern": "^role:[a-z][a-z0-9_]*$(?!\\n)",
+      "description": "An Ansible role as a graph node id (role:<name>); the name starts with the module id (- as _)."
+    },
+    "status_ref": {
+      "type": "string",
+      "maxLength": 96,
+      "pattern": "^status:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "description": "A status source as a graph node id, declared on one of the module's own service rows."
+    },
+    "interface_id": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "description": "An inter-module interface, named by what it carries; exactly one module (or the core) defines each id and version."
+    },
+    "contract_version": {
+      "type": "string",
+      "maxLength": 16,
+      "pattern": "^[0-9]+\\.[0-9]+$(?!\\n)",
+      "description": "MAJOR.MINOR of a contract: met by the same major and an equal or higher minor."
+    },
+    "schema_id": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^https://schemas\\.example\\.internal/homelabnext/[a-z0-9_/.-]+/[0-9]+\\.[0-9]+$(?!\\n)",
+      "description": "The $id of a shipped schema (an event type such as events/case.opened/1.0, an OCSF class, ids/logical-id/1.0)."
+    },
+    "adapter_ref": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?:hnx_modules\\.[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)+:[A-Za-z_][A-Za-z0-9_]*|homelabnext\\.conform\\.adapters\\.[a-z_][a-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*)$(?!\\n)",
+      "description": "The factory that binds the product to the slot's contract: the module's own code (hnx_modules.<own id>.) or one of the shared adapters (homelabnext.conform.adapters.); the loader binds the package to the module's id."
+    },
+    "own_code_ref": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^hnx_modules\\.[a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)+:[A-Za-z_][A-Za-z0-9_]*$(?!\\n)",
+      "description": "Code in the module's own package, hnx_modules.<own id with - as _>.<module>:<attr>; the loader puts only that package on the import path."
+    },
+    "secret": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^secret:[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:/[a-z][a-z0-9_-]*)+$(?!\\n)",
+      "description": "A secret-store name in the module's own namespace (secret:<module id>/...), never a value; another module's secret is read only through an overlay grant."
+    },
+    "neutral_format": {
+      "enum": [
+        "parquet",
+        "jsonl",
+        "csv",
+        "json",
+        "markdown-tree",
+        "object-tree",
+        "zone-file",
+        "sigma",
+        "stix",
+        "sarif",
+        "ics"
+      ],
+      "description": "A format no product owns. parquet: lake rows; jsonl/csv/json: records; markdown-tree: Markdown with front matter and relative links; object-tree: keys and bytes plus a JSONL listing (key, size, sha256, metadata); zone-file: RFC 1035; sigma: Sigma rules; stix: STIX 2.1 bundles; sarif: SARIF 2.1.0 logs; ics: RFC 5545 calendars."
+    },
+    "neutral_formats": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/neutral_format"
+      },
+      "minItems": 1,
+      "description": "One or more neutral formats (cases export JSONL plus Markdown)."
+    },
+    "format_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version"
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "An interchange format at a boundary: ocsf, sigma, cloudevents, action-request, sql, s3, openai-compatible, markdown-records, stix, sarif, ics."
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]*$(?!\\n)",
+          "description": "The format's own version (ocsf 1.3.0, cloudevents 1.0, the S3 API 2006-03-01)."
+        },
+        "schema_id": {
+          "$ref": "#/$defs/schema_id"
+        },
+        "classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_.-]*$(?!\\n)"
+          },
+          "description": "The subset in use (OCSF classes, event types)."
+        }
+      },
+      "description": "A neutral format at a boundary: the conformance suite checks field meanings in it."
+    },
+    "formats": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/format_ref"
+      }
+    },
+    "features": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/slug"
+      },
+      "description": "Optional contract abilities as the suite names them; a semantic property a dependant relies on is a feature it can require (alert-promotes-case)."
+    },
+    "requirement_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cap"
+      ],
+      "properties": {
+        "cap": {
+          "$ref": "#/$defs/cap_ref"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "formats": {
+          "$ref": "#/$defs/formats"
+        },
+        "provisional": {
+          "const": true,
+          "description": "The slot has no contract yet (the slot registry says so; the loader refuses this where a contract exists). No version then."
+        },
+        "instance": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "Which instance of the slot, when a site selects several providers of it."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "One slot the module cannot work without (hard); never a product.",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "provisional"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "version"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "version"
+            ]
+          }
+        }
+      ]
+    },
+    "requirement_model_role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/mdl_ref"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "A model role alias (ADR-0007), never a model id."
+    },
+    "requirement_interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interface",
+        "version"
+      ],
+      "properties": {
+        "interface": {
+          "$ref": "#/$defs/interface_id"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "cardinality": {
+          "enum": [
+            "one",
+            "all"
+          ],
+          "description": "one (default): exactly one selected module provides it; all: consume every selected provider."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "An interface another module provides; the requiring module never names it."
+    },
+    "fallback_data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/slug",
+          "description": "One of the module's own data ids, living in this preference (loader)."
+        },
+        "retention": {
+          "$ref": "#/$defs/retention"
+        },
+        "formats": {
+          "$ref": "#/$defs/neutral_formats",
+          "description": "A subset of the fallback slot's export formats (loader)."
+        }
+      },
+      "description": "How an owned dataset changes when the fallback slot holds it instead (retention, export formats)."
+    },
+    "fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "behaviour"
+      ],
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/cap_ref",
+          "description": "The lighter slot used instead, when the site selects it; datasets bound to the preferred slot move with it."
+        },
+        "behaviour": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "What the module does, and what stops working, without the preferred slot or interface."
+        },
+        "data": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/fallback_data"
+          }
+        }
+      },
+      "description": "Without the preferred slot: what stops working, optionally the lighter slot used instead (to) and how owned datasets change there (data, which needs a to: data cannot move nowhere).",
+      "dependentRequired": {
+        "data": [
+          "to"
+        ]
+      }
+    },
+    "preference_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cap",
+        "purpose",
+        "fallback"
+      ],
+      "properties": {
+        "cap": {
+          "$ref": "#/$defs/cap_ref"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "formats": {
+          "$ref": "#/$defs/formats"
+        },
+        "provisional": {
+          "const": true
+        },
+        "instance": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      },
+      "description": "A slot used when the site has it (soft), with its fallback, so removal impact is computable.",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "provisional"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "version"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "version"
+            ]
+          }
+        }
+      ]
+    },
+    "preference_interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interface",
+        "version",
+        "purpose",
+        "fallback"
+      ],
+      "properties": {
+        "interface": {
+          "$ref": "#/$defs/interface_id"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "cardinality": {
+          "enum": [
+            "one",
+            "all"
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "fallback": {
+          "$ref": "#/$defs/fallback"
+        }
+      }
+    },
+    "prefers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/preference_capability"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/preference_interface"
+          }
+        }
+      },
+      "description": "Soft dependencies, each with its fallback behaviour."
+    },
+    "footprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory_mb",
+        "disk_gb"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 256
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 16
+        },
+        "disk_gb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gpu_memory_mb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "exclusive"
+            ],
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/slug",
+                "description": "The kind of a named host resource (gpu)."
+              },
+              "exclusive": {
+                "type": "boolean"
+              }
+            }
+          },
+          "description": "Named resources the placement binds to the host's own (gpu0); an exclusive one is never shared."
+        }
+      },
+      "description": "What the module places on one host role. A site sums every footprint on a host over cpu, memory, disk and GPU memory against the host's capacity less its headroom, and the generated units and guests take them as limits (MemoryMax, CPUQuota), never as hints."
+    },
+    "requirement_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "kind",
+        "footprint"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "The module's name for this host; the site's placement maps it to a host."
+        },
+        "kind": {
+          "enum": [
+            "vm",
+            "lxc",
+            "host",
+            "external",
+            "any"
+          ],
+          "description": "external: placement and footprint only; its compute model is deferred to the collector pilot."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1,
+          "description": "Copies of this host role; the footprint and its resources count once per copy."
+        },
+        "exposure": {
+          "enum": [
+            "internal",
+            "internet-facing",
+            "isolated"
+          ],
+          "default": "internal",
+          "description": "Default internal. internet-facing: only on a kind external role, or with the overlay's grants.internet_facing. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated."
+        },
+        "footprint": {
+          "$ref": "#/$defs/footprint"
+        },
+        "roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/role_ref"
+          },
+          "description": "The module's own Ansible roles on this host."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "A host or guest the module needs, by role, never by name."
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requirement_capability"
+          }
+        },
+        "model_roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requirement_model_role"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requirement_interface"
+          }
+        },
+        "hosts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requirement_host"
+          }
+        }
+      },
+      "description": "Everything the module needs, by slot, role or interface; never a product."
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formats",
+        "export",
+        "import"
+      ],
+      "properties": {
+        "formats": {
+          "$ref": "#/$defs/neutral_formats"
+        },
+        "export": {
+          "$ref": "#/$defs/role_ref",
+          "description": "The role whose export hook writes the slot's neutral format."
+        },
+        "import": {
+          "$ref": "#/$defs/role_ref",
+          "description": "The role whose import hook reads it (role interface v1.1)."
+        }
+      },
+      "description": "The slot's neutral export/import. Required exactly when the slot registry marks the slot stateful (a loader rule); a stateless slot carries none."
+    },
+    "provider_slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter"
+      ],
+      "properties": {
+        "formats": {
+          "$ref": "#/$defs/formats"
+        },
+        "adapter": {
+          "$ref": "#/$defs/adapter_ref"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "conformance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target"
+          ],
+          "properties": {
+            "target": {
+              "$ref": "#/$defs/rel_path",
+              "description": "A conformance target file in the module; its features equal the entry's."
+            },
+            "strict": {
+              "type": "boolean",
+              "description": "true: SHOULD checks fail the run too."
+            }
+          },
+          "description": "How the provider is proved; the evidence is the report kept in the swap record, never copied here."
+        },
+        "provisional": {
+          "const": true,
+          "description": "The slot has no contract yet. Refused where the slot has one, and always for a privileged slot."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "calibration": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "Per (decision spec x provider) thresholds and input limits, refitted by the conformance replay."
+          }
+        },
+        "migration": {
+          "$ref": "#/$defs/migration"
+        }
+      },
+      "description": "One slot the provider fills, keyed by the slot's name in provides.slots, so a slot cannot be claimed twice.",
+      "oneOf": [
+        {
+          "required": [
+            "conformance"
+          ],
+          "not": {
+            "required": [
+              "provisional"
+            ]
+          }
+        },
+        {
+          "required": [
+            "provisional",
+            "reason"
+          ],
+          "not": {
+            "required": [
+              "conformance"
+            ]
+          }
+        }
+      ]
+    },
+    "interface_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "kind",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/interface_id"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "kind": {
+          "enum": [
+            "object-prefix",
+            "event",
+            "lake-table",
+            "service"
+          ],
+          "description": "object-prefix: objects under a prefix of an object-store instance; event: an event type; lake-table: a table others read; service: a registry service's API."
+        },
+        "formats": {
+          "$ref": "#/$defs/formats"
+        },
+        "schema": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*\\.json$(?!\\n)",
+          "description": "The JSON Schema of one item (a .json file), in this (the owning) module; the loader reads it as a JSON Schema whose $id is in .../modules/<owner>/."
+        },
+        "schema_id": {
+          "$ref": "#/$defs/schema_id"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "description": "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface.",
+      "oneOf": [
+        {
+          "required": [
+            "schema"
+          ]
+        },
+        {
+          "required": [
+            "schema_id"
+          ]
+        }
+      ]
+    },
+    "interface_provided": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interface",
+        "version",
+        "via",
+        "description"
+      ],
+      "properties": {
+        "interface": {
+          "$ref": "#/$defs/interface_id"
+        },
+        "version": {
+          "$ref": "#/$defs/contract_version"
+        },
+        "via": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cap": {
+              "$ref": "#/$defs/cap_ref"
+            },
+            "instance": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+              "description": "The slot instance it is carried on."
+            },
+            "prefix": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_.-]*)*/$(?!\\n)",
+              "description": "Under the module's own data namespace (<module id>/...)."
+            },
+            "table": {
+              "$ref": "#/$defs/table_ref"
+            },
+            "service": {
+              "$ref": "#/$defs/svc_ref"
+            }
+          },
+          "description": "Where it is carried: a slot instance and its prefix or table, or a service."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "description": "An interface this module provides; the definition (schema) is the owner's."
+    },
+    "provides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slots": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/provider_slot"
+          },
+          "description": "Provider only: one entry per slot it fills, keyed by slot name."
+        },
+        "interfaces": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/interface_provided"
+          }
+        }
+      },
+      "description": "What the module offers: slots (provider only) and interfaces (any kind)."
+    },
+    "egress": {
+      "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). Enforcement by a generated network policy is specified, not implemented.",
+      "default": "none",
+      "oneOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "host",
+              "to"
+            ],
+            "properties": {
+              "host": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+                "description": "One of the module's host roles."
+              },
+              "to": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/svc_ref"
+                    },
+                    {
+                      "const": "internet"
+                    }
+                  ]
+                },
+                "minItems": 1
+              },
+              "purpose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "lake_table_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/rel_path"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "A platform/lake_table record (draft 1.0) in the module: its id's namespace is the module id."
+    },
+    "notify_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problem",
+        "recovery"
+      ],
+      "properties": {
+        "problem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "The problem title."
+        },
+        "recovery": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Its recovery title."
+        }
+      },
+      "description": "A recovery pair. The notifier loads pairs from manifests: this is their only source."
+    },
+    "agent_need": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cap",
+        "access",
+        "scope"
+      ],
+      "properties": {
+        "cap": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cap_ref"
+            },
+            {
+              "not": {
+                "enum": [
+                  "cap:broker",
+                  "cap:secrets",
+                  "cap:idp",
+                  "cap:edge",
+                  "cap:remote-admin",
+                  "cap:mcp-catalog"
+                ]
+              }
+            }
+          ],
+          "description": "Never an authority slot (broker, secrets, idp, edge, remote-admin, mcp-catalog)."
+        },
+        "access": {
+          "enum": [
+            "read",
+            "write"
+          ]
+        },
+        "scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(?:table:[a-z][a-z0-9]*(?:_[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*|[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_.-]*)*/)$(?!\\n)"
+          },
+          "minItems": 1,
+          "description": "Full table ids or prefixes (each ending in /). A write scope sits under the module's own namespace (<root>/<module id>[-shadow]/), and never overlaps another module's (loader)."
+        }
+      },
+      "description": "A scoped grant on a slot; the cap set equals the spec's capabilities."
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "writes"
+      ],
+      "properties": {
+        "writes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_.-]*)*/$(?!\\n)"
+          },
+          "minItems": 1,
+          "description": "The records prefixes this lane writes: the real lane under <root>/<module id>/, the shadow lane under <root>/<module id>-shadow/ (loader)."
+        },
+        "compare_to": {
+          "enum": [
+            "real"
+          ],
+          "description": "The lane a shadow lane is graded against."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "real"
+      ],
+      "properties": {
+        "production": {
+          "enum": [
+            "real",
+            "shadow"
+          ],
+          "default": "real",
+          "description": "The lane consumers read (default real). The selection binds each lane to exactly one orchestration instance."
+        },
+        "real": {
+          "$ref": "#/$defs/lane"
+        },
+        "shadow": {
+          "$ref": "#/$defs/lane"
+        }
+      },
+      "description": "The agent's lanes. Each needs a prompt, and the selection binds each to one orchestration instance, so a cutover runs the real lane on the old instance and the shadow on the new one, never both on both."
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "profile",
+        "charter",
+        "spec",
+        "prompts",
+        "lanes"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "The agent key; starts with the module id and is unique against the core's and every module's."
+        },
+        "profile": {
+          "$ref": "#/$defs/profile_ref",
+          "description": "profile:<key>: owned by the module; never another profile's id (ceilings are keyed by it)."
+        },
+        "charter": {
+          "$ref": "#/$defs/rel_path",
+          "description": "The one copy of the agent's standing instructions."
+        },
+        "spec": {
+          "$ref": "#/$defs/rel_path",
+          "description": "The profile spec (docs/agent.md): the one source of model role and capabilities. It carries no ceiling: a module agent compiles only with the overlay's ceiling policy."
+        },
+        "needs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/agent_need"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 96,
+            "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9_]*$(?!\\n)"
+          },
+          "description": "Slot-named tools (<slot>.<tool>); a product's tool name is caught by the product-name lint, not by this pattern."
+        },
+        "context_manifest": {
+          "$ref": "#/$defs/rel_path"
+        },
+        "prompts": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "real",
+              "shadow"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/rel_path"
+          },
+          "description": "Per lane, an agent/prompt_template record; exactly the agent's lanes."
+        },
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "on_calendar"
+          ],
+          "properties": {
+            "on_calendar": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9*:/,. -]+ UTC$(?!\\n)",
+              "description": "A systemd calendar ending in UTC."
+            }
+          }
+        },
+        "trigger": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "event"
+              ],
+              "properties": {
+                "event": {
+                  "type": "string",
+                  "maxLength": 96,
+                  "pattern": "^homelabnext\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$(?!\\n)",
+                  "description": "An event type (schemas/events)."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "interface"
+              ],
+              "properties": {
+                "interface": {
+                  "$ref": "#/$defs/interface_id"
+                }
+              }
+            }
+          ],
+          "description": "Event-driven instead of a calendar: an event type, or an item arriving on an interface the module consumes."
+        },
+        "state": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 96,
+            "pattern": "^[a-z0-9][a-z0-9_.-]*\\.json$(?!\\n)"
+          },
+          "description": "State files, per lane under the module's state prefix."
+        },
+        "roster": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "recall": {
+              "type": "boolean",
+              "description": "true: the incident recall addresses this agent. Staff codes are the overlay roster's, never the manifest's."
+            }
+          }
+        },
+        "handoffs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/rel_path"
+          },
+          "description": "agent/handoff records; their broker actions must be a subset of the operator's broker manifest and are never added to it."
+        },
+        "lanes": {
+          "$ref": "#/$defs/lanes"
+        }
+      },
+      "description": "One agent as ONE block: profile, tool wiring, scheduler entry, state paths and roster are generated from it.",
+      "oneOf": [
+        {
+          "required": [
+            "schedule"
+          ],
+          "not": {
+            "required": [
+              "trigger"
+            ]
+          }
+        },
+        {
+          "required": [
+            "trigger"
+          ],
+          "not": {
+            "required": [
+              "schedule"
+            ]
+          }
+        }
+      ]
+    },
+    "entry_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "name",
+        "object"
+      ],
+      "properties": {
+        "group": {
+          "enum": [
+            "homelabnext.invariants.checks"
+          ],
+          "description": "An existing entry-point group; the proposed ones (docs/modules.md, migration path) join when they exist."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$(?!\\n)",
+          "description": "Starts with the module id (- as _)."
+        },
+        "object": {
+          "$ref": "#/$defs/own_code_ref"
+        }
+      },
+      "description": "Code the module plugs into the core."
+    },
+    "scheduler_job": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/rel_path"
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "description": "A fleet_units spec in the module: unit names start with the module id; no run_as_root or hardening_opt_out without an overlay grant; no direct paging."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "timer"
+          ],
+          "properties": {
+            "timer": {
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^timer:[a-z][a-z0-9_]*/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+              "description": "A timer of one of the module's OWN roles (timer:<role>/<name>)."
+            }
+          }
+        }
+      ]
+    },
+    "shared_config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "file",
+        "reason"
+      ],
+      "properties": {
+        "target": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/cap_ref"
+            },
+            {
+              "not": {
+                "enum": [
+                  "cap:secrets",
+                  "cap:broker",
+                  "cap:mcp-catalog",
+                  "cap:records",
+                  "cap:orchestration"
+                ]
+              }
+            }
+          ],
+          "description": "The shared component; never secrets, broker, mcp-catalog, records or orchestration, and edge or idp only with an overlay grant."
+        },
+        "file": {
+          "$ref": "#/$defs/rel_path"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "description": "A quirk in a shared component, as typed keys that component's generator merges, never an edit to its own config."
+    },
+    "contributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "An Ansible role directory in the module (role interface v1); its name starts with the module id."
+          }
+        },
+        "services": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "platform/service rows; names start with the module id (a provider's row is keyed by its slot and renamed to the instance). A public_hostname needs auth other than none and an overlay grant."
+          }
+        },
+        "status_sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/status_ref"
+          }
+        },
+        "notify_pairs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/notify_pair"
+          }
+        },
+        "scheduler_jobs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scheduler_job"
+          }
+        },
+        "lake_tables": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/lake_table_entry"
+          }
+        },
+        "preflight": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "hook"
+            ],
+            "properties": {
+              "role": {
+                "$ref": "#/$defs/role_ref"
+              },
+              "hook": {
+                "enum": [
+                  "readiness",
+                  "health"
+                ]
+              }
+            },
+            "description": "A role's own readiness or health hook."
+          }
+        },
+        "mcp_servers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "A platform/mcp_server record; its id starts with the module id."
+          }
+        },
+        "agents": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/agent"
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "Criteria in the register's shape with ids <module id>/<slug> (registers/invariant 1.1)."
+          }
+        },
+        "entry_points": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/entry_point"
+          }
+        },
+        "detections": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "A Sigma rule; its det: id starts with the module id."
+          }
+        },
+        "workflow_packs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "A workflow pack."
+          }
+        },
+        "docs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/rel_path"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "description": "A Markdown page the docs index lists under the module."
+          }
+        },
+        "shared_config": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/shared_config"
+          }
+        }
+      },
+      "description": "Entries the module adds to registries the core builds. The core keeps no list. Authority (ceilings, broker actions, review policy, grants, tooling settings, hooks, instructions) is never contributed."
+    },
+    "retention": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "days"
+          ],
+          "properties": {
+            "days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keep"
+          ],
+          "properties": {
+            "keep": {
+              "enum": [
+                "forever",
+                "transient"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "data_io": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formats",
+        "via"
+      ],
+      "properties": {
+        "formats": {
+          "$ref": "#/$defs/neutral_formats"
+        },
+        "via": {
+          "$ref": "#/$defs/role_ref"
+        }
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "description",
+        "export",
+        "import",
+        "retention"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/slug"
+        },
+        "kind": {
+          "enum": [
+            "lake-table",
+            "object-prefix",
+            "records-prefix",
+            "files",
+            "database",
+            "state"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/table_ref"
+        },
+        "prefix": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_.-]*)*/$(?!\\n)",
+          "description": "Under the module's own namespace in the slot it lives in."
+        },
+        "via": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cap"
+          ],
+          "properties": {
+            "cap": {
+              "$ref": "#/$defs/cap_ref"
+            },
+            "instance": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            }
+          },
+          "description": "The requirement or preference it lives in (required for a dataset in a slot; files, database and state live on the module's own host). It names only a cap, and an instance, the module requires or prefers; when the site resolves that slot to its fallback, the dataset moves there (with the fallback's data override)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "export": {
+          "$ref": "#/$defs/data_io",
+          "description": "Its exit copy, written by that role's export hook (relative to the module's data root)."
+        },
+        "import": {
+          "$ref": "#/$defs/data_io",
+          "description": "Its import; the role validates traversal, symlinks and sizes in the tree it reads."
+        },
+        "retention": {
+          "$ref": "#/$defs/retention"
+        }
+      },
+      "description": "One dataset the module owns: removing the module exports it first, and never touches another module's data.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "lake-table"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "table"
+            ],
+            "not": {
+              "required": [
+                "prefix"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object-prefix",
+                  "records-prefix",
+                  "files"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "prefix"
+            ],
+            "not": {
+              "required": [
+                "table"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "database",
+                  "state"
+                ]
+              }
+            }
+          },
+          "then": {
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "table"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "prefix"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "lake-table",
+                  "object-prefix",
+                  "records-prefix"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "via"
+            ]
+          }
+        }
+      ]
+    },
+    "config_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "description",
+        "overlay"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "boolean",
+            "duration_s",
+            "path",
+            "svc",
+            "secret",
+            "enum"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "default": {
+          "description": "A fictional default; a real value comes from the overlay."
+        },
+        "values": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "minItems": 1
+        },
+        "overlay": {
+          "enum": [
+            "required",
+            "optional"
+          ],
+          "description": "required: a site must set it."
+        }
+      },
+      "description": "A configuration key. An enum default is one of values (loader); a path default is relative to the module's data root.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "secret"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/secret"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "svc"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/svc_ref"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "duration_s"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/plain_string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "path"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "default": {
+                "$ref": "#/$defs/rel_path"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "enum"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "values"
+            ],
+            "properties": {
+              "default": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "values"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "plain_string": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "A string default carries no reference of any scheme (secret:, vault:, any <scheme>:, in any case) and no address literal: those have typed keys or come from the registry.",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+          }
+        },
+        {
+          "not": {
+            "pattern": "[Ss][Ee][Cc][Rr][Ee][Tt]:"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$|::"
+          }
+        }
+      ]
+    },
+    "playbook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "playbook"
+      ],
+      "properties": {
+        "playbook": {
+          "$ref": "#/$defs/rel_path"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "install"
+      ],
+      "properties": {
+        "install": {
+          "$ref": "#/$defs/playbook"
+        },
+        "upgrade": {
+          "$ref": "#/$defs/playbook"
+        },
+        "remove": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "playbook",
+            "audit"
+          ],
+          "properties": {
+            "playbook": {
+              "$ref": "#/$defs/rel_path"
+            },
+            "export_first": {
+              "type": "boolean",
+              "description": "Default true: every owned dataset is exported before removal."
+            },
+            "discard_reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "Why owned data may go without an export (required when export_first is false)."
+            },
+            "audit": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/slug"
+              },
+              "minItems": 1,
+              "description": "Decommission planes (homelabnext/decommission/planes.py's registry; the loader checks the names) plus the contributions plane."
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "export_first": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "export_first"
+                ]
+              },
+              "then": {
+                "required": [
+                  "discard_reason"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "description": "Playbooks in the module. Required when the module places anything on a host; a hosted or config-only provider needs none. upgrade defaults to install (roles are idempotent)."
+    },
+    "origin": {
+      "description": "Where the module comes from. in-tree: shipped in this repository (reviewed by its own pull requests). git or archive: fetched; the overlay pins its tree digest (sha256 over every file of the module directory, code and roles included) and keeps the reviews keyed by it, so an unpinned or changed module is not loadable.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "in-tree"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url",
+            "commit"
+          ],
+          "properties": {
+            "kind": {
+              "const": "git"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 300,
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
+            },
+            "commit": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$(?!\\n)",
+              "description": "A full commit id: 40 hex (sha1 repositories) or 64 hex (sha256)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url",
+            "sha256"
+          ],
+          "properties": {
+            "kind": {
+              "const": "archive"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 300,
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
+            },
+            "sha256": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$(?!\\n)"
+            }
+          }
+        }
+      ]
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/slug",
+          "description": "The product's name as the product-name lint matches it."
+        },
+        "display": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Default: name."
+        },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/slug"
+          },
+          "description": "Other spellings the lint matches."
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.+_-]*$(?!\\n)",
+          "description": "The pinned product version; the provider's service rows take it from here."
+        }
+      }
+    },
+    "licence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "open-source",
+            "commercial",
+            "trial",
+            "subscription"
+          ]
+        },
+        "spdx": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9.+-]+$(?!\\n)"
+        },
+        "tier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "The feature tier the site relies on."
+        },
+        "expires": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+          "description": "The licence probe warns 30 days ahead, pages the owner through notify at 7, and turns red on the day."
+        },
+        "renewal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "trial",
+                  "subscription",
+                  "commercial"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "expires"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "open-source"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "spdx"
+            ]
+          }
+        }
+      ]
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secret",
+        "identity",
+        "holder",
+        "purpose"
+      ],
+      "properties": {
+        "secret": {
+          "$ref": "#/$defs/secret"
+        },
+        "identity": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "api-key, service-account, sso-app, key-pair, token, password, ... (a slug; the loader knows the kinds)."
+        },
+        "holder": {
+          "enum": [
+            "provider",
+            "consumers",
+            "granted"
+          ],
+          "description": "provider: only the provider's own roles read it; consumers: a template the provider issues one credential per consumer from at bind time (never shared); granted: readable only by modules the overlay's grants.secrets names."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "identifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "on_remove"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "hostname, dns-name, vmid, lake-namespace, bucket, iac-variable, secret-name (a slug)."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$(?!\\n)"
+        },
+        "on_remove": {
+          "enum": [
+            "release",
+            "keep",
+            "tombstone"
+          ],
+          "description": "tombstone: never reused. The loader refuses an identifier another module or the core holds."
+        }
+      }
+    }
+  }
+}

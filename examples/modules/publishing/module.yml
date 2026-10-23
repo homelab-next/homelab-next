@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: Apache-2.0
+# The publishing module (fictional values): the lab's ONLY egress path for published content. It
+# OWNS the publishable-output interface, because the gate's input (the TLP field) is the contract;
+# every producer references it. It reads every producer's items, applies the gate (the TLP is
+# verified, never trusted; then the leak and deny-list scan) and pushes what passes through the
+# static-hosting slot. That it alone may reach that slot is an overlay grant (grants.publish),
+# checked by a core criterion, never a rule this module contributes about itself.
+manifest_version: "1.0"
+id: publishing
+kind: feature
+title: Publishing
+description: Gates and publishes every module's publishable output to the static-hosting slot; the
+  only module that sends published content off the lab.
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.2.0
+origin: {kind: in-tree}
+requires:
+  capabilities:
+    - cap: cap:static-hosting
+      provisional: true
+      purpose: where gated content is pushed (no contract yet; a site picks the provider)
+    - cap: cap:object-store
+      version: "1.0"
+      purpose: reads the producers' items on whichever instance each producer's interface names
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the deny-list is read by name; the hosting credential stays with the slot's adapter
+    - cap: cap:notify
+      version: "1.0"
+      purpose: pages once when the gate blocks an item, once when it clears
+  hosts:
+    - role: publisher
+      kind: any
+      footprint: {cpu: 0.5, memory_mb: 256, disk_gb: 5}
+      roles: [role:publishing_gate]
+      purpose: runs the gate and the push; the only identity granted the hosting credential
+interfaces:
+  - id: publishable-output
+    version: "1.0"
+    kind: object-prefix
+    schema: interfaces/publishable-item.schema.json
+    description: items offered for publication under a producer's prefix, each with a JSON sidecar
+      carrying its claimed TLP; the gate verifies the claim against the content before anything leaves
+prefers:
+  interfaces:
+    - interface: publishable-output
+      version: "1.0"
+      cardinality: all
+      purpose: every selected module's publishable items, with their TLP sidecars
+      fallback:
+        behaviour: with no producer selected nothing is published
+egress:
+  - host: publisher
+    to: [internet]
+    purpose: pushes the gated site through the static-hosting slot's adapter; granted in the overlay
+contributes:
+  roles:
+    - file: roles/publishing_gate
+  notify_pairs:
+    - problem: 'Publishing: an item was blocked by the gate'
+      recovery: 'Publishing: the gate passes every item again'
+  scheduler_jobs:
+    - file: units/fleet_units.yml
+  preflight:
+    - {role: role:publishing_gate, hook: readiness}
+data:
+  - id: published-manifest
+    kind: state
+    description: what was published, when, from which producer, with each item's sha256 and verified TLP
+    export: {formats: [jsonl], via: role:publishing_gate}
+    import: {formats: [jsonl], via: role:publishing_gate}
+    retention: {keep: forever}
+config:
+  tlp_allowed:
+    type: enum
+    description: the most permissive TLP the gate lets out (red and amber never pass)
+    values: [clear, green]
+    default: clear
+    overlay: optional
+  deny_list:
+    type: secret
+    description: the site's deny-list of internal names and addresses, including its public ones
+    default: secret:publishing/deny-list
+    overlay: required
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, secret-names, contributions]

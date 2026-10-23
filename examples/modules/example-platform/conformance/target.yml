@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider's contracted slots.
+name: example-platform
+capabilities:
+  secrets:
+    adapter: hnx_modules.example_platform.secrets:make
+  idp:
+    adapter: hnx_modules.example_platform.idp:make
+  edge:
+    adapter: hnx_modules.example_platform.edge:make
+  dns:
+    adapter: hnx_modules.example_platform.dns:make
+  backup:
+    adapter: hnx_modules.example_platform.backup:make
+  events:
+    adapter: hnx_modules.example_platform.events:make
+  broker:
+    adapter: hnx_modules.example_platform.broker:make
+  records:
+    adapter: hnx_modules.example_platform.records:make
+  orchestration:
+    adapter: hnx_modules.example_platform.orchestration:make
