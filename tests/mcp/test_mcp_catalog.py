@@ -38,9 +38,9 @@ OLD_TABLE = {
     "docker": ["exec"], "kubernetes": ["exec"], "ansible": ["exec"],
     "filesystem": ["read", "file-write"], "git": ["read", "file-write"],
     "github": ["egress", "file-write"], "gitlab": ["egress", "file-write"], "fetch": ["egress"],
-    "http": ["egress"], "web": ["egress"], "web-search": ["egress"], "browser": ["egress"],
-    "playwright": ["egress"], "puppeteer": ["egress"], "email": ["egress"], "smtp": ["egress"],
-    "slack": ["egress"], "ntfy": ["egress"], "vault": ["credential"],
+    "http": ["egress", "send"], "web": ["egress"], "web-search": ["egress"], "browser": ["egress"],
+    "playwright": ["egress"], "puppeteer": ["egress"], "email": ["egress", "send"], "smtp": ["egress", "send"],
+    "slack": ["egress", "send"], "ntfy": ["egress", "send"], "vault": ["credential"],
 }  # fmt: skip
 
 
@@ -57,7 +57,8 @@ def test_the_repository_catalog_passes_every_rule():
 def test_the_derived_table_keeps_every_level_and_reader_verdict():
     """Behaviour unchanged: for every name the hand-written table classified, the level and the
     classes a reader may not hold are what they were (hnx-broker gained ``read`` for its
-    read-only tools, which changes neither)."""
+    read-only tools, which changes neither; the senders gained ``send``, ADR-0030, which a reader
+    could not hold as egress either)."""
     table = default_classes()
     assert table.catalog is not None
     for name, old in OLD_TABLE.items():
@@ -398,7 +399,8 @@ def test_every_shipped_acting_server_is_broker_only_or_a_reviewed_direct_one():
     assert acting == {
         "hnx-broker": "broker", "ssh": "direct", "shell": "direct", "ansible": "direct",
         "kubernetes": "direct", "vault": "direct", "filesystem": "direct", "git": "direct",
-        "github": "direct", "gitlab": "direct",
+        "github": "direct", "gitlab": "direct", "slack": "direct", "email": "direct",
+        "smtp": "direct", "ntfy": "direct", "http": "direct",
     }  # fmt: skip
     for sid, via in acting.items():
         if via == "direct":
@@ -467,3 +469,20 @@ def test_a_new_record_claiming_the_broker_is_refused(tmp_catalog):
     (tmp_catalog / "k8s-ops.yml").write_text(yaml.safe_dump(rec))
     problems = servers.check(servers.load(tmp_catalog), registry=REGISTRY)
     assert any("k8s-ops.yml: acts_via: broker, but only the broker's own" in p for p in problems)
+
+
+def test_a_send_is_an_effect_that_goes_through_the_broker():
+    """S2: posting to chat, sending mail, publishing a notification or an HTTP request change
+    something elsewhere: class send, broker-only (the broker's notify actions), and a server that
+    sends directly promises no approval. Reading the web (fetch, browse) stays egress."""
+    from homelabnext.agent.readers import table_broker_only
+
+    assert "send" in table_broker_only()
+    for sid, tool in (("slack", "post_message"), ("email", "send_email"), ("smtp", "send_email"),
+                      ("ntfy", "publish"), ("http", "request")):  # fmt: skip
+        rec = yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
+        (t,) = [t for t in rec["tools"] if t["name"] == tool]
+        assert "send" in t["classes"] and t["approval"] is False, sid
+    for sid in ("fetch", "web", "browser", "playwright"):
+        rec = yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
+        assert all(t["classes"] == ["egress"] for t in rec["tools"]), sid

@@ -256,19 +256,19 @@ def test_a_deprecated_grant_renders_with_a_note(tmp_path):
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
     _lax_review_policy(tmp_path)
-    rec = yaml.safe_load((d / "ntfy.yml").read_text())
-    rec.update(status="deprecated", reason="moved to slack", replaced_by="slack")
-    (d / "ntfy.yml").write_text(yaml.safe_dump(rec))
+    rec = yaml.safe_load((d / "fetch.yml").read_text())
+    rec.update(status="deprecated", reason="moved to web", replaced_by="web")
+    (d / "fetch.yml").write_text(yaml.safe_dump(rec))
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["ntfy"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["fetch"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     text, notes = clients.render_profile(
         servers.load(d), prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert "ntfy" in json.loads(text)["mcpServers"]
-    assert any("deprecated" in n and "grant 'slack' instead" in n for n in notes)
+    assert "fetch" in json.loads(text)["mcpServers"]
+    assert any("deprecated" in n and "grant 'web' instead" in n for n in notes)
 
 
 def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
@@ -277,7 +277,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     client's working directory."""
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["ntfy"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["fetch"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     with pytest.raises(clients.RenderError, match="npm_prefix is not given"):
@@ -287,7 +287,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     text, _ = clients.render_profile(
         CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert json.loads(text)["mcpServers"]["ntfy"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
+    assert json.loads(text)["mcpServers"]["fetch"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
     spec = tmp_path / "spec.yml"
     spec.write_text(yaml.safe_dump({
         "client": "claude-code", "catalog": str(ROOT / "examples" / "mcp"), "policy": "pol.yml",

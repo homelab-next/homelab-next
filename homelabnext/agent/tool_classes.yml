@@ -32,11 +32,12 @@ classes:
   exec: runs commands, workflows, containers or broker actions with side effects (shell)
   file-write: creates or changes files, objects or repositories
   egress: sends data to a destination outside the platform (web fetch, search, browser, mail, chat, notifications, tunnels)
+  send: sends a message or a request that changes something elsewhere (mail, chat, a notification, an HTTP request); an effect, so it goes through the broker (its notify actions)
   credential: reads or issues credentials (secret stores, identity providers)
 
-reader_forbidden: [exec, file-write, egress, credential]
+reader_forbidden: [exec, file-write, egress, send, credential]
 
-broker_only: [exec, file-write, credential]
+broker_only: [exec, file-write, send, credential]
 
 tiers:
   read: [read]
@@ -58,7 +59,7 @@ capabilities:
   cap:events: [record-write]
   cap:detections: [record-write]
   cap:object-store: [read, file-write]
-  cap:notify: [egress]
+  cap:notify: [egress, send]
   cap:edge: [egress]
   cap:orchestration: [exec]
   cap:broker: [exec]

@@ -151,7 +151,7 @@ def test_an_actor_acts_through_the_broker():
                         tier="execute"))  # fmt: skip
     assert p["grants"]["tier"] == "execute" and verify_profile(p) == []
     # egress and record-write are not broker-only: a non-reader may hold them
-    p = _compile(_actor(mcp=["fetch"], capabilities=["cap:notify", "cap:records-propose"],
+    p = _compile(_actor(mcp=["fetch"], capabilities=["cap:records-propose"],
                         tier="write", data_tier="cloud-allowed"))  # fmt: skip
     assert verify_profile(p) == []
 
@@ -164,6 +164,8 @@ def test_an_actor_acts_through_the_broker():
         ("mcp", "filesystem", "'filesystem' (file-write)"),
         ("mcp", "git", "'git' (file-write)"),
         ("mcp", "vault", "'vault' (credential)"),
+        ("mcp", "slack", "'slack' (send)"),
+        ("capabilities", "cap:notify", "'cap:notify' (send)"),
         ("capabilities", "cap:hypervisor", "'cap:hypervisor' (exec)"),
         ("capabilities", "cap:secrets", "'cap:secrets' (credential)"),
         ("capabilities", "cap:idp", "'cap:idp' (credential)"),
@@ -263,7 +265,7 @@ def test_direct_mcp_is_a_list_of_server_ids():
 # ---------------------------------------------------------------- the table
 def test_the_table_lists_the_broker_only_classes():
     table = default_classes()
-    assert table.broker_only == {"exec", "file-write", "credential"}
+    assert table.broker_only == {"exec", "file-write", "send", "credential"}
     assert table.broker_only <= table.reader_forbidden  # a reader may hold none of them either
 
 
@@ -271,11 +273,11 @@ def test_a_classes_file_cannot_narrow_broker_only(tmp_path, capsys):
     doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
     doc["broker_only"] = ["credential"]
     (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
-    with pytest.raises(SpecError, match=r"broker_only leaves out \['exec', 'file-write'\]"):
+    with pytest.raises(SpecError, match=r"broker_only leaves out \['exec', 'file-write', 'send'\]"):
         ToolClasses.load(tmp_path / "classes.yml")
     assert cli.main(["agent", "lint", str(ROOT / "schemas"), "--classes",
                      str(tmp_path / "classes.yml")]) == 1  # fmt: skip
-    doc["broker_only"] = ["credential", "exec", "file-write", "egress"]  # more is fine
+    doc["broker_only"] = ["credential", "exec", "file-write", "send", "egress"]  # more is fine
     (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
     assert "egress" in ToolClasses.load(tmp_path / "classes.yml").broker_only
     doc.pop("broker_only")

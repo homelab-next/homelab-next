@@ -20,9 +20,11 @@ env:
 egress: [internet]
 data_tier: local-only
 tools:
-- {name: send_email, classes: [egress], approval: true}
+- {name: send_email, classes: [egress, send], approval: false}
+acts_via: direct
+direct_reason: 'Sends mail itself with its own credential; no shipped profile holds it: a message goes through the broker''s notify actions (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:19d4533cbb1f'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:19d4533cbb1f'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:19d4533cbb1f'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:d57330062787'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:d57330062787'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:d57330062787'}

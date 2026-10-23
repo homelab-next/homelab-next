@@ -20,9 +20,11 @@ env:
 egress: [internet]
 data_tier: local-only
 tools:
-- {name: post_message, classes: [egress], approval: true}
+- {name: post_message, classes: [egress, send], approval: false}
+acts_via: direct
+direct_reason: 'Posts to chat itself with its own token; no shipped profile holds it: a message goes through the broker''s notify actions (ADR-0030).'
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:f20fac63a87e'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:f20fac63a87e'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:f20fac63a87e'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:609cb969b11d'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:609cb969b11d'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:609cb969b11d'}
