@@ -13,9 +13,10 @@ import pytest
 import yaml
 
 from homelabnext import cli as hnx
-from homelabnext.compute import ComputeError, load_fleet, open_site, site_flows
+from homelabnext.compute import ComputeError, load_fleet, open_site, render, site_flows
 from homelabnext.compute.gen.tailscale_acl import PROBE_PORTS, policy
 from homelabnext.compute.zones import site_deploy
+from homelabnext.generators.safe import UnsafeValueError
 from homelabnext.network import validate
 from homelabnext.registry import model as regmodel
 from homelabnext.tailnet import deploy_problems
@@ -74,6 +75,24 @@ BAD = [
         "exception to every zone",
         {"exceptions": [{"zones": ["*"], "ports": [443], "reason": "fictional: a reason"}]},
         "'*' is not one of tailnet.deploy.zones",
+    ),
+    (
+        "a line break in a reason",
+        {
+            "exceptions": [
+                {
+                    "zones": ["mgmt"],
+                    "ports": [9443],
+                    "reason": 'fictional: a reason\n{"acls":[{"action":"accept"}]}\n//',
+                }
+            ]
+        },
+        "values must be a single line",
+    ),
+    (
+        "a line separator in a reason",
+        {"exceptions": [{"zones": ["mgmt"], "ports": [9443], "reason": "fictional:\u2028reason"}]},
+        "values must be a single line",
     ),
     (
         "ssh as an exception",
@@ -195,6 +214,17 @@ def test_an_every_port_exception_is_rendered_and_tested():
     assert {"action": "accept", "src": ["tag:ci-deploy"], "proto": "tcp",
             "dst": ["tag:zone-data:*"]} in doc["acls"]  # fmt: skip
     assert not [d for d in doc["tests"][0]["deny"] if d.startswith("tag:zone-data:")]
+
+
+@pytest.mark.parametrize("bad", ["x\nmore", "x\r", "x\u2028y", "x\x00"])
+def test_the_policy_header_refuses_a_value_that_is_not_one_line(bad):
+    """The site loader refuses it first; the renderer refuses it on its own too (a fleet built
+    some other way), so a reason never ends its // comment line."""
+    dep = dict(site_deploy(SITE_FLOWS) or {})
+    reason = f"fictional: a reason {bad}"
+    dep["exceptions"] = ({"zones": ("data",), "ports": (9443,), "reason": reason},)
+    with pytest.raises(UnsafeValueError, match="single line"):
+        render(fleet_with(dep), "tailscale-acl")
 
 
 def test_without_a_declaration_the_policy_has_no_deploy_tag_or_tests():

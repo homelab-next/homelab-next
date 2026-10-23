@@ -34,6 +34,7 @@ from typing import Any
 
 from homelabnext.compute.baselines import APPLY_GUEST, resolve
 from homelabnext.compute.model import Fleet, Guest
+from homelabnext.generators.safe import checked
 from homelabnext.tailnet import ANY_PORT, SSH, ZONE_TAG_PREFIX
 
 from ._text import HEADER
@@ -173,9 +174,12 @@ def render(fleet: Fleet) -> dict[str, str]:
         for e in dep["exceptions"]:
             where = ", ".join(zone_tag(z) for z in e["zones"])
             ports = "every port" if e["ports"] == ANY_PORT else ",".join(map(str, e["ports"]))
-            L.append(f"//   and tcp {ports} to {where}: {e['reason']}")
+            reason = checked(e["reason"], "tailnet.deploy exception reason")
+            L.append(f"//   and tcp {ports} to {where}: {reason}")
         empty = [z for z in dep["zones"] if z not in {g.zone for g in guests}]
         if empty:
             L.append(f"//   no tailnet node yet in: {', '.join(empty)}")
+    for n, line in enumerate(L):  # each // line stays one comment line
+        checked(line, f"{FILE} header line {n + 1}")
     L.append(json.dumps(doc, indent=2, ensure_ascii=True))
     return {FILE: "\n".join(L) + "\n"}
