@@ -452,7 +452,12 @@ that fill those slots) must be listed for that role, and so must `external` for 
 host role, which runs outside the lab and so is egress by itself. Because the grant lists targets,
 not roles, a manifest change that adds a target to a granted role is refused until the overlay
 lists it too. A host role inside the lab may be `internet-facing` only with
-`grants.internet_facing.<module>: [<role>]`. **The egress generator is specified, not implemented**: nothing renders the declared egress
+`grants.internet_facing.<module>: [<role>]`. Both grants name a selected module, one of its host
+roles, and only what the manifest uses (an egress target its entry lists, `external` for an
+external role, an internet-facing role inside the lab): a grant waiting for a role or target to
+appear would switch it on with a placement line nobody reads as a grant, so it is refused. A
+`svc:` target is checked even before the rows are read: a selected slot, an instance, or a name
+bound to a selected feature or core module (whose rows then decide). **The egress generator is specified, not implemented**: nothing renders the declared egress
 into host and unit network policy (`IPAddressDeny`/allow lists, nftables) yet, so today egress is
 declared and checked against grants, not enforced on the wire. **Publishing is the only egress
 for published content** because the overlay says so, not because publishing says so: only a module

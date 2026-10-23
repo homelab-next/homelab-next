@@ -603,7 +603,6 @@ MODULE_DEFECTS = {
 }
 
 
-@pytest.mark.parametrize("case", sorted(MODULE_DEFECTS))
 def test_a_loader_rule_refuses_the_defect(case):
     name, mutate, needle = MODULE_DEFECTS[case]
     assert any(needle in p for p in _rules(name, mutate)), _rules(name, mutate)
@@ -1129,11 +1128,11 @@ SITE_DEFECTS.update(
 )
 
 
-@pytest.mark.parametrize("case", sorted(SITE_DEFECTS))
 def test_a_site_rule_refuses_the_defect(case):
+    """Parametrised by pytest_generate_tests from the final SITE_DEFECTS, so an entry added
+    anywhere in this module is collected."""
     profile, mutate, needle = SITE_DEFECTS[case]
     assert needle in _site(profile, mutate)
-    assert len(SITE_DEFECTS) >= 37, "every SITE_DEFECTS entry is defined before this test"
 
 
 def test_a_provider_agent_is_bound_under_providers():
@@ -1181,6 +1180,41 @@ def test_an_egress_grant_listing_roles_only_grants_nothing():
     )
     assert any("host role edge is external" in p for p in probs)
     assert sc.errors_for(SELECTION, site, REG)
+
+
+def test_grants_name_selected_modules_their_roles_and_used_targets_only():
+    """Negative: a grant for a module that is not selected, for a role it does not have, or for a
+    target it does not use is refused, so no grant waits for a manifest change to switch it on."""
+    site = copy.deepcopy(SITES["full"])
+    eg = site["grants"]["egress"]
+    eg["example-unknown"] = {"x": ["internet"]}
+    eg["external-collector"]["ghost"] = ["internet", "svc:secrets"]
+    eg["external-collector"]["edge"].append("internet")
+    site["grants"]["internet_facing"] = {
+        "example-unknown": ["x"],
+        "external-collector": ["edge", "receiver", "ghost"],
+    }
+    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    for needle in (
+        "grants.egress.example-unknown: the module is not selected",
+        "grants.egress.external-collector.ghost: not one of the module's host roles",
+        "grants.egress.external-collector.edge: internet is granted but not used",
+        "grants.internet_facing.example-unknown: the module is not selected",
+        "grants.internet_facing.external-collector.ghost: not one of the module's host roles",
+        "grants.internet_facing.external-collector.edge: the role is not an internet-facing role inside the lab",
+        "grants.internet_facing.external-collector.receiver: the role is not an internet-facing role inside the lab",
+    ):
+        assert needle in probs, (needle, probs)
+
+
+def test_an_egress_service_target_must_exist_without_rows_too():
+    """svc:secret (a typo of svc:secrets) is refused without rows; a name bound to a selected
+    feature stands in for its row until the rows are given."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["external-collector"]["egress"][0]["to"].append("svc:secret")
+    probs = mr.site_problems(site, mods, SLOTS)
+    assert "external-collector: host edge egresses to svc:secret, which is no service" in probs
+    assert not any("svc:external-collector-receiver" in p for p in probs)
 
 
 def test_an_egress_service_target_must_exist():
@@ -1240,3 +1274,27 @@ def test_feature_and_core_modules_and_sites_carry_no_product_names():
     for f in paths:
         text = f.read_text().lower()
         assert not [n for n in names if n in text], f
+
+
+#: test function -> the dict its cases come from, read at collection time (after the whole module
+#: ran), so a case added after the test is still collected
+DEFECT_TABLES = {
+    "test_a_site_rule_refuses_the_defect": lambda: SITE_DEFECTS,
+    "test_a_loader_rule_refuses_the_defect": lambda: MODULE_DEFECTS,
+}
+
+
+def pytest_generate_tests(metafunc):
+    table = DEFECT_TABLES.get(metafunc.function.__name__)
+    if table is not None:
+        metafunc.parametrize("case", sorted(table()))
+
+
+def test_every_defect_case_is_collected(request):
+    """Exact guard: every collected case set equals its final dict (a table whose test was
+    deselected entirely is not compared)."""
+    names = {i.name for i in request.session.items if i.module is request.module}
+    for fn, table in DEFECT_TABLES.items():
+        got = {n for n in names if n.startswith(fn + "[")}
+        if got:
+            assert got == {f"{fn}[{c}]" for c in table()}, fn

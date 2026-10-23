@@ -548,6 +548,7 @@ def site_problems(
     ch = chosen(site)
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
+    out += _grant_problems(grants, sel)
     out += _config_problems(site, sel, grants)
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
@@ -611,7 +612,7 @@ def site_problems(
                 needs = t == "internet" or t.removeprefix("svc:") in authority
                 if needs and t not in granted.get(e["host"], []):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t} without a grant")
-                if rows is not None and t.startswith("svc:") and t[4:] not in services:
+                if t.startswith("svc:") and not _is_service(t[4:], services, sel, rows):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t}, which is no service")
         for role, h in _hosts(m).items():
             if h["kind"] == "external" and "external" not in granted.get(role, []):
@@ -657,6 +658,59 @@ def site_problems(
                 out.append(f"grants.secrets: {reader} may not read {n} (not a granted credential)")
     out += _interface_problems(sel, mods)
     out += placement_problems(site, sel)
+    return out
+
+
+def _is_service(name: str, services: set[str], sel: dict[str, Doc], rows) -> bool:
+    """A registry service the site has.  Without ``rows`` a selected feature or core module's row
+    is unknown, so a name bound to such a module (``<id>-...``) stands in for it; anything else
+    (``svc:secret`` for ``svc:secrets``) is still refused."""
+    if name in services:
+        return True
+    return rows is None and any(
+        _named(name, mid) for mid, m in sel.items() if m["kind"] != "provider"
+    )
+
+
+def _grant_problems(grants: Doc, sel: dict[str, Doc]) -> list[str]:
+    """Egress and internet-facing grants name a selected module, one of its host roles, and only
+    targets the manifest uses: a grant waiting for a role or target to appear would switch it on
+    with a placement line nobody reads as a grant."""
+    out = []
+    for mid, roles in grants.get("egress", {}).items():
+        m = sel.get(mid)
+        if m is None:
+            out.append(f"grants.egress.{mid}: the module is not selected")
+            continue
+        if not isinstance(roles, dict):
+            continue  # the old list shape, reported by site_problems
+        hosts = _hosts(m)
+        for role, targets in roles.items():
+            if role not in hosts:
+                out.append(f"grants.egress.{mid}.{role}: not one of the module's host roles")
+                continue
+            used = {t for e in _egress(m) if e["host"] == role for t in e["to"]}
+            if hosts[role]["kind"] == "external":
+                used.add("external")
+            for t in targets:
+                if t not in used:
+                    out.append(f"grants.egress.{mid}.{role}: {t} is granted but not used")
+    for mid, roles in grants.get("internet_facing", {}).items():
+        m = sel.get(mid)
+        if m is None:
+            out.append(f"grants.internet_facing.{mid}: the module is not selected")
+            continue
+        hosts = _hosts(m)
+        for role in roles:
+            h = hosts.get(role)
+            if h is None:
+                out.append(
+                    f"grants.internet_facing.{mid}.{role}: not one of the module's host roles"
+                )
+            elif h.get("exposure") != "internet-facing" or h["kind"] == "external":
+                out.append(
+                    f"grants.internet_facing.{mid}.{role}: the role is not an internet-facing role inside the lab"
+                )
     return out
 
 
