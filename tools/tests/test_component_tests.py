@@ -70,3 +70,80 @@ def test_every_allowlist_entry_has_a_reason():
 
 def test_this_repo_passes():
     assert component_tests.main([]) == 0
+
+
+def test_every_go_package_of_every_module_holds_a_go_test_file(tmp_path):
+    root = _tree(tmp_path)
+    assert component_tests.problems(root, allow={}) == []  # no Go module: a no-op
+    _touch(root, "orchestrator/go.mod", "module example.com/fixture\n")
+    _touch(root, "orchestrator/internal/queue/queue.go", "package queue\n")
+    _touch(root, "orchestrator/internal/queue/queue_test.go", "package queue\n")
+    _touch(root, "orchestrator/internal/tools/notes/notes.go", "package notes\n")  # nested
+    _touch(root, "orchestrator/pkg/safefs/safefs.go", "package safefs\n")
+    _touch(root, "orchestrator/pkg/safefs/doc.md")
+    _touch(root, "orchestrator/cmd/controller/main.go", "package main\n")
+    _touch(root, "orchestrator/cmd/controller/main_test.go", "package main\n")
+    # any directory of the module is a package, its root and examples/ included
+    _touch(root, "orchestrator/doc.go", "package fixture\n")
+    _touch(root, "orchestrator/examples/hello/main.go", "package main\n")
+    # a second module, and one nested in the first, are discovered like it
+    _touch(root, "labkit/go.mod", "module example.com/labkit\n")
+    _touch(root, "labkit/probe/probe.go", "package probe\n")
+    _touch(root, "orchestrator/internal/hidden/go.mod", "module example.com/hidden\n")
+    _touch(root, "orchestrator/internal/hidden/h.go", "package hidden\n")
+    # not packages: test data, ignored directories, a directory with only tests, the linters'
+    # module, Go in no module (tools/go_modules.py fails on that), build output
+    _touch(root, "orchestrator/internal/queue/testdata/fixture.go", "package fixture\n")
+    _touch(root, "orchestrator/internal/_scratch/x.go", "package x\n")
+    _touch(root, "orchestrator/internal/onlytests/x_test.go", "package x\n")
+    _touch(root, "orchestrator/tools/go.mod", "module example.com/fixture/tools\n")
+    _touch(root, "scratch/loose.go", "package loose\n")
+    _touch(root, "build/go.mod", "module example.com/out\n")
+    _touch(root, "build/out.go", "package out\n")
+    found = component_tests.problems(root, allow={})
+    assert found == [
+        "labkit/probe: no tests (add labkit/probe/*_test.go)",
+        "orchestrator: no tests (add orchestrator/*_test.go)",
+        "orchestrator/examples/hello: no tests (add orchestrator/examples/hello/*_test.go)",
+        "orchestrator/internal/hidden: no tests (add orchestrator/internal/hidden/*_test.go)",
+        "orchestrator/internal/tools/notes: no tests (add orchestrator/internal/tools/notes/*_test.go)",
+        "orchestrator/pkg/safefs: no tests (add orchestrator/pkg/safefs/*_test.go)",
+    ]
+    kinds = component_tests.components(root)
+    assert kinds["orchestrator/internal/queue"] == "go-package"
+    assert "orchestrator/internal/tools" not in kinds and "orchestrator/tools" not in kinds
+    for d in (
+        "labkit/probe",
+        "orchestrator",
+        "orchestrator/examples/hello",
+        "orchestrator/internal/hidden",
+        "orchestrator/internal/tools/notes",
+        "orchestrator/pkg/safefs",
+    ):
+        _touch(root, f"{d}/x_test.go", "package x\n")
+    assert component_tests.problems(root, allow={}) == []
+
+
+def test_go_in_a_linters_module_is_reported_since_no_job_runs_it(tmp_path):
+    # verify3.md (v3/toolshide): ./... in orchestrator/ never enters tools/, whose go.mod makes it
+    # another module, and the linters run with -modfile on the main module's packages only, so
+    # tools/evil/ (which does not compile, and whose test fails) was in no job at all
+    root = tmp_path
+    _touch(root, "orchestrator/go.mod", "module example.com/fixture\n")
+    _touch(root, "orchestrator/a/a.go", "package a\n")
+    _touch(root, "orchestrator/a/a_test.go", "package a\n")
+    _touch(root, "orchestrator/tools/go.mod", "module example.com/fixture/tools\n")
+    _touch(root, "orchestrator/tools/go.sum")
+    _touch(root, "orchestrator/tools/evil/evil.go", "package evil\n\nfunc F() int { return x }\n")
+    _touch(root, "orchestrator/tools/evil/evil_test.go", "package evil\n")
+    # a module nested below the linters' module is a module of its own, with its own job
+    _touch(root, "orchestrator/tools/own/go.mod", "module example.com/own\n")
+    _touch(root, "orchestrator/tools/own/own.go", "package own\n")
+    _touch(root, "orchestrator/tools/own/own_test.go", "package own\n")
+    assert component_tests.problems(root, allow={}) == [
+        "orchestrator/tools/evil/evil.go: Go in a linters' module, which only pins tools: no job "
+        "builds or tests it",
+        "orchestrator/tools/evil/evil_test.go: Go in a linters' module, which only pins tools: no "
+        "job builds or tests it",
+    ]
+    assert component_tests.main(["--root", str(root)]) == 1

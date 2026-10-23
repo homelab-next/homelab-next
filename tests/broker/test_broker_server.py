@@ -9,6 +9,7 @@ the protocol and the service are the real ones)."""
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import shutil
@@ -724,15 +725,41 @@ def test_serve_command_runs_until_terminated(tmp_path):
         stderr=subprocess.PIPE,
     )
     try:
-        for _ in range(100):
-            if sock.exists():
-                break
-            time.sleep(0.1)
-        assert BrokerClient(sock).actions()["caller"] == "profile:triage"
+        assert _actions_once_serving(proc, sock)["caller"] == "profile:triage"
     finally:
         proc.terminate()
         assert proc.wait(timeout=10) == 0
     assert not sock.exists()
+
+
+#: the connect failures of a broker that is starting: no socket file yet, or bound but not listening
+_NOT_YET_LISTENING = (os.strerror(errno.ENOENT), os.strerror(errno.ECONNREFUSED))
+
+
+def _actions_once_serving(proc, sock, deadline_s: float = 20.0) -> dict:
+    """``actions()`` from a broker started as ``proc``, once it accepts a connection.  The socket
+    file appears at bind, before listen, so a connect between the two is refused: waiting for the
+    file alone flaked with "Connection refused" on a loaded host.  Only those two connect failures
+    are retried; any other transport error (no valid response, a timeout) fails at once.  The
+    deadline sits well inside the suite's 60 s budget."""
+    end = time.monotonic() + deadline_s
+    while True:
+        try:
+            return BrokerClient(sock).actions()
+        except BrokerError as exc:
+            starting = getattr(exc, "reason", None) == "transport-error" and any(
+                msg in str(exc) for msg in _NOT_YET_LISTENING
+            )
+            if not starting:
+                raise
+            if time.monotonic() > end:
+                proc.terminate()
+                proc.wait(timeout=10)
+                raise AssertionError(
+                    f"the broker did not listen in {deadline_s} s: {proc.stderr.read().decode()}"
+                ) from exc
+            assert proc.poll() is None, f"the broker exited: {proc.stderr.read().decode()}"
+            time.sleep(0.1)
 
 
 # -- the MCP server's registration -------------------------------------------------------------

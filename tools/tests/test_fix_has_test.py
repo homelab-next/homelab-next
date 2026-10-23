@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Q-08: the fix_has_test gate -- a fix commit without a test file fails, waivers are listed,
-and --prove catches a regression test that passes without the fix."""
+and --prove catches a regression test that passes without the fix (pytest modules and Go
+packages, the latter on a fixture module when a Go toolchain is installed)."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +40,19 @@ def test_test_files():
     assert gate.test_files(files) == files[1:]
     assert gate.test_files(["conformance/dns/test_dns.py"]) == ["conformance/dns/test_dns.py"]
     assert gate.test_files(["docs/testing.md", "src/latest.py"]) == []
+    go = ["orchestrator/internal/queue/queue_test.go", "orchestrator/internal/queue/queue.go"]
+    assert gate.test_files(go) == go[:1]
+    assert gate.test_files(["orchestrator/go.mod", "orchestrator/testing.go"]) == []
+    # Go fixtures and golden files are test files: staged with the tests, and a test change
+    data = ["orchestrator/internal/api/testdata/case.json", "testdata/golden.txt"]
+    assert gate.test_files(data) == data
+    assert gate.test_files(["orchestrator/internal/mytestdata/x.go"]) == []
+
+
+def test_nested_testdata_is_the_data_of_the_package_holding_the_outermost_testdata():
+    m = gate.GO_TESTDATA.match("orchestrator/internal/api/testdata/sub/testdata/b.txt")
+    assert m.group("pkg") == "orchestrator/internal/api/"
+    assert gate.GO_TESTDATA.match("testdata/golden.txt").group("pkg") == ""
 
 
 def test_the_gate_itself_is_not_a_test_file():
@@ -177,3 +192,271 @@ def test_a_fix_whose_only_test_files_are_not_test_modules_cannot_be_proven(tmp_p
 
 def test_this_repository_passes():
     assert gate.main(["--range", "HEAD", "--allow-missing-base"]) == 0
+
+
+# --- Go: a fixture module in orchestrator/ --------------------------------------------------------
+
+GO_MOD = "module example.com/fixture\n\ngo 1.21\n"
+CALC = "package calc\n\nfunc Add(a, b int) int {{\n\treturn a {op} b\n}}\n"
+CALC_TEST = (
+    'package calc\n\nimport "testing"\n\n'
+    "func TestOther(t *testing.T) {{\n\tif Add(0, 0) != 0 {{\n\t\tt.Fatal(0)\n\t}}\n}}\n"
+    "{extra}"
+)
+TEST_ADD = "\nfunc TestAdd(t *testing.T) {\n\tif Add(2, 2) != 4 {\n\t\tt.Fatal(Add(2, 2))\n\t}\n}\n"
+TEST_TRUE = "\nfunc TestTrue(t *testing.T) {}\n"
+GO = "orchestrator/internal/calc/"
+
+
+def _go_repo(tmp_path):
+    r, commit = _repo(tmp_path)
+    base = commit(
+        "feat: calc",
+        **{
+            "orchestrator/go.mod": GO_MOD,
+            GO + "calc.go": CALC.format(op="-"),
+            GO + "calc_test.go": CALC_TEST.format(extra=""),
+        },
+    )
+    return r, commit, base
+
+
+needs_go = pytest.mark.usefixtures("go_toolchain")  # tools/tests/conftest.py (HNX_REQUIRE_GO)
+
+
+@needs_go
+def test_go_fix_is_proved_by_its_changed_test_functions(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == ["TestAdd"]
+    assert gate.prove(c, cwd=r) is None  # TestAdd fails on the parent: proven
+    assert gate.main(["--repo", str(r), "--range", f"{base}..{fix}", "--prove"]) == 0
+
+    # only TestTrue is new, and it passes without the fix (TestAdd is not re-run)
+    vacuous = commit(
+        "fix: comment only",
+        **{
+            GO + "calc.go": "// Package calc adds.\n" + CALC.format(op="+"),
+            GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD + TEST_TRUE),
+        },
+    )
+    (c,) = gate.commits_in(f"{fix}..{vacuous}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == ["TestTrue"]
+    problem = gate.prove(c, cwd=r)
+    assert "passes WITHOUT the fix" in problem and "-run ^(TestTrue)$" in problem
+    assert gate.main(["--repo", str(r), "--range", f"{fix}..{vacuous}", "--prove"]) == 1
+
+
+@needs_go
+def test_go_test_that_does_not_build_without_the_fix_counts_as_failing(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    test_sub = "\nfunc TestSub(t *testing.T) {\n\tif Sub(3, 1) != 2 {\n\t\tt.Fatal(1)\n\t}\n}\n"
+    fix = commit(
+        "fix: calc subtracts too",
+        **{
+            GO + "calc.go": CALC.format(op="-") + "\nfunc Sub(a, b int) int { return a - b }\n",
+            GO + "sub_test.go": 'package calc\n\nimport "testing"\n' + test_sub,
+        },
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
+READS_FIXTURE = (
+    'package calc\n\nimport (\n\t"os"\n\t"testing"\n)\n\n'
+    "func TestCase(t *testing.T) {\n"
+    '\tif _, err := os.ReadFile("testdata/case.json"); err != nil {\n\t\tt.Fatal(err)\n\t}\n}\n'
+)
+
+
+@needs_go
+def test_go_fixtures_are_staged_on_the_parent_with_the_tests(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    # the test only reads its new fixture: it fails on the parent only if the fixture is missing
+    vacuous = commit(
+        "fix: add adds",
+        **{
+            GO + "calc.go": CALC.format(op="+"),
+            GO + "case_test.go": READS_FIXTURE,
+            GO + "testdata/case.json": "{}\n",
+        },
+    )
+    (c,) = gate.commits_in(f"{base}..{vacuous}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem is not None and "passes WITHOUT the fix" in problem
+
+
+@needs_go
+def test_a_go_fix_whose_only_test_change_is_testdata_runs_its_package(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    golden = (
+        'package calc\n\nimport (\n\t"os"\n\t"strconv"\n\t"strings"\n\t"testing"\n)\n\n'
+        "func TestGolden(t *testing.T) {\n"
+        '\tb, _ := os.ReadFile("testdata/add.golden")\n'
+        "\tif got := strconv.Itoa(Add(2, 2)); got != strings.TrimSpace(string(b)) {\n"
+        "\t\tt.Fatal(got)\n\t}\n}\n"
+    )
+    base = commit(
+        "test: a golden file",
+        **{GO + "golden_test.go": golden, GO + "testdata/add.golden": "0\n"},
+    )
+    fix = commit(
+        "fix: add adds", **{GO + "calc.go": CALC.format(op="+"), GO + "testdata/add.golden": "4\n"}
+    )
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.check([c]) == ([], [])  # the golden file is its test
+    assert gate.prove(c, cwd=r) is None  # the whole package fails on the parent: proven
+    vacuous = commit("fix: whitespace", **{GO + "testdata/add.golden": "4\n\n"})
+    (c,) = gate.commits_in(f"{fix}..{vacuous}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert (
+        problem is not None and "passes WITHOUT the fix" in problem and "./internal/calc" in problem
+    )
+
+
+def _module_proxy(root: Path) -> str:
+    """A GOPROXY directory serving example.com/dep v1.0.0 (``func One() int { return 1 }``)."""
+    import zipfile
+
+    d = root / "example.com" / "dep" / "@v"
+    d.mkdir(parents=True)
+    mod = "module example.com/dep\n\ngo 1.21\n"
+    (d / "list").write_text("v1.0.0\n")
+    (d / "v1.0.0.info").write_text('{"Version":"v1.0.0"}\n')
+    (d / "v1.0.0.mod").write_text(mod)
+    with zipfile.ZipFile(d / "v1.0.0.zip", "w") as z:
+        z.writestr("example.com/dep@v1.0.0/go.mod", mod)
+        z.writestr("example.com/dep@v1.0.0/dep.go", "package dep\n\nfunc One() int { return 1 }\n")
+    return root.as_uri()
+
+
+@pytest.mark.parametrize(
+    ("err", "can_run"),
+    [
+        ("go: downloading example.com/dep v1.0.0\n--- FAIL: TestAdd\nFAIL\n", True),
+        ("FAIL\texample.com/fixture/internal/calc [setup failed]\n", False),
+        ("go: errors parsing go.mod:\n", False),
+        ("go: cannot find main module, but found .git/config\n", False),
+        ("go: updates to go.mod needed; to update it:\n", False),
+    ],
+)
+def test_go_setup_errors_are_told_from_progress_lines(err, can_run):
+    assert (gate.GO_SETUP_ERROR.search(err) is None) is can_run
+
+
+@needs_go
+def test_a_go_fix_with_a_dependency_is_proved_on_a_cold_module_cache(tmp_path, monkeypatch):
+    # go test prints "go: downloading ..." for every module it fetches: that is no setup error
+    monkeypatch.setenv("GOPROXY", _module_proxy(tmp_path / "proxy"))
+    monkeypatch.setenv("GOSUMDB", "off")
+    monkeypatch.setenv("GOFLAGS", "-modcacherw")  # so tmp_path can be removed
+    monkeypatch.setenv("GOTOOLCHAIN", "local")
+    monkeypatch.setenv("GOMODCACHE", str(tmp_path / "warm"))
+    r, commit = _repo(tmp_path)
+    mod = r / "orchestrator"
+    calc = 'package calc\n\nimport "example.com/dep"\n\nfunc Add(a, b int) int {{ return a {op} b * dep.One() }}\n'
+    (mod / "internal" / "calc").mkdir(parents=True)
+    (mod / "go.mod").write_text(GO_MOD + "\nrequire example.com/dep v1.0.0\n")
+    (mod / "internal" / "calc" / "calc.go").write_text(calc.format(op="-"))
+    subprocess.run(["go", "mod", "tidy"], cwd=mod, check=True, capture_output=True)
+    base = commit("feat: calc with a dependency")
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": calc.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    monkeypatch.setenv("GOMODCACHE", str(tmp_path / "cold"))  # nothing downloaded yet
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_the_regression_tests_job_has_a_go_toolchain_once_a_module_exists():
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    ci = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = ci["jobs"]
+    steps = jobs["regression-tests"]["steps"]
+    (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
+    (pinned,) = [
+        s for s in jobs["go"]["steps"] if s.get("uses", "").startswith("actions/setup-go@")
+    ]
+    assert go["uses"] == pinned["uses"]  # the same pinned commit as the go job
+    # any discovered module, not one named directory; the workflow's pinned Go version
+    assert jobs["regression-tests"]["needs"] == "go-modules"
+    assert go["if"] == "needs.go-modules.outputs.present == 'true'"
+    assert go["with"]["go-version"] == "${{ env.GO_VERSION }}"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", ci["env"]["GO_VERSION"])
+    assert go["with"]["cache-dependency-path"] == "**/go.sum"
+    names = [s.get("name") or s.get("uses") for s in steps]
+    assert names.index(go["uses"]) < next(
+        i for i, s in enumerate(steps) if "fix_has_test" in s.get("run", "")
+    )
+
+
+def test_go_test_functions_are_gos_own_rule_and_end_at_their_closing_brace():
+    src = (
+        'package calc\n\nimport "testing"\n\n'
+        "func TestMain(m *testing.M) { m.Run() }\n\n"
+        "func Testable(t *testing.T) {}\n\n"
+        "func Test(t *testing.T) {}\n\n"
+        "func TestJSON(t *testing.T) {\n"
+        "\twant := `{\n}\n`\n"  # a raw string with a } alone on a line
+        "\t/* } */ r := '}'\n"
+        '\ts := "}\\"{"\n'
+        "\t// }\n"
+        "\t_ = want + s + string(r)\n"
+        "}\n\n"
+        "func Fuzz_Parse(f *testing.F) {}\n"
+        "func TestLast(t *testing.T) {"  # no newline at the end of the file
+    )
+    funcs = gate._go_funcs(src)
+    assert sorted(funcs) == ["Fuzz_Parse", "Test", "TestJSON", "TestLast"]
+    assert funcs["TestJSON"].endswith("_ = want + s + string(r)\n}")
+    assert funcs["TestLast"] == "func TestLast(t *testing.T) {"
+
+
+@needs_go
+def test_a_go_fix_that_changes_only_testmain_runs_the_whole_package(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    main = "\nfunc TestMain(m *testing.M) {\n\tif Add(2, 2) != 4 {\n\t\tpanic(Add(2, 2))\n\t}\n\tm.Run()\n}\n"
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=main)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert gate.changed_go_tests(c, GO + "calc_test.go", cwd=r) == []  # a helper: run it all
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_the_go_module_probe_prints_no_git_errors(tmp_path, capfd):
+    r, _commit, base = _go_repo(tmp_path)
+    (c,) = gate.commits_in(base, cwd=r)
+    capfd.readouterr()
+    # orchestrator/internal/calc/go.mod and orchestrator/internal/go.mod do not exist: no noise
+    assert gate._go_module_at(c, GO + "calc_test.go", cwd=r) is True
+    assert gate._go_module_at(c, "loose/x_test.go", cwd=r) is False
+    assert capfd.readouterr().err == ""
+
+
+def test_go_fix_without_a_go_toolchain_cannot_be_proved(tmp_path):
+    r, commit, base = _go_repo(tmp_path)
+    fix = commit(
+        "fix: add adds",
+        **{GO + "calc.go": CALC.format(op="+"), GO + "calc_test.go": CALC_TEST.format(extra=TEST_ADD)},
+    )  # fmt: skip
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    problem = gate.prove(c, cwd=r, go="go-toolchain-that-is-not-there")
+    assert problem is not None and "cannot prove its Go tests: no Go toolchain" in problem
+
+
+@needs_go
+def test_go_test_outside_a_module_cannot_be_proved(tmp_path):
+    r, commit = _repo(tmp_path)
+    base = commit("feat: loose", **{"loose/x.go": "package loose\n"})
+    fix = commit("fix: loose", **{"loose/x_test.go": "package loose\n"})
+    (c,) = gate.commits_in(f"{base}..{fix}", cwd=r)
+    assert "is in no Go module on the parent" in gate.prove(c, cwd=r)
