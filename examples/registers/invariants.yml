@@ -59,13 +59,13 @@ criteria:
   expected: >-
     exit 0: no secret in the tracked tree. The full history is scanned by CI's pinned gitleaks
     (`gitleaks git`, every fetched ref) and the commits of a change by `make leak-scan-history`;
-    files on hosts are F-23 (SERVER)
+    files on hosts are F-24 (SERVER)
   expect_regex: no secrets found
   slow: true
   remediation: >-
     Remove the secret, rotate it (it is burned once committed), and load it from the environment
     or the secrets store instead; a key in git is readable by everyone who ever cloned it.
-- id: F-23
+- id: F-24
   statement: Secrets are not readable on disk.
   evidence: server
   observable: >-
