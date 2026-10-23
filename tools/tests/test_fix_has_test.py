@@ -4,7 +4,6 @@ and --prove catches a regression test that passes without the fix (pytest module
 packages, the latter on a fixture module when a Go toolchain is installed)."""
 
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -158,7 +157,7 @@ def _go_repo(tmp_path):
     return r, commit, base
 
 
-needs_go = pytest.mark.skipif(shutil.which("go") is None, reason="go is not installed")
+needs_go = pytest.mark.usefixtures("go_toolchain")  # tools/tests/conftest.py (HNX_REQUIRE_GO)
 
 
 @needs_go

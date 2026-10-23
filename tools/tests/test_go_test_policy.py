@@ -407,7 +407,7 @@ def test_the_skip_reason_is_the_last_line_before_skip_not_earlier_logs(tmp_path,
     )
 
 
-@pytest.mark.skipif(shutil.which("go") is None, reason="go is not installed")
+@pytest.mark.usefixtures("go_toolchain")  # tools/tests/conftest.py (HNX_REQUIRE_GO)
 def test_a_real_go_test_json_stream(tmp_path):
     mod = tmp_path / "mod"
     (mod / "calc").mkdir(parents=True)
@@ -810,3 +810,34 @@ def test_the_go_job_checks_the_skip_calls_before_the_tests():
     assert names.index("every skip names its reason in the call") < next(
         i for i, n in enumerate(names) if n.startswith("tests (race")
     )
+
+
+@pytest.mark.parametrize(
+    ("required", "outcome", "why"),
+    [
+        ("", pytest.skip.Exception, "go is not installed"),
+        ("1", pytest.fail.Exception, "HNX_REQUIRE_GO=1 requires it"),
+    ],
+)
+def test_go_toolchain_skips_without_go_unless_go_is_required(
+    request, monkeypatch, tmp_path, required, outcome, why
+):
+    monkeypatch.setenv("PATH", str(tmp_path))  # no go here
+    monkeypatch.setenv("HNX_REQUIRE_GO", required)
+    with pytest.raises(outcome, match=why):
+        request.getfixturevalue("go_toolchain")  # evaluated once per test: its result is cached
+
+
+def test_one_test_leg_installs_go_and_requires_it():
+    import yaml
+
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    job = ci["jobs"]["test"]
+    legs = job["strategy"]["matrix"]["include"]
+    assert [bool(leg.get("go")) for leg in legs].count(True) == 1  # the other legs prove no-Go
+    (go,) = [s for s in job["steps"] if s.get("uses", "").startswith("actions/setup-go@")]
+    (pinned,) = [s for s in go_job()["steps"] if s.get("uses", "").startswith("actions/setup-go@")]
+    assert go["uses"] == pinned["uses"] and go["if"] == "matrix.go"
+    assert go["with"]["go-version"] == "${{ env.GO_VERSION }}"
+    (pytest_step,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
+    assert pytest_step["env"]["HNX_REQUIRE_GO"] == "${{ matrix.go && '1' || '' }}"

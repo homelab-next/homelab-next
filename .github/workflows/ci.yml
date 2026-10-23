@@ -55,9 +55,11 @@ jobs:
       matrix:
         include:
           # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
-          # lookup-plugin tests (which import ansible) run
+          # lookup-plugin tests (which import ansible) run; and Go, which the Go tools' tests
+          # then require (HNX_REQUIRE_GO), so they cannot skip with "go is not installed" here
           - python-version: "3.12"
             extras: "test,lake,mcp,ansible"
+            go: true
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - python-version: "3.11"
             extras: "test"
@@ -69,9 +71,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           extras: ${{ matrix.extras }}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        if: matrix.go
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false  # the tests build throwaway modules: nothing worth caching
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
-      - run: >-
+      - env:
+          HNX_REQUIRE_GO: ${{ matrix.go && '1' || '' }}
+        run: >-
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 
