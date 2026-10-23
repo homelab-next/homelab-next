@@ -367,8 +367,18 @@ KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmei
 # a Go expression assigned in code: an identifier with a selector, a call or an index after it
 # (base64.StdEncoding.EncodeToString(buf), sha256.Sum256([]byte(tok))); Go has no bare literals
 GO_CODE_VALUE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.[A-Za-z_]\w*|[\[(].*)$")
-# a string literal of letters only names something (a header, a flag, a field), it is no value
-GO_WORDS_RE = re.compile(r"[A-Za-z]+(?:[-_. ][A-Za-z]+)*")
+# A string literal on the right-hand side that is text, not a value: words (each maybe ending in
+# a digit or two) with spaces or punctuation between them ("Bearer ", "/oauth/token",
+# "-suffix-v2", "Authorization"), a format string ("%s-%s-tls") or a time layout ("2006-01-02")
+GO_WORDS_RE = re.compile(r"\s*[-_.:/ ]*[A-Za-z]+\d{0,2}(?:[-_. :/]+[A-Za-z]*\d{0,2})*[-_.:/ ]*\s*")
+GO_FMT_VERB_RE = re.compile(r"%[-+# 0-9.*\[\]]*[a-zA-Z%]")
+GO_TIME_LAYOUT_RE = re.compile(r"2006|15:04|Jan _?2|Mon Jan")
+
+
+def _is_go_text_literal(body: str) -> bool:
+    return bool(
+        GO_WORDS_RE.fullmatch(body) or GO_FMT_VERB_RE.search(body) or GO_TIME_LAYOUT_RE.search(body)
+    )
 
 
 class GoSource:
@@ -405,7 +415,8 @@ class GoSource:
         """The bodies of the string literals that start after this position on its line, up to a
         comment."""
         end = self.starts[lineno]
-        for tok in self.tokens[self._index(lineno, col) :]:
+        for i in range(self._index(lineno, col), len(self.tokens)):  # no slice: linear per file
+            tok = self.tokens[i]
             if tok.pos >= end or tok.kind == "comment":
                 return
             if tok.kind in ("string", "raw") and tok.pos >= self.starts[lineno - 1] + col:
@@ -420,7 +431,8 @@ def _go_where(line: str) -> tuple[GoSource, int]:
     """The current Go file and line number, or this line alone outside scan_text."""
     if _GO_CONTEXT:
         src, lineno = _GO_CONTEXT[-1]
-        if src.lines[lineno - 1].rstrip("\r\n") == line.rstrip("\r\n"):
+        # splitlines() as scan_text: a line may end at \f, \x85 or \u2028 as well as \n
+        if (src.lines[lineno - 1].splitlines() or [""])[0] == line:
             return src, lineno
     return GoSource(line), 1
 
@@ -452,17 +464,16 @@ def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
         )
     if kind != "code" or m.group("q"):
         return _keyed_value_is_hit(m, value)  # a raw string, a comment: text, as in any file
-    # an unquoted value in code: after = or := an expression such as
-    # base64.StdEncoding.EncodeToString(buf) is never a literal, Go having no bare ones (after a
-    # key's ":" it is judged as before, so a cast of a long number there stays a finding); and every
-    # string literal after it in the statement is judged as a quoted value
+    # an unquoted value in code, after =, := or a key's ":" alike: an expression such as
+    # base64.StdEncoding.EncodeToString(buf) is never a literal, Go having no bare ones, except a
+    # numeric cast, judged as before (a long number cast to uint64 stays a finding); and every
+    # string literal after it in the statement that is not text is judged as a quoted value
     # (prefix + "<literal>", fromHex("<literal>"), map[string]string{"k": "<literal>"})
-    separator = line[m.start() : m.start("val")].rstrip("\"' \t")
-    code = separator.endswith("=") and GO_CODE_VALUE_RE.match(value)
+    code = GO_CODE_VALUE_RE.match(value) and not NUMBER_CAST_RE.match(value)
     if not code and _keyed_value_is_hit(m, value):
         return True
     return any(
-        not GO_WORDS_RE.fullmatch(body) and _keyed_value_is_hit(_Quoted(body), body)
+        not _is_go_text_literal(body) and _keyed_value_is_hit(_Quoted(body), body)
         for body in src.literals_after(lineno, m.start("val"))
     )
 

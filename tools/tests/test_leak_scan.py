@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -656,8 +657,6 @@ def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str)
         AUTH + "int64(" + "84726193" + "50213)",
         # a cast of something that is not a number
         AUTH + "float64(" + "Zq81kXw" + "Lm2pV9a)",
-        # only the limit constants: any other dotted value with digits stays a finding
-        AUTH + "math." + "Zq81kXw" + "Lm2pV9a",
         # an escape ends the value, but what precedes it is still scanned
         '"db_pass' + "word: " + "Tr0ub4dor" + '&3\\nuser: admin"',
     ],
@@ -665,6 +664,14 @@ def test_go_numeric_values_and_escaped_newlines_are_not_keyed_secrets(text: str)
 def test_go_numeric_and_escape_exemptions_stay_narrow(text: str):
     assert "keyed-secret" in _secret_hits(text)
     assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+def test_a_dotted_value_is_a_finding_in_text_and_a_selector_in_go_code():
+    # only the limit constants are exempt as text; in Go code a selector is code after any
+    # separator (verify5.md: one rule for ":", "=" and ":=")
+    text = AUTH + "math." + "Zq81kXw" + "Lm2pV9a"
+    assert "keyed-secret" in _secret_hits(text, "conf.yml")
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go")
 
 
 # fictional credential-shaped values, assembled here so this file does not match itself
@@ -837,6 +844,55 @@ def test_a_literal_after_an_unquoted_go_value_is_judged(text: str):
 )
 def test_names_and_expressions_on_the_right_hand_side_are_not_secrets(text: str):
     assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+# verify5.md (v5/colon): idioms whose right-hand-side literal is text, not a value
+GO_TEXT_LITERALS = [
+    f'{TOK} := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")',
+    f'{TOK} = fmt.Sprintf("Bearer %s", raw)',
+    f'{SEC}Name := fmt.Sprintf("%s-%s-tls", app, env)',
+    f'{SEC} = time.Now().Format("2006-01-02")',
+    f'Bearer{TOK.title()}: fmt.Sprintf("Bearer %s", access{TOK.title()}),',
+    f'{TOK.title()}: os.Getenv("TOKEN") + "-suffix-v2",',
+    f'{PW.title()}: fmt.Sprintf("%s:%d", host, port),',
+    f'{TOK}URL := strings.TrimSuffix(base, "/") + "/oauth/{TOK}"',
+    f'{SEC}File := path.Join(cfgDir, "{SEC}s", "db.yaml")',
+]
+
+
+@pytest.mark.parametrize("text", GO_TEXT_LITERALS)
+def test_text_literals_on_the_right_hand_side_are_not_secrets(text: str):
+    assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go"), text
+
+
+# verify5.md (v5/colon/d.go): one rule for ":", "=" and ":=": an expression is code after each,
+# a cast of a long number stays a finding after each
+@pytest.mark.parametrize("sep", [": ", " = ", " := "])
+def test_go_separators_share_one_rule(sep: str):
+    def hit(value: str) -> bool:
+        return "keyed-secret" in _secret_hits(f"{SEC}{sep}{value}", "orchestrator/internal/x/x.go")
+
+    assert not hit("base64.StdEncoding.EncodeToString(key)")
+    assert not hit('vault.KVv2("' + SEC + '").Get(ctx, "app/api")')
+    assert hit("uint64(" + "82736451" + "09283746512)")
+    assert hit("float64(" + "Zq81kXw" + "Lm2pV9a)")
+
+
+def test_a_line_ending_in_a_form_feed_keeps_its_file_context():
+    # verify5.md (v5/ff): the line ends at \f for splitlines(), the comparison with the file's
+    # line failed, and the raw string's body was judged as code
+    text = f"package c\n\nconst conf = `\nclient_{SEC} = Zq8vT2.Kp4mW9xR7nB3\f\napi_{TOK} = x`\n"
+    hits = leak_scan.scan_text(text, "orchestrator/internal/x/c.go")
+    assert [h.line for h in hits if h.pattern == "keyed-secret"] == [4]
+
+
+def test_go_source_stays_linear_on_a_large_file():
+    # verify5.md (v5/perf): a slice per keyed match made a 20k-line Go file take minutes
+    line = f'\t{TOK}Path := filepath.Join(dir, "{TOK}.json") + "x"\n'
+    text = "package big\n\nfunc f() {\n" + line * 20000 + "}\n"
+    start = time.monotonic()
+    leak_scan.scan_text(text, "big.go")
+    assert time.monotonic() - start < 60  # about 6 s here; the quadratic walk took minutes
 
 
 def test_vault_prefixed_names_are_findings_whatever_product_uses_them():
