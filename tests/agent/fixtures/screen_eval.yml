@@ -465,6 +465,16 @@ positives:
     text: ["password=FakeValue0123\u00b5gh", "p_fake0123456789abcdefghijklmnopqrstuv"]
     secrets: ["FakeValue0123", ["gh", "p_fake0123456789abcdefghijklmnopqrstuv"]]
 
+  # a lower-priority value overlapped by a higher-priority span keeps its own label for the rest
+  - id: secret-then-spaced-card
+    type: card
+    text: ["password=4111 1111 1111 1111 for the test account"]
+    secrets: ["4111 1111 1111 1111", "1111 1111 1111"]
+  - id: secret-then-spaced-phone
+    type: phone
+    text: ["pwd=555 123 4567 is the desk line"]
+    secrets: ["555 123 4567", "123 4567"]
+
 negatives:
   - {id: version-dotted-quad, text: "upgraded to v4.18.2.1 last week", keep: [v4.18.2.1]}
   - {id: version-word, text: "agent version 2.31.0.7 deployed", keep: [version 2.31.0.7]}

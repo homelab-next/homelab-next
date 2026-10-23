@@ -433,8 +433,45 @@ def test_a_credential_overlapped_by_a_higher_priority_span_is_still_redacted(glu
     assert out.startswith("password=[REDACTED:secret:1]") and out.endswith("[REDACTED:token:1]")
 
 
-def test_the_rest_of_an_overlapped_email_is_not_redacted():
+def test_the_rest_of_an_overlapped_email_is_redacted_under_its_own_label():
+    """Every type's remainder is redacted, not only a credential's: the cost is the host of an
+    e-mail address whose local part is a token."""
     token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
     assert screen_text(f"origin https://{token}@example.com/x.git") == (
-        "origin https://[REDACTED:token:1]@example.com/x.git"
+        "origin https://[REDACTED:token:1][REDACTED:email:1]/x.git"
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "kwargs", "clear"),
+    [
+        ("password=4111 1111 1111 1111 ok", {}, "1111"),  # card digits after the secret
+        ("pwd=555 123 4567 call", {}, "4567"),  # the rest of a phone number
+        ("mail alice.fake@corp.example.com", {"denylist": ["corp"]}, "alice"),
+    ],
+)
+def test_a_lower_priority_value_is_not_left_partly_in_clear(text, kwargs, clear):
+    assert clear not in screen_text(text, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "password=FakeValue0123",
+        "password=fake" + "gh" + "p_fake0123456789abcdefghijklmnopqrstuv",
+        "password=FakeValue0123\u00b5" + "gh" + "p_fake0123456789abcdefghijklmnopqrstuv",
+        "token=abc.eyJ" + "hbGciOiJIUzI1NiJ9.eyJ" + "zdWIiOiJmYWtlIn0.fakeSignature_0123456789",
+        "from 192.0.2.4 to alice.fake@example.com, card 4111 1111 1111 1111",
+    ],
+)
+def test_screening_screened_text_changes_nothing(text):
+    once = screen_text(text)
+    assert once != text and screen_text(once) == once
+
+
+def test_a_value_split_by_another_span_is_counted_once():
+    token = "gh" + "p_fake0123456789abcdefghijklmnopqrstuv"
+    s = Screener()
+    out, spans = s.screen(f"api_key=pre\u00b5{token}\u00b5post")
+    assert out.count("[REDACTED:secret:1]") == 2 and len(spans) == 3
+    assert s.redactions == {"secret": 1, "token": 1}

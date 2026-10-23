@@ -76,8 +76,6 @@ TYPES = (
     "phone",
 )
 _PRIORITY = {t: i for i, t in enumerate(TYPES)}
-# types whose overlapped remainder is still redacted (see Screener._find)
-_FILL_TYPES = frozenset({"private-key", "jwt", "token", "secret", "denylist"})
 LABEL_RE = re.compile(r"\[REDACTED:(?P<type>[a-z-]+):(?P<n>\d+)\]")
 
 # Ranges that ``redact_private_ips=False`` leaves in place: RFC 1918, CGNAT, loopback, link-local,
@@ -480,14 +478,17 @@ class Screener:
 
         # Candidates are taken by priority; chosen spans never overlap, so they are kept sorted
         # and each candidate is checked against its neighbours only (a scan of every chosen span
-        # was quadratic).  A credential candidate (a key, token, secret or deny-list term) that
-        # overlaps a higher-priority span is not dropped: the parts of it no chosen span covers
-        # are redacted under its own label, so a credential a rule found never stays in clear
-        # because another rule matched next to it ("password=<value><letter>ghp_..." keeps the
-        # token's label and redacts the value).  Other types are dropped as before: the rest of
-        # an e-mail address whose local part is a token is a host name, not a secret.
-        chosen: list[tuple[int, int, str, str]] = []
-        starts: list[int] = []
+        # was quadratic).  A candidate that overlaps a higher-priority span is not dropped: the
+        # parts of it no chosen span covers are redacted under its own label, so nothing a rule
+        # found stays in clear because another rule matched next to it ("password=4111 1111
+        # 1111 1111": the secret takes "4111", the card the rest).  The cost is over-redaction,
+        # such as the host of an e-mail address whose local part is a token.  A label already
+        # in the text ("[REDACTED:secret:1]") is taken first and never redacted again, so
+        # screening screened text changes nothing.
+        chosen: list[tuple[int, int, str, str]] = [
+            (m.start(), m.end(), "", "") for m in LABEL_RE.finditer(text)
+        ]
+        starts: list[int] = [c[0] for c in chosen]
 
         def put(s: int, e: int, t: str, v: str) -> None:
             i = bisect.bisect_left(starts, s)
@@ -496,9 +497,6 @@ class Screener:
 
         for _, s, e, t, v in sorted(cands, key=lambda c: (c[0], c[1], -(c[2] - c[1]))):
             i = bisect.bisect_right(starts, s)
-            overlapped = (i and chosen[i - 1][1] > s) or (i < len(chosen) and chosen[i][0] < e)
-            if overlapped and t not in _FILL_TYPES:
-                continue
             if i and chosen[i - 1][1] > s:
                 i -= 1  # the chosen span that covers s
             pieces: list[tuple[int, int]] = []
@@ -513,7 +511,7 @@ class Screener:
                 pieces.append((pos, e))
             for ps, pe in pieces:
                 put(ps, pe, t, v)
-        return chosen
+        return [c for c in chosen if c[2]]  # the labels already in the text are not spans
 
     def _ip(self, m: re.Match[str], text: str, add: Callable[[str, int, int, str], None]) -> None:
         raw = m.group(0)
@@ -553,11 +551,16 @@ class Screener:
         out: list[str] = []
         done: list[Redaction] = []
         pos = 0
+        chain: set[str] = set()  # labels of the run of adjacent spans ending at pos
         for s, e, t, v in self.find(text):
             lab = self.label(t, v)
             out += [text[pos:s], lab]
             done.append(Redaction(t, s, e, lab))
-            self.redactions[t] = self.redactions.get(t, 0) + 1
+            if s != pos or not done[:-1]:
+                chain = set()
+            if lab not in chain:  # a value split by another span is counted once
+                self.redactions[t] = self.redactions.get(t, 0) + 1
+                chain.add(lab)
             pos = e
         out.append(text[pos:])
         return "".join(out), done
