@@ -8,7 +8,9 @@ from conformance.fakes.event_bus import (
     DoubleSettleEventBus,
     FakeEventBus,
     LosesUnsettledEventBus,
+    ReplayingEventBus,
     RestartsAtTailEventBus,
+    StaleSettleEventBus,
 )
 from homelabnext.conform.core import Mutant, Suite
 
@@ -174,6 +176,48 @@ def _(bus):
 
 
 @SUITE.check(
+    "stale-delivery-settles-nothing",
+    "settling an earlier delivery, or one handed out before a reopen, leaves the live one alone",
+)
+def _(bus):
+    # a consumer restarts; the old process's late ack lands after the new process's delivery
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s, max_deliver=5)
+    bus.publish(s, b"reopened")
+    (old,) = c.fetch(1)
+    c = bus.consumer(name, s, max_deliver=5)
+    (live,) = c.fetch(1)
+    old.ack()  # stale: must be a no-op
+    live.nack()  # the live delivery failed: the message must come back
+    got = [d.data for d in c.fetch(5)]
+    assert got == [b"reopened"], f"a stale ack settled the live delivery: redelivered {got}"
+    # without a reopen: a second settlement of a delivery after its redelivery was fetched
+    s = _subject(bus)
+    c = bus.consumer(uniq("c"), s, max_deliver=5)
+    bus.publish(s, b"again")
+    (first,) = c.fetch(1)
+    first.nack()
+    (second,) = c.fetch(1)
+    first.ack()  # settled already: must not count, and must not touch ``second``
+    second.nack()
+    got = [d.data for d in c.fetch(5)]
+    assert got == [b"again"], f"a second settlement settled the redelivery: redelivered {got}"
+
+
+@SUITE.check(
+    "new-consumer-starts-at-creation",
+    "a new durable consumer sees what is published after it was created, not the history",
+)
+def _(bus):
+    s = _subject(bus)
+    bus.publish(s, b"before")
+    c = bus.consumer(uniq("c"), s)
+    bus.publish(s, b"after")
+    got = [d.data for d in c.fetch(10)]
+    assert got == [b"after"], f"a new consumer was handed {got}"
+
+
+@SUITE.check(
     "star-wildcard-matches-one-token",
     "'*' matches exactly one token",
     severity="should",
@@ -206,6 +250,16 @@ MUTANTS = {
         RestartsAtTailEventBus,
         "durable-resumes-after-reopen",
         "reopening a durable consumer skips everything not yet delivered",
+    ),
+    "stale-delivery-settles": Mutant(
+        StaleSettleEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale delivery settles the live redelivery of the same message",
+    ),
+    "new-consumer-replays-history": Mutant(
+        ReplayingEventBus,
+        "new-consumer-starts-at-creation",
+        "a new durable consumer is handed every message published before it existed",
     ),
     "double-settle": Mutant(
         DoubleSettleEventBus,

@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Publish/consume with acknowledgement, bounded redelivery and dead letters.**
 
 - Contract: [`conformance.protocols.events`](../../conformance/protocols/events.py) (`conformance.protocols.events:EventBus`)
-- Conformance suite: [`conformance.suites.events`](../../conformance/suites/events.py) (13 checks: 12 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.events`](../../conformance/suites/events.py) (15 checks: 14 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -165,6 +165,8 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `unsettled-redelivered-on-reopen` | MUST | a message fetched but never settled is delivered again after the consumer restarts |  |
 | `durable-resumes-after-reopen` | MUST | a reopened durable consumer continues after its last ack, including messages sent meanwhile |  |
 | `settle-twice-is-noop` | MUST | only the first ack/nack/term of a delivery counts |  |
+| `stale-delivery-settles-nothing` | MUST | settling an earlier delivery, or one handed out before a reopen, leaves the live one alone |  |
+| `new-consumer-starts-at-creation` | MUST | a new durable consumer sees what is published after it was created, not the history |  |
 | `star-wildcard-matches-one-token` | SHOULD | '*' matches exactly one token | `wildcards` |
 
 ### Features an adapter may declare
@@ -182,7 +184,9 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 | `dlq-drops-messages` | `dlq-after-max-deliver` | exhausted messages vanish instead of being dead-lettered |
 | `double-settle` | `settle-twice-is-noop` | a delivery can be settled more than once |
 | `loses-unsettled-on-restart` | `unsettled-redelivered-on-reopen` | a message fetched but not settled is lost when the consumer restarts |
+| `new-consumer-replays-history` | `new-consumer-starts-at-creation` | a new durable consumer is handed every message published before it existed |
 | `restart-at-tail` | `durable-resumes-after-reopen` | reopening a durable consumer skips everything not yet delivered |
+| `stale-delivery-settles` | `stale-delivery-settles-nothing` | a stale delivery settles the live redelivery of the same message |
 
 ## Implementations
 
@@ -332,4 +336,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run events --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

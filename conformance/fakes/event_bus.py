@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 from conformance.protocols.events import Delivery
 
 
@@ -31,7 +33,11 @@ class FakeConsumer:
         self._cursor = start  # next sequence to consider for first delivery
         self._redeliver: list[_Msg] = []
         self._attempts: dict[int, int] = {}
-        self._in_flight: set[int] = set()
+        # seq -> the token of the one delivery of it that may still be settled.  Keyed by
+        # delivery, not by message: a stale delivery (an earlier one of the same message, or one
+        # handed out before a reopen) must not settle the live redelivery.
+        self._in_flight: dict[int, int] = {}
+        self._tokens = itertools.count(1)
         self._dead: list[Delivery] = []
 
     def fetch(self, n: int = 1) -> list[Delivery]:
@@ -48,15 +54,16 @@ class FakeConsumer:
     def _deliver(self, msg: _Msg) -> Delivery:
         attempt = self._attempts.get(msg.seq, 0) + 1
         self._attempts[msg.seq] = attempt
-        self._in_flight.add(msg.seq)
+        token = next(self._tokens)
+        self._in_flight[msg.seq] = token
         d = Delivery(msg.seq, msg.subject, msg.data, msg.msg_id, attempt)
-        d._settle = lambda how, m=msg, dl=d: self._settle(m, dl, how)
+        d._settle = lambda how, m=msg, dl=d, t=token: self._settle(m, dl, how, t)
         return d
 
-    def _settle(self, msg: _Msg, delivery: Delivery, how: str) -> None:
-        if msg.seq not in self._in_flight:
-            return  # already settled: settling twice is a no-op
-        self._in_flight.discard(msg.seq)
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        if self._in_flight.get(msg.seq) != token:
+            return  # settled already, or superseded by a later delivery: a no-op
+        del self._in_flight[msg.seq]
         if how == "ack":
             return
         if how == "term" or delivery.attempt >= self.max_deliver:
@@ -141,9 +148,9 @@ class RestartsAtTailEventBus(FakeEventBus):
 
 
 class _ResettlingConsumer(FakeConsumer):
-    def _settle(self, msg: _Msg, delivery: Delivery, how: str) -> None:
-        self._in_flight.add(msg.seq)  # every settlement counts, not only the first
-        super()._settle(msg, delivery, how)
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        self._in_flight[msg.seq] = token  # every settlement counts, not only the first
+        super()._settle(msg, delivery, how, token)
 
 
 class DoubleSettleEventBus(FakeEventBus):
@@ -162,3 +169,17 @@ class ReplayingEventBus(FakeEventBus):
         if new:
             c._cursor = 1
         return c
+
+
+class _StaleSettlingConsumer(FakeConsumer):
+    def _settle(self, msg: _Msg, delivery: Delivery, how: str, token: int) -> None:
+        # keyed by message, not by delivery: any delivery of a message in flight settles it
+        super()._settle(msg, delivery, how, self._in_flight.get(msg.seq, -1))
+
+
+class StaleSettleEventBus(FakeEventBus):
+    """Defect: settlement is tracked per message, so a stale delivery - an earlier one of the
+    same message, or one handed out before a reopen - settles the live redelivery (a late ack
+    from a crashed process swallows the new process's nack: the message is lost)."""
+
+    consumer_class = _StaleSettlingConsumer
