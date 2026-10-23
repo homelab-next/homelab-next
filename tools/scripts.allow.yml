@@ -62,6 +62,14 @@ not_in_runner:
   run-output-lint: >-
     a lint of the repository's own script sources (where they write scratch files), not a property
     of a running fleet; make check and CI run it, and an invariant would re-run the same AST pass
+  go-test-policy: >-
+    it judges the event stream of one Go test run (CI's orchestrator job pipes `go test -json`
+    into it), the Go counterpart of tests/suite_policy.py, which also runs inside its test
+    session rather than as a criterion; on its own it has no run to judge
+  go-modules: >-
+    it lists the Go modules CI's go job runs once each (a matrix needs the list before the job
+    starts), and fails on Go no module covers; component_tests and the Dependabot test read the
+    same discovery, so a criterion would repeat what CI already decides on every push
 
 # scheduled execs that are not scripts of this repository (product binaries); none yet
 external_exec: {}

@@ -1,0 +1,14 @@
+{"Time":"2026-10-23T02:51:36.39020116Z","Action":"start","Package":"example.com/fixture/internal/hard"}
+{"Time":"2026-10-23T02:51:36.390448242Z","Action":"run","Package":"example.com/fixture/internal/hard","Test":"TestHard"}
+{"Time":"2026-10-23T02:51:36.390455104Z","Action":"output","Package":"example.com/fixture/internal/hard","Test":"TestHard","Output":"=== RUN   TestHard\n"}
+{"Time":"2026-10-23T02:51:36.390467735Z","Action":"output","Package":"example.com/fixture/internal/hard","Test":"TestHard","Output":"--- PASS: TestHard (0.00s)\n"}
+{"Time":"2026-10-23T02:51:36.390473984Z","Action":"pass","Package":"example.com/fixture/internal/hard","Test":"TestHard","Elapsed":0}
+{"Time":"2026-10-23T02:51:36.390483468Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"PASS\n"}
+{"Time":"2026-10-23T02:51:36.390485807Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"panic: TestHard left root-owned state behind\n"}
+{"Time":"2026-10-23T02:51:36.390488035Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"\n"}
+{"Time":"2026-10-23T02:51:36.390489801Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"goroutine 1 [running]:\n"}
+{"Time":"2026-10-23T02:51:36.390491679Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"example.com/fixture/internal/hard.TestMain(0x6cd920?)\n"}
+{"Time":"2026-10-23T02:51:36.390495994Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"\t/src/orch/internal/hard/h_test.go:4 +0x3e\n"}
+{"Time":"2026-10-23T02:51:36.390498236Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"main.main()\n"}
+{"Time":"2026-10-23T02:51:36.390500122Z","Action":"output","Package":"example.com/fixture/internal/hard","Output":"\t_testmain.go:47 +0xa8\n"}
+{"Time":"2026-10-23T02:51:36.390503478Z","Action":"pass","Package":"example.com/fixture/internal/hard","Elapsed":0}

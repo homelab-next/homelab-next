@@ -1,0 +1,16 @@
+{"Time":"2026-10-23T01:22:23.646147196Z","Action":"start","Package":"example.com/fixture/internal/tmp"}
+{"Time":"2026-10-23T01:22:23.665272441Z","Action":"run","Package":"example.com/fixture/internal/tmp","Test":"TestFlaky"}
+{"Time":"2026-10-23T01:22:23.665315062Z","Action":"output","Package":"example.com/fixture/internal/tmp","Test":"TestFlaky","Output":"=== RUN   TestFlaky\n"}
+{"Time":"2026-10-23T01:22:23.665547247Z","Action":"output","Package":"example.com/fixture/internal/tmp","Test":"TestFlaky","Output":"    tmp_test.go:10: flaky\n"}
+{"Time":"2026-10-23T01:22:23.665720928Z","Action":"output","Package":"example.com/fixture/internal/tmp","Test":"TestFlaky","Output":"--- FAIL: TestFlaky (0.00s)\n"}
+{"Time":"2026-10-23T01:22:23.665843885Z","Action":"fail","Package":"example.com/fixture/internal/tmp","Test":"TestFlaky","Elapsed":0}
+{"Time":"2026-10-23T01:22:23.665890067Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"FAIL\n"}
+{"Time":"2026-10-23T01:22:23.668284528Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"panic: teardown failed\n"}
+{"Time":"2026-10-23T01:22:23.668364416Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"\n"}
+{"Time":"2026-10-23T01:22:23.668433129Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"goroutine 1 [running]:\n"}
+{"Time":"2026-10-23T01:22:23.668538785Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"example.com/fixture/internal/tmp.TestMain(...)\n"}
+{"Time":"2026-10-23T01:22:23.669697597Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"\t/src/orch/internal/tmp/tmp_test.go:7\n"}
+{"Time":"2026-10-23T01:22:23.669728353Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"main.main()\n"}
+{"Time":"2026-10-23T01:22:23.669731678Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"\t_testmain.go:47 +0x178\n"}
+{"Time":"2026-10-23T01:22:23.673505658Z","Action":"output","Package":"example.com/fixture/internal/tmp","Output":"FAIL\texample.com/fixture/internal/tmp\t0.027s\n"}
+{"Time":"2026-10-23T01:22:23.673594381Z","Action":"fail","Package":"example.com/fixture/internal/tmp","Elapsed":0.027}
