@@ -17,10 +17,12 @@
 
 Each unit below is measured by the tests that exist for it (not by the whole suite, so a unit
 cannot ride on coverage some unrelated test happens to give it): units are grouped by the tests
-they name, and each group runs in its own pytest with coverage of its own units only.  Each unit
-must reach ``FLOOR`` percent of its statements on its own; one aggregate number would let a
-well-covered package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's coverage is always fine; lowering ``FLOOR`` or dropping a
-unit is a reviewed change to this file.
+they name, and each group runs in its own pytest with coverage of its own units only.  Units
+that name the same tests share a group: the four ``homelabnext/status`` units are all measured
+by ``tests/status``, the package's tests, so they can credit each other.  Each unit must reach
+``FLOOR`` percent of its statements on its own; one aggregate number would let a well-covered
+package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's
+coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed change to this file.
 
 * ``homelabnext/broker``  -- the broker decision evaluator (grants, tiers, approvals) and the
   reference service (lanes, pinned handlers, durable single-use approvals)
