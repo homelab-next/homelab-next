@@ -103,7 +103,15 @@ from . import (
 from . import execute as _exec
 from . import lanes as _lanes
 from .relay import BROKER_SOURCE
-from .state import DECISION_KINDS, FileApprovalStore, StateDir, StateError, is_id, new_id
+from .state import (
+    DECISION_KINDS,
+    FileApprovalStore,
+    StateDir,
+    StateError,
+    is_id,
+    new_id,
+    process_identity,
+)
 
 __all__ = [
     "DEFAULT_PENDING_PER_ACTOR",
@@ -1030,7 +1038,7 @@ class BrokerService:
         # stays pending and its approval unused, to run once the trail can take it
         self._started(caller, act, req, args, "run")
         claimed = self.state.claim(
-            request_id, {"op": "run", "by": caller, "at": now, "pid": os.getpid()}
+            request_id, {"op": "run", "by": caller, "at": now, **process_identity()}
         )
         if not claimed:
             self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)

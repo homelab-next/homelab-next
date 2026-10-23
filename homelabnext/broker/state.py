@@ -46,8 +46,12 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
 A request's state: no claim -> ``pending``; claim ``cancel`` -> ``cancelled``; claim ``deny`` ->
 ``denied``; claim ``run`` -> the result's ``done`` / ``error``, or ``running`` while there is none.
 A run claim with no result is ``interrupted`` instead when nothing will ever write one: the process
-that claimed it (the claim's ``pid``, on this host) is gone, or this process could not write the
-result (:meth:`StateDir.mark_unfinished`: a full disk).  The audit trail says what happened: the
+that claimed it is gone, or this process could not write the result
+(:meth:`StateDir.mark_unfinished`: a full disk).  A claim names its process by pid, the pid's
+start time, the boot id, the PID namespace and the host (:func:`process_identity`): a pid that
+came back as another process (a restarted broker is pid 1 again in its container) or a boot since
+the claim reads ``interrupted``; a claimant on another host or in another PID namespace (the CLI
+on the host, the broker in a container) cannot be judged from here and reads ``running``.  The audit trail says what happened: the
 run's ``started`` record, and its outcome record when one could be written.  An interrupted
 request never runs again; its approval was consumed with the claim.
 """
@@ -71,6 +75,7 @@ __all__ = [
     "StateError",
     "is_id",
     "new_id",
+    "process_identity",
     "write_exclusive",
     "write_temp",
 ]
@@ -181,17 +186,75 @@ def _load(path: Path) -> Any:
         return None
 
 
-def _alive(pid: Any) -> bool:
-    """Whether the process ``pid`` (a run claim's) may still be running; an unknown pid is."""
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or pid == os.getpid():
-        return True
+def _read(path: str) -> str | None:
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:  # EPERM: it exists, as another user
+        with open(path, encoding="ascii") as fh:
+            return fh.read().strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _pid_start(pid: int) -> str | None:
+    """The start time of ``pid`` in clock ticks since boot (``/proc/<pid>/stat`` field 22), or
+    None when there is no such process or no ``/proc``."""
+    stat_line = _read(f"/proc/{pid}/stat")
+    if stat_line is None:
+        return None
+    fields = stat_line.rpartition(")")[2].split()  # the command name may hold spaces or ")"
+    return fields[19] if len(fields) > 19 else None
+
+
+def _pid_ns() -> str | None:
+    try:
+        return str(os.stat("/proc/self/ns/pid").st_ino)
+    except OSError:
+        return None
+
+
+def process_identity() -> dict[str, Any]:
+    """This process as a run claim records it: the pid alone is reused (and is 1 in every
+    container), so with it the pid's start time, the boot id, the PID namespace and the host --
+    what tells a live claimant from a dead one whose pid came back, and a claimant this reader
+    cannot see (another host, another PID namespace) from one that is gone."""
+    import socket
+
+    pid = os.getpid()
+    out: dict[str, Any] = {"pid": pid, "host": socket.gethostname()}
+    for key, value in (
+        ("pid_start", _pid_start(pid)),
+        ("boot_id", _read("/proc/sys/kernel/random/boot_id")),
+        ("pid_ns", _pid_ns()),
+    ):
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _alive(claim: dict[str, Any]) -> bool:
+    """Whether the process that took a run claim may still be running; when this reader cannot
+    tell (another host, another PID namespace, an unknown pid), it may."""
+    pid = claim.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return True
-    return True
+    if "pid_start" not in claim:  # a claim from before the identity was recorded: the pid alone
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:  # EPERM: it exists, as another user
+            return True
+        return True
+    me = process_identity()
+    if claim.get("host") != me["host"] or claim.get("pid_ns") != me.get("pid_ns"):
+        return True  # not a process this reader can see
+    if claim.get("boot_id") and me.get("boot_id") and claim["boot_id"] != me["boot_id"]:
+        return False  # the host has rebooted since: nothing from then still runs
+    start = _pid_start(pid)
+    if start is None:
+        return "pid_start" not in me  # gone (with /proc to ask), or no /proc: cannot tell
+    return start == claim["pid_start"]  # else the pid was reused: the claimant is gone
 
 
 def _is_decision(record: dict[str, Any]) -> bool:
@@ -326,7 +389,7 @@ class StateDir:
         result = self.get_result(rid)
         if result is not None:
             return str(result.get("state", "error"))
-        if rid in self._unfinished or not _alive(claim.get("pid")):
+        if rid in self._unfinished or not _alive(claim):
             return "interrupted"
         return "running"
 

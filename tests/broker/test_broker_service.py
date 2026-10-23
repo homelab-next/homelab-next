@@ -1088,6 +1088,34 @@ def test_a_filed_proposal_whose_event_cannot_be_queued_is_still_filed(tmp_path, 
     assert svc.audit_documents(reason="outbox-failed")
 
 
+def test_a_run_claim_names_its_process_beyond_the_pid(tmp_path):
+    """A claim held only the pid: a dead earlier broker whose pid came back (pid 1 again in a
+    container) read running forever, and a reader in another PID namespace saw a live run as
+    interrupted."""
+    from homelabnext.broker.state import process_identity
+
+    svc = _svc(tmp_path)
+    me = process_identity()
+    assert {"pid", "pid_start", "boot_id", "pid_ns", "host"} <= set(me)
+
+    def claimed(**over):
+        rid = _restart(svc)
+        doc = {"op": "run", "by": AGENT, "at": "2026-01-15T10:00:00Z", **me, **over}
+        assert svc.state.claim(rid, doc)
+        return svc.state.state_of(rid)
+
+    assert claimed() == "running", "this very process"
+    assert claimed(pid_start="1") == "interrupted", "this pid, an earlier process"
+    assert claimed(boot_id="00000000-0000-4000-8000-000000000000") == "interrupted"
+    assert claimed(host="elsewhere.example", pid_start="1") == "running", "cannot be judged"
+    assert claimed(pid_ns="1", pid_start="1") == "running", "another PID namespace"
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    svc.run(AGENT, rid)
+    claim = svc.state.get_claim(rid)
+    assert (claim["pid_start"], claim["boot_id"]) == (me["pid_start"], me["boot_id"])
+
+
 # -- single use: run consumes its approval exactly once ------------------------------------------
 
 
