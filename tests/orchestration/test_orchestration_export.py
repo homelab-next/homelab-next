@@ -367,6 +367,21 @@ def test_every_export_line_validates_against_the_export_schema(synced):
     assert turn["gateway_tag"]["pattern"] == f"^{TAG.pattern}$(?!\\n)"
 
 
+def test_the_export_schemas_inlined_id_patterns_are_the_ids_patterns_plus_the_newline_guard():
+    """The export schema inlines ids/logical-id's svc_id and ids/common's timestamp (a $ref
+    could not add the trailing-newline guard); if ids/ changes, the copy must follow it."""
+    root = Path(__file__).resolve().parents[2]
+    load = lambda *p: json.loads(root.joinpath("schemas", *p).read_text(encoding="utf-8"))  # noqa: E731
+    export = load("status", "orchestration_export.schema.json")
+    svc = load("ids", "logical-id.schema.json")["$defs"]["svc_id"]
+    stamp = load("ids", "common.schema.json")["$defs"]["timestamp"]
+    guard = "(?!\\n)"
+    sources = export["$defs"]["header"]["properties"]["sources"]["items"]
+    assert sources["pattern"] == svc["pattern"] + guard
+    assert sources["maxLength"] == svc["maxLength"]
+    assert export["$defs"]["time"]["pattern"] == stamp["pattern"] + guard
+
+
 @pytest.mark.parametrize(
     "change",
     [
