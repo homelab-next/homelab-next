@@ -264,11 +264,15 @@ migrated or purged). `--out` is written whole (a temporary file beside it, mode 
 renamed over it), and is refused when it is the store itself under any spelling, or a symlink:
 
 ```
+{"schema": "homelabnext.orchestration.export/1", "kind": "header", "sources": ["svc:llm-orchestrator"], "retention_days": 90, "exported_at": "2026-01-01T06:00:00Z"}
 {"schema": "homelabnext.orchestration.export/1", "kind": "job", "event": {...}, "turns_settled_at": "2026-01-01T00:20:00Z"}
 {"schema": "homelabnext.orchestration.export/1", "kind": "turn", "turn": {...}}
 ```
 
-A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
+The first line is a header naming the store it came from: the job sources it took, its
+retention and when it was exported. An import does not need it; it is only read to explain a job
+refused for its source (an export from a store with another `--source` is refused job by job,
+with both stores' sources in the reason). A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
 record) and when its turns settled; a turn line carries the neutral turn record. Jobs come first,
 oldest finish first, then turns. `hnx orchestration import --db DB FILE|-` loads it through the
 same paths as the live writers: a job goes through the consumer, so the same id and body is a
@@ -278,7 +282,9 @@ the same record again is a `duplicate`. A refused line is reported with its line
 and does not stop the rest. That makes a store movable (another host, a rebuilt hub) and keeps
 history across a swap of the gateway or the controller, since neither line names a product. A
 job that a store before exports kept without its envelope exports with `event: null`, which an
-import refuses rather than inventing one.
+import refuses rather than inventing one; so is a turn written before the turn record's last
+rename. The export still writes them, counts them on stderr and exits 1, so a move of a pilot
+store does not lose them silently.
 
 ## What the recommendation engine will consume
 

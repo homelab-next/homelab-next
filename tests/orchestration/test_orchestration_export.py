@@ -43,8 +43,8 @@ def test_an_export_round_trips_into_another_store(synced, tmp_path):
     lines = list(export_lines(synced))
     recs = [json.loads(line) for line in lines]
     assert {r["schema"] for r in recs} == {EXPORT_SCHEMA}
-    assert [r["kind"] for r in recs] == ["job"] * 4 + ["turn"] * 4  # jobs first, then turns
-    assert recs[0]["event"]["type"] == "homelabnext.agent.job.finished"
+    assert [r["kind"] for r in recs] == ["header"] + ["job"] * 4 + ["turn"] * 4  # then jobs, turns
+    assert recs[1]["event"]["type"] == "homelabnext.agent.job.finished"
     other = TelemetryStore(tmp_path / "other.db", clock=lambda: T0)
     counts, refused = import_lines(other, lines)
     assert refused == [] and counts == {("job", "processed"): 4, ("turn", "processed"): 4}
@@ -70,7 +70,7 @@ def _line(**rec) -> str:
 
 def test_an_import_refuses_what_the_consumer_refuses_and_keeps_the_rest(synced, tmp_path):
     good = list(export_lines(synced))
-    event = json.loads(good[0])["event"]
+    event = json.loads(good[1])["event"]
     foreign = copy.deepcopy(event) | {"source": "svc:status-hub", "id": "evt-foreign"}
     text = copy.deepcopy(event) | {"id": "evt-text"}
     text["data"]["prompt"] = "fake task text"
@@ -133,7 +133,7 @@ def test_cli_export_reads_only_and_import_loads(synced, tmp_path, capsys):
         f.write("not json\n")
     assert cli.main(argv, clock=lambda: T0) == 1
     out_, err = capsys.readouterr()
-    assert "jobs 0 processed, 4 duplicate" in out_ and "export.jsonl:9: not JSON" in err
+    assert "jobs 0 processed, 4 duplicate" in out_ and "export.jsonl:10: not JSON" in err
     assert cli.main(["export", "--db", str(tmp_path / "none.db")], clock=lambda: T0) == 2
     assert not (tmp_path / "none.db").exists()
 
@@ -145,7 +145,7 @@ def test_an_older_store_without_envelopes_exports_jobs_an_import_refuses(tmp_pat
     store.consume(body(examples()[0]))
     with store._db() as db:
         db.execute("UPDATE jobs SET event = NULL")
-    (line,) = export_lines(store)
+    _, line = export_lines(store)
     assert json.loads(line)["event"] is None
     counts, refused = import_lines(TelemetryStore(tmp_path / "o.db", clock=lambda: T0), [line])
     assert counts == {"refused": 1} and "carries its event" in refused[0][1]
@@ -165,8 +165,8 @@ def test_a_line_the_consumer_refuses_is_refused_not_a_crash(synced, tmp_path, li
     number, as the bus consumer refuses it, and the lines after it are still imported."""
     good = list(export_lines(synced))
     other = TelemetryStore(tmp_path / "other.db", clock=lambda: T0)
-    counts, refused = import_lines(other, [line, *good])
-    assert counts["refused"] == 1 and refused[0][0] == 1 and needle in refused[0][1]
+    counts, refused = import_lines(other, [good[0], line, *good[1:]])  # after the header
+    assert counts["refused"] == 1 and refused[0][0] == 2 and needle in refused[0][1]
     assert counts[("job", "processed")] == 4 and counts[("turn", "processed")] == 4
 
 
@@ -205,3 +205,58 @@ def test_hnx_help_names_export_and_import(capsys):
     (line,) = [x for x in capsys.readouterr().out.splitlines() if "orchestration telemetry" in x]
     for sub in ("consume", "ingest", "turns", "report", "export", "import"):
         assert sub in line.split(":", 1)[1], sub
+
+
+def test_an_export_starts_with_a_header_naming_its_store(synced):
+    header = json.loads(next(iter(export_lines(synced))))
+    assert header == {
+        "schema": EXPORT_SCHEMA,
+        "kind": "header",
+        "sources": ["svc:llm-orchestrator"],
+        "retention_days": 90,
+        "exported_at": "2026-01-01T06:00:00Z",
+    }
+
+
+def test_an_import_into_a_store_of_other_sources_says_why_every_job_is_refused(synced, tmp_path):
+    lines = list(export_lines(synced))
+    other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0, sources=["svc:other-ctl"])
+    counts, refused = import_lines(other, lines)
+    assert counts["refused"] == 4 and counts[("turn", "processed")] == 4
+    for _, why in refused:
+        assert "not the controller's job record" in why
+        assert "the export's store took svc:llm-orchestrator; this store takes svc:other-ctl" in why
+    misplaced = [lines[1], lines[0]]  # a header is the first line or nothing
+    counts, refused = import_lines(TelemetryStore(tmp_path / "p.db", clock=lambda: T0), misplaced)
+    assert refused == [(2, "a header is the first line of an export")]
+    bad = json.dumps(json.loads(lines[0]) | {"note": "x"})
+    _, refused = import_lines(TelemetryStore(tmp_path / "q.db", clock=lambda: T0), [bad])
+    assert refused and "not a job or turn line" in refused[0][1]
+
+
+def test_export_of_records_an_import_would_refuse_warns_with_a_count_and_exits_1(tmp_path, capsys):
+    """A pilot store from before exports: jobs kept without their envelope and turns written
+    before the neutral record's rename.  The export still writes them, and says it, exit 1."""
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: T0)
+    for ev in examples()[:2]:
+        store.consume(body(ev))
+    old_turn = BLANK | {
+        "turn_id": "t-old",
+        "gateway_tag": "run-0001",
+        "started_at": "2026-01-01T00:01:00Z",
+    }
+    store.add_turns([old_turn])
+    with store._db() as db:
+        db.execute("UPDATE jobs SET event = NULL WHERE run_id = 'run-0001'")
+        doc = json.dumps(
+            {k if k != "model_role" else "model_group": v for k, v in old_turn.items()}
+        )
+        db.execute("UPDATE turns SET doc = ?", (doc,))
+    out = tmp_path / "e.jsonl"
+    assert cli.main(["export", "--db", str(store.path), "--out", str(out)], clock=lambda: T0) == 1
+    err = capsys.readouterr().err
+    assert "3 record(s)" in err
+    assert (
+        "2 an import would refuse: 1 job(s) without an envelope, 1 turn(s) not a turn record" in err
+    )
+    assert len(out.read_text().splitlines()) == 4  # header + 3 records, all still written

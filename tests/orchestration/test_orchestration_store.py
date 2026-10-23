@@ -562,8 +562,8 @@ def test_the_envelope_is_closed_an_extension_or_a_free_text_subject_is_poison(st
         store.consume(body(ev))
     assert needle in "\n".join(exc.value.problems)
     assert store.jobs() == []
-    for lines in export_lines(store):  # nothing of it is stored, so nothing is exported
-        raise AssertionError(lines)
+    _header, *records = export_lines(store)
+    assert records == []  # nothing of it is stored, so nothing is exported
 
 
 def test_every_envelope_attribute_an_example_sends_is_allowed(store):
@@ -571,7 +571,7 @@ def test_every_envelope_attribute_an_example_sends_is_allowed(store):
     the schema's own: closing the envelope refuses none of them."""
     ev = json.loads((EXAMPLES / CONTROLLER_EXAMPLE).read_text(encoding="utf-8"))
     assert store.consume(body(ev)).status == "processed"
-    (line,) = export_lines(store)
+    _header, line = export_lines(store)
     assert set(json.loads(line)["event"]) == {
         "specversion", "id", "source", "type", "time", "subject", "correlationid", "data",
     }  # fmt: skip

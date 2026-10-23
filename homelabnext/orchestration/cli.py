@@ -30,7 +30,8 @@ as its event, every turn as its record), reading it as the hub does (read-only, 
 ``import`` loads such a file into a store, idempotent by the same ids and refusing a record the
 bus consumer would refuse, so a store can be moved, rebuilt or swapped.
 
-Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``, ``import``), the bus failed during the
+Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``, ``import``), the export
+holds records an import would refuse (``export``: it says how many), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
 (``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
 configuration or the connect), or a store that cannot be opened, or (``consume``) cannot take a
@@ -186,12 +187,21 @@ def _ingest(a, store: TelemetryStore) -> int:
 def _export(a, store: TelemetryStore) -> int:
     from .export import export_lines
 
-    lines = [f"{line}\n" for line in export_lines(store)]
+    refusable: Counter = Counter()
+    lines = [f"{line}\n" for line in export_lines(store, refusable)]
     if a.out == "-":
         sys.stdout.writelines(lines)
     else:
         _write_whole(Path(a.out), "".join(lines), store.path)
-    print(f"orchestration export: {len(lines)} record(s)", file=sys.stderr)
+    print(f"orchestration export: {len(lines) - 1} record(s)", file=sys.stderr)
+    if refusable:
+        print(
+            f"hnx orchestration export: {refusable.total()} an import would refuse: "
+            f"{refusable['job']} job(s) without an envelope, {refusable['turn']} turn(s) not a "
+            "turn record (a store written before exports; rebuild it from the outbox to move them)",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
