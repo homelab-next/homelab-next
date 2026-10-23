@@ -622,21 +622,42 @@ scope:
     it), every entry must be a string naming a documentation network (`scope-address`), the shape
     is the selection's with `scope` at the top level only (`scope-shape`: an unknown part, a key
     twice, an anchor or alias), and a file the parse refuses fails (`scope-unparsed`).
-  - Everywhere else, in **every file** the scanner reads (any suffix, Markdown prose and fences of
-    any indent, length or info string), the raw text under every `scope` key (any case, quoted or
-    not, `scope:`, `scope =`, `[scope]`, `[[scope]]`, a dotted `scope.x` key; the same after
-    decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references) is tokenised,
-    and any address-like token that is not a documentation address fails (`scope-address`): an
-    IPv6 address, a dotted quad in any numeric spelling, an integer of 2^24 or more in any YAML,
-    TOML or C spelling, a private `inet_aton` short form, or a short form with a prefix length,
-    port or scheme. A YAML alias is followed to its anchor, and a `!!binary` value fails. What a
-    key holds is over-read: the rest of its line, every deeper line after it (a TOML header: up to
-    the next header) and any flow collection it opens. A page may show a block's shape with
-    documentation addresses, so a doc-only block outside the allowlist is not judged for shape.
-  - Not covered: an address that is not under a scope key (a sibling key, plain prose) is
+  - Everywhere, in **every file** the scanner reads (any suffix; CRLF and CR line ends are
+    normalised first), two rules run and either one fails the file (`scope-address`):
+    - **the parse pass:** a file that parses as JSON, TOML or YAML (by content, whatever the
+      suffix; YAML only within the size and depth bounds) has every scalar, keys included, judged
+      under any key whose resolved value is `scope` in any case, at any depth. An alias-spelled key,
+      `? scope` with a comment, a CRLF `[scope]` header and a flow dedented anywhere are ordinary
+      mappings here;
+    - **the raw rule:** the raw text under every `scope` key (any case, quoted or not, `scope:`,
+      `scope =`, `[scope]`, `[[scope]]`, a dotted `scope.x` key, a comment before the colon; the
+      same after decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references)
+      is tokenised. It also reads what does not parse: Markdown prose and fences of any indent,
+      length or info string. What a key holds is over-read: the rest of its line, every deeper
+      line, a value on the first later line with content, a quoted scalar or flow collection
+      opened there through its close, and for a TOML header everything to the next header. A YAML
+      alias is followed to its anchor's last real definition (more than 256 aliases is itself a
+      finding), and a value tagged as YAML binary fails.
+
+    An address-like token is an IPv6 address, a dotted quad in any numeric spelling, an integer
+    of 2^24 or more in any YAML, TOML or C spelling, an `inet_aton` short form that is no version
+    (a hex or leading-zero part, or a part over 255: `81.2.17806`, `0x51.0x2458e`) or that sits in
+    an address context (a prefix length, port or scheme), and a private or shared short form.
+    Only two or three plain decimal parts of at most 255 (`1.0`, `16.4`, `2.1.0`) read as a
+    version. A page may show a block's shape with documentation addresses, so a doc-only block
+    outside the allowlist is not judged for shape. A case variant of an allowlisted path is
+    refused (`scope-shape`).
+  - **Threat model.** The gate defends against an **accidental** commit of a real address in any
+    ordinary format (YAML, JSON, TOML, Markdown, CRLF line ends, escapes, integer, hex,
+    zero-padded and short spellings), and fails closed on what it cannot read. A **deliberately
+    obfuscating** author is out of scope for a text gate and is review's to catch. Known non-goals:
+    a hostname that resolves to the address it spells (`81-2-69-142.sslip.io`, `*.nip.io`), <!-- no-raw-endpoint: allow a non-goal example -->
+    percent-encoded or ideographic dots, named HTML entities, Markdown backslash escapes or
+    emphasis inside a number, and numbers spelt in words.
+  - Not covered either: an address that is not under a scope key (a sibling key, plain prose) is
     `tools/leak_scan.py`'s, which ignores zero-padded and integer spellings; an integer below
-    2^24 (it names no host); a plain short form in a version range (`1.0`, `16.4`); a file the
-    scanner cannot read as text.
+    2^24 (it names no host); a version-like short form outside private space; a file the scanner
+    cannot read as text (binary, over 5 MB), which `leak_scan` itself fails on.
 - This block is the site's **network** scope. It is not `homelabnext.scope` ([scope guard](scope.md)),
   which keeps writer tools off scratch targets by registry id.
 
