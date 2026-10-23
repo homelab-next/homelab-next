@@ -14,7 +14,11 @@
 #     "1": some file does not
 """Fail if a source or config file lacks an SPDX-License-Identifier header in its first 5 lines.
 
-Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml``.  With no arguments the file list is
+Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml`` and ``*.go`` (a Go file puts
+``// SPDX-License-Identifier: Apache-2.0`` on line 1, above any ``//go:build`` line; ``go.mod`` and
+``go.sum`` are tool-written and not checked, and so is a generated Go file: one whose header,
+above the ``package`` clause, has the Go convention's ``// Code generated ... DO NOT EDIT.``
+line).  With no arguments the file list is
 ``git ls-files`` (falling back to a directory walk outside a work tree).  Two escape hatches,
 both reviewed in this file rather than spread through the tree:
 
@@ -34,7 +38,7 @@ from pathlib import Path
 
 HEADER = "SPDX-License-Identifier: Apache-2.0"
 ANY_HEADER = re.compile(r"SPDX-License-Identifier:\s*\S")
-SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml"}
+SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".go"}
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"}
 GENERATED = (
     "*/golden/*",
@@ -43,6 +47,8 @@ GENERATED = (
     "examples/mcp/clients/hermes/*",
     "examples/mcp/clients/llm-orchestrator/mcp_catalog.yaml",
 )
+# https://go.dev/s/generatedcode: the line marking a Go file as written by a tool, not a person
+GO_GENERATED = re.compile(r"^// Code generated .* DO NOT EDIT\.$")
 VENDORED: dict[str, str] = {
     # "path/glob/*.sh": "upstream project X, kept verbatim",
 }
@@ -58,10 +64,23 @@ def missing_header(path: Path) -> bool:
         return False  # empty __init__.py is allowed
     if _matches(path, GENERATED):
         return False
-    head = path.read_text(encoding="utf-8", errors="replace").splitlines()[:5]
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if path.suffix == ".go" and _go_generated(lines):
+        return False
+    head = lines[:5]
     if _matches(path, VENDORED):
         return not any(ANY_HEADER.search(line) for line in head)
     return not any(HEADER in line for line in head)
+
+
+def _go_generated(lines: list[str]) -> bool:
+    """A ``// Code generated ... DO NOT EDIT.`` line before the package clause."""
+    for line in lines:
+        if line.startswith("package "):
+            return False
+        if GO_GENERATED.match(line.rstrip("\r")):
+            return True
+    return False
 
 
 def _tracked() -> list[Path] | None:

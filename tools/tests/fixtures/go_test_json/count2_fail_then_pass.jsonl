@@ -1,0 +1,13 @@
+{"Time":"2026-10-23T01:09:44.956044434Z","Action":"start","Package":"example.com/fixture/internal/fl"}
+{"Time":"2026-10-23T01:09:44.959467883Z","Action":"run","Package":"example.com/fixture/internal/fl","Test":"TestFlip"}
+{"Time":"2026-10-23T01:09:44.95950597Z","Action":"output","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Output":"=== RUN   TestFlip\n"}
+{"Time":"2026-10-23T01:09:44.959569502Z","Action":"output","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Output":"    fl_test.go:4: fails first time\n"}
+{"Time":"2026-10-23T01:09:44.959576865Z","Action":"output","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Output":"--- FAIL: TestFlip (0.00s)\n"}
+{"Time":"2026-10-23T01:09:44.959580089Z","Action":"fail","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Elapsed":0}
+{"Time":"2026-10-23T01:09:44.959584539Z","Action":"run","Package":"example.com/fixture/internal/fl","Test":"TestFlip"}
+{"Time":"2026-10-23T01:09:44.959586588Z","Action":"output","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Output":"=== RUN   TestFlip\n"}
+{"Time":"2026-10-23T01:09:44.959590195Z","Action":"output","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Output":"--- PASS: TestFlip (0.00s)\n"}
+{"Time":"2026-10-23T01:09:44.959592678Z","Action":"pass","Package":"example.com/fixture/internal/fl","Test":"TestFlip","Elapsed":0}
+{"Time":"2026-10-23T01:09:44.959595615Z","Action":"output","Package":"example.com/fixture/internal/fl","Output":"FAIL\n"}
+{"Time":"2026-10-23T01:09:44.960210115Z","Action":"output","Package":"example.com/fixture/internal/fl","Output":"FAIL\texample.com/fixture/internal/fl\t0.004s\n"}
+{"Time":"2026-10-23T01:09:44.960262608Z","Action":"fail","Package":"example.com/fixture/internal/fl","Elapsed":0.004}

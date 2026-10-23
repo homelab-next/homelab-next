@@ -11,6 +11,8 @@ graft tools
 include conftest.py CHANGELOG.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md NOTICE LICENSE README.md
 # never: dotfiles and dot-directories (.env, .github, .git*), environment files, caches
 prune .*
+# the Go module: its own CI job builds and tests it; it is in neither Python artefact
+prune orchestrator
 # a template for a separate private repository (dotfiles, workflows), not data: in neither artefact
 prune examples/private-overlay
 global-exclude .* *.env .env* *.env.* __pycache__ *.pyc *.pyo

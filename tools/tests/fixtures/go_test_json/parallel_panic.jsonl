@@ -1,0 +1,38 @@
+{"Time":"2026-10-23T01:09:18.684287339Z","Action":"start","Package":"example.com/fixture/internal/par"}
+{"Time":"2026-10-23T01:09:18.686762135Z","Action":"run","Package":"example.com/fixture/internal/par","Test":"TestFlaky"}
+{"Time":"2026-10-23T01:09:18.686809907Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestFlaky","Output":"=== RUN   TestFlaky\n"}
+{"Time":"2026-10-23T01:09:18.686880464Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestFlaky","Output":"    par_test.go:3: flaky\n"}
+{"Time":"2026-10-23T01:09:18.68688827Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestFlaky","Output":"--- FAIL: TestFlaky (0.00s)\n"}
+{"Time":"2026-10-23T01:09:18.686895042Z","Action":"fail","Package":"example.com/fixture/internal/par","Test":"TestFlaky","Elapsed":0}
+{"Time":"2026-10-23T01:09:18.686900429Z","Action":"run","Package":"example.com/fixture/internal/par","Test":"TestA"}
+{"Time":"2026-10-23T01:09:18.686902769Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestA","Output":"=== RUN   TestA\n"}
+{"Time":"2026-10-23T01:09:18.686905397Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestA","Output":"=== PAUSE TestA\n"}
+{"Time":"2026-10-23T01:09:18.686907323Z","Action":"pause","Package":"example.com/fixture/internal/par","Test":"TestA"}
+{"Time":"2026-10-23T01:09:18.686909776Z","Action":"run","Package":"example.com/fixture/internal/par","Test":"TestB"}
+{"Time":"2026-10-23T01:09:18.686911671Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"=== RUN   TestB\n"}
+{"Time":"2026-10-23T01:09:18.686913775Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"=== PAUSE TestB\n"}
+{"Time":"2026-10-23T01:09:18.686915399Z","Action":"pause","Package":"example.com/fixture/internal/par","Test":"TestB"}
+{"Time":"2026-10-23T01:09:18.686917703Z","Action":"cont","Package":"example.com/fixture/internal/par","Test":"TestA"}
+{"Time":"2026-10-23T01:09:18.686919524Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestA","Output":"=== CONT  TestA\n"}
+{"Time":"2026-10-23T01:09:18.686921578Z","Action":"cont","Package":"example.com/fixture/internal/par","Test":"TestB"}
+{"Time":"2026-10-23T01:09:18.686925733Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"=== CONT  TestB\n"}
+{"Time":"2026-10-23T01:09:18.737544736Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"--- FAIL: TestB (0.05s)\n"}
+{"Time":"2026-10-23T01:09:18.739754577Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"panic: boom [recovered]\n"}
+{"Time":"2026-10-23T01:09:18.739791994Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\tpanic: boom\n"}
+{"Time":"2026-10-23T01:09:18.739795361Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\n"}
+{"Time":"2026-10-23T01:09:18.739798005Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"goroutine 8 [running]:\n"}
+{"Time":"2026-10-23T01:09:18.739800816Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"testing.tRunner.func1.2({0x5477a0, 0x5afa50})\n"}
+{"Time":"2026-10-23T01:09:18.739804398Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1734 +0x21c\n"}
+{"Time":"2026-10-23T01:09:18.739807987Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-10-23T01:09:18.739810348Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1737 +0x35e\n"}
+{"Time":"2026-10-23T01:09:18.739813086Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"panic({0x5477a0?, 0x5afa50?})\n"}
+{"Time":"2026-10-23T01:09:18.739815446Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/usr/local/go1.24.7/src/runtime/panic.go:792 +0x132\n"}
+{"Time":"2026-10-23T01:09:18.739832654Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"example.com/fixture/internal/par.TestB(0xc000003dc0?)\n"}
+{"Time":"2026-10-23T01:09:18.739835819Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/src/orch/internal/par/par_test.go:5 +0x30\n"}
+{"Time":"2026-10-23T01:09:18.739839304Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"testing.tRunner(0xc000003dc0, 0x584430)\n"}
+{"Time":"2026-10-23T01:09:18.739841885Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1792 +0xf4\n"}
+{"Time":"2026-10-23T01:09:18.739844271Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-23T01:09:18.739846774Z","Action":"output","Package":"example.com/fixture/internal/par","Test":"TestB","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1851 +0x413\n"}
+{"Time":"2026-10-23T01:09:18.740443016Z","Action":"fail","Package":"example.com/fixture/internal/par","Test":"TestB","Elapsed":0.05}
+{"Time":"2026-10-23T01:09:18.740510137Z","Action":"output","Package":"example.com/fixture/internal/par","Output":"FAIL\texample.com/fixture/internal/par\t0.056s\n"}
+{"Time":"2026-10-23T01:09:18.740520882Z","Action":"fail","Package":"example.com/fixture/internal/par","Elapsed":0.056}
