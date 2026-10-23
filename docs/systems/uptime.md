@@ -101,7 +101,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.uptime`
+- Registry row (Veritas, ADR-0028): `services.uptime`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

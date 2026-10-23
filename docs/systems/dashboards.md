@@ -102,7 +102,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.dashboards`
+- Registry row (Veritas, ADR-0028): `services.dashboards`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 
