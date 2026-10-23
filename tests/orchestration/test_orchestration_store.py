@@ -61,6 +61,14 @@ def test_a_pattern_valid_but_impossible_timestamp_is_refused_as_poison(store, ke
     assert store.jobs() == []
 
 
+def test_a_record_older_than_retention_is_expired_not_processed(tmp_path):
+    """It would be deleted in the very write that stores it: reported ``expired``, not stored."""
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: T0 + 200 * 86400)
+    ev = body(examples()[1])
+    assert [store.consume(ev).status for _ in range(2)] == ["expired", "expired"]
+    assert store.jobs() == []
+
+
 def test_jobs_and_turns_past_retention_are_purged(tmp_path):
     now = [T0]
     store = TelemetryStore(tmp_path / "t.db", clock=lambda: now[0], retention_days=1)

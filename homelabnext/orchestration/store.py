@@ -8,6 +8,9 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
 :class:`homelabnext.events.consumer.Consumer` is, but durably (the seen ids are the table):
 
 * the same event id with the same body is a ``duplicate`` (acknowledged, nothing written);
+* a record that finished more than ``retention_days`` ago is ``expired``: valid, acknowledged and
+  not stored, since retention would delete it in the same write (a late replay, a backfill of an
+  old outbox); it is neither ``processed`` nor poison;
 * the same event id with a different body, or a second event for a run already recorded under
   another id, is refused (:class:`homelabnext.events.envelope.EventError`): one run, one record;
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
@@ -121,6 +124,8 @@ class TelemetryStore:
         eid, digest, data = event["id"], body_digest(event), event["data"]
         finished = _instants(data)["finished_at"]
         now = self.clock()
+        if finished < now - self.retention_s:
+            return Delivery(eid, "expired")
         with self._db() as db:
             row = db.execute(
                 "SELECT event_id, digest FROM jobs WHERE event_id = ? OR run_id = ?",

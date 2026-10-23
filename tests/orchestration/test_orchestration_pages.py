@@ -158,7 +158,7 @@ def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
     run = lambda *a: cli.main([*a, "--db", str(db)], clock=lambda: T0)  # noqa: E731
     assert run("ingest", str(events)) == 1  # the garbage line is refused, the rest stored
     out, err = capsys.readouterr()
-    assert "4 processed, 1 duplicate, 1 refused" in out and "events.jsonl:6: " in err
+    assert "4 processed, 1 duplicate, 0 expired, 1 refused" in out and "events.jsonl:6: " in err
     monkeypatch.delenv("HNX_ENDPOINT_LLM_GATEWAY", raising=False)
     assert run("turns") == 2
     monkeypatch.setenv(*next(iter(KEY_ENV.items())))
@@ -181,8 +181,16 @@ def test_cli_ingest_refuses_only_the_record_with_an_impossible_date(tmp_path, ca
     argv = ["ingest", str(events), "--db", str(tmp_path / "t.db")]
     assert cli.main(argv, clock=lambda: T0) == 1
     out, err = capsys.readouterr()
-    assert "4 processed, 0 duplicate, 1 refused" in out
+    assert "4 processed, 0 duplicate, 0 expired, 1 refused" in out
     assert "events.jsonl:1: invalid event" in err
+
+
+def test_cli_ingest_counts_a_record_past_retention_as_expired(tmp_path, capsys):
+    events = tmp_path / "events.jsonl"
+    events.write_text("\n".join(body(e).decode() for e in examples()) + "\n")
+    argv = ["ingest", str(events), "--db", str(tmp_path / "t.db"), "--retention-days", "30"]
+    assert cli.main(argv, clock=lambda: T0 + 60 * 86400) == 0  # not an error
+    assert "0 processed, 0 duplicate, 4 expired, 0 refused" in capsys.readouterr().out
 
 
 def test_cli_consume_without_a_bus_is_a_configuration_error(tmp_path, monkeypatch, capsys):

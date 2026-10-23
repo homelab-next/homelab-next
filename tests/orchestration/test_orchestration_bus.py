@@ -7,11 +7,12 @@ from __future__ import annotations
 import copy
 import sqlite3
 
-from orch_helpers import body, examples
+from orch_helpers import T0, body, examples
 
 from conformance.fakes.event_bus import FakeEventBus
 from homelabnext.orchestration import FINISHED_EVENT
 from homelabnext.orchestration.bus import DURABLE, drain
+from homelabnext.orchestration.store import TelemetryStore
 
 
 def _bus_with(*bodies: bytes) -> FakeEventBus:
@@ -77,3 +78,11 @@ def test_a_content_error_the_store_did_not_name_is_poison_not_a_retry(store, mon
 
     monkeypatch.setattr(store, "consume", picky)
     assert drain(bus, store, batch=4) == {"quarantined": 1, "processed": 3}
+
+
+def test_a_record_past_retention_is_acked_as_expired(tmp_path):
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: T0 + 200 * 86400)
+    bus = _bus_with(*(body(e) for e in examples()))
+    assert drain(bus, store) == {"expired": 4}
+    assert bus.consumer(DURABLE, FINISHED_EVENT).dead_letters() == []
+    assert drain(bus, store) == {} and store.jobs() == []

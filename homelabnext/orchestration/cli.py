@@ -11,7 +11,8 @@
 
 ``consume`` drains ``homelabnext.agent.job.finished`` from the bus (``HNX_ENDPOINT_EVENTS``) into
 the store, one pass (a timer runs it); ``ingest`` stores events from a JSON-lines file (one event
-per line: a backfill, or a replay of the controller's outbox).  ``turns`` reads the gateway's
+per line: a backfill, or a replay of the controller's outbox).  Both count a record that finished
+before the retention window as ``expired``: acknowledged, not stored, not an error.  ``turns`` reads the gateway's
 spend log (``--gateway-url``, else ``HNX_ENDPOINT_LLM_GATEWAY``) for every job whose turns are not
 settled, with the read-only viewer key named by ``--key`` (default: the secret store's
 ``llm-gateway/key-telemetry-reader``, :data:`.gateway.DEFAULT_KEY`).  ``report`` prints the rollup as JSON
@@ -98,7 +99,7 @@ def _ingest(a, store: TelemetryStore) -> int:
             print(f"{a.events}:{n}: {str(exc).splitlines()[0]}", file=sys.stderr)
     print(
         "orchestration ingest: "
-        + ", ".join(f"{counts[k]} {k}" for k in ("processed", "duplicate", "refused"))
+        + ", ".join(f"{counts[k]} {k}" for k in ("processed", "duplicate", "expired", "refused"))
     )
     return 1 if counts["refused"] else 0
 
@@ -117,7 +118,7 @@ def _consume(a, store: TelemetryStore) -> int:
         counts = drain(bus, store, durable=a.durable or DURABLE)
     finally:
         bus.close()
-    keys = ("processed", "duplicate", "quarantined", "retried")
+    keys = ("processed", "duplicate", "expired", "quarantined", "retried")
     print("orchestration consume: " + ", ".join(f"{counts[k]} {k}" for k in keys))
     return 1 if counts["quarantined"] or counts["retried"] else 0
 

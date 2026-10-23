@@ -6,7 +6,8 @@ lab, :mod:`homelabnext.conform.adapters.nats_jetstream`) on the type's subject. 
 settled after the store answered, so the semantics are those of the st2 bridge
 (:mod:`homelabnext.workflows.st2_bridge`):
 
-* stored, or a duplicate of what is stored: ``ack``;
+* stored, a duplicate of what is stored, or expired (older than the store's retention, so not
+  stored): ``ack``;
 * poison (not JSON, invalid, another type or source, an id or run conflict): ``term`` -- the
   bus's dead-letter stream is the quarantine, it is never retried, and only the event id and the
   reason are logged, never the body;
@@ -45,7 +46,7 @@ def drain(
     max_deliver: int = 5,
 ) -> Counter:
     """One pass over the durable (see the module docstring); returns counts by outcome
-    (``processed``, ``duplicate``, ``quarantined``, ``retried``)."""
+    (``processed``, ``duplicate``, ``expired``, ``quarantined``, ``retried``)."""
     consumer = bus.consumer(durable, FINISHED_EVENT, max_deliver=max_deliver)
     counts: Counter = Counter()
     for _ in range(max_batches):

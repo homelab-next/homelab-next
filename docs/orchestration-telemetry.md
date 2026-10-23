@@ -97,7 +97,9 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   two, merged when within an hour), keep the rows whose `request_tags` hold a job's tag, and
   rewrite them by request id. A job is settled ten minutes after it finished (LiteLLM writes its
   spend log in batches); a failed read settles nothing.
-- **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time.
+- **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time. A
+  record that arrives already older than that (a late replay, an old backfill) is counted
+  `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
 
 ### The gateway read path: the spend-log API with a viewer key
 
