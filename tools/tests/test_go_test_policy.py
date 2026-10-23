@@ -522,6 +522,7 @@ def run_test_step(
     packages: list[str] | None = None,
     tested: list[str] = (),
     tamper: str = "",
+    module_files: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
     ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
@@ -547,6 +548,9 @@ def run_test_step(
     )
     for pkg in ("hard", "race"):
         (mod / "internal" / pkg).mkdir(parents=True)
+    for rel, text in (module_files or {}).items():
+        (mod / rel).parent.mkdir(parents=True, exist_ok=True)
+        (mod / rel).write_text(text)
     (tmp_path / "stream.json").write_text("\n".join(lines) + "\n")
     priv_lines, priv_exit = privileged or ([], 0)
     if packages is None:
@@ -576,6 +580,7 @@ def run_test_step(
     }
     for name in ("a root-owned results directory", "root-only tests", "tests (race"):
         step = ci_step(name).replace("/run/go-results", f"{tmp_path}/run/go-results")
+        step = step.replace("/usr/bin/sudo ", "sudo ")  # the stand-in on PATH
         (tmp_path / "step.sh").write_text(step)
         # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
         r = subprocess.run(
@@ -813,62 +818,120 @@ def test_the_results_are_root_owned_and_the_tests_cannot_sudo():
     copy = steps[snap]["run"]
     # verify4.md (v4/ren): a root-owned directory in the runner's RUNNER_TEMP could be renamed
     # away and replaced; a fresh mktemp name in root-owned /run cannot
-    assert "res=$(sudo mktemp -d /run/go-results.XXXXXX)" in copy
+    assert "res=$(/usr/bin/sudo mktemp -d /run/go-results.XXXXXX)" in copy
     assert '"$GITHUB_WORKSPACE/tools/go_test_policy.py"' in copy and "pyproject.toml" in copy
-    assert "sudo install -m 0644 skips.yml go.mod" in copy
-    assert 'sudo cp -R "$yaml" "$pol/vendor/yaml"' in copy
+    assert "/usr/bin/sudo install -m 0644 skips.yml go.mod" in copy
+    # verify5.md (v5/shadow): PyYAML by its metadata, from /, isolated, with its RECORD
+    assert "paths=$(cd / && python -I -c " in copy and "site.getsitepackages()" in copy
+    assert "cp -R --no-dereference" in copy and '"$pol/vendor/RECORD"' in copy
     assert 'echo "GO_RESULTS=$res" >> "$GITHUB_ENV"' in copy
     assert "RUNNER_TEMP" not in copy
     root, main = ci_step("root-only tests"), ci_step("tests (race")
     for run in (root, main, ci_step("every skip names its reason")):
         # the directory is checked, and the judge is the image's interpreter, isolated, as root
         assert 'res="$GO_RESULTS"' in run and "/run/go-results.??????)" in run
-        assert 'sudo test -d "$res" -a ! -L "$res" -a -O "$res"' in run
+        assert '/usr/bin/sudo test -d "$res" -a ! -L "$res" -a -O "$res"' in run
         assert "$GITHUB_WORKSPACE" not in run
         calls = re.findall(r'(\S+ \S+ \S+) "\$\w+/(?:policy/)?go_test_policy\.py"', run)
-        assert calls and set(calls) == {"sudo /usr/bin/python3 -I"}, calls
+        assert calls and set(calls) == {"/usr/bin/sudo /usr/bin/python3 -I"}, calls
+    # verify5.md (v5/genv): sudo by its path, never by $PATH, in every step of the job
+    for step in steps:
+        assert not re.search(r"(?<![\w/])sudo ", step.get("run", "")), step.get("name")
     assert "exec setpriv --no-new-privs --reuid=" in main
     assert "exec setpriv --no-new-privs -- " in root
     # every write into the results directory is root's: sudo tee, or a file root opened
-    assert '| sudo tee -a "$exits" > /dev/null' in root
-    assert '| sudo tee -a "$out" > /dev/null' in root
+    assert '| /usr/bin/sudo tee -a "$exits" > /dev/null' in root
+    assert '| /usr/bin/sudo tee -a "$out" > /dev/null' in root
+    # the privileged binaries run from root's copy in the results directory
+    assert 'bin="$res/privileged-' in root
+    assert '/usr/bin/sudo install -m 0755 "$RUNNER_TEMP/privileged.test" "$bin"' in root
     assert """-json ./... > "$3"'""" in main and 'sh "$(id -u)" "$(id -g)" "$out"' in main
-    assert '| sudo tee "$res/go-packages.txt" > /dev/null' in main
-    assert 'sudo test -s "$res/go-packages.txt"' in main
+    assert '| /usr/bin/sudo tee "$res/go-packages.txt" > /dev/null' in main
+    assert '/usr/bin/sudo test -s "$res/go-packages.txt"' in main
     assert '--expect-tests "$res/go-tested.txt"' in main
     for run in (root, main):
         assert not re.search(r'>>? *"\$(out|exits|res)', run.replace("> /dev/null", ""))
     # verify4.md (v4/pre): bash -e alone let a failing go list | tee pass
     assert job["defaults"]["run"]["shell"] == "bash"
-    # the module's code that runs as the runner user cannot sudo either
+    # verify5.md: the module's code that could steer later steps runs after the verdict, and
+    # cannot sudo either
+    judge = next(i for i, n in enumerate(names) if n.startswith("tests (race"))
+    for name in ("gofmt", "go vet", "build every package", "staticcheck"):
+        assert names.index(next(n for n in names if n.startswith(name))) > judge, name
     for name in ("go vet", "build every package", "staticcheck"):
         for line in ci_step(name).splitlines():
             assert line.startswith("setpriv --no-new-privs -- go "), line
     # the limit is stated beside the job, and the job stays on a hosted runner
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert "guards against accidents" in text and "not against hostile test code" in text
-    assert "root-run tests are root" in text and "$GITHUB_ENV and $GITHUB_PATH" in text
+    assert "guards against accidents and casual tampering" in text
+    assert "not against hostile pull-request code" in text
+    assert "Branch protection and human review are the boundary" in text
     assert job["runs-on"] == "ubuntu-latest" and "pull_request_target" not in text
+
+
+def _vendor(pol: Path) -> None:
+    """PyYAML and its RECORD copied as CI's results step does."""
+    from importlib import metadata
+
+    import yaml
+
+    dist = metadata.distribution("PyYAML")
+    (record,) = [f for f in dist.files if f.name == "RECORD"]
+    shutil.copytree(
+        Path(yaml.__file__).parent,
+        pol / "vendor" / "yaml",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copy(dist.locate_file(record), pol / "vendor" / "RECORD")
 
 
 def test_the_policy_copy_finds_pyyaml_beside_it_under_an_isolated_interpreter(tmp_path):
     # CI runs the copy as sudo /usr/bin/python3 -I, whose path holds neither the script's
     # directory nor the venv; PyYAML is copied to vendor/ beside it (-S: no site-packages at all)
-    import yaml
-
     pol = tmp_path / "policy"
-    shutil.copytree(Path(yaml.__file__).parent, pol / "vendor" / "yaml")
+    _vendor(pol)
     shutil.copy(ROOT / "tools" / "go_test_policy.py", pol)
     (pol / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
     (pol / "skips.yml").write_text(HARD)
     cmd = [sys.executable, "-I", "-S", str(pol / "go_test_policy.py")]
-    r = subprocess.run([*cmd, "--policy", str(pol / "skips.yml"), "--list-privileged"],
-                       capture_output=True, text=True)  # fmt: skip
+    args = [*cmd, "--policy", str(pol / "skips.yml"), "--list-privileged"]
+    r = subprocess.run(args, capture_output=True, text=True)
     assert r.returncode == 0 and r.stdout == "./internal/hard ^(TestHard)$\n", r.stderr
+    assert not list((pol / "vendor").rglob("__pycache__"))  # nothing written beside the check
     shutil.rmtree(pol / "vendor")
-    r = subprocess.run([*cmd, "--policy", str(pol / "skips.yml"), "--list-privileged"],
-                       capture_output=True, text=True)  # fmt: skip
+    r = subprocess.run(args, capture_output=True, text=True)
     assert r.returncode != 0 and "No module named 'yaml'" in r.stderr
+
+
+def test_the_vendored_pyyaml_must_match_its_record(tmp_path):
+    # verify5.md (v5/shadow): the copy was taken on trust, and could be the module's own yaml
+    pol = tmp_path / "policy"
+    _vendor(pol)
+    policy.verify_vendor(pol / "vendor")
+    init = pol / "vendor" / "yaml" / "__init__.py"
+    for change, why in [
+        (lambda: init.write_text(init.read_text() + "\nprint('module yaml')\n"), "does not match"),
+        (lambda: (init.parent / "extra.py").write_text(""), "not in its RECORD"),
+        (lambda: (init.parent / "__pycache__").mkdir(), "bytecode cache"),
+        (lambda: (init.parent / "link.py").symlink_to(init), "symbolic link"),
+        (lambda: (pol / "vendor" / "RECORD").unlink(), "cannot read"),
+    ]:
+        shutil.rmtree(pol / "vendor")
+        _vendor(pol)
+        change()
+        with pytest.raises(policy.PolicyError, match=why):
+            policy.verify_vendor(pol / "vendor")
+
+
+@needs_bash
+def test_the_results_step_copies_pyyaml_not_a_yaml_of_the_module(tmp_path):
+    # verify5.md (v5/shadow): python -c in the module's directory imported its yaml/ first
+    shadow = "print('[module yaml] ran in the results step')\n"
+    r = run_test_step(tmp_path, GREEN, 0, module_files={"yaml/__init__.py": shadow})
+    assert "[module yaml]" not in r.stdout + r.stderr
+    (res,) = (tmp_path / "run").glob("go-results.*")
+    policy.verify_vendor(res / "policy" / "vendor")
+    assert (res / "policy" / "vendor" / "yaml" / "__init__.py").read_text() != shadow
 
 
 @needs_bash

@@ -93,6 +93,9 @@ Exit: 0 clean, 1 a policy failure, 2 usage error / unreadable input / malformed 
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
+import hashlib
 import json
 import os
 import re
@@ -175,13 +178,43 @@ def module_path(go_mod: Path) -> str:
     return m.group(1) if m else ""
 
 
+def verify_vendor(directory: Path) -> None:
+    """Every file of the vendored PyYAML matches the hash its dist's ``RECORD`` (copied beside it)
+    gives; a file it does not list, a symbolic link or a ``__pycache__`` is refused."""
+    try:
+        rows = list(csv.reader((directory / "RECORD").read_text(encoding="utf-8").splitlines()))
+    except OSError as exc:
+        raise PolicyError(f"{directory}: cannot read the vendored PyYAML's RECORD: {exc}") from exc
+    hashes = {row[0]: row[1] for row in rows if len(row) >= 2 and "=" in row[1]}
+    for f in sorted(directory.rglob("*")):
+        rel = f.relative_to(directory).as_posix()
+        if rel == "RECORD":
+            continue
+        if f.is_symlink() or (f.is_dir() and f.name == "__pycache__"):
+            raise PolicyError(f"vendored PyYAML: {rel} is a symbolic link or a bytecode cache")
+        if f.is_dir():
+            continue
+        algo, _, want = hashes.get(rel, "=").partition("=")
+        if not algo:
+            raise PolicyError(f"vendored PyYAML: {rel} is not in its RECORD")
+        try:
+            digest = hashlib.new(algo, f.read_bytes()).digest()
+        except ValueError as exc:
+            raise PolicyError(f"vendored PyYAML: {rel}: unknown hash {algo!r}") from exc
+        if base64.urlsafe_b64encode(digest).rstrip(b"=").decode() != want:
+            raise PolicyError(f"vendored PyYAML: {rel} does not match its RECORD hash")
+
+
 def load_policy(path: Path | None, module: str | None = None) -> Policy:
     if path is None:
         return Policy()
     if not path.is_file():
         raise PolicyError(f"policy file not found: {path}")
-    if VENDOR.is_dir() and str(VENDOR) not in sys.path:
-        sys.path.append(str(VENDOR))  # CI's copy of PyYAML beside the policy copy, for python3 -I
+    if VENDOR.is_dir():  # CI's copy of PyYAML beside the policy copy, for python3 -I
+        verify_vendor(VENDOR)
+        sys.dont_write_bytecode = True  # what was checked is what is imported, every time
+        if str(VENDOR) not in sys.path:
+            sys.path.append(str(VENDOR))
     import yaml  # the yaml extra; only needed when a policy file is given
 
     try:
