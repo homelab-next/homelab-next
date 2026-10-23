@@ -9,6 +9,8 @@ mutants``) prove each is caught by that check.  This file only keeps the record:
 from ``MUTANTS`` - and with it the proof - fails here by name.
 """
 
+import threading
+
 import pytest
 
 from homelabnext.conform.core import run_checks
@@ -51,6 +53,8 @@ REVIEWED = {
         "read-follows-traversal",
         "approve-overturns-denial",
         "deny-withdraws-approval",
+        "namesake-overwrites-decision",
+        "decide-check-then-copy",
     },
     "secrets": {
         "error-cause-leaks-value",
@@ -149,3 +153,53 @@ def test_the_reference_broker_redacts_what_its_schema_does_not_name():
         {"pasword": "<redacted>"},
         {"password": "<redacted>"},
     ]
+
+
+# ---- the interleaving harness behind records' decide-is-atomic ----------------------------------
+
+
+class _Counter:
+    """A read-modify-write on two lines, with or without a lock around it."""
+
+    def __init__(self, lock: bool) -> None:
+        self.n = 0
+        self.lock = threading.Lock() if lock else None
+
+    def bump(self) -> int:
+        if self.lock is None:
+            seen = self.n
+            self.n = seen + 1
+            return self.n
+        with self.lock:
+            seen = self.n
+            self.n = seen + 1
+            return self.n
+
+
+def _race(counter):
+    from conformance.suites._util import interleavings
+
+    def setup():
+        start = counter.n
+
+        def judge(out1, out2):
+            assert out1[0] and out2[0], (out1, out2)
+            assert counter.n == start + 2, f"lost update: {start} -> {counter.n}"
+
+        return counter.bump, counter.bump, judge
+
+    return interleavings(counter, setup, blocked_after=0.2)
+
+
+def test_the_interleaving_finds_a_lost_update_every_time():
+    """Deterministic, not timing: the first bump is stopped between its read and its write on
+    every run, so the lost update is found on every run, at the same schedule."""
+    for _ in range(3):
+        with pytest.raises(AssertionError, match="lost update"):
+            _race(_Counter(lock=False))
+
+
+def test_a_subject_that_serialises_on_a_lock_passes_and_ends_early():
+    """Paused inside the lock, the second bump blocks: the first is resumed, the pair passes, and
+    no later point is tried (the unpaused run, then lines 1-2 before the lock, then line 3)."""
+    assert _race(_Counter(lock=True)) == 4

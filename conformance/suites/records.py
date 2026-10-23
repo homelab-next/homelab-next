@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 from conformance.fakes.records_target import (
+    CheckThenCopyRecordsTarget,
     DeniedCompletingRecordsTarget,
     FakeRecordsTarget,
     InboxCompletingRecordsTarget,
+    NamesakeRecordsTarget,
     OverwritingRecordsTarget,
     PartialCompleteRecordsTarget,
     ReapprovingRecordsTarget,
@@ -16,7 +18,7 @@ from conformance.fakes.records_target import (
 )
 from homelabnext.conform.core import Mutant, Suite
 
-from ._util import raises, uniq
+from ._util import interleavings, raises, uniq
 
 SUITE = Suite(
     "records",
@@ -86,14 +88,35 @@ def _(r):
     )
 
 
+def _decide(r, name, lane):
+    """Move a freshly proposed note into ``lane`` the way the decision maker does."""
+    if lane == "decided/approved":
+        r.approve(name)
+    elif lane == "decided/denied":
+        r.deny(name, "no")
+    elif lane == "decided/completed":
+        r.approve(name)
+        r.complete(r.completion_request([name], "Done.", agent="triage"))
+
+
 @SUITE.check(
-    "propose-never-overwrites", "proposing an existing name fails and keeps the first note"
+    "propose-never-overwrites",
+    "proposing a name taken in any lane - inbox, approved, denied, completed - fails and keeps "
+    "the first note",
 )
 def _(r):
-    note = _note(title="Same title", created="2026-04-01T00:00:00Z")
-    name = r.propose(note, "original body")
-    raises(lambda: r.propose(note, "replacement body"), "duplicate name", FileExistsError)
-    assert r.read("inbox", name)[1].strip() == "original body", "the first note was replaced"
+    for lane in LANES:
+        note = _note(title=uniq("Same title").replace("-", " "), created="2026-04-01T00:00:00Z")
+        name = r.propose(note, "original body")
+        _decide(r, name, lane)
+        before = _snapshot(r)
+        raises(
+            lambda n=note: r.propose(n, "replacement body"),
+            f"proposing a name already in {lane}",
+            FileExistsError,
+        )
+        assert _snapshot(r) == before, f"a refused namesake of a note in {lane} was filed"
+        assert r.read(lane, name)[1].strip() == "original body", f"the note in {lane} was replaced"
 
 
 @SUITE.check("approve-moves-note", "approve takes the note out of the inbox into decided/approved")
@@ -152,14 +175,39 @@ def _(r):
         ("approve", r.approve, done),
         ("deny", lambda n: r.deny(n, "too late"), done),
     ):
-        raises(
-            lambda f=fn, n=name: f(n),
-            f"{verb} of decided note {name!r}",
-            FileNotFoundError,
-            PermissionError,
-            ValueError,
-        )
+        raises(lambda f=fn, n=name: f(n), f"{verb} of decided note {name!r}", FileNotFoundError)
         assert _snapshot(r) == before, f"{verb} re-decided {name!r}"
+
+
+@SUITE.check(
+    "decide-is-atomic",
+    "of an approve and a deny raced on one note, exactly one succeeds and the note ends in "
+    "exactly one lane (a deterministic interleaving, not timing)",
+)
+def _(r):
+    lane_of = {"approve": "decided/approved", "deny": "decided/denied"}
+
+    def setup(first):
+        name = r.propose(_note())
+        ops = {"approve": lambda: r.approve(name), "deny": lambda: r.deny(name, "raced")}
+        second = "deny" if first == "approve" else "approve"
+
+        def judge(out1, out2):
+            outcome = {first: out1, second: out2}
+            won = [verb for verb, (ok, _) in outcome.items() if ok]
+            lanes = [lane for lane in LANES if name in r.list(lane)]
+            assert len(won) == 1 and lanes == [lane_of[won[0]]], (
+                f"{first} raced by {second}: {won or 'neither'} succeeded, note in {lanes}"
+            )
+            (lost,) = [out for verb, (ok, out) in outcome.items() if not ok]
+            assert isinstance(lost, FileNotFoundError), (
+                f"the losing decision raised {type(lost).__name__}, not FileNotFoundError"
+            )
+
+        return ops[first], ops[second], judge
+
+    for first in ("approve", "deny"):
+        interleavings(r, lambda f=first: setup(f))
 
 
 @SUITE.check(
@@ -272,6 +320,16 @@ MUTANTS = {
         OverwritingRecordsTarget,
         "propose-never-overwrites",
         "a repeated proposal silently replaces the first",
+    ),
+    "namesake-overwrites-decision": Mutant(
+        NamesakeRecordsTarget,
+        "propose-never-overwrites",
+        "a name is checked against the inbox only, so a namesake of an approved note replaces it",
+    ),
+    "decide-check-then-copy": Mutant(
+        CheckThenCopyRecordsTarget,
+        "decide-is-atomic",
+        "a decision copies then unlinks, so a raced approve and deny both succeed",
     ),
     "completes-inbox-notes": Mutant(
         InboxCompletingRecordsTarget,

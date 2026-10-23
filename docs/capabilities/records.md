@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Validated proposals in one agent lane; operator-only approve/deny/complete moves.**
 
 - Contract: [`conformance.protocols.records`](../../conformance/protocols/records.py) (`conformance.protocols.records:RecordsTarget`)
-- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (13 checks: 13 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.records`](../../conformance/suites/records.py) (14 checks: 14 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -22,10 +22,17 @@ Contract for `records`: the propose -> decide -> complete lifecycle.
 
 Agents can write only into the `inbox` lane; only the decision maker moves notes into
 `decided/approved|denied|completed`.  A completion request moves every note it names from
-approved to completed in one step (all-or-nothing).  A decision is final: `approve` and `deny`
-take a note from the inbox only, so a note already approved, denied or completed is refused and
-stays where it is.  Subject = `RecordsTarget`, which the
-fake builds from `homelabnext.records` over a temporary directory.
+approved to completed in one step (all-or-nothing).
+
+A name is taken when a note of that name is in *any* lane, the inbox or a decided one: `propose`
+then raises `FileExistsError`, so no namesake can be filed for a later decision to overwrite.
+
+A decision is final and atomic.  `approve` and `deny` take a note from the inbox only: a note
+that is not there (unknown, or already approved, denied or completed) raises
+`FileNotFoundError` and nothing moves.  Of two decisions on one note, even concurrent ones,
+exactly one succeeds, the other raises `FileNotFoundError`, and the note ends in exactly one
+lane.  Subject = `RecordsTarget`, which the fake builds from `homelabnext.records` over a
+temporary directory.
 
 ## How to use it
 
@@ -49,8 +56,8 @@ def propose(note: Mapping[str, Any], body: str = '') -> str
 **Returns:** `str`
 
 Agent side.  Returns the note name.  Raises ValueError (naming the field) when the
-note is invalid, FileExistsError when the name is taken, PermissionError for a lane
-violation.
+note is invalid, FileExistsError when the name is taken in any lane, PermissionError for
+a lane violation.
 
 **Raises:** `ValueError`, `FileExistsError`, `PermissionError`
 
@@ -105,6 +112,10 @@ def approve(name: str) -> None
 
 **Returns:** `None`
 
+Inbox -> approved, atomically.  FileNotFoundError when `name` is not in the inbox.
+
+**Raises:** `FileNotFoundError`
+
 #### `RecordsTarget.deny`
 
 ```python
@@ -117,6 +128,10 @@ def deny(name: str, reason: str | None = None) -> None
 | `reason` | `str \| None` | `None` | positional or keyword |
 
 **Returns:** `None`
+
+Inbox -> denied, atomically.  FileNotFoundError when `name` is not in the inbox.
+
+**Raises:** `FileNotFoundError`
 
 #### `RecordsTarget.complete`
 
@@ -156,11 +171,12 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `filename-convention` | MUST | the name is <date>-<agent>-<slug>.md |  |
 | `note-roundtrip` | MUST | frontmatter and body read back as written |  |
 | `invalid-note-rejected-naming-field` | MUST | a bad note raises ValueError naming the field and writes nothing |  |
-| `propose-never-overwrites` | MUST | proposing an existing name fails and keeps the first note |  |
+| `propose-never-overwrites` | MUST | proposing a name taken in any lane - inbox, approved, denied, completed - fails and keeps the first note |  |
 | `approve-moves-note` | MUST | approve takes the note out of the inbox into decided/approved |  |
 | `deny-moves-note` | MUST | deny moves the note to decided/denied |  |
 | `decide-unknown-note-rejected` | MUST | deciding a name not in the inbox fails; approve/deny/complete refuse '../' names |  |
 | `decisions-are-final` | MUST | approve or deny of a note already decided is refused and nothing moves |  |
+| `decide-is-atomic` | MUST | of an approve and a deny raced on one note, exactly one succeeds and the note ends in exactly one lane (a deterministic interleaving, not timing) |  |
 | `completion-moves-related-notes` | MUST | completing a request moves each related note to completed |  |
 | `completion-needs-existing-approved-notes` | MUST | a completion request naming a missing note or a path outside approved is refused |  |
 | `completion-only-of-approved-notes` | MUST | completing an inbox or denied note is refused and nothing moves (all-or-nothing) |  |
@@ -179,8 +195,10 @@ Each is a deliberately broken fake (`hnx conform run records --target broken:<mu
 | `approve-overturns-denial` | `decisions-are-final` | approve accepts a denied note and moves it to approved |
 | `completes-denied-notes` | `completion-only-of-approved-notes` | a completion request may name a denied note |
 | `completes-inbox-notes` | `completion-only-of-approved-notes` | a completion request for a note still in the inbox approves it on the agent path |
+| `decide-check-then-copy` | `decide-is-atomic` | a decision copies then unlinks, so a raced approve and deny both succeed |
 | `decide-follows-traversal` | `decide-unknown-note-rejected` | deny/complete join the name onto the lane without refusing '../' |
 | `deny-withdraws-approval` | `decisions-are-final` | deny accepts an approved note and moves it to denied |
+| `namesake-overwrites-decision` | `propose-never-overwrites` | a name is checked against the inbox only, so a namesake of an approved note replaces it |
 | `overwrites-existing-note` | `propose-never-overwrites` | a repeated proposal silently replaces the first |
 | `partial-completion` | `completion-only-of-approved-notes` | complete() moves notes one by one and stops halfway on a missing one |
 | `read-follows-traversal` | `unknown-lane-rejected` | read() joins the name onto the lane without refusing '../' |
@@ -232,4 +250,4 @@ No service in `examples/services.yml` declares `capability: records`.
    hnx conform run records --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
