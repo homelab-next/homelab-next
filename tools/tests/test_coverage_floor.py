@@ -185,3 +185,18 @@ def test_this_repo_meets_the_floor(tmp_path, monkeypatch):
     pytest.importorskip("pytest_cov")
     monkeypatch.setattr(coverage_floor, "REPORT_DIR", tmp_path)
     assert coverage_floor.main([]) == 0
+
+
+def test_the_test_and_dev_extras_pin_a_coverage_that_patches_subprocesses():
+    """coverage_floor writes ``patch = subprocess`` (coverage >= 7.10); an older coverage ignores
+    it, and leak_scan's floor then fails for a reason nobody would guess (59.8% without its
+    subprocess runs).  pytest-cov alone does not pull a new enough coverage."""
+    import re
+    import tomllib
+
+    with (Path(__file__).resolve().parents[2] / "pyproject.toml").open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+    for name in ("test", "dev"):
+        pins = [re.fullmatch(r"coverage>=(\d+)\.(\d+)", d) for d in extras[name]]
+        (m,) = [m for m in pins if m]
+        assert (int(m[1]), int(m[2])) >= (7, 10), name
