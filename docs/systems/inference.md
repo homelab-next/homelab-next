@@ -101,7 +101,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.inference`
+- Registry row (Veritas, ADR-0028): `services.inference`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

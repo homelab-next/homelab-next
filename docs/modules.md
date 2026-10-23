@@ -747,7 +747,7 @@ Still open:
 
 ## See also
 
-[ADR-0027](adr/0027-feature-and-provider-modules.md) ·
+[ADR-0027](adr/0027-feature-and-provider-modules.md) · [Veritas, ADR-0028](adr/0028-veritas-single-source-of-truth.md) ·
 [capabilities](capabilities/README.md) · [conformance](conformance.md) · [swap kit](swap.md) ·
 [decommission audit](decommission.md) · [role interface](role-interface.md) ·
 [MCP catalog](mcp-catalog.md) · [agent profiles](agent.md) · [private overlay](private-overlay.md) ·
