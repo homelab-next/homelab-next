@@ -26,8 +26,10 @@ For every schema under ``schemas/<dir>/`` (top level only):
 5. the schema is an *additive* evolution of its frozen baseline
    (``schemas/_frozen/<major>.<minor-at-freeze>/...``) unless the major version
    was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: proposed, no
-   loader or pilot yet) has no baseline and may change freely; it must not have a frozen copy
-   at its own version, ``--freeze`` skips it, and freezing it means removing ``x-draft``.
+   loader or pilot yet) has no baseline and may change freely; ``--freeze`` skips it, and
+   freezing it means removing ``x-draft``.  A draft is refused when **any** frozen baseline of
+   its major exists: only a schema never frozen, or a new major, can be a draft, so ``x-draft``
+   cannot lift the additivity gate off a released schema.
 
 Instances may be ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
 
@@ -448,6 +450,15 @@ def check_schema(
                 Problem(
                     rel,
                     "a draft schema has a frozen copy of its own version (drop x-draft to freeze it)",
+                )
+            )
+        released = [b for b in baselines(root, schema_path) if b[0] == pid[1]]
+        if released:
+            probs.append(
+                Problem(
+                    rel,
+                    f"x-draft on a released major: {pid[1]}.{released[-1][1]} is frozen, so this "
+                    "version is additive to it (a draft is only a new major or a schema never frozen)",
                 )
             )
     elif pid:

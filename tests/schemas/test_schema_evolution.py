@@ -292,3 +292,37 @@ def test_an_empty_x_draft_is_refused(tmp_path):
     p.write_text(json.dumps(s))
     probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
     assert any("x-draft must say why" in x.message for x in probs)
+
+
+def _bump(s, version):
+    s["$id"] = s["$id"].rsplit("/", 1)[0] + "/" + version
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "platform/guest.schema.json",
+        "platform/swap_record.schema.json",
+        "platform/capability.schema.json",
+    ],
+)
+def test_x_draft_on_a_released_major_is_refused_even_with_a_minor_bump(tmp_path, rel):
+    """Negative: x-draft cannot lift the additivity gate off a frozen schema, whatever the version."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas" / rel
+    s = json.loads(p.read_text())
+    _, major, minor = sc.parse_id(s)
+    optional = next(k for k in s["properties"] if k not in s.get("required", []))
+    s["properties"].pop(optional)  # a non-additive change
+    _bump(s, f"{major}.{minor + 1}")
+    s["x-draft"] = "ADR-0000 (proposed): a planted bypass"
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=[rel])
+    assert any("x-draft on a released major" in x.message for x in probs), probs
+    # a new major may still be drafted: it has no frozen baseline of its own major
+    _bump(s, f"{major + 1}.0")
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=[rel])
+    assert not any("x-draft on a released major" in x.message for x in probs), probs
