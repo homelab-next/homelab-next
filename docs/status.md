@@ -319,7 +319,10 @@ sender's `runtimes`, a session another sender or a local source started, an even
 stored for another session or sender: what is stored decides ownership), 409 a second, different
 detail for an event (a detail is written once; the same one again is a retry), 200 `{added,
 duplicates, details, detail_dropped}`. A sender with `detail: false` has its details dropped and
-its summaries' `has_detail` cleared. With `--publish-to URL` (an events forwarder;
+its summaries' `has_detail` cleared. Before any of that the listener bounds its peers: a request
+must arrive within 30 s (each read; as the console's) or the connection is closed, and at most 32
+connections are served at once (the console: 64), more answered 503 at once without a thread of
+their own, so a peer that connects and sends nothing cannot exhaust the hub's threads. With `--publish-to URL` (an events forwarder;
 `--publish-state FILE`, default `STORE.publish.json`) each summary the store accepted -- its
 redacted copy, never a duplicate -- is also published as a `homelabnext.agent.activity` event
 (one attempt in the request; what fails stays pending and is flushed at the next start). It is a

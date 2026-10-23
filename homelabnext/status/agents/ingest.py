@@ -27,6 +27,12 @@ Every request, in order (the first failure answers):
 200  ``{"added", "duplicates", "details", "detail_dropped"}``
 ==== =======================================================================================
 
+The listener's own bounds: a request must arrive within ``timeout_s`` (default 30 s, as the
+console's) or its connection is closed, and at most ``max_connections`` (default
+:data:`DEFAULT_INGEST_CONNECTIONS`) are served at once, more answered ``503`` without a thread
+(:class:`homelabnext.status.serve.BoundedHTTPServer`): both before any token check, so a peer
+that only connects cannot pin the hub's threads or descriptors.
+
 Accepted records go through :meth:`ActivityStore.add` (redact, cap, store) with
 ``via = push:<sender>``.  A sender configured with ``detail: false`` has its detail records
 dropped (counted) and its summaries' ``has_detail`` cleared.  ``publish`` (optional) receives
@@ -48,11 +54,14 @@ from typing import Any
 
 from homelabnext._http import is_loopback
 
-from ..serve import LOOPBACK, LOOPBACK_NAMES, host_allowed
+from ..serve import LOOPBACK, LOOPBACK_NAMES, BoundedHTTPServer, host_allowed
 from .config import IngestSettings, Sender
 from .store import ActivityError, ActivityStore
 
 PATH = "/ingest/agent-activity"
+#: seconds a connection may take to deliver its request; connections served at once
+DEFAULT_TIMEOUT_S = 30
+DEFAULT_INGEST_CONNECTIONS = 32
 _log = logging.getLogger(__name__)
 _HEADERS = {
     "Cache-Control": "no-store",
@@ -218,9 +227,14 @@ def make_ingest_server(
     allowed_hosts: Iterable[str] = (),
     clock: Callable[[], float] = time.time,
     publish: Callable[[list[Mapping[str, Any]]], None] | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_connections: int = DEFAULT_INGEST_CONNECTIONS,
 ) -> ThreadingHTTPServer:
     """The ingest listener.  ``port=0`` picks a free port.  Loopback unless ``allow_remote``
-    (which needs ``allowed_hosts``, the names senders use)."""
+    (which needs ``allowed_hosts``, the names senders use).  ``timeout_s`` bounds each read of a
+    request, ``max_connections`` the connections served at once (see the module doc)."""
+    if timeout_s <= 0:
+        raise ValueError("timeout_s is positive")
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames senders will use")
@@ -234,6 +248,7 @@ def make_ingest_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status-ingest"
         sys_version = ""
+        timeout = timeout_s  # a peer that sends nothing, or half a request, cannot hold a thread
 
         def _reply(self, code: int, doc: Mapping[str, Any], extra: dict | None = None) -> None:
             body = (json.dumps(doc, sort_keys=True) + "\n").encode("utf-8")
@@ -312,4 +327,4 @@ def make_ingest_server(
         def log_message(self, *a: Any) -> None:
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return BoundedHTTPServer((host, port), Handler, max_connections=max_connections)

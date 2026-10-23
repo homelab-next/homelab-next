@@ -301,3 +301,88 @@ def test_hnx_status_ingest_publish_to_puts_stored_summaries_on_the_bus(tmp_path,
     assert (tmp_path / "activity.db.publish.json").is_file()
     none = argparse.Namespace(publish_to=None)
     assert _publisher(none, cfg) is None
+
+
+# -- the listener's own bounds: idle connections time out, and only so many are served at once ---
+
+
+def _serving(srv):
+    th = threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True)
+    th.start()
+    return srv.server_address[:2]
+
+
+def _closed_within(sock, seconds: float) -> bool:
+    import time
+
+    sock.settimeout(seconds)
+    deadline = time.monotonic() + seconds
+    try:
+        while time.monotonic() < deadline:
+            if not sock.recv(65536):
+                return True
+    except TimeoutError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
+def test_an_idle_or_half_sent_request_times_out(tmp_path, clock):
+    """The ingest is the listener cloud senders reach, and its handler had no timeout: a client
+    that connected and sent nothing (or headers and half a body) held a thread forever, before
+    any token check."""
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, timeout_s=0.5)
+    host, port = _serving(srv)
+    try:
+        with (
+            socket.create_connection((host, port)) as idle,
+            socket.create_connection((host, port)) as half,
+        ):
+            half.sendall(
+                f"POST /ingest/agent-activity HTTP/1.1\r\nHost: {host}\r\n"
+                f"Authorization: Bearer {TOKEN}\r\nContent-Length: 100\r\n"
+                "Content-Type: application/json\r\n\r\n{".encode()
+            )
+            assert _closed_within(idle, 5) and _closed_within(half, 5)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_listener_serves_a_bounded_number_of_connections(tmp_path, clock):
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, max_connections=2, timeout_s=5)
+    host, port = _serving(srv)
+    try:
+        held = [socket.create_connection((host, port)) for _ in range(2)]
+        with socket.create_connection((host, port)) as extra:
+            extra.settimeout(5)
+            answer = extra.recv(65536)
+        assert answer.startswith(b"HTTP/1.1 503 "), answer
+        for s in held:
+            s.close()
+        base = f"http://{host}:{port}"
+        for _ in range(200):  # the held slots are released once their handlers see the close
+            try:
+                if post_json(base, {"summary": [summary()]}, TOKEN)[0] == 200:
+                    break
+            except OSError:  # answered 503 and closed while the request was still being sent
+                pass
+            threading.Event().wait(0.05)
+        else:
+            raise AssertionError("never served again")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_the_default_bounds():
+    from homelabnext.status.agents.ingest import DEFAULT_INGEST_CONNECTIONS, DEFAULT_TIMEOUT_S
+
+    assert DEFAULT_TIMEOUT_S == 30 and DEFAULT_INGEST_CONNECTIONS >= 1

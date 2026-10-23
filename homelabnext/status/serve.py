@@ -25,6 +25,8 @@ else (after the AOS-1 monitor's ``hostAllowed``, MIT).
 
 from __future__ import annotations
 
+import contextlib
+import threading
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +39,12 @@ from .views import dumps
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
 LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
+#: connections the console serves at once; more are answered 503 at once (BoundedHTTPServer)
+DEFAULT_MAX_CONNECTIONS = 64
+_BUSY = (
+    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\n"
+    b"Content-Length: 5\r\nConnection: close\r\nRetry-After: 5\r\n\r\nbusy\n"
+)
 _HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -79,6 +87,40 @@ def host_allowed(host: str | None, origin: str | None, allowed: frozenset[str]) 
     return origin is None or origin_name(origin) in allowed
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    """A :class:`ThreadingHTTPServer` that serves at most ``max_connections`` connections at
+    once: one more is answered ``503`` on the accepting thread and closed, without a thread of its
+    own, so clients that connect and send nothing cannot pin a thread and a socket each until the
+    host runs out (each handler also has a read timeout)."""
+
+    daemon_threads = True
+
+    def __init__(self, address, handler, *, max_connections: int = DEFAULT_MAX_CONNECTIONS):
+        if max_connections < 1:
+            raise ValueError("max_connections is at least 1")
+        self.slots = threading.BoundedSemaphore(max_connections)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address) -> None:
+        if not self.slots.acquire(blocking=False):
+            with contextlib.suppress(OSError):
+                request.setblocking(False)  # never block the accepting thread on this peer
+                request.send(_BUSY)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
 def make_server(
     document: Callable[[], Mapping[str, Any]],
     *,
@@ -94,8 +136,10 @@ def make_server(
     approvals: Any = None,
     orchestration: Any = None,
     maps: Any = None,
+    max_connections: int = DEFAULT_MAX_CONNECTIONS,
 ) -> ThreadingHTTPServer:
-    """A server for ``document()`` (called once per request).  ``port=0`` picks a free port.
+    """A server for ``document()`` (called once per request).  ``port=0`` picks a free port;
+    at most ``max_connections`` are served at once (:class:`BoundedHTTPServer`).
 
     ``allowed_hosts``: hostnames (no port) a request's ``Host``/``Origin`` may name besides the
     loopback names; required with ``allow_remote``.  ``agents``: an
@@ -210,4 +254,4 @@ def make_server(
         def log_message(self, *a: Any) -> None:  # quiet; the CLI prints the URL once
             pass
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return BoundedHTTPServer((host, port), Handler, max_connections=max_connections)
