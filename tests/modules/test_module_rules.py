@@ -55,3 +55,75 @@ def test_a_name_belongs_to_the_longest_module_id():
     assert mr._owner("external_collector_edge", ids, "_") == "external-collector"
     assert mr._owner("external_edge", ids, "_") == "external"
     assert mr._owner("other_edge", ids, "_") is None
+
+
+# ------------------------------------------------------------- agents act only through the broker
+def _load(path):
+    import yaml
+
+    return yaml.safe_load(Path(path).read_text())
+
+
+def _collector(tmp_path):
+    """A copy of the external-collector example module (its manifest, files and directory)."""
+    import shutil
+
+    mod = tmp_path / "external-collector"
+    shutil.copytree(ROOT / "examples/modules/external-collector", mod)
+    return _load(mod / "module.yml"), mod
+
+
+def _write(path, doc):
+    import yaml
+
+    Path(path).write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_the_example_modules_act_only_through_the_broker():
+    for manifest in sorted((ROOT / "examples/modules").glob("*/module.yml")):
+        assert mr.broker_rule_problems(_load(manifest), manifest.parent, _load) == [], manifest
+
+
+def test_a_contributed_acting_record_acts_through_the_broker(tmp_path):
+    """ADR-0030 for modules: a contributed MCP record with an acting tool says acts_via: broker;
+    a direct exception is the overlay's own catalog record and ceiling policy, never a module's."""
+    doc, mod = _collector(tmp_path)
+    probe = mod / "mcp/external-collector-probe.yml"
+    rec = _load(probe)
+    rec["tools"].append({"name": "purge", "classes": ["exec"], "approval": False})
+    _write(probe, rec)
+    got = mr.broker_rule_problems(doc, mod, _load)
+    assert len(got) == 1 and "tool(s) purge act other than through the broker" in got[0]
+    _write(probe, {**rec, "acts_via": "direct", "direct_reason": "a module says why"})
+    assert "never a module's" in mr.broker_rule_problems(doc, mod, _load)[0]
+    _write(probe, {**rec, "acts_via": "broker"})
+    assert mr.broker_rule_problems(doc, mod, _load) == []
+    # and the full rule set reports it too
+    _write(probe, rec)
+    probs = mr.module_problems(doc, mod, {}, _load, (tmp_path,))
+    assert any("act other than through the broker" in p for p in probs)
+
+
+def test_a_contributed_agent_acts_only_through_the_broker(tmp_path):
+    doc, mod = _collector(tmp_path)
+    agent = doc["contributes"]["agents"][0]
+    spec_path = mod / agent["spec"]
+    spec = _load(spec_path)
+    _write(spec_path, {**spec, "mcp": ["shell"], "capabilities": [*spec["capabilities"],
+                                                                   "cap:hypervisor"],
+                       "tier": "privileged"})  # fmt: skip
+    got = "\n".join(mr.broker_rule_problems(doc, mod, _load))
+    assert "agent external-collector-analyst: profile:external-collector-analyst" in got
+    for needle in ("'shell' (exec)", "'cap:hypervisor' (exec)", "tier 'privileged'"):
+        assert needle in got, needle
+    # an agent tool naming an acting tool of the module's own record that does not use the broker
+    _write(spec_path, spec)
+    probe = mod / "mcp/external-collector-probe.yml"
+    rec = _load(probe)
+    rec["tools"].append({"name": "purge", "classes": ["exec"], "approval": False})
+    _write(probe, rec)
+    agent["tools"].append("external-collector-probe.purge")
+    got = mr.broker_rule_problems(doc, mod, _load)
+    assert any("tool external-collector-probe.purge acts other than" in p for p in got), got
+    _write(probe, {**rec, "acts_via": "broker"})
+    assert mr.broker_rule_problems(doc, mod, _load) == []
