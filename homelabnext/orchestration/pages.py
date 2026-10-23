@@ -27,7 +27,7 @@ from typing import Any
 from homelabnext.status.agents.pages import _chips, _href, _n, _table
 from homelabnext.status.render import _e, nav_html, shell_html
 
-from .model import NO_BACKEND, OUTCOMES, group_key, rollup
+from .model import NO_BACKEND, OUTCOMES, _total, group_key, rollup
 from .store import TelemetryStore
 
 __all__ = ["ROUTES", "OrchestrationSite"]
@@ -264,12 +264,13 @@ class OrchestrationSite:
         tools = _table(
             ("Tool", "Calls"), [(_e(t["name"]), _e(t["calls"])) for t in job.get("tools") or ()]
         )
-        known = [t for t in turns if t.get("input_tokens") is not None]
         if turns:
+            # each sum over the turns that report that value, the others counted
+            seen_in = _partial(*_total(t.get("input_tokens") for t in turns))
+            seen_out = _partial(*_total(t.get("output_tokens") for t in turns))
             recon = (
-                f"<p>The gateway saw {len(turns)} turn(s): "
-                f"{sum(t['input_tokens'] for t in known)} tokens in, "
-                f"{sum(t.get('output_tokens') or 0 for t in known)} out; the usage file reports "
+                f"<p>The gateway saw {len(turns)} turn(s): {seen_in} tokens in, {seen_out} out; "
+                "the usage file reports "
                 f"{_num(usage.get('input_tokens'))} in, {_num(usage.get('output_tokens'))} out "
                 f"over {_num(usage.get('api_calls'))} call(s).</p>"
             )

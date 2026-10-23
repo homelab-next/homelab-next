@@ -133,6 +133,22 @@ def test_one_job_shows_its_record_and_its_gateway_turns(site):
     assert site.handle("/orchestration/other", "", _doc()) is None
 
 
+def test_the_job_page_sums_each_turn_value_over_the_turns_that_report_it(filled):
+    """The output total used to be summed only over turns whose INPUT was known, so a turn with
+    an unknown input and a known output vanished from it."""
+    filled.add_turns(
+        [
+            {"turn_id": "t-in", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:20Z",
+             "input_tokens": 100, "output_tokens": None},
+            {"turn_id": "t-out", "gateway_tag": "run-0003", "started_at": "2026-01-01T02:00:30Z",
+             "input_tokens": None, "output_tokens": 50},
+        ]
+    )  # fmt: skip
+    html = _page(OrchestrationSite(filled, clock=lambda: T0), "/orchestration/job", "run=run-0003")
+    some = '<span class="muted">(1 unknown)</span>'
+    assert f"The gateway saw 2 turn(s): 100 {some} tokens in, 50 {some} out" in html
+
+
 def test_the_hub_serves_the_page_read_only(site):
     srv = make_server(_doc, orchestration=site)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
