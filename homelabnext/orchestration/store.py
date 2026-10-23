@@ -55,6 +55,7 @@ from __future__ import annotations
 import functools
 import itertools
 import json
+import shlex
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -84,10 +85,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_gateway_tag ON jobs(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_tag ON turns(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_started ON turns(started);
 """
-#: what to run on a store whose jobs share a tag, to keep the first job stored with each
-DEDUPE_SQL = (
-    "DELETE FROM jobs WHERE rowid NOT IN (SELECT min(rowid) FROM jobs GROUP BY gateway_tag)"
-)
+
+
+def dedupe_sql(cutoff: float) -> str:
+    """What to run on a store whose jobs share a tag: keep, of each tag's jobs that finished at or
+    after ``cutoff`` (the retention cutoff), the one received first (then the least run id), and
+    delete the rest, the expired ones too.  Never by rowid, and never an expired job: the next
+    open would purge it and leave the tag with no job at all, its live jobs already deleted."""
+    c = repr(float(cutoff))
+    return (
+        f"DELETE FROM jobs WHERE finished < {c} OR EXISTS (SELECT 1 FROM jobs AS k"
+        f" WHERE k.gateway_tag = jobs.gateway_tag AND k.finished >= {c} AND (k.received <"
+        " jobs.received OR (k.received = jobs.received AND k.run_id < jobs.run_id)))"
+    )
+
+
 DEFAULT_RETENTION_DAYS = 90
 #: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
 JOURNAL_MODE = "DELETE"
@@ -126,10 +138,11 @@ class TelemetryStore:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = functools.partial(transaction, self.path, journal_mode=JOURNAL_MODE)
-        with self._db() as db:
+        with self._db() as db:  # committed on its own: a refusal below must not roll it back
             db.executescript(_TABLES)
             self._purge(db, None)
-            _refuse_shared_tags(db, self.path)
+        with self._db() as db:
+            _refuse_shared_tags(db, self.path, self.clock() - self.retention_s)
             db.executescript(_INDEXES)
 
     # ---------------------------------------------------------------- writes
@@ -277,10 +290,12 @@ class TelemetryStore:
         return rollup(self.jobs(since=since), self.turns(since=since), now=now, days=days)
 
 
-def _refuse_shared_tags(db: sqlite3.Connection, path: Path) -> None:
+def _refuse_shared_tags(db: sqlite3.Connection, path: Path, cutoff: float) -> None:
     """A store an earlier release wrote (a plain index on the tag) may hold two jobs with one
     tag, and the unique index cannot be built over them: refuse to open it (:class:`ValueError`)
-    and say how to fix it, rather than fail on the index, or pick which job to drop."""
+    and say how to fix it (:func:`dedupe_sql` at the retention ``cutoff``), rather than fail on
+    the index, or pick which job to drop.  The purge before it is already committed, so the count
+    is of the jobs the table holds."""
     if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'jobs_gateway_tag'").fetchone():
         return  # the unique index already holds
     tags, jobs = db.execute(
@@ -291,7 +306,8 @@ def _refuse_shared_tags(db: sqlite3.Connection, path: Path) -> None:
         raise ValueError(
             f"{path}: {tags} gateway tag(s) are each held by more than one job ({jobs} jobs), so "
             "their turns cannot be told apart and the store will not open; keep one job per tag "
-            f'and run again (to keep the first stored: sqlite3 {path} "{DEDUPE_SQL}")'
+            "and run again (to keep the one received first: "
+            f"sqlite3 {shlex.quote(str(path))} {shlex.quote(dedupe_sql(cutoff))})"
         )
 
 
@@ -354,4 +370,11 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
     return out
 
 
-__all__ = ["DEFAULT_RETENTION_DAYS", "JOURNAL_MODE", "MAX_JOB_S", "STORE_ERRORS", "TelemetryStore"]
+__all__ = [
+    "DEFAULT_RETENTION_DAYS",
+    "JOURNAL_MODE",
+    "MAX_JOB_S",
+    "STORE_ERRORS",
+    "TelemetryStore",
+    "dedupe_sql",
+]

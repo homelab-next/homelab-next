@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shlex
 import sqlite3
 
 import pytest
@@ -14,7 +15,7 @@ from orch_helpers import CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body,
 from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, cli, percentile, rollup
 from homelabnext.orchestration.pages import OrchestrationSite
-from homelabnext.orchestration.store import DEDUPE_SQL, TelemetryStore
+from homelabnext.orchestration.store import DEFAULT_RETENTION_DAYS, TelemetryStore, dedupe_sql
 from homelabnext.status.model import iso, parse_iso
 
 
@@ -359,9 +360,11 @@ def test_a_store_with_two_jobs_on_one_tag_is_refused_with_how_to_fix_it(tmp_path
         assert cli.main(argv, clock=lambda: T0) == 2
         err = capsys.readouterr().err
         assert "1 gateway tag(s) are each held by more than one job (3 jobs)" in err
-        assert DEDUPE_SQL in err and "Traceback" not in err
+        assert "Traceback" not in err
+    fix = _printed_fix(err, db)
+    assert fix == dedupe_sql(T0 - DEFAULT_RETENTION_DAYS * 86400)
     with sqlite3.connect(db) as conn:
-        conn.execute(DEDUPE_SQL)
+        conn.execute(fix)
     conn.close()
     store = TelemetryStore(db, clock=lambda: T0)
     assert [j["run_id"] for j in store.jobs()] == ["run-0001"]
@@ -379,3 +382,89 @@ def test_a_store_sqlite_cannot_open_is_exit_2_not_a_traceback(tmp_path, capsys):
     (tmp_path / "t.db").mkdir()  # a directory where the database should be
     assert cli.main(["report", "--db", str(tmp_path / "t.db")], clock=lambda: T0) == 2
     assert "hnx orchestration report: unable to open database file" in capsys.readouterr().err
+
+
+def _printed_fix(err: str, db) -> str:
+    """The statement the refusal prints, as the shell would pass it to sqlite3."""
+    cmd = shlex.split(err.split("to keep the one received first: ", 1)[1].rsplit(")", 1)[0])
+    assert cmd[:2] == ["sqlite3", str(db)] and len(cmd) == 3
+    return cmd[2]
+
+
+def _store_with_jobs(path, jobs: list[tuple[str, float]]) -> None:
+    """An earlier release's store (a plain index on the tag) holding ``jobs`` (run id, finished
+    and received at that time), all on one tag."""
+    TelemetryStore(path, clock=lambda: T0)
+    with sqlite3.connect(path) as db:
+        db.execute("DROP INDEX jobs_gateway_tag")
+        db.execute("CREATE INDEX jobs_tag ON jobs(gateway_tag)")
+        for run, at in jobs:
+            db.execute(
+                "INSERT INTO jobs VALUES (?,?,'d','profile:x',NULL,'real','completed',?,'t',?,"
+                "NULL,'{}')",
+                (run, f"e-{run}", at, at),
+            )
+    db.close()
+
+
+def _run_ids(path) -> list[str]:
+    with sqlite3.connect(path) as db:
+        ids = [r[0] for r in db.execute("SELECT run_id FROM jobs ORDER BY run_id")]
+    db.close()
+    return ids
+
+
+DAY = 86400.0
+
+
+@pytest.mark.parametrize(
+    ("jobs", "left"),
+    [
+        ([("r1", T0 - 100 * DAY), ("r2", T0 - DAY)], ["r2"]),
+        ([("r1", T0 - 100 * DAY), ("r2", T0 - 95 * DAY), ("r3", T0)], ["r3"]),
+    ],
+)
+def test_an_expired_duplicate_is_purged_for_good_and_the_store_opens(tmp_path, jobs, left):
+    """The purge at open used to roll back with the refusal: the message counted what was left
+    after it, while the table still held the expired jobs."""
+    db = tmp_path / "t.db"
+    _store_with_jobs(db, jobs)
+    TelemetryStore(db, clock=lambda: T0)
+    assert _run_ids(db) == left
+
+
+def test_the_printed_fix_keeps_the_live_job_received_first_never_an_expired_one(tmp_path, capsys):
+    """Two live jobs and an expired one on one tag: the refusal names two jobs (the expired one is
+    already gone), and its statement keeps the live job received first.  The old statement kept
+    min(rowid), the expired job if it was still there, which the next open purged: every job on
+    the tag was gone."""
+    db = tmp_path / "t.db"
+    _store_with_jobs(db, [("r1", T0 - 100 * DAY), ("r2", T0 - 2 * DAY), ("r3", T0)])
+    assert cli.main(["report", "--db", str(db)], clock=lambda: T0) == 2
+    err = capsys.readouterr().err
+    assert "1 gateway tag(s) are each held by more than one job (2 jobs)" in err
+    assert _run_ids(db) == ["r2", "r3"]  # the purge is committed despite the refusal
+    fix = _printed_fix(err, db)
+    with sqlite3.connect(db) as conn:  # the expired job is back, as if not yet purged
+        conn.execute(
+            "INSERT INTO jobs SELECT 'r1', 'e-r1', digest, profile, backend, lane, outcome, ?,"
+            " gateway_tag, ?, turns_settled, doc FROM jobs WHERE run_id = 'r2'",
+            (T0 - 100 * DAY, T0 - 100 * DAY),
+        )
+        conn.execute(fix)
+    conn.close()
+    assert _run_ids(db) == ["r2"]
+    TelemetryStore(db, clock=lambda: T0)
+    assert _run_ids(db) == ["r2"]
+
+
+def test_the_printed_fix_quotes_a_path_the_shell_would_split(tmp_path, capsys):
+    db = tmp_path / "a dir; with $(x)" / "t.db"
+    db.parent.mkdir()
+    _store_with_jobs(db, [("r1", T0), ("r2", T0)])
+    assert cli.main(["report", "--db", str(db)], clock=lambda: T0) == 2
+    fix = _printed_fix(capsys.readouterr().err, db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(fix)
+    conn.close()
+    assert _run_ids(db) == ["r1"]

@@ -121,8 +121,10 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
 - **One job per tag, on an older store**: the tag's index is unique. A store an earlier release
   wrote may hold two jobs with one tag; every `hnx orchestration` command then refuses to open it
-  (exit 2), naming how many tags are shared and the statement that keeps the first job stored
-  with each, rather than choosing which job to drop.
+  (exit 2), naming how many tags are shared and the statement that keeps, of each tag's jobs
+  inside retention, the one received first (expired jobs are purged, and committed, before the
+  count, and the statement deletes any left; it never keeps an expired job, which the next open
+  would purge, leaving the tag with none), rather than choosing which job to drop.
 
 ### The gateway read path: the spend-log API with a viewer key
 
