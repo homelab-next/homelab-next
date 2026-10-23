@@ -34,6 +34,9 @@ REVIEWED = {
         "refused-submit-unaudited",
         "submit-unaudited",
         "redacts-known-secrets-only",
+        # third round (verify)
+        "redacts-unknown-by-name-guess",
+        "refusal-echoes-unexpected-values",
     },
     "events": {
         "loses-unsettled-on-restart",

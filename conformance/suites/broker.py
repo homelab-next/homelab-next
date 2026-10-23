@@ -14,7 +14,9 @@ from conformance.fakes.command_broker import (
     CallerOnlyBroker,
     ChattyErrorBroker,
     DeferredClearAuditBroker,
+    EchoingRefusalBroker,
     FakeBroker,
+    GuessingRedactionBroker,
     KeyNameRedactingBroker,
     KnownSecretsOnlyBroker,
     LoggingBroker,
@@ -279,28 +281,37 @@ def _(b):
 
 @SUITE.check(
     "unknown-arguments-redacted",
-    "an argument the schema does not name - misspelt, or of an unknown command - is audited "
-    "without its value, called or submitted",
+    "an argument the schema does not name - misspelt, or of an unknown command - shows its value "
+    "in no audit record and no error, called or submitted, whatever its name looks like",
 )
 def _(b):
     cmd, caller = uniq("cmd"), uniq("caller")
-    b.register(cmd, lambda **kw: "rotated", {"user": ArgSpec("str"), "password": SPEC_SECRET})
+    b.register(cmd, lambda **kw: "rotated", {"user": ArgSpec("str"), "label": SPEC_SECRET})
     b.allow(caller, [cmd])
     before = len(b.audit())
+    raised = []
+    # names that do not look secret: redaction is the default, not a guess from the name
+    attempts = (
+        (cmd, {"user": "svc", "lable": SECRET}),  # a typo of a secret argument's name
+        (cmd, {"user": "svc", "label": "ok", "x9": SECRET}),  # an argument the schema lacks
+        (uniq("nocmd"), {"q": SECRET, "mode": SECRET}),  # a command nobody registered
+    )
     for fn in _ops(b).values():
-        for command, args in (
-            (cmd, {"user": "svc", "pasword": SECRET}),  # a typo of a secret argument's name
-            (uniq("nocmd"), {"password": SECRET}),  # a command nobody registered
-        ):
-            with contextlib.suppress(BrokerError):
+        for command, args in attempts:
+            try:
                 fn(caller, command, args)
+            except BrokerError as exc:
+                raised.append(exc_text(exc))
     new = list(b.audit())[before:]
-    assert new, "four refused attempts left no audit record to judge (see every-call-audited)"
+    assert new, "six refused attempts left no audit record to judge (see every-call-audited)"
     for rec in new:
         assert SECRET not in repr(rec) and SECRET not in repr(dict(rec.args)), (
             f"the value of an argument the schema does not name was audited on a "
             f"{rec.outcome!r} {rec.operation!r} record"
         )
+    assert raised and not any(SECRET in text for text in raised), (
+        "a refusal (its message, attributes or cause) echoed an argument's value"
+    )
 
 
 @SUITE.check(
@@ -532,6 +543,16 @@ MUTANTS = {
         KnownSecretsOnlyBroker,
         "unknown-arguments-redacted",
         "a misspelt secret argument, or any argument of an unknown command, is audited in clear",
+    ),
+    "redacts-unknown-by-name-guess": Mutant(
+        GuessingRedactionBroker,
+        "unknown-arguments-redacted",
+        "an unnamed argument is redacted only when its name looks secret",
+    ),
+    "refusal-echoes-unexpected-values": Mutant(
+        EchoingRefusalBroker,
+        "unknown-arguments-redacted",
+        "InvalidArguments names each unexpected argument with its value",
     ),
     "foreign-access-not-audited": Mutant(
         SilentForeignAccessBroker,

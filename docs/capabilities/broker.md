@@ -28,7 +28,8 @@ arguments the schema marks `secret` never appear in any audit record, whatever t
 in anything `call` raises.  Redaction follows the schema's `secret` flag, not the argument's
 name, and it is the default: an argument the schema does not name (a misspelt name, or any
 argument of a command nobody registered) is recorded by name only, its value redacted, because
-nothing says it is not a secret.  A handler failure surfaces as `BrokerError` naming the command only: the handler's own
+nothing says it is not a secret - whatever the name looks like - and no error `call` or
+`submit` raises (message, attributes, cause) carries its value either.  A handler failure surfaces as `BrokerError` naming the command only: the handler's own
 exception (message, cause, context) is not passed to the caller.
 
 `ArgSpec` checks *shape* (presence and type), not *content*.  A value that passed validation is
@@ -243,7 +244,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `every-submit-audited` | MUST | ok, denied and invalid submits each leave one submit record, as calls do |  |
 | `submit-keeps-its-own-copy` | MUST | changing the mapping given to submit afterwards changes nothing that runs |  |
 | `audit-redacts-secret-args` | MUST | arguments the schema marks secret never appear in the audit trail or an error, any outcome, called or deferred |  |
-| `unknown-arguments-redacted` | MUST | an argument the schema does not name - misspelt, or of an unknown command - is audited without its value, called or submitted |  |
+| `unknown-arguments-redacted` | MUST | an argument the schema does not name - misspelt, or of an unknown command - shows its value in no audit record and no error, called or submitted, whatever its name looks like |  |
 | `run-audited-once` | MUST | running a request leaves exactly one record of its outcome, operation run, with its id |  |
 | `audit-trail-is-append-only` | SHOULD | editing the returned audit list does not change the trail |  |
 | `results-are-isolated` | SHOULD | mutating a returned result does not change later results |  |
@@ -271,6 +272,8 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 | `redacts-by-key-name` | `audit-redacts-secret-args` | redaction guesses from argument names instead of the schema's secret flag |
 | `redacts-known-secrets-only` | `unknown-arguments-redacted` | a misspelt secret argument, or any argument of an unknown command, is audited in clear |
 | `redacts-ok-calls-only` | `audit-redacts-secret-args` | denied, invalid and failed calls are audited with secrets in the clear |
+| `redacts-unknown-by-name-guess` | `unknown-arguments-redacted` | an unnamed argument is redacted only when its name looks secret |
+| `refusal-echoes-unexpected-values` | `unknown-arguments-redacted` | InvalidArguments names each unexpected argument with its value |
 | `refused-submit-unaudited` | `every-submit-audited` | a denied or invalid submit leaves no audit record |
 | `requests-shared-between-callers` | `requests-bound-to-caller` | any caller may read, run or cancel a request another caller submitted |
 | `run-audited-twice` | `run-audited-once` | running a request leaves a started record and then its outcome |

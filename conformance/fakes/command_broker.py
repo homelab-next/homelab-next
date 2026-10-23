@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -309,3 +310,37 @@ class RunChattyErrorBroker(FakeBroker):
             raise BrokerError(f"{command} failed: {exc}") from exc
         self._log(caller, command, "ok", spec, args, **extra)
         return result
+
+
+class GuessingRedactionBroker(FakeBroker):
+    """Defect: an argument the schema does not name is redacted only when its name looks secret
+    (``pass``, ``token``, ``key`` ...), the common logging-filter idiom: redaction by guess."""
+
+    _LOOKS = re.compile(r"(?i)pass|word|secret|token|key|cred|pwd")
+
+    def _redact(self, spec, args):
+        return {
+            k: (
+                ("<redacted>" if spec[k].secret else v)
+                if k in spec
+                else ("<redacted>" if self._LOOKS.search(k) else v)
+            )
+            for k, v in args.items()
+        }
+
+
+class EchoingRefusalBroker(FakeBroker):
+    """Defect: the audit trail is redacted, but ``InvalidArguments`` names each unexpected
+    argument with its value (``unexpected lable='...'``), as validation libraries' messages do."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if entry is not None and command in self._allow.get(caller, set()):
+            spec = entry[1]
+            problems = arg_problems(spec, args)
+            if problems:
+                self._log(caller, command, "invalid", spec, args, **extra)
+                shown = [p for p in problems if not p.startswith("unexpected")]
+                shown += [f"unexpected {k}={args[k]!r}" for k in args if k not in spec]
+                raise InvalidArguments("; ".join(shown))
+        return super()._admit(caller, command, args, **extra)
