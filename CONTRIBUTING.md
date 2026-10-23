@@ -8,8 +8,10 @@ tests on a laptop with no network and no private context.
 1. **Sign off every commit** (Developer Certificate of Origin): `git commit -s`. The sign-off
    certifies you may submit the work under Apache-2.0. CI's `dco` job fails a pull request with
    a commit that lacks a `Signed-off-by:` for its author. Commit with your GitHub noreply address
-   (Settings -> Emails); CI rejects any other author or committer e-mail. Commits authored by a
-   GitHub App bot (Dependabot) are exempt; the maintainer who merges them takes the sign-off.
+   (Settings -> Emails); CI rejects any other author or committer e-mail. Dependabot's own
+   commits, in a pull request GitHub records as opened by Dependabot, are exempt; the maintainer
+   who merges them takes the sign-off. A bot's address in a commit's author field exempts
+   nothing on its own: anyone can set it.
 2. **Every schema change ships an example and a negative** (an input that must be rejected).
    Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
    may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
