@@ -26,7 +26,13 @@ State lives in one directory (:class:`homelabnext.broker.state.StateDir`): one f
 claim, result, approval, consumed approval and audit record, each created exclusively, so any
 number of processes share it without locks and an approval is single use across all of them.
 Every outcome - ok, denied, invalid, error, shadow - leaves one audit record that validates
-against ``schemas/broker/audit``.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
+against ``schemas/broker/audit``.  An action that executes (a ``call``, or an approved ``run``)
+first writes a ``started`` record (audit 1.2), and the broker refuses to execute it
+(``audit-unavailable``) when that record cannot be written: the trail never lacks an action that
+ran.  If the outcome record cannot be written afterwards (``audit-incomplete``), the ``started``
+record is the evidence; a run then ends ``error`` (or reads ``interrupted`` when not even its
+result can be written, :mod:`homelabnext.broker.state`).  The contract view (:meth:`audit`)
+lists outcomes only, one per operation.  Arguments an ``ArgSpec`` marks ``secret`` are redacted in the
 audit trail and never written to disk; in the request (and so in its digest, which is persisted,
 audited and sent with events) each is replaced by ``hmac-sha256:<hex>``, a hash keyed with the
 state directory's ``digest.key``, so a low-entropy secret cannot be recovered from the digest by
@@ -55,6 +61,7 @@ import copy
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import tempfile
@@ -90,7 +97,7 @@ from . import (
 from . import execute as _exec
 from . import lanes as _lanes
 from .relay import BROKER_SOURCE
-from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
+from .state import DECISION_KINDS, FileApprovalStore, StateDir, StateError, is_id, new_id
 
 __all__ = [
     "DEFAULT_NOTIFY_WINDOW_S",
@@ -106,6 +113,13 @@ __all__ = [
 
 NOT_OWNER = "not-request-owner"
 TOO_MANY_PENDING = "too-many-pending"
+#: an action was not run because its ``started`` record could not be written
+AUDIT_UNAVAILABLE = "audit-unavailable"
+#: an action ran and its outcome record could not be written (its ``started`` record stands)
+AUDIT_INCOMPLETE = "audit-incomplete"
+#: what writing an audit record can raise when the trail cannot take it
+_AUDIT_FAILURES = (OSError, StateError, BrokerError)
+log = logging.getLogger("homelabnext.broker.service")
 #: manifest ``quotas`` defaults: requests one actor may have pending, and its page window (s)
 DEFAULT_PENDING_PER_ACTOR = 20
 DEFAULT_NOTIFY_WINDOW_S = 300.0
@@ -503,6 +517,7 @@ class BrokerService:
                 reason=r.get("reason", ""),
             )
             for r in self.state.audit_records()
+            if r.get("outcome") != "started"  # an intent; its outcome is the operation's record
         ]
 
     def audit_documents(self, *, limit: int | None = None, **match: Any) -> list[dict[str, Any]]:
@@ -712,14 +727,48 @@ class BrokerService:
             "stderr_bytes": len(res.stderr),
         }
 
-    def _run_audited(self, caller, act, request, args, operation) -> Any:
-        extra = {"request_id": request["request_id"], "request_digest": request["digest"]}
+    def _started(self, caller, act, request, args, operation) -> None:
+        """Write the ``started`` record of an action about to execute, or refuse to execute it:
+        an action never runs without a record of it (``audit-unavailable``)."""
         try:
-            result = self._execute(act, request, args)
-        except _Refused as exc:
             self._audit(
                 caller,
                 act.name,
+                operation,
+                "started",
+                args=args,
+                spec=act.spec,
+                request_id=request["request_id"],
+                request_digest=request["digest"],
+            )
+        except _AUDIT_FAILURES as exc:
+            log.error("%s: not run, the audit trail cannot be written (%s)", act.name, exc)
+            raise _reasoned(
+                f"{act.name}: the audit trail cannot be written; nothing was run",
+                AUDIT_UNAVAILABLE,
+            ) from None
+
+    def _outcome(self, caller, act, operation, outcome, **kw) -> None:
+        """The outcome record of an action that executed; when it cannot be written, the action
+        has still happened (its ``started`` record says so): ``audit-incomplete``."""
+        try:
+            self._audit(caller, act.name, operation, outcome, args=kw.pop("args"), **kw)
+        except _AUDIT_FAILURES as exc:
+            log.error("%s ran; its %s record cannot be written (%s)", act.name, outcome, exc)
+            raise _reasoned(
+                f"{act.name} ran but its outcome could not be audited", AUDIT_INCOMPLETE
+            ) from None
+
+    def _run_audited(self, caller, act, request, args, operation, *, started=False) -> Any:
+        extra = {"request_id": request["request_id"], "request_digest": request["digest"]}
+        if not started:
+            self._started(caller, act, request, args, operation)
+        try:
+            result = self._execute(act, request, args)
+        except _Refused as exc:
+            self._outcome(
+                caller,
+                act,
                 operation,
                 exc.outcome,
                 reason=exc.reason,
@@ -733,8 +782,8 @@ class BrokerService:
             summary = {
                 k: result[k] for k in ("path", "bytes", "digest", "exit_code") if k in result
             }
-        self._audit(
-            caller, act.name, operation, "ok", args=args, spec=act.spec, result=summary, **extra
+        self._outcome(
+            caller, act, operation, "ok", args=args, spec=act.spec, result=summary, **extra
         )
         return result
 
@@ -947,6 +996,9 @@ class BrokerService:
                 **extra,
             )
             raise _contract_error(exc) from None
+        # the intent is on record before anything changes: when it cannot be written, the request
+        # stays pending and its approval unused, to run once the trail can take it
+        self._started(caller, act, req, args, "run")
         claimed = self.state.claim(
             request_id, {"op": "run", "by": caller, "at": now, "pid": os.getpid()}
         )
@@ -958,9 +1010,7 @@ class BrokerService:
             # only a run holding the claim consumes, so this means the approval was used
             # outside this request's run: refuse, and end the claimed request as an error
             self._secret_args.pop(request_id, None)
-            self.state.put_result(
-                request_id, {"state": "error", "at": now, "reason": "approval-replayed"}
-            )
+            self._finish(request_id, {"state": "error", "at": now, "reason": "approval-replayed"})
             self._audit(
                 caller,
                 req["action"],
@@ -974,9 +1024,9 @@ class BrokerService:
                 f"request {request_id!r}: approval already used", reason="approval-replayed"
             )
         try:
-            result = self._run_audited(caller, act, req, args, "run")
+            result = self._run_audited(caller, act, req, args, "run", started=True)
         except BrokerError as exc:
-            self.state.put_result(
+            self._finish(
                 request_id, {"state": "error", "at": now, "reason": getattr(exc, "reason", "")}
             )
             raise
@@ -985,8 +1035,18 @@ class BrokerService:
         done = {"state": "done", "at": _stamp(self._now())}
         if act.kind != "callable" and isinstance(result, Mapping):
             done["result"] = json.loads(json.dumps(result, default=repr))
-        self.state.put_result(request_id, done)
+        self._finish(request_id, done)
         return result
+
+    def _finish(self, request_id: str, doc: dict[str, Any]) -> None:
+        """Record how a claimed run ended.  When the result cannot be written (a full disk), the
+        request reads ``interrupted`` rather than ``running`` forever; the audit trail holds what
+        happened."""
+        try:
+            self.state.put_result(request_id, doc)
+        except (OSError, StateError) as exc:
+            self.state.mark_unfinished(request_id)
+            log.error("request %s: its result cannot be written (%s)", request_id, exc)
 
     def cancel(self, caller, request_id):
         rec = self._owned(caller, request_id, "cancel")

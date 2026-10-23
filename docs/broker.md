@@ -182,6 +182,20 @@ read never walks the refusals; rebuilt once for an older state directory),
 `relay/` (the relay's own: `delivered/`, `undeliverable/`, `quarantine/`, `relay.lock`,
 `initialized`; [Publishing events](#publishing-events-the-outbox-relay)), `runs/<request>/` and
 `digest.key`.
+
+**Audit before execute.** An action that executes (a `call`, an approved `run`) first writes an
+`outcome: started` record (audit 1.2), and the broker refuses to execute it, answering
+`audit-unavailable`, when that record cannot be written (a full disk, an unwritable `audit/`): an
+action never runs without a record of it. For a `run` the record is written before the claim, so
+the request stays `pending` and its approval unused, to run once the trail can take it. The
+operation's own record (`ok`, `denied`, `error`) completes it; when that one cannot be written
+the caller gets `audit-incomplete` and the `started` record is the evidence that the action ran.
+A run then ends `error` (reason `audit-incomplete`); when not even its result can be written it
+reads `interrupted`, as does a run whose claiming process (the claim's `pid`) is gone. An
+interrupted request never runs again (its approval was consumed with the claim): check the target
+and the trail, and submit a new request if the action is still needed. `hnx broker audit
+--outcome started` lists the intents; the contract's `audit()` view lists outcomes only.
+
 Keep it owned by the broker's user, `0700`, or `0710` with the outbox relay's group when the relay
 runs as its own user ([Publishing events](#publishing-events-the-outbox-relay)): then `outbox/` is
 `2750` in that group (its files are `0640`) and `relay/` belongs to the relay; every other

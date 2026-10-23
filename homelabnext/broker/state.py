@@ -43,6 +43,11 @@ the same file and nothing is ever rewritten in place.  State is *derived* from w
 
 A request's state: no claim -> ``pending``; claim ``cancel`` -> ``cancelled``; claim ``deny`` ->
 ``denied``; claim ``run`` -> the result's ``done`` / ``error``, or ``running`` while there is none.
+A run claim with no result is ``interrupted`` instead when nothing will ever write one: the process
+that claimed it (the claim's ``pid``, on this host) is gone, or this process could not write the
+result (:meth:`StateDir.mark_unfinished`: a full disk).  The audit trail says what happened: the
+run's ``started`` record, and its outcome record when one could be written.  An interrupted
+request never runs again; its approval was consumed with the claim.
 """
 
 from __future__ import annotations
@@ -174,6 +179,19 @@ def _load(path: Path) -> Any:
         return None
 
 
+def _alive(pid: Any) -> bool:
+    """Whether the process ``pid`` (a run claim's) may still be running; an unknown pid is."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # EPERM: it exists, as another user
+        return True
+    return True
+
+
 def _is_decision(record: dict[str, Any]) -> bool:
     return (record.get("operation"), record.get("outcome")) in DECISION_KINDS
 
@@ -203,6 +221,7 @@ class StateDir:
         self._audit_lock = threading.Lock()  # a threaded server shares one instance
         self._key: bytes | None = None
         self._pruned = float("-inf")
+        self._unfinished: set[str] = set()  # runs this process claimed and could not finish
         if index_missing:  # a state directory from before the index: build it once
             for rid in self.request_ids():
                 if self.get_claim(rid) is None:
@@ -288,6 +307,11 @@ class StateDir:
     def get_result(self, rid: str) -> dict[str, Any] | None:
         return _load(self._dir("results") / f"{rid}.json") if is_id(rid) else None
 
+    def mark_unfinished(self, rid: str) -> None:
+        """Record that this process claimed ``rid``'s run and could not write its result, so it
+        reads ``interrupted``, not ``running`` (in memory: there is no disk to write it to)."""
+        self._unfinished.add(rid)
+
     def state_of(self, rid: str) -> str:
         claim = self.get_claim(rid)
         if claim is None:
@@ -298,7 +322,11 @@ class StateDir:
         if op == "deny":
             return "denied"
         result = self.get_result(rid)
-        return "running" if result is None else str(result.get("state", "error"))
+        if result is not None:
+            return str(result.get("state", "error"))
+        if rid in self._unfinished or not _alive(claim.get("pid")):
+            return "interrupted"
+        return "running"
 
     # ---------------------------------------------------------------- approvals
     def put_approval(self, approval: dict[str, Any]) -> bool:

@@ -187,13 +187,15 @@ def test_lane_writes_through_the_broker(tmp_path):
     assert info.value.reason == "not-granted"
     outcomes = [(d["outcome"], d["reason"]) for d in _audit_ok(svc)]
     assert outcomes == [
+        ("started", ""),  # admitted: the intent is recorded before the write
         ("ok", ""),
-        ("denied", "lane-name-invalid"),
-        ("denied", "lane-exists"),
+        ("denied", "lane-name-invalid"),  # refused at admission: nothing started
+        ("started", ""),
+        ("denied", "lane-exists"),  # refused by the write itself
         ("invalid", "lane-too-large"),
         ("denied", "not-granted"),
     ]
-    assert _audit_ok(svc)[3]["args"]["content"]["bytes"] > 70000, "large values are summarized"
+    assert _audit_ok(svc)[5]["args"]["content"]["bytes"] > 70000, "large values are summarized"
 
 
 def test_findings_and_proposals_lanes(tmp_path):
@@ -595,7 +597,7 @@ def test_audit_filters(tmp_path):
     with pytest.raises(Denied):
         svc.call("profile:reader", "memory.write", {"name": "a.md", "content": "x"})
     assert len(svc.audit_documents(outcome="denied")) == 1
-    assert len(svc.audit_documents(caller=AGENT, outcome=None)) == 1
+    assert len(svc.audit_documents(caller=AGENT, outcome=None)) == 2  # started, ok
     assert [r.outcome for r in svc.audit()] == ["ok", "denied"]
 
 
@@ -814,3 +816,113 @@ def test_decision_returned_names_who_approved(tmp_path, who, approver, tier):
     assert returned["data"]["tier_used"] == tier and returned["data"]["verdict"] == "accept"
     assert event_problems(returned) == []
     assert svc.run(AGENT, rid)["output"]["would_restart"] == "svc:queue"  # it still counts
+
+
+# -- audit before execute: an action never runs without a record of it ---------------------------
+
+
+def _full_disk(svc, monkeypatch, *outcomes, results=False):
+    """Make the audit trail (and, with ``results``, the result files) unwritable for records of
+    ``outcomes``, as a full disk would."""
+    import errno
+
+    real = svc.state.append_audit
+
+    def append(record, stamp):
+        if record["outcome"] in outcomes:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(record, stamp)
+
+    monkeypatch.setattr(svc.state, "append_audit", append)
+    if results:
+
+        def put_result(rid, doc):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(svc.state, "put_result", put_result)
+
+
+def _memory(tmp_path):
+    return sorted(p.name for p in (tmp_path / "data").rglob("*.md"))
+
+
+def test_a_call_whose_started_record_cannot_be_written_never_runs(tmp_path, monkeypatch):
+    """With the trail unwritable (a full disk), the lane write ran first and its "ok" record then
+    failed: the side effect happened and the trail had no record of it."""
+    svc = _svc(tmp_path)
+    _full_disk(svc, monkeypatch, "started")
+    with pytest.raises(BrokerError) as info:
+        svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    assert info.value.reason == "audit-unavailable"
+    assert _memory(tmp_path) == [], "the action ran without a record"
+
+
+def test_every_executed_call_has_a_started_record(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    started, ok = (svc.audit_documents(action="memory.write", outcome=o) for o in ("started", "ok"))
+    assert len(started) == len(ok) == 1 and started[0]["at"] <= ok[0]["at"]
+    assert started[0]["request_id"] == ok[0]["request_id"]
+    assert _audit_ok(svc)
+    assert [r.outcome for r in svc.audit()] == ["ok"], "the contract view: one record per call"
+    # the outcome record fails after the write: the started record is the evidence it ran
+    _full_disk(svc, monkeypatch, "ok")
+    with pytest.raises(BrokerError) as info:
+        svc.call(AGENT, "memory.write", {"name": "b.md", "content": "x"})
+    assert info.value.reason == "audit-incomplete"
+    assert _memory(tmp_path) == ["a.md", "b.md"]
+    assert len(svc.audit_documents(action="memory.write", outcome="started")) == 2
+
+
+def test_a_run_that_cannot_audit_its_start_changes_nothing(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    appr = svc.approve(rid, APPROVER)
+    with monkeypatch.context() as m:
+        _full_disk(svc, m, "started")
+        with pytest.raises(BrokerError) as info:
+            svc.run(AGENT, rid)
+    assert info.value.reason == "audit-unavailable"
+    assert svc.status(AGENT, rid).state == "pending"
+    assert not svc.approvals.consumed(appr["approval_id"]), "the approval was burnt"
+    svc.run(AGENT, rid)  # once the disk is back, the same approval runs it
+    assert svc.status(AGENT, rid).state == "done"
+
+
+def test_a_run_whose_outcome_cannot_be_audited_ends_in_error_not_running(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    _full_disk(svc, monkeypatch, "ok")
+    with pytest.raises(BrokerError) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "audit-incomplete"
+    assert svc.state.state_of(rid) == "error"
+    assert svc.state.get_result(rid)["reason"] == "audit-incomplete"
+
+
+def test_a_run_that_can_record_nothing_reads_interrupted(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    _full_disk(svc, monkeypatch, "ok", "error", results=True)
+    with pytest.raises(BrokerError) as info:
+        svc.run(AGENT, rid)
+    assert info.value.reason == "audit-incomplete"
+    assert svc.state.state_of(rid) == "interrupted", "not 'running' forever"
+
+
+def test_a_run_whose_process_died_reads_interrupted(tmp_path):
+    import subprocess
+    import sys
+
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()  # a pid that no longer runs
+    assert svc.state.claim(rid, {"op": "run", "by": AGENT, "at": "2026-01-15T10:00:00Z",
+                                 "pid": child.pid})  # fmt: skip
+    assert StateDir(tmp_path / "state").state_of(rid) == "interrupted"
+    alive = _restart(svc)
+    svc.state.claim(alive, {"op": "run", "by": AGENT, "at": "2026-01-15T10:00:00Z", "pid": 1})
+    assert svc.state.state_of(alive) == "running"

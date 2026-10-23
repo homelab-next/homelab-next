@@ -18,7 +18,8 @@ Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action
 `uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
 for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;
 absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
-socket peer, `uid:<n>`). Manifest 1.4 adds `refusal_limit` (`max` refused requests per
+socket peer, `uid:<n>`); audit 1.2 adds the outcome `started` (the record an action writes before
+it executes, with an empty reason). Manifest 1.4 adds `refusal_limit` (`max` refused requests per
 `window_s` per transport peer before the socket answers it `rate-limited`; default 60 per 60 s).
 Manifest 1.5 adds `quotas` (`pending_per_actor`, default 20, and `notify_window_s`, default
 300 s: one approval page per actor and window) and a lane's `max_files` and `max_total_bytes`
