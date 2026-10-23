@@ -77,7 +77,7 @@ def _tracked() -> list[str]:
             ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True
         )
     except (OSError, subprocess.CalledProcessError):
-        pytest.skip("not a git checkout: the tracked-file list is unavailable")
+        pytest.skip("needs a git checkout")
     return res.stdout.decode().split("\0")
 
 
