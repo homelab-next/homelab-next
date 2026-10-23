@@ -21,7 +21,8 @@ settled, with the read-only viewer key named by ``--key`` (default: the secret s
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
 (``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
-configuration or the connect), or a store that cannot be opened (SQLite's own error, or two jobs
+configuration or the connect), or a store that cannot be opened, or (``consume``) cannot take a
+write before the bus is read (SQLite's own error, or two jobs
 holding one gateway tag in a store an earlier release wrote: the message says how to fix it).
 """
 

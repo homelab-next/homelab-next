@@ -144,6 +144,20 @@ class TelemetryStore:
             for table, col in _RETAINED
         )
 
+    def check_writable(self) -> None:
+        """Raise the store's own error (:data:`STORE_ERRORS`) unless a write could commit now:
+        the write lock is taken (``BEGIN IMMEDIATE``, waiting out SQLite's busy timeout) and a
+        row is written, so the journal is created and written, then everything is rolled back.
+        A consumer runs this before it fetches (:func:`.bus.drain`): a delivery fetched into a
+        store that cannot take it costs an attempt, and the bus dead-letters a record after
+        ``max_deliver`` of them however valid it is."""
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute("INSERT OR REPLACE INTO turns VALUES ('', '', 0, '')")
+            finally:
+                db.rollback()
+
     def consume(self, body: bytes | str | Mapping[str, Any]) -> Delivery:
         """Store one ``homelabnext.agent.job.finished`` event (see the module docstring); raises
         :class:`EventError` for a body that must never be retried (poison)."""

@@ -14,7 +14,7 @@ from orch_helpers import ROOT, T0, body, examples
 from referencing.exceptions import Unresolvable
 
 from conformance.fakes.event_bus import FakeEventBus
-from homelabnext import paths
+from homelabnext import _sqlite, paths
 from homelabnext.events import envelope
 from homelabnext.orchestration import FINISHED_EVENT
 from homelabnext.orchestration.bus import DURABLE, drain
@@ -156,3 +156,47 @@ def test_a_record_past_retention_is_acked_as_expired(tmp_path):
     assert drain(bus, store) == {"expired": 4}
     assert bus.consumer(DURABLE, FINISHED_EVENT).dead_letters() == []
     assert drain(bus, store) == {} and store.jobs() == []
+
+
+def test_a_persistent_store_outage_fetches_nothing_and_dead_letters_nothing(store, monkeypatch):
+    """The bus counts an attempt per delivery it hands out, so a pass that fetched into a dead
+    store would spend every record's attempts and dead-letter all of them after ``max_deliver``
+    passes.  The store must take a write before the pass fetches: across more passes than
+    ``max_deliver`` nothing is fetched, nothing is dead-lettered, and all is stored once the store
+    answers again."""
+    bus = _bus_with(*(body(e) for e in examples()))
+    durable = bus.consumer(DURABLE, FINISHED_EVENT)
+    working = store._db
+
+    def dead(*a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store, "_db", dead)
+    for _ in range(max(durable.max_deliver, 5) + 2):
+        with pytest.raises(sqlite3.OperationalError):
+            drain(bus, store, batch=4)
+    assert durable.dead_letters() == []
+    assert durable._attempts == {}  # nothing was ever fetched
+    monkeypatch.setattr(store, "_db", working)
+    assert drain(bus, store, batch=4) == {"processed": 4}
+    assert durable.dead_letters() == [] and len(store.jobs()) == 4
+
+
+def test_the_write_probe_needs_the_write_lock_and_leaves_nothing(store, monkeypatch):
+    """check_writable takes the write lock, so a writer holding it is an outage (once the busy
+    timeout lapses, shortened here); on a store that answers it writes nothing that stays."""
+    store.check_writable()
+    assert store.turns() == {} and store.jobs() == []
+    connect = sqlite3.connect
+    monkeypatch.setattr(
+        _sqlite.sqlite3, "connect", lambda *a, **k: connect(*a, **k | {"timeout": 0.05})
+    )
+    holder = connect(store.path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.check_writable()
+    finally:
+        holder.rollback()
+        holder.close()
+    store.check_writable()

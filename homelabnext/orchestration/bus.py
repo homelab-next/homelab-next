@@ -22,7 +22,14 @@ settled after the store answered, so the semantics are those of the st2 bridge
 
 The validator is built, and its ``$ref``s resolved, before the first fetch
 (:func:`homelabnext.events.envelope.load_validator`), so a broken environment fails the pass up
-front, with nothing fetched.
+front, with nothing fetched.  So does a store that cannot take a write
+(:meth:`.store.TelemetryStore.check_writable`: locked past the busy timeout, read-only, no
+database, a disk that refuses the journal), raising the store's error: the bus counts an attempt
+for every delivery it hands out, so fetching into an outage would spend one attempt of every
+fetched record per pass, and after ``max_deliver`` passes dead-letter them all.  An outage that
+begins inside a pass costs the batch in hand one attempt, the pass stops there, and the next pass
+fetches nothing until the store answers again.  (``max_deliver`` stays finite: the bus protocol
+takes a positive count, and poison is always ``term``-ed explicitly, so it bounds only retries.)
 
 A pass ends when a fetch returns nothing or after ``max_batches`` fetches, so a timer can run it.
 """
@@ -61,6 +68,7 @@ def drain(
     """One pass over the durable (see the module docstring); returns counts by outcome
     (``processed``, ``duplicate``, ``expired``, ``quarantined``, ``retried``)."""
     load_validator(FINISHED_EVENT)  # an environment fault raises here, before anything is fetched
+    store.check_writable()  # so does a store outage: a fetch would spend every record's attempt
     consumer = bus.consumer(durable, FINISHED_EVENT, max_deliver=max_deliver)
     counts: Counter = Counter()
     for _ in range(max_batches):

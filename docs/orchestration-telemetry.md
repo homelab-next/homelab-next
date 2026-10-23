@@ -91,9 +91,16 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   quarantine; only the id and the reason are logged. A body nested so deep that it parses but
   cannot be re-encoded is poison too. Anything else (a store failure, SQLite or the disk, or the
   environment: `jsonschema` missing, a schema file half-written by a deploy, a `$ref` that
-  resolves to nothing): `nack` and the pass stops, so an outage never dead-letters valid records.
-  The event schemas are loaded and their `$ref`s resolved before the first fetch, so a broken
-  environment fails `consume` up front (exit 2) with nothing fetched. The consumer's NATS user needs the same pull-consumer grant shape as the
+  resolves to nothing): `nack` and the pass stops. The event schemas are loaded and their `$ref`s
+  resolved, and the store must take a write (the write lock and a journal write, rolled back),
+  before the first fetch, so a broken environment or a store outage (locked past the busy timeout,
+  read-only, a disk that refuses the journal) fails `consume` up front (exit 2) with nothing
+  fetched. That is what keeps an outage from dead-lettering valid records: JetStream counts an
+  attempt for every delivery it hands out, so fetching into a dead store would spend one attempt of
+  every fetched record per pass, and the fifth such pass would dead-letter them all. An outage that
+  begins inside a pass costs only the batch in hand one attempt. `max_deliver` (5) stays finite:
+  the bus protocol takes a positive count, and poison is always `term`-ed, so it bounds retries
+  only. The consumer's NATS user needs the same pull-consumer grant shape as the
   StackStorm bridge's, on `<prefix>.homelabnext.agent.job.finished`; publishing on
   `homelabnext.agent.job.>` stays the controller's alone.
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
