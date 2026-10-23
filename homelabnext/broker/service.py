@@ -371,6 +371,13 @@ class _Action:
     spec: Mapping[str, ArgSpec] | None = None
 
 
+def _hidden(spec: Mapping[str, ArgSpec], name: str) -> bool:
+    """Whether an argument's value is kept out of the audit trail and keyed in the request digest:
+    redaction is the default, so everything but an argument the schema names and does not mark
+    secret."""
+    return name not in spec or spec[name].secret
+
+
 class BrokerService:
     """See the module doc.  One instance per process.  Any number may share ``state_dir`` for
     the exactly-once guarantees (claims, approvals); the pending quota and the open-page state
@@ -520,7 +527,7 @@ class BrokerService:
         its own schema validates) shows every argument."""
         out: dict[str, Any] = {}
         for k, v in args.items():
-            if spec is not None and (k not in spec or spec[k].secret):
+            if spec is not None and _hidden(spec, k):
                 out[k] = "<redacted>"
                 continue
             raw = json.dumps(v, sort_keys=True, ensure_ascii=False, default=repr)
@@ -667,11 +674,10 @@ class BrokerService:
         act = self._action(action) if isinstance(action, str) else None
         spec = act.spec if act else {}  # an unknown command: every argument value is redacted
         params = dict(args) if isinstance(args, Mapping) else {}
-        if spec is not None:  # secret arguments enter the request, and its digest, keyed
-            params = {
-                k: self._keyed(v) if spec.get(k, ArgSpec("str")).secret else v
-                for k, v in params.items()
-            }
+        if spec is not None:  # hidden arguments enter the request, and its digest, keyed: the
+            # same redact-by-default rule as the audit view, so a misspelt secret argument (or any
+            # argument of an unknown command) is not an unkeyed hash a wordlist can reverse
+            params = {k: self._keyed(v) if _hidden(spec, k) else v for k, v in params.items()}
         request: dict[str, Any] = {
             "request_id": rid,
             "action": str(action),

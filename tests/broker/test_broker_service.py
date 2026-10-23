@@ -4,6 +4,7 @@ approvals flow, durable single-use approvals across processes, and the audit tra
 
 from __future__ import annotations
 
+import contextlib
 import json
 import multiprocessing
 import re
@@ -925,6 +926,34 @@ def test_unnamed_argument_values_never_reach_the_audit_trail(tmp_path):
     for p in (tmp_path / "state").rglob("*"):
         if p.is_file():
             assert secret not in p.read_text(), p
+
+
+def test_a_refused_request_digest_does_not_reveal_an_unnamed_argument(tmp_path):
+    """The audit view redacted an unnamed argument, but the request digest on the same record
+    hashed its clear value, unkeyed, next to every other input it covers (action, actor, the
+    argument's name): a wordlist recovered it.  The digest keys it like a declared secret."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "hunter2"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op, command, args in (
+        (svc.call, "ops.rotate", {"user": "svc", "pasword": secret}),
+        (svc.submit, "ops.rotat", {"password": secret}),
+        (svc.call, "ops.rotate", {"user": "svc", "password": secret}),
+    ):
+        with contextlib.suppress(BrokerError):
+            op("ops", command, args)
+    words = ["password", "letmein", "123456", secret, "qwerty"]
+    docs = _audit_ok(svc)
+    assert {d["outcome"] for d in docs} >= {"invalid", "denied", "ok"}
+    for d in docs:
+        if not d.get("request_digest"):
+            continue
+        for guess in words:
+            params = {k: (guess if v == "<redacted>" else v) for k, v in d["args"].items()}
+            req = {"action": d["action"], "actor": d["caller"], "params": params}
+            assert request_digest(req) != d["request_digest"], (d["outcome"], d["args"])
 
 
 def test_submit_keeps_the_arguments_it_checked(tmp_path):
