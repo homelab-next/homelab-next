@@ -576,3 +576,18 @@ def test_a_symlink_at_the_lock_path_is_not_followed(tmp_path):
     with pytest.raises(LakeError, match="cannot open the lock"):
         _backend_like(sc, path)
     assert not victim.exists()
+
+
+@pytest.mark.parametrize("text", ["services: [not, a, mapping\n", "services: {}\n"])
+def test_an_unreadable_registry_refuses_to_start(tmp_path, text):
+    sc = Scenario(tmp_path)
+    sc.registry.write_text(text, encoding="utf-8")
+    with pytest.raises(LakeError, match="refusing to guess the swap direction"):
+        _backend_like(sc, None)
+
+
+def test_a_missing_registry_starts_unflipped(tmp_path):
+    sc = Scenario(tmp_path)
+    sc.registry.unlink()
+    b = _backend_like(sc, None)
+    assert b.writer.primary is b.old and b.old_state().data["state"] == "running"

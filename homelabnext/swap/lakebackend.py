@@ -111,11 +111,19 @@ class LakeBackend(Backend):
             self._open_journal(Path(pending_path))
 
     def _current_host(self) -> str | None:
+        """Where the registry routes the service now; None only when there is no registry
+        file yet.  A registry that exists but cannot be read refuses to start: guessing "not
+        flipped" would send production writes to the wrong primary."""
+        if not self.registry_path.exists():
+            return None
         try:
             doc = load_doc(self.registry_path.read_text(encoding="utf-8"))
             return str(doc["services"][self.service]["host"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return None  # no readable registry yet: the plan step reports it
+        except Exception as exc:  # unreadable, not YAML, or no route for the service
+            raise LakeError(
+                f"cannot read the route of {self.service!r} from {self.registry_path} "
+                f"({type(exc).__name__}); refusing to guess the swap direction"
+            ) from None
 
     # ------------------------------------------------------------ the parked queue on disk
     def _role(self, component: Any) -> str:
