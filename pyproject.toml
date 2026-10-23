@@ -135,6 +135,11 @@ suite_budgets = [
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
+  # every suite against its fake, each of 97 registered mutants through its whole suite, the
+  # report and X-10 over all of them, the lab adapters over their stand-ins (some wait in real
+  # time); on a 4-core box 1.35-2x slower than CI, main took 69-151s and this 3-5% more: 120 is
+  # 1.5x the worst projected CI run (110s / 1.35)
+  "tests/conform = 120",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed
