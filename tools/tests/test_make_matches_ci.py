@@ -10,6 +10,7 @@ import re
 import shlex
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,8 +30,26 @@ def _expand(line, variables):
     return re.sub(r"\$\((\w+)\)", lambda m: variables.get(m[1], m[0]), line)
 
 
+def makefile_problems(text):
+    """What the simple parser above cannot model, refused outright: an appended or conditional
+    assignment (``+=``, ``?=``, ``!=``) of a variable the recipe uses, a second ``test:`` rule,
+    and ``PYTEST_ADDOPTS`` anywhere (make exports it to pytest)."""
+    out = []
+    # PY (`PY ?= python3`) only names the interpreter; every other variable selects tests
+    used = set(re.findall(r"\$\((\w+)\)", " ".join(_recipe(text, "test")))) - {"PY"}
+    for m in re.finditer(r"^(?:override\s+|export\s+)?([A-Z_]+)\s*([+?!]|::?)?=", text, re.M):
+        if m[1] in used and m[2] in ("+", "?", "!"):
+            out.append(f"{m[1]} {m[2]}= changes what the test recipe runs")
+    if len(re.findall(r"^test:", text, re.M)) != 1:
+        out.append("more than one `test:` rule")
+    if "PYTEST_ADDOPTS" in text:
+        out.append("PYTEST_ADDOPTS changes pytest's selection")
+    return out
+
+
 def make_pytest_args():
     text = (ROOT / "Makefile").read_text()
+    assert makefile_problems(text) == []
     (line,) = _recipe(text, "test")
     words = shlex.split(_expand(line, _make_vars(text)))
     assert words[:3] == ["$(PY)", "-m", "pytest"], words
@@ -65,3 +84,19 @@ def test_make_check_runs_the_coverage_floor_like_ci():
     assert any(
         s.get("run") == "python tools/coverage_floor.py" for s in ci["jobs"]["coverage"]["steps"]
     )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "PYTEST_ARGS += --ignore=tests/broker\n",
+        "PYTEST_ARGS ?= -q\n",
+        "override PYTEST_ARGS += -k x\n",
+        "export PYTEST_ADDOPTS = --ignore=tests/broker\n",
+        "test:\n\t$(PY) -m pytest tests/cli\n",
+    ],
+)
+def test_a_makefile_that_the_parser_would_misread_is_refused(extra):
+    text = (ROOT / "Makefile").read_text()
+    assert makefile_problems(text) == []
+    assert makefile_problems(text + "\n" + extra), extra
