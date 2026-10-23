@@ -10,8 +10,11 @@ settled after the store answered, so the semantics are those of the st2 bridge
 * poison (not JSON, invalid, another type or source, an id or run conflict): ``term`` -- the
   bus's dead-letter stream is the quarantine, it is never retried, and only the event id and the
   reason are logged, never the body;
-* the store failed (a locked or full disk): ``nack`` -- redelivered, and the pass stops, since
-  every later delivery would fail the same way.
+* the store failed (a locked or full disk: :class:`sqlite3.Error` or :class:`OSError`): ``nack``
+  -- redelivered, and the pass stops, since every later delivery would fail the same way.  Any
+  other exception comes from the record itself (the store refuses every content defect it knows
+  as :class:`EventError`), so it is poison too: retrying it would only fail again, hold back the
+  valid deliveries behind it and finally drop it without a dead letter.
 
 A pass ends when a fetch returns nothing or after ``max_batches`` fetches, so a timer can run it.
 """
@@ -25,7 +28,7 @@ from typing import Any
 from homelabnext.events.envelope import EventError
 
 from .model import FINISHED_EVENT
-from .store import TelemetryStore
+from .store import STORE_ERRORS, TelemetryStore
 
 log = logging.getLogger(__name__)
 DURABLE = "hnx-orchestration-telemetry"
@@ -56,12 +59,14 @@ def drain(
                     counts[store.consume(d.data).status] += 1
                 except EventError as exc:
                     reason = str(exc).splitlines()[0]
-                except Exception as exc:  # the store, not the event: retry it later
+                except STORE_ERRORS as exc:  # the store, not the event: retry it later
                     log.error("orchestration: store failed (%s); retrying", type(exc).__name__)
                     for rest in deliveries[i:]:
                         rest.nack()
                     counts["retried"] += len(deliveries) - i
                     return counts
+                except Exception as exc:  # the content of this one record: never retried
+                    reason = f"refused by the store ({type(exc).__name__})"
                 else:
                     d.ack()
                     continue

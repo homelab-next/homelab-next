@@ -141,6 +141,19 @@ def test_cli_ingest_turns_and_report(tmp_path, monkeypatch, capsys):
     assert run("report", "--days", "0") == 2
 
 
+def test_cli_ingest_refuses_only_the_record_with_an_impossible_date(tmp_path, capsys):
+    evs = examples()
+    bad = json.loads(body(evs[0])) | {"id": "evt-bad-date"}
+    bad["data"].update(run_id="run-bad-date", finished_at="2026-02-30T00:00:00Z")
+    events = tmp_path / "events.jsonl"
+    events.write_text("\n".join([json.dumps(bad), *(body(e).decode() for e in evs)]) + "\n")
+    argv = ["ingest", str(events), "--db", str(tmp_path / "t.db")]
+    assert cli.main(argv, clock=lambda: T0) == 1
+    out, err = capsys.readouterr()
+    assert "4 processed, 0 duplicate, 1 refused" in out
+    assert "events.jsonl:1: invalid event" in err
+
+
 def test_cli_consume_without_a_bus_is_a_configuration_error(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("HNX_ENDPOINT_EVENTS", raising=False)
     argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p"]

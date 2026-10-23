@@ -9,7 +9,11 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
 
 * the same event id with the same body is a ``duplicate`` (acknowledged, nothing written);
 * the same event id with a different body, or a second event for a run already recorded under
-  another id, is refused (:class:`homelabnext.events.envelope.EventError`): one run, one record.
+  another id, is refused (:class:`homelabnext.events.envelope.EventError`): one run, one record;
+* a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
+  24, an offset of 99 hours) is refused the same way: everything :meth:`consume` derives from a
+  record is computed before the database is touched, so the only other exceptions it raises are
+  the store's own (:mod:`sqlite3`, the disk), which a caller may retry.
 
 **Turns** come from the gateway's spend log (:mod:`.gateway`), already reduced to the allow-listed
 names and numbers; a turn is keyed by the gateway's request id, so reading a window twice
@@ -33,7 +37,7 @@ from typing import Any
 from homelabnext._sqlite import transaction
 from homelabnext.events.consumer import Delivery, decode_event
 from homelabnext.events.envelope import EventError, body_digest
-from homelabnext.status.model import parse_iso
+from homelabnext.status.model import iso, parse_iso
 
 from .model import CONTROLLER_SOURCE, FINISHED_EVENT, rollup
 
@@ -51,6 +55,8 @@ CREATE INDEX IF NOT EXISTS turns_tag ON turns(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_started ON turns(started);
 """
 DEFAULT_RETENTION_DAYS = 90
+#: the store's own failures (the database, the disk): a caller retries these, never a record's
+STORE_ERRORS = (sqlite3.Error, OSError)
 #: (table, the time column retention is measured on)
 _RETAINED = (("jobs", "finished"), ("turns", "started"))
 
@@ -96,6 +102,7 @@ class TelemetryStore:
                 [f"source {event['source']!r}: only {CONTROLLER_SOURCE} reports jobs"],
             )
         eid, digest, data = event["id"], body_digest(event), event["data"]
+        finished = _instants(data)["finished_at"]
         now = self.clock()
         with self._db() as db:
             row = db.execute(
@@ -115,7 +122,7 @@ class TelemetryStore:
                 "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     data["run_id"], eid, digest, data["profile"], data.get("backend"),
-                    data["lane"], data["outcome"], parse_iso(data["finished_at"]),
+                    data["lane"], data["outcome"], finished,
                     data["gateway_tag"], now, None, json.dumps(data, sort_keys=True),
                 ),
             )  # fmt: skip
@@ -190,4 +197,26 @@ class TelemetryStore:
         return rollup(jobs, self.turns(j["gateway_tag"] for j in jobs), now=now, days=days)
 
 
-__all__ = ["DEFAULT_RETENTION_DAYS", "TelemetryStore"]
+#: the record's timestamps; each must name a real instant that UTC can represent
+_TIMES = ("queued_at", "started_at", "finished_at")
+
+
+def _instants(data: Mapping[str, Any]) -> dict[str, float]:
+    """The record's timestamps as epoch seconds; :class:`EventError` (poison) for one that matches
+    the schema's pattern but is no real date and time, or falls outside what UTC can express."""
+    out: dict[str, float] = {}
+    for key in _TIMES:
+        value = data.get(key)
+        if value is None:
+            continue
+        try:
+            out[key] = parse_iso(value)
+            iso(out[key])  # the rollup buckets by the UTC day: it must be representable
+        except (ValueError, OverflowError, OSError) as exc:
+            raise EventError(
+                "invalid event", [f"data.{key}: {value!r} is not a real date and time ({exc})"]
+            ) from None
+    return out
+
+
+__all__ = ["DEFAULT_RETENTION_DAYS", "STORE_ERRORS", "TelemetryStore"]

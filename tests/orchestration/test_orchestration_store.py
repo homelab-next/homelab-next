@@ -43,6 +43,24 @@ def test_a_conflicting_foreign_or_invalid_record_is_refused(filled, mutate, why)
     assert filled.job("run-0001") == examples()[0]["data"]  # the stored record is untouched
 
 
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("finished_at", "2026-02-30T00:00:00Z"),  # no such day
+        ("queued_at", "2026-01-01T24:00:00Z"),  # no such hour
+        ("started_at", "2026-01-01T00:00:00+99:00"),  # no such offset
+        ("finished_at", "0000-01-01T00:00:00Z"),  # no year 0
+    ],
+)
+def test_a_pattern_valid_but_impossible_timestamp_is_refused_as_poison(store, key, value):
+    ev = copy.deepcopy(examples()[0])
+    ev["data"][key] = value
+    with pytest.raises(EventError) as err:
+        store.consume(body(ev))
+    assert f"data.{key}" in str(err.value) and "not a real date and time" in str(err.value)
+    assert store.jobs() == []
+
+
 def test_jobs_and_turns_past_retention_are_purged(tmp_path):
     now = [T0]
     store = TelemetryStore(tmp_path / "t.db", clock=lambda: now[0], retention_days=1)

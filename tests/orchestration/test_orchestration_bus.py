@@ -51,3 +51,29 @@ def test_a_store_failure_is_redelivered_not_lost(store, monkeypatch):
     assert drain(bus, store, batch=4) == {"processed": 1, "retried": 3}
     assert drain(bus, store, batch=4) == {"processed": 3}
     assert len(store.jobs()) == 4
+
+
+def test_an_impossible_timestamp_is_poison_and_the_batch_behind_it_is_stored(store):
+    """A date the schema's pattern accepts but the calendar does not (2026-02-30) is dead-lettered;
+    it is not a store outage, so the valid records in the same batch are still stored."""
+    evs = examples()
+    bad = copy.deepcopy(evs[0]) | {"id": "evt-bad-date"}
+    bad["data"].update(run_id="run-bad-date", finished_at="2026-02-30T00:00:00Z")
+    bus = _bus_with(body(bad), *(body(e) for e in evs))
+    assert drain(bus, store, batch=5) == {"quarantined": 1, "processed": 4}
+    assert len(store.jobs()) == 4
+    assert [d.data for d in bus.consumer(DURABLE, FINISHED_EVENT).dead_letters()] == [body(bad)]
+
+
+def test_a_content_error_the_store_did_not_name_is_poison_not_a_retry(store, monkeypatch):
+    bus = _bus_with(*(body(e) for e in examples()))
+    real, calls = store.consume, []
+
+    def picky(data):
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyError("usage")  # a defect of this record, not of the store
+        return real(data)
+
+    monkeypatch.setattr(store, "consume", picky)
+    assert drain(bus, store, batch=4) == {"quarantined": 1, "processed": 3}

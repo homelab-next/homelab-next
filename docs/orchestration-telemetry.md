@@ -84,9 +84,10 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 - **Consume** (`homelabnext.orchestration.bus.drain`): a durable pull consumer
   (`hnx-orchestration-telemetry`) on the type's subject. Stored or a duplicate: `ack`. Poison (not
   JSON, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
-  another body, a second record for a run under another id): `term`, so the bus's dead-letter
-  stream is the quarantine; only the id and the reason are logged. A store failure: `nack` and
-  the pass stops. The consumer's NATS user needs the same pull-consumer grant shape as the
+  another body, a second record for a run under another id, a timestamp the pattern accepts but
+  the calendar does not, such as `2026-02-30`): `term`, so the bus's dead-letter stream is the
+  quarantine; only the id and the reason are logged. A store failure (SQLite or the disk): `nack`
+  and the pass stops; any other error is the record's own and is poison too. The consumer's NATS user needs the same pull-consumer grant shape as the
   StackStorm bridge's, on `<prefix>.homelabnext.agent.job.finished`; publishing on
   `homelabnext.agent.job.>` stays the controller's alone.
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
