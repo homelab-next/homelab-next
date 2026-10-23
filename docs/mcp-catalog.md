@@ -154,7 +154,7 @@ entry N)`.
   such as `/mcp`, `/sse`, `/v1/mcp`, or lower-case words and versions; a key that a vendor puts
   in the path goes in a header as a `secret:` name instead, and the same rule holds for a lab
   server's `transport.path`), no host label that looks like a credential (any label, a single-label
-  host included: `<key>.mcp.vendor.example`, `<key>.example`; an IDN `xn--` label is judged decoded), never an IPv4 address in any notation (a host whose
+  host included: `<key>.mcp.vendor.example`, `<key>.example`; an IDN `xn--` label is judged decoded, and as written when it does not decode), never an IPv4 address in any notation (a host whose
   last label is a decimal, octal or `0x` number is one to a URL parser and to `getaddrinfo`:
   `0x7f.0x1`), never a private, test or lab host (`.local`, `.internal`, `.home.arpa`, the
   registry's domain or hosts: a lab server is reached by registry name), its egress names
@@ -173,7 +173,7 @@ entry N)`.
   (`key`, `auth`, `session`, `credentials`) takes one unless the value is a plain name, a path or
   an auth method (`--key id`, `--sort-key created_at`, `--session default`, `--auth oauth`,
   `GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa.json`). So a credential flag's value (`--token X`,
-  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw` and its long forms (`--user user:pw`, `--user=user:pw`, `--username`, `--proxy-user`, an attached `-uuser:pw`, and httpie's `-a user:pw`, `-auser:pw` and `-a=user:pw`; a numeric `uid:gid` is not one, nor an IP, `localhost` (any case, a trailing dot allowed) or empty host with a port after `-a`, nor a path such as `host:/data` after `-a`; short flags are case-sensitive, so curl's `-A` user agent is not one), a header after
+  `--token ./x`, `--token=-x`, `-p X` or `-pX` unless a port, `-u user:pw` and its long forms (`--user user:pw`, `--user=user:pw`, `--username`, `--proxy-user`, an attached `-uuser:pw`, and httpie's `-a user:pw`, `-auser:pw` and `-a=user:pw`; a numeric `uid:gid` is not one, nor an IP, `localhost` (any case, a trailing dot allowed) or empty host with a port after `-a`, nor a path after `-a` whose host is dotted, an IP, `localhost` or a drive letter (`backup.example.com:/data`, `C:/x`; `alice:/pw` is a credential); short flags are case-sensitive, so curl's `-A` user agent is not one), a header after
   `--header` or in `--header=`) is a `secret:` reference, nothing looks like a token (a token
   prefix such as `ghp_`, or a long, mixed, high-entropy value, `/`-separated base64 and
   dash-grouped random parts included), no URL carries one (userinfo, a credential-named query

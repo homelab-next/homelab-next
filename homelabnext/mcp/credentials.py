@@ -284,13 +284,14 @@ def plain_url_path(path: str) -> bool:
 def _host_label_secret(label: str) -> bool:
     """A host label that looks like a credential.  An IDN label (``xn--...``) is judged in its
     decoded Unicode form: the ASCII encoding of an ordinary word in another script reads as
-    random letters and digits.  A label that does not decode is skipped (a key would have to be
-    valid punycode to hide there)."""
+    random letters and digits.  A label that does not decode is judged as it is written.  Any
+    error from the decoder counts as "does not decode": Python 3.13's punycode decoder raises
+    OverflowError on some labels, and a validator must refuse or accept, never crash."""
     if label.lower().startswith("xn--"):
         try:
-            label = label.encode("ascii").decode("idna")
-        except (UnicodeError, ValueError):
-            return False
+            return looks_secret(label.encode("ascii").decode("idna"))
+        except Exception:  # UnicodeError, ValueError, OverflowError (3.13)
+            pass
     return looks_secret(label)
 
 
@@ -423,6 +424,12 @@ _USER_FLAGS = frozenset(
 _HOST_PORT = re.compile(
     r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]|(?i:localhost)\.?)?:[0-9]{1,5}"
 )
+#: a path after ``-a``: a host-shaped name (dotted, an IP, a bracketed IPv6 address or localhost)
+#: or a drive letter, then ``:/`` (rsync-style ``backup.example.com:/data``, ``C:/x``); a plain
+#: word before ``:/`` may be a user (``alice:/Secr3tPw``)
+_HOST_PATH = re.compile(
+    r"(?:[A-Za-z]|(?i:localhost)\.?|\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.?)?:/"
+)
 
 
 def _user_password(flag: str, value: str) -> bool:
@@ -436,7 +443,7 @@ def _user_password(flag: str, value: str) -> bool:
         and "://" not in value
         and not re.fullmatch(r"[0-9]+:[0-9]+", value)
         # after -a, a listen address or a path (rsync-style host:/data, C:/x) is not one
-        and not (flag == "-a" and (_HOST_PORT.fullmatch(value) or ":/" in value))
+        and not (flag == "-a" and (_HOST_PORT.fullmatch(value) or _HOST_PATH.match(value)))
     )
 
 

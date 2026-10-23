@@ -97,6 +97,7 @@ FOUND = [
     (["-a=admin:fakepw"], {}),
     (["-a", "alice.smith:2024"], {}),  # a dotted user and a numeric password, not host:port
     (["-a", "db.prod:65535"], {}),
+    (["-a", "alice:/Secr3tPw"], {}),  # a plain word before ":/" may be a user
 ]  # fmt: skip
 
 #: (args, settings) of a record: none of these is a credential
@@ -324,7 +325,7 @@ def test_scan_args_finds_attached_and_short_user_password_forms(args, flag):
         ["-A", "Mozilla/5.0 (X11; rv:109.0) Gecko/20100101"],
         ["-A", "localhost:8080"],
         ["-a", "Localhost.:8080"],
-        ["-a", "host:/srv/data"],
+        ["-a", "backup.example.com:/srv/data"],
         ["-aC:/x"],
     ],
 )

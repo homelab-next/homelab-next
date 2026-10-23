@@ -260,10 +260,27 @@ def test_the_internet_exception_is_a_list_of_server_ids(bad):
         ("localhost", []),
         ("mcp", []),
         ("xn--80aealotwbjpid2k.example", []),
-        ("xn--zzzz-a1b2c3d4e5f6g7h8i9j0.example", []),  # does not decode: skipped
+        # does not decode: judged as written (no digits here, so not a credential)
+        ("xn--zzzz-abcdefghij.example", []),
+        # does not decode, and reads as a key as written
+        ("xn--zzzz-a1b2c3d4e5f6g7h8i9j0.example", [0]),
     ],
 )
 def test_every_host_label_is_checked_and_idn_labels_are_judged_decoded(host, labels):
     from homelabnext.mcp import credentials
 
     assert credentials.secret_host_labels(host) == labels
+
+
+#: a label Python 3.13's punycode decoder answers with OverflowError, not UnicodeError
+_OVERFLOW_LABEL = "xn--792ad84db474521944884823204797e8aeb26"
+
+
+def test_an_idn_label_the_decoder_crashes_on_is_judged_not_raised():
+    from homelabnext.mcp import credentials, importer
+
+    host = f"{_OVERFLOW_LABEL}.tracker.example.com"
+    assert credentials.secret_host_labels(host) == [0]  # read as written: key-shaped
+    rec = _edit(transport__url=f"https://{host}/mcp")
+    assert any("URL host may carry a credential" in p for p in _problems(rec, REGISTRY))
+    assert importer._plain_host(host) == "unknown.tracker.example.com"
