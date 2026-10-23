@@ -14,7 +14,9 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
 * the same event id with a different body, a second event for a run already recorded under
   another id, or a record whose ``gateway_tag`` another run already holds, is refused
   (:class:`homelabnext.events.envelope.EventError`): one run, one record, and one tag per run, so
-  the turns joined by a tag belong to exactly one job (a unique index enforces it too);
+  the turns joined by a tag belong to exactly one job (a unique index enforces it too; a store
+  an earlier release left with two jobs on one tag is refused when it opens, :class:`ValueError`
+  naming the count and how to fix it, since the index cannot be built over them);
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours) is refused the same way: everything :meth:`consume` derives from a
   record is computed before the database is touched, so the only other exceptions it raises are
@@ -63,19 +65,26 @@ from homelabnext.status.model import iso, parse_iso
 
 from .model import CONTROLLER_SOURCE, FINISHED_EVENT, rollup
 
-_SCHEMA = """
+_TABLES = """
 CREATE TABLE IF NOT EXISTS jobs(
   run_id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, digest TEXT NOT NULL,
   profile TEXT NOT NULL, backend TEXT, lane TEXT NOT NULL, outcome TEXT NOT NULL,
   finished REAL NOT NULL, gateway_tag TEXT NOT NULL, received REAL NOT NULL,
   turns_settled REAL, doc TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(finished);
-CREATE UNIQUE INDEX IF NOT EXISTS jobs_gateway_tag ON jobs(gateway_tag);
 CREATE TABLE IF NOT EXISTS turns(
   turn_id TEXT PRIMARY KEY, gateway_tag TEXT NOT NULL, started REAL NOT NULL, doc TEXT NOT NULL);
+"""
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(finished);
+DROP INDEX IF EXISTS jobs_tag;
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_gateway_tag ON jobs(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_tag ON turns(gateway_tag);
 CREATE INDEX IF NOT EXISTS turns_started ON turns(started);
 """
+#: what to run on a store whose jobs share a tag, to keep the first job stored with each
+DEDUPE_SQL = (
+    "DELETE FROM jobs WHERE rowid NOT IN (SELECT min(rowid) FROM jobs GROUP BY gateway_tag)"
+)
 DEFAULT_RETENTION_DAYS = 90
 #: the writers' journal: no -wal or -shm, so a reader as another user needs no write access
 JOURNAL_MODE = "DELETE"
@@ -115,8 +124,10 @@ class TelemetryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = functools.partial(transaction, self.path, journal_mode=JOURNAL_MODE)
         with self._db() as db:
-            db.executescript(_SCHEMA)
+            db.executescript(_TABLES)
             self._purge(db, None)
+            _refuse_shared_tags(db, self.path)
+            db.executescript(_INDEXES)
 
     # ---------------------------------------------------------------- writes
     def purge(self, now: float | None = None) -> int:
@@ -247,6 +258,24 @@ class TelemetryStore:
         now = self.clock() if now is None else now
         since = now - days * 86400
         return rollup(self.jobs(since=since), self.turns(since=since), now=now, days=days)
+
+
+def _refuse_shared_tags(db: sqlite3.Connection, path: Path) -> None:
+    """A store an earlier release wrote (a plain index on the tag) may hold two jobs with one
+    tag, and the unique index cannot be built over them: refuse to open it (:class:`ValueError`)
+    and say how to fix it, rather than fail on the index, or pick which job to drop."""
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'jobs_gateway_tag'").fetchone():
+        return  # the unique index already holds
+    tags, jobs = db.execute(
+        "SELECT count(*), coalesce(sum(n), 0) FROM"
+        " (SELECT count(*) AS n FROM jobs GROUP BY gateway_tag HAVING n > 1)"
+    ).fetchone()
+    if tags:
+        raise ValueError(
+            f"{path}: {tags} gateway tag(s) are each held by more than one job ({jobs} jobs), so "
+            "their turns cannot be told apart and the store will not open; keep one job per tag "
+            f'and run again (to keep the first stored: sqlite3 {path} "{DEDUPE_SQL}")'
+        )
 
 
 def _conflict(row: tuple[str, str, str], eid: str, data: Mapping[str, Any]) -> str:

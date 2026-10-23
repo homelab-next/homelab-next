@@ -12,9 +12,9 @@ import pytest
 from orch_helpers import CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0, body, examples
 
 from homelabnext.events.envelope import EventError
-from homelabnext.orchestration import ROLLUP_SCHEMA, percentile, rollup
+from homelabnext.orchestration import ROLLUP_SCHEMA, cli, percentile, rollup
 from homelabnext.orchestration.pages import OrchestrationSite
-from homelabnext.orchestration.store import TelemetryStore
+from homelabnext.orchestration.store import DEDUPE_SQL, TelemetryStore
 from homelabnext.status.model import parse_iso
 
 
@@ -280,3 +280,58 @@ def test_turns_of_many_jobs_do_not_bind_a_variable_per_tag(store, monkeypatch):
     assert len(store.turns((f"run-m{n:03d}" for n in range(120)), since=T0 - 86400)) == 120
     assert [t["turn_id"] for t in store.job_turns("run-m007")] == ["t7"]
     assert "150 jobs" in OrchestrationSite(store, clock=lambda: T0)._overview({})
+
+
+def _earlier_release_store(path, *, shared_tags: int) -> None:
+    """A store as an earlier release left it: a plain index on the tag, and ``shared_tags`` tags
+    each held by a second job."""
+    TelemetryStore(path, clock=lambda: T0).consume(body(examples()[0]))
+    with sqlite3.connect(path) as db:
+        db.execute("DROP INDEX jobs_gateway_tag")
+        db.execute("CREATE INDEX jobs_tag ON jobs(gateway_tag)")
+        for n in range(shared_tags):
+            db.execute(
+                "INSERT INTO jobs SELECT ?, ?, digest, profile, backend, lane, outcome, finished,"
+                " gateway_tag, received, turns_settled, doc FROM jobs WHERE run_id = 'run-0001'",
+                (f"run-copy-{n}", f"evt-copy-{n}"),
+            )
+    db.close()
+
+
+def _indexes(path) -> set[str]:
+    with sqlite3.connect(path) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    db.close()
+    return names
+
+
+def test_a_store_with_two_jobs_on_one_tag_is_refused_with_how_to_fix_it(tmp_path, capsys):
+    """The unique index cannot be built over an earlier release's duplicates: every command is
+    exit 2 naming the count and the fix, never an IntegrityError traceback; after the fix the
+    store opens, with the old plain index gone."""
+    db = tmp_path / "t.db"
+    _earlier_release_store(db, shared_tags=2)
+    for argv in (["report", "--db", str(db)], ["ingest", "--db", str(db), "-"]):
+        assert cli.main(argv, clock=lambda: T0) == 2
+        err = capsys.readouterr().err
+        assert "1 gateway tag(s) are each held by more than one job (3 jobs)" in err
+        assert DEDUPE_SQL in err and "Traceback" not in err
+    with sqlite3.connect(db) as conn:
+        conn.execute(DEDUPE_SQL)
+    conn.close()
+    store = TelemetryStore(db, clock=lambda: T0)
+    assert [j["run_id"] for j in store.jobs()] == ["run-0001"]
+    assert "jobs_gateway_tag" in _indexes(db) and "jobs_tag" not in _indexes(db)
+
+
+def test_an_earlier_release_store_without_shared_tags_is_migrated(tmp_path):
+    db = tmp_path / "t.db"
+    _earlier_release_store(db, shared_tags=0)
+    TelemetryStore(db, clock=lambda: T0)
+    assert "jobs_gateway_tag" in _indexes(db) and "jobs_tag" not in _indexes(db)
+
+
+def test_a_store_sqlite_cannot_open_is_exit_2_not_a_traceback(tmp_path, capsys):
+    (tmp_path / "t.db").mkdir()  # a directory where the database should be
+    assert cli.main(["report", "--db", str(tmp_path / "t.db")], clock=lambda: T0) == 2
+    assert "hnx orchestration report: unable to open database file" in capsys.readouterr().err

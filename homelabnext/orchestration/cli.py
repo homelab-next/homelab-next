@@ -21,7 +21,8 @@ settled, with the read-only viewer key named by ``--key`` (default: the secret s
 Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
 (``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
-configuration or the connect).
+configuration or the connect), or a store that cannot be opened (SQLite's own error, or two jobs
+holding one gateway tag in a store an earlier release wrote: the message says how to fix it).
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from pathlib import Path
 from conformance.protocols.events import EventsError
 from homelabnext.events.envelope import EventError
 
-from .store import DEFAULT_RETENTION_DAYS, TelemetryStore
+from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 ENDPOINT_GATEWAY = "HNX_ENDPOINT_LLM_GATEWAY"
 REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
@@ -192,7 +193,7 @@ def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time
             return 2
         sys.stdout.write(json.dumps(store.rollup(days=days), indent=1, sort_keys=True) + "\n")
         return 0
-    except (OSError, ValueError) as exc:  # a store path, a file, the bus configuration
+    except (ValueError, *STORE_ERRORS) as exc:  # the store (SQLite, the disk), a file, config
         print(f"hnx orchestration {a.cmd}: {exc}", file=sys.stderr)
         return 2
 

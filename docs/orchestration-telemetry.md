@@ -108,6 +108,10 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 - **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time. A
   record that arrives already older than that (a late replay, an old backfill) is counted
   `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
+- **One job per tag, on an older store**: the tag's index is unique. A store an earlier release
+  wrote may hold two jobs with one tag; every `hnx orchestration` command then refuses to open it
+  (exit 2), naming how many tags are shared and the statement that keeps the first job stored
+  with each, rather than choosing which job to drop.
 
 ### The gateway read path: the spend-log API with a viewer key
 
