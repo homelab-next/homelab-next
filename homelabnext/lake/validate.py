@@ -30,6 +30,9 @@ def parse_timestamp(value: Any) -> datetime:
     return value.astimezone(UTC)
 
 
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
+
+
 def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
     if value is None:
         if col.required:
@@ -43,6 +46,8 @@ def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
     if t == "long":
         if isinstance(value, bool) or not isinstance(value, int):
             problems.append(f"{path}: expected integer, got {type(value).__name__}")
+        elif not INT64_MIN <= value <= INT64_MAX:  # every engine stores a long in 64 bits
+            problems.append(f"{path}: integer {value} is outside the 64-bit range of a long")
         return value
     if t == "double":
         if (
