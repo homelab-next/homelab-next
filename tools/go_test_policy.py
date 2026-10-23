@@ -29,7 +29,12 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   always installs);
 * an invalid quarantine entry, wherever its test is: owner, until and reason missing, the date in
   the past, or more than ``quarantine_max_days`` (90) ahead -- the same rule as pytest's marker;
-* a line that is not a ``go test -json`` event, or input with no events at all.
+* a line that is not a ``go test -json`` event, or input with no events at all;
+* a cut-off stream: a test or a package with no verdict (``pass``/``fail``/``skip``), as when the
+  run was killed or its output only partly captured;
+* with ``--go-exit N`` (``go test``'s own exit status): any status but 0 and 1, a 1 with nothing
+  in the stream to explain it but quarantined failures, or a 0 next to a failure in the stream.
+  So a stream that lost its failing part cannot pass while ``go test`` itself failed.
 
 The policy file (``orchestrator/skips.yml``)::
 
@@ -49,7 +54,8 @@ output of the root run) shows it passed, so a missing root run fails instead of 
 
 Usage::
 
-    go test -json ./... > run.json; python tools/go_test_policy.py --policy skips.yml run.json
+    go test -json ./... > run.json; python tools/go_test_policy.py --policy skips.yml \
+        --go-exit $? run.json
     python tools/go_test_policy.py --policy skips.yml --list-privileged
 
 Exit: 0 clean, 1 a policy failure, 2 usage error / unreadable input / malformed policy.
@@ -213,10 +219,8 @@ def parse(lines: Iterable[str], run: Run | None = None) -> Run:
             else:
                 run.build_output.setdefault(path, []).append(ev.get("Output", ""))
             continue
-        if test:
-            res = run.tests.setdefault((pkg, test), Result())
-        else:
-            res = run.packages.setdefault(pkg, Result())
+        pkg_res = run.packages.setdefault(pkg, Result())  # every package needs its own verdict
+        res = run.tests.setdefault((pkg, test), Result()) if test else pkg_res
         if action == "output":
             res.output.append(ev.get("Output", ""))
         elif action in ("pass", "fail", "skip") and res.action != "fail":
@@ -273,6 +277,7 @@ def judge(
     max_days: int = 90,
     privileged_run: Run | None = None,
     forbid: Iterable[str] = (),
+    go_exit: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """``(problems, notes)`` for one run against the policy."""
     problems = list(run.bad_lines)
@@ -343,6 +348,8 @@ def judge(
     for path in sorted(set(run.build_failed) - reported_builds):
         problems.append(f"BUILD FAIL {path}: {_oneline(run.build_output.get(path, []))}")
 
+    problems += _cut_off(run)
+
     forbid_rx = [re.compile(f) for f in forbid]
     priv_passed = {
         k for k, r in (privileged_run.tests.items() if privileged_run else ()) if r.action == "pass"
@@ -379,7 +386,47 @@ def judge(
             if res.action == "fail":
                 problems.append(f"FAIL (privileged run) {pkg} {test}")
         problems += [f"(privileged run) {b}" for b in privileged_run.bad_lines]
+        problems += [f"(privileged run) {c}" for c in _cut_off(privileged_run)]
+    if go_exit is not None:
+        problems += _exit_status_problems(run, go_exit, notes, problems)
     return problems, notes
+
+
+def _cut_off(run: Run) -> list[str]:
+    """A test or package that never got a verdict: the run was killed or the stream truncated."""
+    out = []
+    for (pkg, test), res in sorted(run.tests.items()):
+        if not res.action:
+            first = next(iter(_own_lines(res)), "").strip()
+            out.append(
+                f"FAIL {pkg} {test}: no verdict: the test did not finish or the stream was cut "
+                f"off{f' ({first[:120]})' if first else ''}"
+            )
+    for pkg, res in sorted(run.packages.items()):
+        if not res.action:
+            out.append(f"FAIL {pkg}: no package verdict: the run or its stream was cut off")
+    return out
+
+
+def _exit_status_problems(
+    run: Run, status: int, notes: list[str], problems: list[str]
+) -> list[str]:
+    """``go test``'s exit status against the stream (``--go-exit``)."""
+    failed = any(r.action == "fail" for r in (*run.tests.values(), *run.packages.values()))
+    if status == 0:
+        return (
+            ["go test exited 0 but the stream has a failure: it is not this run's"]
+            if failed
+            else []
+        )
+    if status != 1:
+        return [f"go test exited {status}: not a test verdict (killed, a signal or a usage error)"]
+    if not problems and not any(n.startswith("quarantined failure") for n in notes):
+        return [
+            "go test exited 1 but the stream shows no failure: events were lost (a cut-off or "
+            "partly captured stream)"
+        ]
+    return []
 
 
 # what the test binary itself prints at the end of a failing run, and go test's summary line
@@ -448,6 +495,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--privileged", action="append", default=[], metavar="FILE")
     ap.add_argument("--forbid", action="append", default=[], metavar="REGEX")
     ap.add_argument("--today", help="YYYY-MM-DD (default: env HNX_TODAY, else today)")
+    ap.add_argument(
+        "--go-exit",
+        type=int,
+        metavar="N",
+        help="go test's exit status: 0, or 1 when only quarantined failures explain it",
+    )
     ap.add_argument("--list-privileged", action="store_true")
     args = ap.parse_args(argv)
     try:
@@ -469,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             max_days=max_days,
             privileged_run=privileged,
             forbid=forbid,
+            go_exit=args.go_exit,
         )
     except (PolicyError, re.error) as exc:
         print(f"go_test_policy: {exc}", file=sys.stderr)

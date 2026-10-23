@@ -452,3 +452,119 @@ def test_the_ci_job_is_pinned_and_a_no_op_without_the_module():
     runs = "\n".join(s.get("run", "") for s in steps)
     assert "go test -race -shuffle=on -count=1 -json ./..." in runs
     assert "unshare --net" in runs and "tools/go_test_policy.py" in runs
+
+
+# --- the CI step itself, run with stand-ins for sudo, unshare, ip, setpriv and go ----------------
+
+FAKE_TOOLS = {
+    "sudo": 'exec "$@"\n',
+    "unshare": 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n',
+    "setpriv": 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n',
+    "ip": "exit 0\n",
+    "go": 'cat "$FAKE_STREAM"; exit "$FAKE_EXIT"\n',
+}
+
+
+def ci_step(name: str) -> str:
+    import yaml
+
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][
+        "orchestrator"
+    ]
+    (step,) = [s for s in job["steps"] if s.get("name", "").startswith(name)]
+    return step["run"]
+
+
+def run_test_step(tmp_path, lines: list[str], go_exit: int) -> subprocess.CompletedProcess:
+    """The orchestrator job's test step, in a scratch checkout, with go replaced by a stream."""
+    bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
+    for d in (bin_dir, mod, rt):
+        d.mkdir()
+    for name, body in FAKE_TOOLS.items():
+        (bin_dir / name).write_text("#!/bin/sh\n" + body)
+        (bin_dir / name).chmod(0o755)
+    (tmp_path / "tools").symlink_to(ROOT / "tools")
+    (mod / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
+    (mod / "skips.yml").write_text(
+        QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
+            "internal/queue", "internal/ok"
+        )
+    )
+    (rt / "go-test-root.json").write_text("")  # the root-only step ran and found nothing to run
+    (tmp_path / "stream.json").write_text("\n".join(lines) + "\n")
+    (tmp_path / "step.sh").write_text(ci_step("tests (race"))
+    env = {
+        "PATH": f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "RUNNER_TEMP": str(rt),
+        "HNX_TODAY": TODAY,
+        "FAKE_STREAM": str(tmp_path / "stream.json"),
+        "FAKE_EXIT": str(go_exit),
+    }
+    # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
+        cwd=mod,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("stream", "go_exit", "passes"),
+    [
+        ("quarantined_only.json", 1, True),  # go exits 1 on the quarantined failure: tolerated
+        ("timeout_truncated.json", 1, False),  # the stream stops before any verdict
+        ("timeout_truncated.json", 143, False),  # go test killed
+        ("quarantined_only.json", 2, False),  # a status no test failure explains
+        ("green", 0, True),
+        ("green", 1, False),  # go failed, the stream does not say why: events were lost
+    ],
+)
+def test_the_ci_step_judges_the_stream_and_go_tests_exit_status(tmp_path, stream, go_exit, passes):
+    # green: no skip, since the step forbids the one GREEN has
+    green = package("internal/queue", "pass", events_of("internal/queue", "TestAdmit", "pass"))
+    lines = green if stream == "green" else fixture(stream)
+    r = run_test_step(tmp_path, lines, go_exit)
+    assert (r.returncode == 0) is passes, r.stdout + r.stderr
+
+
+def test_a_cut_off_stream_fails_with_or_without_the_exit_status(tmp_path, capsys):
+    text = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
+        "internal/queue", "internal/to"
+    )
+    lines = fixture("timeout_truncated.json")
+    assert run(tmp_path, lines, policy_yaml=text) == 1
+    out = capsys.readouterr().out
+    assert "FAIL example.com/fixture/internal/to TestFlaky: no verdict" in out
+    assert "FAIL example.com/fixture/internal/to TestHang: no verdict" in out
+    assert "FAIL example.com/fixture/internal/to: no package verdict" in out
+    # a panic in parallel TestB kills the binary while TestA is still running
+    assert run(tmp_path, fixture("parallel_panic.json")) == 1
+    out = capsys.readouterr().out
+    assert "FAIL example.com/fixture/internal/par TestB\n" in out
+    assert "FAIL example.com/fixture/internal/par TestA: no verdict" in out
+    # a whole package missing its end, in a stream that is otherwise green
+    assert run(tmp_path, GREEN[:-1]) == 1
+    assert "no package verdict" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("lines", "status", "ok", "why"),
+    [
+        (GREEN, 0, True, ""),
+        (GREEN, 1, False, "go test exited 1 but the stream shows no failure"),
+        (GREEN, 2, False, "go test exited 2: not a test verdict"),
+        (FLAKY, 1, True, ""),  # explained by the quarantined failure
+        (FLAKY, 0, False, "go test exited 0 but the stream has a failure"),
+    ],
+)  # fmt: skip
+def test_go_exit_must_agree_with_the_stream(tmp_path, capsys, lines, status, ok, why):
+    text = QUARANTINE.format(test="TestStall", until="2026-02-01")
+    assert run(tmp_path, lines, "--go-exit", str(status), policy_yaml=text) == (0 if ok else 1)
+    assert why in capsys.readouterr().out

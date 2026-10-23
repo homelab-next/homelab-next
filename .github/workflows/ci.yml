@@ -273,15 +273,20 @@ jobs:
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
         if: steps.module.outputs.present == 'true'
         run: |
-          set +o pipefail  # go test exits 1 on a quarantined failure; the policy tool decides
           policy=()
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
+          out="$RUNNER_TEMP/go-test.json"
+          status=0
           sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" unshare --net -- \
             sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --clear-groups -- \
               go test -race -shuffle=on -count=1 -json ./...' sh "$(id -u)" "$(id -g)" \
-            | python ../tools/go_test_policy.py "${policy[@]}" \
-                --privileged "$RUNNER_TEMP/go-test-root.json" \
-                --forbid 'python3 not available' -
+            > "$out" || status=$?
+          # go test exits 1 on a quarantined failure too: the policy tool judges the stream and
+          # go's own exit status together (any other status, or a 1 the stream does not explain,
+          # fails), so a stream cut short cannot pass while go test failed
+          python ../tools/go_test_policy.py "${policy[@]}" \
+            --privileged "$RUNNER_TEMP/go-test-root.json" \
+            --forbid 'python3 not available' --go-exit "$status" "$out"
 
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
