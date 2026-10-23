@@ -518,22 +518,73 @@ def test_the_pending_quota_has_a_default(tmp_path):
         _restart(svc)
 
 
-def test_approval_pages_are_coalesced_per_actor_and_window(tmp_path):
+def test_approval_pages_are_coalesced_while_the_actor_has_an_open_page(tmp_path):
     sent = []
     clock = Clock()
-    svc = _quota_svc(tmp_path, clock, notify_window_s=300, notifier=_notifier(sent))
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
     first = _restart(svc)
+    rest = []
     for _ in range(4):
         clock.advance(10)
-        _restart(svc)
-    assert [m.title for m in sent] == ["Broker approval needed"], "one page per actor and window"
+        rest.append(_restart(svc))
+    assert [m.title for m in sent] == ["Broker approval needed"], "one open page per actor"
     assert first in sent[0].body
     assert len(svc.state.outbox()) == 5, "every request still emits its event"
-    clock.advance(300)
-    rid = _restart(svc)
-    assert len(sent) == 2 and rid in sent[1].body and "6 requests await approval" in sent[1].body
-    svc.approve(first, APPROVER)  # the paged one settles: the page says what is still waiting
-    assert sent[-1].title == "Broker approval settled" and "5 more" in sent[-1].body
+    clock.advance(3600)
+    _restart(svc)
+    assert len(sent) == 1, "the page is still open: no time window reopens it"
+    svc.approve(first, APPROVER)  # the paged one settles: the page moves to the oldest waiting
+    settled, moved = sent[1:]
+    assert settled.title == "Broker approval settled" and "5 more" in settled.body
+    assert moved.title == "Broker approval needed" and moved.level == "warn"
+    assert rest[0] in moved.body and all(r in moved.body for r in rest), "names every waiting id"
+    assert "5 requests await approval" in moved.body
+
+
+def test_a_request_filed_after_a_cancelled_decoy_still_pages(tmp_path):
+    """The page window was spent by a decoy the actor then cancelled: the real request, filed
+    inside the window, never paged, now or later."""
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    decoy = _restart(svc)
+    clock.advance(5)
+    svc.cancel(AGENT, decoy)
+    clock.advance(5)
+    real = _restart(svc)
+    assert [m.title for m in sent][-1] == "Broker approval needed" and real in sent[-1].body
+
+
+def test_a_retry_after_a_denial_pages(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    svc.deny(_restart(svc), APPROVER)
+    clock.advance(30)
+    retry = _restart(svc)
+    assert sent[-1].title == "Broker approval needed" and retry in sent[-1].body
+
+
+def test_a_failed_page_does_not_silence_the_actors_next_requests(tmp_path):
+    """The window was taken before the send: one failed send (an ntfy blip) silenced every page
+    of that actor for the whole window."""
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    real, calls = svc.notifier.sender.send, []
+
+    def flaky(message):
+        calls.append(message)
+        if len(calls) == 1:
+            raise RuntimeError("ntfy down")
+        real(message)
+
+    svc.notifier.sender.send = flaky
+    a = _restart(svc)
+    clock.advance(10)
+    b = _restart(svc)
+    [page] = sent
+    assert b in page.body and a in page.body, "the page names every request still waiting"
 
 
 def test_a_failing_notifier_never_fails_the_operation(tmp_path):

@@ -140,11 +140,15 @@ hnx broker validate examples/broker/manifest.yml
    Accepted work is bounded per agent (manifest 1.5 `quotas`): an actor may have at most
    `pending_per_actor` requests pending at once (default 20; a `submit` past it is refused
    `too-many-pending`, audited, and counts as a refusal for the rate limit), and its approval
-   requests page the approver at most once per `notify_window_s` (default 300 s; 0 pages every
-   request). The page counts the actor's requests awaiting approval; every request still emits
-   its event and appears on the Approvals page, and the settling of a paged request says how many
-   of the actor's requests still wait. A looping agent can therefore neither flood the approver's
-   phone nor bury one malicious request among hundreds.
+   requests page the approver only while the actor has no open page. A page is open once the
+   notifier has sent it (a failed send opens nothing) and until its request settles; it names
+   every request of the actor's still awaiting approval. Every request still emits its event and
+   appears on the Approvals page. When the paged request settles, the settling says how many
+   still wait and the oldest of them is paged at once, at warn level, naming them all, so no
+   waiting request is left without a page: not one filed after a cancelled decoy, not a retry
+   after a denial, not one filed after a page whose send failed. A looping agent can therefore
+   neither flood the approver's phone nor bury one malicious request among hundreds, nor make
+   one page-silent. (`quotas.notify_window_s`, manifest 1.5, is accepted and no longer used.)
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
@@ -226,7 +230,7 @@ callers:                                  # an agent's system user -> the one pr
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
 refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
-quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
+quotas: {pending_per_actor: 20}           # requests one agent may have pending (the default)
 ```
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
