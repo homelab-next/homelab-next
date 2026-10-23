@@ -590,3 +590,79 @@ def test_a_new_alternative_the_old_schema_implies_is_additive():
     assert sc.is_additive(old, new) == []
     new["anyOf"] = [{"required": ["b"]}]
     assert sc.is_additive(old, new)
+
+
+# ----- VERIFY1: a new alternative is proven only from constraints the check really compares -----
+_CLOSED = {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+           "required": ["a"], "additionalProperties": False,
+           "$defs": {"strict": {"required": ["b"]}, "short": {"maxLength": 0}}}  # fmt: skip
+_OPEN = {"type": "object", "properties": {"a": {"type": "string"}, "l": {"type": "array"}},
+         "required": ["a"]}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("old", "change", "broken"),
+    [
+        # oneOf: {a, b} met both branches and now fails "exactly one"
+        (_CLOSED, {"oneOf": [{"required": ["a"]}, {"required": ["b"]}]}, {"a": "x", "b": "y"}),
+        # a $ref branch was never compared, so any definition passed as "implied"
+        (_CLOSED, {"anyOf": [{"$ref": "#/$defs/strict"}]}, {"a": "x"}),
+        # a property the old schema left open (additional properties allowed)
+        (_OPEN, {"anyOf": [{"properties": {"z": {"type": "string"}}}]}, {"a": "x", "z": 1}),
+        (_OPEN, {"anyOf": [{"additionalProperties": {"type": "integer"}}]}, {"a": "x", "q": "s"}),
+        (
+            _OPEN,
+            {
+                "properties": {
+                    "a": {"type": "string"},
+                    "l": {"type": "array", "anyOf": [{"items": {"type": "integer"}}]},
+                }
+            },
+            {"a": "x", "l": ["s"]},
+        ),
+        (
+            _OPEN,
+            {
+                "properties": {
+                    "a": {"type": "string"},
+                    "l": {"type": "array", "anyOf": [{"contains": {"type": "integer"}}]},
+                }
+            },
+            {"a": "x", "l": ["s"]},
+        ),
+        # a new $ref, or a property widened into an anyOf of one
+        (
+            _CLOSED,
+            {
+                "properties": {
+                    "a": {"type": "string", "$ref": "#/$defs/short"},
+                    "b": {"type": "string"},
+                }
+            },
+            {"a": "x"},
+        ),
+        # a dependentSchemas key a pattern property already admitted
+        (
+            {"type": "object", "patternProperties": {"^x-": {}}, "additionalProperties": False},
+            {"dependentSchemas": {"x-new": {"required": ["zz"]}}},
+            {"x-new": 1},
+        ),
+    ],
+)
+def test_a_new_alternative_that_breaks_documents_is_not_additive(old, change, broken):
+    from jsonschema import Draft202012Validator as V
+
+    new = {**copy.deepcopy(old), **copy.deepcopy(change)}
+    assert V(old).is_valid(broken) and not V(new).is_valid(broken)  # the probe is a real break
+    assert sc.is_additive(old, new), new
+
+
+@pytest.mark.parametrize("key", ["dependentSchemas", "dependentRequired"])
+def test_removing_a_dependent_entry_is_additive(key):
+    """Removing one entry removes a constraint: every old document stays valid."""
+    entry = {"b": {"required": ["a"]}, "a": {"required": ["a"]}} if key == "dependentSchemas" \
+        else {"b": ["a"], "a": ["a"]}  # fmt: skip
+    old = {**_CLOSED, key: entry}
+    new = {**_CLOSED, key: {"a": entry["a"]}}
+    assert sc.is_additive(old, new) == []
+    assert sc.is_additive(_CLOSED, {**_CLOSED, "oneOf": [{"required": ["a"]}]}) == []
