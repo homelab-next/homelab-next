@@ -307,6 +307,27 @@ def test_skip_reason_drops_framing_and_the_caller_prefix():
     assert policy.skip_reason(res) == "flock(1) not on PATH"
 
 
+def test_the_skip_reason_is_the_last_line_before_skip_not_earlier_logs(tmp_path, capsys):
+    pkg = "internal/queue"
+    # t.Log("flock(1) not installed") then t.Skip("later"): the reason is "later"
+    logged = package(
+        pkg, "pass", events_of(pkg, "TestSeal", "skip", "flock(1) not installed", "later")
+    )
+    assert run(tmp_path, logged) == 1
+    assert "TestSeal: silent skip, reason 'later' matches no pattern" in capsys.readouterr().out
+    # --forbid is matched against the reason too, not against a logged line
+    forbidden_log = package(
+        pkg,
+        "pass",
+        events_of(pkg, "TestSeal", "skip", "python3 not available", "flock(1) not installed"),
+    )
+    assert run(tmp_path, forbidden_log, "--forbid", "python3 not available") == 0
+    assert (
+        "note: skip example.com/fixture/internal/queue TestSeal: 'flock(1) not installed'"
+        in capsys.readouterr().out
+    )
+
+
 @pytest.mark.skipif(shutil.which("go") is None, reason="go is not installed")
 def test_a_real_go_test_json_stream(tmp_path):
     mod = tmp_path / "mod"

@@ -20,7 +20,7 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   subtest under it is quarantined);
 * a package that failed without a failing test: a build failure (``build-fail``), a panic in
   ``TestMain`` or ``init``, a timeout;
-* a skip whose reason (the test's own output before ``--- SKIP``) matches none of the
+* a skip whose reason (the last line the test wrote before ``--- SKIP``) matches none of the
   ``skip_reasons`` regular expressions of ``[tool.pytest.ini_options]`` in pyproject.toml, or one
   that ``--forbid`` names for this run (a reason that is legitimate elsewhere, such as a tool CI
   always installs);
@@ -193,9 +193,25 @@ def parse(lines: Iterable[str], run: Run | None = None) -> Run:
     return run
 
 
+SKIP_LINE = re.compile(r"^\s*--- SKIP:")
+
+
 def skip_reason(res: Result) -> str:
-    lines = [CALLER.sub("", line).strip() for line in res.output if not FRAMING.match(line)]
-    return " ".join(line for line in lines if line)
+    """The message of ``t.Skip``: the last line the test wrote before its ``--- SKIP`` line.
+
+    Earlier ``t.Log`` lines are not the reason, so a logged phrase cannot make an unregistered
+    skip look registered (or trip ``--forbid``) on its own.
+    """
+    out = res.output
+    ends = [i for i, line in enumerate(out) if SKIP_LINE.match(line)]
+    before = out[: ends[-1]] if ends else out
+    for line in reversed(before):
+        if FRAMING.match(line):
+            continue
+        text = CALLER.sub("", line).strip()
+        if text:
+            return text
+    return ""
 
 
 def _quarantine_problem(e: Entry, today: date, max_days: int) -> str | None:
