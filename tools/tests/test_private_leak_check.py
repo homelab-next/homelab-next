@@ -660,6 +660,12 @@ ADDRESS_CASES = {
     "subscript, integer": f"site['scope']['trusted']['wan'] = [{PUBLIC_INT}]\n",
     "subscript, augmented": f'site["scope"]["target"] += ["{PADDED}/32"]\n',
     "subscript, multi-line": f'site["scope"] = {{\n    "target": ["{PRIVATE_NET}"],\n}}\n',
+    # VERIFY4 N1: a dotted key needs its `:` or `=`, and every spelling of one still has it
+    "yaml dotted key": f"scope.trusted.wan: ['{PADDED}/32']\n",
+    "markdown dotted key": f"`scope.trusted.wan`: {PADDED}\n",
+    "toml spaced dotted key": f'scope . trusted . wan = ["{PADDED}/32"]\n',
+    "toml quoted dotted key": f'scope."trusted".wan = ["{PADDED}/32"]\n',
+    "attribute assignment": f'self.scope.target = ["{PRIVATE_NET}"]\n',
     # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
     "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
     "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
@@ -849,10 +855,18 @@ PASSING_ELSEWHERE = [
     "scope = Foo<T>" + "::bar()\nscope = " + ":" * 2 + "Account.find(1)\n",
     f'scope = {{"type": "http", "client": ("{LOOPBACK}", 51234)}}\n',  # an ASGI test scope
     f"scope:\n  bind: {LOOPBACK}\n  any: {UNSPECIFIED}:9090\n  metadata: {METADATA}\n"
-    + "  v6: '[" + ":" * 2 + "1]:9090'\n  wild: '[" + ":" * 2 + "]:80'\n  ll: 'fe80" + "::1%eth0'\n"
+    + "  v6: '["
+    + ":" * 2
+    + "1]:9090'\n  wild: '["
+    + ":" * 2
+    + "]:80'\n  ll: 'fe80"
+    + "::1%eth0'\n"
     + f"  mapped: '::ffff:{LOOPBACK}'\n",
     # VERIFY4 SF3: a comparison is no assignment
     'assert site["scope"]["n"] == 17' + "00000000\n",
+    # VERIFY4 N1: an attribute access or a method call is no dotted key
+    'scope.set_extra("max_body", 10' + "4857600)\n",
+    'limit = scope.get("limit", 26' + "8435456)\nif scope.x == 17" + "00000000:\n    pass\n",
 ]
 
 
@@ -995,6 +1009,7 @@ LINEAR_SHAPES = {
         "x.json",
         lambda n: "[" + ",".join(f'{{"scope":"a","id":{i}}}' for i in range(n)) + "]",
     ),
+    "dotted paths that never assign": ("x.py", lambda n: "scope." * n + "\n"),
     "subscripts that never assign": ("x.py", lambda n: '["scope"]' * n + "\n"),
     "one-line HTML with entities": (
         "x.html",

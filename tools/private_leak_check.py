@@ -82,7 +82,8 @@ and only while its marker says ``fictional: true``.  Findings:
                    a dedented flow, a CRLF header are just mappings here); (2) the raw rule:
                    the raw text under every ``scope`` key (any case, quoted or not, ``scope:``,
                    ``scope =`` at a line's start, ``[scope]``/``[[scope]]`` headers, dotted
-                   ``scope.x`` keys, a comment before the colon, Markdown `` `scope`: ``,
+                   ``scope.x`` keys followed by ``:`` or ``=`` (never ``scope.get(``), a
+                   comment before the colon, Markdown `` `scope`: ``,
                    ``**scope**:``, ``_scope_:`` and table rows, a subscript assignment
                    ``x["scope"][...] = ...``, and the same after decoding
                    YAML, JSON and TOML escapes, an escaped line break and HTML character
@@ -770,13 +771,16 @@ SCOPE_EXEMPT = {
 #: Quoted or not, any case (``re.I`` also folds the long s, U+017F); not part of a longer word.
 #: Markdown spellings count (`` `scope`: ``, ``**scope**:``, ``_scope_:``, a table row whose first
 #: cell is ``scope``).  Never a key: a call's keyword argument (``fixture(scope="module")``,
-#: ``f(a, scope=x)``) or an HTML or XML attribute (``<th scope="row">``): ``scope =`` counts only
-#: at a line's start or, spaced, inside a TOML inline table.  A Python subscript assignment
+#: ``f(a, scope=x)``), an attribute access or a call (``scope.get(``, ``scope.x == y``: a
+#: dotted key needs its own ``:`` or ``=``) or an HTML or XML attribute (``<th scope="row">``):
+#: ``scope =`` counts only at a line's start or, spaced, inside a TOML inline table.  A Python subscript assignment
 #: (``site["scope"]["target"] = [...]``) is a key; a comparison (``==``) is not.
 _SCOPE_KEY = re.compile(
     r"""(?<![\w$-])[`*_"']*scope[`*_"'\]}]*"""  # Markdown `scope`, **scope**, _scope_, quotes
     r"""(?:[ \t]*(?:\#[^\n]*)?\n)*[ \t]*"""  # comment lines and line breaks before the colon
-    r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_])"""  # scope: or a dotted scope.x key
+    # scope: or a dotted scope.x key, which needs its own : or = (scope.get( is no key); the
+    # path is at most 256 characters, possessive, so a run of them stays linear
+    r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_][\w"'`*. \t-]{0,256}+(?::(?!:)|[|+]?=(?!=)))"""
     r"""|^[ \t]*["']?scope["']?[ \t]*=(?!=)"""  # scope = at a line's start (TOML, INI)
     r"""|(?<=[{,])[ \t]*["']?scope["']?[ \t]+=[ \t]"""  # in a TOML inline table, spaced
     r"""|^[ \t]*\|[ \t]*[`*_]*scope(?:\.[\w.]+)?[`*_]*[ \t]*\|"""  # a Markdown table row
