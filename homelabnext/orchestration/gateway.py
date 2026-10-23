@@ -30,11 +30,13 @@ is used, so the key never reaches another origin; the reply is read bounded.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -58,6 +60,9 @@ SETTLE_S = 600.0
 SLACK_S = 120.0
 #: jobs whose read windows are closer than this are read in one window
 MERGE_GAP_S = 3600.0
+#: but a window is never longer than this: PAGE_SIZE * MAX_PAGES rows (100k) per hour is ~28
+#: requests a second, far more than the gateway of a lab serves
+MAX_WINDOW_S = 3600.0
 _SECRET_REF = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]{0,127}$")
 _TURN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$")
@@ -245,23 +250,34 @@ def turn_from_row(row: Mapping[str, Any], tags: Iterable[str]) -> dict[str, Any]
     }
 
 
-def _windows(jobs: Iterable[Mapping[str, Any]]) -> list[tuple[float, float, set[str]]]:
-    """Read windows covering every job (merged when close), each with the tags inside it."""
+def _windows(
+    jobs: Iterable[Mapping[str, Any]],
+) -> list[tuple[float, float, list[Mapping[str, Any]]]]:
+    """Read windows covering every job, oldest first, each with the jobs whose span it overlaps.
+    Spans closer than :data:`MERGE_GAP_S` are read together, but no window is longer than
+    :data:`MAX_WINDOW_S`: a run of jobs less than an hour apart (a week of first replay, a backlog
+    after a gateway outage) is cut into windows a page budget can finish, rather than one window
+    over all of the gateway's traffic that fails every run."""
     spans = sorted(
-        (
-            parse_iso(j["queued_at"]) - SLACK_S,
-            parse_iso(j["finished_at"]) + SLACK_S,
-            j["gateway_tag"],
-        )
-        for j in jobs
+        (parse_iso(j["queued_at"]) - SLACK_S, parse_iso(j["finished_at"]) + SLACK_S, i, j)
+        for i, j in enumerate(jobs)
     )
-    out: list[tuple[float, float, set[str]]] = []
-    for lo, hi, tag in spans:
-        if out and lo <= out[-1][1] + MERGE_GAP_S:
-            plo, phi, tags = out[-1]
-            out[-1] = (plo, max(phi, hi), tags | {tag})
+    merged: list[tuple[float, float, list[tuple[float, float, Mapping[str, Any]]]]] = []
+    for lo, hi, _, job in spans:
+        if merged and lo <= merged[-1][1] + MERGE_GAP_S:
+            plo, phi, members = merged[-1]
+            merged[-1] = (plo, max(phi, hi), [*members, (lo, hi, job)])
         else:
-            out.append((lo, hi, {tag}))
+            merged.append((lo, hi, [(lo, hi, job)]))
+    out: list[tuple[float, float, list[Mapping[str, Any]]]] = []
+    for lo, hi, members in merged:
+        n = max(1, math.ceil((hi - lo) / MAX_WINDOW_S))
+        step = (hi - lo) / n
+        for k in range(n):
+            a, b = lo + k * step, hi if k == n - 1 else lo + (k + 1) * step
+            inside = [job for jlo, jhi, job in members if jlo <= b and jhi >= a]
+            if inside:
+                out.append((a, b, inside))
     return out
 
 
@@ -273,16 +289,29 @@ def sync_turns(
     settle_s: float = SETTLE_S,
 ) -> dict[str, int]:
     """Read the turns of every unsettled job (``read_rows``: :meth:`SpendLogReader.rows`) into
-    the store, then settle the jobs finished more than ``settle_s`` before ``now``.  A failed read
-    raises before anything is settled, so the next run reads the same jobs again."""
+    the store, window by window (:func:`_windows`), oldest first.  Each window's turns are stored
+    as soon as it is read, and a job finished more than ``settle_s`` before ``now`` is settled as
+    soon as the last window it overlaps is read.  A failed read raises; what was read and settled
+    before it stays, and the next run reads the jobs still unsettled."""
     pending = store.unsettled()
-    turns = 0
-    for lo, hi, tags in _windows(pending):
-        found = [t for r in read_rows(lo, min(hi, now)) if (t := turn_from_row(r, tags))]
-        turns += store.add_turns(found)
-    done = [j["run_id"] for j in pending if parse_iso(j["finished_at"]) <= now - settle_s]
-    store.settle(done, now)
-    return {"jobs": len(pending), "turns": turns, "settled": len(done)}
+    windows = _windows(pending)
+    left = Counter(j["run_id"] for _, _, inside in windows for j in inside)
+    seen: set[str] = set()  # a turn read by two adjacent windows is one turn
+    settled = 0
+    for lo, hi, inside in windows:
+        if lo <= now:
+            tags = {j["gateway_tag"] for j in inside}
+            found = [t for r in read_rows(lo, min(hi, now)) if (t := turn_from_row(r, tags))]
+            store.add_turns(found)
+            seen.update(t["turn_id"] for t in found)
+        done = []
+        for j in inside:
+            left[j["run_id"]] -= 1
+            if not left[j["run_id"]] and parse_iso(j["finished_at"]) <= now - settle_s:
+                done.append(j["run_id"])
+        store.settle(done, now)
+        settled += len(done)
+    return {"jobs": len(pending), "turns": len(seen), "settled": settled}
 
 
 __all__ = [

@@ -5,16 +5,22 @@ and settling.  The gateway is a loopback fake serving a recorded-shape fixture."
 
 from __future__ import annotations
 
+import copy
+
 import pytest
-from orch_helpers import KEY_ENV, NEVER, T0, FakeSpendLogs, pages
+from orch_helpers import KEY_ENV, NEVER, T0, FakeSpendLogs, body, examples, pages
 
 from homelabnext.orchestration.gateway import (
+    MAX_PAGES,
+    MAX_WINDOW_S,
+    PAGE_SIZE,
+    SLACK_S,
     GatewayError,
     SpendLogReader,
     sync_turns,
     turn_from_row,
 )
-from homelabnext.status.model import parse_iso
+from homelabnext.status.model import iso, parse_iso
 
 ROWS = [r for p in pages() for r in p["data"]]
 TAGS = {"run-0001", "hnx-run-0002", "run-0003", "run-0004"}
@@ -120,11 +126,14 @@ def test_sync_joins_turns_by_tag_and_settles_only_finished_jobs(filled):
     with FakeSpendLogs() as gw:
         got = sync_turns(filled, SpendLogReader(gw.url, env=KEY_ENV).rows, now=just_after)
     assert got == {"jobs": 4, "turns": 4, "settled": 3}
-    # the four jobs sit within an hour of each other: one window from the first queue time
-    # (less the slack) to now
-    assert {(r["start_date"], r["end_date"]) for r in gw.requests} == {
-        ("2025-12-31 23:58:00", "2026-01-01 03:01:00")
-    }
+    # the four jobs sit within an hour of each other: read together from the first queue time
+    # (less the slack) to now, in windows of at most an hour
+    assert sorted({(r["start_date"], r["end_date"]) for r in gw.requests}) == [
+        ("2025-12-31 23:58:00", "2026-01-01 00:44:00"),
+        ("2026-01-01 00:44:00", "2026-01-01 01:30:00"),
+        ("2026-01-01 01:30:00", "2026-01-01 02:16:00"),
+        ("2026-01-01 02:16:00", "2026-01-01 03:01:00"),
+    ]
     turns = filled.turns()
     assert {t: [x["turn_id"] for x in v] for t, v in turns.items()} == {
         "run-0001": ["req-a1", "req-a2"], "hnx-run-0002": ["req-b1"], "run-0003": ["req-c1"],
@@ -144,3 +153,51 @@ def test_a_failed_read_settles_nothing(filled):
     with FakeSpendLogs(status=503) as gw, pytest.raises(GatewayError):
         sync_turns(filled, SpendLogReader(gw.url, env=KEY_ENV).rows, now=T0)
     assert len(filled.unsettled()) == 4 and filled.turns() == {}
+
+
+def _a_week_of_jobs(store, every_s: float = 1800.0) -> list[str]:
+    """A job every half hour for seven days (the first replay of a new durable): one chain."""
+    template, runs = examples()[0], []
+    start = T0 - 7 * 86400
+    for n in range(int(7 * 86400 // every_s)):
+        ev = copy.deepcopy(template) | {"id": f"evt-w{n:04d}"}
+        q = start + n * every_s
+        ev["data"].update(
+            run_id=f"run-w{n:04d}", gateway_tag=f"run-w{n:04d}", queued_at=iso(q),
+            started_at=iso(q + 10), finished_at=iso(q + 300),
+        )  # fmt: skip
+        assert store.consume(body(ev)).status == "processed"
+        runs.append(f"run-w{n:04d}")
+    return runs
+
+
+def test_a_week_of_close_jobs_is_read_in_bounded_windows_settled_as_each_succeeds(store):
+    """Jobs less than an hour apart used to chain into one window over the whole week, which
+    holds all the gateway's traffic: past the page budget it failed every run and nothing ever
+    settled.  Windows are capped; each one's jobs settle as soon as it is read, so a failure
+    keeps what was read before it, and the next run carries on from there."""
+    runs = _a_week_of_jobs(store)
+    asked: list[tuple[float, float]] = []
+    fail_at = [T0 - 3 * 86400]
+
+    def gateway(lo, hi):  # a fake gateway: the window it was asked for, a job's one turn
+        asked.append((lo, hi))
+        if fail_at and lo <= fail_at[0] <= hi:
+            raise GatewayError(f"more than {MAX_PAGES} pages of {PAGE_SIZE} rows in one window")
+        return [
+            {"request_id": f"req-{r}", "request_tags": [r], "startTime": iso(lo + 1)} for r in runs
+        ]
+
+    with pytest.raises(GatewayError):
+        sync_turns(store, gateway, now=T0)
+    assert max(hi - lo for lo, hi in asked) <= MAX_WINDOW_S
+    assert asked == sorted(asked)  # oldest first
+    left = {j["run_id"] for j in store.unsettled()}
+    assert 0 < len(left) < len(runs)  # everything before the failing window is settled
+    first_left = min(parse_iso(j["queued_at"]) for j in store.unsettled())
+    assert first_left >= fail_at[0] - MAX_WINDOW_S - 300 - 120
+    fail_at.clear()
+    asked.clear()
+    got = sync_turns(store, gateway, now=T0)
+    assert got["jobs"] == len(left) and got["settled"] == len(left) and store.unsettled() == []
+    assert min(lo for lo, _ in asked) >= first_left - SLACK_S - 1  # only what was left

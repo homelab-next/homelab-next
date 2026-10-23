@@ -94,9 +94,12 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   backfill or a replay of the outbox.
 - **Turns** (`hnx orchestration turns`): for every job whose turns are not settled, read the
   spend log over windows covering the jobs (from queue time less two minutes to finish time plus
-  two, merged when within an hour), keep the rows whose `request_tags` hold a job's tag, and
-  rewrite them by request id. A job is settled ten minutes after it finished (LiteLLM writes its
-  spend log in batches); a failed read settles nothing.
+  two, merged when within an hour, but cut into windows of at most an hour so a week of replay
+  or a backlog after an outage never becomes one window over all the gateway's traffic), oldest
+  first; keep the rows whose `request_tags` hold a job's tag, and rewrite them by request id. A
+  job is settled ten minutes after it finished (LiteLLM writes its spend log in batches), as soon
+  as the last window it overlaps has been read; a failed read stops the pass but keeps what was
+  read and settled before it, and the next pass starts from the jobs still unsettled.
 - **Retention**: 90 days by default (`--retention-days`), by finish time and turn start time. A
   record that arrives already older than that (a late replay, an old backfill) is counted
   `expired` by `consume` and `ingest`: acknowledged and not stored, neither processed nor poison.
