@@ -709,3 +709,19 @@ def test_render_needs_the_review_policy_and_runs_the_full_record_check(tmp_path,
     (d / "notes.yml").write_text(yaml.safe_dump(notes))
     with pytest.raises(clients.RenderError, match="egress names internet but no tool"):
         clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
+
+
+def test_the_orchestrator_catalog_has_no_kind_for_a_server_that_acts_directly():
+    """ADR-0030: a server that acts other than through the broker is a kind of the orchestrator's
+    catalog only when a rendered profile is granted it (a policy's direct_mcp exception); else its
+    controller refuses any profile's grant of it, a barrier behind the profile checks."""
+    text, notes = clients.orch_catalog(CATALOG, (), CTX)
+    kinds = yaml.safe_load(text)["kinds"]
+    assert "hnx-broker" in kinds  # acts through the broker
+    for sid in ("shell", "ssh", "ansible", "kubernetes", "vault", "filesystem", "git", "github"):
+        assert sid not in kinds, sid
+        assert any(n.startswith(f"{sid}: acts other than through the broker") for n in notes)
+    text, _ = clients.orch_catalog(CATALOG, {"shell"}, CTX)
+    assert "shell" in yaml.safe_load(text)["kinds"]
+    shipped = yaml.safe_load((SPECS / "llm-orchestrator" / "mcp_catalog.yaml").read_text())
+    assert not {"shell", "ssh", "ansible", "kubernetes", "vault"} & set(shipped["kinds"])
