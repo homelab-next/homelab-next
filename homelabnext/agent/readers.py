@@ -196,6 +196,10 @@ class ToolClasses:
                 # only a direct server's exception needs it, so only those are evaluated
                 "human_approved": rec.get("acts_via") == "direct"
                 and human_approved(rec, review_policy),
+                # only the structural broker front, with current reviews, acts via the broker
+                "broker_front": rec.get("acts_via") == "broker"
+                and not servers.broker_front_problems(rec),
+                "reviewed": rec.get("acts_via") == "broker" and reviews_current(rec, review_policy),
             }
             for sid, rec in cat
         }
@@ -240,6 +244,25 @@ def human_approved(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
         policy=review_policy,
     )
     return any(r.get("role") == "approve" and r.get("kind") == "human" for r in ev.current)
+
+
+def reviews_current(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
+    """The record carries the reviews its status needs, all of its current content: with a review
+    policy, what it asks of ``mcp-server.<status>``; without one, a current human approve."""
+    from homelabnext.mcp import servers
+    from homelabnext.reviews import evaluate
+
+    if review_policy is None:
+        return human_approved(rec, review_policy)
+    ev = evaluate(
+        rec.get("reviews"),
+        author=rec.get("author"),
+        digest=servers.record_digest(rec),
+        artefact=servers.ARTEFACT,
+        state=str(rec.get("status")),
+        policy=review_policy,
+    )
+    return not ev.problems and not ev.missing
 
 
 def reaches_internet(rec: Mapping[str, Any]) -> bool:
@@ -422,6 +445,18 @@ def broker_problems(
             continue
         via = meta.get("acts_via")
         if via == "broker":
+            if not meta.get("broker_front"):
+                problems.append(
+                    f"{who} is granted MCP server {name!r} ({', '.join(acting)}), which says "
+                    "acts_via: broker but is not the broker's own MCP front (hnx-broker, "
+                    "exactly its tools): agents act only through the broker"
+                )
+            elif not meta.get("reviewed"):
+                problems.append(
+                    f"{who} is granted MCP server {name!r} ({', '.join(acting)}), the broker's "
+                    "front, whose record lacks current reviews: a change to it is reviewed "
+                    "before an agent holds it"
+                )
             continue
         if via != "direct":
             problems.append(

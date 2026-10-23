@@ -344,3 +344,45 @@ def test_an_unclassified_capability_is_refused():
     for cap in ("cap:automation", "cap:agent-runtime", "cap:records-db", "cap:dns"):
         got = broker_problems({"capabilities": [cap], "tier": "privileged"}, who="profile:a")
         assert any(f"{cap!r} (" in p for p in got), (cap, got)
+
+
+# ---------------------------------------------------------------- only the broker's front is broker
+def _restamp(rec: dict) -> None:
+    digest = servers.record_digest(rec)[: len("sha256:") + 12]
+    for x in rec.get("reviews") or ():
+        x["digest"] = digest
+
+
+def test_a_relabelled_server_is_not_the_broker(tmp_path):
+    """B2 (P2, P4, P5): acts_via: broker is honoured only on the broker's own front with exactly
+    its tools and current reviews; a re-stamped relabel, an extra tool or a new record claiming it
+    is refused at grant time too (lint, verify, compile, render)."""
+    d = _catalog_copy(tmp_path)
+    grants = {"mcp": ["ssh"], "capabilities": [], "tier": "read"}
+
+    def relabel(r):
+        r.pop("direct_reason")
+        r["acts_via"] = "broker"
+        _restamp(r)
+
+    table = _edit(d, "ssh", relabel)
+    got = broker_problems(grants, table, "profile:a")
+    assert got and "is not the broker's own MCP front" in got[0]
+
+    def raw_shell(r):
+        r["tools"].append({"name": "raw_shell", "classes": ["exec"], "approval": False})
+        _restamp(r)
+
+    table = _edit(d, "hnx-broker", raw_shell)
+    got = broker_problems({"mcp": ["hnx-broker"]}, table, "profile:a")
+    assert got and "is not the broker's own MCP front" in got[0]
+
+
+def test_the_brokers_front_with_stale_reviews_is_refused(tmp_path):
+    """S5/P2b: lint, verify and compile used to accept a broker record edited after its reviews."""
+    d = _catalog_copy(tmp_path)
+    table = _edit(d, "hnx-broker", lambda r: r.update(description="Changed after review."))
+    got = broker_problems({"mcp": ["hnx-broker"]}, table, "profile:a")
+    assert got and "lacks current reviews" in got[0]
+    table = ToolClasses.from_catalog(servers.load(_catalog_copy(tmp_path / "fresh")))
+    assert broker_problems({"mcp": ["hnx-broker"]}, table, "profile:a") == []

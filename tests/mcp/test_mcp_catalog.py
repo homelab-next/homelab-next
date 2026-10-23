@@ -418,3 +418,52 @@ def test_job_submission_and_shell_commands_are_the_brokers():
     for sid in ("bash", "exec", "terminal"):
         assert cat.status(sid) == "retired", sid
         assert cat.get(sid)["replaced_by"] == "hnx-broker", sid
+
+
+# ---------------------------------------------------------------- only the broker's front is broker
+def test_the_broker_records_tools_are_the_brokers_real_tools():
+    """B2: hnx-broker.yml lists exactly what homelabnext/broker/mcp_tools.py registers."""
+    rec = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
+    assert {t["name"] for t in rec["tools"]} == set(servers.broker_tools())
+    assert servers.broker_front_problems(rec) == []
+
+
+def _restamp(r: dict) -> None:
+    """The author re-stamps every review to the new content (what an agent author can do)."""
+    digest = servers.record_digest(r)[: len("sha256:") + 12]
+    for x in r.get("reviews") or ():
+        x["digest"] = digest
+
+
+@pytest.mark.parametrize(
+    ("sid", "edit", "needle"),
+    [
+        # P2: an operator relabels ssh to get it back, re-stamping the reviews
+        ("ssh", lambda r: [r.pop("direct_reason"), r.update(acts_via="broker")],
+         "only the broker's own MCP front"),
+        # P4: the real broker record grows a raw shell
+        ("hnx-broker", lambda r: r["tools"].append(
+            {"name": "raw_shell", "classes": ["exec"], "approval": False}),
+         "lists tool(s) raw_shell the broker's MCP front does not register"),
+        # the broker record under another launch
+        ("hnx-broker", lambda r: r["transport"].update(entry="mcp-serve"),
+         "only the broker's own MCP front"),
+    ],
+)  # fmt: skip
+def test_only_the_brokers_own_front_may_say_acts_via_broker(tmp_catalog, sid, edit, needle):
+    def change(r):
+        edit(r)
+        _restamp(r)
+
+    cat = _edit(tmp_catalog, sid, change)
+    assert any(needle in p for p in _check(cat)), _check(cat)
+
+
+def test_a_new_record_claiming_the_broker_is_refused(tmp_catalog):
+    """P5: a third-party record (the SSH package under another id) claims acts_via: broker."""
+    rec = yaml.safe_load((CATALOG / "ssh.yml").read_text())
+    rec.pop("direct_reason")
+    rec.update(id="k8s-ops", acts_via="broker", reviews=[])
+    (tmp_catalog / "k8s-ops.yml").write_text(yaml.safe_dump(rec))
+    problems = servers.check(servers.load(tmp_catalog), registry=REGISTRY)
+    assert any("k8s-ops.yml: acts_via: broker, but only the broker's own" in p for p in problems)

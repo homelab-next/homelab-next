@@ -842,6 +842,57 @@ def _tool_problems(rec: Mapping[str, Any], where: str, vocabulary: Iterable[str]
     return out
 
 
+#: the broker's own MCP front (``hnx broker mcp``, docs/mcp.md): the one record that may say
+#: ``acts_via: broker`` (ADR-0030). Fixed here, in code, and never read from data, so no record
+#: (an overlay's, a module's, a relabelled vendor package) can name itself into it.
+BROKER_FRONT_ID = "hnx-broker"
+BROKER_FRONT_PATH = "homelabnext/broker/mcp_tools.py"
+BROKER_FRONT_ENTRY = "broker-mcp"
+
+
+def broker_tools() -> frozenset[str]:
+    """The tools the broker's MCP front really registers (:data:`homelabnext.broker.mcp_tools.TOOLS`)."""
+    from homelabnext.broker.mcp_tools import TOOLS
+
+    return frozenset(TOOLS)
+
+
+def broker_front_problems(rec: Mapping[str, Any]) -> list[str]:
+    """Why ``rec`` may not say ``acts_via: broker`` (empty: it is the broker's own front). It must
+    be the record :data:`BROKER_FRONT_ID`, first-party from :data:`BROKER_FRONT_PATH`, launched as
+    ``hnx broker-mcp``, and list exactly the tools the broker's front registers: an extra tool
+    (a ``raw_shell`` added to the record) is not a broker call, whatever the record says."""
+    origin = rec.get("origin") if isinstance(rec.get("origin"), Mapping) else {}
+    t = rec.get("transport") if isinstance(rec.get("transport"), Mapping) else {}
+    if (
+        rec.get("id") != BROKER_FRONT_ID
+        or origin.get("kind") != "first-party"
+        or origin.get("path") != BROKER_FRONT_PATH
+        or t.get("type") != "stdio"
+        or t.get("bin") != "hnx"
+        or t.get("entry") != BROKER_FRONT_ENTRY
+    ):
+        return [
+            f"only the broker's own MCP front ({BROKER_FRONT_ID}: first-party "
+            f"{BROKER_FRONT_PATH}, launched as hnx {BROKER_FRONT_ENTRY}) acts through the "
+            "broker; any other acting server says acts_via: direct"
+        ]
+    names = {str(x.get("name")) for x in rec.get("tools") or () if isinstance(x, Mapping)}
+    real = broker_tools()
+    out = []
+    if names - real:
+        out.append(
+            f"lists tool(s) {', '.join(sorted(names - real))} the broker's MCP front does not "
+            f"register ({BROKER_FRONT_PATH})"
+        )
+    if real - names:
+        out.append(
+            f"leaves out tool(s) {', '.join(sorted(real - names))} the broker's MCP front "
+            f"registers ({BROKER_FRONT_PATH})"
+        )
+    return out
+
+
 def acts_via_problems(
     rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
 ) -> list[str]:
@@ -849,6 +900,8 @@ def acts_via_problems(
     acting tool (a class in ``broker_only``, default the packaged table's) declares ``acts_via``
     (R3.3), and ``approval: true`` on an acting tool needs ``acts_via: broker`` (R3.2): only the
     broker grants an approval, so a server that acts directly cannot promise one."""
+    if rec.get("acts_via") == "broker" and rec.get("status") not in GRANTABLE:
+        return [f"{where}: acts_via: broker, but {p}" for p in broker_front_problems(rec)]
     if rec.get("status") not in GRANTABLE:
         return []
     if broker_only is None:
@@ -857,11 +910,12 @@ def acts_via_problems(
         broker_only = table_broker_only()
     only = set(broker_only)
     acting = [t for t in rec.get("tools") or () if set(t.get("classes") or ()) & only]
-    if not acting:
+    if not acting and rec.get("acts_via") != "broker":
         return []
     via = rec.get("acts_via")
-    out: list[str] = []
-    if via is None:
+    out: list[str] = [f"{where}: acts_via: broker, but {p}" for p in broker_front_problems(rec)
+                      if via == "broker"]  # fmt: skip
+    if via is None and acting:
         out.append(
             f"{where}: tool(s) {', '.join(sorted(str(t.get('name')) for t in acting))} act "
             f"({', '.join(sorted(only))} classes) but the record does not say how (acts_via: "
