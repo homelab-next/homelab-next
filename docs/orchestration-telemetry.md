@@ -291,20 +291,23 @@ renamed over it), and is refused when it is the store itself under any spelling,
 The first line is a header naming the store it came from: the job sources it took, its
 retention and when it was exported. An import does not need it; it is only read to explain a job
 refused for its source (an export from a store with another `--source` is refused job by job,
-with both stores' sources in the reason). A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
+with both stores' sources in the reason). A header whose sources are not service ids, or whose
+retention or time is not one, is refused, so nothing of it is printed. A job line carries the `agent.job.finished` envelope as consumed (the store keeps it beside the
 record) and when its turns settled; a turn line carries the neutral turn record. Jobs come first,
 oldest finish first, then turns. `hnx orchestration import --db DB FILE|-` loads it through the
 same paths as the live writers: a job goes through the consumer, so the same id and body is a
 `duplicate` and a foreign, invalid, conflicting or non-finite record is refused as poison, and one
 older than retention is `expired`; a turn is refused unless it is exactly the neutral record and
 its tag joins a job already in the store (jobs come first, so the export's own jobs count), and
-the same record again is a `duplicate`. A turn start or a `turns_settled_at` more than a day
+the same record again is a `duplicate`, while the same `turn_id` with another body is refused:
+an import never rewrites a stored turn (its cost or its job). A turn start or a `turns_settled_at` more than a day
 ahead of the store's clock is refused too. A refused line is reported with its line number (exit 1)
 and does not stop the rest. That makes a store movable (another host, a rebuilt hub) and keeps
 history across a swap of the gateway or the controller, since neither line names a product. A
 job that a store before exports kept without its envelope exports with `event: null`, which an
 import refuses rather than inventing one; so is a turn written before the turn record's last
-rename. The export still writes them, counts them on stderr and exits 1, so a move of a pilot
+rename, and an envelope an earlier build kept that the consumer now refuses (an extension, a
+free subject). The export still writes them, counts them on stderr and exits 1, so a move of a pilot
 store does not lose them silently.
 
 ## What the recommendation engine will consume

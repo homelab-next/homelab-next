@@ -233,7 +233,7 @@ def test_an_import_into_a_store_of_other_sources_says_why_every_job_is_refused(s
     assert refused == [(2, "a header is the first line of an export")]
     bad = json.dumps(json.loads(lines[0]) | {"note": "x"})
     _, refused = import_lines(TelemetryStore(tmp_path / "q.db", clock=lambda: T0), [bad])
-    assert refused and "not a job or turn line" in refused[0][1]
+    assert refused and "not a header" in refused[0][1]
 
 
 def test_export_of_records_an_import_would_refuse_warns_with_a_count_and_exits_1(tmp_path, capsys):
@@ -259,7 +259,8 @@ def test_export_of_records_an_import_would_refuse_warns_with_a_count_and_exits_1
     err = capsys.readouterr().err
     assert "3 record(s)" in err
     assert (
-        "2 an import would refuse: 1 job(s) without an envelope, 1 turn(s) not a turn record" in err
+        "2 an import would refuse: 1 job(s) without an envelope the consumer takes, 1 turn(s) not a turn record"
+        in err
     )
     assert len(out.read_text().splitlines()) == 4  # header + 3 records, all still written
 
@@ -290,3 +291,52 @@ def test_an_import_refuses_future_times_and_turns_of_no_job(synced, tmp_path):
     ok = _line(kind="turn", turn=turn | {"turn_id": "t-near", "started_at": iso(near)})
     counts, refused = import_lines(other, [*lines[1:5], ok])
     assert refused == [] and counts[("turn", "processed")] == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"sources": ["svc:evil\x1b[31mRED\x1b[0m\nline2"]},
+        {"sources": ["not-a-service-id"]},
+        {"sources": []},
+        {"retention_days": "x"},
+        {"retention_days": {"a": 1}},
+        {"exported_at": "yesterday"},
+    ],
+)
+def test_a_header_that_is_not_a_store_s_header_is_refused_and_never_printed(
+    synced, tmp_path, change
+):
+    lines = list(export_lines(synced))
+    bad = json.dumps(json.loads(lines[0]) | change)
+    other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0, sources=["svc:other-ctl"])
+    _, refused = import_lines(other, [bad, *lines[1:]])
+    assert refused[0][0] == 1 and "not a header" in refused[0][1]
+    assert not any("\x1b" in why or "evil" in why for _, why in refused)
+
+
+def test_an_import_never_rewrites_a_stored_turn_with_another_body(synced, tmp_path):
+    """Jobs are refused when their id comes back with another body; so is a turn: a re-import
+    with a rewritten cost or another job's tag would move it, or inflate that job's cost."""
+    lines = list(export_lines(synced))
+    rec = json.loads(lines[-1])
+    stored = rec["turn"]
+    other_tag = next(t for t in synced.turns() if t != stored["gateway_tag"])
+    for change in ({"cost_usd": 999.0}, {"gateway_tag": other_tag}):
+        line = json.dumps(rec | {"turn": stored | change})
+        counts, refused = import_lines(synced, [line])
+        assert counts == {"refused": 1} and "already stored with another body" in refused[0][1]
+    assert synced.turn(stored["turn_id"]) == stored
+
+
+def test_export_counts_a_stored_envelope_the_closed_rules_now_refuse(tmp_path, capsys):
+    """A store a build before the closed envelope wrote can hold an extension or a free subject:
+    the export writes it, an import would refuse it, so it is counted (exit 1)."""
+    store = TelemetryStore(tmp_path / "t.db", clock=lambda: T0)
+    ev = examples()[0]
+    store.consume(body(ev))
+    with store._db() as db:
+        db.execute("UPDATE jobs SET event = ?", (json.dumps(ev | {"comment": "fake free text"}),))
+    out = tmp_path / "e.jsonl"
+    assert cli.main(["export", "--db", str(store.path), "--out", str(out)], clock=lambda: T0) == 1
+    assert "1 an import would refuse: 1 job(s)" in capsys.readouterr().err

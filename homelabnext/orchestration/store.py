@@ -231,23 +231,8 @@ class TelemetryStore:
     def consume(self, body: bytes | str | Mapping[str, Any]) -> Delivery:
         """Store one ``homelabnext.agent.job.finished`` event (see the module docstring); raises
         :class:`EventError` for a body that must never be retried (poison)."""
-        event = decode_event(body, types=[FINISHED_EVENT])
-        extra = sorted(set(event) - ENVELOPE_ATTRIBUTES)
-        if extra:
-            raise EventError(
-                "invalid event",
-                [f"envelope attribute {k!r:.40}: not one the envelope declares" for k in extra],
-            )
-        if event.get("subject", event["data"]["run_id"]) != event["data"]["run_id"]:
-            raise EventError("invalid event", ["subject: not the record's run id (data.run_id)"])
-        if event["source"] not in self.sources:
-            raise EventError(
-                "not the controller's job record",
-                [f"source {event['source']!r}: only {', '.join(self.sources)} reports jobs"],
-            )
+        event, finished, now = self.record(body)
         eid, digest, data = event["id"], body_digest(event), event["data"]
-        now = self.clock()
-        finished = _instants(data, self.retention_s, now + FUTURE_S)["finished_at"]
         if finished < now - self.retention_s:
             return Delivery(eid, "expired")
         with self._db() as db:
@@ -276,6 +261,28 @@ class TelemetryStore:
             )  # fmt: skip
             self._purge(db, now)
         return Delivery(eid, "processed")
+
+    def record(self, body: bytes | str | Mapping[str, Any]) -> tuple[dict[str, Any], float, float]:
+        """``(event, finished, now)`` for a job record that :meth:`consume` would take, judged
+        without the database (an export uses it to count what an import would refuse); raises
+        :class:`EventError` exactly as :meth:`consume` does for poison."""
+        event = decode_event(body, types=[FINISHED_EVENT])
+        extra = sorted(set(event) - ENVELOPE_ATTRIBUTES)
+        if extra:
+            raise EventError(
+                "invalid event",
+                [f"envelope attribute {k!r:.40}: not one the envelope declares" for k in extra],
+            )
+        if event.get("subject", event["data"]["run_id"]) != event["data"]["run_id"]:
+            raise EventError("invalid event", ["subject: not the record's run id (data.run_id)"])
+        if event["source"] not in self.sources:
+            raise EventError(
+                "not the controller's job record",
+                [f"source {event['source']!r}: only {', '.join(self.sources)} reports jobs"],
+            )
+        now = self.clock()
+        finished = _instants(event["data"], self.retention_s, now + FUTURE_S)["finished_at"]
+        return event, finished, now
 
     def add_turns(self, turns: Iterable[Mapping[str, Any]]) -> int:
         """Insert or rewrite gateway turns (keyed by ``turn_id``); returns how many were written.

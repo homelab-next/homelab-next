@@ -26,6 +26,7 @@ kind rather than guessing.  Evolve additively; an incompatible change is ``expor
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
@@ -35,7 +36,7 @@ from homelabnext.events.consumer import parse_json
 from homelabnext.events.envelope import EventError
 from homelabnext.status.model import iso, parse_iso
 
-from .store import FUTURE_S, TelemetryStore
+from .store import _SOURCE, FUTURE_S, TelemetryStore
 
 EXPORT_SCHEMA = "homelabnext.orchestration.export/1"
 #: what an import counts, per kind
@@ -45,8 +46,30 @@ STATUSES = ("processed", "duplicate", "expired")
 _HEADER = {"schema", "kind", "sources", "retention_days", "exported_at"}
 
 
-def _is_sources(v: Any) -> bool:
-    return isinstance(v, list) and all(isinstance(s, str) for s in v)
+def _is_header(rec: Mapping[str, Any]) -> bool:
+    """A store's header: its sources are service ids (so they are safe to print), its retention
+    a number of days, its export time a time."""
+    sources, days, at = rec.get("sources"), rec.get("retention_days"), rec.get("exported_at")
+    if not (isinstance(sources, list) and sources):
+        return False
+    if not all(isinstance(s, str) and _SOURCE.fullmatch(s) for s in sources):
+        return False
+    if isinstance(days, bool) or not isinstance(days, int | float) or not math.isfinite(days):
+        return False
+    try:
+        return isinstance(at, str) and parse_iso(at) is not None
+    except (ValueError, OverflowError):
+        return False
+
+
+def _refused(store: TelemetryStore, event: Mapping[str, Any]) -> bool:
+    """Whether the consumer would refuse ``event`` now (a store an earlier build wrote may hold
+    an envelope the closed rules refuse)."""
+    try:
+        store.record(event)
+    except EventError:
+        return True
+    return False
 
 
 class ImportRefused(ValueError):
@@ -73,7 +96,7 @@ def export_lines(store: TelemetryStore, refusable: Counter | None = None) -> Ite
                 "event": event,
                 "turns_settled_at": None if settled is None else iso(settled),
             }
-            bad = not isinstance(event, Mapping)
+            bad = not isinstance(event, Mapping) or _refused(store, event)
         else:
             rec = {"turn": item}
             bad = bool(turn_problems(item))
@@ -94,8 +117,10 @@ def import_line(store: TelemetryStore, line: str) -> tuple[str, str]:
     if rec.get("schema") != EXPORT_SCHEMA:
         raise ImportRefused(f"schema {str(rec.get('schema'))[:80]!r}: not {EXPORT_SCHEMA}")
     kind = rec.get("kind")
-    if kind == "header" and set(rec) == _HEADER and _is_sources(rec["sources"]):
-        return "header", "read"
+    if kind == "header":
+        if set(rec) == _HEADER and _is_header(rec):
+            return "header", "read"
+        raise ImportRefused("not a header of an export (sources, retention_days, exported_at)")
     if kind == "job" and set(rec) == {"schema", "kind", "event", "turns_settled_at"}:
         return "job", _import_job(store, rec["event"], rec["turns_settled_at"])
     if kind == "turn" and set(rec) == {"schema", "kind", "turn"}:
@@ -138,8 +163,18 @@ def _import_turn(store: TelemetryStore, turn: Any) -> str:
         raise ImportRefused(
             f"no job holds gateway tag {tag[:80]!r}: a turn is imported after its job"
         )
-    if isinstance(turn.get("turn_id"), str) and store.turn(turn["turn_id"]) == dict(turn):
-        return "duplicate"
+    probs = turn_problems(turn)
+    if probs:
+        tid = turn.get("turn_id")
+        raise ImportRefused(f"not a turn record ({tid!r:.80}): {'; '.join(probs)}")
+    stored = store.turn(turn["turn_id"]) if isinstance(turn.get("turn_id"), str) else None
+    if stored is not None:
+        if stored == dict(turn):
+            return "duplicate"
+        raise ImportRefused(
+            f"turn {turn['turn_id'][:80]!r} is already stored with another body: an import "
+            "never rewrites a turn (its cost or its job)"
+        )
     try:
         store.add_turns([turn])
     except ValueError as exc:

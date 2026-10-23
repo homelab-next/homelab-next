@@ -208,7 +208,8 @@ def _export(a, store: TelemetryStore) -> int:
     if refusable:
         print(
             f"hnx orchestration export: {refusable.total()} an import would refuse: "
-            f"{refusable['job']} job(s) without an envelope, {refusable['turn']} turn(s) not a "
+            f"{refusable['job']} job(s) without an envelope the consumer takes, "
+            f"{refusable['turn']} turn(s) not a "
             "turn record (a store written before exports; rebuild it from the outbox to move them)",
             file=sys.stderr,
         )
