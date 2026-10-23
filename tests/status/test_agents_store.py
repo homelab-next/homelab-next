@@ -203,6 +203,28 @@ def test_reads_purge_at_most_once_per_interval(tmp_path, clock, monkeypatch):
     assert len(calls) == 1
 
 
+def test_a_read_whose_purge_meets_a_writers_lock_still_answers(tmp_path, clock):
+    """The read-path purge is a write: with another writer holding the database, a page that
+    only reads waited out the busy timeout and then failed with "database is locked"."""
+    import sqlite3
+    import time
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock, retention_days=1)
+    store.add([summary(1)], via="t")
+    clock.advance(store.purge_interval_s)
+    writer = sqlite3.connect(tmp_path / "activity.db", isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")  # a writer holds the lock
+    try:
+        started = time.monotonic()
+        assert [e["event_id"] for e in store.events()] == [summary(1)["event_id"]]
+        assert time.monotonic() - started < 5, "the read waited on the writer's lock"
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()
+    clock.advance(2 * 86400)  # the lock is gone: the next read purges as before
+    assert store.events() == []
+
+
 def test_the_retention_timer_purges_an_idle_store(tmp_path, clock):
     import threading
 
