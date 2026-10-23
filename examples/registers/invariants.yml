@@ -275,6 +275,21 @@ criteria:
   remediation: >-
     Trust the internal CA instead of turning verification off; a client that skips verification
     accepts any certificate, so anyone on the path can read and change its traffic.
+- id: F-23
+  statement: The edge never trusts a client's identity headers.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/caddy_lint.py && echo edge strips identity headers
+  expected: >-
+    exit 0 (every forward_auth deletes its copy_headers, both spellings, first in its route;
+    every Caddy pin 2.11.2 or later)
+  expect_regex: edge strips identity headers
+  remediation: >-
+    Put forward_auth in a route that first runs request_header -X-Authentik-* and
+    -X_Authentik_* (or each copied header in both spellings), as the generated hnx_forward_auth
+    snippet does, and pin Caddy 2.11.2 or later. Otherwise a client sends its own username or
+    groups, the identity provider's answer omits them, and the service trusts the forgery.
 - id: F-17
   statement: Nothing at runtime points at the workstation.
   evidence: auto

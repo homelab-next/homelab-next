@@ -56,6 +56,29 @@
     },
     {
       "exit": {
+        "0": "clean",
+        "1": "an unprotected forward_auth or a Caddy pin below 2.11.2",
+        "2": "usage error or a missing dependency"
+      },
+      "id": "caddy-lint",
+      "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, registries) and the caddy generator",
+      "invariant": [
+        "F-23"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per unprotected forward_auth or vulnerable Caddy pin",
+      "owner": "maintainers",
+      "path": "tools/caddy_lint.py",
+      "purpose": "Fail when a Caddy config lets a client-sent identity header past forward_auth, or a Caddy pin is below 2.11.2.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:caddy-lint"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing or the version cannot be read"
       },

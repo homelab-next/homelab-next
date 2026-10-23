@@ -5,13 +5,14 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-46 scripts: 19 check, 11 job, 2 service, 14 tool.
+47 scripts: 20 check, 11 job, 2 service, 14 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
 | `aide-scan` | [`ansible/roles/aide/templates/scan.sh.j2`](../../ansible/roles/aide/templates/scan.sh.j2) | job | platform | Run one scheduled AIDE file integrity check and record its exit status for the role's health hook. | `timer:aide/scan`; `role:aide` | - | 0 the run finished (the scanner's own status is in last-run) |
 | `broker-example-service-restart` | [`examples/broker/handlers/service-restart.sh`](../../examples/broker/handlers/service-restart.sh) | tool | broker | Example approval-gated broker handler for service.restart; a stand-in that reports what it would restart. | `manual` | - | 0 reported |
 | `broker-example-service-status` | [`examples/broker/handlers/service-status.sh`](../../examples/broker/handlers/service-status.sh) | tool | broker | Example read-only broker handler for service.status; reports a stand-in state for the target. | `manual` | - | 0 reported |
+| `caddy-lint` | [`tools/caddy_lint.py`](../../tools/caddy_lint.py) | check | maintainers | Fail when a Caddy config lets a client-sent identity header past forward_auth, or a Caddy pin is below 2.11.2. | `ci:ci/schemas`; `make:caddy-lint` | F-23 | 0 clean; 1 an unprotected forward_auth or a Caddy pin below 2.11.2; 2 usage error or a missing dependency |
 | `check-changelog` | [`tools/check_changelog.py`](../../tools/check_changelog.py) | check | maintainers | Fail unless CHANGELOG.md keeps an Unreleased section and one for the current version. | `ci:ci/lint`; `make:changelog-check` | - | 0 both sections present; 1 a section is missing or the version cannot be read |
 | `check-spdx` | [`tools/check_spdx.py`](../../tools/check_spdx.py) | check | maintainers | Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines. | `ci:ci/lint`; `make:spdx`; `pre-commit:spdx-header` | Q-09 | 0 every file carries the header; 1 some file does not |
 | `clamav-scan` | [`ansible/roles/clamav/templates/scan.sh.j2`](../../ansible/roles/clamav/templates/scan.sh.j2) | job | platform | Run one scheduled ClamAV scan of the configured paths and record its exit status for the role's health hook. | `timer:clamav/scan`; `role:clamav` | - | 0 the run finished (the scanner's own status is in last-run) |

@@ -22,7 +22,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `edge-proxy`
 - Contract: none (`edge-proxy` is not one of the conformance capabilities)
-- Implementation: `caddy` 2.8.4
+- Implementation: `caddy` 2.11.7
 - Owner: platform-team
 - Tags: core, edge
 <!-- /hnx:gen -->
