@@ -224,7 +224,7 @@
         "broker",
         "direct"
       ],
-      "description": "How the server's acting tools (a tool in a broker_only class of homelabnext/agent/tool_classes.yml: exec, file-write, credential) reach the world (1.1, ADR-0030). broker: each one is a call to the lab's broker, which allowlists, approves and audits it (the broker's own MCP front); direct: the server acts itself, so a profile may hold it only by an exception: a direct_reason here, a current human approve review of the record, and the ceiling policy's direct_mcp entry for that profile. An active or deprecated server with an acting tool must declare it (hnx mcp catalog check); a profile may hold an acting server only when it says broker or is such an exception (hnx agent lint)."
+      "description": "How the server's acting tools (a tool in a broker_only class of homelabnext/agent/tool_classes.yml: exec, file-write, send, credential) reach the world (1.1, ADR-0030). broker: only the broker's own MCP front (hnx-broker, checked structurally: its origin, launch and exact tools), whose tools are calls to the broker, which allowlists, approves and audits them; direct: the server acts itself, so a profile may hold it only by an exception: a direct_reason here, a current human approve review of the record, and the ceiling policy's direct_mcp entry for that profile. An active or deprecated server with an acting tool must declare it (hnx mcp catalog check)."
     },
     "direct_reason": {
       "type": "string",

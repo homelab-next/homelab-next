@@ -53,19 +53,19 @@ implements: [cap:context]        # homelab-next contracts it implements (its con
 tools:
 - {name: read_note, classes: [read], approval: false}
 - {name: write_note, classes: [record-write], approval: false}
-# acts_via: broker | direct      # 1.1: required with an exec, file-write or credential tool
+# acts_via: broker | direct      # 1.1: required with an exec, file-write, send or credential tool
 # direct_reason: ...             # with acts_via: direct, and only then
 author: agent:example-builder
 reviews: [...]                   # check, audit, approve (homelabnext.reviews)
 ```
 
 The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-write`, `egress`,
-`credential`. A server's classes are the union of its tools'.
+`send`, `credential`. A server's classes are the union of its tools'.
 
 A server with an **acting** tool (a class in the table's `broker_only`: `exec`, `file-write`,
-`credential`) says how it acts (1.1, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md)):
-`acts_via: broker` when each acting tool is a broker call (`hnx-broker`), else `acts_via: direct`
-with a `direct_reason`. Agents act only through the broker, so a profile holds a direct server
+`send`, `credential`) says how it acts (1.1, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md)):
+`acts_via: broker` only on the broker's own front (`hnx-broker`, checked structurally against
+`homelabnext/broker/mcp_tools.py`), else `acts_via: direct` with a `direct_reason`. Agents act only through the broker, so a profile holds a direct server
 only as an exception: a current human approve review of the record plus the ceiling policy's
 `direct_mcp` entry for that profile ([agent profiles](agent.md), G-13). `approval: true` means the
 broker grants an approval; a client's confirmation prompt is not one, so only a broker server
@@ -234,8 +234,15 @@ entry N)`.
   names an active server; `implements` names a homelab-next capability contract
   (a conformance capability), so the graph ties the server to that contract's suite;
 - an `active` or `deprecated` record with an acting tool (`broker_only` class) declares
-  `acts_via` (`direct` with a `direct_reason`), and only an `acts_via: broker` record marks an
-  acting tool `approval: true` (ADR-0030);
+  `acts_via` (`direct` with a `direct_reason`), only the broker's own front (fixed in code: id,
+  origin, launch and its exact tools) may say `acts_via: broker`, and only it marks an acting tool
+  `approval: true` (ADR-0030);
+- classes are floored in code, not only declared: a record of known acting software (by a word
+  of its id, package, image or bins: ssh, shells, kubernetes, ansible, docker, filesystem, git, a
+  secret store, chat or mail senders) has a tool in that class, a tool whose name acts (run,
+  exec, apply, deploy, delete, send, publish...) carries an acting class, and a tool that writes
+  is `file-write`, or `record-write` only on a record that fronts a platform capability
+  (`capabilities` or `implements`: an API that validates what it writes);
 - with the review policy: an `active` record carries current agent check, agent audit and human
   approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest
   examples/mcp/<id>.yml` gives the digest to stamp);

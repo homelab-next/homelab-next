@@ -780,9 +780,10 @@ criteria:
     exit 0 (judged with the ceiling policy, so a reviewed direct exception its direct_mcp lists
     passes; a lab's register names its own policy): no agent profile or context manifest, reader
     or not, holds an acting grant (exec,
-    file-write, credential) other than through the broker: an acting MCP server says acts_via:
-    broker or is a reviewed direct exception the ceiling policy lists for that profile, no acting
-    capability but cap:broker, and an acting tier only with cap:broker
+    file-write, send, credential) other than through the broker: an acting MCP server is the
+    broker's own front or a reviewed direct exception the ceiling policy lists for that profile,
+    every capability is classed and none acts but cap:broker, and an acting tier only with
+    cap:broker
   expect_regex: 'actors-act-via-broker: [1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
   remediation: >-
     Grant hnx-broker and cap:broker and ask the broker for a named action instead of the acting

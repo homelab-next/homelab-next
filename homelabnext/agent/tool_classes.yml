@@ -19,10 +19,11 @@
 # Agents act only through the broker (checklist G-13, ADR-0030, docs/agent.md "Actors act only
 # through the broker"): ANY profile, reader or not, may hold a grant in a class listed under
 # broker_only only through the broker.  An MCP server with a broker_only tool is granted only when
-# its catalog record says `acts_via: broker` (its acting tools are broker calls), or `acts_via:
+# it is the broker's own front (`acts_via: broker`, checked structurally in code), or `acts_via:
 # direct` with a direct_reason, a current human approve review and the ceiling policy's
-# direct_mcp entry for that profile; a broker_only capability other than cap:broker is never
-# granted; and a tier whose classes are broker_only (execute, privileged) needs cap:broker.  A
+# direct_mcp entry for that profile; every capability below is classed (an unclassed one is
+# refused for every profile), and a broker_only one other than cap:broker is never granted; a
+# tier whose classes are broker_only (execute, privileged) needs cap:broker.  A
 # file passed with --classes may forbid more, never less (a table that leaves out a class listed
 # here is refused, as for reader_forbidden).
 

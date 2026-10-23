@@ -26,12 +26,14 @@ profile whose data may go to the cloud.
 
 Actors act only through the broker (checklist G-13, ADR-0030), and this applies to **every**
 profile, reader or not: :func:`broker_problems` refuses a granted MCP server with a tool in a
-``broker_only`` class (exec, file-write, credential) unless its catalog record says ``acts_via:
-broker`` (its acting tools are broker calls: the broker gates, approves and audits each one), or
-says ``acts_via: direct`` with a ``direct_reason``, carries a current human approve review and is
-listed for the profile in the ceiling policy's ``direct_mcp`` (an exception the policy owner
-makes per profile and server); a ``broker_only`` capability other than ``cap:broker``; and a tier
-whose classes are ``broker_only`` (execute, privileged) without ``cap:broker``.
+``broker_only`` class (exec, file-write, send, credential) unless it is the broker's own front
+(``acts_via: broker``, checked structurally by
+:func:`homelabnext.mcp.servers.broker_front_problems`, with current reviews), or says ``acts_via:
+direct`` with a ``direct_reason``, carries a current human approve review and is listed for the
+profile in the ceiling policy's ``direct_mcp`` (an exception the policy owner makes per profile
+and server); a capability the table does not class, or a ``broker_only`` one other than
+``cap:broker``; and a tier whose classes are ``broker_only`` (execute, privileged) without
+``cap:broker``.
 """
 
 from __future__ import annotations

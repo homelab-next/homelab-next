@@ -117,6 +117,8 @@ its tools *act*, through a running broker that authenticates the MCP process by 
 is the catalog record `examples/mcp/hnx-broker.yml` (each tool classed: `read`, `record-write`
 or `exec`; `broker_submit` and `broker_run` need approval) with `acts_via: broker`: its acting
 tools are broker calls, so it is the one acting server any profile may hold without an exception
+(the catalog check ties the record's tools to the ones `mcp_tools.py` registers, and no other
+record may claim `acts_via: broker`)
 (agents act only through the broker, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md),
 [[agent]] G-13). A profile grants it in `grants.mcp`, with `cap:broker` for an `execute` or
 `privileged` tier, and the reader rule refuses it to any profile that reads untrusted content. Split such an agent into a reader (with `hnx-catalog`) and an
