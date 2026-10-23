@@ -485,7 +485,20 @@ FAKE_TOOLS = {
     "unshare": 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n',
     "setpriv": 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n',
     "ip": "exit 0\n",
-    "go": 'cat "$FAKE_STREAM"; exit "$FAKE_EXIT"\n',
+    # go test -c writes a "test binary" that prints FAKE_PRIV_STREAM and exits FAKE_PRIV_EXIT;
+    # go test prints FAKE_STREAM and exits FAKE_EXIT; go tool test2json passes its input through
+    "go": """case "$1" in
+  test)
+    if [ "$2" = -c ]; then
+      while [ "$1" != -o ]; do shift; done
+      printf '#!/bin/sh\\ncat "$FAKE_PRIV_STREAM"; exit "$FAKE_PRIV_EXIT"\\n' > "$2"
+      chmod +x "$2"; exit 0
+    fi
+    cat "$FAKE_STREAM"; exit "$FAKE_EXIT";;
+  list) echo "$FAKE_MODULE/${2#./}";;
+  tool) cat;;
+esac
+""",
 }
 
 
@@ -494,8 +507,17 @@ def ci_step(name: str) -> str:
     return step["run"]
 
 
-def run_test_step(tmp_path, lines: list[str], go_exit: int) -> subprocess.CompletedProcess:
-    """The orchestrator job's test step, in a scratch checkout, with go replaced by a stream."""
+def run_test_step(
+    tmp_path,
+    lines: list[str],
+    go_exit: int,
+    *,
+    skips: str | None = None,
+    privileged: tuple[list[str], int] | None = None,
+) -> subprocess.CompletedProcess:
+    """The go job's root-only and test steps, in a scratch checkout, with go replaced by streams:
+    ``lines`` and ``go_exit`` for go test, ``privileged`` = (stream, exit status) for the root
+    run's test binary.  The test step's result, or the root-only step's when that fails."""
     bin_dir, mod, rt = tmp_path / "bin", tmp_path / "orchestrator", tmp_path / "runner-temp"
     for d in (bin_dir, mod, rt):
         d.mkdir()
@@ -505,13 +527,16 @@ def run_test_step(tmp_path, lines: list[str], go_exit: int) -> subprocess.Comple
     (tmp_path / "tools").symlink_to(ROOT / "tools")
     (mod / "go.mod").write_text(f"module {MOD}\n\ngo 1.24\n")
     (mod / "skips.yml").write_text(
-        QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
+        skips
+        or QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
             "internal/queue", "internal/ok"
         )
     )
-    (rt / "go-test-root.json").write_text("")  # the root-only step ran and found nothing to run
+    for pkg in ("hard", "race"):
+        (mod / "internal" / pkg).mkdir(parents=True)
     (tmp_path / "stream.json").write_text("\n".join(lines) + "\n")
-    (tmp_path / "step.sh").write_text(ci_step("tests (race"))
+    priv_lines, priv_exit = privileged or ([], 0)
+    (tmp_path / "priv.json").write_text("\n".join(priv_lines) + "\n")
     env = {
         "PATH": f"{bin_dir}:{Path(sys.executable).parent}:/usr/bin:/bin",
         "HOME": str(tmp_path),
@@ -520,15 +545,23 @@ def run_test_step(tmp_path, lines: list[str], go_exit: int) -> subprocess.Comple
         "HNX_TODAY": TODAY,
         "FAKE_STREAM": str(tmp_path / "stream.json"),
         "FAKE_EXIT": str(go_exit),
+        "FAKE_PRIV_STREAM": str(tmp_path / "priv.json"),
+        "FAKE_PRIV_EXIT": str(priv_exit),
+        "FAKE_MODULE": MOD,
     }
-    # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
-    return subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
-        cwd=mod,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    for name in ("root-only tests", "tests (race"):
+        (tmp_path / "step.sh").write_text(ci_step(name))
+        # GitHub runs a bash step as: bash --noprofile --norc -eo pipefail {0}
+        r = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(tmp_path / "step.sh")],
+            cwd=mod,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode:
+            break
+    return r
 
 
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
@@ -595,3 +628,98 @@ def test_every_step_runs_in_the_module_and_the_linters_wait_for_theirs():
     assert not any("hashFiles" in s.get("if", "") for s in steps)  # silent when the file is gone
     (lint,) = [s for s in steps if "staticcheck" in s.get("run", "")]
     assert lint["if"] == "matrix.module.tools"
+
+
+# the root run: test2json reads the binary's text, so its package verdict can be "pass" while the
+# binary failed (TestMain panics after m.Run printed PASS); a race after the tests fails the package
+HARD = "privileged:\n  - {test: TestHard, package: internal/hard, reason: needs root}\n"
+HARD_SKIP = package(
+    "internal/hard", "pass", events_of("internal/hard", "TestHard", "skip", "needs root")
+)
+RACE = "privileged:\n  - {test: TestOther, package: internal/race, reason: needs root}\n"
+RACE_SKIP = package(
+    "internal/race", "pass", events_of("internal/race", "TestOther", "skip", "needs root")
+)
+
+
+def _exits(tmp_path, text: str) -> str:
+    f = tmp_path / "root.exit"
+    f.write_text(text)
+    return str(f)
+
+
+def test_a_privileged_binary_that_exits_non_zero_fails_even_when_its_stream_passed(
+    tmp_path, capsys
+):
+    root = tmp_path / "root.json"
+    root.write_text("\n".join(fixture("privileged_testmain_panic.json")))
+    priv = ["--privileged", str(root)]
+    exits = _exits(tmp_path, f"{MOD}/internal/hard 2\n")
+    assert run(tmp_path, HARD_SKIP, *priv, "--privileged-exit", exits, policy_yaml=HARD) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL (privileged run) {MOD}/internal/hard: the test binary exited 2" in out
+    assert "panic: TestHard left root-owned state behind" in out
+    # exit 0 recorded for it: the same stream is the clean root run it looks like
+    exits = _exits(tmp_path, f"{MOD}/internal/hard 0\n")
+    assert run(tmp_path, HARD_SKIP, *priv, "--privileged-exit", exits, policy_yaml=HARD) == 0
+
+
+def test_a_privileged_package_that_failed_without_a_failing_test_fails(tmp_path, capsys):
+    root = tmp_path / "root.json"
+    root.write_text("\n".join(fixture("privileged_post_test_race.json")))
+    assert run(tmp_path, RACE_SKIP, "--privileged", str(root), policy_yaml=RACE) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL (privileged run) {MOD}/internal/race: package failed (WARNING: DATA RACE)" in out
+
+
+def test_every_privileged_binary_needs_a_zero_exit_status_and_events(tmp_path, capsys):
+    root = tmp_path / "root.json"
+    root.write_text("\n".join(fixture("privileged_testmain_panic.json")))
+    priv = ["--privileged", str(root)]
+    for text, why in [
+        ("", "no exit status recorded for its test binary"),
+        (f"{MOD}/internal/hard 0\n{MOD}/internal/gone 0\n", "internal/gone: exited 0 but wrote no"),
+        (f"{MOD}/internal/hard 1\n{MOD}/internal/hard 0\n", "the test binary exited 1"),  # sticky
+    ]:
+        exits = _exits(tmp_path, text)
+        assert run(tmp_path, HARD_SKIP, *priv, "--privileged-exit", exits, policy_yaml=HARD) == 1
+        assert why in capsys.readouterr().out
+    assert (
+        run(
+            tmp_path,
+            HARD_SKIP,
+            *priv,
+            "--privileged-exit",
+            _exits(tmp_path, "x y z\n"),
+            policy_yaml=HARD,
+        )
+        == 2
+    )
+    assert (
+        run(tmp_path, HARD_SKIP, "--privileged-exit", _exits(tmp_path, ""), policy_yaml=HARD) == 2
+    )
+    assert "--privileged-exit needs the root run" in capsys.readouterr().err
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("priv_stream", "priv_exit", "passes"),
+    [
+        (
+            "privileged_testmain_panic.json",
+            2,
+            False,
+        ),  # the binary's status, not test2json's verdict
+        ("privileged_testmain_panic.json", 0, True),
+        ("privileged_post_test_race.json", 1, False),
+    ],
+)
+def test_the_ci_steps_record_and_judge_each_privileged_binarys_exit_status(
+    tmp_path, priv_stream, priv_exit, passes
+):
+    skip = HARD_SKIP if "testmain" in priv_stream else RACE_SKIP
+    skips = HARD if "testmain" in priv_stream else RACE
+    r = run_test_step(tmp_path, skip, 0, skips=skips, privileged=(fixture(priv_stream), priv_exit))
+    assert (r.returncode == 0) is passes, r.stdout + r.stderr
+    exits = (tmp_path / "runner-temp" / "go-test-root.exit").read_text().split()
+    assert exits[1] == str(priv_exit)

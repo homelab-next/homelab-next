@@ -50,6 +50,9 @@ import path; it names exactly that package, never one whose path merely ends the
 the policy file, or ``--module``.  ``test`` names a top-level test or a ``Parent/sub`` subtest, and a parent covers its subtests.
 A ``privileged`` test's skip is accepted only when ``--privileged FILE`` (the ``go test -json``
 output of the root run) shows it passed, so a missing root run fails instead of passing silently.
+In the root run nothing is quarantined: a failing test or package fails, and with
+``--privileged-exit FILE`` (``<import path> <exit status>`` per test binary) every binary must
+have exited 0 and written events, since test2json judges that stream from its text alone.
 ``--list-privileged`` prints ``./<package> <-run regex>`` lines for the CI step that runs them.
 
 Usage::
@@ -276,6 +279,7 @@ def judge(
     today: date,
     max_days: int = 90,
     privileged_run: Run | None = None,
+    privileged_exit: dict[str, int] | None = None,
     forbid: Iterable[str] = (),
     go_exit: int | None = None,
 ) -> tuple[list[str], list[str]]:
@@ -332,12 +336,7 @@ def judge(
             problems.append(f"BUILD FAIL {pkg}: {out}")
         elif pkg in tolerated:  # a quarantined failure, and something else went wrong too
             open_ = sorted(t for (p, t), r in run.tests.items() if p == pkg and r.action == "")
-            extra = [x for x in res.output if x.strip() and not PACKAGE_SUMMARY.match(x.strip())]
-            why = (
-                f"no verdict for {', '.join(open_)}"
-                if open_
-                else " | ".join(x.strip() for x in extra[:3] if x.strip() != "=" * 18)
-            )
+            why = f"no verdict for {', '.join(open_)}" if open_ else _beyond_summary(res)
             problems.append(
                 f"FAIL {pkg}: package failed beyond its quarantined tests ({why})"[:300]
             )
@@ -382,14 +381,45 @@ def judge(
                 "skip_reasons ([tool.pytest.ini_options] in pyproject.toml)"
             )
     if privileged_run is not None:
-        for (pkg, test), res in sorted(privileged_run.tests.items()):
-            if res.action == "fail":
-                problems.append(f"FAIL (privileged run) {pkg} {test}")
-        problems += [f"(privileged run) {b}" for b in privileged_run.bad_lines]
-        problems += [f"(privileged run) {c}" for c in _cut_off(privileged_run)]
+        problems += _privileged_problems(privileged_run, privileged_exit)
     if go_exit is not None:
         problems += _exit_status_problems(run, go_exit, notes, problems)
     return problems, notes
+
+
+def _privileged_problems(run: Run, exits: dict[str, int] | None) -> list[str]:
+    """The root run: no quarantine applies there, so any failure is one.
+
+    Its stream comes from ``go tool test2json`` reading the test binary's output, which decides the
+    package verdict from the text alone: a ``TestMain`` that panics after ``m.Run`` printed
+    ``PASS`` still reads as a pass.  So each binary's own exit status (``--privileged-exit``) must
+    be 0 as well, and a package the stream says failed (a race reported after the tests, a crash)
+    fails even when no test did.
+    """
+    out = []
+    reported = set()
+    for (pkg, test), res in sorted(run.tests.items()):
+        if res.action == "fail":
+            out.append(f"FAIL (privileged run) {pkg} {test}")
+            reported.add(pkg)
+    for pkg, res in sorted(run.packages.items()):
+        if res.action == "fail" and pkg not in reported:
+            out.append(f"FAIL (privileged run) {pkg}: package failed ({_beyond_summary(res)})")
+    out += [f"(privileged run) {b}" for b in run.bad_lines]
+    out += [f"(privileged run) {c}" for c in _cut_off(run)]
+    if exits is None:
+        return out
+    for pkg, status in sorted(exits.items()):
+        if status != 0:
+            out.append(
+                f"FAIL (privileged run) {pkg}: the test binary exited {status} "
+                f"({_beyond_summary(run.packages[pkg]) if pkg in run.packages else 'no events'})"
+            )
+        elif pkg not in run.packages:
+            out.append(f"FAIL (privileged run) {pkg}: exited 0 but wrote no go test events")
+    for pkg in sorted(set(run.packages) - set(exits)):
+        out.append(f"FAIL (privileged run) {pkg}: no exit status recorded for its test binary")
+    return out
 
 
 def _cut_off(run: Run) -> list[str]:
@@ -441,6 +471,13 @@ def _explained_by_tests(run: Run, pkg: str, res: Result) -> bool:
     return all(PACKAGE_SUMMARY.match(line.strip()) for line in res.output if line.strip())
 
 
+def _beyond_summary(res: Result) -> str:
+    """The first lines a package wrote besides its PASS/FAIL summary: a panic, a race report."""
+    lines = (x.strip() for x in res.output)
+    extra = [x for x in lines if x and x != "=" * 18 and not PACKAGE_SUMMARY.match(x)]
+    return " | ".join(extra[:3])[:200] or "no output of its own"
+
+
 def _own_lines(res: Result) -> list[str]:
     """What a test wrote itself: its output minus test2json framing (subtests have their own)."""
     return [line for line in res.output if line.strip() and not FRAMING.match(line)]
@@ -463,6 +500,24 @@ def list_privileged(policy: Policy) -> list[str]:
         f"{'.' if pkg == '.' else './' + pkg} ^({'|'.join(sorted(ts))})$"
         for pkg, ts in sorted(by_pkg.items())
     ]
+
+
+def read_exits(path: str) -> dict[str, int]:
+    """``--privileged-exit``: one ``<import path> <exit status>`` line per test binary run."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PolicyError(f"cannot read {path}: {exc.strerror}") from exc
+    exits: dict[str, int] = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) != 2 or not re.fullmatch(r"\d+", fields[1]):
+            raise PolicyError(f"{path}:{n}: expected '<import path> <exit status>', got {line!r}")
+        status = int(fields[1])
+        exits[fields[0]] = exits.get(fields[0], 0) or status  # a non-zero status is sticky
+    return exits
 
 
 def _read(paths: list[str], run: Run | None = None) -> Run:
@@ -493,6 +548,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--module", help="module path (default: the go.mod beside --policy)")
     ap.add_argument("--pyproject", type=Path, default=REPO_ROOT / "pyproject.toml")
     ap.add_argument("--privileged", action="append", default=[], metavar="FILE")
+    ap.add_argument(
+        "--privileged-exit",
+        metavar="FILE",
+        help="'<import path> <status>' per root-run test binary; every status must be 0",
+    )
     ap.add_argument("--forbid", action="append", default=[], metavar="REGEX")
     ap.add_argument("--today", help="YYYY-MM-DD (default: env HNX_TODAY, else today)")
     ap.add_argument(
@@ -514,6 +574,9 @@ def main(argv: list[str] | None = None) -> int:
         forbid = [re.compile(f).pattern for f in args.forbid]
         run = _read(args.results)
         privileged = _read(args.privileged) if args.privileged else None
+        if args.privileged_exit and privileged is None:
+            raise PolicyError("--privileged-exit needs the root run's stream (--privileged)")
+        exits = read_exits(args.privileged_exit) if args.privileged_exit else None
         problems, notes = judge(
             run,
             policy,
@@ -521,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
             today=_today(args.today),
             max_days=max_days,
             privileged_run=privileged,
+            privileged_exit=exits,
             forbid=forbid,
             go_exit=args.go_exit,
         )

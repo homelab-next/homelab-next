@@ -277,7 +277,9 @@ jobs:
       - name: root-only tests (skips.yml privileged) under sudo, no network
         run: |
           out="$RUNNER_TEMP/go-test-root.json"
+          exits="$RUNNER_TEMP/go-test-root.exit"
           : > "$out"
+          : > "$exits"
           policy=()
           if [ -f skips.yml ]; then policy=(--policy skips.yml); fi
           python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" --list-privileged > "$RUNNER_TEMP/privileged.txt"
@@ -286,9 +288,11 @@ jobs:
             bin="$RUNNER_TEMP/privileged-$(echo "$pkg" | tr '/.' '__').test"
             go test -c -race -o "$bin" "$pkg"
             imp=$(go list "$pkg")
-            # the verdict is go_test_policy.py's (next step), not this exit code
-            (cd "$pkg" && sudo unshare --net -- sh -c 'ip link set lo up && exec "$@"' sh \
-              "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || true) \
+            # the verdict is go_test_policy.py's (next step): the stream, and this exit status,
+            # which test2json does not see (a TestMain panic after PASS still reads as a pass)
+            (cd "$pkg" && status=0 && { sudo unshare --net -- sh -c 'ip link set lo up && exec "$@"' \
+              sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
+              && echo "$imp $status" >> "$exits") \
               | go tool test2json -t -p "$imp" >> "$out"
           done < "$RUNNER_TEMP/privileged.txt"
       - name: tests (race, shuffled, no network) judged by go_test_policy.py
@@ -308,6 +312,7 @@ jobs:
           # fails), so a stream cut short cannot pass while go test failed
           python "$GITHUB_WORKSPACE/tools/go_test_policy.py" "${policy[@]}" \
             --privileged "$RUNNER_TEMP/go-test-root.json" \
+            --privileged-exit "$RUNNER_TEMP/go-test-root.exit" \
             --forbid 'python3 not available' --go-exit "$status" "$out"
 
   # One stable check name for branch protection, whatever the modules are called: the discovery
