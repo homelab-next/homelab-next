@@ -291,6 +291,11 @@ def parse_caddyfile(
         node.block = opens
         first = pending[0] if pending else None
         hidden = first is not None and not first.quoted and first.text.startswith("{")
+        if hidden and first.text == "{block}" and len(pending) == 1 and not opens:
+            top = cur
+            while top.parent is not None and top.parent is not root:
+                top = top.parent
+            hidden = not SNIPPET.match(top.name)  # an import's block lands here (Caddy 2.9+)
         if hidden and not (cur is root and opens):  # a site address may be {$SITE}
             problem(anchor.line, f"{first.text} in directive position hides a directive")
         cur.children.append(node)
@@ -345,6 +350,7 @@ class CaddyContext:
     tree: Path | None = None
     parsed: set[str] = field(default_factory=set)
     depth: int = 0
+    imported: set[str] = field(default_factory=set)  # files only ever read through an import
 
 
 def _external_snippet(name: str) -> Node | None:
@@ -361,13 +367,56 @@ def _external_snippet(name: str) -> Node | None:
     return root.children[0]
 
 
+#: an import argument in a snippet or imported file: ``{args[0]}`` (and the older ``{args.0}``)
+ARG_REF = re.compile(r"\{args(?:\[(?P<i>\d+)\]|\.(?P<j>\d+))\}")
+
+
+class _Refused(Exception):
+    """An import the lint will not expand: what it would add cannot be known."""
+
+
+def _substitute(nodes: list[Node], imp: Node) -> list[Node]:
+    """``nodes`` (copies of what ``imp`` imports) with its arguments substituted and ``{block}``
+    replaced by the import's own block, as Caddy does. An argument that is itself a placeholder,
+    an index past the arguments given, or an argument range is refused: the expanded tokens (a
+    header name, say) would not be literal."""
+    args = imp.tokens[2:]
+
+    def tok(t: str) -> str:
+        def one(m: re.Match[str]) -> str:
+            k = int(m.group("i") or m.group("j"))
+            if k >= len(args):
+                raise _Refused(f"{m.group(0)} is past the {len(args)} argument(s) given")
+            if "{" in args[k] or "}" in args[k]:
+                raise _Refused(f"argument {args[k]} is a placeholder, not a literal")
+            return args[k]
+
+        out = ARG_REF.sub(one, t)
+        if "{args" in out:
+            raise _Refused(f"{t} cannot be substituted (an argument range)")
+        return out
+
+    def walk(level: list[Node], parent: Node) -> list[Node]:
+        out: list[Node] = []
+        for n in level:
+            if n.tokens == ["{block}"] and not n.block:
+                out += [b.copy(parent) for b in imp.children]
+                continue
+            n.tokens = [tok(t) for t in n.tokens]
+            n.children = walk(n.children, n)
+            out.append(n)
+        return out
+
+    return walk(nodes, nodes[0].parent if nodes else imp)
+
+
 def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Finding]) -> None:
-    """Replace every ``import`` with what it imports, as Caddy does: a snippet defined in this
-    config, a generated snippet, or a file under the tree (no glob). Anything else is a
-    ``parse`` finding: the lint cannot see what it would add."""
-    snippets = {
-        m.group("name"): c for c in root.children if c.block and (m := SNIPPET.match(c.name))
-    }
+    """Replace every ``import`` with what it imports, as Caddy does: a snippet defined earlier
+    in this config (Caddy refuses one used before its definition), a generated snippet, or a
+    file under the tree (no glob), with its arguments substituted and its block put where the
+    snippet says ``{block}``. Anything else is a ``parse`` finding: the lint cannot see what it
+    would add."""
+    snippets: dict[str, Node] = {}
 
     def resolve(node: Node) -> list[Node] | None:
         target = node.tokens[1] if len(node.tokens) > 1 else ""
@@ -387,12 +436,13 @@ def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Fin
             return None
         if not f.is_file() or ctx.depth > 8:
             return None
-        sub = CaddyContext(ctx.tree, ctx.parsed, ctx.depth + 1)
+        sub = CaddyContext(ctx.tree, ctx.parsed, ctx.depth + 1, ctx.imported)
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None
         ctx.parsed.add(rel)
+        ctx.imported.add(rel)
         sub_root, sub_problems = parse_caddyfile(text, rel)
         problems.extend(sub_problems)
         _expand(sub_root, f.parent, sub, problems)
@@ -401,24 +451,34 @@ def _expand(root: Node, base: Path | None, ctx: CaddyContext, problems: list[Fin
     def expand(nodes: list[Node], parent: Node, depth: int) -> list[Node]:
         out: list[Node] = []
         for c in nodes:
-            if c.name != "import" or c.block:
+            if parent is root and _kind(c) == "snippet":
+                snippets[SNIPPET.match(c.name).group("name")] = c  # type: ignore[union-attr]
+                out.append(c)  # judged where it is imported, so not expanded here
+                continue
+            if c.name != "import":
                 c.children = expand(c.children, c, depth)
                 out.append(c)
                 continue
+            target = c.tokens[1] if len(c.tokens) > 1 else ""
             got = resolve(c) if depth < 16 else None
             if got is None:
-                target = c.tokens[1] if len(c.tokens) > 1 else ""
                 problems.append(
                     Finding(
                         c.path,
                         c.line,
                         "parse",
-                        f"import {target} cannot be followed (a glob, a placeholder, a cycle or no "
-                        "such file under the tree): the lint cannot see what it adds",
+                        f"import {target} cannot be followed (a glob, a placeholder, a cycle, a "
+                        "snippet not defined above it, or no such file under the tree): the lint "
+                        "cannot see what it adds",
                     )
                 )
                 continue
-            out += expand([g.copy(parent) for g in got], parent, depth + 1)
+            try:
+                copies = _substitute([g.copy(parent) for g in got], c)
+            except _Refused as exc:
+                problems.append(Finding(c.path, c.line, "parse", f"import {target}: {exc}"))
+                continue
+            out += expand(copies, parent, depth + 1)
         return out
 
     root.children = expand(root.children, root, 0)
@@ -539,6 +599,18 @@ def _resets(nodes: list[Node], copied: set[str]) -> list[Finding]:
             continue  # nothing named, or a delete
         label, (field, *values) = got[0], got[1]
         bare = field.lstrip("+?>")
+        if "{" in bare or "}" in bare:
+            out.append(
+                Finding(
+                    node.path,
+                    node.line,
+                    "parse",
+                    f"{label} {field}: a header name taken from a placeholder (an environment "
+                    "variable, an import argument, a request value) can name an identity header, "
+                    "and the lint cannot tell which: write the name literally",
+                )
+            )
+            continue
         hits = [bare] if identity(bare) else []
         hits += [
             m.group("name")

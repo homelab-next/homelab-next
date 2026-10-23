@@ -977,6 +977,101 @@ def test_a_snippet_that_imports_itself_terminates():
     assert found and {r for _, r, _ in found} == {"parse"}
 
 
+# ---------------------------------------------------------------- a header name the lint cannot read
+
+NAMED_LATER = """\
+(setid) {
+	request_header {args[0]} {http.request.header.X-Evil}
+}
+app.lab.example {
+	request_header -*authentik*
+	route {
+		request_header -*authentik*
+		forward_auth idp:9443 {
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+		%s
+	}
+	reverse_proxy app:8080%s
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("route", "proxy", "expected"),
+    [
+        # review SF1: each passed the lint, adapted on 2.11.7 and, live, delivered
+        # X-Authentik-Groups: forged-evil with the IdP answering alice/users (a finding in an
+        # expanded snippet is reported on the snippet's own line)
+        ("import setid X-Authentik-Groups", "", ("reset", 2, "request_header names the identity header X-Authentik-Groups")),
+        ("request_header {vars.a}{vars.b} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {vars.a}{vars.b}: a header name taken from a placeholder")),
+        ("request_header {$IDH} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {$IDH}: a header name")),
+        ("request_header {http.request.header.X-Name} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {http.request.header.X-Name}: a header")),
+        ("", " {\n\t\theader_up {http.request.header.X-Name} {http.request.header.X-Evil}\n\t}", ("parse", 14, "header_up {http.request.header.X-Name}: a header")),
+        ("request_header @m +{header.X-Name} x", "", ("parse", 11, "request_header +{header.X-Name}: a header")),
+        # an argument the lint cannot substitute literally is refused at the import
+        ("import setid {$IDH}", "", ("parse", 11, "import setid: argument {$IDH} is a placeholder, not a literal")),
+        ("import setid", "", ("parse", 11, "import setid: {args[0]} is past the 0 argument(s) given")),
+    ],
+)  # fmt: skip
+def test_a_header_name_that_is_not_literal_fails_closed(route, proxy, expected):
+    found = lint.lint_caddy(NAMED_LATER % (route, proxy))
+    assert [(f.rule, f.line) for f in found] == [expected[:2]]
+    assert found[0].detail.startswith(expected[2]), found[0].detail
+
+
+def test_import_arguments_are_substituted():
+    text = NAMED_LATER % ("import setid X-Request-Id", "")
+    assert lint.lint_caddy(text) == []
+    ranged = text.replace("{args[0]}", "{args[:]}")
+    assert [f.detail for f in lint.lint_caddy(ranged)] == [
+        "import setid: {args[:]} cannot be substituted (an argument range)"
+    ]
+
+
+BLOCK = """\
+(proxied) {
+	reverse_proxy {args[0]} {
+		{block}
+	}
+}
+app.lab.example {
+	request_header -*authentik*
+	route {
+		request_header -*authentik*
+		forward_auth idp:9443 {
+			copy_headers X-Authentik-Username X-Authentik-Groups
+		}
+	}
+	import proxied app:8080 {
+		%s
+	}
+}
+"""
+
+
+def test_an_import_block_lands_where_the_snippet_says_block():
+    """Review N4: {block} (Caddy 2.9+) was a parse finding; the import's block is expanded into
+    it, and what it carries is judged."""
+    assert lint.lint_caddy(BLOCK % "header_up Host {upstream_hostport}") == []
+    found = lint.lint_caddy(BLOCK % "header_up X-Authentik-Groups admins")
+    assert [(f.line, f.rule) for f in found] == [(15, "reset")]
+    # outside a snippet it is still a directive the lint cannot see
+    assert [f.rule for f in lint.lint_caddy("app.lab.example {\n\t{block}\n}\n")] == ["parse"]
+
+
+def test_a_snippet_is_available_only_after_its_definition():
+    """Review N6: Caddy refuses a snippet imported above its definition ("File to import not
+    found"); the lint expanded it anyway."""
+    text = (
+        "app.lab.example {\n\timport auth\n\treverse_proxy app:8080\n}\n"
+        "(auth) {\n\trequest_header -*authentik*\n}\n"
+    )
+    assert [(f.line, f.rule) for f in lint.lint_caddy(text)] == [(2, "parse")]
+    moved = text.split("(auth)")[1]
+    assert lint.lint_caddy("(auth)" + moved + text.split("(auth)")[0]) == []
+
+
 # ---------------------------------------------------------------- discovery and coverage
 
 BARE = (
