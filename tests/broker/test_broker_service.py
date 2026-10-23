@@ -395,12 +395,14 @@ def test_approval_is_single_use_across_service_instances(tmp_path):
     assert (first["reason"], second["reason"]) == ("approved", "approval-replayed")
 
 
-def test_cancel_settles_a_pending_approval(tmp_path):
+def test_a_cancel_by_its_owner_closes_the_page_quietly(tmp_path):
+    """A settled message per cancel let a submit/cancel loop send two messages a cycle."""
     sent = []
     svc = _svc(tmp_path, notifier=_notifier(sent))
     rid = _restart(svc)
     svc.cancel(AGENT, rid)
-    assert [m.title for m in sent] == ["Broker approval needed", "Broker approval settled"]
+    assert [m.title for m in sent] == ["Broker approval needed"]
+    assert svc.notifier.state_of(f"broker-approval-{rid}") == "ok", "the page is closed"
 
 
 def _notifier(sent):
@@ -588,6 +590,9 @@ def test_a_request_filed_after_a_cancelled_decoy_still_pages(tmp_path):
     svc.cancel(AGENT, decoy)
     clock.advance(5)
     real = _restart(svc)
+    assert len(sent) == 1, "the floor between an actor's pages holds"
+    clock.advance(300)
+    svc.pending()  # what the hub lists every few seconds: the due page goes out
     assert [m.title for m in sent][-1] == "Broker approval needed" and real in sent[-1].body
 
 
@@ -598,7 +603,74 @@ def test_a_retry_after_a_denial_pages(tmp_path):
     svc.deny(_restart(svc), APPROVER)
     clock.advance(30)
     retry = _restart(svc)
+    assert sent[-1].title == "Broker approval settled"
+    clock.advance(300)
+    assert svc.poll_pages() == 1
     assert sent[-1].title == "Broker approval needed" and retry in sent[-1].body
+
+
+def test_a_submit_cancel_loop_pages_at_most_once_per_floor(tmp_path):
+    """With only the open-page gate, 200 submit/cancel cycles sent 400 messages in five seconds,
+    every operation answered ok, so neither the refusal limit nor the pending quota tripped."""
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    for _ in range(200):
+        svc.cancel(AGENT, _restart(svc))
+    assert len(sent) == 1
+    clock.advance(300)
+    svc.poll_pages()
+    assert len(sent) == 1, "nothing waits: nothing is due"
+
+
+def test_one_actor_cannot_spend_another_actors_notifier_budget(tmp_path):
+    from homelabnext.notify.core import RateLimit
+
+    sent = []
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["grants"][1]["actions"].append("service.restart")
+    manifest["grants"][1]["max_tier"] = "execute"
+    manifest["quotas"] = {"notify_window_s": 0}  # no floor: only the budget stands in the way
+    notifier = _notifier(sent)
+    notifier.rate_limit = RateLimit(max_sends=20, window_s=3600)
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=Clock(), notifier=notifier,
+    )  # fmt: skip
+    for _ in range(30):
+        svc.cancel(AGENT, _restart(svc))
+    assert len(sent) == 20, "the looping agent spent its own budget"
+    other = svc.submit("profile:reader", "service.restart", {"grace_s": 1}, target="svc:queue")
+    assert other in sent[-1].body, "another agent is still paged"
+
+
+def test_an_approval_that_expires_unused_pages_again(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    rid = _restart(svc)
+    clock.advance(400)
+    svc.approve(rid, APPROVER)
+    assert [m.title for m in sent] == ["Broker approval needed", "Broker approval settled"]
+    clock.advance(902)  # past approval_ttl_s: the request waits for an approver again
+    svc.poll_pages()
+    assert sent[-1].title == "Broker approval needed" and rid in sent[-1].body
+
+
+def test_a_deferred_page_is_sent_by_its_timer(tmp_path):
+    import time
+
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent), notify_window_s=1)
+    svc.cancel(AGENT, _restart(svc))
+    waiting = _restart(svc)
+    clock.advance(2)  # the broker's clock passes the floor; the timer fires in real time
+    for _ in range(100):
+        if len(sent) == 2:
+            break
+        time.sleep(0.05)
+    assert len(sent) == 2 and waiting in sent[1].body
 
 
 def test_a_failed_page_does_not_silence_the_actors_next_requests(tmp_path):

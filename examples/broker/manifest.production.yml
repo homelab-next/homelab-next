@@ -21,8 +21,8 @@ callers:
 approval_relays:
   - {user: hnx-hub, issuer: sso}
 # accepted work is bounded per agent: at most 10 requests pending at once, and one open approval
-# page per agent however many it files (lanes: max_files / max_total_bytes per directory)
-quotas: {pending_per_actor: 10}
+# page per agent, 10 minutes apart at least, however many it files (lanes: quotas per directory)
+quotas: {pending_per_actor: 10, notify_window_s: 600}
 handler_docs:
   - handlers/service-status.handler.json
   - handlers/service-restart.handler.json

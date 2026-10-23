@@ -166,15 +166,19 @@ hnx broker validate examples/broker/manifest.yml
    Accepted work is bounded per agent (manifest 1.5 `quotas`): an actor may have at most
    `pending_per_actor` requests pending at once (default 20; a `submit` past it is refused
    `too-many-pending`, audited, and counts as a refusal for the rate limit), and its approval
-   requests page the approver only while the actor has no open page. A page is open once the
-   notifier has sent it (a failed send opens nothing) and until its request settles; it names
-   every request of the actor's still awaiting approval. Every request still emits its event and
-   appears on the Approvals page. When the paged request settles, the settling says how many
-   still wait and the oldest of them is paged at once, at warn level, naming them all, so no
-   waiting request is left without a page: not one filed after a cancelled decoy, not a retry
-   after a denial, not one filed after a page whose send failed. A looping agent can therefore
-   neither flood the approver's phone nor bury one malicious request among hundreds, nor make
-   one page-silent. (`quotas.notify_window_s`, manifest 1.5, is accepted and no longer used.)
+   requests page the approver only while the actor has no open page, and at most once per
+   `notify_window_s` (default 300 s; 0: no floor). A page is open once the notifier has sent it
+   (a failed send opens nothing) and until its request settles; it is for the actor's oldest
+   request awaiting approval and names every one of them, so a request filed while a page is
+   open is named on the next page (it is on the Approvals page and in its event at once). A page
+   the floor holds back is recorded due and sent when the floor passes, by a timer and on every
+   submit, settle and pending listing. An approval or a denial closes the page with a settled
+   message saying how many still wait, and the oldest of those is paged next; a cancel by the
+   owner closes it quietly. An approval that expires unused puts its request back to waiting and
+   pages it again. Every message about an agent draws on that agent's own notifier budget, so
+   one agent cannot spend the pages of every other. A looping agent can therefore neither flood
+   the approver's phone (a submit/cancel loop pages once per floor) nor bury one malicious
+   request among hundreds, nor make one page-silent.
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
@@ -256,7 +260,7 @@ callers:                                  # an agent's system user -> the one pr
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
 refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
-quotas: {pending_per_actor: 20}           # requests one agent may have pending (the default)
+quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
 ```
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);

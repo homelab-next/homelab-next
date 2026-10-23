@@ -26,8 +26,8 @@ Manifest 1.5 adds `quotas` (`pending_per_actor`, default 20, and `notify_window_
 (default 4096 files and 64 MiB per lane directory).
 Manifest 1.6 adds a shared lane's per-actor share (`max_files_per_actor`, `max_bytes_per_actor`;
 default an eighth of the lane's quotas) and a lane's `max_writes_per_hour` (default 120 on a shared
-lane, none on a per-actor lane; refused `lane-rate-exceeded`); `notify_window_s` is accepted and
-no longer used (an actor's approval requests page while it has no open page), and `max_files` may be
+lane, none on a per-actor lane; refused `lane-rate-exceeded`); an actor's approval
+requests page only while it has no open page, `notify_window_s` apart at least, and `max_files` may be
 `null`: no file cap, for an append-only lane bounded by its bytes and its write rate.
 Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
