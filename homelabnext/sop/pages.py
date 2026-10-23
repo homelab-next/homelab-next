@@ -164,7 +164,7 @@ def _gen_blocks(reg: Registry, s: Service, catalog: Any = None) -> dict[str, str
             + f"- Endpoint override variable: `{s.endpoint_env_var}`\n"
         ),
         "source": (
-            f"- Registry row: `services.{s.name}`\n"
+            f"- Registry row (Veritas, ADR-0028): `services.{s.name}`\n"
             f"- Backup: {('job `' + s.backup_job + '`') if s.backup_job else 'not in a backup job'}\n"
         ),
     }

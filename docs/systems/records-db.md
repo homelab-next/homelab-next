@@ -101,7 +101,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.records-db`
+- Registry row (Veritas, ADR-0028): `services.records-db`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 
