@@ -25,8 +25,10 @@ setting) says why in a ``No-regression-test: <reason>`` trailer; the gate lists 
 
 ``--prove`` also checks the "fails without the fix" half: for each fix, the commit's test files are
 put on top of its parent in a temporary worktree and the tests it added or changed are run there
-(a Python test function or ``Test*`` method whose source, decorators included, differs; the
-whole module when only helpers changed; Go likewise, below).  At least one of them must FAIL
+(a Python test function or ``Test*`` method whose source, decorators included, differs, and
+every test that reaches a module-level name the commit changed: ``@parametrize("x", CASES)``
+when only ``CASES`` gained a case, a changed fixture or helper; the whole module only when a
+change cannot be put down to a name; Go likewise, below).  At least one of them must FAIL
 there.  A regression test that passes without the fix proves nothing and is
 reported; so is every case that cannot prove it, never counted as a pass.
 
@@ -356,40 +358,172 @@ def go_outcome(output: str, returncode: int, added: Added) -> Outcome:
     return out
 
 
-def _py_tests(text: str) -> dict[str, str]:
-    """The test functions of a Python test module (top level and in ``Test*`` classes) -> their
-    source, decorators included (a new parametrize case is a change)."""
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return {}
-    lines = text.splitlines()
+def _src(lines: list[str], node: ast.AST) -> str:
+    """A node's source, decorators included (a new parametrize case is a change)."""
+    deco = getattr(node, "decorator_list", [])
+    first = min([d.lineno for d in deco] + [node.lineno])
+    return "\n".join(lines[first - 1 : node.end_lineno])
 
-    def source(node: ast.AST) -> str:
-        first = min([d.lineno for d in node.decorator_list] + [node.lineno])
-        return "\n".join(lines[first - 1 : node.end_lineno])
 
-    out: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
-            "test"
-        ):
-            out[node.name] = source(node)
-        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            for sub in node.body:
-                if isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef) and sub.name.startswith(
-                    "test"
-                ):
-                    out[f"{node.name}::{sub.name}"] = source(sub)
+def _refs(*nodes: ast.AST) -> set[str]:
+    """The names a node can reach: every name it reads, its parameters (fixtures) and every
+    identifier-shaped string (``usefixtures("db")``, ``getfixturevalue("db")``)."""
+    out: set[str] = set()
+    for node in nodes:
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name):
+                out.add(n.id)
+            elif isinstance(n, ast.arg):
+                out.add(n.arg)
+            elif (
+                isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.isidentifier()
+            ):
+                out.add(n.value)
     return out
 
 
+def _is_test(node: ast.AST) -> bool:
+    return isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test")
+
+
+def _target_names(t: ast.AST) -> set[str] | None:
+    if isinstance(t, ast.Name):
+        return {t.id}
+    if isinstance(t, ast.Tuple | ast.List):
+        names: set[str] = set()
+        for e in t.elts:
+            sub = _target_names(e.value if isinstance(e, ast.Starred) else e)
+            if sub is None:
+                return None
+            names |= sub
+        return names
+    if isinstance(t, ast.Subscript | ast.Attribute):  # CASES["x"] = ..., NS.attr = ...
+        return _target_names(t.value)
+    return None
+
+
+def _bound(stmt: ast.stmt) -> set[str] | None:
+    """The module-level names a statement binds; None when it binds none it can be blamed on."""
+    if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        return {stmt.name}
+    if isinstance(stmt, ast.Assign):
+        names: set[str] = set()
+        for t in stmt.targets:
+            sub = _target_names(t)
+            if sub is None:
+                return None
+            names |= sub
+        return names
+    if isinstance(stmt, ast.AnnAssign | ast.AugAssign):
+        return _target_names(stmt.target)
+    if isinstance(stmt, ast.Import | ast.ImportFrom):
+        if any(a.name == "*" for a in stmt.names):
+            return None
+        return {(a.asname or a.name).split(".")[0] for a in stmt.names}
+    return None
+
+
+# a change to one of these reaches every test in the module without any test naming it
+PY_MODULE_WIDE = frozenset(
+    {"pytestmark", "setup_module", "teardown_module", "setup_function", "teardown_function",
+     "setUpModule", "tearDownModule"}
+)  # fmt: skip
+
+
+@dataclass
+class _PyModule:
+    tests: dict[str, str] = field(default_factory=dict)  # node id -> source
+    refs: dict[str, set[str]] = field(default_factory=dict)  # node id -> names it reaches
+    classes: dict[str, str] = field(default_factory=dict)  # Test class -> its non-test source
+    # module-level name -> the sources of the statements binding it, and the names they reach
+    bindings: dict[str, list[str]] = field(default_factory=dict)
+    deps: dict[str, set[str]] = field(default_factory=dict)
+    module_wide: set[str] = field(default_factory=set)  # autouse fixtures, pytest_* hooks
+    unattributed: list[str] = field(default_factory=list)  # statements that bind no name
+    ok: bool = True
+
+
+def _py_module(text: str) -> _PyModule:
+    """A Python test module split into its tests (top level and in ``Test*`` classes) and the
+    module-level code they can reach."""
+    out = _PyModule()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        out.ok = False
+        return out
+    lines = text.splitlines()
+    for node in tree.body:
+        if _is_test(node):
+            out.tests[node.name] = _src(lines, node)
+            out.refs[node.name] = _refs(node)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            rest = [sub for sub in node.body if not _is_test(sub)]
+            # the class's own decorators, bases and non-test body reach each of its tests
+            class_refs = _refs(*node.decorator_list, *node.bases, *rest)
+            out.classes[node.name] = "\n".join(
+                [ast.dump(d) for d in node.decorator_list + node.bases]
+                + [_src(lines, sub) for sub in rest]
+            )
+            for sub in node.body:
+                if _is_test(sub):
+                    nid = f"{node.name}::{sub.name}"
+                    out.tests[nid] = _src(lines, sub)
+                    out.refs[nid] = _refs(sub) | class_refs
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # a docstring or a bare constant does nothing
+        else:
+            names = _bound(node)
+            if names is None:
+                out.unattributed.append(_src(lines, node))
+                continue
+            src = _src(lines, node)
+            wide = any(
+                n in PY_MODULE_WIDE or n.startswith("pytest_") for n in names
+            ) or "autouse" in "".join(_src(lines, d) for d in getattr(node, "decorator_list", []))
+            for n in names:
+                out.bindings.setdefault(n, []).append(src)
+                out.deps.setdefault(n, set()).update(_refs(node))
+                if wide:
+                    out.module_wide.add(n)
+    return out
+
+
+def _py_tests(text: str) -> dict[str, str]:
+    """The test functions of a Python test module (top level and in ``Test*`` classes) -> their
+    source, decorators included (a new parametrize case is a change)."""
+    return _py_module(text).tests
+
+
 def changed_py_tests(c: Commit, path: str, cwd: Path = REPO_ROOT) -> list[str]:
-    """The pytest node ids of the tests in ``path`` that ``c`` added or changed; empty when it
-    changed none of them (helpers only: the whole module runs)."""
-    new = _py_tests(_show(cwd, c.sha, path) or "")
-    old = _py_tests(_show(cwd, f"{c.sha}^", path) or "")
-    return [f"{path}::{name}" for name, body in new.items() if old.get(name) != body]
+    """The pytest node ids of the tests in ``path`` that ``c`` added or changed, and of every test
+    that reaches a module-level name the commit changed (``@parametrize("x", CASES)`` when only
+    ``CASES`` gained a case, a test taking a changed fixture, a test calling a changed helper,
+    through other module-level names too).  Empty, so the module runs whole, when it changed
+    module-level code that names nothing (an ``if`` block, a bare call), something every test
+    reaches unnamed (``pytestmark``, an autouse fixture, a ``pytest_*`` hook), or when a version
+    does not parse."""
+    new = _py_module(_show(cwd, c.sha, path) or "")
+    old = _py_module(_show(cwd, f"{c.sha}^", path) or "")
+    if not new.ok or not old.ok or new.unattributed != old.unattributed:
+        return []
+    names = set(new.bindings) | set(old.bindings)
+    dirty = {n for n in names if new.bindings.get(n) != old.bindings.get(n)}
+    if dirty & (new.module_wide | old.module_wide):
+        return []
+    grew = True
+    while grew:  # a module-level name that reaches a changed one is changed with it
+        more = {n for n, refs in new.deps.items() if n not in dirty and refs & dirty}
+        grew = bool(more)
+        dirty |= more
+    changed_classes = {k for k, v in new.classes.items() if old.classes.get(k) != v}
+    return [
+        f"{path}::{nid}"
+        for nid, body in new.tests.items()
+        if old.tests.get(nid) != body
+        or new.refs[nid] & dirty
+        or ("::" in nid and nid.split("::")[0] in changed_classes)
+    ]
 
 
 def _go_func_end(text: str, start: int) -> int:
@@ -561,8 +695,9 @@ def prove(
         try:
             _git("checkout", c.sha, "--", *tests, cwd=wt)
             if modules:
-                # like Go: the test functions the commit added or changed (the module whole when
-                # it changed only helpers), so the parent run is as narrow as the claim
+                # like Go: the test functions the commit added or changed and the tests that
+                # reach a module-level name it changed (the module whole when a change names
+                # nothing), so the parent run is as narrow as the claim
                 targets = [t for m in modules for t in (changed_py_tests(c, m, cwd) or [m])]
                 run = _pytest(python, wt, report, targets)
                 if run.returncode == 4 and targets != modules:

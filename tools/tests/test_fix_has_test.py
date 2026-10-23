@@ -237,6 +237,91 @@ def test_only_the_python_tests_the_fix_adds_or_changes_run_on_the_parent(tmp_pat
     assert problem and "passes WITHOUT the fix" in problem
 
 
+CASES_MODULE = (
+    PY_PATH
+    + "import pytest\nfrom mod import clamp\n\n{pre}CASES = {cases}\n\n\n"
+    + "@pytest.mark.parametrize('x, y', CASES)\ndef test_c(x, y):\n    assert clamp(x) == y\n\n\n"
+    + "def test_other():\n    assert {other}\n"
+)
+
+
+def test_a_case_added_to_a_module_level_list_is_run_with_the_tests_the_fix_changes(tmp_path):
+    """The fix adds a case to CASES, which a parametrize decorator reads, and also edits another
+    test in the module: the parametrized test runs on the parent too, so the new case proves the
+    fix (it used to run only the edited neighbour, which passes there, and report a correct fix as
+    "passes WITHOUT the fix")."""
+    r, commit = _repo(tmp_path)
+    commit(
+        "feat: clamp",
+        **{
+            "mod.py": "def clamp(x):\n    return x\n",
+            "tests/test_mod.py": CASES_MODULE.format(pre="", cases="[(1, 1)]", other="True"),
+        },
+    )
+    sha = commit(
+        "fix: clamp",
+        **{
+            "mod.py": "def clamp(x):\n    return max(0, x)\n",
+            "tests/test_mod.py": CASES_MODULE.format(
+                pre="", cases="[(1, 1), (-1, 0)]", other="True is True"
+            ),
+        },
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.changed_py_tests(c, "tests/test_mod.py", cwd=r) == [
+        "tests/test_mod.py::test_c",
+        "tests/test_mod.py::test_other",
+    ]
+    assert gate.prove(c, cwd=r) is None
+
+
+@pytest.mark.parametrize(
+    "before, after, want",
+    [
+        # a name the list is built from: the change reaches the test through CASES
+        ("BASE = [(1, 1)]\n", "BASE = [(1, 1), (2, 2)]\n", ["test_c"]),
+        # every test reaches these without naming them: the module runs whole
+        ("pytestmark = []\n", "pytestmark = [pytest.mark.slow]\n", None),
+        (
+            "@pytest.fixture(autouse=True)\ndef env():\n    yield\n\n\n",
+            "@pytest.fixture(autouse=True)\ndef env():\n    yield 1\n\n\n",
+            None,
+        ),
+        ("if True:\n    A = 1\n", "if True:\n    A = 2\n", None),
+    ],
+    ids=["through another name", "pytestmark", "autouse", "unnamed"],
+)
+def test_module_level_changes_select_the_tests_that_reach_them(tmp_path, before, after, want):
+    r, commit = _repo(tmp_path)
+    cases = "BASE + [(3, 3)]" if "BASE" in before else "[(1, 1)]"
+    commit("feat", **{"tests/test_mod.py": CASES_MODULE.format(pre=before, cases=cases, other="1")})
+    sha = commit(
+        "fix", **{"tests/test_mod.py": CASES_MODULE.format(pre=after, cases=cases, other="1")}
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    got = gate.changed_py_tests(c, "tests/test_mod.py", cwd=r)
+    # an empty selection runs the module whole
+    assert got == [f"tests/test_mod.py::{t}" for t in want or []]
+
+
+def test_a_changed_fixture_selects_the_tests_that_take_it(tmp_path):
+    r, commit = _repo(tmp_path)
+    body = (
+        "import pytest\n\n\n"
+        "@pytest.fixture\ndef cap():\n    return {v}\n\n\n"
+        "def test_cap(cap):\n    assert cap\n\n\n"
+        "@pytest.mark.usefixtures('cap')\nclass TestUses:\n    def test_u(self):\n        pass\n\n\n"
+        "def test_free():\n    pass\n"
+    )
+    commit("feat", **{"tests/test_mod.py": body.format(v=1)})
+    sha = commit("fix", **{"tests/test_mod.py": body.format(v=2)})
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.changed_py_tests(c, "tests/test_mod.py", cwd=r) == [
+        "tests/test_mod.py::test_cap",
+        "tests/test_mod.py::TestUses::test_u",
+    ]
+
+
 def test_a_real_failure_proves_the_fix(tmp_path):
     test = "def test_clamp():\n    from mod import clamp\n    assert clamp(12) == 10\n"
     r, c = _py_fix(tmp_path, CLAMP.format(cap=10), test)
