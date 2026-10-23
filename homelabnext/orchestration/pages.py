@@ -72,11 +72,16 @@ def _size(n: Any) -> str:
     return ""  # pragma: no cover
 
 
-def _partial(cell: str, unknown: int, jobs: int) -> str:
-    """A sum over the known values: ``?`` when none is known, else the count of unknown ones."""
-    if unknown == jobs:
+def _partial(total: Any, unknown: int, show: Callable[[Any], str] = _num) -> str:
+    """A sum over the known values (the rollup's): ``?`` when none is known (``total`` None),
+    else the sum and, when some were left out, how many."""
+    if total is None:
         return '<span class="muted">?</span>'
-    return cell + (f' <span class="muted">({unknown} unknown)</span>' if unknown else "")
+    return show(total) + (f' <span class="muted">({unknown} unknown)</span>' if unknown else "")
+
+
+def _in_out(sums: Mapping[str, Any], unknown: Mapping[str, int], keys: tuple[str, str]) -> str:
+    return "/".join(_partial(sums[k], unknown[k]) for k in keys)
 
 
 def _usage(j: Mapping[str, Any], key: str) -> Any:
@@ -148,9 +153,9 @@ class OrchestrationSite:
                     _e(g["profile"]), _e(g["backend"]), _e(g["lane"]), _e(g["jobs"]),
                     " ".join(f"{_badge(k)}&nbsp;{o[k]}" for k in OUTCOMES if o[k]),
                     _pair(g["wall_s"]), _pair(g["queue_wait_s"]),
-                    _partial(_e(f"{t['input']}/{t['output']}"), t["jobs_unknown"], g["jobs"]),
+                    _in_out(t, t["jobs_unknown"], ("input", "output")),
                     _num(None if share is None else round(100 * share, 1), "%"),
-                    _partial(_usd(g["cost_usd"]["total"]), g["cost_usd"]["jobs_unknown"], g["jobs"]),
+                    _partial(g["cost_usd"]["total"], g["cost_usd"]["jobs_unknown"], _usd),
                     _e(f"{g['retries']['of_earlier_run']}/{g['retries']['auto_scheduled']}"),
                     _e(g["cloud_fallbacks"]),
                     f"{_size(g['bytes']['input']['p50'])} / {_size(g['bytes']['output']['p50'])}",
@@ -172,7 +177,8 @@ class OrchestrationSite:
             (
                 _e(d["day"]), _e(d["profile"]), _e(d["jobs"]), _e(d["completed"]),
                 _e(d["not_completed"]), _num(d["wall_s_p50"], "s"),
-                _e(f"{d['input_tokens']}/{d['output_tokens']}"), _usd(d["cost_usd"]),
+                _in_out(d, d["jobs_unknown"], ("input_tokens", "output_tokens")),
+                _partial(d["cost_usd"], d["jobs_unknown"]["cost_usd"], _usd),
             )
             for d in sorted(days, key=lambda d: (d["day"], d["profile"]), reverse=True)
         ]  # fmt: skip

@@ -159,9 +159,14 @@ reads the store only.
 `hnx orchestration report --db DB [--days N]` prints the rollup (`homelabnext.orchestration.rollup/1`,
 `homelabnext.orchestration.model`): per profile, backend and lane, the job counts by outcome and
 failure class, distributions (p50, p95 and n) of wall time, queue wait, input and output tokens per
-job, API calls per job and gateway turns per job, token sums with the count of jobs whose usage is
-unknown, cache-read share, cost, retries, fallbacks, sizes, and the per-turn latency figures; plus
-the per-day trend. The engine (`hnx orchestration recommend`, a later step) turns rules over that
+job, API calls per job and gateway turns per job, token sums, cache-read share, cost, retries,
+fallbacks, sizes, and the per-turn latency figures; plus the per-day trend (by UTC day). Every sum
+(tokens, cost, output size, the gateway turns' tokens and cost, each day's tokens and cost) is over
+the known values only, carries its own count of the values left out (`jobs_unknown.<sum>`,
+`turns_unknown.<sum>`), and is `null` when no value is known: unknown is never folded into 0. The
+full shape is in `homelabnext.orchestration.model`'s docstring. Until the first release the shape
+of `rollup/1` may still change in place (nothing consumes it yet); after it, it evolves additively
+and an incompatible change takes `rollup/2`. The engine (`hnx orchestration recommend`, a later step) turns rules over that
 input into broker proposals (`proposal.created`) with the evidence attached:
 
 | Rule | Reads |

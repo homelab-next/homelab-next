@@ -87,6 +87,18 @@ def test_filters_and_the_window_narrow_the_page(site):
     assert "4 jobs" in _page(site, "/orchestration", "days=<script>")  # refused, default kept
 
 
+def test_an_unknown_sum_is_shown_as_unknown_never_as_zero(site):
+    """run-0004 wrote no usage file: its trend row shows ``?``, not 0 tokens at $0."""
+    unknown = '<span class="muted">?</span>'
+    trend = _page(site, "/orchestration", "outcome=cancelled").split("<h3>Trend by day")[1]
+    trend = trend.split("<h3>Latest jobs")[0]
+    assert f"{unknown}/{unknown}" in trend and "$0.0000" not in trend
+    # all four jobs: the sums of the known values, with the unknown ones counted
+    trend = _page(site, "/orchestration").split("<h3>Trend by day")[1].split("<h3>Latest")[0]
+    assert '89000 <span class="muted">(1 unknown)</span>' in trend
+    assert '$0.0000 <span class="muted">(2 unknown)</span>' in trend
+
+
 def test_one_job_shows_its_record_and_its_gateway_turns(site):
     html = _page(site, "/orchestration/job", "run=run-0001")
     assert "<h2>Job <code>run-0001</code></h2>" in html

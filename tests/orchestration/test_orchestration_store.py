@@ -105,8 +105,10 @@ def test_rollup_per_profile_backend_and_lane(filled):
     assert g["failure_classes"] == {"backend-down": 1}
     assert g["wall_s"] == {"p50": 300.0, "p95": 570.0, "n": 2}
     assert g["queue_wait_s"] == {"p50": 12.0, "p95": 30.0, "n": 2}
+    # each sum has its own unknown count: run-0002 reported no reasoning or cache-read tokens
     assert g["tokens"] == {
-        "input": 50000, "output": 3600, "reasoning": 0, "cache_read": 28000, "jobs_unknown": 0,
+        "input": 50000, "output": 3600, "reasoning": 0, "cache_read": 28000,
+        "jobs_unknown": {"input": 0, "output": 0, "reasoning": 1, "cache_read": 1},
     }  # fmt: skip
     # run-0002 did not report cache reads: the share is over run-0001 alone, never diluted
     assert g["cache_read_share"] == round(28000 / 41000, 4)
@@ -120,13 +122,46 @@ def test_rollup_per_profile_backend_and_lane(filled):
     assert (t["input_tokens"], t["output_tokens"], t["cache_read_tokens"]) == (29000, 1900, 12000)
     never = by["profile:triage", "-", "real"]  # run-0004: cancelled in the queue, no usage file
     assert never["wall_s"] == {"p50": None, "p95": None, "n": 0}
-    assert never["tokens"]["jobs_unknown"] == 1 and never["cost_usd"]["jobs_unknown"] == 1
+    assert never["tokens"] == {
+        "input": None, "output": None, "reasoning": None, "cache_read": None,
+        "jobs_unknown": {"input": 1, "output": 1, "reasoning": 1, "cache_read": 1},
+    }  # fmt: skip
+    assert never["cost_usd"] == {"total": None, "jobs_unknown": 1}
+    assert never["bytes"]["output"] == {"p50": None, "total": None, "n": 0}
+    assert never["turns"]["input_tokens"] is None  # no gateway data, not 0
     assert never["cache_read_share"] is None and never["retries"]["of_earlier_run"] == 1
     assert roll["days"] == [
         {"day": "2026-01-01", "profile": "profile:triage", "jobs": 4, "completed": 2,
          "not_completed": 2, "wall_s_p50": 300.0, "input_tokens": 89000, "output_tokens": 6500,
-         "cost_usd": 0.0},
+         "cost_usd": 0.0,
+         "jobs_unknown": {"input_tokens": 1, "output_tokens": 1, "cost_usd": 2}},
     ]  # fmt: skip
+
+
+def test_a_sum_with_no_known_value_is_unknown_not_zero():
+    """A day, a group and the gateway turns whose values are all null sum to None with their
+    unknown count, never to 0 (which reads as "free" or "no tokens")."""
+    job = copy.deepcopy(examples()[0]["data"]) | {"usage": None}
+    blank = {"input_tokens": None, "output_tokens": None, "cache_read_tokens": None}
+    turns = {job["gateway_tag"]: [{"turn_id": "t1", **blank, "cost_usd": None}]}
+    roll = rollup([job], turns, now=T0, days=7)
+    (day,) = roll["days"]
+    assert (day["input_tokens"], day["output_tokens"], day["cost_usd"]) == (None, None, None)
+    assert day["jobs_unknown"] == {"input_tokens": 1, "output_tokens": 1, "cost_usd": 1}
+    (g,) = roll["groups"]
+    assert g["cost_usd"] == {"total": None, "jobs_unknown": 1} and g["tokens"]["output"] is None
+    t = g["turns"]
+    assert (t["input_tokens"], t["output_tokens"], t["cost_usd"]) == (None, None, None)
+    assert t["turns_unknown"] == {
+        "input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 1, "cost_usd": 1,
+    }  # fmt: skip
+    # one known value is a sum, with the rest counted
+    half = copy.deepcopy(job) | {"run_id": "run-h", "gateway_tag": "run-h"}
+    nulls = ("input_tokens", "reasoning_tokens", "cache_read_tokens", "api_calls", "cost_usd")
+    half["usage"] = dict.fromkeys(nulls) | {"output_tokens": 7}
+    g2 = rollup([job, half], {}, now=T0, days=7)["groups"][0]
+    assert g2["tokens"]["output"] == 7 and g2["tokens"]["jobs_unknown"]["output"] == 1
+    assert g2["tokens"]["input"] is None and g2["tokens"]["jobs_unknown"]["input"] == 2
 
 
 def test_rollup_window_leaves_out_older_jobs():
