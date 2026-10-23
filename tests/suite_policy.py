@@ -18,6 +18,11 @@ not anchored).  Each pattern names a legitimate, visible cause: an optional extr
 is absent, the platform cannot run the test.  Any other skip -- including one with no reason -- is
 turned into a failure.  ``xfail`` and ``-m`` deselection are not skips.
 
+**Required tools.**  ``HNX_REQUIRE_TOOLS`` (comma-separated names, e.g.
+``actionlint,zizmor,nats-server,docker``) turns a skip whose reason says a listed tool is not
+installed or not available into a failure.  CI sets it where it installs those tools, so a broken
+install fails the job instead of passing as a legitimate skip.
+
 **Quarantine.**  ``@pytest.mark.quarantine(owner="team-or-handle", until="YYYY-MM-DD",
 reason="...")`` lets a known-flaky test keep running without breaking the build (it becomes a
 non-strict ``xfail``) for a bounded time.  The owner, the date and the reason are required; a date
@@ -133,10 +138,33 @@ def _state(config: pytest.Config) -> dict:
     return config.stash[_STATE]
 
 
+def required_tools(value: str | None) -> list[str]:
+    """The tool names of ``HNX_REQUIRE_TOOLS`` (comma-separated)."""
+    return [t.strip() for t in (value or "").split(",") if t.strip()]
+
+
+def missing_required_tool(reason: str, tools: Iterable[str]) -> str | None:
+    """The required tool a skip reason says is missing (``<tool> ... not installed`` or
+    ``not available``), else None."""
+    for tool in tools:
+        rx = rf"(?<![\w-]){re.escape(tool)}(?![\w-]).*\bnot (?:installed|available)\b"
+        if re.search(rx, reason, re.IGNORECASE):
+            return tool
+    return None
+
+
 def _silent_skip(config: pytest.Config, rep) -> None:
     if not rep.skipped or hasattr(rep, "wasxfail"):
         return
     reason = _reason(rep.longrepr)
+    tool = missing_required_tool(reason, required_tools(os.environ.get("HNX_REQUIRE_TOOLS")))
+    if tool:
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"required tool missing: {reason.strip()!r}, and HNX_REQUIRE_TOOLS names {tool!r}, "
+            "so this skip is a failure (the tool's install step did not put it on PATH)"
+        )
+        return
     if skip_reason_allowed(reason, _state(config)["skip_patterns"]):
         return
     rep.outcome = "failed"

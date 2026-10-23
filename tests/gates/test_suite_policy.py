@@ -61,6 +61,43 @@ def test_check_quarantine(kwargs, problem):
     assert (got is None) if problem is None else (problem in got), got
 
 
+@pytest.mark.parametrize(
+    "reason, tools, missing",
+    [
+        ("actionlint is not installed", "actionlint,zizmor", "actionlint"),
+        ("nats-server is not installed", " zizmor , nats-server ", "nats-server"),
+        ("docker with the compose plugin is not available", "docker", "docker"),
+        ("playwright for node not installed", "playwright", "playwright"),
+        ("zizmor is not installed", "actionlint", None),
+        ("actionlint-py is not installed", "actionlint", None),  # a different name
+        ("actionlint is not installed", "", None),
+        ("actionlint found a problem", "actionlint", None),
+    ],
+)
+def test_missing_required_tool(reason, tools, missing):
+    assert sp.missing_required_tool(reason, sp.required_tools(tools)) == missing
+
+
+def test_a_required_tools_skip_is_a_failure_end_to_end(tmp_path):
+    _project(
+        tmp_path,
+        a__test_tools="""
+            import pytest
+
+            def test_needs_lint():
+                pytest.skip("hnx-fake-lint is not installed")
+
+            def test_needs_other():
+                pytest.skip("hnx-fake-other is not installed")
+        """,
+    )
+    proc = _pytest(tmp_path, env={"HNX_REQUIRE_TOOLS": "hnx-fake-lint"})
+    assert proc.returncode == 1, proc.stdout
+    assert "FAILED" in proc.stdout and "required tool missing" in proc.stdout
+    assert "1 failed, 1 skipped" in proc.stdout
+    assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
+
+
 def _project(tmp_path, ini_budgets="", **files):
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\n"

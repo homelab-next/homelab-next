@@ -399,7 +399,9 @@ Every secret is referenced only in the `env:` or `with:` of the step that needs 
 `run:` script as an expression (that is how a value ends up in a shell command line), and nothing
 turns on `set -x` or step debug logging. `tests/overlay/` lints the templates by the same rules as
 this repository's own workflows, and runs `actionlint` and zizmor (`zizmor --offline`; checked
-with 1.31.1) over them when those tools are installed (the tests skip otherwise).
+with 1.31.1) over them when those tools are installed (the tests skip otherwise). CI's
+`external-tools` job installs both at pinned versions with verified checksums and makes those
+skips failures (`HNX_REQUIRE_TOOLS`), so the templates are linted on every push.
 
 `checks.yml` runs on every pull request with no secret and no Environment: it only runs the
 private leak check, so a pull request's code never sees a credential.
