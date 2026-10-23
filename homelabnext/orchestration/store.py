@@ -63,7 +63,7 @@ import re
 import shlex
 import sqlite3
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   run_id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, digest TEXT NOT NULL,
   profile TEXT NOT NULL, backend TEXT, lane TEXT NOT NULL, outcome TEXT NOT NULL,
   finished REAL NOT NULL, gateway_tag TEXT NOT NULL, received REAL NOT NULL,
-  turns_settled REAL, doc TEXT NOT NULL);
+  turns_settled REAL, doc TEXT NOT NULL, event TEXT);
 CREATE TABLE IF NOT EXISTS turns(
   turn_id TEXT PRIMARY KEY, gateway_tag TEXT NOT NULL, started REAL NOT NULL, doc TEXT NOT NULL);
 """
@@ -154,6 +154,8 @@ class TelemetryStore:
         self._db = functools.partial(transaction, self.path, journal_mode=JOURNAL_MODE)
         with self._db() as db:  # committed on its own: a refusal below must not roll it back
             db.executescript(_TABLES)
+            if "event" not in {r[1] for r in db.execute("PRAGMA table_info(jobs)")}:
+                db.execute("ALTER TABLE jobs ADD COLUMN event TEXT")  # a store before export
             self._purge(db, None)
         with self._db() as db:
             _refuse_shared_tags(db, self.path, self.clock() - self.retention_s)
@@ -214,11 +216,14 @@ class TelemetryStore:
                     [_conflict(r, eid, data) for r in rows],
                 )
             db.execute(
-                "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO jobs (run_id, event_id, digest, profile, backend, lane, outcome,"
+                " finished, gateway_tag, received, turns_settled, doc, event)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     data["run_id"], eid, digest, data["profile"], data.get("backend"),
                     data["lane"], data["outcome"], finished,
                     data["gateway_tag"], now, None, json.dumps(data, sort_keys=True),
+                    json.dumps(event, sort_keys=True),
                 ),
             )  # fmt: skip
             self._purge(db, now)
@@ -270,6 +275,26 @@ class TelemetryStore:
             sql += f" LIMIT {int(limit)}"
         with self._db() as db:
             return [json.loads(r[0]) for r in db.execute(sql, args)]
+
+    def dump(self) -> Iterator[tuple[str, Any]]:
+        """Everything the store holds, for an export (:mod:`.export`): ``("job", (event,
+        turns_settled))`` per job, oldest finish first, then ``("turn", turn)`` per turn, oldest
+        start first.  ``event`` is the envelope as consumed (``None`` for a job a store before
+        exports kept without it)."""
+        with self._db() as db:
+            has_event = "event" in {r[1] for r in db.execute("PRAGMA table_info(jobs)")}
+            sql = f"SELECT {'event' if has_event else 'NULL'}, turns_settled FROM jobs"
+            jobs = db.execute(sql + " ORDER BY finished, run_id").fetchall()
+            turns = db.execute("SELECT doc FROM turns ORDER BY started, turn_id").fetchall()
+        for event, settled in jobs:
+            yield "job", (json.loads(event) if event else None, settled)
+        for (doc,) in turns:
+            yield "turn", json.loads(doc)
+
+    def turn(self, turn_id: str) -> dict[str, Any] | None:
+        with self._db() as db:
+            row = db.execute("SELECT doc FROM turns WHERE turn_id = ?", (turn_id,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def job(self, run_id: str) -> dict[str, Any] | None:
         with self._db() as db:

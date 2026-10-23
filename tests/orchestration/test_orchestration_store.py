@@ -126,7 +126,7 @@ def test_the_database_refuses_a_second_job_with_the_same_tag(filled):
     with pytest.raises(sqlite3.IntegrityError), sqlite3.connect(filled.path) as db:
         db.execute(
             "INSERT INTO jobs SELECT 'run-x', 'evt-x', digest, profile, backend, lane, outcome,"
-            " finished, gateway_tag, received, turns_settled, doc FROM jobs WHERE run_id = ?",
+            " finished, gateway_tag, received, turns_settled, doc, event FROM jobs WHERE run_id = ?",
             ("run-0001",),
         )
 
@@ -340,7 +340,7 @@ def _earlier_release_store(path, *, shared_tags: int) -> None:
         for n in range(shared_tags):
             db.execute(
                 "INSERT INTO jobs SELECT ?, ?, digest, profile, backend, lane, outcome, finished,"
-                " gateway_tag, received, turns_settled, doc FROM jobs WHERE run_id = 'run-0001'",
+                " gateway_tag, received, turns_settled, doc, event FROM jobs WHERE run_id = 'run-0001'",
                 (f"run-copy-{n}", f"evt-copy-{n}"),
             )
     db.close()
@@ -404,7 +404,7 @@ def _store_with_jobs(path, jobs: list[tuple[str, float]]) -> None:
         for run, at in jobs:
             db.execute(
                 "INSERT INTO jobs VALUES (?,?,'d','profile:x',NULL,'real','completed',?,'t',?,"
-                "NULL,'{}')",
+                "NULL,'{}',NULL)",
                 (run, f"e-{run}", at, at),
             )
     db.close()
@@ -451,7 +451,7 @@ def test_the_printed_fix_keeps_the_live_job_received_first_never_an_expired_one(
     with sqlite3.connect(db) as conn:  # the expired job is back, as if not yet purged
         conn.execute(
             "INSERT INTO jobs SELECT 'r1', 'e-r1', digest, profile, backend, lane, outcome, ?,"
-            " gateway_tag, ?, turns_settled, doc FROM jobs WHERE run_id = 'r2'",
+            " gateway_tag, ?, turns_settled, doc, event FROM jobs WHERE run_id = 'r2'",
             (T0 - 100 * DAY, T0 - 100 * DAY),
         )
         conn.execute(fix)

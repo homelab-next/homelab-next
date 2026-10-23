@@ -8,6 +8,8 @@
     hnx orchestration turns --db FILE --turn-source none|MODULE:FACTORY [--gateway-url URL]
                             [--key secret:NAME] [--ca-file F] [--allow-plaintext] [--settle-s N]
     hnx orchestration report --db FILE [--days N]
+    hnx orchestration export --db FILE [--out FILE|-]
+    hnx orchestration import --db FILE EXPORT.jsonl|-
 
 ``consume`` drains ``homelabnext.agent.job.finished`` from the bus (``HNX_ENDPOINT_EVENTS``) into
 the store, one pass (a timer runs it); ``ingest`` stores events from a JSON-lines file (one event
@@ -20,9 +22,13 @@ target, called with the adapter options given (``--gateway-url`` as ``base_url``
 secret name, ``--ca-file``, ``--allow-plaintext``) and returning a
 :class:`conformance.protocols.inference.TurnSource`.  Which adapter fills the slot is site
 configuration; ``docs/orchestration-telemetry.md`` lists the shipped ones.  ``report`` prints the rollup as JSON
-(``homelabnext.orchestration.rollup/1``: the recommendation engine's input).
+(``homelabnext.orchestration.rollup/1``: the recommendation engine's input).  ``export`` writes
+the whole store as JSON lines (``homelabnext.orchestration.export/1``, :mod:`.export`: every job
+as its event, every turn as its record), reading it as the hub does (read-only, nothing purged);
+``import`` loads such a file into a store, idempotent by the same ids and refusing a record the
+bus consumer would refuse, so a store can be moved, rebuilt or swapped.
 
-Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``), the bus failed during the
+Exit codes: 0 ok, 1 a record was refused (``ingest``, ``consume``, ``import``), the bus failed during the
 pass (``consume``: what was settled before stays settled) or the gateway could not be read
 (``turns``), 2 usage or configuration error (``consume``: the event schemas cannot be loaded, the bus
 configuration or the connect), or a store that cannot be opened, or (``consume``) cannot take a
@@ -109,6 +115,12 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="the rollup as JSON (the recommendation engine's input)")
     store_opts(p)
     p.add_argument("--days", type=int, default=7)
+    p = sub.add_parser("export", help="the whole store as JSON lines (export/1)")
+    store_opts(p)
+    p.add_argument("--out", default="-", help="the file to write, or - for stdout (the default)")
+    p = sub.add_parser("import", help="load an export (JSON lines) into the store")
+    store_opts(p)
+    p.add_argument("export", help="the file, or - for stdin")
     return ap
 
 
@@ -127,6 +139,33 @@ def _ingest(a, store: TelemetryStore) -> int:
         "orchestration ingest: "
         + ", ".join(f"{counts[k]} {k}" for k in ("processed", "duplicate", "expired", "refused"))
     )
+    return 1 if counts["refused"] else 0
+
+
+def _export(a, store: TelemetryStore) -> int:
+    from .export import export_lines
+
+    lines = [f"{line}\n" for line in export_lines(store)]
+    if a.out == "-":
+        sys.stdout.writelines(lines)
+    else:
+        Path(a.out).write_text("".join(lines), encoding="utf-8")
+    print(f"orchestration export: {len(lines)} record(s)", file=sys.stderr)
+    return 0
+
+
+def _import(a, store: TelemetryStore) -> int:
+    from .export import STATUSES, import_lines
+
+    text = sys.stdin.read() if a.export == "-" else Path(a.export).read_text(encoding="utf-8")
+    counts, refused = import_lines(store, text.splitlines())
+    for n, why in refused:
+        print(f"{a.export}:{n}: {why}", file=sys.stderr)
+    parts = [
+        f"{kind}s " + ", ".join(f"{counts[(kind, s)]} {s}" for s in STATUSES)
+        for kind in ("job", "turn")
+    ]
+    print(f"orchestration import: {'; '.join(parts)}; {counts['refused']} refused")
     return 1 if counts["refused"] else 0
 
 
@@ -240,7 +279,17 @@ def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time
         sources = a.source or [
             s.strip() for s in os.environ.get(SOURCE_ENV, CONTROLLER_SOURCE).split(",") if s.strip()
         ]
-        store = TelemetryStore(a.db, clock=clock, retention_days=a.retention_days, sources=sources)
+        store = TelemetryStore(
+            a.db,
+            clock=clock,
+            retention_days=a.retention_days,
+            sources=sources,
+            read_only=a.cmd == "export",  # an export creates, migrates and purges nothing
+        )
+        if a.cmd == "export":
+            return _export(a, store)
+        if a.cmd == "import":
+            return _import(a, store)
         if a.cmd == "ingest":
             return _ingest(a, store)
         if a.cmd == "consume":
