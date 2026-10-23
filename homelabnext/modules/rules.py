@@ -363,16 +363,21 @@ def module_problems(
 
 def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
     """Actors act only through the broker (checklist G-13, ADR-0030), for what a module
-    contributes.  A contributed MCP record with an acting tool (a ``broker_only`` class) says
-    ``acts_via: broker``: a module contributes no authority (ADR-0027), so a direct exception (a
-    reviewed record and the ceiling policy's ``direct_mcp``) is never the module's to make, only
-    the overlay's own catalog's.  A contributed agent's spec obeys the rule as any profile does
-    (no direct exception either), and an agent's ``tools`` entry naming an acting tool of one of
-    the module's own records needs that record to act through the broker."""
-    from homelabnext.agent.readers import broker_problems, table_broker_only
+    contributes.  A module contributes no authority (ADR-0027, "contributes (never authority)"):
+    its effects are contributed as broker actions (the broker manifest and handlers), never as an
+    MCP tool or a grant.  So a contributed MCP record has no acting tool (a ``broker_only``
+    class) and declares no ``acts_via`` at all (``broker`` is only the broker's own front;
+    ``direct`` is an exception only the overlay's own catalog and ceiling policy make), and a
+    contributed agent's spec holds no acting grant: no acting MCP server (the broker's front
+    included), no acting capability (``cap:broker`` included) and no acting tier.  The overlay
+    that selects the module may grant its agent the broker in its own ceiling policy and spec."""
+    from homelabnext.agent.readers import broker_problems, default_classes
 
-    only = set(table_broker_only())
     c = doc.get("contributes", {})
+    if not c.get("mcp_servers") and not c.get("agents"):
+        return []
+    classes = default_classes()
+    only = set(classes.broker_only)
     records: dict[str, Doc] = {}
     out: list[str] = []
     for e in c.get("mcp_servers", []):
@@ -381,37 +386,51 @@ def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
         acting = sorted(
             str(t.get("name")) for t in rec.get("tools") or () if set(t.get("classes") or ()) & only
         )
-        if acting and rec.get("acts_via") != "broker":
+        if acting:
             out.append(
-                f"{e['file']}: MCP record tool(s) {', '.join(acting)} act other than through the "
-                "broker (a module's acting record says acts_via: broker; a direct exception is the "
-                "overlay's own catalog record and ceiling policy, never a module's)"
+                f"{e['file']}: MCP record tool(s) {', '.join(acting)} act: a module contributes "
+                "no authority (ADR-0027); its effects are broker actions, never an MCP tool"
+            )
+        if "acts_via" in rec:
+            out.append(
+                f"{e['file']}: MCP record declares acts_via: a module's record never does (broker "
+                "is only the broker's own front; a direct exception is only the overlay's)"
             )
 
-    def direct(sid: str) -> bool:
-        rec = records[sid]
-        return rec.get("acts_via") != "broker" and any(
-            set(t.get("classes") or ()) & only for t in rec.get("tools") or ()
-        )
+    def acts(sid: str) -> bool:
+        return any(set(t.get("classes") or ()) & only for t in records[sid].get("tools") or ())
 
     for a in _agents(doc):
         key = a["key"]
         spec = load(mod_dir / a["spec"])
+        who = str(spec.get("id"))
         mcp = [m for m in spec.get("mcp") or [] if m not in records]
-        grants = {"mcp": mcp, "capabilities": spec.get("capabilities") or [],
-                  "tier": spec.get("tier")}  # fmt: skip
-        out += [f"agent {key}: {p}" for p in broker_problems(grants, who=str(spec.get("id")))]
-        for sid in sorted({m for m in spec.get("mcp") or [] if m in records and direct(m)}):
-            out.append(f"agent {key}: spec grants the module's MCP record {sid}, which acts other "
-                       "than through the broker")  # fmt: skip
+        caps = list(spec.get("capabilities") or [])
+        grants = {"mcp": mcp, "capabilities": caps, "tier": spec.get("tier")}
+        out += [f"agent {key}: {p}" for p in broker_problems(grants, classes, who)]
+        for m in sorted(set(mcp)):
+            if set(classes.classify("mcp", m) or ()) & only and not broker_problems(
+                {"mcp": [m]}, classes, who
+            ):
+                out.append(f"agent {key}: spec grants acting MCP server {m!r}: a module grants "
+                           "its own agent no acting tool (ADR-0027)")  # fmt: skip
+        if "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds cap:broker: a module grants its own agent no "
+                       "acting capability (ADR-0027)")  # fmt: skip
+        tier = classes.classify("tiers", str(spec.get("tier"))) if spec.get("tier") else None
+        if tier and set(tier) & only and "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds an acting tier: a module grants its own agent "
+                       "no acting tier (ADR-0027)")  # fmt: skip
+        for sid in sorted({m for m in spec.get("mcp") or [] if m in records and acts(m)}):
+            out.append(f"agent {key}: spec grants the module's acting MCP record {sid}")
         for t in a.get("tools", []):
             sid, _, name = t.partition(".")
             rec = records.get(sid)
-            if rec is None or rec.get("acts_via") == "broker":
-                continue
-            if any(x.get("name") == name and set(x.get("classes") or ()) & only
-                   for x in rec.get("tools") or ()):  # fmt: skip
-                out.append(f"agent {key}: tool {t} acts other than through the broker")
+            if rec is not None and any(
+                x.get("name") == name and set(x.get("classes") or ()) & only
+                for x in rec.get("tools") or ()
+            ):
+                out.append(f"agent {key}: tool {t} acts: a module's agent holds no acting tool")
     return out
 
 
