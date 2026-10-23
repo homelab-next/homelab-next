@@ -87,7 +87,7 @@ because each instance needs its own scope.
    setting, env or parameter key may configure the process or its launcher (`PATH`, `LD_*`,
    `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PIP_*`, the docker CLI's `DOCKER_HOST`, `DOCKER_CONFIG`
    ..., and what loads code or redirects trust inside a launcher: `OPENSSL_*`, `SSL_CERT_*`,
-   `*_PROXY`, glibc's `GCONV_PATH`, `GLIBC_TUNABLES`, `MALLOC_*` ..., any case).
+   `SSLKEYLOGFILE`, `*_PROXY`, glibc's `GCONV_PATH`, `GLIBC_TUNABLES`, `MALLOC_*` ..., any case).
 8. **Import, then pin.** `hnx mcp catalog import` turns an existing lab's client configs into
    draft records in a directory it is given (`--out`, required): credentials become `secret:`
    names, failing closed (every environment value is one unless its key is allowlisted as

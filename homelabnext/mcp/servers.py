@@ -85,7 +85,8 @@ ORCH_DENIED_ENV = re.compile(
 #: TLS stack and the shell read to load code or redirect trust inside any of these processes are
 #: refused too: OpenSSL's configuration (OPENSSL_CONF loads an engine's shared object, so npx
 #: dlopens whatever it names) and certificate stores (OPENSSL_*, SSL_CERT_*, REQUESTS_CA_BUNDLE,
-#: CURL_CA_BUNDLE), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
+#: CURL_CA_BUNDLE), the TLS key log (SSLKEYLOGFILE: Python's ssl, curl, NSS and Node write every
+#: session's keys to the file it names), every proxy (*_PROXY: HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, any
 #: case), glibc's module, locale, resolver and allocator knobs (GCONV_PATH, LOCPATH, NLSPATH,
 #: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
 #: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
@@ -98,7 +99,7 @@ DENIED_ENV = re.compile(
     r"|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*"
     r"|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT"
     r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN"
-    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
+    r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
     r"|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
     r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
     re.I,

@@ -200,7 +200,8 @@ entry N)`.
   well as the container). Another `DOCKER_` name, such as `DOCKER_CONTAINER` that an image reads
   inside the container, is the server's own setting. Also refused, because they load code or
   redirect trust inside the launcher (an `OPENSSL_CONF` engine makes `npx` load a shared object):
-  `OPENSSL_*`, `SSL_CERT_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, every `*_PROXY`
+  `OPENSSL_*`, `SSL_CERT_*`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSLKEYLOGFILE` (the TLS
+  stack writes every session's keys to it), every `*_PROXY`
   (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
   `HOSTALIASES`, `RES_OPTIONS`, `LOCALDOMAIN`, `GLIBC_TUNABLES`, `MALLOC_*`, `TZDIR`,
   `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`,

@@ -370,7 +370,7 @@ def test_no_setting_env_or_parameter_configures_the_launcher(key):
 #: round 5: what the C library, the TLS stack, the shell and other interpreters read to load code
 #: or redirect trust inside the launcher (OPENSSL_CONF's engine makes npx dlopen a shared object)
 RUNTIME_KEYS = ["OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES", "SSL_CERT_FILE",
-                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY",
+                "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSLKEYLOGFILE", "HTTP_PROXY",
                 "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "GCONV_PATH", "LOCPATH",
                 "NLSPATH", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES",
                 "MALLOC_CHECK_", "MALLOC_ARENA_MAX", "TZDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
