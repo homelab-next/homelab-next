@@ -10,11 +10,15 @@ is assembled from parts at run time."""
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
+from pathlib import Path
 
 import pytest
 
 from homelabnext.modules import scope as ms
+
+ROOT = Path(__file__).resolve().parents[2]
 
 #: documentation prefixes (RFC 5737)
 D1, D2, D3 = "192.0.2", "198.51.100", "203.0.113"
@@ -137,6 +141,8 @@ def test_an_entry_no_part_may_hold(part, entry, why):
 def test_a_trusted_part_has_a_floor_and_target_does_not(entry, trusted_ok):
     """Trusting more than a /8 or a /32 is a blind spot, not the lab: refused in trusted.*."""
     for part in ("trusted.wan", "trusted.nets", "trusted.tooling"):
+        if part == "trusted.wan" and entry.startswith("10."):
+            continue  # private space: trusted.wan refuses it for that reason (N8, below)
         if trusted_ok:
             assert ms.parse_entry(entry, part) == net(entry)
         else:
@@ -189,7 +195,10 @@ def test_scope_problems_check_only_the_parts_present():
         ({"trusted": {"wan": True}}, "scope.trusted.wan: not a list (bool)"),
         ({"targets": [PRIVATE + "/16"]}, "scope.targets: no such scope part"),
         ({"trusted": {"wans": [f"{D1}.0/24"]}}, "scope.trusted.wans: no such scope part"),
-        ({"target": [v4(0, 0, 0, 0, plen=0)]}, "scope.target[0]: '0.0.0.0/0' is not a usable"),
+        (
+            {"target": [v4(0, 0, 0, 0, plen=0)]},
+            f"scope.target[0]: '{v4(0, 0, 0, 0, plen=0)}' is not",
+        ),
     ],
 )
 def test_scope_problems_stand_alone_without_the_schema(block, problem):
@@ -295,6 +304,15 @@ def test_effective_targets_needs_every_part_it_subtracts_declared(module):
         ms.effective_targets(SITE, module)
 
 
+@pytest.mark.parametrize("excluded", [f"{D2}.0/24", f"{D2}.0/23"])
+def test_effective_targets_never_returns_an_empty_list(excluded):
+    """SF4: exclusions that cover every target leave nothing to act on: that raises (fails
+    closed) instead of returning [], which a caller could read as "unrestricted"."""
+    site = {"scope": {"target": [f"{D2}.0/24"], "exclude": {"offensive": [excluded]}}}
+    with pytest.raises(ms.ScopeMissing, match="nothing left after the exclusions"):
+        ms.effective_targets(site, reader("target", "exclude.offensive"))
+
+
 def test_effective_targets_fails_closed_on_an_absent_exclusion_and_takes_an_empty_one():
     site = {"scope": {"target": [f"{D2}.0/24"]}}
     with pytest.raises(ms.ScopeMissing, match=r"exclude\.offensive: missing"):
@@ -319,19 +337,65 @@ def test_an_ipv6_written_exclusion_of_an_ipv4_range_fails_closed():
         (("target", "exclude.offensive"), False, []),
         (("target", "exclude.offensive"), True, ["exclude.unattended_mutation"]),
         (("target",), True, ["exclude.offensive", "exclude.unattended_mutation"]),
-        (("trusted.wan",), True, []),
+        # SF3: every address part, not target alone (the manifest cannot say "only filters")
+        (("trusted.wan",), True, ["exclude.offensive", "exclude.unattended_mutation"]),
+        (("trusted.nets",), True, ["exclude.offensive", "exclude.unattended_mutation"]),
+        (("trusted.tooling",), False, ["exclude.offensive"]),
+        (("exclude.offensive",), True, []),
     ],
 )
-def test_a_module_acting_on_target_must_declare_the_exclusions(parts, unattended, missing):
+def test_a_module_reading_addresses_must_declare_the_exclusions(parts, unattended, missing):
     problems = ms.manifest_scope_problems(reader(*parts, unattended=unattended))
     assert [p.split(" without ", 1)[1].split(" ", 1)[0] for p in problems] == missing
 
 
-def test_an_agent_on_a_calendar_or_a_trigger_runs_unattended():
+#: a module contributing one entry of a kind, for every kind platform/module 1.0 declares
+CONTRIBUTION_KINDS = sorted(
+    json.loads((ROOT / "schemas/platform/module.schema.json").read_text())["$defs"]["contributes"][
+        "properties"
+    ]
+)
+
+
+def test_every_contribution_kind_is_classified():
+    """The inert set names real kinds only; every other kind (and any kind added later) counts as
+    something that can run unattended."""
+    assert set(CONTRIBUTION_KINDS) >= ms.INERT_CONTRIBUTIONS
+    for kind in ("services", "workflow_packs", "mcp_servers", "invariants", "entry_points",
+                 "preflight", "scheduler_jobs", "agents", "roles", "shared_config"):  # fmt: skip
+        assert kind in CONTRIBUTION_KINDS and kind not in ms.INERT_CONTRIBUTIONS, kind
+
+
+@pytest.mark.parametrize("kind", CONTRIBUTION_KINDS)
+def test_a_module_runs_unattended_unless_it_contributes_only_inert_kinds(kind):
+    """SF3: inverted, fail closed.  A service, a workflow pack, an MCP server, an invariant, an
+    entry point, a preflight hook, a role and every agent can run with no human present."""
+    module = {"contributes": {kind: [{"file": "x"}]}}
+    assert ms.runs_unattended(module) is (kind not in ms.INERT_CONTRIBUTIONS)
+    if kind not in ms.INERT_CONTRIBUTIONS:
+        scanner = reader("target", "exclude.offensive") | module
+        assert ms.manifest_scope_problems(scanner), kind  # needs exclude.unattended_mutation
+
+
+def test_a_module_with_nothing_executable_is_attended():
+    assert not ms.runs_unattended({})
+    assert not ms.runs_unattended({"contributes": {}})
+    assert not ms.runs_unattended({"contributes": {"docs": [{"file": "d.md"}], "services": []}})
+    assert ms.runs_unattended({"contributes": "not a mapping"})  # malformed is not "attended"
     agent = {"key": "assess-analyst"}
-    assert not ms.runs_unattended({"contributes": {"agents": [agent]}})
-    for extra in ({"schedule": {"on_calendar": "daily UTC"}}, {"trigger": {"event": "x"}}):
-        assert ms.runs_unattended({"contributes": {"agents": [agent | extra]}})
+    assert ms.runs_unattended({"contributes": {"agents": [agent]}})
+
+
+def test_a_part_less_scope_requirement_is_a_problem_not_a_crash():
+    """N7: the rules stand alone without the schema (which requires part)."""
+    module = {"id": "m", "requires": {"scope": [{"purpose": "x"}, "target", {"part": "target"}]}}
+    assert ms.declared_parts(module) == {"target"}
+    problems = ms.manifest_scope_problems(module)
+    assert [p.split(":", 1)[0] for p in problems[:2]] == [
+        "requires.scope[0]",
+        "requires.scope[1]",
+    ]
+    assert ms.declared_parts({"requires": None}) == set()
 
 
 #: a public resolver and a public host, assembled at run time
@@ -391,3 +455,46 @@ def test_a_config_value_that_is_not_a_site_address_is_kept(value):
 def test_a_config_value_naming_a_site_address_is_refused(value):
     """S7: an address in any spelling, outside the special and documentation blocks."""
     assert ms.address_literals(value), value
+
+
+#: inet_aton short forms of private addresses (the octets 10, 20, 0, 5; 10, 0, 0, 1; 172, 16, 0, 1)
+SHORT3 = ".".join(("10", "20", "5"))
+SHORT2 = ".".join(("10", "1"))
+SHORT_SHARED = ".".join(("172", "16", "1"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f"http://{SHORT3}/",
+        f"{SHORT3}:8080",
+        f"http://{SHORT2}/",
+        f"udp://{SHORT_SHARED}:53",
+        f"{SHORT2}/8",
+        f"https://user@{SHORT3}/x",
+    ],
+)
+def test_an_inet_aton_short_form_in_an_address_context_is_refused(value):
+    """SF5: glibc and curl read a three-part 10.20.5 as the octets 10, 20, 0, 5; with a URL, a port or a prefix length it is
+    an address, never a version."""
+    assert ms.address_literals(value), value
+
+
+@pytest.mark.parametrize("value", ["1.2", "2.1.0", SHORT3, "v1.2:3", f"http://{D1}.7/"])
+def test_a_plain_short_form_is_a_version(value):
+    assert ms.address_literals(value) == []
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [("10", "0", "0", "0", "8"), ("172", "16", "0", "0", "12"), ("100", "64", "0", "0", "10")],
+)
+def test_trusted_wan_refuses_private_and_shared_space(parts):
+    """N8: the WAN is what the internet sees; an internal network there belongs in trusted.nets."""
+    entry = ".".join(parts[:4]) + "/" + parts[4]
+    with pytest.raises(ValueError, match="private, shared or unique-local"):
+        ms.parse_entry(entry, "trusted.wan")
+    assert ms.parse_entry(entry, "trusted.nets") == net(entry)
+    with pytest.raises(ValueError, match="private, shared or unique-local"):
+        ms.parse_entry(":".join(("fd00", "1", "")) + ":/48", "trusted.wan")
+    assert ms.parse_entry(f"{D3}.0/24", "trusted.wan") == net(f"{D3}.0/24")

@@ -128,3 +128,6 @@ scope:
     - 2001:db8:20::/48
     tooling:
     - 192.0.2.200/32
+  exclude:
+    unattended_mutation: []
+    offensive: []

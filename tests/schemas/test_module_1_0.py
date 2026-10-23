@@ -401,15 +401,15 @@ def _ag(d):
 
 
 MODULE_DEFECTS = {
-    "a module acting on target without exclude.offensive": (
+    "a module reading addresses without exclude.offensive": (
         "external-collector",
-        lambda d: d["requires"]["scope"].append({"part": "target"}),
-        "requires.scope: target without exclude.offensive",
+        lambda d: d["requires"].__setitem__("scope", [{"part": "trusted.wan"}]),
+        "requires.scope: trusted.wan without exclude.offensive",
     ),
-    "an unattended module acting on target without exclude.unattended_mutation": (
+    "an unattended module reading addresses without exclude.unattended_mutation": (
         "external-collector",
-        lambda d: d["requires"]["scope"].extend(
-            [{"part": "target"}, {"part": "exclude.offensive"}]
+        lambda d: d["requires"].__setitem__(
+            "scope", [{"part": "target"}, {"part": "exclude.offensive"}]
         ),
         "requires.scope: target without exclude.unattended_mutation",
     ),

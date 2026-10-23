@@ -82,7 +82,8 @@ grants:
   secrets:
     publishing: [secret:example-static-host/deploy-token]
 # The site's network scope, every part shown (documentation ranges only in a public example; the
-# real one is in the private overlay's lab/modules.yml). The collector requires trusted.wan; the
+# real one is in the private overlay's lab/modules.yml). The collector requires trusted.wan and both
+# exclusions (every module that reads addresses does); the
 # exclusions carve out of target what offensive tooling never touches and what no unattended job
 # changes.
 scope:

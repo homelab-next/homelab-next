@@ -24,13 +24,16 @@ from homelabnext.ids.lint import DOCUMENTATION_NETS
 Doc = dict[str, Any]
 
 __all__ = [
+    "ACTING_PARTS",
     "DYNAMIC_PARTS",
     "EMBEDDED_V4",
     "EMPTY_ALLOWED",
     "ENTRY_PATTERN",
+    "INERT_CONTRIBUTIONS",
     "PART_DOCS",
     "SCOPE_PARTS",
     "TRUSTED_FLOOR",
+    "WAN_NOT_PUBLIC",
     "Network",
     "ScopeMissing",
     "ScopeUndeclared",
@@ -79,6 +82,20 @@ DYNAMIC_PARTS = frozenset({"trusted.wan"})
 #: the broadest network a trusted part may hold, per IP version: trusting more than a /8 (IPv4)
 #: or a /32 (IPv6, one regional allocation) is no longer "the lab itself", it is a blind spot
 TRUSTED_FLOOR = {4: 8, 6: 32}
+#: the parts that name addresses a module can act on: every part but the exclusions.  The
+#: manifest cannot say "reads this part only to filter" (an ``acts_on`` marker is specified, not
+#: implemented), so a module that requires any of them must also require the exclusions
+#: (:func:`manifest_scope_problems`)
+ACTING_PARTS = tuple(p for p in SCOPE_PARTS if p not in EMPTY_ALLOWED)
+#: contribution kinds that never execute anything: a module whose contributions are all of these
+#: kinds (or none) is the only kind :func:`runs_unattended` treats as attended.  Every other kind
+#: in ``platform/module`` 1.0 ``contributes`` (roles, services, scheduler_jobs, preflight,
+#: mcp_servers, agents, invariants, entry_points, workflow_packs, shared_config, and any kind
+#: added later) counts as something that can run with no human present; a test ties this set to
+#: the schema
+INERT_CONTRIBUTIONS = frozenset(
+    {"docs", "detections", "lake_tables", "status_sources", "notify_pairs"}
+)
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 #: networks no scope part may touch: unspecified and "this network", loopback, link-local,
@@ -93,6 +110,21 @@ SPECIAL_NETS: tuple[tuple[str, Network], ...] = tuple(
         ("reserved", (0xF000_0000, 4)),  # 240/4, the broadcast address included
         ("link-local", "fe80::/10"),
         ("multicast", "ff00::/8"),
+    )
+)
+
+
+#: networks ``trusted.wan`` may not touch: private (RFC 1918), shared (RFC 6598, a CGNAT inside
+#: address the internet never sees) and unique local IPv6.  The WAN is what the internet sees the
+#: lab as; one of these there is a typo for ``trusted.nets``
+WAN_NOT_PUBLIC: tuple[Network, ...] = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        (0x0A00_0000, 8),  # 10/8
+        (0xAC10_0000, 12),  # 172.16/12
+        (0xC0A8_0000, 16),  # 192.168/16
+        (0x6440_0000, 10),  # 100.64/10
+        "fc00::/7",
     )
 )
 
@@ -287,6 +319,13 @@ def parse_entry(value: Any, part: str) -> Network:
     floor = TRUSTED_FLOOR[net.version]
     if part.startswith("trusted.") and net.prefixlen < floor:
         raise ValueError(f"broader than /{floor}, the floor for a trusted part")
+    if part == "trusted.wan" and any(
+        net.version == n.version and net.overlaps(n) for n in WAN_NOT_PUBLIC
+    ):
+        raise ValueError(
+            "private, shared or unique-local space: the internet never sees the lab as this "
+            "(an internal network belongs in trusted.nets)"
+        )
     return net
 
 
@@ -364,9 +403,20 @@ def scope_problems(site: Doc) -> list[str]:
 # ---- the module-facing reader -----------------------------------------------------------------
 
 
+def _scope_requirements(module: Doc) -> list[Any]:
+    requires = module.get("requires")
+    got = requires.get("scope") if isinstance(requires, dict) else None
+    return got if isinstance(got, list) else []
+
+
 def declared_parts(module: Doc) -> set[str]:
-    """The scope parts a module declares in ``requires.scope``."""
-    return {n["part"] for n in module.get("requires", {}).get("scope", [])}
+    """The scope parts a module declares in ``requires.scope`` (an entry with no ``part``, or not a
+    mapping, declares nothing: :func:`manifest_scope_problems` reports it)."""
+    return {
+        n["part"]
+        for n in _scope_requirements(module)
+        if isinstance(n, dict) and isinstance(n.get("part"), str)
+    }
 
 
 def scope_networks(site: Doc, module: Doc, part: str) -> list[Network]:
@@ -387,31 +437,49 @@ def scope_networks(site: Doc, module: Doc, part: str) -> list[Network]:
 
 
 def runs_unattended(module: Doc) -> bool:
-    """True when the module does work no human starts: a scheduler job, or an agent on a
-    calendar or an event trigger."""
-    contributes = module.get("contributes", {})
-    if contributes.get("scheduler_jobs"):
-        return True
-    return any("schedule" in a or "trigger" in a for a in contributes.get("agents", []))
+    """True unless everything the module contributes is inert (:data:`INERT_CONTRIBUTIONS`).
+
+    Inverted on purpose (fail closed): the manifest has no "interactive only" marker, and a
+    service, a workflow pack, an MCP server another module's scheduled agent calls, an hourly
+    invariant, an entry point, a preflight hook, a role (which can install its own timer) and
+    every agent (each has a calendar or a trigger) all run with no human present.  So a module
+    is attended only when it contributes nothing that can execute."""
+    contributes = module.get("contributes")
+    if not isinstance(contributes, dict):
+        return contributes is not None  # a malformed contributes is not proof of "attended"
+    return any(v for k, v in contributes.items() if k not in INERT_CONTRIBUTIONS)
 
 
 def manifest_scope_problems(module: Doc) -> list[str]:
-    """What a module that acts on ``target`` must also declare.
+    """What a module that reads addresses from the scope must also declare.
 
-    The manifest has no "offensive" or "mutating" marker, so the rule is keyed on the
-    declarations it does have: a module that reads ``target`` acts on the addresses assessment
-    tooling may touch, so it requires ``exclude.offensive``; one that also runs unattended
-    (:func:`runs_unattended`) requires ``exclude.unattended_mutation`` too.  Both may be an
-    explicit ``[]`` in the selection, but neither may be absent."""
+    The manifest has no "offensive", "mutating" or "acts on" marker, so the rule is keyed on the
+    declarations it does have, and fails closed: a module that requires any address part
+    (:data:`ACTING_PARTS`: ``target`` and every ``trusted.*`` part) may act on those addresses,
+    so it requires ``exclude.offensive``; unless it is attended (:func:`runs_unattended`, which
+    is inverted: unattended unless it contributes nothing that can execute), it requires
+    ``exclude.unattended_mutation`` too.  Both may be an explicit ``[]`` in the selection, but
+    neither may be absent.  A requirement with no part is refused (it would declare nothing).
+
+    Not covered (specified, not implemented): a module that acts on hostnames or ``svc:``
+    references.  The scope holds networks only, and the manifest cannot say a module acts on a
+    name, so no rule here can see it."""
+    out = [
+        f"requires.scope[{i}]: no part (a scope requirement names one of {', '.join(SCOPE_PARTS)})"
+        for i, n in enumerate(_scope_requirements(module))
+        if not (isinstance(n, dict) and isinstance(n.get("part"), str))
+    ]
     parts = declared_parts(module)
-    if "target" not in parts:
-        return []
+    acting = sorted(parts & set(ACTING_PARTS))
+    if not acting:
+        return out
     need = ["exclude.offensive"]
     if runs_unattended(module):
         need.append("exclude.unattended_mutation")
-    return [
-        f"requires.scope: target without {p} (a module that acts on target subtracts it; "
-        "the selection may set it to [], never leave it out)"
+    return out + [
+        f"requires.scope: {acting[0]} without {p} (a module that reads addresses may act on "
+        "them, so it subtracts the exclusions; the selection may set it to [], never leave it "
+        "out)"
         for p in need
         if p not in parts
     ]
@@ -439,12 +507,16 @@ def effective_targets(site: Doc, module: Doc) -> list[Network]:
     is per IP version, and that is sound because an IPv4 range can only be excluded by an IPv4
     entry: IPv6 forms that embed IPv4 (mapped, compatible, NAT64) are refused by
     :func:`parse_entry`, so an exclusion written that way fails closed instead of silently
-    excluding nothing."""
+    excluding nothing.  When the exclusions cover every target it raises :class:`ScopeMissing`
+    ("nothing left after the exclusions"), never an empty list, which a caller could read as
+    "unrestricted" or hand to a tool that defaults to everything."""
     targets = scope_networks(site, module, "target")
     minus = scope_networks(site, module, "exclude.offensive")
     if runs_unattended(module):
         minus = minus + scope_networks(site, module, "exclude.unattended_mutation")
     left = _subtract(targets, minus)
+    if not left:  # never an empty list: a caller may read [] as "no restriction"
+        raise ScopeMissing("scope.target: nothing left after the exclusions")
     v4 = ipaddress.collapse_addresses(n for n in left if n.version == 4)
     v6 = ipaddress.collapse_addresses(n for n in left if n.version == 6)
     return [*v4, *v6]
@@ -455,6 +527,10 @@ def effective_targets(site: Doc, module: Doc) -> list[Network]:
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _SPLIT = re.compile(r"[\s,;=@()<>\"'`|{}!?*&^$#~\\\[\]]+")
 _DOTTED = re.compile(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){3}")
+#: an inet_aton short form: two or three numeric parts (``10.1`` is the octets 10, 0, 0, 1;
+#: ``10.20.5`` is 10, 20, 0, 5); read only in an address context (a URL, a port, a prefix length, brackets), where
+#: it cannot be a version
+_SHORT = re.compile(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){1,2}")
 _HEX_INT = re.compile(r"0[xX][0-9A-Fa-f]{1,8}")
 _BARE_INT = re.compile(r"[0-9]{8,10}")
 
@@ -477,8 +553,11 @@ def _special(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 
 def ipv4_readings(parts: list[str]) -> list[ipaddress.IPv4Address]:
-    """A dotted quad with hex or zero-padded parts, as a person reads it (decimal) and as
-    ``inet_aton`` does (octal after a leading zero, hex after 0x)."""
+    """One to four dotted numeric parts (``10.1``, ``10.20.5``, ``0x0a.0.0.1``, ``010.0.0.1``), as
+    a person reads them (decimal) and as ``inet_aton`` does (octal after a leading zero, hex after
+    0x; with fewer than four parts the last fills the remaining bytes, so ``10.1`` is the octets 10, 0, 0, 1)."""
+    if not 1 <= len(parts) <= 4:
+        return []
     out = []
     for octal in (False, True):
         values = []
@@ -492,8 +571,14 @@ def ipv4_readings(parts: list[str]) -> list[ipaddress.IPv4Address]:
                     values.append(256)  # not octal: no address under this reading
             else:
                 values.append(int(p))
-        if all(v <= 255 for v in values):
-            out.append(ipaddress.IPv4Address(".".join(map(str, values))))
+        last_bits = 8 * (5 - len(values))
+        if all(v <= 255 for v in values[:-1]) and values[-1] < 1 << last_bits:
+            n = values[-1]
+            for i, v in enumerate(values[:-1]):
+                n |= v << (8 * (3 - i))
+            addr = ipaddress.IPv4Address(n)
+            if addr not in out:
+                out.append(addr)
     return out
 
 
@@ -503,6 +588,8 @@ def _flag_v4(host: str, context: bool) -> bool:
         if any(p[:2].lower() == "0x" or (len(p) > 1 and p[0] == "0") for p in parts):
             return any(not _special(a) for a in ipv4_readings(parts))
         return any(not _special(a) and (context or not a.is_global) for a in ipv4_readings(parts))
+    if context and _SHORT.fullmatch(host):
+        return any(not _special(a) for a in ipv4_readings(host.split(".")))
     if _HEX_INT.fullmatch(host):
         return not _special(ipaddress.IPv4Address(int(host, 16)))
     if _BARE_INT.fullmatch(host) and int(host) < 1 << 32:
@@ -518,11 +605,14 @@ def address_literals(value: str) -> list[str]:
     Never flagged: a special address (:func:`_special`: ``0.0.0.0``, loopback, ``::``,
     ``[::]:8080``, ``cafe::beef``, multicast, a documentation address).  Always flagged when not
     special: an IPv6 address, a hex or zero-padded dotted quad, a ``0x`` integer, and any IPv4
-    address with a port, a prefix length or inside a URL.  A plain dotted quad or a bare 8 to 10
-    digit integer is also a version or a number (a four-part version), so it is flagged only when it is
-    private or shared address space (``is_global`` false): a lab's internal address, never a
-    version.  An external endpoint (a public resolver, an NTP server) is written as a hostname
-    or a ``svc:`` reference, so with a port or a scheme its literal is refused too."""
+    address with a port, a prefix length, in brackets or inside a URL, including an
+    ``inet_aton`` short form there (``http://10.1/`` is the octets 10, 0, 0, 1,
+    ``10.20.5:8080`` is 10, 20, 0, 5).  A plain dotted quad or a bare 8 to 10 digit integer is also a version or a
+    number (a four-part version), so it is flagged only when it is private or shared address
+    space (``is_global`` false): a lab's internal address, never a version.  A plain short form
+    (``1.2``, ``10.20.5``) is a version and is never flagged.  An external endpoint (a public
+    resolver, an NTP server) is written as a hostname or a ``svc:`` reference, so with a port or
+    a scheme its literal is refused too."""
     out: list[str] = []
     url = bool(_SCHEME.search(value))
     bracketed = "[" in value

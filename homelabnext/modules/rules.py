@@ -839,6 +839,11 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
                 out.append(f"{where}.config.{k}: the module declares no such key")
                 continue
             literal = None
+            # not scanned: integer, duration_s and boolean keys.  Their value is a number by
+            # schema, and any integer of 2**24 or more is also an IPv4 address (a byte count of
+            # 170000000 reads as one in 10/8), so scanning them would refuse ordinary sizes; a module
+            # that reads an address out of an integer key is a defect in that module
+            # (docs/modules.md, "The network scope")
             if spec[k]["type"] not in ("integer", "duration_s", "boolean"):
                 text = str(v) if isinstance(v, int) and not isinstance(v, bool) else v
                 literal = address_literals(text) if isinstance(text, str) else None
