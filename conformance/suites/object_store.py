@@ -6,7 +6,10 @@ from __future__ import annotations
 from conformance.fakes.object_store import (
     BrokenEtagObjectStore,
     BrokenListObjectStore,
+    DeleteEveryBucketObjectStore,
+    DeleteMissingBucketObjectStore,
     FakeObjectStore,
+    HeadMissingIsEmptyObjectStore,
     PathResolvingObjectStore,
 )
 from conformance.protocols.object_store import NoSuchBucket, NoSuchKey, ObjectStoreError
@@ -44,11 +47,21 @@ def _(store):
     assert store.get(b, "empty") == b"", "empty object not preserved"
 
 
-@SUITE.check("get-missing-key-raises", "a missing key raises NoSuchKey, not None or empty bytes")
+@SUITE.check(
+    "get-missing-key-raises",
+    "get or head of a missing key raises NoSuchKey, not None, empty bytes or a zero-size object",
+)
 def _(store):
     b = _bucket(store)
-    exc = raises(lambda: store.get(b, "nope"), "missing key", NoSuchKey)
-    assert isinstance(exc, NoSuchKey), f"wrong error type {type(exc).__name__}"
+    store.put(b, "gone", b"x")
+    store.delete(b, "gone")
+    for key in ("nope", "gone"):
+        for name, fn in (
+            ("get", lambda k=key: store.get(b, k)),
+            ("head", lambda k=key: store.head(b, k)),
+        ):
+            exc = raises(fn, f"{name} of missing key {key!r}", NoSuchKey)
+            assert isinstance(exc, NoSuchKey), f"{name}: wrong error type {type(exc).__name__}"
 
 
 @SUITE.check("missing-bucket-raises", "operations on a missing bucket raise NoSuchBucket")
@@ -57,6 +70,8 @@ def _(store):
     for name, fn in (
         ("put", lambda: store.put(ghost, "k", b"x")),
         ("get", lambda: store.get(ghost, "k")),
+        ("head", lambda: store.head(ghost, "k")),
+        ("delete", lambda: store.delete(ghost, "k")),
         ("list", lambda: store.list(ghost)),
     ):
         exc = raises(fn, f"{name} on missing bucket", NoSuchBucket, NoSuchKey)
@@ -134,7 +149,7 @@ def _(store):
 
 @SUITE.check(
     "keys-never-escape-the-bucket",
-    "'..' keys are stored verbatim or refused; buckets never see each other's objects",
+    "'..' keys are stored verbatim or refused; buckets never see or delete each other's objects",
 )
 def _(store):
     a, b = _bucket(store), _bucket(store)
@@ -142,6 +157,13 @@ def _(store):
     store.put(a, "x", b"a-x")
     raises(lambda: store.get(b, "secret"), "another bucket's key", NoSuchKey)
     assert "secret" not in store.list(b).keys, "a bucket lists another bucket's key"
+    store.put(a, "shared", b"a-shared")
+    store.put(b, "shared", b"b-shared")
+    store.delete(b, "shared")
+    raises(lambda: store.get(b, "shared"), "deleted key", NoSuchKey)
+    assert store.get(a, "shared") == b"a-shared", "deleting a key in one bucket deleted another's"
+    store.delete(b, "secret")  # absent in b: must not reach a's object of that name
+    assert store.get(a, "secret") == b"bucket-a", "a delete reached another bucket"
     for key in ("../x", "a/../../b", f"../{a}/secret", f"x/../../{a}/secret", "./x"):
         try:
             store.put(b, key, b"evil")
@@ -183,6 +205,21 @@ MUTANTS = {
     ),
     "weak-etag": Mutant(
         BrokenEtagObjectStore, "etag-tracks-content", "etag depends on the size only"
+    ),
+    "head-missing-is-empty": Mutant(
+        HeadMissingIsEmptyObjectStore,
+        "get-missing-key-raises",
+        "head of a missing key returns a zero-size object instead of NoSuchKey",
+    ),
+    "delete-missing-bucket-succeeds": Mutant(
+        DeleteMissingBucketObjectStore,
+        "missing-bucket-raises",
+        "delete on a bucket that does not exist succeeds instead of NoSuchBucket",
+    ),
+    "delete-reaches-every-bucket": Mutant(
+        DeleteEveryBucketObjectStore,
+        "keys-never-escape-the-bucket",
+        "delete(bucket, key) removes key from every bucket",
     ),
     "keys-resolved-as-paths": Mutant(
         PathResolvingObjectStore,

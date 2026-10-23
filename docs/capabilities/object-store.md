@@ -191,7 +191,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 |---|---|---|---|
 | `put-get-roundtrip` | MUST | bytes written are the bytes read back |  |
 | `binary-safe` | MUST | all 256 byte values survive, including NUL and empty objects |  |
-| `get-missing-key-raises` | MUST | a missing key raises NoSuchKey, not None or empty bytes |  |
+| `get-missing-key-raises` | MUST | get or head of a missing key raises NoSuchKey, not None, empty bytes or a zero-size object |  |
 | `missing-bucket-raises` | MUST | operations on a missing bucket raise NoSuchBucket |  |
 | `overwrite-last-writer-wins` | MUST | a second put replaces the object |  |
 | `etag-tracks-content` | MUST | equal content has an equal etag; different content differs |  |
@@ -199,7 +199,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `list-prefix-and-order` | MUST | listing filters by prefix and is ordered by key |  |
 | `list-pagination-complete` | MUST | paging visits every key exactly once, in order |  |
 | `unicode-and-slash-keys` | MUST | keys are opaque text: unicode and '/' work |  |
-| `keys-never-escape-the-bucket` | MUST | '..' keys are stored verbatim or refused; buckets never see each other's objects |  |
+| `keys-never-escape-the-bucket` | MUST | '..' keys are stored verbatim or refused; buckets never see or delete each other's objects |  |
 | `user-metadata-preserved` | SHOULD | metadata supplied on put comes back from head | `metadata` |
 
 ### Features an adapter may declare
@@ -214,6 +214,9 @@ Each is a deliberately broken fake (`hnx conform run object-store --target broke
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `delete-missing-bucket-succeeds` | `missing-bucket-raises` | delete on a bucket that does not exist succeeds instead of NoSuchBucket |
+| `delete-reaches-every-bucket` | `keys-never-escape-the-bucket` | delete(bucket, key) removes key from every bucket |
+| `head-missing-is-empty` | `get-missing-key-raises` | head of a missing key returns a zero-size object instead of NoSuchKey |
 | `keys-resolved-as-paths` | `keys-never-escape-the-bucket` | bucket/key is normalised as a path, so '..' reaches other keys and buckets |
 | `pagination-drops-boundary-key` | `list-pagination-complete` | the last key of each truncated page is lost |
 | `weak-etag` | `etag-tracks-content` | etag depends on the size only |

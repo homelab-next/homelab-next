@@ -32,6 +32,14 @@ CASES = [
     ("idp", "identity", "SubstringScopeIdentityProvider", "scope-enforced"),
     ("idp", "identity", "ScopedSkipsRevocationIdentityProvider", "revoked-token-rejected"),
     ("idp", "identity", "NonFiniteTtlIdentityProvider", "issue-validates-input"),
+    ("object-store", "object_store", "HeadMissingIsEmptyObjectStore", "get-missing-key-raises"),
+    ("object-store", "object_store", "DeleteMissingBucketObjectStore", "missing-bucket-raises"),
+    (
+        "object-store",
+        "object_store",
+        "DeleteEveryBucketObjectStore",
+        "keys-never-escape-the-bucket",
+    ),
 ]
 
 
