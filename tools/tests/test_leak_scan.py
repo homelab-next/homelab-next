@@ -718,10 +718,32 @@ def test_a_go_short_variable_declaration_is_a_keyed_value(path: str):
         "tokenizer := x",
         'secretRef := "secret:llm-gateway/key"',
         "maxTokens := 4096",
+        # verify3.md (v3/leak/fp4): a Go expression is code, whatever its digits
+        "secret" + "Key = base64.StdEncoding.EncodeToString(buf)",
+        "secret" + "Key := base64.StdEncoding.EncodeToString(buf)",
+        "sessionTok" + "en := base64.RawURLEncoding.EncodeToString(b)",
+        "tok" + "enHash := sha256.Sum256([]byte(tok))",
+        "tok" + "enHash = sha512.New384()",
+        "authToken := tokens[0]",
+        "refreshToken := oauth2Token.RefreshToken",
     ],
 )
 def test_go_short_declarations_of_code_and_references_are_not_keyed_secrets(text: str):
     assert "keyed-secret" not in _secret_hits(text, "orchestrator/internal/x/x.go")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'secretKey := "' + RANDOM + '"',  # a quoted literal is still judged
+        'apiToken = "' + VAL_B + '"',
+        "x := `token = " + VAL_B + "`",  # a raw string: config text, not code
+        'cfg := "token=' + VAL_B + '"',  # an interpreted string
+        "apiTok" + "en := " + VAL_B,  # no selector, call or index: not an expression
+    ],
+)
+def test_go_code_is_skipped_only_unquoted_and_outside_a_string(text: str):
+    assert "keyed-secret" in _secret_hits(text, "orchestrator/internal/x/x.go"), text
 
 
 def test_history_reads_go_sum_by_the_path_of_the_diff(tmp_path):

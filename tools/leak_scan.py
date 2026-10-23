@@ -384,8 +384,23 @@ def _is_short_number(value: str) -> bool:
 KEYED_PLACEHOLDER_RE = re.compile(r"(?i)secret|passw|token|hunter2|abc123|letmein|qwerty|123456")
 
 
+# a Go expression assigned in code: an identifier with a selector, a call or an index after it
+# (base64.StdEncoding.EncodeToString(buf), sha256.Sum256([]byte(tok))); Go has no bare literals
+GO_CODE_VALUE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.[A-Za-z_]\w*|[\[(].*)$")
+
+
+def _is_go_code_assignment(m: re.Match[str], line: str) -> bool:
+    """An unquoted Go expression on the right of ``:=`` or ``=``, not in an interpreted string."""
+    if m.group("q") or not GO_CODE_VALUE_RE.match(m.group("val")):
+        return False
+    separator = line[m.start() : m.start("val")].rstrip("\"' \t")
+    return separator.endswith("=") and not _in_go_string(line, m.start("val"))
+
+
 def _is_hit_keyed_value(m: re.Match[str], line: str, path: str = "") -> bool:
     value = m.group("val")
+    if path.endswith(".go") and _is_go_code_assignment(m, line):
+        return False
     if path.endswith(".go") and _in_go_string(line, m.start("val")):
         segments = GO_ESCAPE_RE.split(value)
         kept = [seg for n, seg in enumerate(segments) if not (n and NEXT_KEY_RE.match(seg))]
