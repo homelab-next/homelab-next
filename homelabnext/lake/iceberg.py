@@ -15,7 +15,9 @@ Two independent layers, because each covers a failure the other cannot:
 2. **Content key.** Rows whose key columns (``uid``) already exist in the table are filtered out
    before the append. That makes replay safe when the batching changes, when the same log tail is
    re-read under new batch ids, or when old snapshots were expired (the ledger is gone, the data
-   is not).
+   is not). The lookup is over the whole table, as in the other adapters: a ``uid`` stored with
+   another ``time`` (a re-emitted finding, a re-normalised event) is still found. Only a schema
+   whose key includes its time column has the lookup bounded to the batch's time range.
 
 ``hnx.high-water`` lets a restarted reader fast-forward its checkpoint to what the lake already
 holds (see :mod:`homelabnext.lake.checkpoint`).
@@ -215,19 +217,20 @@ class IcebergLake(AdapterBase):
     def _existing_keys(self, tbl: Any, s: TableSchema, rows: list[dict[str, Any]]) -> set[tuple]:
         from pyiceberg.expressions import And, GreaterThanOrEqual, In, LessThanOrEqual
 
-        times = [r[s.time_column] for r in rows]
-        lo, hi = min(times), max(times)
+        bound = None
+        if s.time_column in s.key:  # a key that holds the time: the batch's range prunes safely
+            times = [r[s.time_column] for r in rows]
+            bound = And(
+                GreaterThanOrEqual(s.time_column, min(times).isoformat()),
+                LessThanOrEqual(s.time_column, max(times).isoformat()),
+            )
         k0 = s.key[0]
         found: set[tuple] = set()
         values = sorted({r[k0] for r in rows}, key=str)
         for i in range(0, len(values), KEY_CHUNK):
-            flt = And(
-                And(
-                    GreaterThanOrEqual(s.time_column, lo.isoformat()),
-                    LessThanOrEqual(s.time_column, hi.isoformat()),
-                ),
-                In(k0, values[i : i + KEY_CHUNK]),
-            )
+            flt = In(k0, values[i : i + KEY_CHUNK])
+            if bound is not None:
+                flt = And(bound, flt)
             got = tbl.scan(row_filter=flt, selected_fields=tuple(s.key)).to_arrow()
             for rec in got.to_pylist():
                 found.add(tuple(rec[k] for k in s.key))
