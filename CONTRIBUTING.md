@@ -129,16 +129,17 @@ and an entry that no longer excuses anything fails the lint.
   `tools/tls_verify.allow.yml`, or `tls-verify: allow <reason>` on the line.
 - `tools/caddy_lint.py` (F-23): over every Caddy config in the tree (`git ls-files`: Caddyfiles
   and their templates and imports, markdown fences, Caddyfiles in YAML, Caddy JSON/YAML, the
-  `caddy` generator's output for each registry), a site that runs `forward_auth` deletes the
-  identity headers first at site level with no matcher (`request_header -*authentik*`, as the
-  generator writes it), every `forward_auth` sits in a `route` that first deletes each header its
-  `copy_headers` sets in every `-`/`_` spelling, with no matcher; no header directive sets, adds
+  `caddy` generator's output for each registry), in a config with a `forward_auth` anywhere
+  every site that runs it or proxies deletes the identity headers first at site level with no
+  matcher (`request_header -*authentik*`, as the generator writes it; the IdP's own site is
+  exempt), every `forward_auth` sits in a `route`, with no matcher, after a delete (site level
+  or in the route) of each header its `copy_headers` sets in every `-`/`_` spelling; no header directive sets, adds
   or copies an identity header, or rewrites one through a `*` field; no FastCGI `env` sets an
   identity CGI variable or a client-chosen value; no `forward_auth` (or forward-auth site proxy)
-  dials a request placeholder (`dial`); no upstream behind `forward_auth` is proxied again
-  without it (`exposure`); what the lint cannot read (a heredoc, `{$ENV}` in directive
-  position, a header name that is a placeholder, an import glob, a `forward_auth` in a `.conf`
-  nothing imports or a Python string) fails closed; and every Caddy pin (registry `impl: caddy`,
+  dials a request placeholder (`dial`); what the lint cannot read (a heredoc, `{$ENV}` in
+  directive position, a header name that is a placeholder, an import outside the tree, a
+  `forward_auth` in a `.conf` nothing imports, a Python string or a caddy-docker-proxy label)
+  fails closed; and every Caddy pin (registry `impl: caddy`,
   `caddy_*version` keys, any `.../caddy` image, Dockerfile `FROM`/`COPY --from` and `xcaddy
   build`, `caddy=` packages, `go.mod`, `.env`) is 2.11.2 or later. With a `caddy` binary on PATH
   (or `HNX_CADDY`) it also judges Caddy's own `caddy adapt` JSON; CI pins one and requires it,
