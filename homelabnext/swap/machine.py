@@ -332,14 +332,26 @@ def _cutover(ctx: _Ctx) -> list[Gate]:
         if stopped.ok:
             return gates
     # a failed post-condition: put the old route (and the old component) back at once
-    _safe(b.start_old)  # first, so the old component is running when it is primary again
+    started = _safe(b.start_old)  # first, so the old component runs when it is primary again
     back = _safe(lambda: b.apply_route(before))
-    d["revert"] = {"ok": back.ok, "detail": back.detail}
+    d["revert"] = {
+        "ok": back.ok,
+        "detail": back.detail,
+        "start_old": {"ok": started.ok, "detail": started.detail},
+    }
     if back.ok:
         ctx.doc["route"]["flipped"] = False
         ctx.details["reverted"] = True
+        if not started.ok:
+            gates.append(_g("post", "revert", False, f"old route restored, but {started.detail}"))
     else:
-        gates.append(_g("post", "revert", False, f"could not restore the old route: {back.detail}"))
+        # the route stays on the candidate: stop the old component again, as cutover left it
+        stopped = _safe(b.stop_old)
+        d["revert"]["stop_old"] = {"ok": stopped.ok, "detail": stopped.detail}
+        why = f"could not restore the old route: {back.detail}"
+        if not started.ok:
+            why += f"; {started.detail}"
+        gates.append(_g("post", "revert", False, why))
     return gates
 
 
@@ -542,7 +554,11 @@ class SwapRunner:
         }
 
     # ---------------------------------------------------------------- rollback / notes
-    def rollback(self, reason: str) -> dict[str, Any]:
+    def rollback(self, reason: str, *, abandon_parked: bool = False) -> dict[str, Any]:
+        """Restore the prior route.  Writes parked for the old component are replayed into it
+        first; while one is refused the rollback stops (and the old component is stopped again).
+        ``abandon_parked`` drops those writes on purpose: they are listed, rows included, in the
+        rollback evidence."""
         doc = self.record()
         reason = (reason or "").strip()
         if doc["status"] != "active":
@@ -573,11 +589,28 @@ class SwapRunner:
 
         # start the old component first: its parked writes replay while it is still secondary,
         # and it is never primary while stopped (a write in between would fail)
-        do("start old component", self.backend.start_old)
+        abandoned: list[Any] = []
+        if abandon_parked:
+            first = _safe(self.backend.start_old)
+            if not first.ok:
+                gone = _safe(lambda: self.backend.discard_parked(reason))
+                abandoned = list(gone.data.get("discarded") or [])
+                do("abandon parked writes", lambda: gone)
+                do("start old component", self.backend.start_old)
+            else:
+                do("start old component", lambda: first)
+        else:
+            do("start old component", self.backend.start_old)
+        restored = False
         if was_flipped:
+            before_n = len(problems)
             do("restore route", lambda: self.backend.apply_route(before))
+            restored = len(problems) == before_n
         do("verify route", lambda: self.backend.verify_route(before))
         do("stop mirror", self.backend.stop_mirror, required=False)
+        if problems and was_flipped and not restored:
+            # the route stays on the candidate: put the old component back as cutover left it
+            do("stop old component again", self.backend.stop_old, required=False)
         if problems:
             rec.append_transition(
                 doc,
@@ -598,6 +631,8 @@ class SwapRunner:
             "actions": actions,
             "at": now,
         }
+        if abandon_parked:
+            body["abandoned_parked"] = abandoned
         text = json.dumps(body, indent=2, sort_keys=True) + "\n"
         d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
         d.mkdir(parents=True, exist_ok=True)

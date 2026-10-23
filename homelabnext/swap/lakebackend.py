@@ -14,12 +14,20 @@ Behaviour worth knowing:
   loses no data; while the old component is stopped its writes are parked and replayed on restart.
   A batch parked for a component is replayed into it before a route change makes it primary, and
   the route is not changed while one cannot be; ``start_old`` fails while any stays parked.
+* ``mirror_status`` retries the batches parked for the candidate, so a transient failure clears
+  the ``divergences-within-budget`` gates once the candidate takes them.
+* Parked batches live in memory unless ``pending_path`` is given: then the queue is written to
+  that file on every change and read back at start (an unreadable file refuses to start).
+* ``discard_parked`` drops the batches owed to the old component on purpose (``rollback
+  --abandon-parked``) and returns them as evidence.
 * ``stop_old`` makes the old client refuse requests (it is stopped, not destroyed).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +37,7 @@ from homelabnext.parity import ParityQuery, ParityReport, Sample, compare_querie
 
 from .backend import Backend, Outcome
 from .decommission import Retired, scan
-from .dualwrite import DualWriter
+from .dualwrite import DualWriter, _Pending
 from .flip import flip_text, load_doc, plan_flip
 
 
@@ -69,6 +77,7 @@ class LakeBackend(Backend):
         retired: Retired | None = None,
         allow: Sequence[str] = (),
         smoke: Callable[[Any, str], Outcome] | None = None,
+        pending_path: str | Path | None = None,
     ):
         self.old = SwitchableClient(old)
         self.new = new
@@ -87,6 +96,53 @@ class LakeBackend(Backend):
         self.mirroring = False
         self.writer = DualWriter(self.old, self.new)  # production writes go through this
         self.last_report: ParityReport | None = None
+        self.pending_path = Path(pending_path) if pending_path else None
+        if self.pending_path is not None:
+            self._load_pending()
+            self.writer.on_change = self._save_pending
+
+    # ------------------------------------------------------------ the parked queue on disk
+    def _role(self, component: Any) -> str:
+        return "old" if component is self.old else "new"
+
+    def _save_pending(self) -> None:
+        """Write the parked queue (each batch with the component it is owed to) atomically, so a
+        restart does not drop it."""
+        from homelabnext.state import atomic_write_text
+
+        assert self.pending_path is not None
+        doc = {
+            "version": 1,
+            "pending": [
+                {"owed_to": self._role(self.writer._target(p)), **p.to_dict()}
+                for p in self.writer.pending
+            ],
+        }
+        text = json.dumps(doc, sort_keys=True, default=_json_value) + "\n"
+        atomic_write_text(self.pending_path, text, mode=0o600)
+
+    def _load_pending(self) -> None:
+        assert self.pending_path is not None
+        if not self.pending_path.exists():
+            return
+        try:
+            doc = json.loads(self.pending_path.read_text(encoding="utf-8"))
+            items = doc["pending"] if doc.get("version") == 1 else None
+            if not isinstance(items, list):
+                raise ValueError("not a version 1 parked-batch file")
+            for it in items:
+                target = self.old if it["owed_to"] == "old" else self.new
+                self.writer.pending.append(
+                    _Pending(
+                        it["table"], list(it["rows"]), it["idempotency_key"], it.get("source"),
+                        it.get("high_water"), target, int(it.get("order") or 0),
+                    )
+                )  # fmt: skip
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # refuse to start rather than drop parked writes silently
+            raise LakeError(f"parked batches in {self.pending_path} are unreadable: {exc}") from exc
+        if self.writer.pending:
+            self.writer._order["n"] = max(p.order for p in self.writer.pending)
 
     # ------------------------------------------------------------ conformance / shadow / mirror
     def conformance(self, role: str) -> Outcome:
@@ -124,6 +180,8 @@ class LakeBackend(Backend):
         return Outcome(True, "dual-write active", {"direction": "old->new"})
 
     def mirror_status(self) -> Outcome:
+        if self.mirroring:  # a batch parked for the candidate is retried at every status check
+            self.writer.replay_pending(owed_to=self.writer.secondary)
         s = self.writer.status()
         return Outcome(self.mirroring, f"{s['unresolved']} unresolved", {**s})
 
@@ -211,6 +269,12 @@ class LakeBackend(Backend):
             )
         return Outcome(True, detail)
 
+    def discard_parked(self, reason: str) -> Outcome:
+        gone = self.writer.discard_pending(reason, owed_to=self.old)
+        gone = json.loads(json.dumps(gone, default=_json_value))  # plain JSON, for the evidence
+        keys = ", ".join(g["idempotency_key"] for g in gone) or "none"
+        return Outcome(True, f"discarded {len(gone)} parked batches: {keys}", {"discarded": gone})
+
     def old_state(self) -> Outcome:
         return Outcome(True, "", {"state": "stopped" if self.old.down else "running"})
 
@@ -223,3 +287,10 @@ class LakeBackend(Backend):
             "no references remain" if not found else f"{len(found)} references remain",
             {"findings": [f.to_dict() for f in found]},
         )
+
+
+def _json_value(v: Any) -> Any:
+    """Rows hold timestamps; they are stored as ISO text, which the lake validation reads back."""
+    if isinstance(v, datetime | date):
+        return v.isoformat()
+    raise TypeError(f"cannot store a parked {type(v).__name__}")

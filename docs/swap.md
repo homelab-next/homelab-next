@@ -104,6 +104,36 @@ gets the same idempotency key; a failure or a row-count mismatch becomes a recor
 safely. If the primary fails, the secondary is not touched, so the candidate can never hold data
 the incumbent lacks. After cutover the direction reverses so a rollback loses nothing.
 
+Parked batches keep their order. While any is parked for the secondary, a new batch is not sent
+past it: the parked ones are replayed first, and if one is still refused the new batch is parked
+behind it. Replays go oldest first and stop at a component's first failure, so each component
+takes its batches in write order and the lake's per-source mark never moves to an older batch (a
+replay into a component that has already taken a newer batch of the same source is sent without
+its mark, as a second guard). `mirror_status` (the `dual-write` and `soak` gates) retries the
+batches parked for the candidate, so a transient failure clears once the candidate takes them.
+
+A route change replays what is owed to the component that becomes primary, and **is refused**
+(`route not changed: N parked batches owed to the incoming primary ...`) while any cannot be
+replayed; `start_old` fails while a batch stays parked for the old component. In the reference
+`LakeBackend` the queue lives in memory unless `pending_path` is given, which writes it to that
+file on every change and reads it back at start; an unreadable file refuses to start rather than
+drop parked writes.
+
+### Rollback and refused writes
+
+A rollback starts the old component first (its parked writes replay while it is still
+secondary), then restores the route. If a parked write is refused for good, the rollback stops
+with `rollback incomplete` and puts the old component back as cutover left it (stopped), so the
+forward path's `old-retained` gate still holds. The automatic revert of a failed cutover does the
+same and records the outcome of each step under `revert` in the cutover evidence.
+
+The escape hatch is explicit and recorded: `hnx swap rollback R --reason TEXT --abandon-parked`
+(`SwapRunner.rollback(reason, abandon_parked=True)`) drops the writes the old component refuses
+(`Backend.discard_parked`, `DualWriter.discard_pending`), lists each dropped batch with its rows
+under `abandoned_parked` in the rollback evidence (hashed into the record), and records an
+`abandon parked writes` action. Use it only when the dropped rows are reconciled some other way;
+nothing else ever drops a parked batch.
+
 ## The registry flip
 
 Consumers resolve `<capability>.<svc_label>.<domain>`; the registry row says what answers. Cutover

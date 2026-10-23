@@ -11,6 +11,14 @@ Rules (each is a test):
   :meth:`DualWriter.replay_pending` retries parked batches; the key makes replay safe.
   Each parked batch remembers the component it was meant for, so a writer re-pointed with
   :meth:`DualWriter.rerouted` (a route flip or a rollback) still replays it into that component.
+* **Order per component.** While batches are parked for the secondary, a new batch is not sent
+  past them: they are replayed first, and if any is still refused the new batch is parked behind
+  them (``queued``).  Replays go oldest first and stop at a component's first failure.  So a
+  component takes its batches in write order, and the lake's per-source mark never moves to an
+  older batch.  As a second line of defence, a replay into a component that has already taken a
+  newer batch of the same source is sent without its source mark.
+* :meth:`DualWriter.discard_pending` drops parked batches on purpose, with a reason, and returns
+  them (rows included) for the caller to keep as evidence; nothing else ever drops one.
 * A secondary that "succeeds" but wrote a different number of rows than the primary is a
   divergence too (``count_mismatch``), because that is how silent loss starts.
 * Divergences go to an optional JSON Lines file (one object per line) as well as memory.
@@ -35,7 +43,7 @@ from homelabnext.lake.protocol import WriteResult
 @dataclass(frozen=True)
 class Divergence:
     at: str
-    kind: str  # secondary_error | count_mismatch | replay_failed
+    kind: str  # secondary_error | queued | count_mismatch | replay_failed | discarded
     table: str
     idempotency_key: str
     detail: str
@@ -60,6 +68,17 @@ class _Pending:
     source: str | None
     high_water: str | None
     target: Any = None  # the component the batch is owed to; None means the current secondary
+    order: int = 0  # the write order of the batch (shared by every rerouted writer)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "table": self.table,
+            "idempotency_key": self.idempotency_key,
+            "source": self.source,
+            "high_water": self.high_water,
+            "order": self.order,
+            "rows": self.rows,
+        }
 
 
 @dataclass
@@ -91,6 +110,11 @@ class DualWriter:
         self.divergences: list[Divergence] = []
         self.pending: list[_Pending] = []
         self.stats = MirrorStats()
+        #: write order counter and, per (component, table, source), the order of the newest
+        #: batch that component took with that source's mark (shared by rerouted writers)
+        self._order: dict[str, Any] = {"n": 0, "marked": {}}
+        #: called after every change to ``pending`` (a backend persists the queue with it)
+        self.on_change: Callable[[], None] | None = None
 
     def rerouted(self, primary: Any, secondary: Any) -> DualWriter:
         """A writer for a new direction that keeps this one's parked batches, divergences and stats.
@@ -102,7 +126,19 @@ class DualWriter:
         new.pending = self.pending
         new.divergences = self.divergences
         new.stats = self.stats
+        new._order = self._order
+        new.on_change = self.on_change
         return new
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
+
+    def _mark(self, component: Any, table: str, source: str | None, order: int) -> None:
+        if source is not None:
+            k = (id(component), table, source)
+            marked = self._order["marked"]
+            marked[k] = max(order, marked.get(k, 0))
 
     # ------------------------------------------------------------ writes
     def write_batch(
@@ -117,9 +153,14 @@ class DualWriter:
         result = self.primary.write_batch(
             table, rows, idempotency_key=idempotency_key, source=source, high_water=high_water
         )  # an exception here is the caller's, and the secondary is not touched
+        self._order["n"] += 1
+        order = self._order["n"]
+        self._mark(self.primary, table, source, order)
         self.stats.batches += 1
         self.stats.rows += len(rows)
-        self._mirror(table, [dict(r) for r in rows], idempotency_key, source, high_water, result)
+        self._mirror(
+            table, [dict(r) for r in rows], idempotency_key, source, high_water, result, order
+        )
         return result
 
     def write(self, table: str, rows: Sequence[Mapping[str, Any]], *, batch_id: str) -> int:
@@ -133,16 +174,27 @@ class DualWriter:
         source: str | None,
         high_water: str | None,
         primary_result: WriteResult,
+        order: int = 0,
     ) -> None:
+        parked = _Pending(table, rows, key, source, high_water, self.secondary, order)
+        if self.owed_to(self.secondary):  # never send a batch past older ones still parked
+            self.replay_pending(owed_to=self.secondary)
+            if self.owed_to(self.secondary):
+                self.pending.append(parked)
+                self._record("queued", table, key, "parked behind earlier batches", len(rows))
+                self._changed()
+                return
         try:
             res = self.secondary.write_batch(
                 table, rows, idempotency_key=key, source=source, high_water=high_water
             )
         except Exception as exc:  # the secondary must never break the primary
             self.stats.secondary_failures += 1
-            self.pending.append(_Pending(table, rows, key, source, high_water, self.secondary))
+            self.pending.append(parked)
             self._record("secondary_error", table, key, f"{type(exc).__name__}: {exc}", len(rows))
+            self._changed()
             return
+        self._mark(self.secondary, table, source, order)
         if res.rows_written != primary_result.rows_written:
             self.stats.count_mismatches += 1
             self._record(
@@ -163,7 +215,8 @@ class DualWriter:
     def replay_pending(self, owed_to: Any = None) -> int:
         """Retry parked batches (only those owed to ``owed_to``, when given); returns how many
         now succeeded.  Batches are retried oldest first and stop at the first failure for each
-        component, so a component never takes an older batch after a newer one."""
+        component.  A batch older than one the component already took with the same source's
+        mark is replayed without the mark, so the mark never moves back."""
         still: list[_Pending] = []
         ok = 0
         failed: list[Any] = []
@@ -172,15 +225,18 @@ class DualWriter:
             if (owed_to is not None and target is not owed_to) or any(target is f for f in failed):
                 still.append(p)
                 continue
+            newer = self._order["marked"].get((id(target), p.table, p.source), 0) > p.order
             try:
                 target.write_batch(
                     p.table,
                     p.rows,
                     idempotency_key=p.idempotency_key,
-                    source=p.source,
-                    high_water=p.high_water,
+                    source=None if newer else p.source,
+                    high_water=None if newer else p.high_water,
                 )
                 ok += 1
+                if not newer:
+                    self._mark(target, p.table, p.source, p.order)
             except Exception as exc:
                 still.append(p)
                 failed.append(target)
@@ -191,9 +247,35 @@ class DualWriter:
                     f"{type(exc).__name__}: {exc}",
                     len(p.rows),
                 )
-        self.pending = still
+        changed = len(still) != len(self.pending)
+        self.pending[:] = still  # in place: rerouted writers share the queue
         self.stats.replayed_ok += ok
+        if changed:
+            self._changed()
         return ok
+
+    def discard_pending(
+        self, reason: str, *, keys: Sequence[str] | None = None, owed_to: Any = None
+    ) -> list[dict[str, Any]]:
+        """Drop parked batches on purpose (those with ``keys``, and owed to ``owed_to``, when
+        given; else all) and return them, rows included, for the caller's evidence.  Each drop is
+        a ``discarded`` divergence naming ``reason``."""
+        reason = (reason or "").strip()
+        if not reason:
+            raise ValueError("discarding parked batches needs a reason")
+        want = None if keys is None else set(keys)
+        gone, still = [], []
+        for p in self.pending:
+            hit = (want is None or p.idempotency_key in want) and (
+                owed_to is None or self._target(p) is owed_to
+            )
+            (gone if hit else still).append(p)
+        self.pending[:] = still
+        for p in gone:
+            self._record("discarded", p.table, p.idempotency_key, reason, len(p.rows))
+        if gone:
+            self._changed()
+        return [p.to_dict() for p in gone]
 
     # ------------------------------------------------------------ reporting
     def _record(self, kind: str, table: str, key: str, detail: str, rows: int) -> None:

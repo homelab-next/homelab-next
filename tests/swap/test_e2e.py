@@ -10,7 +10,15 @@ import pytest
 from scenario import AFTER, BEFORE, Scenario
 from support import check_example
 
-from homelabnext.swap import GateFailed, RollbackRefused, SwapError, record, retired_from_record
+from homelabnext.lake import LakeError
+from homelabnext.swap import (
+    GateFailed,
+    LakeBackend,
+    RollbackRefused,
+    SwapError,
+    record,
+    retired_from_record,
+)
 from homelabnext.swap.flip import load_doc
 
 
@@ -240,3 +248,134 @@ def test_active_example_mid_swap(tmp_path):
     for _ in range(4):
         sc.runner.advance()
     check_example("active", record.dumps(doc_of(sc)))
+
+
+def _with_flaky_candidate(sc):
+    b = sc.backend
+    assert b.shadow_start().ok and b.start_mirror().ok
+    flaky = _Flaky(sc.new)
+    b.new = flaky
+    b.writer = b.writer.rerouted(b.old, flaky)
+    return b, flaky
+
+
+def test_a_batch_written_between_the_park_and_the_flip_waits_its_turn(tmp_path):
+    # b1 parked, the candidate recovers, b2 is mirrored: b2 must not land before b1
+    sc = Scenario(tmp_path)
+    b, flaky = _with_flaky_candidate(sc)
+    base = lakes.rows_for("dns_activity")[0]
+    flaky.down = True
+    b.writer.write_batch("dns_activity", [dict(base, uid="r1")], idempotency_key="b1", source="src", high_water="100")  # fmt: skip
+    flaky.down = False
+    b.writer.write_batch("dns_activity", [dict(base, uid="r2")], idempotency_key="b2", source="src", high_water="200")  # fmt: skip
+    assert b.writer.status()["pending"] == 0
+    assert b.apply_route(AFTER).ok
+    mark = sc.new.describe("dns_activity").committed["src"]
+    assert (mark.batch_id, mark.high_water) == ("b2", "200")
+
+
+def test_a_batch_is_parked_behind_older_ones_still_refused(tmp_path):
+    sc = Scenario(tmp_path)
+    b, flaky = _with_flaky_candidate(sc)
+    base = lakes.rows_for("dns_activity")[0]
+    flaky.down = True
+    for k in ("b1", "b2"):
+        b.writer.write_batch("dns_activity", [dict(base, uid=k)], idempotency_key=k, source="src", high_water=k)  # fmt: skip
+    assert [p.idempotency_key for p in b.writer.pending] == ["b1", "b2"]
+    assert [d.kind for d in b.writer.divergences][-1] == "queued"  # b2 never went past b1
+    flaky.down = False
+    assert b.mirror_status().data["pending"] == 0  # the status check replays, in order
+    assert sc.new.describe("dns_activity").committed["src"].batch_id == "b2"
+
+
+def test_mirror_status_replays_so_the_divergence_gates_can_clear(tmp_path):
+    sc = Scenario(tmp_path)
+    b, flaky = _with_flaky_candidate(sc)
+    flaky.down = True
+    b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid="m1")], idempotency_key="m1")  # fmt: skip
+    assert b.mirror_status().data["unresolved"] == 1
+    flaky.down = False
+    assert b.mirror_status().data["unresolved"] == 0 and _count(sc.new, "m1") == 1
+
+
+def _poisoned_rollback_scenario(tmp_path):
+    sc = Scenario(tmp_path)
+    sc.run_to_cutover()
+    b = sc.backend
+    row = dict(lakes.rows_for("dns_activity")[0], uid="poison")
+    b.writer.write_batch("dns_activity", [row], idempotency_key="k-poison")
+    inner = b.old._inner
+
+    class Refuses:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def write_batch(self, table, rows, **kw):
+            if any(r.get("uid") == "poison" for r in rows):
+                raise ValueError("old component refuses this row")
+            return inner.write_batch(table, rows, **kw)
+
+    b.old._inner = Refuses()
+    sc.clock.advance(hours=5)
+    return sc
+
+
+def test_a_rollback_blocked_by_a_refused_write_leaves_the_old_component_stopped(tmp_path):
+    sc = _poisoned_rollback_scenario(tmp_path)
+    with pytest.raises(SwapError, match="1 still parked"):
+        sc.runner.rollback("canary latency regression observed on the candidate")
+    assert sc.backend.old_state().data["state"] == "stopped"
+    assert doc_of(sc)["route"]["flipped"] is True
+    assert sc.backend.writer.status()["pending"] == 1  # nothing dropped on its own
+
+
+def test_rollback_abandon_parked_drops_the_refused_writes_into_the_evidence(tmp_path):
+    sc = _poisoned_rollback_scenario(tmp_path)
+    d = sc.runner.rollback("canary regression; the old lake refuses k-poison", abandon_parked=True)
+    assert d["status"] == "rolled_back" and d["route"]["flipped"] is False
+    assert any(
+        a.startswith("abandon parked writes: ok (discarded 1") for a in d["rollback"]["actions"]
+    )
+    [ev] = [e for s in d["steps"] for e in s["evidence"] if e["kind"] == "rollback"]
+    body = json.loads((sc.runner.evidence_dir / ev["ref"]).read_text())
+    [gone] = body["abandoned_parked"]
+    assert gone["idempotency_key"] == "k-poison" and gone["rows"][0]["uid"] == "poison"
+    assert record.problems(d) == [] and record.verify_evidence(d, sc.runner.evidence_dir) == []
+    assert [x.kind for x in sc.backend.writer.divergences][-1] == "discarded"
+
+
+def _backend_like(sc, pending_path):
+    return LakeBackend(
+        sc.old,
+        sc.new,
+        tables=list(lakes.TABLES),
+        registry_path=sc.registry,
+        service="lake-query",
+        new_host="lake-core-2",
+        pending_path=pending_path,
+    )
+
+
+def test_parked_writes_survive_a_restart_when_a_pending_path_is_given(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.json"
+    b = _backend_like(sc, path)
+    assert b.shadow_start().ok and b.start_mirror().ok
+    assert b.apply_route(AFTER).ok and b.stop_old().ok
+    row = dict(lakes.rows_for("dns_activity")[0], uid="kept-across-restart")
+    b.writer.write_batch("dns_activity", [row], idempotency_key="k-restart", source="s", high_water="7")  # fmt: skip
+    assert json.loads(path.read_text())["pending"][0]["owed_to"] == "old"
+    again = _backend_like(sc, path)  # the process restarted
+    assert again.writer.owed_to(again.old) == 1
+    again.writer = again.writer.rerouted(again.new, again.old)  # the flipped route
+    assert "replayed 1 parked batches" in again.start_old().detail
+    assert _count(sc.old, row["uid"]) == 1
+    assert json.loads(path.read_text())["pending"] == []
+
+
+def test_an_unreadable_parked_file_refuses_to_start(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.json"
+    path.write_text("{not json")
+    with pytest.raises(LakeError, match="unreadable"):
+        _backend_like(sc, path)

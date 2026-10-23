@@ -79,6 +79,11 @@ class Backend:
         """``data['state']`` is ``running``, ``stopped`` or ``destroyed``."""
         return self._missing("old_state")
 
+    def discard_parked(self, reason: str) -> Outcome:
+        """Drop the writes parked for the old component on purpose (``rollback
+        --abandon-parked``); ``data['discarded']`` lists them, rows included, as evidence."""
+        return self._missing("discard_parked")
+
     def decommission_scan(self) -> Outcome:
         return self._missing("decommission_scan")
 
@@ -154,6 +159,12 @@ class ManualBackend(Backend):
 
     def stop_mirror(self) -> Outcome:
         return Outcome(True, "mirror stop is recorded; stop the tee in the deployment")
+
+    def discard_parked(self, reason: str) -> Outcome:
+        return Outcome(
+            True, "this backend parks nothing (the deployment's tee is reconciled by hand)",
+            {"discarded": []},
+        )  # fmt: skip
 
     def parity(self) -> Outcome:
         o = self._attest("parity")
