@@ -298,8 +298,3 @@ def test_lint_rules_and_policy(tmp_path, capsys):
     assert "actors-act-via-broker: 1 profile(s), 0 manifest(s), 0 problem(s)" in (
         capsys.readouterr().err
     )
-
-
-def test_every_profile_in_the_repository_acts_only_through_the_broker():
-    problems, counts = lint_paths([ROOT], rules=(BROKER,))
-    assert problems == [] and counts["profile"] >= 5

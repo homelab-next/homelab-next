@@ -339,6 +339,7 @@ def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
 
 # ---------------------------------------------------------------- lint
 def test_lint_passes_on_the_repository():
+    # both rules by default: readers cannot act (G-03), actors act via the broker (G-13)
     problems, counts = lint_paths([ROOT])
     assert problems == []
     assert counts["profile"] >= 3 and counts["manifest"] >= 1
