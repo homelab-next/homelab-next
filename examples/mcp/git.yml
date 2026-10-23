@@ -4,7 +4,7 @@
 id: git
 description: Reads history and commits in local repositories.
 owner: platform-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: pypi
@@ -24,7 +24,3 @@ tools:
 acts_via: direct
 direct_reason: 'Commits itself; a record cannot express confining it to the agent''s own workspace, so no shipped profile holds it: repository changes go through the broker (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:c48162c59b50'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:c48162c59b50'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:c48162c59b50'}

@@ -4,7 +4,7 @@
 id: gitlab
 description: Searches and changes repositories on a public code host (gitlab).
 owner: platform-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: npm
@@ -25,7 +25,3 @@ tools:
 acts_via: direct
 direct_reason: 'Opens pull requests on a public code host itself; no shipped profile holds it: a repository change goes through the broker (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:dbe6857d2cb6'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:dbe6857d2cb6'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:dbe6857d2cb6'}

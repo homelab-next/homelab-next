@@ -95,16 +95,57 @@ def _policy(s: dict, **extra) -> CeilingPolicy:
     return CeilingPolicy.from_mapping({"ceilings": {s["id"]: entry}})
 
 
-def _compile(s: dict, **extra) -> dict:
-    policy = _policy(s, **extra)
-    return compile_profile({k: v for k, v in s.items() if k != "ceiling"}, LIB, policy=policy)
-
-
 def _catalog_copy(tmp_path: Path) -> Path:
     d = tmp_path / "mcp"
     shutil.copytree(CATALOG, d, ignore=shutil.ignore_patterns("clients"))
     shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
     return d
+
+
+def _reviewed_copy(tmp_path: Path) -> Path:
+    """The catalog as a lab that reviewed its direct servers would have it: the shipped direct
+    servers are unreviewed drafts (no example may carry a human approve, ADR-0030), so these tests
+    make them active with check, audit and approve reviews of their current content."""
+    d = _catalog_copy(tmp_path)
+    for f in sorted(d.glob("*.yml")):
+        rec = yaml.safe_load(f.read_text())
+        if rec.get("acts_via") != "direct" or rec.get("status") != "draft":
+            continue
+        rec["status"] = "active"
+        rec.pop("reviews", None)
+        digest = servers.record_digest(rec)[: len("sha256:") + 12]
+        rec["reviews"] = [
+            {"by": f"{who}", "kind": kind, "role": role, "date": "2026-10-23", "verdict": "pass",
+             "digest": digest}
+            for who, kind, role in (("agent:example-checker", "agent", "check"),
+                                    ("agent:example-auditor", "agent", "audit"),
+                                    ("human:example-operator", "human", "approve"))
+        ]  # fmt: skip
+        f.write_text(yaml.safe_dump(rec, sort_keys=False))
+    return d
+
+
+REVIEWED: dict[str, ToolClasses] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _reviewed(tmp_path_factory):
+    d = _reviewed_copy(tmp_path_factory.mktemp("reviewed"))
+    REVIEWED["table"] = ToolClasses.from_catalog(servers.load(d))
+    REVIEWED["dir"] = d
+    yield
+    REVIEWED.clear()
+
+
+def _table() -> ToolClasses:
+    return REVIEWED["table"]
+
+
+def _compile(s: dict, **extra) -> dict:
+    policy = _policy(s, **extra)
+    return compile_profile(
+        {k: v for k, v in s.items() if k != "ceiling"}, LIB, policy=policy, classes=_table()
+    )
 
 
 def _edit(d: Path, sid: str, fn) -> ToolClasses:
@@ -118,21 +159,22 @@ def _edit(d: Path, sid: str, fn) -> ToolClasses:
 # ---------------------------------------------------------------- the gap analysis' rogue actor
 def test_the_rogue_actor_is_refused_by_verify_lint_and_render(tmp_path, capsys):
     doc, policy = _rogue()
-    problems = "\n".join(verify_profile(doc, policy=policy))
+    problems = "\n".join(verify_profile(doc, policy=policy, classes=_table()))
     for name in ("'ssh'", "'shell'", "'ansible'", "'kubernetes'", "'cap:hypervisor'"):
         assert f"{name} (" in problems, name
     assert "hnx-catalog" not in problems  # a read-only server is not an acting grant
     path = tmp_path / "profile.rogue-actor.json"
     path.write_text(json.dumps(doc))
-    found, counts = lint_paths([path], rules=(BROKER,))
+    found, counts = lint_paths([path], _table(), rules=(BROKER,))
     assert counts["profile"] == 1 and len(found) == 5
     assert cli.main(["agent", "lint", str(path)]) == 1
     err = capsys.readouterr().err
     assert "actors-act-via-broker: 1 profile(s), 0 manifest(s), 5 problem(s)" in err
-    assert "readers-cannot-act: 1 profile(s), 0 manifest(s), 0 problem(s)" in err
+    # against the shipped catalog the four direct servers are unreviewed drafts besides
+    assert "readers-cannot-act: 1 profile(s), 0 manifest(s), 4 problem(s)" in err
     with pytest.raises(clients.RenderError, match="agents act only through the broker"):
         clients.render_profile(
-            servers.load(CATALOG), path, "claude-code", policy=policy,
+            servers.load(REVIEWED["dir"]), path, "claude-code", policy=policy,
             npm_prefix="/var/lib/hnx/npm-prefix",
         )  # fmt: skip
 
@@ -149,11 +191,11 @@ def test_the_rogue_actor_does_not_compile():
 def test_an_actor_acts_through_the_broker():
     p = _compile(_actor(mcp=["hnx-broker", "lake"], capabilities=["cap:broker", "cap:lake-query"],
                         tier="execute"))  # fmt: skip
-    assert p["grants"]["tier"] == "execute" and verify_profile(p) == []
+    assert p["grants"]["tier"] == "execute" and verify_profile(p, classes=_table()) == []
     # egress and record-write are not broker-only: a non-reader may hold them
     p = _compile(_actor(mcp=["fetch"], capabilities=["cap:records-propose"],
                         tier="write", data_tier="cloud-allowed"))  # fmt: skip
-    assert verify_profile(p) == []
+    assert verify_profile(p, classes=_table()) == []
 
 
 @pytest.mark.parametrize(
@@ -194,7 +236,8 @@ def test_every_acting_grant_outside_the_broker_is_refused(kind, name, needle):
         grants[kind] = sorted({*grants[kind], name})
     p["ceiling"] = {**copy.deepcopy(grants), "budgets": p["ceiling"]["budgets"]}
     p["digest"] = profile_digest(p)
-    assert any(needle in x for x in verify_profile(p)), verify_profile(p)
+    got = verify_profile(p, classes=_table())
+    assert any(needle in x for x in got), got
 
 
 def test_a_reader_is_judged_by_both_rules():
@@ -206,17 +249,19 @@ def test_a_reader_is_judged_by_both_rules():
 
 def test_a_manifest_tool_acts_only_through_the_broker():
     doc = {"id": "m", "persona": "persona:a", "sections": [], "tools": ["shell", "hnx-broker"]}
-    problems = manifest_problems(doc)
+    problems = manifest_problems(doc, _table())
     assert len(problems) == 1 and "'shell' (exec)" in problems[0]
-    assert manifest_problems(doc, rules=(READERS,)) == []
+    assert manifest_problems(doc, _table(), rules=(READERS,)) == []
 
 
 # ---------------------------------------------------------------- the direct exception
 def test_a_direct_server_needs_a_reason_a_human_approve_and_the_policy(tmp_path):
-    d = _catalog_copy(tmp_path)
+    shipped = yaml.safe_load((CATALOG / "shell.yml").read_text())
+    assert shipped["status"] == "draft" and not shipped.get("reviews")  # no shipped approve
+    d = _reviewed_copy(tmp_path)
     table = ToolClasses.from_catalog(servers.load(d))
     grants = {"mcp": ["shell"], "capabilities": [], "tier": "read"}
-    # the shipped shell: direct, with a reason and a current human approve review
+    # a reviewed shell: direct, with a reason and a current human approve review
     assert "(none given)" in broker_problems(grants, table, "profile:a")[0]
     assert "direct_mcp entry" in broker_problems(grants, table, "profile:a", ())[0]
     assert broker_problems(grants, table, "profile:a", ["shell"]) == []
@@ -241,10 +286,11 @@ def test_a_reviewed_direct_server_compiles_only_with_the_policy_listing():
     with pytest.raises(BrokerViolation, match="direct_mcp entry"):
         _compile(s)
     p = _compile(s, direct_mcp=["shell"])
-    assert any("(none given)" in x for x in verify_profile(p))  # no policy, no exception
+    t = _table()
+    assert any("(none given)" in x for x in verify_profile(p, classes=t))  # no policy, none
     policy = _policy(s, direct_mcp=["shell"])
-    assert verify_profile(p, policy=policy) == []
-    assert any("direct_mcp entry" in x for x in verify_profile(p, policy=_policy(s)))
+    assert verify_profile(p, policy=policy, classes=t) == []
+    assert any("direct_mcp entry" in x for x in verify_profile(p, policy=_policy(s), classes=t))
 
 
 def test_a_spec_ceiling_cannot_grant_a_direct_exception():
@@ -252,7 +298,7 @@ def test_a_spec_ceiling_cannot_grant_a_direct_exception():
     s["ceiling"]["mcp"] = [*s["ceiling"]["mcp"], "shell"]
     s["ceiling"]["direct_mcp"] = ["shell"]  # not a ceiling key: only a policy makes the exception
     with pytest.raises(BrokerViolation, match="none given"):
-        compile_profile(s, LIB)
+        compile_profile(s, LIB, classes=_table())
 
 
 def test_direct_mcp_is_a_list_of_server_ids():
@@ -286,7 +332,10 @@ def test_a_classes_file_cannot_narrow_broker_only(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------- lint
-def test_lint_rules_and_policy(tmp_path, capsys):
+def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
+    from homelabnext.agent import readers
+
+    monkeypatch.setattr(readers, "default_classes", _table)  # a lab that reviewed its shell
     prof = tmp_path / "actor.yml"
     prof.write_text(yaml.safe_dump(_actor(mcp=["shell"])))
     assert cli.main(["agent", "lint", str(prof), "--rule", READERS]) == 0

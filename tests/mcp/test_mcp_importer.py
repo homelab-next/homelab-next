@@ -258,6 +258,7 @@ def test_a_rendered_record_imports_back_to_the_same_server(tmp_path):
     gh["tools"] = [t for t in gh["tools"] if t["name"] == "search_code"]
     gh.pop("acts_via")
     gh.pop("direct_reason")
+    gh["status"] = "active"  # the shipped one is an unreviewed draft (ADR-0030)
     (d / "github.yml").write_text(yaml.safe_dump(gh))
     prof = tmp_path / "p.json"
     doc = json.loads((ROOT / "examples/mcp/clients/profile.collector.json").read_text())

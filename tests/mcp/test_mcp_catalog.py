@@ -207,7 +207,8 @@ def test_duplicate_ids_are_refused(tmp_catalog):
 # ---------------------------------------------------------------------------------- grants
 def test_grants_must_name_active_catalog_servers():
     table = default_classes()
-    assert grant_problems({"mcp": ["lake", "shell"]}, table) == []
+    assert grant_problems({"mcp": ["lake", "hnx-broker"]}, table) == []
+    assert "is a draft" in grant_problems({"mcp": ["shell"]}, table)[0]  # unreviewed (ADR-0030)
     assert "not in the MCP catalog" in grant_problems({"mcp": ["nothing"]}, table)[0]
     assert "is retired" in grant_problems({"mcp": ["puppeteer"]}, table)[0]
     assert "is a draft" in grant_problems({"mcp": ["web-search"]}, table)[0]
@@ -352,8 +353,10 @@ def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
 def test_an_acting_server_says_how_it_acts(tmp_catalog):
     """R3.3: an active or deprecated server with an acting tool (exec, file-write, credential)
     declares acts_via; a draft or retired one is not granted, so it need not."""
-    cat = _edit(tmp_catalog, "shell", lambda r: [r.pop("acts_via"), r.pop("direct_reason")])
-    assert any("tool(s) run_command act" in p and "does not say how" in p for p in _check(cat))
+    cat = _edit(tmp_catalog, "shell", lambda r: [r.pop("acts_via"), r.pop("direct_reason"),
+                                                 r.update(status="active")])  # fmt: skip
+    probs = servers.check(cat, registry=REGISTRY)
+    assert any("tool(s) run_command act" in p and "does not say how" in p for p in probs)
     cat = _edit(tmp_catalog, "shell", lambda r: r.update(status="deprecated", reason="r",
                                                          replaced_by="hnx-broker"))  # fmt: skip
     assert any("does not say how" in p for p in servers.check(cat, registry=REGISTRY))
@@ -365,8 +368,9 @@ def test_an_acting_server_says_how_it_acts(tmp_catalog):
 
 def test_only_a_server_that_acts_through_the_broker_promises_an_approval(tmp_catalog):
     """R3.2: only the broker grants an approval; a client's prompt is not one."""
-    cat = _edit(tmp_catalog, "ssh", lambda r: r["tools"][0].update(approval=True))
-    got = [p for p in _check(cat) if "approval: true" in p]
+    cat = _edit(tmp_catalog, "ssh", lambda r: [r["tools"][0].update(approval=True),
+                                               r.update(status="active")])  # fmt: skip
+    got = [p for p in servers.check(cat, registry=REGISTRY) if "approval: true" in p]
     assert len(got) == 1 and "ssh_exec" in got[0] and "acts_via: broker" in got[0]
     # the broker's own tools may need one
     broker = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
@@ -383,9 +387,11 @@ def test_the_schema_says_only_the_broker_grants_an_approval():
     assert schema["properties"]["acts_via"]["enum"] == ["broker", "direct"]
 
 
-def test_every_shipped_acting_server_is_broker_only_or_a_reviewed_direct_one():
+def test_every_shipped_acting_server_is_the_broker_or_an_unreviewed_direct_draft():
     """The catalog decisions of ADR-0030: the broker's MCP front acts via the broker; every other
-    server with an acting tool acts directly, says why, and no shipped profile holds it."""
+    server with an acting tool acts directly, says why, and ships as an unreviewed draft: no
+    example carries a human approve for it (an agent can write a review line; the human control
+    is review of the catalog and the ceiling policy, CODEOWNERS), so no profile can hold it."""
     from homelabnext.agent.readers import table_broker_only
 
     cat = servers.load(CATALOG)
@@ -393,8 +399,7 @@ def test_every_shipped_acting_server_is_broker_only_or_a_reviewed_direct_one():
     acting = {
         sid: rec.get("acts_via")
         for sid, rec in cat
-        if rec["status"] in servers.GRANTABLE
-        and any(set(t["classes"]) & only for t in rec["tools"])
+        if rec["status"] != "retired" and any(set(t["classes"]) & only for t in rec["tools"])
     }
     assert acting == {
         "hnx-broker": "broker", "ssh": "direct", "shell": "direct", "ansible": "direct",
@@ -403,8 +408,10 @@ def test_every_shipped_acting_server_is_broker_only_or_a_reviewed_direct_one():
         "smtp": "direct", "ntfy": "direct", "http": "direct",
     }  # fmt: skip
     for sid, via in acting.items():
+        rec = cat.get(sid)
         if via == "direct":
-            assert cat.get(sid)["direct_reason"], sid
+            assert rec["direct_reason"] and rec["status"] == "draft", sid
+            assert not rec.get("reviews"), sid
 
 
 def test_job_submission_and_shell_commands_are_the_brokers():

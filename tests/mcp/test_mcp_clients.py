@@ -646,9 +646,9 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
             clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     # llm-orchestrator's catalog holds every grantable stdio server, granted or not
     (d / "notes.yml").write_text(pristine)
-    rec = yaml.safe_load((d / "shell.yml").read_text())
+    rec = yaml.safe_load((d / "cases.yml").read_text())
     rec["transport"]["args"] = ["--api-key=fakeshort"]
-    (d / "shell.yml").write_text(yaml.safe_dump(rec))
+    (d / "cases.yml").write_text(yaml.safe_dump(rec))
     kw = {"lanes": ["real", "shadow"], "policy": WIDE}
     assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
@@ -720,8 +720,13 @@ def test_the_orchestrator_catalog_has_no_kind_for_a_server_that_acts_directly():
     assert "hnx-broker" in kinds  # acts through the broker
     for sid in ("shell", "ssh", "ansible", "kubernetes", "vault", "filesystem", "git", "github"):
         assert sid not in kinds, sid
-        assert any(n.startswith(f"{sid}: acts other than through the broker") for n in notes)
-    text, _ = clients.orch_catalog(CATALOG, {"shell"}, CTX)
+    # a lab that reviewed shell (active): no kind unless a rendered profile is granted it
+    cat = copy.deepcopy(CATALOG)
+    cat.servers["shell"]["status"] = "active"
+    text, notes = clients.orch_catalog(cat, (), CTX)
+    assert "shell" not in yaml.safe_load(text)["kinds"]
+    assert any(n.startswith("shell: acts other than through the broker") for n in notes)
+    text, _ = clients.orch_catalog(cat, {"shell"}, CTX)
     assert "shell" in yaml.safe_load(text)["kinds"]
     shipped = yaml.safe_load((SPECS / "llm-orchestrator" / "mcp_catalog.yaml").read_text())
     assert not {"shell", "ssh", "ansible", "kubernetes", "vault"} & set(shipped["kinds"])

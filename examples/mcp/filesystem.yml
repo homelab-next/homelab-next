@@ -4,7 +4,7 @@
 id: filesystem
 description: Reads and writes files under the agent's work directory.
 owner: platform-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: npm
@@ -23,7 +23,3 @@ tools:
 acts_via: direct
 direct_reason: 'Writes files itself; a record cannot express confining it to the agent''s own workspace, so no shipped profile holds it: file changes go through the broker (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:78785e098ec5'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:78785e098ec5'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:78785e098ec5'}
