@@ -90,6 +90,7 @@ has no section below.
 - Status hub: a pushed observation dated in the future is clamped to the hub's clock (and the skew recorded), so it still goes stale; only the service that declares a push source may publish for it, and only into its own module; an agent-activity sender may only write its own sessions.
 - Reviews: the content digest no longer covers the record's id, so allocating a number for an `LL-NEW` record keeps its reviews current; a requirement's `min` counts distinct reviewers, not reviews.
 - Invariant X-06 never checked `det:` ids: it read a top-level `det_map.yml` under a `detections:` key instead of `detections/det_map.yml` `entries:`. `detections lint-ids` now skips test fixtures and runs in `make detections` and CI; `hnx docs systems check` (L-05) now runs in CI.
+- `make test` selects what CI's test job selects (`-m "not live"`, the coverage-floor test deselected), so it no longer fails a green tree on the tools/tests time budget; `make check` runs `make coverage` (the Q-07 floor) as a prerequisite instead, as CI runs its coverage job. `tools/tests/test_make_matches_ci.py` holds the two selections equal.
 
 ### Security
 
