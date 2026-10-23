@@ -39,7 +39,8 @@ def test_current_schema_is_additive_over_frozen_v1_0(path):
     for m in range(1, major + 1):
         assert sc.frozen_path(ROOT, path, m, 0).is_file(), f"missing baseline {m}.0 of {path}"
     old = json.loads(sc.frozen_path(ROOT, path, major, 0).read_text())
-    assert sc.is_additive(old, json.loads(path.read_text())) == []
+    new = json.loads(path.read_text())
+    assert sc.additive_problems(old, new, sc.parse_id(new)[0], f"{major}.0") == []
 
 
 # examples of a feature added after the 1.0 freeze (1.0 rightly refuses them)
@@ -547,3 +548,45 @@ def test_a_symlinked_frozen_root_is_refused(tmp_path):
     (tmp_path / "schemas/_frozen").symlink_to(real)
     probs = [p.message for p in sc.check_repo(tmp_path, strict=True)]
     assert "schemas/_frozen is a symlink (it is a directory)" in probs
+
+
+# ----- dependentSchemas, dependentRequired and a new anyOf/oneOf are judged, not waved through -----
+def _mcp(version: str) -> dict:
+    path = ROOT / "schemas" / "_frozen" / version / "platform" / "mcp_server.schema.json"
+    return json.loads(path.read_text())
+
+
+def test_mcp_server_1_1s_dependent_schemas_are_additive():
+    """acts_via and direct_reason are new properties: their dependentSchemas can only constrain a
+    document that carries them, which no 1.0 document did."""
+    assert sc.is_additive(_mcp("1.0"), _mcp("1.1")) == []
+
+
+@pytest.mark.parametrize(
+    ("base", "mutate"),
+    [
+        # the review's repros: each one breaks documents the old schema accepted
+        ("1.1", lambda s: s["dependentSchemas"].update(status={"required": ["acts_via"]})),
+        ("1.0", lambda s: s.update(dependentSchemas={"tools": {"required": ["acts_via"]}})),
+        ("1.0", lambda s: s.update(dependentRequired={"tools": ["acts_via"]})),
+        ("1.0", lambda s: s.update(anyOf=[{"required": ["acts_via"]}])),
+        ("1.0", lambda s: s.update(oneOf=[{"required": ["capabilities"]}])),
+        ("1.1", lambda s: s["dependentSchemas"]["acts_via"].update(required=["capabilities"])),
+    ],
+)
+def test_a_tightening_dependent_or_alternative_is_not_additive(base, mutate):
+    old = _mcp(base)
+    new = copy.deepcopy(old)
+    mutate(new)
+    assert sc.is_additive(old, new), new
+
+
+def test_a_new_alternative_the_old_schema_implies_is_additive():
+    """customization 1.2 moved review_by from required into anyOf [required review_by, ...]:
+    every old document has review_by, so it meets the first branch."""
+    old = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+    new = {"type": "object", "properties": {"a": {"type": "string"}},
+           "anyOf": [{"required": ["a"]}, {"required": ["b"]}]}  # fmt: skip
+    assert sc.is_additive(old, new) == []
+    new["anyOf"] = [{"required": ["b"]}]
+    assert sc.is_additive(old, new)
