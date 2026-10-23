@@ -46,9 +46,14 @@ class FakeSecretStore:
         if not versions:
             raise SecretNotFound(f"no secret at {path!r}")
         v = len(versions) if version is None else version
-        if not 1 <= v <= len(versions):
+        if not self._written(v, len(versions)):
             raise SecretNotFound(f"no version {v} at {path!r}")
         return Secret(path, v, dict(versions[v - 1]))
+
+    @staticmethod
+    def _written(version: int, count: int) -> bool:
+        """Whether ``version`` names one of the ``count`` versions written (numbered from 1)."""
+        return 1 <= version <= count
 
     def delete(self, path: str) -> None:
         if path not in self._v:
@@ -145,14 +150,9 @@ class VersionZeroIsLatestSecretStore(FakeSecretStore):
 class NegativeVersionSecretStore(FakeSecretStore):
     """Defect: only the upper bound is checked, so a negative version indexes from the end."""
 
-    def get(self, path: str, version: int | None = None) -> Secret:
-        versions = self._v.get(path)
-        if not versions:
-            raise SecretNotFound(f"no secret at {path!r}")
-        v = len(versions) if version is None else version
-        if v > len(versions):
-            raise SecretNotFound(f"no version {v} at {path!r}")
-        return Secret(path, v, dict(versions[v - 1]))
+    @staticmethod
+    def _written(version: int, count: int) -> bool:
+        return version <= count
 
 
 class VersionErrorLeaksSecretStore(FakeSecretStore):
@@ -182,9 +182,9 @@ class AliasingSecretStore(FakeSecretStore):
     ``put`` (or changing what ``get`` returned) rewrites the stored secret."""
 
     def put(self, path: str, data: Mapping[str, str]) -> int:
-        self._check_path(path, data)
-        self._v.setdefault(path, []).append(data)  # type: ignore[arg-type]
-        return len(self._v[path])
+        version = super().put(path, data)
+        self._v[path][-1] = data  # type: ignore[assignment]  # the caller's own object
+        return version
 
     def get(self, path: str, version: int | None = None) -> Secret:
         s = super().get(path, version)
