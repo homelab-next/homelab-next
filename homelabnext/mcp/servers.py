@@ -436,14 +436,20 @@ def resolve_bin(origin: Mapping[str, Any], bin_: Any) -> tuple[str | None, str |
 #: real parser.
 HNX_ENTRIES: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {
     # hnx mcp serve: the read-only catalog server (homelabnext/mcp/cli.py)
-    "mcp-serve": (("mcp", "serve"), frozenset({"--root", "--registry", "--scope-from-profile"})),
+    "mcp-serve": (
+        ("mcp", "serve"),
+        frozenset({"--root", "--registry", "--scope-from-profile", "--policy", "--lock"}),
+    ),
     # hnx broker mcp: the broker's agent-facing tools (homelabnext/broker/cli.py)
     "broker-mcp": (("broker", "mcp"), frozenset({"--socket"})),
 }
 #: the hnx entry flags that name a path the server reads (a checkout, a registry, the broker's
 #: socket): absolute, since a relative one resolves in the client's working directory, where the
 #: agent may write a checkout, registry or socket of its own
-HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket"})
+HNX_PATH_FLAGS = frozenset({"--root", "--registry", "--socket", "--policy", "--lock"})
+#: flags an entry's flag needs beside it: a profile scopes ``hnx mcp serve`` only when it is
+#: verified against the policy and the lock (the file's own ceiling proves only self-consistency)
+HNX_FLAGS_NEED = {"--scope-from-profile": frozenset({"--policy", "--lock"})}
 
 
 def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
@@ -484,6 +490,9 @@ def hnx_args_problems(entry: Any, args: Iterable[Any]) -> list[str]:
             out.append(f"hnx entry {entry}: {flag} is given twice")
         seen.add(flag)
         i += 1
+    for flag, needs in HNX_FLAGS_NEED.items():
+        if flag in seen and not needs <= seen:
+            out.append(f"hnx entry {entry}: {flag} needs {' and '.join(sorted(needs))}")
     return out
 
 

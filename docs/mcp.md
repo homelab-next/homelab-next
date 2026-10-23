@@ -9,7 +9,7 @@ speaks **stdio only**: there is no network listener. Code: `homelabnext/mcp/`
 
 ```
 pip install 'homelabnext[mcp]'          # the official mcp SDK (1.x or 2.x)
-hnx mcp serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json]
+hnx mcp serve [--root CHECKOUT] [--registry FILE] [--scope-from-profile PROFILE.json --policy POLICY --lock LOCK]
 hnx mcp tools                           # what each tool answers (no SDK needed)
 hnx mcp call context_for --args '{"task_text": "...", "allowed": ["doc:docs/", "cap:"]}'
 ```
@@ -17,8 +17,9 @@ hnx mcp call context_for --args '{"task_text": "...", "allowed": ["doc:docs/", "
 A client configuration starts it as a subprocess. Do not write that configuration by hand: the
 server is the `hnx-catalog` record of the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), and
 `hnx mcp catalog render --profile build/profile.json --client claude-code --policy policy.yml`
-writes the entry, with `--scope-from-profile` pointing at the profile (render refuses a profile
-`hnx agent verify --policy` would refuse, so the scope it points at is a verified one).
+writes the entry, with `--scope-from-profile` pointing at the profile and `--policy`/`--lock` at
+the deployed ceiling policy and lock (render refuses a profile `hnx agent verify --policy` would
+refuse, and the server verifies it again at start against the same policy and lock).
 `hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.
 
 ## Tools
@@ -71,8 +72,11 @@ $ hnx mcp call context_for --args '{"task_text": "add an adapter for the context
 * **Scope is mandatory for content.** `context_for` refuses a call without `allowed` (a list of
   exact ids or namespaces ending in `:` or `/`, as in the `context` contract; no wildcard).
 * **A profile bounds the server, and a call cannot widen it.** `--scope-from-profile` takes a
-  compiled agent profile ([agent profiles](agent.md), [[agent]]). The profile must verify (schema,
-  the reader rule, grants within its ceiling, digest; `verify_profile`) and must be **granted
+  compiled agent profile ([agent profiles](agent.md), [[agent]]) and needs `--policy` and `--lock`.
+  The profile must verify against them (schema, the reader rule, grants within the policy's
+  ceiling, digest and the lock's reviewed digest; `verify_profile`): checked only against the
+  ceiling stored in the file, a profile that whoever can write the file widened, with its digest
+  recomputed, would widen the server's scope. It must also be **granted
   this server** (`hnx-catalog` in `grants.mcp`), or the server does not start. Its scope is
   derived from its grants: the profile node; per granted capability `cap:<x>`, `check:<x>/` and
   `doc:docs/capabilities/<x>.md`; per granted MCP server `mcp:<m>`; and every registry service

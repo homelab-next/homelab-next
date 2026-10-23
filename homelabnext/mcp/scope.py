@@ -99,13 +99,29 @@ def profile_scope(profile: Mapping[str, Any], registry: Any) -> frozenset[str]:
     return frozenset(out)
 
 
-def load_profile_scope(path: str | Path, registry: Any) -> tuple[str, frozenset[str]]:
+def load_profile_scope(
+    path: str | Path,
+    registry: Any,
+    *,
+    policy: Any,
+    lock: Mapping[str, str] | None,
+) -> tuple[str, frozenset[str]]:
     """``(profile id, scope)`` from a compiled profile file.
 
-    The profile must verify (schema, reader rule, grants within its ceiling, digest: the checks
-    of :func:`homelabnext.agent.compiler.verify_profile`) and must be granted this server
-    (``hnx-catalog`` in ``grants.mcp``): a profile that may not use it gets no scope at all."""
+    The profile must verify against the ceiling ``policy`` and the reviewed digests in ``lock``
+    (schema, reader rule, grants within the policy's ceiling, digest and the pinned digest: the
+    checks of :func:`homelabnext.agent.compiler.verify_profile`).  Without them it would be
+    checked only against the ceiling stored in the same file, which whoever can write the file
+    (it sits beside the agent's client config) also controls.  It must also be granted this
+    server (``hnx-catalog`` in ``grants.mcp``): a profile that may not use it gets no scope."""
     from homelabnext.agent.compiler import verify_profile
+
+    if policy is None or lock is None:
+        raise ScopeError(
+            "a profile scopes the server only against the ceiling policy and the lock of "
+            "reviewed digests (--policy, --lock): its own ceiling and digest are whatever last "
+            "edited the file"
+        )
 
     try:
         profile = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -115,7 +131,7 @@ def load_profile_scope(path: str | Path, registry: Any) -> tuple[str, frozenset[
         raise ScopeError(f"{path}: a compiled profile is a JSON object")
     # verify_profile's own schema messages quote the values: a schema failure is worded safely
     problems = credentials.safe_schema_errors("agent", "profile", profile) or verify_profile(
-        profile
+        profile, policy=policy, lock=lock
     )
     if problems:
         raise ScopeError(f"{path}: profile does not verify: " + "; ".join(problems))

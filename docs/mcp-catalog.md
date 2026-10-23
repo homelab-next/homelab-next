@@ -138,8 +138,9 @@ entry N)`.
 - a **first-party** server runs this checkout's code: `bin: hnx` with an `entry` from a fixed
   allowlist in code (`servers.HNX_ENTRIES`: `mcp-serve` is `hnx mcp serve`, `broker-mcp` is `hnx
   broker mcp`, the subcommands that serve MCP on stdio), whose `args` may hold only that entry's
-  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`; `--socket`; the
-  path flags `--root`, `--registry` and `--socket` absolute, since a relative one resolves in the
+  flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`, `--policy`,
+  `--lock`; `--socket`; `--scope-from-profile` only with `--policy` and `--lock`; the path flags
+  `--root`, `--registry`, `--policy`, `--lock` and `--socket` absolute, since a relative one resolves in the
   client's working directory), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
   `broker run`, `workflows run`, `conform run` or `--out`; or a path bin under `origin.path`, which
   render writes absolute under the spec's `checkout_root:` (or `--checkout-root`; required,

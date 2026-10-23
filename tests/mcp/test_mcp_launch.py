@@ -76,8 +76,8 @@ GENERATED = [
      ["uvx", "--no-config", "--from",
       f"git+{GIT_PYPI['repo']}@{COMMIT}#subdirectory=packages/srv", "srv"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve"), ["hnx", "mcp", "serve"]),
-    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json"]),
-     ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json"]),
+    (_rec(BROKER, FIRST, bin="hnx", entry="mcp-serve", args=["--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]),
+     ["hnx", "mcp", "serve", "--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]),
     (_rec(BROKER, FIRST, bin="hnx", entry="broker-mcp", args=["--socket=/run/b.sock"]),
      ["hnx", "broker", "mcp", "--socket=/run/b.sock"]),
     (_rec(BROKER, FIRST, bin="homelabnext/mcp/run.py"), [f"{CHECKOUT}/homelabnext/mcp/run.py"]),
@@ -272,8 +272,8 @@ IMPORTED = [
      {"bin": "srv"}),
     ("docker", ["run", "-i", f"registry.example:5000/mcp/docker@{D}"], {"bin": None}),
     ("uvx", ["--from", f"git+https://code.example/org/srv@{COMMIT}#subdirectory=../x", "srv"], None),
-    ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json"],
-     {"bin": "hnx", "args": ["--scope-from-profile", "/p.json"]}),
+    ("hnx", ["mcp", "serve", "--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"],
+     {"bin": "hnx", "args": ["--scope-from-profile", "/p.json", "--policy", "/pol.yml", "--lock", "/lock.yml"]}),
     ("hnx", ["invariants", "run", "--plugins-dir", "/tmp/x"], None),
     ("hnx", ["broker", "mcp", "--socket", "/s", "--notify-cmd", "id"], None),
     # not mapped at all: the draft keeps no origin, bin or argument
@@ -467,4 +467,20 @@ def test_an_absolute_hnx_path_flag_and_a_profile_file_template_pass():
     assert servers.hnx_args_problems("broker-mcp", ["--socket", "/run/hnx-broker/b.sock"]) == []
     assert servers.hnx_args_problems("mcp-serve", ["--root=/opt/hnx", "--registry",
                                                    "/opt/hnx/lab/services.yml",
-                                                   "--scope-from-profile", "{profile_file}"]) == []  # fmt: skip
+                                                   "--scope-from-profile", "{profile_file}",
+                                                   "--policy", "/etc/hnx/ceilings.yml",
+                                                   "--lock=/etc/hnx/profiles.lock.yml"]) == []  # fmt: skip
+
+
+@pytest.mark.parametrize("missing", [["--policy"], ["--lock"], ["--policy", "--lock"]])
+def test_a_profile_scoped_hnx_server_names_the_policy_and_the_lock(missing):
+    """A profile verified only against itself can widen the server's scope: the record that
+    passes --scope-from-profile passes the policy and the lock it is verified against too."""
+    flags = {"--policy": "/etc/hnx/ceilings.yml", "--lock": "/etc/hnx/profiles.lock.yml"}
+    args = ["--scope-from-profile", "{profile_file}"]
+    args += [x for f, v in flags.items() if f not in missing for x in (f, v)]
+    problems = servers.hnx_args_problems("mcp-serve", args)
+    assert any("--scope-from-profile needs --lock and --policy" in p for p in problems), problems
+    assert any("is not an absolute path" in p
+               for p in servers.hnx_args_problems("mcp-serve", [*args, *(
+                   x for f in missing for x in (f, "rel/x.yml"))]))  # fmt: skip

@@ -105,6 +105,7 @@ has no section below.
 - The shared screener (context packs, the activity hook's spool tier) redacts credential shapes it missed: a quoted password-style value with spaces (JSON, YAML), `DB_PASS=`/`_PW=` style keys, `Authorization:` credentials of every scheme (Basic, Digest, Token, short Bearer), `Cookie:`/`Set-Cookie:` values and IPv4-mapped IPv6 addresses as one address; matching ignores zero-width and other format characters and folds Unicode digits.
 - `hnx mcp catalog check` refuses a hosted server URL (and a lab server's `transport.path`) whose path could carry a credential (anything but an MCP path or lower-case words and versions, the importer's rule), and render refuses one too: a key in `/mcp/<key>/sse` was written verbatim into the committed client config.
 - MCP catalog check and import treat `--user user:password` and `--user=user:password` (and `--username`, `--proxy-user`) as credentials, like `-u`; the importer kept the literal in the draft's args.
+- `hnx mcp serve --scope-from-profile` requires `--policy` and `--lock` and verifies the profile against them (catalog check refuses a record that passes the profile without both); verified only against the ceiling stored in the file, a profile rewritten with a recomputed digest widened the server's scope.
 
 ### Added
 

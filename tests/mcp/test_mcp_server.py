@@ -29,6 +29,7 @@ from homelabnext.mcp import (
 )
 from homelabnext.mcp import catalog as catalog_mod
 from homelabnext.mcp.cli import main as cli_main
+from homelabnext.mcp.clients import load_lock, load_policy
 from homelabnext.sop.capabilities import collect, render_page
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +58,23 @@ def _call(c: Catalog, name: str, **args) -> dict:
     text = c.call(name, args)
     assert len(text) <= MAX_RESULT_CHARS
     return json.loads(text)
+
+
+def _policy_and_lock(tmp_path: Path, profile: Path) -> tuple[Path, Path]:
+    """The ceiling policy the reader example is judged against (its own ceiling, written by the
+    policy owner) and a lock pinning ``profile``'s digest."""
+    doc = json.loads(profile.read_text(encoding="utf-8"))
+    pol, lock = tmp_path / "ceilings.yml", tmp_path / "profiles.lock.yml"
+    entry = {**doc["ceiling"], "data_tier": doc["data_tier"], "reads_untrusted": True}
+    pol.write_text(json.dumps({"ceilings": {doc["id"]: entry}}), encoding="utf-8")
+    lock.write_text(json.dumps({"profiles": {doc["id"]: doc["digest"]}}), encoding="utf-8")
+    return pol, lock
+
+
+def _scope(cat, path: Path, pinned: Path | None = None):
+    """load_profile_scope against the policy and a lock pinning ``pinned`` (default ``path``)."""
+    pol, lock = _policy_and_lock(path.parent, pinned or path)
+    return load_profile_scope(path, cat.registry, policy=load_policy(pol), lock=load_lock(lock))
 
 
 def _granted_profile(tmp_path: Path, grant: bool = True) -> Path:
@@ -347,7 +365,7 @@ def test_intersect_never_widens(requested, granted, want):
 
 
 def test_profile_scope_bounds_a_call_and_cannot_be_widened(cat, tmp_path):
-    pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
+    pid, scope = _scope(cat, _granted_profile(tmp_path))
     assert pid == "profile:reader"
     assert scope >= {
         "profile:reader",
@@ -388,7 +406,7 @@ def test_related_resolves_a_path_however_it_is_spelled(cat):
 def test_profile_scope_bounds_the_catalog_tools(cat, tmp_path):
     """``find_services``, ``get_contract``, ``list_capabilities`` and ``lessons_due`` return only
     what the profile scope covers; an out-of-scope capability reads like an unknown one."""
-    pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
+    pid, scope = _scope(cat, _granted_profile(tmp_path))
     scoped = Catalog(ROOT, scope=scope, scope_source=pid)
     caps = _call(scoped, "list_capabilities")["capabilities"]
     assert caps and all(f"cap:{c['name']}" in scope for c in caps)
@@ -422,7 +440,7 @@ def test_scoped_lessons_due_reasons_name_no_out_of_scope_record(cat, tmp_path):
     RB 1") whatever the scope; a record the scope does not cover is now withheld -- its number
     in the reason, its uid in ``refs`` and in ``labels``."""
     u = load_aliases(ROOT / "examples/registers").codes
-    pid, scope = load_profile_scope(_granted_profile(tmp_path), cat.registry)
+    pid, scope = _scope(cat, _granted_profile(tmp_path))
     unscoped = _call(cat, "lessons_due", today="2027-06-01")
     row = unscoped["due"]["incorporate"][0]
     assert "RB 1" in row["reason"] and row["refs"] == [u["RB-001"]] and row["label"] == "LL 5"
@@ -460,18 +478,43 @@ def _visible(scope, doc_id):
 
 def test_profile_scope_refuses_an_ungranted_or_tampered_profile(cat, tmp_path):
     with pytest.raises(ScopeError, match="not granted the hnx-catalog"):
-        load_profile_scope(_granted_profile(tmp_path, grant=False), cat.registry)
+        _scope(cat, _granted_profile(tmp_path, grant=False))
     p = _granted_profile(tmp_path)
     doc = json.loads(p.read_text(encoding="utf-8"))
     doc["grants"]["capabilities"].append("cap:records-propose")  # widened, digest kept
     p.write_text(json.dumps(doc), encoding="utf-8")
     with pytest.raises(ScopeError, match="does not verify"):
-        load_profile_scope(p, cat.registry)
+        _scope(cat, p)
     (tmp_path / "bad.json").write_text("[]", encoding="utf-8")
     with pytest.raises(ScopeError):
-        load_profile_scope(tmp_path / "bad.json", cat.registry)
+        _scope(cat, tmp_path / "bad.json", pinned=_granted_profile(tmp_path))
     with pytest.raises(ScopeError, match="cannot read"):
-        load_profile_scope(tmp_path / "missing.json", cat.registry)
+        _scope(cat, tmp_path / "missing.json", pinned=_granted_profile(tmp_path))
+
+
+def test_a_profile_rewritten_with_its_own_ceiling_and_digest_does_not_widen_the_scope(
+    cat, tmp_path
+):
+    """Whoever can write the profile file can widen grants and ceiling together and recompute
+    the digest; only the policy and the lock, owned elsewhere, refuse it."""
+    honest = _granted_profile(tmp_path)
+    pol, lock = _policy_and_lock(tmp_path, honest)
+    forged = json.loads(honest.read_text(encoding="utf-8"))
+    caps = sorted({f"cap:{s.capability}" for s in cat.registry.sorted_services()})
+    for part in ("grants", "ceiling"):
+        forged[part]["capabilities"] = sorted({*forged[part]["capabilities"], *caps})
+    forged["digest"] = profile_digest(forged)
+    f = tmp_path / "forged.json"
+    f.write_text(json.dumps(forged), encoding="utf-8")
+    with pytest.raises(ScopeError, match="only against the ceiling policy and the lock"):
+        load_profile_scope(f, cat.registry, policy=None, lock=None)
+    with pytest.raises(ScopeError, match="does not verify"):
+        load_profile_scope(f, cat.registry, policy=load_policy(pol), lock=load_lock(lock))
+    # a lock alone is not enough either: the policy's ceiling is what the grants are held to
+    pinned = tmp_path / "forged.lock.yml"
+    pinned.write_text(json.dumps({"profiles": {forged["id"]: forged["digest"]}}))
+    with pytest.raises(ScopeError, match="does not verify"):
+        load_profile_scope(f, cat.registry, policy=load_policy(pol), lock=load_lock(pinned))
 
 
 def test_profile_scope_is_derived_from_grants_only(cat):
@@ -542,11 +585,24 @@ def test_cli_tools_and_call(capsys):
 
 
 def test_cli_scope_from_profile(tmp_path, capsys):
-    assert cli_main(["serve", "--scope-from-profile", str(READER)]) == 1
+    pol, lock = _policy_and_lock(tmp_path, READER)
+    pl = ["--policy", str(pol), "--lock", str(lock)]
+    assert cli_main(["serve", "--scope-from-profile", str(READER), *pl]) == 1
     assert "not granted" in capsys.readouterr().err
-    prof = str(_granted_profile(tmp_path))
+    prof = _granted_profile(tmp_path)
+    pol, lock = _policy_and_lock(tmp_path, prof)
     args = '{"task_text": "lake", "allowed": ["lesson:", "cap:"]}'
-    assert cli_main(["call", "context_for", "--args", args, "--scope-from-profile", prof]) == 0
+    for partial in ([], ["--policy", str(pol)], ["--lock", str(lock)]):
+        call = ["call", "context_for", "--args", args, "--scope-from-profile", str(prof)]
+        assert cli_main([*call, *partial]) == 2
+        assert "needs --policy and --lock" in capsys.readouterr().err
+    assert cli_main(["call", "list_capabilities", "--policy", str(pol)]) == 2
+    assert "go with --scope-from-profile" in capsys.readouterr().err
+    pl = ["--policy", str(pol), "--lock", str(lock)]
+    assert (
+        cli_main(["call", "context_for", "--args", args, "--scope-from-profile", str(prof), *pl])
+        == 0
+    )
     out = json.loads(capsys.readouterr().out)
     assert out["scope"] == ["cap:lake-query"] and out["scoped_by"] == "profile:reader"
 
