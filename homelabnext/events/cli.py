@@ -50,7 +50,10 @@ def _deploy_changed(a: argparse.Namespace) -> int:
         from .forwarder import HttpForwarder
         from .publisher import Publisher
 
-        res = Publisher(HttpForwarder(a.forwarder), StateStore(a.state)).publish(event)
+        pub = Publisher(
+            HttpForwarder(a.forwarder), StateStore(a.state), retain_s=a.retain_hours * 3600
+        )
+        res = pub.publish(event)
         print(f"deploy-changed: {res.id} {res.status}", file=sys.stderr)
         if not res.ok:
             return 1
@@ -100,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--out", help="write the event JSON here")
     d.add_argument("--forwarder", help="publish to this forwarder URL (needs --state)")
     d.add_argument("--state", help="publisher state file")
+    d.add_argument(
+        "--retain-hours",
+        type=float,
+        default=24.0,
+        help="keep sent ids this long for de-duplication (at least the bus's duplicate window)",
+    )
     c = sub.add_parser("enrich-coverage", help="owner/criticality coverage of an event stream")
     c.add_argument("events", help="JSON lines, one envelope per line")
     c.add_argument("--registry")

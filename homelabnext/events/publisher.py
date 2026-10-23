@@ -16,18 +16,23 @@ still ``pending``, so the event is sent again with the *same id*; the forwarder 
 exactly-once in effect, because the id is the idempotency key.  Publishing an id already ``sent``
 makes no call at all; the same id with a different body is refused (:class:`EventError`).
 
-The state is bounded by age: a ``sent`` record carries the time it was sent (``sent_at``, from
-the injected clock) and is removed once it is older than ``retain_s`` (default 24 h, the longest
-duplicate window the event bus allows); expired records go in one write, checked every
-``PRUNE_EVERY`` sends.  So an id is never sent twice, and the same id with a different body is
-refused, for ``retain_s`` after it was sent, whichever process sent it: the age comes from the
-record, not from a per-process counter.  Published again after that, the id is sent again, and
-the forwarder answers ``duplicate`` only within its own window.  A ``sent`` record written
-before ``sent_at`` existed counts as expired.  Pending and rejected records are never removed.
+The state is bounded by age: a ``sent`` record carries the time it was sent (``sent_at``, wall
+clock, injected) and is removed once it is older than ``retain_s`` (default 24 h, the bus's
+default duplicate window; a bus configured with a longer window, which NATS allows up to the
+stream's ``max_age``, should be given a ``retain_s`` at least that long).  Expired records are
+selected and removed under the store's lock, checked every ``PRUNE_EVERY`` sends.  So an id is
+never sent twice, and the same id with a different body is refused, for ``retain_s`` after it was
+sent, whichever process sent it: the age comes from the record, not from a per-process counter.
+Published again after that, the id is sent again, and the forwarder answers ``duplicate`` only
+within its own window.  A ``sent`` record without ``sent_at`` (written by an older release) is
+stamped with the current time when first seen, so it is kept for ``retain_s`` from then; one
+whose ``sent_at`` is not a finite number counts as expired.  A wall clock set far ahead keeps the
+records it stamps until real time passes them.  Pending and rejected records are never removed.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,7 +48,7 @@ class _Store(Protocol):
     def keys(self) -> list[str]: ...
 
 
-#: how long a ``sent`` record is kept by default: the longest bus duplicate window (24 h)
+#: how long a ``sent`` record is kept by default: the bus's default duplicate window (24 h)
 RETAIN_S = 86_400.0
 #: sends between two checks for expired ``sent`` records
 PRUNE_EVERY = 100
@@ -127,36 +132,44 @@ class Publisher:
         selected and deleted under one lock, each re-checked there, so a record another process
         wrote in the meantime (a write-ahead ``pending`` for a republished id) is never removed.
         """
-        cutoff = self.clock() - self.retain_s
+        now = float(self.clock())
+        cutoff = now - self.retain_s
         pre = f"{self.namespace}/"
 
+        def sent(k: str, r: Any) -> bool:
+            return k.startswith(pre) and isinstance(r, dict) and r.get("status") == "sent"
+
         def expired(k: str, r: Any) -> bool:
-            return (
-                k.startswith(pre)
-                and isinstance(r, dict)
-                and r.get("status") == "sent"
-                and _sent_at(r) < cutoff
-            )
+            if not sent(k, r) or "sent_at" not in r:
+                return False  # an unstamped record is stamped, not pruned
+            return _sent_at(r) < cutoff
+
+        def stamp(r: dict[str, Any]) -> dict[str, Any]:
+            return {**r, "sent_at": now}
 
         rewrite = getattr(self.store, "rewrite", None)
         if callable(rewrite):
             gone: list[str] = []
 
             def drop(data: dict[str, Any]) -> bool:
+                unstamped = [k for k, r in data.items() if sent(k, r) and "sent_at" not in r]
+                for k in unstamped:
+                    data[k] = stamp(data[k])
                 gone.extend(k for k, r in data.items() if expired(k, r))
                 for k in gone:
                     del data[k]
-                return bool(gone)
+                return bool(gone or unstamped)
 
             rewrite(drop)
             return len(gone)
         delete = getattr(self.store, "delete", None)
-        if delete is None:
-            return 0  # a store that cannot delete keeps everything
         n = 0
         for i, r in self._records().items():  # not atomic: one key at a time, each re-read
-            if expired(self._k(i), r) and expired(self._k(i), self.store.get(self._k(i))):
-                delete(self._k(i))
+            k = self._k(i)
+            if sent(k, r) and "sent_at" not in r:
+                self.store.put(k, stamp(r))
+            elif delete is not None and expired(k, r) and expired(k, self.store.get(k)):
+                delete(k)
                 n += 1
         return n
 
@@ -238,7 +251,9 @@ class Publisher:
 
 
 def _sent_at(rec: dict[str, Any]) -> float:
+    """A record's send time; one that is not a finite number counts as long expired."""
     try:
-        return float(rec.get("sent_at"))  # type: ignore[arg-type]
+        t = float(rec.get("sent_at"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return float("-inf")  # written before records carried their time: expired
+        return float("-inf")
+    return t if math.isfinite(t) else float("-inf")

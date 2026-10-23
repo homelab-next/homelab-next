@@ -463,9 +463,22 @@ def test_another_process_writing_the_same_file_keeps_its_records(tmp_path):
     assert all(a.status_of(ev["id"]) == "sent" for ev in fresh)
 
 
-def test_a_record_without_a_send_time_counts_as_expired(store):
-    p = pub(FakeForwarder(), store, clock=Clock())
+def test_a_record_without_a_send_time_is_stamped_now_and_kept_for_the_retention(store):
+    # written by an older release: kept for retain_s from first sight, not dropped at once
+    clock = Clock()
+    p = pub(FakeForwarder(), store, retain_s=600, clock=clock)
     store.put("events/evt-legacy", {"status": "sent", "digest": "d", "event": None, "attempts": 1})
+    assert p.prune() == 0
+    assert store.get("events/evt-legacy")["sent_at"] == clock.t
+    clock.t += 601
+    assert p.prune() == 1 and store.get("events/evt-legacy") is None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "soon"])
+def test_a_send_time_that_is_not_a_finite_number_counts_as_expired(store, bad):
+    p = pub(FakeForwarder(), store, retain_s=600, clock=Clock())
+    rec = {"status": "sent", "digest": "d", "event": None, "attempts": 1, "sent_at": bad}
+    store.put("events/evt-odd", rec)
     assert p.prune() == 1
 
 
