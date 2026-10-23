@@ -87,10 +87,27 @@ def test_timestamps_out_of_order_are_refused_as_poison(store, changes, early, la
 
 
 def test_timestamps_a_second_out_of_order_are_accepted(store):
-    """Each time stamped to the second on its own can invert by up to a second: not poison."""
+    """The controller stamps all three from one clock, so a wall-clock step (an NTP correction)
+    between two stamps is what inverts them; a second of it is not poison."""
     ev = copy.deepcopy(examples()[0])
     finished = parse_iso(ev["data"]["finished_at"])
     ev["data"].update(started_at=iso(finished + 1), queued_at=iso(finished + 1))
+    assert store.consume(body(ev)).status == "processed"
+
+
+@pytest.mark.parametrize(
+    "queued_at",
+    ["0001-01-01T00:00:00Z", "2025-12-24T02:59:59Z"],  # a Go zero time; a week and a second
+)
+def test_a_job_queued_more_than_a_week_before_it_finished_is_poison(store, queued_at):
+    """The controller emits Go's zero time behind a parse error it ignored; the span from it to
+    the finish was read as one window per hour, seventeen million of them, wedging every pass."""
+    ev = copy.deepcopy(examples()[0])
+    ev["data"].update(queued_at=queued_at, started_at=None, finished_at="2025-12-31T03:00:00Z")
+    with pytest.raises(EventError, match="no job takes that long"):
+        store.consume(body(ev))
+    assert store.jobs() == []
+    ev["data"].update(queued_at="2025-12-24T03:00:00Z")  # a week exactly: a long job, stored
     assert store.consume(body(ev)).status == "processed"
 
 

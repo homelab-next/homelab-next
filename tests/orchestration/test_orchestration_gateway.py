@@ -17,9 +17,11 @@ from homelabnext.orchestration.gateway import (
     SLACK_S,
     GatewayError,
     SpendLogReader,
+    _span,
     sync_turns,
     turn_from_row,
 )
+from homelabnext.orchestration.store import MAX_JOB_S
 from homelabnext.status.model import iso, parse_iso
 
 ROWS = [r for p in pages() for r in p["data"]]
@@ -237,3 +239,13 @@ def test_a_job_whose_times_are_reversed_is_still_read_and_settled():
     assert got == {"jobs": 1, "turns": 1, "settled": 1}
     assert store.settled == [job["run_id"]] and [t["turn_id"] for t in store.turns] == ["req-r1"]
     assert asked[0][0] <= finished - SLACK_S and asked[-1][1] >= finished + 3 * 3600
+
+
+def test_a_span_never_reaches_further_back_than_the_longest_job():
+    """The store refuses such a record; this is the backstop. A queue time of 0001-01-01 (Go's
+    zero time) made a span of some seventeen million one-hour read windows."""
+    job = copy.deepcopy(examples()[0]["data"])
+    finished = parse_iso(job["finished_at"])
+    job.update(queued_at="0001-01-01T00:00:00Z", started_at=None)
+    lo, hi = _span(job)
+    assert lo == finished - MAX_JOB_S - SLACK_S and hi == finished + SLACK_S

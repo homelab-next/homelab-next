@@ -19,8 +19,9 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
   naming the count and how to fix it, since the index cannot be built over them);
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours), or timestamps out of order (queued after started or finished,
-  started after finished, by more than :data:`ORDER_SLACK_S`), is refused the same way: everything :meth:`consume` derives from a
-  record is computed before the database is touched, so the only other exceptions it raises are
+  started after finished, by more than :data:`ORDER_SLACK_S`), or queued more than
+  :data:`MAX_JOB_S` (a week) before it finished, is refused the same way: everything
+  :meth:`consume` derives from a record is computed before the database is touched, so the only other exceptions it raises are
   the store's own (:mod:`sqlite3`, the disk), which a caller may retry.
 
 **Turns** come from the gateway's spend log (:mod:`.gateway`), already reduced to the allow-listed
@@ -307,9 +308,16 @@ def _conflict(row: tuple[str, str, str], eid: str, data: Mapping[str, Any]) -> s
 
 #: the record's timestamps; each must name a real instant that UTC can represent
 _TIMES = ("queued_at", "started_at", "finished_at")
-#: how far the timestamps may be out of order (queued <= started <= finished): one second, what
-#: stamping each to the second on its own can invert; more is a record no window can cover
+#: how far the timestamps may be out of order (queued <= started <= finished).  The controller
+#: stamps all three from one clock at nanosecond precision, so they invert only when that wall
+#: clock is stepped between two stamps (an NTP correction); a second absorbs such a step, and more
+#: is a record whose span no read window covers as it stands
 ORDER_SLACK_S = 1.0
+#: the longest a job may take from queued to finished: a week, the replay a new durable reads.
+#: A longer record is no job (a Go zero time, 0001-01-01, behind a parse error the controller
+#: ignored) and is refused: its turns would be read over one window per hour of the span, millions
+#: of them, and :func:`.gateway._span` clamps to it as well
+MAX_JOB_S = 7 * 86400.0
 
 
 def _instants(data: Mapping[str, Any]) -> dict[str, float]:
@@ -334,7 +342,16 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
                 "invalid event",
                 [f"data.{early}: {data[early]!r} is after data.{late} {data[late]!r}"],
             )
+    first, last = out[order[0]], out[order[-1]]
+    if last - first > MAX_JOB_S:
+        raise EventError(
+            "invalid event",
+            [
+                f"data.{order[0]}: {data[order[0]]!r} is more than {MAX_JOB_S / 86400:g} days "
+                f"before data.{order[-1]} {data[order[-1]]!r}: no job takes that long"
+            ],
+        )
     return out
 
 
-__all__ = ["DEFAULT_RETENTION_DAYS", "JOURNAL_MODE", "STORE_ERRORS", "TelemetryStore"]
+__all__ = ["DEFAULT_RETENTION_DAYS", "JOURNAL_MODE", "MAX_JOB_S", "STORE_ERRORS", "TelemetryStore"]

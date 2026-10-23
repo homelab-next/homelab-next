@@ -45,7 +45,7 @@ from homelabnext._http import ResponseTooLarge, check_plaintext, credential_open
 from homelabnext.registry.model import secret_env_name
 from homelabnext.status.model import iso, parse_iso
 
-from .store import TelemetryStore
+from .store import MAX_JOB_S, TelemetryStore
 
 SPEND_LOGS_PATH = "/spend/logs/v2"
 DEFAULT_KEY = "secret:llm-gateway/key-telemetry-reader"
@@ -281,9 +281,11 @@ def _windows(
 def _span(job: Mapping[str, Any]) -> tuple[float, float]:
     """The time a job's turns can lie in, with :data:`SLACK_S` either side.  Ordered even when
     the record's times are not (the store refuses those): a reversed span overlaps no window, so
-    its job would never be read or settled."""
+    its job would never be read or settled.  Never longer than :data:`.store.MAX_JOB_S` before the
+    finish (the store refuses a longer job too): a queue time of 0001-01-01 would otherwise be
+    read as some seventeen million one-hour windows, and no pass would ever reach the next job."""
     q, f = parse_iso(job["queued_at"]), parse_iso(job["finished_at"])
-    return min(q, f) - SLACK_S, max(q, f) + SLACK_S
+    return max(min(q, f), f - MAX_JOB_S) - SLACK_S, max(q, f) + SLACK_S
 
 
 def sync_turns(
