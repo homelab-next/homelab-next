@@ -1,0 +1,27 @@
+{"Time":"2026-10-23T01:22:24.517935568Z","Action":"start","Package":"example.com/fixture/internal/race"}
+{"Time":"2026-10-23T01:22:24.542550259Z","Action":"run","Package":"example.com/fixture/internal/race","Test":"TestFlaky"}
+{"Time":"2026-10-23T01:22:24.542644116Z","Action":"output","Package":"example.com/fixture/internal/race","Test":"TestFlaky","Output":"=== RUN   TestFlaky\n"}
+{"Time":"2026-10-23T01:22:24.542985433Z","Action":"output","Package":"example.com/fixture/internal/race","Test":"TestFlaky","Output":"    race_test.go:19: flaky\n"}
+{"Time":"2026-10-23T01:22:24.543228939Z","Action":"output","Package":"example.com/fixture/internal/race","Test":"TestFlaky","Output":"--- FAIL: TestFlaky (0.00s)\n"}
+{"Time":"2026-10-23T01:22:24.543304442Z","Action":"fail","Package":"example.com/fixture/internal/race","Test":"TestFlaky","Elapsed":0}
+{"Time":"2026-10-23T01:22:24.543393006Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"FAIL\n"}
+{"Time":"2026-10-23T01:22:24.545234419Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"==================\n"}
+{"Time":"2026-10-23T01:22:24.545249859Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"WARNING: DATA RACE\n"}
+{"Time":"2026-10-23T01:22:24.545252316Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"Write at 0x0000007c2fe0 by goroutine 8:\n"}
+{"Time":"2026-10-23T01:22:24.545254884Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"  example.com/fixture/internal/race.TestMain.func1()\n"}
+{"Time":"2026-10-23T01:22:24.545284383Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"      /src/orch/internal/race/race_test.go:13 +0x24\n"}
+{"Time":"2026-10-23T01:22:24.545298555Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"\n"}
+{"Time":"2026-10-23T01:22:24.545301381Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"Previous write at 0x0000007c2fe0 by main goroutine:\n"}
+{"Time":"2026-10-23T01:22:24.545303863Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"  example.com/fixture/internal/race.TestMain()\n"}
+{"Time":"2026-10-23T01:22:24.545306621Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"      /src/orch/internal/race/race_test.go:14 +0x44\n"}
+{"Time":"2026-10-23T01:22:24.545308909Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"  main.main()\n"}
+{"Time":"2026-10-23T01:22:24.54531105Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"      _testmain.go:47 +0x171\n"}
+{"Time":"2026-10-23T01:22:24.545313121Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"\n"}
+{"Time":"2026-10-23T01:22:24.545315043Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"Goroutine 8 (running) created at:\n"}
+{"Time":"2026-10-23T01:22:24.545317178Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"  example.com/fixture/internal/race.TestMain()\n"}
+{"Time":"2026-10-23T01:22:24.545319301Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"      /src/orch/internal/race/race_test.go:13 +0x37\n"}
+{"Time":"2026-10-23T01:22:24.545321547Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"  main.main()\n"}
+{"Time":"2026-10-23T01:22:24.54532382Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"      _testmain.go:47 +0x171\n"}
+{"Time":"2026-10-23T01:22:24.545325947Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"==================\n"}
+{"Time":"2026-10-23T01:22:24.555991572Z","Action":"output","Package":"example.com/fixture/internal/race","Output":"FAIL\texample.com/fixture/internal/race\t0.038s\n"}
+{"Time":"2026-10-23T01:22:24.556035925Z","Action":"fail","Package":"example.com/fixture/internal/race","Elapsed":0.038}

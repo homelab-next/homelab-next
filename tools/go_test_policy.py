@@ -20,7 +20,9 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   subtest under it is quarantined and the parent wrote nothing of its own: a parent whose own
   output has a line outside its subtests, its own ``t.Error`` say, needs an entry naming it);
 * a package that failed without a failing test: a build failure (``build-fail``), a panic in
-  ``TestMain`` or ``init``, a timeout;
+  ``TestMain`` or ``init``, a timeout -- and one whose only failing tests are quarantined unless
+  every test in it has a verdict and the package wrote nothing beyond its ``FAIL`` summary, so a
+  quarantine cannot hide a hang, a race reported after the tests or a ``TestMain`` crash;
 * a skip whose reason (the last line the test wrote before ``--- SKIP``) matches none of the
   ``skip_reasons`` regular expressions of ``[tool.pytest.ini_options]`` in pyproject.toml, or one
   that ``--forbid`` names for this run (a reason that is legitimate elsewhere, such as a tool CI
@@ -290,6 +292,8 @@ def judge(
         return next((e for e in valid if e.covers(pkg, test)), None)
 
     failing = {k for k, r in run.tests.items() if r.action == "fail"}
+    reported: set[str] = set()  # packages with a failing test reported as a problem
+    tolerated: set[str] = set()  # packages with a quarantined failing test
 
     for pkg, test in sorted(failing):
         e = quarantined(pkg, test)
@@ -297,9 +301,12 @@ def judge(
         own = _own_lines(run.tests[(pkg, test)])
         if e:
             notes.append(f"quarantined failure {pkg} {test} (owner {e.owner}, until {e.until})")
+            tolerated.add(pkg)
         elif not subs:
             problems.append(f"FAIL {pkg} {test}")
+            reported.add(pkg)
         elif own:
+            reported.add(pkg)
             # its own assertion failed too: a quarantined subtest must not carry it
             problems.append(
                 f"FAIL {pkg} {test}: fails with output of its own, outside its subtests "
@@ -309,12 +316,26 @@ def judge(
 
     reported_builds = set()
     for pkg, res in sorted(run.packages.items()):
-        if res.action != "fail" or any(p == pkg for p, _ in failing):
-            continue  # a package whose failing tests are judged above needs no line of its own
+        if res.action != "fail" or pkg in reported:
+            continue  # a failing test of it is already a problem: no second line for the package
+        if pkg in tolerated and _explained_by_tests(run, pkg, res):
+            notes.append(f"package {pkg} failed only through its quarantined tests")
+            continue
         if res.failed_build:
             reported_builds.add(res.failed_build)
             out = _oneline(run.build_output.get(res.failed_build, res.output))
             problems.append(f"BUILD FAIL {pkg}: {out}")
+        elif pkg in tolerated:  # a quarantined failure, and something else went wrong too
+            open_ = sorted(t for (p, t), r in run.tests.items() if p == pkg and r.action == "")
+            extra = [x for x in res.output if x.strip() and not PACKAGE_SUMMARY.match(x.strip())]
+            why = (
+                f"no verdict for {', '.join(open_)}"
+                if open_
+                else " | ".join(x.strip() for x in extra[:3] if x.strip() != "=" * 18)
+            )
+            problems.append(
+                f"FAIL {pkg}: package failed beyond its quarantined tests ({why})"[:300]
+            )
         else:  # a timeout, a panic in TestMain or init, or (before Go 1.24) a build failure
             problems.append(
                 f"FAIL {pkg}: package failed without a failing test ({_oneline(res.output)})"
@@ -359,6 +380,18 @@ def judge(
                 problems.append(f"FAIL (privileged run) {pkg} {test}")
         problems += [f"(privileged run) {b}" for b in privileged_run.bad_lines]
     return problems, notes
+
+
+# what the test binary itself prints at the end of a failing run, and go test's summary line
+PACKAGE_SUMMARY = re.compile(r"^(?:FAIL|PASS|(?:FAIL|ok)\s+\S+\s.*|coverage: .*)$")
+
+
+def _explained_by_tests(run: Run, pkg: str, res: Result) -> bool:
+    """A failed package whose failure its failing tests account for: every test has a verdict
+    and the package's own output is only the closing summary (no panic, race report or timeout)."""
+    if res.failed_build or any(r.action == "" for (p, _), r in run.tests.items() if p == pkg):
+        return False
+    return all(PACKAGE_SUMMARY.match(line.strip()) for line in res.output if line.strip())
 
 
 def _own_lines(res: Result) -> list[str]:

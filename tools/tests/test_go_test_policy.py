@@ -205,6 +205,38 @@ def test_a_quarantined_subtest_does_not_carry_its_parents_own_failure(tmp_path, 
 
 
 @pytest.mark.parametrize(
+    ("name", "pkg", "problem"),
+    [
+        # -timeout: TestHang never gets a verdict, the panic is in its output (Go 1.24)
+        ("timeout.json", "internal/to", "package failed beyond its quarantined tests"),
+        # TestMain panics after m.Run returned
+        ("teardown_panic.json", "internal/tmp", "panic: teardown failed"),
+        # -race: a data race reported after the tests, outside any of them
+        ("post_test_race.json", "internal/race", "WARNING: DATA RACE"),
+    ],
+)
+def test_a_quarantined_failure_does_not_hide_a_package_failure(
+    tmp_path, capsys, name, pkg, problem
+):
+    text = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace("internal/queue", pkg)
+    assert run(tmp_path, fixture(name), policy_yaml=text) == 1
+    out = capsys.readouterr().out
+    assert f"FAIL example.com/fixture/{pkg}: package failed beyond its quarantined tests" in out
+    assert problem in out or problem.startswith("package failed")
+
+
+def test_a_package_failing_only_through_quarantined_tests_is_tolerated(tmp_path, capsys):
+    text = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
+        "internal/queue", "internal/ok"
+    )
+    assert run(tmp_path, fixture("quarantined_only.json"), policy_yaml=text) == 0
+    assert (
+        "package example.com/fixture/internal/ok failed only through its quarantined tests"
+        in capsys.readouterr().out
+    )
+
+
+@pytest.mark.parametrize(
     ("until", "why"),
     [
         ("2026-01-09", "quarantine expired on 2026-01-09 (owner maintainers)"),
