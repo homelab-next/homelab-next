@@ -178,7 +178,10 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   computes them from the declaration and the accepted output. A reference may name only a
   *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
   `date`, `ipv4`, `ipv6`, `uuid` - or a closed `pattern`: anchored at both ends, no top-level `|`,
-  no `.`, negated class or `\S`/`\W`/`\D`). `summary`, `unknowns`, cites, memory updates and
+  no `.`, negated class or `\S`/`\W`/`\D`, nothing that matches whitespace, classes no wider
+  than ASCII letters, digits and `-_.:/@+=,~%`, and a length bound (`maxLength` or no unbounded
+  quantifier); arrays only through `items` and closed objects only through `properties`, so a
+  schema with `prefixItems`, `patternProperties`, `$ref` or a combinator counts as free text). `summary`, `unknowns`, cites, memory updates and
   any unconstrained string are free text; a declaration that binds one is refused. Bound strings
   are also refused if they hold a control character (`$` matches before a final newline). This is
   the workflows validator's `risky-params` rule, applied to every action, since everything an actor

@@ -16,8 +16,9 @@ the broker actions the actor may take, each with its parameters bound to literal
 2. **Free text never becomes a parameter.**  The actor does not choose parameters: a request's
    params are computed from the declaration, and a reference may name only a *constrained*
    field of the output - an ``enum``/``const``, a number or boolean, or a string with a checked
-   ``format`` (:data:`CHECKED_FORMATS`) or a closed ``pattern`` (:func:`is_closed_pattern`), and
-   arrays/closed objects made only of those.  The report's ``summary``, ``unknowns``, cites and memory updates, and any
+   ``format`` (:data:`CHECKED_FORMATS`) or a closed, length-bounded ``pattern``
+   (:func:`is_closed_pattern`), and arrays (``items`` only, no ``prefixItems``) and closed objects
+   (no ``patternProperties``) made only of those.  The report's ``summary``, ``unknowns``, cites and memory updates, and any
    unconstrained string of the output, are free text: a model can be talked into writing
    anything there.  This is the same rule as the workflows validator's ``risky-params`` (a risky
    action takes no parameter from a prompt step's free text), applied to every action because
@@ -91,28 +92,136 @@ def _top_level_alternation(pattern: str) -> bool:
     return False
 
 
+# characters a class may list besides ASCII letters and digits: enough for names, hosts, paths
+# and versions, never whitespace or shell/markup punctuation
+_CLASS_PUNCT = frozenset("-_.:/@+=,~%")
+# ranges a class may span: within one of these
+_CLASS_RANGES = (("0", "9"), ("a", "z"), ("A", "Z"))
+_ESC_HEX = re.compile(
+    r"x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|u\{([0-9A-Fa-f]{1,6})\}"
+)
+# a quantifier with no upper bound
+_UNBOUNDED = re.compile(r"(?<!\\)(?:\\\\)*(?:[*+]|\{\d*,\})")
+
+
+def _escape_at(pattern: str, i: int) -> tuple[str | None, int]:
+    """The literal character the escape at ``pattern[i] == "\\"`` stands for (None for a class
+    shorthand such as ``\\d``/``\\w``, or an escape this check does not read), and its end."""
+    m = _ESC_HEX.match(pattern, i + 1)
+    if m:
+        return chr(int(next(g for g in m.groups() if g), 16)), m.end()
+    nxt = pattern[i + 1 : i + 2]
+    if nxt.isalnum():
+        return None, i + 2
+    return nxt, i + 2
+
+
+def _narrow_char(c: str) -> bool:
+    return (c.isascii() and c.isalnum()) or c in _CLASS_PUNCT
+
+
+def _wide_or_spaced(pattern: str) -> bool:
+    """True when ``pattern`` can match whitespace (anywhere) or holds a character class wider
+    than ASCII letters, digits and a few name punctuation characters (``[ -~]``,
+    ``[\\u0000-\\U0010FFFF]``): such a pattern admits sentences however it is anchored."""
+    i, n = 0, len(pattern)
+    in_class, prev = False, None  # prev: the last literal class member, for a range
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            lit, j = _escape_at(pattern, i)
+            if lit is None:
+                if pattern[i + 1 : i + 2] not in ("d", "w"):
+                    return True  # \s, \n, \t, \p{..} and other escapes this does not read
+                prev, i = None, j
+                continue
+            c, i = lit, j
+            if c.isspace():
+                return True
+            if in_class:
+                if not _narrow_char(c):
+                    return True
+                prev = c
+            continue
+        if c.isspace():
+            return True
+        if not in_class:
+            if c == "[":
+                in_class, prev = True, None
+                if pattern[i + 1 : i + 2] == "^":
+                    return True  # a negated class
+            i += 1
+            continue
+        if c == "]":
+            in_class = False
+        elif c == "-" and prev is not None and i + 1 < n and pattern[i + 1] != "]":
+            hi = pattern[i + 1]
+            j = i + 2
+            if hi == "\\":
+                hi, j = _escape_at(pattern, i + 1)
+                if hi is None:
+                    return True
+            if not any(a <= prev and hi <= b for a, b in _CLASS_RANGES):
+                return True
+            prev, i = None, j
+            continue
+        elif not _narrow_char(c):
+            return True
+        else:
+            prev = c
+        i += 1
+    return False
+
+
 def is_closed_pattern(pattern: str) -> bool:
     """A pattern that cannot match free text: anchored at both ends with no top-level ``|``
-    (``^a$|.*`` is unanchored), and no ``.``, negated class or ``\\S``/``\\W``/``\\D``."""
+    (``^a$|.*`` is unanchored), no ``.``, negated class or ``\\S``/``\\W``/``\\D``, nothing
+    that matches whitespace, and character classes no wider than ASCII letters, digits and
+    ``-_.:/@+=,~%`` (a class such as ``[ -~]`` or ``[\\u0000-\\U0010FFFF]`` lists everything)."""
     return (
         pattern.startswith("^")
         and pattern.endswith("$")
         and not pattern.endswith("\\$")
         and not _top_level_alternation(pattern)
         and not _OPEN.search(pattern)
+        and not _wide_or_spaced(pattern)
     )
+
+
+def _length_bounded(schema: Mapping[str, Any]) -> bool:
+    """A string schema whose values have a bounded length: a ``maxLength``, or a pattern with no
+    unbounded quantifier (``*``, ``+``, ``{n,}``)."""
+    if isinstance(schema.get("maxLength"), int) and not isinstance(schema["maxLength"], bool):
+        return True
+    return not _UNBOUNDED.search(str(schema.get("pattern")))
+
+
+# keywords that apply a schema to child values the checked keywords do not cover (prefixItems
+# positions are outside ``items``; patternProperties keys bypass additionalProperties), or that
+# compose schemas this check does not follow: what cannot be shown to be constrained is not
+_UNFOLLOWED = frozenset(
+    {
+        "prefixItems", "additionalItems", "unevaluatedItems", "contains", "patternProperties",
+        "unevaluatedProperties", "dependentSchemas", "dependencies", "if", "then", "else",
+        "allOf", "anyOf", "oneOf", "not", "$ref", "$dynamicRef", "$recursiveRef",
+    }
+)  # fmt: skip
 
 
 def is_constrained(schema: Any) -> bool:
     """True when every value ``schema`` admits is constrained enough to be an action parameter.
 
-    Unknown or unsupported keywords (``$ref``, ``anyOf``, a missing ``type``) count as free text:
-    what cannot be shown to be constrained is not.
+    Unknown or unsupported keywords (``$ref``, ``anyOf``, ``prefixItems``, ``patternProperties``,
+    a missing ``type``) count as free text: what cannot be shown to be constrained is not.  A
+    string bound by a pattern must also be bounded in length (``maxLength`` or a pattern with no
+    unbounded quantifier).
     """
     if not isinstance(schema, Mapping):
         return False
     if "enum" in schema or "const" in schema:
         return True
+    if _UNFOLLOWED & set(schema):
+        return False
     kind = schema.get("type")
     if kind in ("integer", "number", "boolean"):
         return True
@@ -120,7 +229,7 @@ def is_constrained(schema: Any) -> bool:
         if schema.get("format") in CHECKED_FORMATS:
             return True
         pattern = schema.get("pattern")
-        return isinstance(pattern, str) and is_closed_pattern(pattern)
+        return isinstance(pattern, str) and is_closed_pattern(pattern) and _length_bounded(schema)
     if kind == "array":
         return is_constrained(schema.get("items"))
     if kind == "object":
@@ -238,7 +347,7 @@ def _shape_problems(doc: Mapping[str, Any]) -> list[str]:
             elif not is_constrained(sub):
                 out.append(
                     f"{name}: {ref!r} is a free-text field; constrain it (enum, a checked "
-                    "format, a closed pattern) or do not pass it to an action"
+                    "format, a closed pattern with a length bound) or do not pass it to an action"
                 )
     return out
 

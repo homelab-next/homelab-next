@@ -293,6 +293,19 @@ def test_profiles_must_be_the_declared_ones():
         ("^[^;]+$", False),
         ("^\\S+$", False),
         ("^a\\$", False),
+        ("^[0-9a-f]{40}$", True),
+        ("^v[0-9]+\\.[0-9]+$", True),
+        ("^[\\x41-\\x5a]+$", True),
+        # a positive class that lists everything, or whitespace, admits sentences
+        ("^[\\u0000-\\U0010FFFF]*$", False),
+        ("^[ -~]*$", False),
+        ("^[A-z]+$", False),  # A-z spans [\\]^_` too
+        ("^[a-z ]+$", False),
+        ("^[a-z]+( [a-z]+)*$", False),
+        ("^[a-z]+\\s[a-z]+$", False),
+        ("^[a-z\\x20]+$", False),
+        ("^[a-z;|&]+$", False),
+        ("^[\\p{L}]+$", False),
     ],
 )
 def test_closed_patterns(pattern, closed):
@@ -323,10 +336,49 @@ def test_closed_patterns(pattern, closed):
         ({"type": "object", "properties": {"a": {"type": "integer"}}}, False),
         ({"$ref": "#/$defs/x"}, False),
         ("string", False),
+        ({"type": "string", "pattern": "^[a-z]+$", "maxLength": 63}, True),
+        ({"type": "string", "pattern": "^[a-z]{1,63}$"}, True),
+        ({"type": "string", "pattern": "^[a-z]+$"}, False),  # no length bound
+        ({"type": "string", "pattern": "^[a-z]{1,}$"}, False),
+        # items does not apply to the prefixItems positions (2020-12)
+        ({"type": "array", "prefixItems": [{"type": "string"}], "items": {"enum": ["a"]}}, False),
+        # keys matching a patternProperties pattern bypass additionalProperties: false
+        (
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"k": {"enum": ["x"]}},
+                "patternProperties": {"^z": {}},
+            },
+            False,
+        ),
+        ({"type": "integer", "anyOf": [{"minimum": 1}]}, False),
+        ({"type": "string", "format": "uuid", "allOf": [{}]}, False),
     ],
 )
 def test_constrained_fields(schema, constrained):
     assert is_constrained(schema) is constrained
+
+
+def test_the_probe_shapes_are_free_text_and_their_declaration_is_refused():
+    """prefixItems, patternProperties and an all-covering class each let a reader's free text
+    reach a broker action's params; a declaration binding any of them is refused."""
+    shapes = {
+        "hosts": {"type": "array", "prefixItems": [{"type": "string"}], "items": {"enum": ["a"]}},
+        "tags": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"k": {"enum": ["x"]}},
+            "patternProperties": {"^z": {}},
+        },
+        "cmd": {"type": "string", "pattern": "^[\\u0000-\\U0010FFFF]*$"},
+        "line": {"type": "string", "maxLength": 80, "pattern": "^[ -~]*$"},
+    }
+    for name, shape in shapes.items():
+        d = _with_params(x=f"$output.{name}")
+        d["output_schema"]["properties"][name] = shape
+        with pytest.raises(HandoffError, match="free-text field"):
+            Handoff.from_mapping(d)
 
 
 def test_array_index_and_escaped_dollar_resolve(pack):
