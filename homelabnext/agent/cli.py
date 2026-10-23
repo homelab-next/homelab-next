@@ -220,6 +220,8 @@ def main(argv: list[str]) -> int:
             notes: list[tuple[str, str]] = []
             rules = tuple(args.rule or RULES)
             policy = _policy(args.policy) if args.policy else None
+            if policy is not None:
+                notes += [(str(args.policy), n) for n in policy.direct_notes(classes)]
             by_rule: dict[str, list[tuple[str, str]]] = {}
             problems, counts = lint_paths(
                 args.paths, classes, notes, policy=policy, rules=rules, by_rule=by_rule

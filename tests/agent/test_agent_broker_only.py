@@ -453,3 +453,22 @@ def test_lint_walks_the_tree_once_for_both_rules(tmp_path, monkeypatch, capsys):
     assert (
         "readers-cannot-act: 1 profile(s)" in err and "actors-act-via-broker: 1 profile(s)" in err
     )
+
+
+def test_an_unused_direct_mcp_entry_is_a_note(tmp_path, capsys):
+    """N5: a direct_mcp entry naming a server that is not acts_via: direct (or none at all) is an
+    exception for nothing; lint with --policy says so (a note, not a refusal)."""
+    prof = tmp_path / "actor.yml"
+    prof.write_text(yaml.safe_dump(_actor(mcp=["lake"])))
+    pol = tmp_path / "policy.yml"
+    entry = {"mcp": ["lake"], "capabilities": ["cap:lake-query"], "tier": "read",
+             "direct_mcp": ["lake", "hnx-broker", "nothing-here"]}  # fmt: skip
+    pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
+    assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
+    err = capsys.readouterr().err
+    for name in ("lake", "hnx-broker", "nothing-here"):
+        assert f"profile:actor lists {name!r} in direct_mcp, which is not an acts_via" in err
+    entry["direct_mcp"] = ["shell"]
+    pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
+    assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
+    assert "in direct_mcp" not in capsys.readouterr().err

@@ -222,6 +222,18 @@ class CeilingPolicy:
         empty for a profile it has no entry or no ``direct_mcp`` for."""
         return self._direct.get(profile_id, frozenset())
 
+    def direct_notes(self, classes: ToolClasses | None = None) -> list[str]:
+        """Warnings for ``direct_mcp`` entries that name no ``acts_via: direct`` catalog server
+        (an exception for nothing, or for a server that would not need one)."""
+        meta = (classes if classes is not None else default_classes()).catalog or {}
+        return [
+            f"{pid} lists {name!r} in direct_mcp, which is not an acts_via: "
+            "direct catalog server (remove the entry)"
+            for pid, names in sorted(self._direct.items())
+            for name in sorted(names)
+            if (meta.get(name) or {}).get("acts_via") != "direct"
+        ]
+
     def requires_reader(self, profile_id: str) -> bool:
         """True when the policy marks ``profile_id`` as reading untrusted content."""
         return profile_id in self._readers
