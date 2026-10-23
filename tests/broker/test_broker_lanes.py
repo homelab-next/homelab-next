@@ -9,7 +9,15 @@ import re
 
 import pytest
 
-from homelabnext.broker.lanes import Lane, LaneError, check_params, name_tag, write
+from homelabnext.broker.lanes import (
+    DEFAULT_MAX_FILES,
+    DEFAULT_MAX_TOTAL_BYTES,
+    Lane,
+    LaneError,
+    check_params,
+    name_tag,
+    write,
+)
 from homelabnext.records.notes import check_filename, parse_note
 
 NOW = "2026-01-15T10:00:00Z"
@@ -317,3 +325,46 @@ def test_written_files_are_owner_only(tmp_path):
     assert len(files) == 2
     for p in files:
         assert p.stat().st_mode & 0o077 == 0, (p, oct(p.stat().st_mode))
+
+
+# -- quotas: a lane directory holds at most max_files files and max_total_bytes bytes -------------
+
+
+def test_a_lane_directory_has_a_file_quota(tmp_path):
+    """An agent with a write lane could add uniquely named files until the disk (the audit trail's
+    disk, by default) was full: each file was capped, the number of them was not."""
+    lane = _lane(max_files=3)
+    for i in range(3):
+        write(lane, tmp_path, ACTOR, {"name": f"n{i}.md", "content": "x"}, NOW)
+    err = _refused(lane, tmp_path, {"name": "n3.md", "content": "x"}, "lane-quota-exceeded")
+    assert err.outcome == "denied" and "3 files" in str(err)
+    assert len(_files(tmp_path)) == 3
+    # per actor: another agent's directory has its own quota
+    write(lane, tmp_path, "profile:other", {"name": "n0.md", "content": "x"}, NOW)
+
+
+def test_a_lane_directory_has_a_byte_quota(tmp_path):
+    lane = _lane(max_total_bytes=100)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x" * 60}, NOW)
+    _refused(lane, tmp_path, {"name": "b.md", "content": "x" * 41}, "lane-quota-exceeded")
+    write(lane, tmp_path, ACTOR, {"name": "b.md", "content": "x" * 40}, NOW)  # exactly full
+    _refused(lane, tmp_path, {"name": "c.md", "content": "x"}, "lane-quota-exceeded")
+
+
+def test_an_overwrite_counts_the_file_it_replaces_once(tmp_path):
+    lane = _lane(overwrite=True, max_files=1, max_total_bytes=50)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x" * 50}, NOW)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "y" * 50}, NOW)  # a replacement
+    _refused(lane, tmp_path, {"name": "b.md", "content": "y"}, "lane-quota-exceeded")
+
+
+def test_a_shared_lane_quota_covers_the_whole_lane(tmp_path):
+    lane = _lane(per_actor=False, max_files=1)
+    write(lane, tmp_path, ACTOR, {"name": "a.md", "content": "x"}, NOW)
+    _refused(lane, tmp_path, {"name": "b.md", "content": "x"}, "lane-quota-exceeded", "profile:b")
+
+
+def test_lane_quotas_have_defaults_and_are_checked():
+    lane = _lane()
+    assert (lane.max_files, lane.max_total_bytes) == (DEFAULT_MAX_FILES, DEFAULT_MAX_TOTAL_BYTES)
+    assert _lane(max_total_bytes=10).problems(), "a quota smaller than one file"

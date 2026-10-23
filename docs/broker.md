@@ -70,6 +70,14 @@ agent (`lane-identity-mismatch`) or its own `created` (`lane-created-set`) and a
 (`lane-actor-invalid`). Lane roots live under the broker's **data root** (`--data-root`, default
 `<state>/lanes`); point it at the directory the agents' memory, findings and records live in.
 
+Each lane directory has a quota (manifest 1.5): `max_files` (default 4096) and `max_total_bytes`
+(default 64 MiB, the new file included) for the directory a write lands in, the agent's own for a
+`per_actor` lane and the shared one otherwise. A write past either is refused
+`lane-quota-exceeded` (a replaced file of an `overwrite` lane counts once). The count and the
+write happen under an exclusive `flock` on the directory, so concurrent writers cannot overshoot
+it together. Without the quota an agent could add uniquely named files until the disk, by default
+the audit trail's disk, was full.
+
 ## Exec handlers
 
 A handler document pins the file and says how to run it:
@@ -117,6 +125,15 @@ hnx broker validate examples/broker/manifest.yml
    `HNX_BROKER_APPROVALS_URL`; an `http(s)` page URL without credentials, query or fragment, e.g.
    `https://status.lab.example/approvals`) the event carries `link` = `URL?request=<id>` and the
    notification ends with `Review: <link>` (ntfy also gets it as `Click`).
+
+   Accepted work is bounded per agent (manifest 1.5 `quotas`): an actor may have at most
+   `pending_per_actor` requests pending at once (default 20; a `submit` past it is refused
+   `too-many-pending`, audited, and counts as a refusal for the rate limit), and its approval
+   requests page the approver at most once per `notify_window_s` (default 300 s; 0 pages every
+   request). The page counts the actor's requests awaiting approval; every request still emits
+   its event and appears on the Approvals page, and the settling of a paged request says how many
+   of the actor's requests still wait. A looping agent can therefore neither flood the approver's
+   phone nor bury one malicious request among hundreds.
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
@@ -174,7 +191,7 @@ subdirectory and file stays `0700`/`0600`, the broker's only. Agents get no acce
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.4; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.5; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -184,6 +201,7 @@ callers:                                  # an agent's system user -> the one pr
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
 refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
+quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
 ```
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);

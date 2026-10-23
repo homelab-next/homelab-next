@@ -38,6 +38,15 @@ Unix socket and takes the caller from the peer's credentials, mapped through the
 ``callers`` (1.3); approvals arrive from the manifest's ``approval_relays``.  While a socket
 request is being served, :data:`TRANSPORT_PEER` names the peer and every audit record carries it
 as ``via``.
+
+**Quotas on accepted work** (manifest 1.5 ``quotas``): an actor may have at most
+``pending_per_actor`` requests pending at once (default :data:`DEFAULT_PENDING_PER_ACTOR`; a
+``submit`` past it is refused ``too-many-pending`` and audited), and its approval requests page
+the approver at most once per ``notify_window_s`` (default :data:`DEFAULT_NOTIFY_WINDOW_S`): the
+page counts the actor's requests awaiting approval, every request still emits its
+``decision.requested`` event and is listed on the Approvals page, and the settling of a paged
+request says how many of the actor's requests still wait.  A lane's directory has its own file
+and byte quota (:mod:`homelabnext.broker.lanes`).  The window is kept per process.
 """
 
 from __future__ import annotations
@@ -49,6 +58,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
@@ -83,6 +93,8 @@ from .relay import BROKER_SOURCE
 from .state import DECISION_KINDS, FileApprovalStore, StateDir, is_id, new_id
 
 __all__ = [
+    "DEFAULT_NOTIFY_WINDOW_S",
+    "DEFAULT_PENDING_PER_ACTOR",
     "NOT_OWNER",
     "TRANSPORT_PEER",
     "BrokerService",
@@ -93,6 +105,10 @@ __all__ = [
 ]
 
 NOT_OWNER = "not-request-owner"
+TOO_MANY_PENDING = "too-many-pending"
+#: manifest ``quotas`` defaults: requests one actor may have pending, and its page window (s)
+DEFAULT_PENDING_PER_ACTOR = 20
+DEFAULT_NOTIFY_WINDOW_S = 300.0
 CALLABLE_HANDLER = "builtin/callable"
 EMPTY_MANIFEST = {
     "manifest_id": "in-process",
@@ -325,6 +341,12 @@ class BrokerService:
         self._callables: dict[str, tuple[Callable[..., Any], dict[str, ArgSpec]]] = {}
         self._allow: dict[str, set[str]] = {}
         self._secret_args: dict[str, dict[str, Any]] = {}
+        quotas = self.manifest.get("quotas") or {}
+        self.pending_per_actor = int(quotas.get("pending_per_actor", DEFAULT_PENDING_PER_ACTOR))
+        self.notify_window_s = float(quotas.get("notify_window_s", DEFAULT_NOTIFY_WINDOW_S))
+        self._submit_lock = threading.Lock()  # the pending count and the new request, as one
+        self._paged: dict[str, datetime] = {}  # actor -> when its last approval page went out
+        self._paged_lock = threading.Lock()
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
 
@@ -762,7 +784,25 @@ class BrokerService:
             "verdict": decision["verdict"],
             "decision_reason": decision["reason"],
         }
-        self.state.put_request(rid, record)
+        with self._submit_lock:
+            if len(self._pending_of(request["actor"])) >= self.pending_per_actor:
+                self._audit(
+                    caller,
+                    command,
+                    "submit",
+                    "denied",
+                    reason=TOO_MANY_PENDING,
+                    args=args,
+                    spec=act.spec,
+                    request_id=rid,
+                    request_digest=request["digest"],
+                )
+                raise Denied(
+                    f"{caller!r} has {self.pending_per_actor} requests pending: run, cancel or "
+                    "wait for a decision on one first",
+                    reason=TOO_MANY_PENDING,
+                )
+            self.state.put_request(rid, record)
         if secret:
             self._secret_args[rid] = secret
         self._audit(
@@ -779,6 +819,24 @@ class BrokerService:
         if decision["verdict"] == "needs-approval":
             self._approval_requested(request)
         return rid
+
+    def _pending_of(self, actor: str) -> list[dict[str, Any]]:
+        """The stored records of ``actor``'s pending requests (the open index: O(open))."""
+        out = []
+        for rid in self.state.open_request_ids():
+            rec = self.state.get_request(rid)
+            if rec and rec["request"]["actor"] == actor:
+                out.append(rec)
+        return out
+
+    def _awaiting(self, actor: str) -> int:
+        """How many of ``actor``'s requests wait for an approver (no valid approval yet)."""
+        return sum(
+            1
+            for rec in self._pending_of(actor)
+            if rec["verdict"] == "needs-approval"
+            and self.approval_state(rec["request"]["request_id"], rec["request"]) != "valid"
+        )
 
     def _owned(self, caller, request_id, operation):
         """The stored record when ``caller`` owns ``request_id``; otherwise audit and refuse.
@@ -944,7 +1002,7 @@ class BrokerService:
         self._secret_args.pop(request_id, None)
         self._audit(caller, req["action"], "cancel", "ok", **extra)
         if rec["verdict"] == "needs-approval":
-            self._notify_settled(request_id, "cancelled by its owner")
+            self._notify_settled(request_id, "cancelled by its owner", req["actor"])
 
     # ---------------------------------------------------------------- approvals
     def _latest_approval(self, request_id: str) -> dict[str, Any] | None:
@@ -1144,7 +1202,7 @@ class BrokerService:
             request_id,
             key=f"returned:{doc['approval_id']}",
         )
-        self._notify_settled(request_id, f"{decision} by {who}")
+        self._notify_settled(request_id, f"{decision} by {who}", req["actor"])
         return doc
 
     # ---------------------------------------------------------------- events and notify
@@ -1179,10 +1237,13 @@ class BrokerService:
         if link:
             data["link"] = link
         self._emit("homelabnext.decision.requested", data, rid, key=f"requested:{rid}")
-        if self.notifier is not None:
+        if self.notifier is not None and self._page_due(request["actor"]):
             from homelabnext.notify.core import Message
 
             body = f"{request['actor']} asks to run {request['action']} ({rid})"
+            waiting = self._awaiting(request["actor"])
+            if waiting > 1:
+                body += f"; {waiting} requests await approval from {request['actor']}"
             msg = Message(
                 key=f"broker-approval-{rid}",
                 title=APPROVAL_TITLE,
@@ -1192,13 +1253,31 @@ class BrokerService:
             )
             self._notify(msg.key, "awaiting-approval", msg)
 
-    def _notify_settled(self, rid: str, how: str) -> None:
+    def _page_due(self, actor: str) -> bool:
+        """Whether ``actor``'s approval request may page now (one page per actor and window);
+        a page that is due is taken here, so of racing requests one pages."""
+        now = self._now()
+        with self._paged_lock:
+            last = self._paged.get(actor)
+            if last is not None and (now - last).total_seconds() < self.notify_window_s:
+                return False
+            self._paged[actor] = now
+            return True
+
+    def _notify_settled(self, rid: str, how: str, actor: str | None = None) -> None:
         if self.notifier is None:
             return
         from homelabnext.notify.core import Message
 
         key = f"broker-approval-{rid}"
-        self._notify(key, "ok", Message(key=key, title=APPROVAL_CLEARED, body=f"{rid} {how}"))
+        state_of = getattr(self.notifier, "state_of", None)
+        if state_of is not None and state_of(key) == "ok":
+            return  # never paged (coalesced into another page): nothing to settle
+        body = f"{rid} {how}"
+        waiting = self._awaiting(actor) if actor else 0
+        if waiting:
+            body += f"; {waiting} more from {actor} await approval"
+        self._notify(key, "ok", Message(key=key, title=APPROVAL_CLEARED, body=body))
 
     def _notify(self, key, state, msg) -> None:
         # a notification is a courtesy: the event and the pending list already carry the request,

@@ -20,6 +20,9 @@ for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `
 absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
 socket peer, `uid:<n>`). Manifest 1.4 adds `refusal_limit` (`max` refused requests per
 `window_s` per transport peer before the socket answers it `rate-limited`; default 60 per 60 s).
+Manifest 1.5 adds `quotas` (`pending_per_actor`, default 20, and `notify_window_s`, default
+300 s: one approval page per actor and window) and a lane's `max_files` and `max_total_bytes`
+(default 4096 files and 64 MiB per lane directory).
 Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x

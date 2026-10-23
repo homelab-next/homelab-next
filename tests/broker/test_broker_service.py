@@ -436,6 +436,82 @@ def test_notify_and_bus(tmp_path):
     assert svc.state.outbox() == [], "with a bus, nothing goes to the outbox"
 
 
+def _quota_svc(tmp_path, clock=None, **quotas):
+    manifest, docs = load_manifest(EXAMPLE)
+    if quotas:
+        manifest["quotas"] = quotas
+    kw = {"notifier": quotas.pop("notifier")} if "notifier" in quotas else {}
+    return BrokerService(
+        tmp_path / "state",
+        manifest,
+        handler_docs=docs,
+        base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data",
+        clock=clock or Clock(),
+        **kw,
+    )
+
+
+def test_an_actor_may_have_only_so_many_requests_pending(tmp_path):
+    """A looping agent with an approval-gated grant filed hundreds of requests a minute, each one
+    a page and a row on the Approvals page, where one malicious request could hide."""
+    svc = _quota_svc(tmp_path, pending_per_actor=3)
+    rids = [_restart(svc) for _ in range(3)]
+    with pytest.raises(Denied) as info:
+        _restart(svc)
+    assert info.value.reason == "too-many-pending"
+    [rec] = svc.audit_documents(reason="too-many-pending")
+    assert (rec["operation"], rec["outcome"], rec["caller"]) == ("submit", "denied", AGENT)
+    assert len(svc.pending()) == 3 and len(svc.state.request_ids()) == 3
+    svc.cancel(AGENT, rids[0])  # a settled request frees its place
+    _restart(svc)
+    assert len(svc.pending()) == 3
+
+
+def test_a_lane_quota_from_the_manifest_refuses_the_write_and_audits_it(tmp_path):
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["lanes"][0]["max_files"] = 2
+    assert validate_manifest(manifest, EXAMPLE.parent)[1] == []
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=Clock(),
+    )  # fmt: skip
+    for name in ("a.md", "b.md"):
+        svc.call(AGENT, "memory.write", {"name": name, "content": "x"})
+    with pytest.raises(Denied) as info:
+        svc.call(AGENT, "memory.write", {"name": "c.md", "content": "x"})
+    assert info.value.reason == "lane-quota-exceeded"
+    assert svc.audit_documents(reason="lane-quota-exceeded")
+
+
+def test_the_pending_quota_has_a_default(tmp_path):
+    from homelabnext.broker.service import DEFAULT_PENDING_PER_ACTOR
+
+    svc = _quota_svc(tmp_path)
+    for _ in range(DEFAULT_PENDING_PER_ACTOR):
+        _restart(svc)
+    with pytest.raises(Denied):
+        _restart(svc)
+
+
+def test_approval_pages_are_coalesced_per_actor_and_window(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notify_window_s=300, notifier=_notifier(sent))
+    first = _restart(svc)
+    for _ in range(4):
+        clock.advance(10)
+        _restart(svc)
+    assert [m.title for m in sent] == ["Broker approval needed"], "one page per actor and window"
+    assert first in sent[0].body
+    assert len(svc.state.outbox()) == 5, "every request still emits its event"
+    clock.advance(300)
+    rid = _restart(svc)
+    assert len(sent) == 2 and rid in sent[1].body and "6 requests await approval" in sent[1].body
+    svc.approve(first, APPROVER)  # the paged one settles: the page says what is still waiting
+    assert sent[-1].title == "Broker approval settled" and "5 more" in sent[-1].body
+
+
 def test_a_failing_notifier_never_fails_the_operation(tmp_path):
     class Broken:
         def register_pair(self, *a):

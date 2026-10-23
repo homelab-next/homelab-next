@@ -32,6 +32,12 @@ Enforced on every write, each refusal with a machine reason (:class:`LaneError`)
 * ``lane-exists`` - the target exists and the lane does not say ``overwrite: true`` (exclusive
   create by default: a hard link that fails when the name exists);
 * ``lane-too-large`` - the encoded content exceeds ``max_bytes``;
+* ``lane-quota-exceeded`` - the write would leave the target directory (the actor's own for a
+  ``per_actor`` lane, the lane's shared one otherwise) holding more than ``max_files`` files or
+  more than ``max_total_bytes`` bytes (manifest 1.5; defaults :data:`DEFAULT_MAX_FILES` and
+  :data:`DEFAULT_MAX_TOTAL_BYTES`).  A replaced file (``overwrite``) is counted once.  The count
+  and the write happen under an exclusive ``flock`` on the directory, so concurrent writers --
+  threads or processes -- cannot overshoot it together;
 * ``lane-content-invalid`` - wrong params shape, content not matching the format or schema, a note
   failing the records schema or a note type the lane does not take;
 * ``lane-identity-mismatch`` - a note naming another ``requesting_agent`` than the actor;
@@ -50,6 +56,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import fcntl
 import hashlib
 import hmac
 import json
@@ -65,6 +72,8 @@ from . import validation
 from .state import write_temp
 
 __all__ = [
+    "DEFAULT_MAX_FILES",
+    "DEFAULT_MAX_TOTAL_BYTES",
     "DEFAULT_NAME_PATTERN",
     "LANE_HANDLER",
     "MAX_CALLER_SLUG",
@@ -80,6 +89,9 @@ __all__ = [
 #: the ``handler`` value of every lane action
 LANE_HANDLER = "builtin/lane"
 DEFAULT_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+#: a lane directory's quotas when the manifest sets none (``max_files``, ``max_total_bytes``)
+DEFAULT_MAX_FILES = 4096
+DEFAULT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 #: hex characters of a records-inbox file name's tag
@@ -125,6 +137,8 @@ class Lane:
     content_schema: str | None = None
     overwrite: bool = False
     note_types: tuple[str, ...] = ("proposal",)
+    max_files: int = DEFAULT_MAX_FILES
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES
 
     @classmethod
     def from_doc(cls, doc: Mapping[str, Any]) -> Lane:
@@ -139,6 +153,8 @@ class Lane:
             content_schema=doc.get("content_schema"),
             overwrite=bool(doc.get("overwrite", False)),
             note_types=tuple(doc.get("note_types", ("proposal",))),
+            max_files=int(doc.get("max_files", DEFAULT_MAX_FILES)),
+            max_total_bytes=int(doc.get("max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)),
         )
 
     def problems(self) -> list[str]:
@@ -157,6 +173,8 @@ class Lane:
                 out.append(f"lane {self.name}: content_schema {self.content_schema!r} not found")
         if self.kind == "records-inbox" and self.per_actor:
             out.append(f"lane {self.name}: a records-inbox lane is shared (per_actor: false)")
+        if self.max_total_bytes < self.max_bytes:
+            out.append(f"lane {self.name}: max_total_bytes is smaller than one file (max_bytes)")
         return out
 
 
@@ -338,6 +356,8 @@ def write(
     try:
         for part in parts:
             fds.append(_open_dir(fds[-1], part))
+        fcntl.flock(fds[-1], fcntl.LOCK_EX)  # the quota check and the write, as one; close unlocks
+        _check_quota(lane, fds[-1], name, len(data))
         _write_in(fds[-1], name, data, lane.overwrite)
     finally:
         for fd in fds:
@@ -347,6 +367,38 @@ def write(
         "bytes": len(data),
         "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
     }
+
+
+def _usage(dir_fd: int) -> dict[str, int]:
+    """name -> size of every regular file in the directory ``dir_fd`` (a write's temporary
+    ``.name.tmp`` excluded: it is either linked into place or removed)."""
+    out: dict[str, int] = {}
+    with os.scandir(dir_fd) as entries:
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                out[entry.name] = st.st_size
+    return out
+
+
+def _check_quota(lane: Lane, dir_fd: int, name: str, size: int) -> None:
+    usage = _usage(dir_fd)
+    if lane.overwrite:
+        usage.pop(name, None)  # a replacement: the old file goes
+    if len(usage) + 1 > lane.max_files:
+        raise LaneError(
+            "lane-quota-exceeded", f"lane {lane.name} holds its quota of {lane.max_files} files"
+        )
+    if sum(usage.values()) + size > lane.max_total_bytes:
+        raise LaneError(
+            "lane-quota-exceeded",
+            f"lane {lane.name} would exceed its quota of {lane.max_total_bytes} bytes",
+        )
 
 
 def _write_in(dir_fd: int, name: str, data: bytes, overwrite: bool) -> None:

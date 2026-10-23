@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Example production broker manifest (schemas/broker/manifest 1.4): the walkthrough's actions, with
+# Example production broker manifest (schemas/broker/manifest 1.5): the walkthrough's actions, with
 # callers authenticated on the socket instead of asserted.  Deploying it: docs/broker.md.
 #   hnx broker validate examples/broker/manifest.production.yml
 #   hnx broker serve --manifest examples/broker/manifest.production.yml \
@@ -20,6 +20,9 @@ callers:
 # the hub behind the SSO front door files approvals for the person it authenticated (issuer sso)
 approval_relays:
   - {user: hnx-hub, issuer: sso}
+# accepted work is bounded per agent: at most 10 requests pending at once, one page per agent per
+# 10 minutes however many it files (lanes: max_files / max_total_bytes per directory)
+quotas: {pending_per_actor: 10, notify_window_s: 600}
 handler_docs:
   - handlers/service-status.handler.json
   - handlers/service-restart.handler.json
@@ -30,6 +33,8 @@ lanes:
     per_actor: true
     filename_pattern: '^[a-z0-9][a-z0-9-]{0,62}\.md$'
     max_bytes: 65536
+    max_files: 1000
+    max_total_bytes: 16777216
     format: text
   - name: findings
     kind: files
