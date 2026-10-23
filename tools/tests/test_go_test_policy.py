@@ -134,7 +134,7 @@ def fixture(name: str) -> list[str]:
 
 def test_a_failure_is_sticky_when_the_same_test_runs_again(tmp_path, capsys):
     # go test -count=2: the first run fails, the second passes; the package fails
-    assert run(tmp_path, fixture("count2_fail_then_pass.json")) == 1
+    assert run(tmp_path, fixture("count2_fail_then_pass.jsonl")) == 1
     out = capsys.readouterr().out
     assert "FAIL example.com/fixture/internal/fl TestFlip\n" in out
     # a quarantined failure elsewhere in the package must not hide the flip's first failure
@@ -195,7 +195,7 @@ def test_a_quarantined_subtest_carries_its_parent(tmp_path):
 
 def test_a_quarantined_subtest_does_not_carry_its_parents_own_failure(tmp_path, capsys):
     # TestParent runs t.Run("flaky", ...) (quarantined) and then fails an assertion of its own
-    lines = fixture("parent_own_failure.json")
+    lines = fixture("parent_own_failure.jsonl")
     sub = "quarantine:\n  - {test: TestParent/flaky, package: internal/p, owner: me, until: 2026-02-01, reason: flaky}\n"
     assert run(tmp_path, lines, policy_yaml=sub) == 1
     out = capsys.readouterr().out
@@ -209,11 +209,11 @@ def test_a_quarantined_subtest_does_not_carry_its_parents_own_failure(tmp_path, 
     ("name", "pkg", "problem"),
     [
         # -timeout: TestHang never gets a verdict, the panic is in its output (Go 1.24)
-        ("timeout.json", "internal/to", "package failed beyond its quarantined tests"),
+        ("timeout.jsonl", "internal/to", "package failed beyond its quarantined tests"),
         # TestMain panics after m.Run returned
-        ("teardown_panic.json", "internal/tmp", "panic: teardown failed"),
+        ("teardown_panic.jsonl", "internal/tmp", "panic: teardown failed"),
         # -race: a data race reported after the tests, outside any of them
-        ("post_test_race.json", "internal/race", "WARNING: DATA RACE"),
+        ("post_test_race.jsonl", "internal/race", "WARNING: DATA RACE"),
     ],
 )
 def test_a_quarantined_failure_does_not_hide_a_package_failure(
@@ -230,7 +230,7 @@ def test_a_package_failing_only_through_quarantined_tests_is_tolerated(tmp_path,
     text = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
         "internal/queue", "internal/ok"
     )
-    assert run(tmp_path, fixture("quarantined_only.json"), policy_yaml=text) == 0
+    assert run(tmp_path, fixture("quarantined_only.jsonl"), policy_yaml=text) == 0
     assert (
         "package example.com/fixture/internal/ok failed only through its quarantined tests"
         in capsys.readouterr().out
@@ -606,10 +606,10 @@ needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is no
 @pytest.mark.parametrize(
     ("stream", "go_exit", "passes"),
     [
-        ("quarantined_only.json", 1, True),  # go exits 1 on the quarantined failure: tolerated
-        ("timeout_truncated.json", 1, False),  # the stream stops before any verdict
-        ("timeout_truncated.json", 143, False),  # go test killed
-        ("quarantined_only.json", 2, False),  # a status no test failure explains
+        ("quarantined_only.jsonl", 1, True),  # go exits 1 on the quarantined failure: tolerated
+        ("timeout_truncated.jsonl", 1, False),  # the stream stops before any verdict
+        ("timeout_truncated.jsonl", 143, False),  # go test killed
+        ("quarantined_only.jsonl", 2, False),  # a status no test failure explains
         ("green", 0, True),
         ("green", 1, False),  # go failed, the stream does not say why: events were lost
     ],
@@ -626,14 +626,14 @@ def test_a_cut_off_stream_fails_with_or_without_the_exit_status(tmp_path, capsys
     text = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
         "internal/queue", "internal/to"
     )
-    lines = fixture("timeout_truncated.json")
+    lines = fixture("timeout_truncated.jsonl")
     assert run(tmp_path, lines, policy_yaml=text) == 1
     out = capsys.readouterr().out
     assert "FAIL example.com/fixture/internal/to TestFlaky: no verdict" in out
     assert "FAIL example.com/fixture/internal/to TestHang: no verdict" in out
     assert "FAIL example.com/fixture/internal/to: no package verdict" in out
     # a panic in parallel TestB kills the binary while TestA is still running
-    assert run(tmp_path, fixture("parallel_panic.json")) == 1
+    assert run(tmp_path, fixture("parallel_panic.jsonl")) == 1
     out = capsys.readouterr().out
     assert "FAIL example.com/fixture/internal/par TestB\n" in out
     assert "FAIL example.com/fixture/internal/par TestA: no verdict" in out
@@ -687,7 +687,7 @@ def test_a_privileged_binary_that_exits_non_zero_fails_even_when_its_stream_pass
     tmp_path, capsys
 ):
     root = tmp_path / "root.json"
-    root.write_text("\n".join(fixture("privileged_testmain_panic.json")))
+    root.write_text("\n".join(fixture("privileged_testmain_panic.jsonl")))
     priv = ["--privileged", str(root)]
     exits = _exits(tmp_path, f"{MOD}/internal/hard 2\n")
     assert run(tmp_path, HARD_SKIP, *priv, "--privileged-exit", exits, policy_yaml=HARD) == 1
@@ -701,7 +701,7 @@ def test_a_privileged_binary_that_exits_non_zero_fails_even_when_its_stream_pass
 
 def test_a_privileged_package_that_failed_without_a_failing_test_fails(tmp_path, capsys):
     root = tmp_path / "root.json"
-    root.write_text("\n".join(fixture("privileged_post_test_race.json")))
+    root.write_text("\n".join(fixture("privileged_post_test_race.jsonl")))
     assert run(tmp_path, RACE_SKIP, "--privileged", str(root), policy_yaml=RACE) == 1
     out = capsys.readouterr().out
     assert f"FAIL (privileged run) {MOD}/internal/race: package failed (WARNING: DATA RACE)" in out
@@ -709,7 +709,7 @@ def test_a_privileged_package_that_failed_without_a_failing_test_fails(tmp_path,
 
 def test_every_privileged_binary_needs_a_zero_exit_status_and_events(tmp_path, capsys):
     root = tmp_path / "root.json"
-    root.write_text("\n".join(fixture("privileged_testmain_panic.json")))
+    root.write_text("\n".join(fixture("privileged_testmain_panic.jsonl")))
     priv = ["--privileged", str(root)]
     for text, why in [
         ("", "no exit status recorded for its test binary"),
@@ -741,12 +741,12 @@ def test_every_privileged_binary_needs_a_zero_exit_status_and_events(tmp_path, c
     ("priv_stream", "priv_exit", "passes"),
     [
         (
-            "privileged_testmain_panic.json",
+            "privileged_testmain_panic.jsonl",
             2,
             False,
         ),  # the binary's status, not test2json's verdict
-        ("privileged_testmain_panic.json", 0, True),
-        ("privileged_post_test_race.json", 1, False),
+        ("privileged_testmain_panic.jsonl", 0, True),
+        ("privileged_post_test_race.jsonl", 1, False),
     ],
 )
 def test_the_ci_steps_record_and_judge_each_privileged_binarys_exit_status(
@@ -780,7 +780,7 @@ def test_every_package_go_list_names_needs_events_in_the_stream(tmp_path, capsys
 
 @needs_bash
 def test_the_ci_step_lists_the_packages_and_requires_each_in_the_stream(tmp_path):
-    lines = fixture("quarantined_only.json")
+    lines = fixture("quarantined_only.jsonl")
     assert run_test_step(tmp_path / "a", lines, 1).returncode == 0
     r = run_test_step(
         tmp_path / "b", lines, 1, packages=[f"{MOD}/internal/ok", f"{MOD}/internal/fl"]
@@ -794,7 +794,7 @@ def test_the_ci_step_lists_the_packages_and_requires_each_in_the_stream(tmp_path
 def test_the_policy_and_its_inputs_are_copied_before_any_test_can_change_them(tmp_path):
     # verify3.md: the policy step read skips.yml (and the tool) from the workspace after the tests
     # ran as the user who owns it, so a test could quarantine its own failure on the way out
-    lines = fixture("quarantined_only.json")
+    lines = fixture("quarantined_only.jsonl")
     quarantine = QUARANTINE.format(test="TestFlaky", until="2026-02-01").replace(
         "internal/queue", "internal/ok"
     )
@@ -978,7 +978,7 @@ def test_a_privileged_entry_without_a_test_binary_fails_instead_of_running_a_sta
 
 @needs_bash
 def test_the_ci_step_requires_a_test_event_from_each_package_with_test_files(tmp_path):
-    lines = fixture("quarantined_only.json")
+    lines = fixture("quarantined_only.jsonl")
     ok = f"{MOD}/internal/ok"
     assert run_test_step(tmp_path / "a", lines, 1, tested=[ok]).returncode == 0
     r = run_test_step(tmp_path / "b", lines, 1, packages=[ok, f"{MOD}/x"], tested=[ok, f"{MOD}/x"])
