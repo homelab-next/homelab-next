@@ -107,8 +107,12 @@ sets `findings` so. Before pointing `--data-root` at an existing tree, look at w
 there: `hnx broker validate MANIFEST --data-root DIR` prints each lane directory's files and bytes
 against its quota and warns at 80%, and `hnx broker serve` logs the same at start. When a write
 is refused `lane-quota-exceeded`, the operator is notified once per actor and lane (through the
-broker's notifier: "Broker lane quota reached"), and again "cleared" when that actor's next write
-lands. Without
+broker's notifier: "Broker lane quota reached"), and "cleared" once that actor's directory is
+back under 80% of its quotas (its share, in a shared lane) -- not on the next small write that
+fits -- with at least 15 minutes between two notices for one actor and lane, so a lane at its
+edge cannot flap. The usage rows of a shared lane also show each actor against its share
+(`validate` attributes an inbox's files by the agent their names carry; `serve` verifies each
+name's tag; `validate --state DIR` reads a shared files lane's owner index). Without
 the share, one looping agent filled the inbox's quota in under a minute and every other agent's
 proposal was refused `lane-quota-exceeded` until someone moved notes out.
 

@@ -49,6 +49,16 @@ def test_validate_shows_lane_usage_and_warns_near_the_quota(tmp_path, capsys):
     assert (row["lane"], row["files"], row["warn"]) == ("memory", 3500, True)
 
 
+def test_validate_shows_each_agents_share_of_the_shared_inbox(tmp_path, capsys):
+    inbox = tmp_path / "data" / "records" / "inbox"
+    inbox.mkdir(parents=True)
+    for i in range(500):  # 98% of triage's default share of 512 files
+        (inbox / f"2026-01-15-triage-s{i}-0000000{i % 10}.md").write_text("x")
+    assert main(["validate", str(EXAMPLE), "--data-root", str(tmp_path / "data")]) == 0
+    out = capsys.readouterr().out
+    assert "profile:triage: 500/512 files" in out and "WARNING: over 80% of its share" in out
+
+
 def test_the_production_example_sets_its_append_only_findings_lane(capsys):
     from homelabnext.broker.service import load_manifest
 

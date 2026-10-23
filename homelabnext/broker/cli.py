@@ -104,6 +104,12 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get("HNX_BROKER_DATA_ROOT"),
         help="also show each lane directory's usage against its quota (warn at 80%%)",
     )
+    v.add_argument(
+        "--state",
+        default=os.environ.get("HNX_BROKER_STATE"),
+        help="with --data-root: the broker's state directory, read for a shared files lane's "
+        "owner index (each actor's share); never written",
+    )
     srv = sub.add_parser("serve", help="serve the broker on a Unix socket (peer-authenticated)")
     _service_opts(srv)
     srv.add_argument(
@@ -207,7 +213,10 @@ def _validate(args) -> int:
         problems = [f"{path}: not a mapping"]
     else:
         _, problems = validate_manifest(manifest, path.parent)
-    rows = lane_usage(manifest, args.data_root) if args.data_root and not problems else []
+    rows = []
+    if args.data_root and not problems:
+        ledger = Path(args.state) / "lanes-ledger" if args.state else None
+        rows = lane_usage(manifest, args.data_root, ledger=ledger)
     if args.json:
         doc = {"manifest": str(path), "ok": not problems, "problems": problems}
         if args.data_root:
@@ -223,14 +232,19 @@ def _validate(args) -> int:
     return 1 if problems else 0
 
 
-def lane_usage(manifest: dict[str, Any], data_root: str | os.PathLike[str]) -> list[dict]:
-    """Every lane directory's usage row (:func:`homelabnext.broker.lanes.usage`)."""
+def lane_usage(
+    manifest: dict[str, Any], data_root: str | os.PathLike[str], *, ledger: Any = None
+) -> list[dict]:
+    """Every lane directory's usage row (:func:`homelabnext.broker.lanes.usage`); a shared
+    inbox's files are attributed to the manifest's granted profiles by name (the broker's own
+    ``serve`` verifies each name's tag)."""
     from . import lanes
 
+    actors = tuple(sorted({g["profile"] for g in manifest.get("grants", [])}))
     return [
         r
         for ld in manifest.get("lanes", [])
-        for r in lanes.usage(lanes.Lane.from_doc(ld), data_root)
+        for r in lanes.usage(lanes.Lane.from_doc(ld), data_root, actors=actors, ledger=ledger)
     ]
 
 
@@ -242,7 +256,15 @@ def _usage_line(row: dict[str, Any]) -> str:
         f"lane {row['lane']} {row['dir']}: {files} files, "
         f"{row['bytes']}/{row['max_total_bytes']} bytes ({row['used']:.0%} of its quota)"
     )
-    return line + ("  WARNING: over 80% of its quota" if row["warn"] else "")
+    lines = [line + ("  WARNING: over 80% of its quota" if row["warn"] else "")]
+    for actor, share in (row.get("actors") or {}).items():
+        files = f"{share['files']}/{row['max_files_per_actor']}"
+        lines.append(
+            f"  {actor}: {files} files, {share['bytes']}/{row['max_bytes_per_actor']} bytes "
+            f"({share['used']:.0%} of its share)"
+            + ("  WARNING: over 80% of its share" if share["warn"] else "")
+        )
+    return "\n".join(lines)
 
 
 def _service(args) -> BrokerService:
@@ -477,7 +499,7 @@ def _serve(args) -> int:
         raise ValueError("--socket-mode is an octal mode such as 660") from None
     svc = _service(args)
     log = logging.getLogger("homelabnext.broker.cli")
-    for row in lane_usage(svc.manifest, svc.data_root):
+    for row in svc.lane_usage():
         (log.warning if row["warn"] else log.info)("%s", _usage_line(row))
     server = BrokerServer(
         svc,

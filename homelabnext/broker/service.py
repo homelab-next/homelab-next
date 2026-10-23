@@ -165,6 +165,8 @@ APPROVAL_CLEARED = "Broker approval settled"
 #: the operator's notice that an agent's writes into a lane are being refused for its quota
 LANE_QUOTA_TITLE = "Broker lane quota reached"
 LANE_QUOTA_CLEARED = "Broker lane quota cleared"
+#: the least time between two lane-quota notices for one actor and lane (s)
+LANE_NOTICE_INTERVAL_S = 900.0
 _SUMMARY_BYTES = 1024
 _SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
@@ -413,6 +415,7 @@ class BrokerService:
         self._paged_lock = threading.Lock()
         self._scoped = _takes_scope(notifier)
         self._lane_full: set[str] = set()  # lane-quota keys this process reported
+        self._lane_notice_at: dict[str, datetime] = {}  # lane-quota key -> its last notice
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
             notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
@@ -708,7 +711,7 @@ class BrokerService:
                     request["created"],
                     key=self._name_key(),
                     at=self._now().timestamp(),
-                    ledger=self.state.root / "lanes-ledger",
+                    ledger=self._ledger(),
                 )
             except _lanes.LaneError as exc:
                 if exc.reason == "lane-quota-exceeded":
@@ -1534,24 +1537,43 @@ class BrokerService:
         self._page(actor)  # the page moves to the oldest still waiting, after the floor
 
     def _lane_quota(self, lane: _lanes.Lane, request: Mapping[str, Any], refusal: str | None):
-        """Tell the operator, once, that ``lane`` refuses an actor's writes for its quota (the
-        agent alone hears ``lane-quota-exceeded``, and a finding that is never written looks like
-        a run that never happened); the actor's next write that lands clears it.  State-diffed by
-        the notifier, so a looping agent's thousandth refusal sends nothing."""
+        """Tell the operator that ``lane`` refuses an actor's writes for its quota (the agent
+        alone hears ``lane-quota-exceeded``, and a finding that is never written looks like a run
+        that never happened), and that it has room again -- but only once the directory is back
+        under :data:`homelabnext.broker.lanes.USAGE_WARN` of its quotas, not on the next small
+        write that fits, and never two notices for one actor and lane within
+        :data:`LANE_NOTICE_INTERVAL_S`.  State-diffed by the notifier, so a looping agent's
+        thousandth refusal sends nothing, and its notices draw on its own budget."""
         if self.notifier is None:
             return
         from homelabnext.notify.core import Message
 
         actor = request["actor"]
         key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
+        now = self._now()
+        last = self._lane_notice_at.get(key)
+        recent = last is not None and (now - last).total_seconds() < LANE_NOTICE_INTERVAL_S
         if refusal is None:
             state_of = getattr(self.notifier, "state_of", None)
             if key not in self._lane_full and (state_of is None or state_of(key) == "ok"):
                 return  # nothing was reported: nothing to clear (the common case, one read)
-            self._lane_full.discard(key)
-            body = f"{actor} writes to lane {lane.name} again"
+            if recent:
+                return
+            try:
+                used = _lanes.fill(
+                    lane, self.data_root, actor, key=self._name_key(), ledger=self._ledger()
+                )
+            except (OSError, _lanes.LaneError):
+                return
+            if used >= _lanes.USAGE_WARN:
+                return  # still nearly full: the next small write would only be refused again
+            body = f"{actor} writes to lane {lane.name} again; it is {used:.0%} full of its quota"
             msg = Message(key=key, title=LANE_QUOTA_CLEARED, body=body)
-            self._notify(key, "ok", msg, request_id=request["request_id"])
+            if self._notify(key, "ok", msg, request_id=request["request_id"], actor=actor):
+                self._lane_full.discard(key)
+                self._lane_notice_at[key] = now
+            return
+        if recent:
             return
         body = (
             f"{actor}'s writes to lane {lane.name} are refused lane-quota-exceeded: {refusal}. "
@@ -1559,8 +1581,27 @@ class BrokerService:
             "(hnx broker validate --data-root shows its usage)."
         )
         msg = Message(key=key, title=LANE_QUOTA_TITLE, body=body, level="warn")
-        if self._notify(key, "lane-quota-exceeded", msg, request_id=request["request_id"]):
+        sent = self._notify(
+            key, "lane-quota-exceeded", msg, request_id=request["request_id"], actor=actor
+        )
+        if sent:
             self._lane_full.add(key)
+            self._lane_notice_at[key] = now
+
+    def _ledger(self) -> Path:
+        return self.state.root / "lanes-ledger"
+
+    def lane_usage(self) -> list[dict[str, Any]]:
+        """Every lane directory's usage against its quotas, each actor's share of a shared lane
+        included (:func:`homelabnext.broker.lanes.usage`, with the broker's own key and ledger)."""
+        actors = tuple(sorted({g["profile"] for g in self._view()["grants"]}))
+        return [
+            row
+            for lane in self._lanes.values()
+            for row in _lanes.usage(
+                lane, self.data_root, actors=actors, key=self._name_key(), ledger=self._ledger()
+            )
+        ]
 
     def _notify(
         self, key, state, msg, *, request_id: str | None = None, actor: str | None = None

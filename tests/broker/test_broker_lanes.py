@@ -469,3 +469,26 @@ def test_lane_usage_reports_each_directory_and_warns_at_80_percent(tmp_path):
     assert usage(_inbox(), tmp_path) == [], "nothing filed yet: no row"
     no_cap = usage(_lane(max_files=None, max_total_bytes=10), tmp_path)
     assert {r["dir"]: r["warn"] for r in no_cap} == {"memory/other": False, "memory/triage": True}
+
+
+def test_lane_usage_shows_each_actors_share_of_a_shared_lane(tmp_path):
+    """An actor at its share of a shared lane was invisible: the row showed only the lane."""
+    from homelabnext.broker.lanes import fill, usage
+
+    lane = _inbox(max_files=16, max_writes_per_hour=1000)  # a share of 2 files each
+    for actor, n in (("profile:triage", 2), ("profile:triage-lead", 1)):
+        for i in range(n):
+            write(lane, tmp_path, actor, {"note": dict(NOTE), "slug": f"s{i}"}, NOW, key=KEY)
+    actors = ("profile:triage", "profile:triage-lead")
+    for key in (KEY, None):  # verified by tag, or by the longest slug a name carries
+        [row] = usage(lane, tmp_path, actors=actors, key=key)
+        assert row["warn"] is True and row["max_files_per_actor"] == 2
+        assert row["actors"]["profile:triage"] == {"files": 2, "bytes": row["actors"][
+            "profile:triage"]["bytes"], "used": 1.0, "warn": True}  # fmt: skip
+        assert row["actors"]["profile:triage-lead"]["files"] == 1
+    assert fill(lane, tmp_path, "profile:triage", key=KEY) == 1.0
+    assert fill(lane, tmp_path, "profile:triage-lead", key=KEY) == 0.5
+    files = _lane(per_actor=False, max_files=16)
+    write(files, tmp_path, ACTOR, {"name": "a.md", "content": "x"}, NOW, ledger=tmp_path / "l")
+    [row] = usage(files, tmp_path, ledger=tmp_path / "l")
+    assert row["actors"] == {ACTOR: {"files": 1, "bytes": 1, "used": 0.5, "warn": False}}

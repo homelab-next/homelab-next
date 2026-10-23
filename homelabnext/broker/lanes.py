@@ -98,6 +98,7 @@ __all__ = [
     "Lane",
     "LaneError",
     "check_params",
+    "fill",
     "name_tag",
     "template_marker",
     "usage",
@@ -463,11 +464,85 @@ def _usage(dir_fd: int) -> dict[str, int]:
     return out
 
 
-def usage(lane: Lane, data_root: str | os.PathLike[str]) -> list[dict[str, Any]]:
+def _fraction(lane: Lane, files: int, total: int) -> float:
+    used = total / lane.max_total_bytes
+    if lane.max_files is not None:
+        used = max(used, files / lane.max_files)
+    return used
+
+
+def _share_fraction(lane: Lane, files: int, total: int) -> float:
+    used = 0.0
+    if lane.max_files_per_actor:
+        used = files / lane.max_files_per_actor
+    if lane.max_bytes_per_actor:
+        used = max(used, total / lane.max_bytes_per_actor)
+    return used
+
+
+def _held(d: Path) -> dict[str, int] | None:
+    try:
+        fd = os.open(d, _DIR_FLAGS)
+    except OSError:
+        return None  # not there yet (or not a real directory: a write would refuse it)
+    try:
+        return _usage(fd)
+    finally:
+        os.close(fd)
+
+
+def _shared_by_actor(
+    lane: Lane,
+    held: Mapping[str, int],
+    parts: list[str],
+    *,
+    actors: tuple[str, ...] = (),
+    key: bytes | None = None,
+    ledger: str | os.PathLike[str] | None = None,
+) -> dict[str, dict[str, int]]:
+    """actor -> {name: size} of a shared lane directory's files: a records-inbox's by name (its
+    tag verified when ``key`` is given, else the longest of ``actors`` whose slug the name
+    carries), a ``files`` lane's by the owner index in ``ledger`` (none without it)."""
+    out: dict[str, dict[str, int]] = {}
+    if lane.kind == "records-inbox":
+        if key is not None:
+            for actor in actors:
+                with contextlib.suppress(LaneError):
+                    mine = _inbox_owned(held, actor, key)
+                    if mine:
+                        out[actor] = mine
+            return out
+        slugs = sorted(
+            ((m.group(1), a) for a in actors if (m := _PROFILE_RE.match(a))),
+            key=lambda sa: -len(sa[0]),
+        )
+        for name, size in held.items():
+            who = next((a for slug, a in slugs if name[11:].startswith(f"{slug}-")), None)
+            if who is not None:
+                out.setdefault(who, {})[name] = size
+        return out
+    if ledger is None:
+        return out
+    for name, actor in _Ledger(Path(ledger), lane, parts).load("owners").items():
+        if name in held and isinstance(actor, str):
+            out.setdefault(actor, {})[name] = held[name]
+    return out
+
+
+def usage(
+    lane: Lane,
+    data_root: str | os.PathLike[str],
+    *,
+    actors: tuple[str, ...] = (),
+    key: bytes | None = None,
+    ledger: str | os.PathLike[str] | None = None,
+) -> list[dict[str, Any]]:
     """What each of the lane's directories holds against its quota (``hnx broker validate
     --data-root``, ``hnx broker serve``): one row per directory -- each actor's for a per-actor
     lane, the shared one otherwise -- with ``files``, ``bytes``, the quotas, ``used`` (the larger
-    fraction of the two quotas) and ``warn`` (``used`` at :data:`USAGE_WARN` or more)."""
+    fraction of the two quotas) and ``warn`` (``used`` at :data:`USAGE_WARN` or more).  A shared
+    lane's row also has ``actors``: each actor's files, bytes and ``used`` of its share (see
+    :func:`_shared_by_actor` for how files are attributed), and warns when any share does."""
     base = Path(data_root, *lane.root.split("/"))
     if lane.kind == "records-inbox":
         dirs = [base / "inbox"]
@@ -484,31 +559,65 @@ def usage(lane: Lane, data_root: str | os.PathLike[str]) -> list[dict[str, Any]]
         dirs = [base]
     rows = []
     for d in dirs:
-        try:
-            fd = os.open(d, _DIR_FLAGS)
-        except OSError:
-            continue  # not there yet (or not a real directory: a write would refuse it)
-        try:
-            held = _usage(fd)
-        finally:
-            os.close(fd)
+        held = _held(d)
+        if held is None:
+            continue
         files, total = len(held), sum(held.values())
-        used = total / lane.max_total_bytes
-        if lane.max_files is not None:
-            used = max(used, files / lane.max_files)
-        rows.append(
-            {
-                "lane": lane.name,
-                "dir": d.relative_to(data_root).as_posix(),
-                "files": files,
-                "bytes": total,
-                "max_files": lane.max_files,
-                "max_total_bytes": lane.max_total_bytes,
-                "used": round(used, 4),
-                "warn": used >= USAGE_WARN,
-            }
-        )
+        used = _fraction(lane, files, total)
+        row: dict[str, Any] = {
+            "lane": lane.name,
+            "dir": d.relative_to(data_root).as_posix(),
+            "files": files,
+            "bytes": total,
+            "max_files": lane.max_files,
+            "max_total_bytes": lane.max_total_bytes,
+            "used": round(used, 4),
+            "warn": used >= USAGE_WARN,
+        }
+        if not lane.per_actor and (lane.max_files_per_actor or lane.max_bytes_per_actor):
+            parts = d.relative_to(data_root).parts
+            by = _shared_by_actor(lane, held, list(parts), actors=actors, key=key, ledger=ledger)
+            row["max_files_per_actor"] = lane.max_files_per_actor
+            row["max_bytes_per_actor"] = lane.max_bytes_per_actor
+            row["actors"] = {}
+            for actor, mine in sorted(by.items()):
+                share = _share_fraction(lane, len(mine), sum(mine.values()))
+                row["actors"][actor] = {
+                    "files": len(mine),
+                    "bytes": sum(mine.values()),
+                    "used": round(share, 4),
+                    "warn": share >= USAGE_WARN,
+                }
+                row["warn"] = row["warn"] or share >= USAGE_WARN
+        rows.append(row)
     return rows
+
+
+def fill(
+    lane: Lane,
+    data_root: str | os.PathLike[str],
+    actor: str,
+    *,
+    key: bytes = b"",
+    ledger: str | os.PathLike[str] | None = None,
+) -> float:
+    """How full the directory ``actor`` writes into is: the largest fraction of any quota that
+    applies to it (the lane's, and in a shared lane the actor's share).  What tells a lane that
+    refused an actor from one it has room in again (the broker's "cleared" notice)."""
+    parts = lane.root.split("/")
+    if lane.kind == "records-inbox":
+        parts = [*parts, "inbox"]
+    elif lane.per_actor:
+        parts = [*parts, _actor_slug(actor)]
+    held = _held(Path(data_root, *parts)) or {}
+    used = _fraction(lane, len(held), sum(held.values()))
+    if not lane.per_actor and (lane.max_files_per_actor or lane.max_bytes_per_actor):
+        if ledger is None:
+            ledger = Path(data_root) / DEFAULT_LEDGER
+        by = _shared_by_actor(lane, held, parts, actors=(actor,), key=key, ledger=ledger)
+        mine = by.get(actor, {})
+        used = max(used, _share_fraction(lane, len(mine), sum(mine.values())))
+    return used
 
 
 def _check_quota(lane: Lane, usage: Mapping[str, int], name: str, size: int) -> None:

@@ -515,23 +515,58 @@ def test_the_operator_hears_once_that_a_lane_refuses_an_agent_for_its_quota(tmp_
     written reads like a run that never happened, and nothing told the operator."""
     sent = []
     manifest, docs = load_manifest(EXAMPLE)
-    manifest["lanes"][0]["max_files"] = 1
+    manifest["lanes"][0]["max_files"] = 5
     svc = BrokerService(
         tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
         data_root=tmp_path / "data", clock=Clock(), notifier=_notifier(sent),
     )  # fmt: skip
-    svc.call(AGENT, "memory.write", {"name": "a.md", "content": "x"})
+    for name in ("a.md", "a1.md", "a2.md", "a3.md", "a4.md"):
+        svc.call(AGENT, "memory.write", {"name": name, "content": "x"})
     for name in ("b.md", "c.md", "d.md"):
         with pytest.raises(Denied):
             svc.call(AGENT, "memory.write", {"name": name, "content": "x"})
     [notice] = sent
     assert notice.title == "Broker lane quota reached" and notice.level == "warn"
     assert AGENT in notice.body and "memory" in notice.body
-    (tmp_path / "data" / "memory" / "triage" / "a.md").unlink()
+    clock = svc.clock
+    clock.advance(1000)
+    for name in ("a.md", "a1.md", "a2.md"):  # back under 80% of the quota that was hit
+        (tmp_path / "data" / "memory" / "triage" / name).unlink()
     svc.call(AGENT, "memory.write", {"name": "b.md", "content": "x"})
     assert [m.title for m in sent] == ["Broker lane quota reached", "Broker lane quota cleared"]
     svc.call(AGENT, "finding.write", {"name": "2026-01-15-x.md", "content": "x"})
     assert len(sent) == 2, "a write that lands with nothing to clear sends nothing"
+
+
+def test_a_lane_quota_notice_does_not_flap_between_reached_and_cleared(tmp_path):
+    """ "Cleared" went out on the next write that landed: alternating a write that does not fit
+    with a one-byte one that does sent 600 operator messages in 20 seconds."""
+    sent = []
+    clock = Clock()
+    manifest, docs = load_manifest(EXAMPLE)
+    manifest["lanes"][0].update(max_files=None, max_total_bytes=1000, max_bytes=200)
+    svc = BrokerService(
+        tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+        data_root=tmp_path / "data", clock=clock, notifier=_notifier(sent),
+    )  # fmt: skip
+    for i in range(4):
+        svc.call(AGENT, "memory.write", {"name": f"f{i}.md", "content": "x" * 200})
+    svc.call(AGENT, "memory.write", {"name": "g.md", "content": "x" * 50})
+    for i in range(50):  # 850 held: a 200-byte write is refused, a 1-byte one fits
+        with pytest.raises(Denied):
+            svc.call(AGENT, "memory.write", {"name": f"big{i}.md", "content": "x" * 200})
+        svc.call(AGENT, "memory.write", {"name": f"s{i}.md", "content": "x"})
+        clock.advance(60)
+    assert [m.title for m in sent] == ["Broker lane quota reached"], "still 90% full: no clear"
+    for i in range(4):
+        (tmp_path / "data" / "memory" / "triage" / f"f{i}.md").unlink()
+    svc.call(AGENT, "memory.write", {"name": "after.md", "content": "x"})
+    assert [m.title for m in sent][-1] == "Broker lane quota cleared"
+    for i in range(4):  # 101 held, + 4 x 190 = 861: they fit, and 200 more do not
+        svc.call(AGENT, "memory.write", {"name": f"again{i}.md", "content": "x" * 190})
+    with pytest.raises(Denied):  # full again at once: inside the interval, no new notice
+        svc.call(AGENT, "memory.write", {"name": "again-last.md", "content": "x" * 200})
+    assert len(sent) == 2
 
 
 @pytest.mark.parametrize("root", ["memory", "memory/deeper", "findings/../x"])
