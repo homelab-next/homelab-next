@@ -1128,6 +1128,51 @@ def test_a_run_claim_names_its_process_beyond_the_pid(tmp_path):
     assert (claim["pid_start"], claim["boot_id"]) == (me["pid_start"], me["boot_id"])
 
 
+def test_a_claim_is_judged_by_its_brokers_instance_lock(tmp_path):
+    """A claim judged by pid, host and PID namespace read running forever after a container
+    restart (a new namespace, a new hostname) and the answer hung on which namespace inode the
+    kernel handed out.  The claimant's instance lock answers it on any namespace."""
+    import os
+    import subprocess
+    import sys
+
+    svc = _svc(tmp_path)
+    state = tmp_path / "state"
+    code = (
+        "import sys, time; from homelabnext.broker.state import StateDir;"
+        "print(StateDir(sys.argv[1]).instance_id(), flush=True); time.sleep(float(sys.argv[2]))"
+    )
+
+    def broker(seconds):
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), *sys.path])}
+        return subprocess.Popen([sys.executable, "-c", code, str(state), str(seconds)],
+                                stdout=subprocess.PIPE, text=True, env=env)  # fmt: skip
+
+    def claimed(instance):
+        rid = _restart(svc)
+        doc = {"op": "run", "by": AGENT, "at": "2026-01-15T10:00:00Z", "instance": instance,
+               "pid": 1, "pid_start": "1", "host": "another-container", "pid_ns": "7"}  # fmt: skip
+        assert svc.state.claim(rid, doc)
+        return rid
+
+    live = broker(60)
+    try:
+        held = claimed(live.stdout.readline().strip())
+        assert svc.state.state_of(held) == "running", "its broker still holds the lock"
+        gone_proc = broker(0)
+        gone = claimed(gone_proc.stdout.readline().strip())
+        gone_proc.wait()
+        assert svc.state.state_of(gone) == "interrupted", "its broker is gone, whatever its pid"
+    finally:
+        live.kill()
+        live.wait()
+    assert StateDir(state).state_of(held) == "interrupted"
+    rid = _restart(svc)
+    svc.approve(rid, APPROVER)
+    svc.run(AGENT, rid)
+    assert svc.state.get_claim(rid)["instance"] == svc.state.instance_id()
+
+
 # -- single use: run consumes its approval exactly once ------------------------------------------
 
 

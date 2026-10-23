@@ -1057,7 +1057,14 @@ class BrokerService:
         # stays pending and its approval unused, to run once the trail can take it
         self._started(caller, act, req, args, "run")
         claimed = self.state.claim(
-            request_id, {"op": "run", "by": caller, "at": now, **process_identity()}
+            request_id,
+            {
+                "op": "run",
+                "by": caller,
+                "at": now,
+                "instance": self.state.instance_id(),
+                **process_identity(),
+            },
         )
         if not claimed:
             self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)
