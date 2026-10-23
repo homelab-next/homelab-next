@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail.**
 
 - Contract: [`conformance.protocols.idp`](../../conformance/protocols/idp.py) (`conformance.protocols.idp:IdentityProvider`)
-- Conformance suite: [`conformance.suites.idp`](../../conformance/suites/idp.py) (14 checks: 14 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.idp`](../../conformance/suites/idp.py) (15 checks: 15 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -22,7 +22,28 @@ Contract for `idp`: issue and verify short-lived bearer tokens.
 
 `issue` returns an opaque string; `verify` returns the claims or raises.  Whatever the
 product (OIDC provider, signed JWTs, opaque introspection), a token that was altered, expired,
-revoked, empty or garbage is *always* `InvalidToken` - never a crash, never accepted.
+revoked, empty or garbage is *always* `InvalidToken` - never a crash, never accepted, whether
+or not a scope is required.
+
+Scopes are opaque tokens with the grammar of an OAuth `scope-token` (RFC 6749 section 3.3,
+`1*( %x21 / %x23-5B / %x5D-7E )`), which a JWT carries space-delimited: printable ASCII with no
+space, compared exactly - codepoint for codepoint, case-sensitive, no Unicode normalisation - and
+a token holds a set of them.  `issue` takes a list of them: it refuses a scope outside that
+grammar (`""`, `"read admin"`, which would read back as two scopes, a fullwidth look-alike of
+`read`) with `ValueError`, and a bare string for the list (`"read"` is not `['read']`,
+and never `('r', 'e', 'a', 'd')`) with `TypeError` or `ValueError`.  `required_scope` names
+one scope exactly: it is granted only when it is one of the token's scopes - never by matching
+part of one, another case or another normalisation of one - so `"READ"` for `read` is
+`Forbidden`; a required scope outside the grammar (`""`, `" read"`, `"read admin"`) is
+never granted (`Forbidden`, or `ValueError` for a misconfigured route).  A forged token is
+`InvalidToken` whatever scope is required: the signature is checked before any claim is read.
+
+A provider that adds default scopes to every token (Keycloak adds `profile` and `email`, and
+`openid` where requested, unless the client's default client scopes are removed) returns more
+scopes than were asked for, and fails the exact round trip; configure the test client without them.
+
+Expiry allows at most one second of leeway: a token must fail to verify once one second has
+passed beyond its ttl, so a JWT library's clock-skew allowance must be configured at or below 1s.
 
 ## How to use it
 
@@ -46,7 +67,9 @@ def issue(subject: str, scopes: Sequence[str], ttl: float) -> str
 
 **Returns:** `str`
 
-Raises ValueError for an empty subject or ttl <= 0.
+Raises ValueError for an empty subject, a scope that is empty or contains whitespace,
+or a ttl that is not a positive, finite number of seconds (`nan` and `inf` included:
+either would never expire).
 
 **Raises:** `ValueError`
 
@@ -121,10 +144,11 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `alg-none-rejected` | MUST | a JWT with alg 'none' (any spelling) or an empty signature is never accepted |  |
 | `garbage-is-invalid-not-a-crash` | MUST | empty and nonsense strings raise InvalidToken only |  |
 | `expired-token-rejected` | MUST | a token is invalid once its ttl has passed (clock hook if offered, else real time) |  |
-| `scope-enforced` | MUST | a valid token without the required scope is Forbidden, not invalid |  |
-| `revoked-token-rejected` | MUST | a revoked token fails verification |  |
+| `scope-enforced` | MUST | a valid token without the required scope is Forbidden, not invalid; scopes match exactly |  |
+| `revoked-token-rejected` | MUST | a revoked token fails verification, with or without a scope |  |
 | `revoke-is-idempotent-and-total` | MUST | revoking twice or revoking garbage is harmless |  |
-| `issue-validates-input` | MUST | empty subject and non-positive ttl are refused |  |
+| `scopes-are-opaque-tokens` | MUST | issue refuses a scope that is not an RFC 6749 scope-token (empty, whitespace, non-ASCII) and a bare string for the scope list |  |
+| `issue-validates-input` | MUST | empty subject and a non-positive or non-finite ttl are refused |  |
 
 ### Features an adapter may declare
 
@@ -137,9 +161,18 @@ Each is a deliberately broken fake (`hnx conform run idp --target broken:<mutant
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `alg-none-accepted` | `alg-none-rejected` | the token header is trusted, so alg=none disables the signature check |
+| `bare-string-scopes-split-into-characters` | `scopes-are-opaque-tokens` | issue('u', 'read', ttl) grants ('r', 'e', 'a', 'd') (the reference fake did this) |
+| `bare-string-scopes-split-on-spaces` | `scopes-are-opaque-tokens` | issue accepts the OAuth string form 'read admin' for the scope list |
+| `empty-scope-is-no-scope` | `scope-enforced` | required_scope='' is read as no scope required, so any valid token passes |
 | `empty-signature-accepted` | `unsigned-token-rejected` | the signature is compared only when present |
 | `exp-not-enforced` | `expired-token-rejected` | exp is issued but never checked |
+| `non-finite-ttl-accepted` | `issue-validates-input` | a nan or inf ttl mints a token that never expires |
+| `revocation-skipped-when-scoped` | `revoked-token-rejected` | revocation is checked only when no scope is required |
+| `scope-case-insensitive` | `scope-enforced` | scopes are compared case-insensitively, so read satisfies READ |
+| `scope-checked-before-signature` | `payload-splice-rejected` | the scope is read from the unverified payload first, so a forgery is Forbidden |
+| `scope-matched-as-substring` | `scope-enforced` | the required scope is matched as a substring, so readwrite satisfies read |
 | `signature-not-checked` | `payload-splice-rejected` | verify trusts the payload without checking the signature |
+| `space-delimited-scopes` | `scopes-are-opaque-tokens` | a scope holding a space is accepted and split on verify, so 'read admin' grants admin |
 
 ## Implementations
 
@@ -197,4 +230,4 @@ Depended on by: [dashboards](../systems/dashboards.md) ([[systems/dashboards|das
    hnx conform run idp --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

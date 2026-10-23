@@ -5,10 +5,18 @@ from __future__ import annotations
 
 from conformance.fakes.event_bus import (
     BrokenDlqEventBus,
+    CrashLoopEventBus,
     DoubleSettleEventBus,
     FakeEventBus,
+    InMemoryDlqEventBus,
     LosesUnsettledEventBus,
+    ReplayingEventBus,
     RestartsAtTailEventBus,
+    SettledNackRequeuesEventBus,
+    StaleNackRequeuesEventBus,
+    StaleSettleEventBus,
+    StaleTermEventBus,
+    WorkQueueEventBus,
 )
 from homelabnext.conform.core import Mutant, Suite
 
@@ -89,6 +97,43 @@ def _(bus):
     assert [x.data for x in c.dead_letters()] == [b"bad"]
 
 
+@SUITE.check(
+    "dead-letters-survive-reopen",
+    "a dead-lettered message is still in the consumer's dead letters after it is reopened",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s, max_deliver=5)
+    bus.publish(s, b"bad")
+    (d,) = c.fetch(1)
+    d.term()
+    assert [x.data for x in c.dead_letters()] == [b"bad"], "term did not dead-letter"
+    c = bus.consumer(name, s, max_deliver=5)
+    got = [x.data for x in c.dead_letters()]
+    assert got == [b"bad"], f"after a reopen the dead letters are {got}"
+    assert list(c.fetch(5)) == [], "a dead-lettered message was delivered after a reopen"
+
+
+@SUITE.check(
+    "unsettled-deliveries-count-toward-max-deliver",
+    "a delivery never settled (the consumer crashed on it) counts as an attempt: after "
+    "max_deliver of them the message is dead-lettered",
+)
+def _(bus):
+    s, name = _subject(bus), uniq("c")
+    c = bus.consumer(name, s, max_deliver=3)
+    bus.publish(s, b"poison")
+    attempts = []
+    for _ in range(5):  # the process dies holding the message, five times
+        got = list(c.fetch(1))
+        if not got:
+            break
+        attempts.append(got[0].attempt)
+        c = bus.consumer(name, s, max_deliver=3)
+    assert attempts == [1, 2, 3], f"delivered at attempts {attempts} with max_deliver=3"
+    assert [x.data for x in c.dead_letters()] == [b"poison"], "the crash-loop message is not dead"
+
+
 @SUITE.check("publish-dedups-on-msg-id", "a repeated msg_id is published once")
 def _(bus):
     s = _subject(bus)
@@ -100,12 +145,20 @@ def _(bus):
     assert len(list(c.fetch(10))) == 1, "duplicate msg_id delivered twice"
 
 
-@SUITE.check("durables-are-independent", "two consumers each receive every message")
+@SUITE.check(
+    "durables-are-independent",
+    "two consumers each receive every message, even one the other has already acked",
+)
 def _(bus):
     s = _subject(bus)
     c1, c2 = bus.consumer(uniq("c"), s), bus.consumer(uniq("c"), s)
     bus.publish(s, b"x")
-    assert len(list(c1.fetch(5))) == 1 and len(list(c2.fetch(5))) == 1
+    got = list(c1.fetch(5))
+    assert len(got) == 1, f"the first durable got {len(got)} messages"
+    got[0].ack()  # settled by one durable: still undelivered to the other (no work-queue retention)
+    assert [d.data for d in c2.fetch(5)] == [b"x"], (
+        "a message one durable acked is gone for another"
+    )
 
 
 @SUITE.check("only-matching-subjects-delivered", "a consumer sees its subject and nothing else")
@@ -173,6 +226,72 @@ def _(bus):
     assert list(c.fetch(5)) == [], "a second nack queued the message twice"
 
 
+SETTLE = ("ack", "nack", "term")
+
+
+@SUITE.check(
+    "stale-delivery-settles-nothing",
+    "no ack, nack or term of an earlier delivery, or of one handed out before a reopen, settles "
+    "the live one or revives a settled message",
+)
+def _(bus):
+    def settle(d, how):
+        getattr(d, how)()
+
+    def reopened(how_stale, live_first):
+        """A consumer restarts; the old process's late settlement lands before (or after) the
+        new process settles its own delivery."""
+        s, name = _subject(bus), uniq("c")
+        c = bus.consumer(name, s, max_deliver=5)
+        bus.publish(s, b"reopened")
+        (old,) = c.fetch(1)
+        c = bus.consumer(name, s, max_deliver=5)
+        (live,) = c.fetch(1)
+        if live_first:
+            live.ack()  # done: a stale settlement must neither requeue nor dead-letter it
+            settle(old, how_stale)
+        else:
+            settle(old, how_stale)  # stale: must be a no-op
+            live.nack()  # the live delivery failed: the message must come back
+        return c
+
+    for how in SETTLE:
+        c = reopened(how, live_first=False)
+        got = [d.data for d in c.fetch(5)]
+        assert got == [b"reopened"], f"a stale {how} settled the live delivery: redelivered {got}"
+        assert list(c.dead_letters()) == [], f"a stale {how} dead-lettered the live delivery"
+        c = reopened(how, live_first=True)
+        got = [d.data for d in c.fetch(5)]
+        assert got == [], f"a stale {how} after the live ack delivered the message again: {got}"
+        assert list(c.dead_letters()) == [], f"a stale {how} after the live ack dead-lettered it"
+    # without a reopen: a second settlement of a delivery after its redelivery was fetched
+    for how in SETTLE:
+        s = _subject(bus)
+        c = bus.consumer(uniq("c"), s, max_deliver=5)
+        bus.publish(s, b"again")
+        (first,) = c.fetch(1)
+        first.nack()
+        (second,) = c.fetch(1)
+        settle(first, how)  # settled already: must not count, and must not touch ``second``
+        second.nack()
+        got = [d.data for d in c.fetch(5)]
+        assert got == [b"again"], f"a second {how} settled the redelivery: redelivered {got}"
+        assert list(c.dead_letters()) == [], f"a second {how} dead-lettered the redelivery"
+
+
+@SUITE.check(
+    "new-consumer-starts-at-creation",
+    "a new durable consumer sees what is published after it was created, not the history",
+)
+def _(bus):
+    s = _subject(bus)
+    bus.publish(s, b"before")
+    c = bus.consumer(uniq("c"), s)
+    bus.publish(s, b"after")
+    got = [d.data for d in c.fetch(10)]
+    assert got == [b"after"], f"a new consumer was handed {got}"
+
+
 @SUITE.check(
     "star-wildcard-matches-one-token",
     "'*' matches exactly one token",
@@ -206,6 +325,46 @@ MUTANTS = {
         RestartsAtTailEventBus,
         "durable-resumes-after-reopen",
         "reopening a durable consumer skips everything not yet delivered",
+    ),
+    "work-queue-retention": Mutant(
+        WorkQueueEventBus,
+        "durables-are-independent",
+        "a message one durable acked is removed for every other (WorkQueue retention)",
+    ),
+    "dead-letters-in-client-memory": Mutant(
+        InMemoryDlqEventBus,
+        "dead-letters-survive-reopen",
+        "the dead-letter list lives in process memory and is empty after a reopen",
+    ),
+    "crash-loop-never-dead-letters": Mutant(
+        CrashLoopEventBus,
+        "unsettled-deliveries-count-toward-max-deliver",
+        "an unsettled delivery does not count against max_deliver (the reference fake did this)",
+    ),
+    "stale-delivery-settles": Mutant(
+        StaleSettleEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale delivery settles the live redelivery of the same message",
+    ),
+    "stale-term-dead-letters-live": Mutant(
+        StaleTermEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale term dead-letters the live redelivery (term is settled by message)",
+    ),
+    "stale-nack-requeues-acked": Mutant(
+        StaleNackRequeuesEventBus,
+        "stale-delivery-settles-nothing",
+        "a stale nack from before a reopen requeues a message the live delivery acked",
+    ),
+    "settled-nack-requeues": Mutant(
+        SettledNackRequeuesEventBus,
+        "settle-twice-is-noop",
+        "a nack of a delivery no longer in flight requeues the message unless already queued",
+    ),
+    "new-consumer-replays-history": Mutant(
+        ReplayingEventBus,
+        "new-consumer-starts-at-creation",
+        "a new durable consumer is handed every message published before it existed",
     ),
     "double-settle": Mutant(
         DoubleSettleEventBus,
