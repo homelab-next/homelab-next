@@ -99,8 +99,8 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
   (`the_prompt_was_...`) pass, up to 512 characters per job and 768 per turn, as they do in
   `run_id`, `gateway_tag` and `tools[].name`; refusing them would refuse real names
   (`together_ai`, `Q4_K_M`, dotted versions). The producers are the pinned controller and the
-  operator's gateway, not an adversary. emits. The tests plant forbidden values (all fictional) and
-  check that neither the store file nor the page holds them.
+  operator's gateway, not an adversary. The tests plant forbidden values (all fictional) and check
+  that neither the store file nor the page holds them.
 
 ## Data flow
 
