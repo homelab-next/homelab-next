@@ -114,10 +114,17 @@ batches parked for the candidate, so a transient failure clears once the candida
 
 A route change replays what is owed to the component that becomes primary, and **is refused**
 (`route not changed: N parked batches owed to the incoming primary ...`) while any cannot be
-replayed; `start_old` fails while a batch stays parked for the old component. In the reference
-`LakeBackend` the queue lives in memory unless `pending_path` is given, which writes it to that
-file on every change and reads it back at start; an unreadable file refuses to start rather than
-drop parked writes.
+replayed; `start_old` fails while a batch stays parked for the old component.
+
+In the reference `LakeBackend` the direction and the old component's state follow the registry at
+start (a flipped route: the candidate is primary and the old component stopped). The queue lives
+in memory unless `pending_path` is given: then each change (a park, a replay or discard, a
+write-order mark, a stop or start of the old component) is appended to that journal as one
+`0600` JSON line, so a park costs one batch on disk, never a rewrite of the queue; it is compacted
+and read back at start. An unreadable journal refuses to start rather than drop parked writes (a
+torn last line from a crash mid-append is dropped), a journal another backend holds is refused
+(an exclusive lock for the backend's lifetime; `close()` releases it), and stale temp files of a
+crashed compaction are removed.
 
 ### Rollback and refused writes
 
@@ -127,11 +134,15 @@ with `rollback incomplete` and puts the old component back as cutover left it (s
 forward path's `old-retained` gate still holds. The automatic revert of a failed cutover does the
 same and records the outcome of each step under `revert` in the cutover evidence.
 
-The escape hatch is explicit and recorded: `hnx swap rollback R --reason TEXT --abandon-parked`
-(`SwapRunner.rollback(reason, abandon_parked=True)`) drops the writes the old component refuses
-(`Backend.discard_parked`, `DualWriter.discard_pending`), lists each dropped batch with its rows
-under `abandoned_parked` in the rollback evidence (hashed into the record), and records an
-`abandon parked writes` action. Use it only when the dropped rows are reconciled some other way;
+The escape hatch is explicit and recorded, and it is a library call, not a CLI flag (the CLI
+drives a `ManualBackend`, which parks nothing): `SwapRunner.rollback(reason, abandon_parked=True)`
+first tries to start the old component (that attempt is listed in the actions); if a parked write
+is refused, `Backend.discard_parked` drops **only the refused write**, replays the rest, and
+repeats, so a good write queued behind a refused one is replayed, not dropped. The dropped
+batches, rows included, are written at once as their own `abandoned-parked` evidence file
+(`0600`, hashed into the record with a note) before any later step runs, so they stay on record
+even when a later step fails the rollback. An incomplete rollback's note lists its actions,
+the abandon included. Use it only when the dropped rows are reconciled some other way;
 nothing else ever drops a parked batch.
 
 ## The registry flip

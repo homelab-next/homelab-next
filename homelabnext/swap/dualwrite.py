@@ -113,8 +113,10 @@ class DualWriter:
         #: write order counter and, per (component, table, source), the order of the newest
         #: batch that component took with that source's mark (shared by rerouted writers)
         self._order: dict[str, Any] = {"n": 0, "marked": {}}
-        #: called after every change to ``pending`` (a backend persists the queue with it)
-        self.on_change: Callable[[], None] | None = None
+        #: an optional journal (``park(p)``, ``settled(order)``, ``mark(component, table, source,
+        #: order)``) told of each change as it happens, so a backend can persist the queue at a
+        #: cost of one record per change rather than one rewrite of the whole queue
+        self.journal: Any = None
 
     def rerouted(self, primary: Any, secondary: Any) -> DualWriter:
         """A writer for a new direction that keeps this one's parked batches, divergences and stats.
@@ -127,18 +129,28 @@ class DualWriter:
         new.divergences = self.divergences
         new.stats = self.stats
         new._order = self._order
-        new.on_change = self.on_change
+        new.journal = self.journal
         return new
 
-    def _changed(self) -> None:
-        if self.on_change is not None:
-            self.on_change()
+    def _park(self, p: _Pending) -> None:
+        self.pending.append(p)
+        if self.journal is not None:
+            self.journal.park(p)
+
+    def _settled(self, p: _Pending) -> None:
+        if self.journal is not None:
+            self.journal.settled(p.order)
 
     def _mark(self, component: Any, table: str, source: str | None, order: int) -> None:
         if source is not None:
             k = (id(component), table, source)
             marked = self._order["marked"]
-            marked[k] = max(order, marked.get(k, 0))
+            if order > marked.get(k, 0):
+                marked[k] = order
+                # the guard matters only while something is owed to the component: journal the
+                # mark then (and so it survives a restart), not on every write
+                if self.journal is not None and self.owed_to(component):
+                    self.journal.mark(component, table, source, order)
 
     # ------------------------------------------------------------ writes
     def write_batch(
@@ -180,9 +192,8 @@ class DualWriter:
         if self.owed_to(self.secondary):  # never send a batch past older ones still parked
             self.replay_pending(owed_to=self.secondary)
             if self.owed_to(self.secondary):
-                self.pending.append(parked)
+                self._park(parked)
                 self._record("queued", table, key, "parked behind earlier batches", len(rows))
-                self._changed()
                 return
         try:
             res = self.secondary.write_batch(
@@ -190,9 +201,8 @@ class DualWriter:
             )
         except Exception as exc:  # the secondary must never break the primary
             self.stats.secondary_failures += 1
-            self.pending.append(parked)
+            self._park(parked)
             self._record("secondary_error", table, key, f"{type(exc).__name__}: {exc}", len(rows))
-            self._changed()
             return
         self._mark(self.secondary, table, source, order)
         if res.rows_written != primary_result.rows_written:
@@ -235,6 +245,7 @@ class DualWriter:
                     high_water=None if newer else p.high_water,
                 )
                 ok += 1
+                self._settled(p)
                 if not newer:
                     self._mark(target, p.table, p.source, p.order)
             except Exception as exc:
@@ -247,12 +258,13 @@ class DualWriter:
                     f"{type(exc).__name__}: {exc}",
                     len(p.rows),
                 )
-        changed = len(still) != len(self.pending)
         self.pending[:] = still  # in place: rerouted writers share the queue
         self.stats.replayed_ok += ok
-        if changed:
-            self._changed()
         return ok
+
+    def first_owed(self, component: Any) -> _Pending | None:
+        """The oldest batch parked for ``component`` (the one a replay stops at), or None."""
+        return next((p for p in self.pending if self._target(p) is component), None)
 
     def discard_pending(
         self, reason: str, *, keys: Sequence[str] | None = None, owed_to: Any = None
@@ -273,8 +285,7 @@ class DualWriter:
         self.pending[:] = still
         for p in gone:
             self._record("discarded", p.table, p.idempotency_key, reason, len(p.rows))
-        if gone:
-            self._changed()
+            self._settled(p)
         return [p.to_dict() for p in gone]
 
     # ------------------------------------------------------------ reporting

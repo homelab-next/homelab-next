@@ -589,16 +589,29 @@ class SwapRunner:
 
         # start the old component first: its parked writes replay while it is still secondary,
         # and it is never primary while stopped (a write in between would fail)
-        abandoned: list[Any] = []
+        from_step = doc["current_step"]
+        step = next(s for s in doc["steps"] if s["name"] == from_step)
         if abandon_parked:
             first = _safe(self.backend.start_old)
+            do("start old component", lambda: first, required=False)
             if not first.ok:
                 gone = _safe(lambda: self.backend.discard_parked(reason))
-                abandoned = list(gone.data.get("discarded") or [])
                 do("abandon parked writes", lambda: gone)
+                if gone.ok:
+                    # the dropped rows are evidence at once, before any later step can fail
+                    dropped = list(gone.data.get("discarded") or [])
+                    fname = self._evidence(
+                        doc, step, "abandoned-parked", "abandon",
+                        {"swap_id": doc["swap_id"], "from_step": from_step, "reason": reason,
+                         "at": now, "abandoned_parked": dropped},
+                        f"{len(dropped)} parked writes abandoned for the rollback",
+                    )  # fmt: skip
+                    rec.append_transition(
+                        doc, at=now, event="note", step=from_step, actor=self.actor,
+                        note=f"rollback abandoned {len(dropped)} parked writes ({fname})",
+                    )  # fmt: skip
+                    rec.save(self.path, doc)
                 do("start old component", self.backend.start_old)
-            else:
-                do("start old component", lambda: first)
         else:
             do("start old component", self.backend.start_old)
         restored = False
@@ -618,12 +631,11 @@ class SwapRunner:
                 event="note",
                 step=doc["current_step"],
                 actor=self.actor,
-                note="rollback incomplete: " + "; ".join(problems),
+                # the actions first (an abandon among them), so the 500-character note keeps them
+                note="rollback incomplete; actions: " + "; ".join(actions),
             )
             rec.save(self.path, doc)
             raise SwapError("rollback incomplete, fix and retry: " + "; ".join(problems))
-        from_step = doc["current_step"]
-        step = next(s for s in doc["steps"] if s["name"] == from_step)
         body = {
             "swap_id": doc["swap_id"],
             "from_step": from_step,
@@ -631,21 +643,7 @@ class SwapRunner:
             "actions": actions,
             "at": now,
         }
-        if abandon_parked:
-            body["abandoned_parked"] = abandoned
-        text = json.dumps(body, indent=2, sort_keys=True) + "\n"
-        d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
-        d.mkdir(parents=True, exist_ok=True)
-        fname = f"rollback.{len(doc['transitions']) + 1:03d}.json"
-        (d / fname).write_text(text, encoding="utf-8")
-        step["evidence"].append(
-            {
-                "kind": "rollback",
-                "ref": fname,
-                "sha256": rec.sha256_text(text),
-                "summary": f"rolled back from {from_step}",
-            }
-        )
+        self._evidence(doc, step, "rollback", "rollback", body, f"rolled back from {from_step}")
         doc["rollback"] = {
             "at": now,
             "from_step": from_step,
@@ -661,6 +659,29 @@ class SwapRunner:
         )
         rec.save(self.path, doc)
         return doc
+
+    def _evidence(
+        self,
+        doc: dict[str, Any],
+        step: dict[str, Any],
+        kind: str,
+        prefix: str,
+        body: dict[str, Any],
+        summary: str,
+    ) -> str:
+        """Write ``body`` as an evidence file (``0600``: it may hold rows) and hash it into
+        ``step``'s evidence; returns the file name."""
+        from homelabnext.state import atomic_write_text
+
+        text = json.dumps(body, indent=2, sort_keys=True) + "\n"
+        d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{prefix}.{len(doc['transitions']) + 1:03d}.json"
+        atomic_write_text(d / fname, text, mode=0o600)
+        step["evidence"].append(
+            {"kind": kind, "ref": fname, "sha256": rec.sha256_text(text), "summary": summary}
+        )
+        return fname
 
     def note(self, text: str) -> None:
         doc = self.record()

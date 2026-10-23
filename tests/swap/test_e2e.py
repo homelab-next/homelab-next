@@ -329,19 +329,55 @@ def test_a_rollback_blocked_by_a_refused_write_leaves_the_old_component_stopped(
     assert sc.backend.writer.status()["pending"] == 1  # nothing dropped on its own
 
 
+def _abandon_evidence(sc, d):
+    [ev] = [e for s in d["steps"] for e in s["evidence"] if e["kind"] == "abandoned-parked"]
+    path = sc.runner.evidence_dir / ev["ref"]
+    return json.loads(path.read_text()), path
+
+
 def test_rollback_abandon_parked_drops_the_refused_writes_into_the_evidence(tmp_path):
     sc = _poisoned_rollback_scenario(tmp_path)
     d = sc.runner.rollback("canary regression; the old lake refuses k-poison", abandon_parked=True)
     assert d["status"] == "rolled_back" and d["route"]["flipped"] is False
-    assert any(
-        a.startswith("abandon parked writes: ok (discarded 1") for a in d["rollback"]["actions"]
-    )
-    [ev] = [e for s in d["steps"] for e in s["evidence"] if e["kind"] == "rollback"]
-    body = json.loads((sc.runner.evidence_dir / ev["ref"]).read_text())
+    acts = d["rollback"]["actions"]
+    assert acts[0].startswith("start old component: FAILED")  # the first, failed attempt
+    assert any(a.startswith("abandon parked writes: ok (discarded 1") for a in acts)
+    body, path = _abandon_evidence(sc, d)
     [gone] = body["abandoned_parked"]
     assert gone["idempotency_key"] == "k-poison" and gone["rows"][0]["uid"] == "poison"
+    assert path.stat().st_mode & 0o777 == 0o600  # it holds rows
+    [rb] = [e for s in d["steps"] for e in s["evidence"] if e["kind"] == "rollback"]
+    assert (sc.runner.evidence_dir / rb["ref"]).stat().st_mode & 0o777 == 0o600
     assert record.problems(d) == [] and record.verify_evidence(d, sc.runner.evidence_dir) == []
     assert [x.kind for x in sc.backend.writer.divergences][-1] == "discarded"
+
+
+def test_abandoned_writes_are_evidence_even_when_a_later_step_fails(tmp_path):
+    sc = _poisoned_rollback_scenario(tmp_path)
+    real = sc.backend.apply_route
+    sc.backend.apply_route = lambda target: (_ for _ in ()).throw(OSError("registry write failed"))
+    with pytest.raises(SwapError, match="rollback incomplete"):
+        sc.runner.rollback("canary regression; the old lake refuses k-poison", abandon_parked=True)
+    d = doc_of(sc)
+    body, _ = _abandon_evidence(sc, d)
+    assert [g["idempotency_key"] for g in body["abandoned_parked"]] == ["k-poison"]
+    assert record.problems(d) == [] and record.verify_evidence(d, sc.runner.evidence_dir) == []
+    note = d["transitions"][-1]["note"]
+    assert note.startswith("rollback incomplete; actions:") and "abandon parked writes: ok" in note
+    sc.backend.apply_route = real
+    again = sc.runner.rollback("retry after the registry write failed")
+    assert again["status"] == "rolled_back"
+
+
+def test_abandon_drops_only_the_refused_write_and_replays_the_rest(tmp_path):
+    sc = _poisoned_rollback_scenario(tmp_path)
+    good = dict(lakes.rows_for("dns_activity")[0], uid="good")
+    sc.backend.writer.write_batch("dns_activity", [good], idempotency_key="k-good")  # queued
+    assert [p.idempotency_key for p in sc.backend.writer.pending] == ["k-poison", "k-good"]
+    d = sc.runner.rollback("canary regression; the old lake refuses k-poison", abandon_parked=True)
+    body, _ = _abandon_evidence(sc, d)
+    assert [g["idempotency_key"] for g in body["abandoned_parked"]] == ["k-poison"]
+    assert _count(sc.old, "good") == 1  # the old component, primary again, has the good write
 
 
 def _backend_like(sc, pending_path):
@@ -356,26 +392,106 @@ def _backend_like(sc, pending_path):
     )
 
 
-def test_parked_writes_survive_a_restart_when_a_pending_path_is_given(tmp_path):
+def _journal_records(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_parked_writes_survive_a_restart_with_direction_and_state(tmp_path):
     sc = Scenario(tmp_path)
-    path = tmp_path / "parked.json"
+    path = tmp_path / "parked.jsonl"
     b = _backend_like(sc, path)
     assert b.shadow_start().ok and b.start_mirror().ok
     assert b.apply_route(AFTER).ok and b.stop_old().ok
     row = dict(lakes.rows_for("dns_activity")[0], uid="kept-across-restart")
     b.writer.write_batch("dns_activity", [row], idempotency_key="k-restart", source="s", high_water="7")  # fmt: skip
-    assert json.loads(path.read_text())["pending"][0]["owed_to"] == "old"
-    again = _backend_like(sc, path)  # the process restarted
+    assert path.stat().st_mode & 0o777 == 0o600
+    b.close()  # the process ends
+    again = _backend_like(sc, path)  # no re-routing by hand: the registry says flipped
+    assert again.writer.primary is again.new and again.writer.secondary is again.old
+    assert again.old_state().data["state"] == "stopped"
     assert again.writer.owed_to(again.old) == 1
-    again.writer = again.writer.rerouted(again.new, again.old)  # the flipped route
-    assert "replayed 1 parked batches" in again.start_old().detail
-    assert _count(sc.old, row["uid"]) == 1
-    assert json.loads(path.read_text())["pending"] == []
+    more = dict(row, uid="after-restart")
+    again.writer.write_batch("dns_activity", [more], idempotency_key="k-more", source="s", high_water="8")  # fmt: skip
+    assert [p.idempotency_key for p in again.writer.pending] == ["k-restart", "k-more"]
+    assert "replayed 2 parked batches" in again.start_old().detail
+    assert _count(sc.old, row["uid"]) == 1 and _count(sc.old, more["uid"]) == 1
+    mark = sc.old.describe("dns_activity").committed["s"]
+    assert (mark.batch_id, mark.high_water) == ("k-more", "8")
+    again.close()
+    third = _backend_like(sc, path)  # compacted at open: nothing parked, old running
+    assert third.writer.pending == [] and third.old_state().data["state"] == "running"
+    assert {r["op"] for r in _journal_records(path)} <= {"mark", "old"}  # no park, no settled
+    third.close()
 
 
-def test_an_unreadable_parked_file_refuses_to_start(tmp_path):
+def test_the_guard_marks_survive_a_restart(tmp_path):
     sc = Scenario(tmp_path)
-    path = tmp_path / "parked.json"
-    path.write_text("{not json")
+    path = tmp_path / "parked.jsonl"
+    b = _backend_like(sc, path)
+    flaky = _Flaky(sc.new)
+    b.new = flaky
+    b.writer = b.writer.rerouted(b.old, flaky)
+    b.writer.journal.b = b
+    flaky.down = True
+    b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid="g1")], idempotency_key="g1", source="s", high_water="1")  # fmt: skip
+    b.writer._mark(flaky, "dns_activity", "s", 99)  # a newer batch the candidate took
+    b.close()
+    marks = [r for r in _journal_records(path) if r["op"] == "mark"]
+    assert marks == [
+        {"op": "mark", "on": "new", "order": 99, "source": "s", "table": "dns_activity"}
+    ]
+    again = _backend_like(sc, path)
+    assert again.writer._order["marked"][(id(again.new), "dns_activity", "s")] == 99
+    assert again.writer._order["n"] >= 99
+    again.close()
+
+
+def test_a_journal_held_by_another_backend_is_refused(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    first = _backend_like(sc, path)
+    with pytest.raises(LakeError, match="in use by another swap backend"):
+        _backend_like(sc, path)
+    first.close()
+    _backend_like(sc, path).close()  # released
+
+
+def test_an_unreadable_journal_refuses_to_start_and_a_torn_tail_is_dropped(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    path.write_text('{not json\n{"op": "old", "down": false}\n')
     with pytest.raises(LakeError, match="unreadable"):
         _backend_like(sc, path)
+    path.write_text('{"op": "old", "down": true}\n{"op": "park", "ord')  # crash mid-append
+    b = _backend_like(sc, path)
+    assert b.old_state().data["state"] == "stopped" and b.writer.pending == []
+    b.close()
+
+
+def test_stale_temp_files_of_a_crashed_compaction_are_swept(tmp_path):
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    stale = tmp_path / ".parked.jsonl.999999999.deadbeef.tmp"
+    stale.write_text("x")
+    _backend_like(sc, path).close()
+    assert not stale.exists()
+
+
+def test_parking_costs_one_record_not_a_rewrite_of_the_queue(tmp_path):
+    import time
+
+    sc = Scenario(tmp_path)
+    path = tmp_path / "parked.jsonl"
+    b = _backend_like(sc, path)
+    assert b.apply_route(AFTER).ok and b.stop_old().ok
+    batch = [dict(r, uid=f"p-{i}") for i, r in enumerate(lakes.rows_for("dns_activity") * 10)][:50]  # fmt: skip
+    t0 = time.perf_counter()
+    sizes = []
+    for n in range(400):
+        b.writer.write_batch("dns_activity", batch, idempotency_key=f"k{n}")
+        if n in (199, 399):
+            sizes.append(path.stat().st_size)
+    elapsed = time.perf_counter() - t0
+    assert 1.9 < sizes[1] / sizes[0] < 2.1  # linear in the parks, not quadratic
+    assert elapsed < 60, elapsed  # generous: the whole-queue rewrite took minutes at this size
+    b.close()

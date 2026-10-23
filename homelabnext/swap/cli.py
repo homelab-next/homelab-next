@@ -30,8 +30,7 @@ USAGE = """usage: hnx swap {plan,start,status,advance,rollback,record} ...
   start --record R --capability cap:X --from A --to B --service S --registry REG --to-host H ...
   status R                                  one-screen state of a swap record
   advance R [--dry-run] [--attest NAME=FILE ...] [--scan-root DIR ...] [--adr docs/adr/NNNN-x.md]
-  rollback R --reason TEXT [--abandon-parked]
-                                            restore the prior route (any step before decommission)
+  rollback R --reason TEXT                  restore the prior route (any step before decommission)
   record R [--verify] [--note TEXT] [--anchor SEQ:HASH]
                                             validate a record, show its transition log and head
 """
@@ -105,11 +104,6 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rollback")
     p.add_argument("record")
     p.add_argument("--reason", required=True)
-    p.add_argument(
-        "--abandon-parked",
-        action="store_true",
-        help="drop the writes the old component refuses (listed in the rollback evidence)",
-    )
     _add_backend(p)
 
     p = sub.add_parser("record")
@@ -313,7 +307,7 @@ def _cmd_advance(args: argparse.Namespace) -> int:
 def _cmd_rollback(args: argparse.Namespace) -> int:
     runner = _runner(args)
     try:
-        doc = runner.rollback(args.reason, abandon_parked=args.abandon_parked)
+        doc = runner.rollback(args.reason)
     except RollbackRefused as exc:
         print(f"ROLLBACK REFUSED: {exc}", file=sys.stderr)
         return 1

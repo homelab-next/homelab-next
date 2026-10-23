@@ -16,10 +16,14 @@ Behaviour worth knowing:
   the route is not changed while one cannot be; ``start_old`` fails while any stays parked.
 * ``mirror_status`` retries the batches parked for the candidate, so a transient failure clears
   the ``divergences-within-budget`` gates once the candidate takes them.
-* Parked batches live in memory unless ``pending_path`` is given: then the queue is written to
-  that file on every change and read back at start (an unreadable file refuses to start).
-* ``discard_parked`` drops the batches owed to the old component on purpose (``rollback
-  --abandon-parked``) and returns them as evidence.
+* At start the direction and the old component's state follow the registry (flipped: the
+  candidate is primary and the old component stopped).
+* Parked batches live in memory unless ``pending_path`` is given: then each change is appended
+  to that journal (:mod:`.journal`; one record per change, compacted at start) and read back at
+  start, with the write-order marks and the old component's state; an unreadable journal, or one
+  another backend holds, refuses to start.  ``close()`` releases it.
+* ``discard_parked`` drops, on purpose, only the batches the old component refuses (``rollback
+  (abandon_parked=True)``) and returns them as evidence.
 * ``stop_old`` makes the old client refuse requests (it is stopped, not destroyed).
 """
 
@@ -27,7 +31,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +42,7 @@ from .backend import Backend, Outcome
 from .decommission import Retired, scan
 from .dualwrite import DualWriter, _Pending
 from .flip import flip_text, load_doc, plan_flip
+from .journal import ParkedJournal, json_value
 
 
 class SwitchableClient:
@@ -94,55 +98,60 @@ class LakeBackend(Backend):
         self.allow = list(allow)
         self._smoke = smoke
         self.mirroring = False
-        self.writer = DualWriter(self.old, self.new)  # production writes go through this
         self.last_report: ParityReport | None = None
-        self.pending_path = Path(pending_path) if pending_path else None
-        if self.pending_path is not None:
-            self._load_pending()
-            self.writer.on_change = self._save_pending
+        # the direction and the old component's state follow the registry: after a restart in
+        # the flipped state the candidate is primary and the old component is stopped
+        flipped = self._current_host() == self.new_host
+        self.writer = (  # production writes go through this
+            DualWriter(self.new, self.old) if flipped else DualWriter(self.old, self.new)
+        )
+        self.old.down = flipped
+        self.journal: ParkedJournal | None = None
+        if pending_path:
+            self._open_journal(Path(pending_path))
+
+    def _current_host(self) -> str | None:
+        try:
+            doc = load_doc(self.registry_path.read_text(encoding="utf-8"))
+            return str(doc["services"][self.service]["host"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None  # no readable registry yet: the plan step reports it
 
     # ------------------------------------------------------------ the parked queue on disk
     def _role(self, component: Any) -> str:
         return "old" if component is self.old else "new"
 
-    def _save_pending(self) -> None:
-        """Write the parked queue (each batch with the component it is owed to) atomically, so a
-        restart does not drop it."""
-        from homelabnext.state import atomic_write_text
-
-        assert self.pending_path is not None
-        doc = {
-            "version": 1,
-            "pending": [
-                {"owed_to": self._role(self.writer._target(p)), **p.to_dict()}
-                for p in self.writer.pending
-            ],
-        }
-        text = json.dumps(doc, sort_keys=True, default=_json_value) + "\n"
-        atomic_write_text(self.pending_path, text, mode=0o600)
-
-    def _load_pending(self) -> None:
-        assert self.pending_path is not None
-        if not self.pending_path.exists():
-            return
+    def _open_journal(self, path: Path) -> None:
+        """Read the parked batches, the marks and the old component's state back from the
+        journal (refusing to start on an unreadable one or one in use), then journal changes."""
+        j = ParkedJournal(path)
+        comp = {"old": self.old, "new": self.new}
         try:
-            doc = json.loads(self.pending_path.read_text(encoding="utf-8"))
-            items = doc["pending"] if doc.get("version") == 1 else None
-            if not isinstance(items, list):
-                raise ValueError("not a version 1 parked-batch file")
-            for it in items:
-                target = self.old if it["owed_to"] == "old" else self.new
+            st = j.state
+            for it in st.parked:
                 self.writer.pending.append(
                     _Pending(
                         it["table"], list(it["rows"]), it["idempotency_key"], it.get("source"),
-                        it.get("high_water"), target, int(it.get("order") or 0),
+                        it.get("high_water"), comp[it["owed_to"]], int(it["order"]),
                     )
                 )  # fmt: skip
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            # refuse to start rather than drop parked writes silently
-            raise LakeError(f"parked batches in {self.pending_path} are unreadable: {exc}") from exc
-        if self.writer.pending:
-            self.writer._order["n"] = max(p.order for p in self.writer.pending)
+            for (on, table, source), order in st.marks.items():
+                self.writer._order["marked"][(id(comp[on]), table, source)] = order
+        except (KeyError, TypeError, ValueError) as exc:
+            j.close()
+            raise LakeError(f"parked batches in {path} are unreadable: {exc}") from exc
+        self.writer._order["n"] = max(self.writer._order["n"], st.last_order)
+        if st.old_down is not None:
+            self.old.down = st.old_down
+        self.journal = j
+        self.writer.journal = _WriterJournal(self)
+
+    def close(self) -> None:
+        """Release the parked-batch journal (and its lock)."""
+        if self.journal is not None:
+            self.journal.close()
+            self.journal = None
+            self.writer.journal = None
 
     # ------------------------------------------------------------ conformance / shadow / mirror
     def conformance(self, role: str) -> Outcome:
@@ -256,10 +265,14 @@ class LakeBackend(Backend):
     # ------------------------------------------------------------ old component
     def stop_old(self) -> Outcome:
         self.old.down = True
+        if self.journal is not None:
+            self.journal.old_down(True)
         return Outcome(True, "old component stopped (kept, not destroyed)")
 
     def start_old(self) -> Outcome:
         self.old.down = False
+        if self.journal is not None:
+            self.journal.old_down(False)
         replayed = self.writer.replay_pending(owed_to=self.old)
         left = self.writer.owed_to(self.old)
         detail = f"old component running; replayed {replayed} parked batches"
@@ -270,8 +283,19 @@ class LakeBackend(Backend):
         return Outcome(True, detail)
 
     def discard_parked(self, reason: str) -> Outcome:
-        gone = self.writer.discard_pending(reason, owed_to=self.old)
-        gone = json.loads(json.dumps(gone, default=_json_value))  # plain JSON, for the evidence
+        """Drop only what the old component refuses: replay, drop the batch the replay stopped
+        at, and repeat until nothing more is owed.  A batch behind a refused one is replayed, not
+        dropped."""
+        gone: list[dict[str, Any]] = []
+        while True:
+            self.writer.replay_pending(owed_to=self.old)
+            head = self.writer.first_owed(self.old)
+            if head is None:
+                break
+            gone += self.writer.discard_pending(
+                reason, keys=[head.idempotency_key], owed_to=self.old
+            )
+        gone = json.loads(json.dumps(gone, default=json_value))  # plain JSON, for the evidence
         keys = ", ".join(g["idempotency_key"] for g in gone) or "none"
         return Outcome(True, f"discarded {len(gone)} parked batches: {keys}", {"discarded": gone})
 
@@ -289,8 +313,20 @@ class LakeBackend(Backend):
         )
 
 
-def _json_value(v: Any) -> Any:
-    """Rows hold timestamps; they are stored as ISO text, which the lake validation reads back."""
-    if isinstance(v, datetime | date):
-        return v.isoformat()
-    raise TypeError(f"cannot store a parked {type(v).__name__}")
+class _WriterJournal:
+    """The writer's journal hooks, in the backend's roles (``old``/``new``)."""
+
+    def __init__(self, backend: LakeBackend):
+        self.b = backend
+
+    def park(self, p: Any) -> None:
+        assert self.b.journal is not None
+        self.b.journal.park(self.b._role(self.b.writer._target(p)), p)
+
+    def settled(self, order: int) -> None:
+        assert self.b.journal is not None
+        self.b.journal.settled(order)
+
+    def mark(self, component: Any, table: str, source: str, order: int) -> None:
+        assert self.b.journal is not None
+        self.b.journal.mark(self.b._role(component), table, source, order)
