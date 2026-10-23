@@ -70,8 +70,15 @@ ADAPTERS = "homelabnext.conform.adapters"
 FACTORIES = "TURN_SOURCES"
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _OPTION_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
-#: an option key naming a credential: its value is a secret name, never the secret
-_CREDENTIAL = re.compile(r"key|token|passw|secret|credential|auth", re.I)
+#: an option key naming a credential: its value is a secret name, never the secret.  A stem
+#: anywhere in the key, or a short one as a whole ``_`` segment (``pass``, ``db_pwd``, ``sig``);
+#: no pattern names every credential, so an adapter also declares its own (:data:`FACTORIES`)
+_CREDENTIAL = re.compile(
+    r"key|token|passw|secret|credential|auth|bearer|cookie|session|private|cert"
+    r"|(?:^|_)(?:pwd|pass|passphrase|jwt|otp|sig|dsn|pem)(?:_|$)"
+)
+#: a URL carrying userinfo (``scheme://user:password@host``, ``scheme://token@host``)
+_USERINFO = re.compile(r"://[^/?#]*@")
 _SECRET_NAME = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
 #: the options the dedicated flags give
 _FLAG_OPTIONS = {
@@ -335,6 +342,16 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     factory = getattr(module, attr, None)
     if not callable(factory) or getattr(factory, "__module__", None) != mod:
         raise ValueError(f"--turn-source {spec!r:.120}: the factory is not defined in {mod}")
+    decl = declared[attr] if isinstance(declared[attr], Mapping) else {}
+    for name in decl.get("secrets", ()):
+        value = config.get(name)
+        if value not in (None, False) and not (
+            isinstance(value, str) and _SECRET_NAME.fullmatch(value)
+        ):
+            raise ValueError(
+                f"--turn-source {spec!r:.120}: option {name} is a secret the adapter declares: "
+                "a secret name (secret:<name>), never a value"
+            )
     try:
         source = factory(**config)
     except TypeError as exc:  # an option the adapter does not take
@@ -348,8 +365,10 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
 
 def turn_source_options(pairs: Sequence[str]) -> dict[str, str | bool]:
     """``--turn-source-option KEY=VALUE`` pairs as adapter options: ``true``/``false`` are
-    booleans; a key that names a credential (key, token, password, secret, ...) takes only a
-    secret name (``secret:<name>``), so no secret value is ever on a command line.
+    booleans; a key that names a credential (:data:`_CREDENTIAL`: key, token, password, secret,
+    pwd, bearer, cookie, session, jwt, cert, dsn, ...) takes only a secret name
+    (``secret:<name>``), and no value may be a URL with userinfo, so no secret value is ever on a
+    command line.  The options a factory declares secret are checked again in :func:`turn_source`.
     :class:`ValueError` for a malformed pair, a repeated key or one a dedicated flag sets."""
     out: dict[str, str | bool] = {}
     for pair in pairs:
@@ -360,6 +379,11 @@ def turn_source_options(pairs: Sequence[str]) -> dict[str, str | bool]:
             raise ValueError(f"--turn-source-option {key}: give it as {_FLAG_OPTIONS[key]}")
         if key in out:
             raise ValueError(f"--turn-source-option {key}: given twice")
+        if _USERINFO.search(value):
+            raise ValueError(
+                f"--turn-source-option {key}: a URL with userinfo carries a credential; give "
+                "the credential as its own option, by secret name"
+            )
         if (_CREDENTIAL.search(key) or value.startswith("secret:")) and not _SECRET_NAME.fullmatch(
             value
         ):

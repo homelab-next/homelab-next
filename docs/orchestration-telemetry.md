@@ -170,8 +170,9 @@ source chosen later still reads the jobs inside retention), or an adapter factor
 `package.module:factory`, the `adapter:` form of a conformance target. The adapter options are
 `--gateway-url` (passed as `base_url`), `--key` (a `secret:` name), `--ca-file` and
 `--allow-plaintext`, and any other option an adapter takes is `--turn-source-option KEY=VALUE`
-(repeatable; `true`/`false` are booleans; a key naming a credential, such as `token` or
-`password`, takes only a `secret:` name). Which adapter fills the slot is site configuration,
+(repeatable; `true`/`false` are booleans; a key naming a credential, such as `token`,
+`password`, `pwd`, `bearer`, `cookie`, `session`, `jwt`, `cert` or `dsn`, and any option the
+adapter declares secret, takes only a `secret:` name, and no value may be a URL with userinfo). Which adapter fills the slot is site configuration,
 but the code is not: the module must be under `homelabnext.conform.adapters` or a site package
 declared with `--turn-source-namespace PACKAGE` (repeatable, else
 `HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default; never a

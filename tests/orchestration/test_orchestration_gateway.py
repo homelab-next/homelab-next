@@ -235,7 +235,7 @@ def test_a_gateway_row_with_an_odd_model_name_never_wedges_the_sync(filled):
 _SITE_ADAPTER = """
 import json, os
 from os.path import join as borrowed  # a callable defined elsewhere, re-exported
-TURN_SOURCES = {"make": {"secrets": ["credential_ref"]}, "borrowed": {}}
+TURN_SOURCES = {"make": {"secrets": ["upstream_ref"]}, "borrowed": {}}
 class Src:
     def __init__(self, opts): self.opts = opts
     def turns(self, start, end, tags): return []
@@ -358,3 +358,38 @@ def test_the_shipped_adapter_declares_its_factory():
     from homelabnext.conform.adapters import litellm_spend_log
 
     assert set(litellm_spend_log.TURN_SOURCES) == {"make"}
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        "pwd=fake-hunter2", "pass=x", "passphrase=x", "bearer=abc", "cookie=s=1", "session=abc",
+        "jwt=eyJfake", "otp=123456", "sig=abc", "private_pem=-----BEGIN", "client_cert=x",
+        "dsn=postgres://u:pw@db.example.com/db", "url=https://fake-token@gw.example.com/v1",
+        "api_key=abc", "apikey=abc", "auth_header=x",
+    ],
+)  # fmt: skip
+def test_a_credential_option_takes_only_a_secret_name(pair):
+    from homelabnext.orchestration.cli import turn_source_options
+
+    with pytest.raises(ValueError, match=r"secret|userinfo"):
+        turn_source_options([pair])
+
+
+def test_options_that_are_no_credential_still_pass():
+    from homelabnext.orchestration.cli import turn_source_options
+
+    got = turn_source_options(
+        ["project=lab-1", "region=us-east-1", "url=https://gw.example.com/v1"]
+    )
+    assert got == {"project": "lab-1", "region": "us-east-1", "url": "https://gw.example.com/v1"}
+
+
+def test_an_option_the_adapter_declares_secret_takes_only_a_secret_name(site_adapters, capsys):
+    """No pattern names every credential, so the adapter says which of its options are secrets
+    (TURN_SOURCES), and those take only secret:<name> whatever they are called."""
+    spec = ["--turn-source", "labsite.turns:make", "--turn-source-namespace", "labsite"]
+    assert _turns_cli(site_adapters, *spec, "--turn-source-option", "upstream_ref=fake-value") == 2
+    assert "upstream_ref" in capsys.readouterr().err and not (site_adapters / "opts.json").exists()
+    ok = ["--turn-source-option", "upstream_ref=secret:gw/ref"]
+    assert _turns_cli(site_adapters, *spec, *ok) == 0
