@@ -201,7 +201,7 @@ def test_serve_pages_through_ntfy_with_a_token_by_secret_reference(tmp_path, mon
     args = argparse.Namespace(
         manifest=str(EXAMPLE), state=str(tmp_path / "state"), data_root=None,
         approvals_url=None, notify_topic="broker", notify_token="secret:broker/ntfy-token",
-        registry=None,
+        registry=None, cmd="serve",
     )  # fmt: skip
     svc = _service(args)
     assert svc.notifier is not None and svc._scoped, "per-agent budgets"
@@ -296,3 +296,15 @@ def test_a_failed_notification_is_logged_at_most_every_few_minutes(tmp_path, cap
             svc.submit("profile:triage", "service.restart", {"grace_s": 1}, target="svc:queue")
     hits = [r for r in caplog.records if "could not be sent" in r.getMessage()]
     assert len(hits) == 1
+
+
+@pytest.mark.parametrize("cmd", [["pending"], ["audit"], ["approve", "req-0000000000000000",
+                                                         "--as", "sso:operator-one"]])  # fmt: skip
+def test_local_commands_ignore_the_notify_topic_environment(cmd, tmp_path, monkeypatch, capsys):
+    """With the topic exported beside HNX_BROKER_STATE, every local command built a notifier: with
+    no endpoint each failed rc 2, and with one each could page from the CLI process."""
+    monkeypatch.setenv("HNX_BROKER_NOTIFY_TOPIC", "hnx-ops")
+    monkeypatch.delenv("HNX_ENDPOINT_NOTIFY", raising=False)
+    rc = main([*cmd, "--manifest", str(EXAMPLE), "--state", str(tmp_path / "state")])
+    err = capsys.readouterr().err
+    assert "notify endpoint" not in err and rc in (0, 1), (rc, err)

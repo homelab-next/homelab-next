@@ -373,7 +373,9 @@ def _service(args) -> BrokerService:
         base_dir=Path(args.manifest).parent,
         data_root=data_root,
         approvals_url=args.approvals_url,
-        notifier=notifier_from_args(args),
+        # only the long-running server pages: a local CLI command (pending, approve, audit, ...)
+        # with the topic exported beside HNX_BROKER_STATE must neither page nor fail on it
+        notifier=notifier_from_args(args) if getattr(args, "cmd", None) == "serve" else None,
     )
 
 
