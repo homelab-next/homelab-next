@@ -228,14 +228,12 @@ def _review_policy(cat: Any) -> Any:
         return None
 
 
-def human_approved(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
-    """The record carries a passing ``kind: human``, ``role: approve`` review of its current
-    content (a review of an earlier content does not count), from a human reviewer of
-    ``review_policy`` when one is given."""
+def _evaluation(rec: Mapping[str, Any], review_policy: Any = None) -> Any:
+    """The record's reviews judged against its current content and status."""
     from homelabnext.mcp import servers
     from homelabnext.reviews import evaluate
 
-    ev = evaluate(
+    return evaluate(
         rec.get("reviews"),
         author=rec.get("author"),
         digest=servers.record_digest(rec),
@@ -243,25 +241,22 @@ def human_approved(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
         state=str(rec.get("status")),
         policy=review_policy,
     )
+
+
+def human_approved(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
+    """The record carries a passing ``kind: human``, ``role: approve`` review of its current
+    content (a review of an earlier content does not count), from a human reviewer of
+    ``review_policy`` when one is given."""
+    ev = _evaluation(rec, review_policy)
     return any(r.get("role") == "approve" and r.get("kind") == "human" for r in ev.current)
 
 
 def reviews_current(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
     """The record carries the reviews its status needs, all of its current content: with a review
     policy, what it asks of ``mcp-server.<status>``; without one, a current human approve."""
-    from homelabnext.mcp import servers
-    from homelabnext.reviews import evaluate
-
     if review_policy is None:
         return human_approved(rec, review_policy)
-    ev = evaluate(
-        rec.get("reviews"),
-        author=rec.get("author"),
-        digest=servers.record_digest(rec),
-        artefact=servers.ARTEFACT,
-        state=str(rec.get("status")),
-        policy=review_policy,
-    )
+    ev = _evaluation(rec, review_policy)
     return not ev.problems and not ev.missing
 
 
