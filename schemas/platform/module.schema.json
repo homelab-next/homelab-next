@@ -986,7 +986,7 @@
             "isolated"
           ],
           "default": "internal",
-          "description": "Default internal. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated."
+          "description": "Default internal. internet-facing: only on a kind external role, or with the overlay's grants.internet_facing. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated."
         },
         "footprint": {
           "$ref": "#/$defs/footprint"
@@ -1295,7 +1295,7 @@
       "description": "What the module offers: slots (provider only) and interfaces (any kind)."
     },
     "egress": {
-      "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet entry, every authority or privileged service (svc:secrets, svc:broker, ...) and every kind: external host role needs an overlay grant (grants.egress). Enforcement by a generated network policy is specified, not implemented.",
+      "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). Enforcement by a generated network policy is specified, not implemented.",
       "default": "none",
       "oneOf": [
         {

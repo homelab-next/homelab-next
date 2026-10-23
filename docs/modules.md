@@ -60,7 +60,9 @@ modules/<id>/module.yml           a module shipped with homelab-next (none yet: 
   roles/<id_>[_<role>]/           its Ansible roles (role interface v1)
   registry/ mcp/ agents/ prompts/ units/ invariants/ detections/ interfaces/ lake/ docs/ conformance/
 examples/modules/<id>/module.yml  the fictional examples (this draft), examples/modules/slots.yml
-                                  (the slot registry draft) and examples/modules/sites/ (profiles)
+                                  (the slot registry draft) and examples/modules/sites/ (profiles);
+                                  never available to a site: the rules' default in-tree root is
+                                  modules/ alone, and only the contract tests add this one
 <overlay>/lab/modules/<id>/       a lab's private modules
 <overlay>/lab/modules.yml         the lab's site selection and grants
 ```
@@ -194,7 +196,7 @@ is subsumed by the providers' and core modules' `requires`.
 | `capabilities` | `{cap, version, features, formats, instance, provisional, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract |
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
-| `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated` |
+| `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
 
 A `prefers` entry names a `fallback`: `behaviour`, optionally a lighter slot `to`, and optionally
 `data` overrides. **A dataset bound to a preferred slot moves with the fallback**: a dataset's `via`
@@ -288,7 +290,7 @@ The core builds each registry from every selected module's entries; **the core k
 |---|---|---|
 | `roles` | an Ansible role (role interface v1) | hand-kept role lists |
 | `services` | `platform/service` rows; host names a module host role | hand-kept rows; health, metrics, front-door routes, DNS, topology, dataflow derive from them |
-| `status_sources` | `status:<id>` declared on the module's own rows | collector lists |
+| `status_sources` | `status:<id>` declared on the module's own rows; the list and the rows' sources are equal | collector lists |
 | `notify_pairs` | inline `{problem, recovery}`: **the notifier's only source** (code stops registering pairs) | a title-keyed dictionary |
 | `scheduler_jobs` | a `fleet_units` spec file, or `timer:<own role>/<name>` | per-feature scheduler blocks |
 | `lake_tables` | a `platform/lake_table` record file (draft 1.0); the core's OCSF tables get the same records | the lake-maintenance list |
@@ -321,7 +323,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
 | shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration; edge or idp only with `grants.shared_config` | overlay owner |
-| egress | traffic beyond required slots | `egress:` declared, from the module's own host roles; internet, an authority or privileged service (`svc:secrets`, `svc:broker`, ...) and every `kind: external` host role need `grants.egress`; static hosting needs `grants.publish` | overlay owner |
+| egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
 **Never contributed**: ceilings, broker actions and approvers, review policy, grants, and runtime
@@ -442,11 +444,15 @@ that slot's round trip").
 ## Egress and publishing
 
 `egress:` is `none` (the default) or, per host role of the module's own, the registry services and
-`internet` it may reach beyond the slots it requires. `grants.egress.<module>` lists the host roles
-whose egress the overlay grants; it is needed for every `internet` entry, every entry to an
-authority or privileged service (`svc:secrets`, `svc:broker`, `svc:idp`, the instances that fill
-those slots), and every `kind: external` host role, which runs outside the lab and so is egress by
-itself. **The egress generator is specified, not implemented**: nothing renders the declared egress
+`internet` it may reach beyond the slots it requires; a `svc:` target must be a registry service
+the site has (a selected slot or instance, or a selected module's row). A grant names its
+targets: `grants.egress.<module>.<role>: [internet, svc:broker, external]`. Every `internet` target
+and every authority or privileged service (`svc:secrets`, `svc:broker`, `svc:idp`, the instances
+that fill those slots) must be listed for that role, and so must `external` for a `kind: external`
+host role, which runs outside the lab and so is egress by itself. Because the grant lists targets,
+not roles, a manifest change that adds a target to a granted role is refused until the overlay
+lists it too. A host role inside the lab may be `internet-facing` only with
+`grants.internet_facing.<module>: [<role>]`. **The egress generator is specified, not implemented**: nothing renders the declared egress
 into host and unit network policy (`IPAddressDeny`/allow lists, nftables) yet, so today egress is
 declared and checked against grants, not enforced on the wire. **Publishing is the only egress
 for published content** because the overlay says so, not because publishing says so: only a module
@@ -498,12 +504,15 @@ slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | 
 features:   {<module>: {placement, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
 core:       {<module>: {placement, config, agents: {...}}}   # core modules are always selected
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
-grants:     {publish: [...], egress: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
+grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external|svc:...]}},
+             internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
              public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:edge|cap:idp]},
              units: {<module>: [<unit>]}}
 ```
 
-A config value must be a key the module declares; a secret-typed value is a secret in the module's
+A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
+instance the site selects of that provider (per-instance agent bindings would be a later, additive
+field). A config value must be a key the module declares; a secret-typed value is a secret in the module's
 own namespace or one granted to it in `grants.secrets`, the same rule as a manifest default.
 `capacity` stands in for the host's `platform/guest` `resources`, which a real selection references
 by guest id instead of re-declaring. A multi-slot provider is placed once per instance. At run time a

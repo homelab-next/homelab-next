@@ -17,9 +17,11 @@ Doc = dict[str, Any]
 
 RECORD_ROOTS = ("findings", "state", "proposals", "memory")
 REPO = Path(__file__).resolve().parents[2]
-#: where an in-tree module lives: the public modules/ tree and, for this draft's fictional
-#: examples, examples/modules/.  An overlay's lab/modules/ is never in-tree.
-PUBLIC_MODULE_ROOTS = (REPO / "modules", REPO / "examples" / "modules")
+#: where an in-tree module lives: the public modules/ tree only.  An overlay's lab/modules/ is
+#: never in-tree, and neither is examples/modules/ (the fictional examples are never available to
+#: a site; the contract tests pass EXAMPLE_ROOTS explicitly).
+PUBLIC_MODULE_ROOTS = (REPO / "modules",)
+EXAMPLE_ROOTS = (REPO / "examples" / "modules",)
 #: slots whose service a module reaches only with an overlay grant (besides privileged slots)
 AUTHORITY_SLOTS = ("broker", "secrets", "idp", "edge", "remote-admin", "mcp-catalog")
 #: the site section that binds a module's agents and config, by kind
@@ -302,8 +304,11 @@ def module_problems(
                 if not _named(s["id"], mid):
                     out.append(f"status source {s['id']}: starts with {mid}")
                 declared.add("status:" + s["id"])
-    for s in set(c.get("status_sources", [])) - declared:
+    listed = set(c.get("status_sources", []))
+    for s in sorted(listed - declared):
         out.append(f"{s}: not declared by the module's own service rows")
+    for s in sorted(declared - listed):
+        out.append(f"{s}: declared on a service row but not listed in contributes.status_sources")
     for job in c.get("scheduler_jobs", []):
         if "file" in job:
             out += unit_problems(load(mod_dir / job["file"]), mid)
@@ -418,8 +423,16 @@ def _bound_names(m: Doc, mod_dir: Path | None, load) -> list[tuple[str, str, str
     for job in c.get("scheduler_jobs", []):
         if "file" in job:
             out += [("unit", u.get("name", ""), "-") for u in load(mod_dir / job["file"])]
+    rows = _rows(m, mod_dir, load)
+    listed = {s.removeprefix("status:") for s in c.get("status_sources", [])}
+    out += [
+        ("status source", src["id"], "-")
+        for row in rows.values()
+        for src in row.get("status_sources", [])
+        if src["id"] not in listed
+    ]
     if m["kind"] != "provider":  # a provider's row is keyed by its slot, renamed to the instance
-        out += [("service row", n, "-") for n in _rows(m, mod_dir, load)]
+        out += [("service row", n, "-") for n in rows]
     return out
 
 
@@ -460,7 +473,7 @@ def tree_problems(
             + m.get("prefers", {}).get("interfaces", [])
         ]
         out += [
-            f"{m['id']}: interface {k} has no owner"
+            f"{m['id']}: interface {k[0]} {k[1]} has no owner"
             for k in used
             if k[1] not in versions.get(k[0], set())
         ]
@@ -538,6 +551,10 @@ def site_problems(
     out += _config_problems(site, sel, grants)
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
+    #: registry services an egress svc: target can name: every selected slot, every instance, and
+    #: the rows of the selected feature and core modules
+    services = {cap[4:] for cap in ch} | {c["instance"] for cs in ch.values() for c in cs}
+    services |= {n for mid, rs in (rows or {}).items() if mid in sel for n in rs}
     for slot, d in slots.items():
         if d.get("required_in_core") and "cap:" + slot not in ch:
             out.append(f"{slot}: a required core slot has no provider")
@@ -583,16 +600,26 @@ def site_problems(
                     )
         if reaches(m, STATIC_HOSTING) and m["id"] not in grants.get("publish", []):
             out.append(f"{m['id']}: reaches {STATIC_HOSTING} without the overlay's publish grant")
-        granted = grants.get("egress", {}).get(m["id"], [])
+        granted = grants.get("egress", {}).get(m["id"], {})
         for e in _egress(m):
             for t in e["to"]:
                 needs = t == "internet" or t.removeprefix("svc:") in authority
-                if needs and e["host"] not in granted:
+                if needs and t not in granted.get(e["host"], []):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t} without a grant")
+                if rows is not None and t.startswith("svc:") and t[4:] not in services:
+                    out.append(f"{m['id']}: host {e['host']} egresses to {t}, which is no service")
         for role, h in _hosts(m).items():
-            if h["kind"] == "external" and role not in granted:
+            if h["kind"] == "external" and "external" not in granted.get(role, []):
                 out.append(
                     f"{m['id']}: host role {role} is external (outside the lab) without an egress grant"
+                )
+            if (
+                h.get("exposure") == "internet-facing"
+                and h["kind"] != "external"
+                and role not in grants.get("internet_facing", {}).get(m["id"], [])
+            ):
+                out.append(
+                    f"{m['id']}: host role {role} is internet-facing inside the lab without grants.internet_facing"
                 )
         for name, row in (rows or {}).get(m["id"], {}).items():
             if row.get("public_hostname") and name not in grants.get("public_routes", {}).get(

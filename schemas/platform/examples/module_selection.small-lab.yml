@@ -117,4 +117,5 @@ core:
 grants:
   egress:
     external-collector:
-    - edge
+      edge:
+      - external

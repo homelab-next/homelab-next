@@ -77,7 +77,7 @@ core:
 grants:
   publish: [publishing]
   egress:
-    publishing: [publisher]
-    external-collector: [edge]
+    publishing: {publisher: [internet]}
+    external-collector: {edge: [external]}
   secrets:
     publishing: [secret:example-static-host/deploy-token]

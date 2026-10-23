@@ -369,7 +369,7 @@ def _defs() -> dict[str, Any]:
                 "exposure": {
                     "enum": ["internal", "internet-facing", "isolated"],
                     "default": "internal",
-                    "description": "Default internal. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
+                    "description": "Default internal. internet-facing: only on a kind external role, or with the overlay's grants.internet_facing. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
                 },
                 "footprint": ref("footprint"),
                 "roles": arr(ref("role_ref"), "The module's own Ansible roles on this host."),
@@ -494,7 +494,7 @@ def _defs() -> dict[str, Any]:
             desc="What the module offers: slots (provider only) and interfaces (any kind).",
         ),
         "egress": {
-            "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet entry, every authority or privileged service (svc:secrets, svc:broker, ...) and every kind: external host role needs an overlay grant (grants.egress). Enforcement by a generated network policy is specified, not implemented.",
+            "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). Enforcement by a generated network policy is specified, not implemented.",
             "default": "none",
             "oneOf": [
                 {"const": "none"},
@@ -1289,9 +1289,28 @@ def module_selection_schema() -> dict[str, Any]:
             "publish": arr(
                 mid, "Modules that may require, prefer or fall back to cap:static-hosting."
             ),
-            "egress": by_module(
+            "egress": {
+                "type": "object",
+                "propertyNames": mid,
+                "additionalProperties": {
+                    "type": "object",
+                    "propertyNames": pat(SLUG, None, 64),
+                    "additionalProperties": arr(
+                        {
+                            "oneOf": [
+                                {"enum": ["internet", "external"]},
+                                {"$ref": LID + "svc_id"},
+                            ]
+                        },
+                        None,
+                        1,
+                    ),
+                },
+                "description": "<module>: {<host role>: [targets]}: each internet or authority-service target the role may reach, and external for a role that runs outside the lab. A grant names its targets, so a manifest cannot widen a granted role's egress.",
+            },
+            "internet_facing": by_module(
                 pat(SLUG, None, 64),
-                "Host roles whose internet, authority-service or external egress the overlay grants.",
+                "Host roles inside the lab (not kind external) that may be internet-facing.",
             ),
             "secrets": by_module(
                 pat(SECRET, None, 128), "Granted credentials (holder: granted) a module may read."

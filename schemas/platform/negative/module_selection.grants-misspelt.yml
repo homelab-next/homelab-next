@@ -170,9 +170,11 @@ grant:
   - publishing
   egress:
     publishing:
-    - publisher
+      publisher:
+      - internet
     external-collector:
-    - edge
+      edge:
+      - external
   secrets:
     publishing:
     - secret:example-static-host/deploy-token

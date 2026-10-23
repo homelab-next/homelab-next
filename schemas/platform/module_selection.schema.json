@@ -476,6 +476,51 @@
             "description": "A module id."
           },
           "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "internet",
+                      "external"
+                    ]
+                  },
+                  {
+                    "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+                  }
+                ]
+              },
+              "minItems": 1
+            }
+          },
+          "description": "<module>: {<host role>: [targets]}: each internet or authority-service target the role may reach, and external for a role that runs outside the lab. A grant names its targets, so a manifest cannot widen a granted role's egress."
+        },
+        "internet_facing": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
             "type": "array",
             "uniqueItems": true,
             "items": {
@@ -485,7 +530,7 @@
             },
             "minItems": 1
           },
-          "description": "Host roles whose internet, authority-service or external egress the overlay grants."
+          "description": "Host roles inside the lab (not kind external) that may be internet-facing."
         },
         "secrets": {
           "type": "object",

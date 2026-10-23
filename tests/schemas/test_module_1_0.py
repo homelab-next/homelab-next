@@ -42,6 +42,9 @@ MODULES = {p.parent.name: load(p) for p in MANIFESTS}
 SLOTS = load(MODULES_DIR / "slots.yml")["slots"]
 SITES = {p.stem: load(p) for p in sorted((MODULES_DIR / "sites").glob("*.yml"))}
 DIRS = {n: MODULES_DIR / n for n in MODULES}
+#: the fictional examples count as in-tree only because the tests say so: the rules' default
+#: public root is modules/ alone, so a loader copying the default never makes them available
+ROOTS = mr.EXAMPLE_ROOTS
 ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
 SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
@@ -229,7 +232,7 @@ def test_example_modules_validate(path):
 
 @pytest.mark.parametrize("name", sorted(MODULES))
 def test_example_modules_meet_the_loader_rules(name):
-    assert mr.module_problems(MODULES[name], MODULES_DIR / name, SLOTS, load) == []
+    assert mr.module_problems(MODULES[name], MODULES_DIR / name, SLOTS, load, ROOTS) == []
 
 
 def test_the_examples_meet_the_rules_across_modules():
@@ -387,7 +390,7 @@ def test_agent_specs_compile_only_against_a_ceiling_policy(name, agent):
 def _rules(name, mutate):
     doc = copy.deepcopy(MODULES[name])
     mutate(doc)
-    return mr.module_problems(doc, MODULES_DIR / name, SLOTS, load)
+    return mr.module_problems(doc, MODULES_DIR / name, SLOTS, load, ROOTS)
 
 
 def _ag(d):
@@ -649,7 +652,7 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         )
     )
     doc["contributes"]["scheduler_jobs"].append({"file": "units/fleet_units.yml"})
-    probs = "\n".join(mr.module_problems(doc, mod, SLOTS, load))
+    probs = "\n".join(mr.module_problems(doc, mod, SLOTS, load, (tmp_path,)))
     for needle in (
         "carries no ceiling",
         "is external-collector/<slug>",
@@ -662,6 +665,37 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         "pages only through notify",
     ):
         assert needle in probs, needle
+
+
+def test_row_status_sources_equal_the_listed_ones(tmp_path):
+    """Negative: a status source declared only on a row (not in contributes.status_sources) is
+    refused, and with directories it joins name ownership (so a longer module id's name is caught)."""
+    import shutil
+
+    mod = tmp_path / "external-collector"
+    shutil.copytree(MODULES_DIR / "external-collector", mod)
+    rows = load(mod / "registry/services.yml")
+    src = copy.deepcopy(rows["services"]["external-collector-receiver"]["status_sources"][0])
+    src["id"] = "external-collector-sub-fresh"
+    rows["services"]["external-collector-receiver"]["status_sources"].append(src)
+    (mod / "registry/services.yml").write_text(yaml.safe_dump(rows))
+    probs = mr.module_problems(MODULES["external-collector"], mod, SLOTS, load, (tmp_path,))
+    assert (
+        "status:external-collector-sub-fresh: declared on a service row but not listed in "
+        "contributes.status_sources" in probs
+    )
+    mods = copy.deepcopy(MODULES)
+    mods["external-collector-sub"] = {
+        **copy.deepcopy(MODULES["core-modules"]),
+        "id": "external-collector-sub",
+        "kind": "feature",
+        "contributes": {},
+    }
+    probs = mr.tree_problems(mods, {**DIRS, "external-collector": mod}, load)
+    assert (
+        "status source external-collector-sub-fresh: named under module external-collector-sub, "
+        "not external-collector" in probs
+    )
 
 
 def test_contributed_row_rules(tmp_path):
@@ -716,6 +750,15 @@ def test_origin_and_kind_core_are_bound_to_where_the_module_lives(tmp_path):
     }
     assert sc.errors_for(SCHEMA, fetched, REG) == [], "a sha256-format commit pins a module"
     assert mr.module_problems(fetched, tmp_path / "external-collector", SLOTS, load) == []
+
+
+def test_the_examples_are_not_in_tree_by_default():
+    """Negative: with the default public root (modules/ only) the fictional examples are not
+    in-tree, and core-staff is not a core module a site could select."""
+    assert mr.PUBLIC_MODULE_ROOTS == (ROOT / "modules",)
+    probs = mr.module_problems(MODULES["core-staff"], MODULES_DIR / "core-staff", SLOTS, load)
+    assert "kind core: a core module lives in the public modules/ tree" in probs
+    assert "origin in-tree: the module is not in the public modules/ tree" in probs
 
 
 def test_cross_module_rules_refuse_two_owners_overlap_and_shared_ids():
@@ -795,7 +838,7 @@ def test_identifiers_and_write_prefixes_are_unique_across_modules():
 def test_an_interface_with_no_owner_is_refused():
     mods = copy.deepcopy(MODULES)
     del mods["publishing"]
-    assert any("publishable-output', '1.0') has no owner" in p for p in mr.tree_problems(mods))
+    assert any("interface publishable-output 1.0 has no owner" in p for p in mr.tree_problems(mods))
 
 
 # ------------------------------------------------------------------ site profiles
@@ -981,12 +1024,6 @@ SITE_DEFECTS = {
 }
 
 
-@pytest.mark.parametrize("case", sorted(SITE_DEFECTS))
-def test_a_site_rule_refuses_the_defect(case):
-    profile, mutate, needle = SITE_DEFECTS[case]
-    assert needle in _site(profile, mutate)
-
-
 def _host(role, **fp):
     return {
         "role": role,
@@ -1003,6 +1040,20 @@ SITE_DEFECTS.update(
                 {"host": "receiver", "to": ["svc:secrets", "svc:broker"]}
             ),
             "host receiver egresses to svc:secrets without a grant",
+        ),
+        "an egress grant for a role that does not name the target": (
+            "full",
+            lambda s, m: m["external-collector"]["egress"][0]["to"].extend(
+                ["internet", "svc:secrets"]
+            ),
+            "host edge egresses to internet without a grant",
+        ),
+        "an internet-facing role inside the lab without a grant": (
+            "full",
+            lambda s, m: m["external-collector"]["requires"]["hosts"][1].__setitem__(
+                "exposure", "internet-facing"
+            ),
+            "host role receiver is internet-facing inside the lab without grants.internet_facing",
         ),
         "an external host role without an egress grant": (
             "full",
@@ -1078,6 +1129,13 @@ SITE_DEFECTS.update(
 )
 
 
+@pytest.mark.parametrize("case", sorted(SITE_DEFECTS))
+def test_a_site_rule_refuses_the_defect(case):
+    profile, mutate, needle = SITE_DEFECTS[case]
+    assert needle in _site(profile, mutate)
+    assert len(SITE_DEFECTS) >= 37, "every SITE_DEFECTS entry is defined before this test"
+
+
 def test_a_provider_agent_is_bound_under_providers():
     """A provider may contribute an agent; its lanes are bound under providers.<id>, not core."""
     site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
@@ -1099,6 +1157,27 @@ def _rows_site(profile, mutate_rows, mutate_site=lambda s: None):
     mutate_rows(rows["external-collector"]["external-collector-receiver"])
     mutate_site(site)
     return "\n".join(mr.site_problems(site, MODULES, SLOTS, rows))
+
+
+def test_a_granted_target_and_an_internet_facing_grant_are_accepted():
+    """The positive side: the grant names exactly what the manifest reaches."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["external-collector"]["egress"][0]["to"].append("internet")
+    mods["external-collector"]["requires"]["hosts"][1]["exposure"] = "internet-facing"
+    site["grants"]["egress"]["external-collector"]["edge"].append("internet")
+    site["grants"]["internet_facing"] = {"external-collector": ["receiver"]}
+    assert mr.site_problems(site, mods, SLOTS, ROWS) == []
+    assert sc.errors_for(SELECTION, site, REG) == []
+
+
+def test_an_egress_service_target_must_exist():
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["external-collector"]["egress"][0]["to"].append("svc:no-such-service")
+    probs = mr.site_problems(site, mods, SLOTS, ROWS)
+    assert (
+        "external-collector: host edge egresses to svc:no-such-service, which is no service"
+        in probs
+    )
 
 
 def test_a_public_row_needs_grants_public_routes_whatever_its_auth():
