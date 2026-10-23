@@ -17,7 +17,7 @@ from conformance.fakes.ntfy_api import FakeNtfy
 from conformance.fakes.openbao_api import FakeOpenBao
 from conformance.protocols.events import EventBus, EventsError
 from conformance.protocols.notify import NotifyTarget
-from conformance.protocols.secrets import SecretNotFound, SecretStore
+from conformance.protocols.secrets import LeaseError, SecretNotFound, SecretStore
 from conformance.suites import events as events_suite
 from conformance.suites import notify as notify_suite
 from conformance.suites import secrets as secrets_suite
@@ -251,6 +251,19 @@ def test_version_zero_and_negative_versions_are_absent_not_latest(openbao):
             s.get("a/x", version=v)
     assert len(openbao.requests) == sent, "a non-positive version reached the server"
     assert dict(s.get("a/x", version=1).data) == {"k": "1"}
+    s.close()
+
+
+def test_a_lease_ttl_that_never_ends_is_refused_before_any_policy_is_written(openbao):
+    """``lease(path, inf)`` raised a raw OverflowError from ``math.ceil`` after the lease ACL
+    policy was already written; ``nan`` was refused only by accident of comparison."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    sent = len(openbao.requests)
+    for ttl in (float("inf"), float("nan"), float("-inf")):
+        with pytest.raises(LeaseError):
+            s.lease("a/x", ttl)
+    assert openbao.policies == {} and len(openbao.requests) == sent, "a refused lease wrote"
     s.close()
 
 

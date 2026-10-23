@@ -11,9 +11,13 @@ from conformance.fakes.secret_store import (
     DeletesLatestOnlySecretStore,
     FakeSecretStore,
     LeakyErrorSecretStore,
+    LeaseAliasingSecretStore,
+    ListsDeletedSecretStore,
     NegativeTtlSecretStore,
     NegativeVersionSecretStore,
     NeverExpiringSecretStore,
+    NonFiniteLeaseSecretStore,
+    TombstoneSecretStore,
     UnknownLeaseValidSecretStore,
     VersionErrorLeaksSecretStore,
     VersionZeroIsLatestSecretStore,
@@ -72,7 +76,8 @@ def _(s):
 
 @SUITE.check(
     "delete-removes-all-versions",
-    "after delete no version is readable and the path is not listed; deleting again raises",
+    "after delete no version is readable, the path is not listed, deleting again raises, and a "
+    "new put starts a fresh history",
 )
 def _(s):
     p = _path(s)
@@ -82,8 +87,14 @@ def _(s):
     raises(lambda: s.get(p), "get after delete", SecretNotFound)
     for v in (1, 2):
         raises(lambda v=v: s.get(p, version=v), f"version {v} after delete", SecretNotFound)
-    assert p not in list(s.list(p)), "a deleted path is still listed"
+    parent = p.rsplit("/", 1)[0] + "/"
+    for prefix in (p, parent, ""):
+        assert p not in list(s.list(prefix)), f"a deleted path is still listed under {prefix!r}"
     raises(lambda: s.delete(p), "second delete", SecretNotFound)
+    # deleted for good: writing the path again starts over, it does not revive the old history
+    assert s.put(p, {"k": "three"}) == 1, "a put after delete continued the deleted numbering"
+    assert dict(s.get(p, version=1).data) == {"k": "three"}, "version 1 is the deleted secret"
+    raises(lambda: s.get(p, version=2), "version 2 of the new history", SecretNotFound)
 
 
 @SUITE.check(
@@ -101,6 +112,10 @@ def _(s):
     with contextlib.suppress(TypeError):  # a read-only mapping is fine too
         got.data["password"] = "rewritten-through-get"  # type: ignore[index]
     assert dict(s.get(p).data) == {"password": VALUE}, "a returned mapping is the stored one"
+    leased = s.lease(p, 300)
+    with contextlib.suppress(TypeError):
+        leased.data["password"] = "rewritten-through-lease"  # type: ignore[index]
+    assert dict(s.get(p).data) == {"password": VALUE}, "a lease's mapping is the stored one"
 
 
 @SUITE.check("invalid-paths-rejected", "empty segments and '..' are refused")
@@ -155,11 +170,13 @@ def _(s):
     assert all(VALUE not in str(x) for x in got)
 
 
-@SUITE.check("lease-ttl-must-be-positive", "a zero or negative ttl is refused")
+@SUITE.check(
+    "lease-ttl-must-be-positive", "a zero, negative or non-finite (nan, inf) ttl is refused"
+)
 def _(s):
     p = _path(s)
     s.put(p, {"k": "v"})
-    for ttl in (0, -5, -0.5):
+    for ttl in (0, -5, -0.5, float("nan"), float("inf"), float("-inf")):
         raises(lambda t=ttl: s.lease(p, t), f"ttl {ttl}", LeaseError, ValueError)
 
 
@@ -233,6 +250,26 @@ MUTANTS = {
         AliasingSecretStore,
         "stored-data-is-a-copy",
         "the caller's mapping is stored and returned by reference",
+    ),
+    "put-after-delete-revives-history": Mutant(
+        TombstoneSecretStore,
+        "delete-removes-all-versions",
+        "delete tombstones the path and a later put revives the deleted versions",
+    ),
+    "deleted-path-listed-under-parent": Mutant(
+        ListsDeletedSecretStore,
+        "delete-removes-all-versions",
+        "a deleted path is still listed under its parent prefix",
+    ),
+    "lease-shares-stored-mapping": Mutant(
+        LeaseAliasingSecretStore,
+        "stored-data-is-a-copy",
+        "lease hands back the stored mapping, so changing lease.data rewrites the secret",
+    ),
+    "non-finite-lease-ttl-accepted": Mutant(
+        NonFiniteLeaseSecretStore,
+        "lease-ttl-must-be-positive",
+        "a nan or inf lease ttl is accepted (the reference fake did this)",
     ),
     "lease-never-expires": Mutant(
         NeverExpiringSecretStore, "lease-expires", "lease_valid ignores the expiry time"

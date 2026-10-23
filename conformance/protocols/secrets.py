@@ -76,13 +76,17 @@ class SecretStore(Protocol):
         end"."""
 
     def delete(self, path: str) -> None:
-        """Remove every version.  Raises SecretNotFound if absent."""
+        """Remove every version, for good: a later ``put`` starts a fresh history at version 1,
+        and no deleted version is readable again.  Raises SecretNotFound if absent."""
 
     def list(self, prefix: str = "") -> Sequence[str]:
-        """Paths only, sorted, never values."""
+        """Paths only, sorted, never values; a deleted path is not listed under any prefix."""
 
     def lease(self, path: str, ttl: float) -> Lease:
-        """A time-limited read.  Raises SecretNotFound, or LeaseError for ttl <= 0."""
+        """A time-limited read; ``data`` is a copy, like ``get``'s.  Raises SecretNotFound, or
+        LeaseError for a ttl that is not a positive, finite number of seconds (``nan`` and
+        ``inf`` included: either would be a read that never expires), before anything is
+        granted."""
 
     def lease_valid(self, lease_id: str) -> bool: ...
 

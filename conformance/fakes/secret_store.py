@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 
 from conformance.protocols.secrets import (
@@ -64,13 +65,18 @@ class FakeSecretStore:
         return sorted(p for p in self._v if p.startswith(prefix))
 
     def lease(self, path: str, ttl: float) -> Lease:
-        if ttl <= 0:
-            raise LeaseError("ttl must be positive")
+        self._check_ttl(ttl)
         sec = self.get(path)
         self._n += 1
         lease = Lease(f"lease-{self._n}", path, self._clock() + ttl, dict(sec.data))
         self._leases[lease.id] = (lease, False)
         return lease
+
+    @staticmethod
+    def _check_ttl(ttl: float) -> None:
+        # ``nan <= 0`` is False and ``now + inf`` never passes: both would never expire
+        if not math.isfinite(ttl) or ttl <= 0:
+            raise LeaseError("ttl must be a positive, finite number of seconds")
 
     def lease_valid(self, lease_id: str) -> bool:
         item = self._leases.get(lease_id)
@@ -189,3 +195,61 @@ class AliasingSecretStore(FakeSecretStore):
     def get(self, path: str, version: int | None = None) -> Secret:
         s = super().get(path, version)
         return Secret(s.path, s.version, self._v[path][s.version - 1])
+
+
+class TombstoneSecretStore(FakeSecretStore):
+    """Defect: ``delete`` hides the path behind a tombstone and a later ``put`` revives its
+    history: numbering continues and the deleted version 1 is readable again (a store with a
+    ``deleted`` flag on the path row does exactly this)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._graves: dict[str, list[dict[str, str]]] = {}
+
+    def delete(self, path: str) -> None:
+        if path not in self._v:
+            raise SecretNotFound(f"no secret at {path!r}")
+        self._graves[path] = self._v.pop(path)
+
+    def put(self, path: str, data: Mapping[str, str]) -> int:
+        if path in self._graves and path not in self._v:
+            self._v[path] = self._graves.pop(path)
+        return super().put(path, data)
+
+
+class LeaseAliasingSecretStore(FakeSecretStore):
+    """Defect: ``lease`` hands back the stored mapping itself, so changing ``lease.data``
+    rewrites the stored secret."""
+
+    def lease(self, path: str, ttl: float) -> Lease:
+        lease = super().lease(path, ttl)
+        return Lease(lease.id, lease.path, lease.expires_at, self._v[path][-1])
+
+
+class NonFiniteLeaseSecretStore(FakeSecretStore):
+    """Defect (the reference fake did this): only ``ttl <= 0`` is refused, so ``inf`` makes a
+    lease that never expires and ``nan`` one that is born expired."""
+
+    @staticmethod
+    def _check_ttl(ttl: float) -> None:
+        if ttl <= 0:
+            raise LeaseError("ttl must be positive")
+
+
+class ListsDeletedSecretStore(FakeSecretStore):
+    """Defect: a separate path index is cleaned only for an exact-prefix ``list``, so listing a
+    parent (or everything) still names a deleted path."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._index: set[str] = set()
+
+    def put(self, path: str, data: Mapping[str, str]) -> int:
+        version = super().put(path, data)
+        self._index.add(path)
+        return version
+
+    def list(self, prefix: str = "") -> list[str]:
+        return sorted(
+            p for p in self._index if p.startswith(prefix) and (p in self._v or p != prefix)
+        )

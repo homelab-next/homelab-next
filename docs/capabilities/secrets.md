@@ -79,7 +79,8 @@ def delete(path: str) -> None
 
 **Returns:** `None`
 
-Remove every version.  Raises SecretNotFound if absent.
+Remove every version, for good: a later `put` starts a fresh history at version 1,
+and no deleted version is readable again.  Raises SecretNotFound if absent.
 
 **Raises:** `SecretNotFound`
 
@@ -95,7 +96,7 @@ def list(prefix: str = '') -> Sequence[str]
 
 **Returns:** `Sequence[str]`
 
-Paths only, sorted, never values.
+Paths only, sorted, never values; a deleted path is not listed under any prefix.
 
 #### `SecretStore.lease`
 
@@ -110,7 +111,10 @@ def lease(path: str, ttl: float) -> Lease
 
 **Returns:** `Lease`
 
-A time-limited read.  Raises SecretNotFound, or LeaseError for ttl <= 0.
+A time-limited read; `data` is a copy, like `get`'s.  Raises SecretNotFound, or
+LeaseError for a ttl that is not a positive, finite number of seconds (`nan` and
+`inf` included: either would be a read that never expires), before anything is
+granted.
 
 **Raises:** `SecretNotFound`, `LeaseError`
 
@@ -187,13 +191,13 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `put-get-roundtrip` | MUST | the stored mapping is read back unchanged |  |
 | `versions-increase-and-stay-readable` | MUST | every put is a new version; old ones remain |  |
 | `missing-secret-raises` | MUST | an absent path or version raises SecretNotFound; versions start at 1 (0 and -1 are absent) |  |
-| `delete-removes-all-versions` | MUST | after delete no version is readable and the path is not listed; deleting again raises |  |
+| `delete-removes-all-versions` | MUST | after delete no version is readable, the path is not listed, deleting again raises, and a new put starts a fresh history |  |
 | `stored-data-is-a-copy` | MUST | changing the mapping given to put, or the one get returned, does not change the secret |  |
 | `invalid-paths-rejected` | MUST | empty segments and '..' are refused |  |
 | `errors-never-contain-values` | MUST | no error - message, repr, attributes, cause chain or traceback - includes a secret value |  |
 | `repr-is-redacted` | MUST | repr/str of a returned secret hides the value |  |
 | `list-returns-paths-only` | MUST | listing shows sorted paths and never values |  |
-| `lease-ttl-must-be-positive` | MUST | a zero or negative ttl is refused |  |
+| `lease-ttl-must-be-positive` | MUST | a zero, negative or non-finite (nan, inf) ttl is refused |  |
 | `lease-expires` | MUST | a lease is invalid after its ttl (clock hook if offered, else real time; never skipped) |  |
 | `unknown-lease-invalid` | MUST | a lease id the store never issued is not valid |  |
 | `revoke-ends-lease` | MUST | a revoked lease is invalid; revoking twice is harmless |  |
@@ -209,11 +213,15 @@ Each is a deliberately broken fake (`hnx conform run secrets --target broken:<mu
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `delete-drops-latest-only` | `delete-removes-all-versions` | delete removes the latest version and leaves the older ones readable |
+| `deleted-path-listed-under-parent` | `delete-removes-all-versions` | a deleted path is still listed under its parent prefix |
 | `error-cause-leaks-value` | `errors-never-contain-values` | the invalid-path error is raised from an exception that carries the values |
 | `error-leaks-value` | `errors-never-contain-values` | the invalid-path error echoes the submitted values |
 | `lease-never-expires` | `lease-expires` | lease_valid ignores the expiry time |
+| `lease-shares-stored-mapping` | `stored-data-is-a-copy` | lease hands back the stored mapping, so changing lease.data rewrites the secret |
 | `negative-ttl-accepted` | `lease-ttl-must-be-positive` | only ttl == 0 is refused |
 | `negative-version-indexes-from-end` | `missing-secret-raises` | a negative version reads an older version through Python negative indexing |
+| `non-finite-lease-ttl-accepted` | `lease-ttl-must-be-positive` | a nan or inf lease ttl is accepted (the reference fake did this) |
+| `put-after-delete-revives-history` | `delete-removes-all-versions` | delete tombstones the path and a later put revives the deleted versions |
 | `stores-caller-mapping` | `stored-data-is-a-copy` | the caller's mapping is stored and returned by reference |
 | `unknown-lease-valid` | `unknown-lease-invalid` | any unknown lease id is valid |
 | `version-error-leaks-value` | `errors-never-contain-values` | the no-such-version error of a path that holds a secret echoes the latest value |

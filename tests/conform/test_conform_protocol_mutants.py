@@ -66,6 +66,10 @@ REVIEWED = {
         "version-error-leaks-value",
         "delete-drops-latest-only",
         "stores-caller-mapping",
+        "put-after-delete-revives-history",
+        "deleted-path-listed-under-parent",
+        "lease-shares-stored-mapping",
+        "non-finite-lease-ttl-accepted",
     },
     "idp": {
         "alg-none-accepted",
@@ -135,6 +139,19 @@ def test_the_reference_idp_refuses_a_ttl_that_never_ends():
     for ttl in (float("nan"), float("inf")):
         with pytest.raises(ValueError):
             p.issue("user", ["read"], ttl)
+
+
+def test_the_reference_secret_store_refuses_a_lease_that_never_ends():
+    """``lease(p, inf)`` was still valid after ``tick(1e12)``, and ``lease(p, nan)`` was accepted
+    and born expired."""
+    from conformance.fakes.secret_store import FakeSecretStore
+    from conformance.protocols.secrets import LeaseError
+
+    s = FakeSecretStore()
+    s.put("a/b", {"k": "v"})
+    for ttl in (float("inf"), float("nan")):
+        with pytest.raises(LeaseError):
+            s.lease("a/b", ttl)
 
 
 def test_the_reference_broker_redacts_what_its_schema_does_not_name():

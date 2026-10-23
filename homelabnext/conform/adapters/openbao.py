@@ -261,8 +261,10 @@ class OpenBaoStore:
 
     def lease(self, path: str, ttl: float) -> Lease:
         _check_path(path)
-        if not isinstance(ttl, int | float) or not ttl > 0:
-            raise LeaseError("ttl must be positive")
+        if not isinstance(ttl, int | float) or not math.isfinite(ttl) or not ttl > 0:
+            # refused before anything is written: math.ceil(inf) would raise OverflowError only
+            # after the lease policy was already in place
+            raise LeaseError("ttl must be a positive, finite number of seconds")
         self.get(path)  # SecretNotFound before any token is minted
         self._ensure_policy()
         seconds = max(1, math.ceil(ttl))
