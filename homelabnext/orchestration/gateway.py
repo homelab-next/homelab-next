@@ -258,10 +258,7 @@ def _windows(
     :data:`MAX_WINDOW_S`: a run of jobs less than an hour apart (a week of first replay, a backlog
     after a gateway outage) is cut into windows a page budget can finish, rather than one window
     over all of the gateway's traffic that fails every run."""
-    spans = sorted(
-        (parse_iso(j["queued_at"]) - SLACK_S, parse_iso(j["finished_at"]) + SLACK_S, i, j)
-        for i, j in enumerate(jobs)
-    )
+    spans = sorted((*_span(j), i, j) for i, j in enumerate(jobs))
     merged: list[tuple[float, float, list[tuple[float, float, Mapping[str, Any]]]]] = []
     for lo, hi, _, job in spans:
         if merged and lo <= merged[-1][1] + MERGE_GAP_S:
@@ -279,6 +276,14 @@ def _windows(
             if inside:
                 out.append((a, b, inside))
     return out
+
+
+def _span(job: Mapping[str, Any]) -> tuple[float, float]:
+    """The time a job's turns can lie in, with :data:`SLACK_S` either side.  Ordered even when
+    the record's times are not (the store refuses those): a reversed span overlaps no window, so
+    its job would never be read or settled."""
+    q, f = parse_iso(job["queued_at"]), parse_iso(job["finished_at"])
+    return min(q, f) - SLACK_S, max(q, f) + SLACK_S
 
 
 def sync_turns(

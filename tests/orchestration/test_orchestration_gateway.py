@@ -201,3 +201,39 @@ def test_a_week_of_close_jobs_is_read_in_bounded_windows_settled_as_each_succeed
     got = sync_turns(store, gateway, now=T0)
     assert got["jobs"] == len(left) and got["settled"] == len(left) and store.unsettled() == []
     assert min(lo for lo, _ in asked) >= first_left - SLACK_S - 1  # only what was left
+
+
+def test_a_job_whose_times_are_reversed_is_still_read_and_settled():
+    """The store refuses such a record; this is the backstop. A queue time hours after the finish
+    made a span that overlapped no window, so the job was never read and never settled."""
+    job = copy.deepcopy(examples()[0]["data"])
+    finished = parse_iso(job["finished_at"])
+    job.update(queued_at=iso(finished + 3 * 3600), started_at=None)
+
+    class Store:
+        def __init__(self):
+            self.turns: list = []
+            self.settled: list = []
+
+        def unsettled(self):
+            return [job]
+
+        def add_turns(self, turns):
+            self.turns += turns
+
+        def settle(self, run_ids, now):
+            self.settled += run_ids
+
+    store, asked = Store(), []
+
+    def gateway(lo, hi):  # the job's one turn, ten seconds before it finished
+        asked.append((lo, hi))
+        if not lo <= finished - 10 <= hi:
+            return []
+        tags = [job["gateway_tag"]]
+        return [{"request_id": "req-r1", "request_tags": tags, "startTime": iso(finished - 10)}]
+
+    got = sync_turns(store, gateway, now=finished + 86400)
+    assert got == {"jobs": 1, "turns": 1, "settled": 1}
+    assert store.settled == [job["run_id"]] and [t["turn_id"] for t in store.turns] == ["req-r1"]
+    assert asked[0][0] <= finished - SLACK_S and asked[-1][1] >= finished + 3 * 3600

@@ -18,7 +18,8 @@ controller's (:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
   an earlier release left with two jobs on one tag is refused when it opens, :class:`ValueError`
   naming the count and how to fix it, since the index cannot be built over them);
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
-  24, an offset of 99 hours) is refused the same way: everything :meth:`consume` derives from a
+  24, an offset of 99 hours), or timestamps out of order (queued after started or finished,
+  started after finished, by more than :data:`ORDER_SLACK_S`), is refused the same way: everything :meth:`consume` derives from a
   record is computed before the database is touched, so the only other exceptions it raises are
   the store's own (:mod:`sqlite3`, the disk), which a caller may retry.
 
@@ -51,6 +52,7 @@ back) is :class:`ValueError` carrying SQLite's own message.
 from __future__ import annotations
 
 import functools
+import itertools
 import json
 import sqlite3
 import time
@@ -291,6 +293,9 @@ def _conflict(row: tuple[str, str, str], eid: str, data: Mapping[str, Any]) -> s
 
 #: the record's timestamps; each must name a real instant that UTC can represent
 _TIMES = ("queued_at", "started_at", "finished_at")
+#: how far the timestamps may be out of order (queued <= started <= finished): one second, what
+#: stamping each to the second on its own can invert; more is a record no window can cover
+ORDER_SLACK_S = 1.0
 
 
 def _instants(data: Mapping[str, Any]) -> dict[str, float]:
@@ -308,6 +313,13 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
             raise EventError(
                 "invalid event", [f"data.{key}: {value!r} is not a real date and time ({exc})"]
             ) from None
+    order = [k for k in _TIMES if k in out]
+    for early, late in itertools.pairwise(order):
+        if out[early] > out[late] + ORDER_SLACK_S:
+            raise EventError(
+                "invalid event",
+                [f"data.{early}: {data[early]!r} is after data.{late} {data[late]!r}"],
+            )
     return out
 
 

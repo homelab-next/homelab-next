@@ -86,7 +86,8 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   JSON, invalid, another type, a source other than `svc:llm-orchestrator`, an id reused with
   another body, a second record for a run under another id, a record whose `gateway_tag` another
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
-  the calendar does not, such as `2026-02-30`): `term`, so the bus's dead-letter stream is the
+  the calendar does not, such as `2026-02-30`, times out of order by more than a second: queued
+  after started or finished, started after finished): `term`, so the bus's dead-letter stream is the
   quarantine; only the id and the reason are logged. A body nested so deep that it parses but
   cannot be re-encoded is poison too. Anything else (a store failure, SQLite or the disk, or the
   environment: `jsonschema` missing, a schema file half-written by a deploy, a `$ref` that

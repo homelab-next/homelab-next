@@ -15,7 +15,7 @@ from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, cli, percentile, rollup
 from homelabnext.orchestration.pages import OrchestrationSite
 from homelabnext.orchestration.store import DEDUPE_SQL, TelemetryStore
-from homelabnext.status.model import parse_iso
+from homelabnext.status.model import iso, parse_iso
 
 
 def test_each_example_is_stored_once_and_a_redelivery_is_a_duplicate(store):
@@ -65,6 +65,33 @@ def test_a_pattern_valid_but_impossible_timestamp_is_refused_as_poison(store, ke
         store.consume(body(ev))
     assert f"data.{key}" in str(err.value) and "not a real date and time" in str(err.value)
     assert store.jobs() == []
+
+
+@pytest.mark.parametrize(
+    ("changes", "early", "late"),
+    [
+        ({"queued_at": "2026-01-01T05:00:00Z", "started_at": None}, "queued_at", "finished_at"),
+        ({"started_at": "2026-01-01T05:00:00Z"}, "started_at", "finished_at"),
+        ({"queued_at": "2026-01-01T05:00:00Z"}, "queued_at", "started_at"),
+    ],
+)
+def test_timestamps_out_of_order_are_refused_as_poison(store, changes, early, late):
+    """A queue time after the finish (or a start outside queue..finish) is no real job, and its
+    span would overlap no read window, so its turns would never settle."""
+    ev = copy.deepcopy(examples()[0])
+    ev["data"].update(changes)
+    with pytest.raises(EventError) as err:
+        store.consume(body(ev))
+    assert f"data.{early}" in str(err.value) and f"is after data.{late}" in str(err.value)
+    assert store.jobs() == []
+
+
+def test_timestamps_a_second_out_of_order_are_accepted(store):
+    """Each time stamped to the second on its own can invert by up to a second: not poison."""
+    ev = copy.deepcopy(examples()[0])
+    finished = parse_iso(ev["data"]["finished_at"])
+    ev["data"].update(started_at=iso(finished + 1), queued_at=iso(finished + 1))
+    assert store.consume(body(ev)).status == "processed"
 
 
 def test_a_record_older_than_retention_is_expired_not_processed(tmp_path):
