@@ -61,6 +61,7 @@ __all__ = [
     "MAX_PAGES",
     "PAGE_SIZE",
     "SPEND_LOGS_PATH",
+    "TURN_SOURCES",
     "SpendLogError",
     "SpendLogReader",
     "SpendLogTurnSource",
@@ -206,6 +207,11 @@ class SpendLogTurnSource:
             turn = turn_from_row(row, wanted)
             if turn is not None:
                 yield turn
+
+
+#: the turn source factories this module declares (``hnx orchestration turns --turn-source``
+#: calls only a declared one); ``secrets``: the options that hold a secret name
+TURN_SOURCES = {"make": {"secrets": ["key"]}}
 
 
 def make(

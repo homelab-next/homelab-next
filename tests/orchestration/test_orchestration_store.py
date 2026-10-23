@@ -613,7 +613,11 @@ SCHEMA_ID = "https://schemas.example.internal/homelabnext/events/agent.job.finis
 @pytest.mark.parametrize(
     "attrs, data, needle",
     [
-        ({"dataschema": "https://schemas.example.internal/homelabnext/ fake prompt text"}, {}, "dataschema"),
+        (
+            {"dataschema": "https://schemas.example.internal/homelabnext/ fake prompt text"},
+            {},
+            "dataschema",
+        ),
         ({"dataschema": SCHEMA_ID + "x"}, {}, "dataschema"),
         ({}, {"model": "fake prompt text: summarise the papers"}, "model"),
         ({}, {"model": "https://gateway.example.com/v1"}, "model"),

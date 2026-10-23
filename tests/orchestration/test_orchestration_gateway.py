@@ -234,6 +234,8 @@ def test_a_gateway_row_with_an_odd_model_name_never_wedges_the_sync(filled):
 # ----------------------------------------------------- which code --turn-source may name
 _SITE_ADAPTER = """
 import json, os
+from os.path import join as borrowed  # a callable defined elsewhere, re-exported
+TURN_SOURCES = {"make": {"secrets": ["credential_ref"]}, "borrowed": {}}
 class Src:
     def __init__(self, opts): self.opts = opts
     def turns(self, start, end, tags): return []
@@ -315,7 +317,7 @@ def test_a_declared_site_namespace_gets_its_options_and_secrets_only_by_name(
 def test_a_turn_source_whose_import_fails_any_way_is_exit_2(site_adapters, capsys):
     pkg = site_adapters / "pkgs" / "labsite"
     (pkg / "broken.py").write_text("raise TypeError('at import')\n")
-    for spec in ("labsite.broken:make", "labsite.turns:nothing", "labsite.missing:make"):
+    for spec in ("labsite.broken:make", "labsite.missing:make"):
         assert (
             _turns_cli(site_adapters, "--turn-source", spec, "--turn-source-namespace", "labsite")
             == 2
@@ -323,3 +325,36 @@ def test_a_turn_source_whose_import_fails_any_way_is_exit_2(site_adapters, capsy
         assert "cannot be imported" in capsys.readouterr().err
     assert _turns_cli(site_adapters, "--turn-source", "x:y", "--turn-source-namespace", "a..b") == 2
     assert "namespace" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "spec, why",
+    [
+        ("homelabnext.conform.adapters.ntfy:safe_urlopen", "not a declared turn source factory"),
+        ("homelabnext.conform.adapters.litellm_spend_log:SpendLogReader", "not a declared"),
+        ("labsite.turns:Src", "not a declared turn source factory"),  # defined there, undeclared
+        ("labsite.turns:borrowed", "not defined in labsite.turns"),  # declared, but re-exported
+    ],
+)
+def test_only_a_declared_factory_defined_in_its_module_is_called(site_adapters, capsys, spec, why):
+    argv = ["--turn-source", spec, "--turn-source-namespace", "labsite"]
+    never = "req=http://127.0.0.1:9/never"  # no-raw-endpoint: allow a value never sent
+    argv += ["--turn-source-option", never]
+    assert _turns_cli(site_adapters, *argv) == 2
+    assert why in capsys.readouterr().err
+    assert not (site_adapters / "opts.json").exists()
+
+
+@pytest.mark.parametrize("ns", ["homelabnext", "homelabnext.cli", "os", "os.path", "json", "sys"])
+def test_a_namespace_that_is_the_standard_library_or_homelabnext_is_refused(
+    site_adapters, capsys, ns
+):
+    argv = ["--turn-source", f"{ns}.x:make", "--turn-source-namespace", ns]
+    assert _turns_cli(site_adapters, *argv) == 2
+    assert "--turn-source-namespace" in capsys.readouterr().err
+
+
+def test_the_shipped_adapter_declares_its_factory():
+    from homelabnext.conform.adapters import litellm_spend_log
+
+    assert set(litellm_spend_log.TURN_SOURCES) == {"make"}

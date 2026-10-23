@@ -174,8 +174,12 @@ source chosen later still reads the jobs inside retention), or an adapter factor
 `password`, takes only a `secret:` name). Which adapter fills the slot is site configuration,
 but the code is not: the module must be under `homelabnext.conform.adapters` or a site package
 declared with `--turn-source-namespace PACKAGE` (repeatable, else
-`HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default), checked before
-anything is imported, and any failure of the import is a configuration error (exit 2). The factory returns a
+`HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES`, comma-separated; none by default; never a
+standard-library package or `homelabnext`), checked before anything is imported, and any failure
+of the import is a configuration error (exit 2). The factory must be one the module declares in
+`TURN_SOURCES` (`{"make": {"secrets": ["key"]}}`: the factory names, and per factory the options
+that hold a secret name) and defines itself, so a helper an adapter imports (a URL opener, a
+secret reader) is never called from a flag. The factory returns a
 `TurnSource` (`turns(start, end, tags)`, neutral turn records), and the `inference` suite's
 `turn-records` checks prove an adapter: every turn is exactly the neutral record, carries only
 the tags asked for, started in the window, and keeps its id across reads. Swapping the gateway is

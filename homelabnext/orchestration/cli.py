@@ -49,7 +49,7 @@ import re
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from conformance.protocols.events import EventsError
@@ -65,6 +65,9 @@ TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
 NAMESPACES_ENV = "HNX_ORCHESTRATION_TURN_SOURCE_NAMESPACES"
 #: the shipped adapters: a turn source is code from here or from a namespace the site declares
 ADAPTERS = "homelabnext.conform.adapters"
+#: an adapter module's declaration of its turn source factories: ``{name: {"secrets": [option,
+#: ...]}}``, ``secrets`` naming the options that hold a secret name (``secret:<name>``)
+FACTORIES = "TURN_SOURCES"
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _OPTION_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 #: an option key naming a credential: its value is a secret name, never the secret
@@ -286,10 +289,12 @@ def _connect(nats_jetstream, a):
 def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     """The :class:`~conformance.protocols.inference.TurnSource` that ``spec`` names, or None for
     ``none``: ``package.module:factory`` called with ``config`` (the options, as given).
-    The module must be in :data:`ADAPTERS` or in one of ``namespaces`` (the site's own packages),
-    checked before anything is imported, so a flag never runs other code.  :class:`ValueError`
-    for a spec outside them, a module whose import fails in any way, a factory that is missing,
-    takes other options, or gives no source."""
+    The module must be in :data:`ADAPTERS` or in one of ``namespaces`` (the site's own packages;
+    never a standard-library or ``homelabnext`` package), checked before anything is imported,
+    and the factory must be one the module declares in :data:`FACTORIES` and defines itself
+    (``factory.__module__`` is the module), so a flag never calls a helper an adapter happens to
+    import.  :class:`ValueError` for a spec outside them, a module whose import fails in any way,
+    a factory that is not declared or not its own, takes other options, or gives no source."""
     import importlib
 
     if spec == "none":
@@ -297,6 +302,12 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
     for ns in namespaces:
         if not _DOTTED.fullmatch(ns):
             raise ValueError(f"--turn-source-namespace {ns!r:.80}: a package name (a.b.c)")
+        top = ns.split(".")[0]
+        if top in sys.stdlib_module_names or top == "homelabnext":
+            raise ValueError(
+                f"--turn-source-namespace {ns}: the site's own package, never the standard "
+                f"library or homelabnext (whose adapters are {ADAPTERS}, always allowed)"
+            )
     mod, sep, attr = spec.partition(":")
     if not sep or not _DOTTED.fullmatch(mod) or not attr.isidentifier():
         raise ValueError(
@@ -310,13 +321,20 @@ def turn_source(spec: str, namespaces: Sequence[str] = (), **config):
             f"(declare a site package with --turn-source-namespace or ${NAMESPACES_ENV})"
         )
     try:
-        factory = getattr(importlib.import_module(mod), attr)
+        module = importlib.import_module(mod)
     except Exception as exc:  # any failure of the import (its top level ran) is configuration
         raise ValueError(
             f"--turn-source {spec!r:.120} cannot be imported: {type(exc).__name__}: {exc}"
         ) from None
-    if not callable(factory):
-        raise ValueError(f"--turn-source {spec!r:.120} cannot be imported: not a factory")
+    declared = getattr(module, FACTORIES, None)
+    if not isinstance(declared, Mapping) or attr not in declared:
+        raise ValueError(
+            f"--turn-source {spec!r:.120}: not a declared turn source factory (the module "
+            f"names its factories in {FACTORIES})"
+        )
+    factory = getattr(module, attr, None)
+    if not callable(factory) or getattr(factory, "__module__", None) != mod:
+        raise ValueError(f"--turn-source {spec!r:.120}: the factory is not defined in {mod}")
     try:
         source = factory(**config)
     except TypeError as exc:  # an option the adapter does not take
