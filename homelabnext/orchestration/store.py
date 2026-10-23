@@ -20,8 +20,9 @@ of the controller's service ids the store is configured with (``sources``, defau
   naming the count and how to fix it, since the index cannot be built over them);
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours), or timestamps out of order (queued after started or finished,
-  started after finished, by more than :data:`ORDER_SLACK_S`), or queued more than
-  :data:`MAX_JOB_S` (a week) before it finished, is refused the same way: everything
+  started after finished, by more than :data:`ORDER_SLACK_S`), a time before :data:`EARLIEST`
+  (a zero time), or queued more than ``retention_days`` before it finished, is refused the same
+  way (the controller bounds neither queue wait nor run time, so a long job is not refused): everything
   :meth:`consume` derives from a record is computed before the database is touched, so the only other exceptions it raises are
   the store's own (:mod:`sqlite3`, the disk), which a caller may retry.
 
@@ -198,7 +199,7 @@ class TelemetryStore:
                 [f"source {event['source']!r}: only {', '.join(self.sources)} reports jobs"],
             )
         eid, digest, data = event["id"], body_digest(event), event["data"]
-        finished = _instants(data)["finished_at"]
+        finished = _instants(data, self.retention_s)["finished_at"]
         now = self.clock()
         if finished < now - self.retention_s:
             return Delivery(eid, "expired")
@@ -375,16 +376,17 @@ _TIMES = ("queued_at", "started_at", "finished_at")
 #: clock is stepped between two stamps (an NTP correction); a second absorbs such a step, and more
 #: is a record whose span no read window covers as it stands
 ORDER_SLACK_S = 1.0
-#: the longest a job may take from queued to finished: a week, the replay a new durable reads.
-#: A longer record is no job (a Go zero time, 0001-01-01, behind a parse error the controller
-#: ignored) and is refused: its turns would be read over one window per hour of the span, millions
-#: of them, and :func:`.gateway._span` clamps to it as well
-MAX_JOB_S = 7 * 86400.0
+#: no job time is earlier than this: an earlier one is a zero time (Go's 0001-01-01 behind a parse
+#: error the controller ignored), not a job.  The controller bounds neither queue wait nor run
+#: time, so the span between the times is not bounded here; only an instant no job has is refused
+EARLIEST = parse_iso("2000-01-01T00:00:00Z")
 
 
-def _instants(data: Mapping[str, Any]) -> dict[str, float]:
+def _instants(data: Mapping[str, Any], retention_s: float) -> dict[str, float]:
     """The record's timestamps as epoch seconds; :class:`EventError` (poison) for one that matches
-    the schema's pattern but is no real date and time, or falls outside what UTC can express."""
+    the schema's pattern but is no real date and time, falls outside what UTC can express, is
+    before :data:`EARLIEST`, or is more than ``retention_s`` before the finish (older than
+    anything the store keeps)."""
     out: dict[str, float] = {}
     for key in _TIMES:
         value = data.get(key)
@@ -397,6 +399,10 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
             raise EventError(
                 "invalid event", [f"data.{key}: {value!r} is not a real date and time ({exc})"]
             ) from None
+        if out[key] < EARLIEST:
+            raise EventError(
+                "invalid event", [f"data.{key}: {value!r} is before 2000: a zero time, not a job's"]
+            )
     order = [k for k in _TIMES if k in out]
     for early, late in itertools.pairwise(order):
         if out[early] > out[late] + ORDER_SLACK_S:
@@ -405,12 +411,12 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
                 [f"data.{early}: {data[early]!r} is after data.{late} {data[late]!r}"],
             )
     first, last = out[order[0]], out[order[-1]]
-    if last - first > MAX_JOB_S:
+    if first < last - retention_s:
         raise EventError(
             "invalid event",
             [
-                f"data.{order[0]}: {data[order[0]]!r} is more than {MAX_JOB_S / 86400:g} days "
-                f"before data.{order[-1]} {data[order[-1]]!r}: no job takes that long"
+                f"data.{order[0]}: {data[order[0]]!r} is more than {retention_s / 86400:g} days "
+                f"before data.{order[-1]} {data[order[-1]]!r}: older than the store keeps"
             ],
         )
     return out
@@ -418,8 +424,8 @@ def _instants(data: Mapping[str, Any]) -> dict[str, float]:
 
 __all__ = [
     "DEFAULT_RETENTION_DAYS",
+    "EARLIEST",
     "JOURNAL_MODE",
-    "MAX_JOB_S",
     "STORE_ERRORS",
     "TelemetryStore",
     "dedupe_sql",

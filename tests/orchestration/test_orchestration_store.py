@@ -97,19 +97,40 @@ def test_timestamps_a_second_out_of_order_are_accepted(store):
 
 
 @pytest.mark.parametrize(
-    "queued_at",
-    ["0001-01-01T00:00:00Z", "2025-12-24T02:59:59Z"],  # a Go zero time; a week and a second
+    "queued_at, started_at",
+    [
+        ("2025-12-23T02:00:00Z", None),  # held in the queue eight days, then cancelled
+        ("2025-12-23T01:00:00Z", "2025-12-23T02:00:00Z"),  # an eight-day run: no ceiling
+        ("2025-10-03T03:00:01Z", "2025-12-30T03:00:00Z"),  # queued just inside retention
+    ],
 )
-def test_a_job_queued_more_than_a_week_before_it_finished_is_poison(store, queued_at):
-    """The controller emits Go's zero time behind a parse error it ignored; the span from it to
-    the finish was read as one window per hour, seventeen million of them, wedging every pass."""
+def test_a_job_queued_or_running_for_days_is_stored(store, queued_at, started_at):
+    """The controller bounds neither queue wait nor run time (no wall-clock ceiling; queued jobs
+    survive restarts and holds, and one cancelled in the queue still reports): a week-long job is
+    a real record, not poison."""
+    ev = copy.deepcopy(examples()[0])
+    ev["data"].update(
+        queued_at=queued_at, started_at=started_at, finished_at="2025-12-31T03:00:00Z"
+    )
+    assert store.consume(body(ev)).status == "processed"
+
+
+@pytest.mark.parametrize(
+    "queued_at, needle",
+    [
+        ("0001-01-01T00:00:00Z", "before 2000"),  # Go's zero time behind a parse error
+        ("1999-12-31T23:59:59Z", "before 2000"),
+        ("2025-10-02T02:59:59Z", "more than 90 days before data.finished_at"),  # past retention
+    ],
+)
+def test_a_job_with_an_impossible_queue_time_is_poison(store, queued_at, needle):
+    """Only an instant no job has is refused: a zero time, or a queue time older than anything
+    the store keeps; its span would otherwise be read as one window per hour back to it."""
     ev = copy.deepcopy(examples()[0])
     ev["data"].update(queued_at=queued_at, started_at=None, finished_at="2025-12-31T03:00:00Z")
-    with pytest.raises(EventError, match="no job takes that long"):
+    with pytest.raises(EventError, match=needle):
         store.consume(body(ev))
     assert store.jobs() == []
-    ev["data"].update(queued_at="2025-12-24T03:00:00Z")  # a week exactly: a long job, stored
-    assert store.consume(body(ev)).status == "processed"
 
 
 def test_a_record_older_than_retention_is_expired_not_processed(tmp_path):

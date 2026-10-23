@@ -104,9 +104,11 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   run already holds (the tag must name one job, or two jobs' turns would merge), a timestamp the pattern accepts but
   the calendar does not, such as `2026-02-30`, times out of order by more than a second (queued
   after started or finished, started after finished: the controller stamps all three from one
-  clock, so only a wall-clock step between two stamps inverts them), a job queued more than a week
-  before it finished (no job takes that long; it is a zero time behind a parse error, and its turns
-  would be read over millions of one-hour windows)): `term`, so the bus's dead-letter stream is the
+  clock, so only a wall-clock step between two stamps inverts them), a time before 2000 (a zero
+  time behind a parse error, not a job's), or a job queued more than the retention before it
+  finished (older than anything the store keeps)). A long job is not poison: the controller bounds
+  neither queue wait nor run time (no wall-clock ceiling; a queued job survives restarts and holds,
+  and one cancelled in the queue still reports)): `term`, so the bus's dead-letter stream is the
   quarantine; only the id and the reason are logged. A body nested so deep that it parses but
   cannot be re-encoded is poison too. Anything else (a store failure, SQLite or the disk, or the
   environment: `jsonschema` missing, a schema file half-written by a deploy, a `$ref` that
@@ -125,8 +127,9 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
   backfill or a replay of the outbox.
 - **Turns** (`hnx orchestration turns --turn-source ...`): for every job whose turns are not
-  settled, read the turn source over windows covering the jobs (from queue time less two minutes to finish time plus
-  two, merged when within an hour, but cut into windows of at most an hour so a week of replay
+  settled, read the turn source over windows covering the jobs (from start time less two minutes to finish
+  time plus two, since no turn happens while a job is queued, around the finish only for a job
+  that never started, and never earlier than the retention cutoff; merged when within an hour, but cut into windows of at most an hour so a week of replay
   or a backlog after an outage never becomes one window over all the gateway's traffic), oldest
   first; keep the turns that carry a job's tag, and rewrite them by the call's id. A
   job is settled ten minutes after it finished (a gateway may write its log in batches), as soon

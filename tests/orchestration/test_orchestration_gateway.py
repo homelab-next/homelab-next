@@ -8,13 +8,13 @@ allow-list, the key, the transport, paging) are tested in
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 from orch_helpers import NEVER, T0, FakeSpendLogs, body, examples, turn_source
 
 from conformance.protocols.inference import TURN_FIELDS, TurnSourceError
 from homelabnext.orchestration.gateway import MAX_WINDOW_S, SLACK_S, _span, sync_turns
-from homelabnext.orchestration.store import MAX_JOB_S
 from homelabnext.status.model import iso, parse_iso
 
 
@@ -41,13 +41,13 @@ def test_sync_joins_turns_by_tag_and_settles_only_finished_jobs(filled):
     with FakeSpendLogs() as gw:
         got = sync_turns(filled, turn_source(gw), now=just_after)
     assert got == {"jobs": 4, "turns": 4, "settled": 3}
-    # the four jobs sit within an hour of each other: read together from the first queue time
-    # (less the slack) to now, in windows of at most an hour
+    # the four jobs sit within an hour of each other: read together from the first start time
+    # (00:00:12, less the slack) to now, in windows of at most an hour
     assert sorted({(r["start_date"], r["end_date"]) for r in gw.requests}) == [
-        ("2025-12-31 23:58:00", "2026-01-01 00:44:00"),
-        ("2026-01-01 00:44:00", "2026-01-01 01:30:00"),
-        ("2026-01-01 01:30:00", "2026-01-01 02:16:00"),
-        ("2026-01-01 02:16:00", "2026-01-01 03:01:00"),
+        ("2025-12-31 23:58:12", "2026-01-01 00:44:09"),
+        ("2026-01-01 00:44:09", "2026-01-01 01:30:06"),
+        ("2026-01-01 01:30:06", "2026-01-01 02:16:03"),
+        ("2026-01-01 02:16:03", "2026-01-01 03:01:00"),
     ]
     turns = filled.turns()
     assert {t: [x["turn_id"] for x in v] for t, v in turns.items()} == {
@@ -117,13 +117,15 @@ def test_a_week_of_close_jobs_is_read_in_bounded_windows_settled_as_each_succeed
 
 
 def test_a_job_whose_times_are_reversed_is_still_read_and_settled():
-    """The store refuses such a record; this is the backstop. A queue time hours after the finish
+    """The store refuses such a record; this is the backstop. A start hours after the finish
     made a span that overlapped no window, so the job was never read and never settled."""
     job = copy.deepcopy(examples()[0]["data"])
     finished = parse_iso(job["finished_at"])
-    job.update(queued_at=iso(finished + 3 * 3600), started_at=None)
+    job.update(started_at=iso(finished + 3 * 3600))  # started hours after it finished
 
     class Store:
+        retention_s = 90 * 86400.0
+
         def __init__(self):
             self.turns: list = []
             self.settled: list = []
@@ -152,14 +154,33 @@ def test_a_job_whose_times_are_reversed_is_still_read_and_settled():
     assert asked[0][0] <= finished - SLACK_S and asked[-1][1] >= finished + 3 * 3600
 
 
-def test_a_span_never_reaches_further_back_than_the_longest_job():
-    """The store refuses such a record; this is the backstop. A queue time of 0001-01-01 (Go's
-    zero time) made a span of some seventeen million one-hour read windows."""
+def test_a_span_starts_when_the_job_started_and_never_before_retention():
+    """No turn happens while a job is queued: the span starts at its start (less the slack), so a
+    job held in the queue for days is not read over every hour it waited, and one that never
+    started is read only around its finish.  Whatever the record says, the span never reaches
+    past the retention cutoff (a zero time would otherwise be millions of one-hour windows)."""
     job = copy.deepcopy(examples()[0]["data"])
     finished = parse_iso(job["finished_at"])
-    job.update(queued_at="0001-01-01T00:00:00Z", started_at=None)
-    lo, hi = _span(job)
-    assert lo == finished - MAX_JOB_S - SLACK_S and hi == finished + SLACK_S
+    floor = finished - 90 * 86400
+    job.update(queued_at=iso(finished - 8 * 86400), started_at=iso(finished - 3600))
+    assert _span(job, floor) == (finished - 3600 - SLACK_S, finished + SLACK_S)
+    job.update(started_at=None)  # held, then cancelled in the queue
+    assert _span(job, floor) == (finished - SLACK_S, finished + SLACK_S)
+    job.update(queued_at="0001-01-01T00:00:00Z", started_at="0001-01-01T00:00:00Z")
+    assert _span(job, floor) == (floor - SLACK_S, finished + SLACK_S)
+
+
+def test_a_job_held_in_the_queue_for_days_is_read_from_its_start(filled):
+    """Regression: the span ran from the queue time, so a job held a week read a week of the
+    gateway's traffic for turns it could not have had while it waited."""
+    job = filled.unsettled()[0]
+    finished = parse_iso(job["finished_at"])
+    with filled._db() as db:  # the store accepts such a record now; set one up directly
+        doc = dict(job, queued_at=iso(finished - 6 * 86400))
+        db.execute("UPDATE jobs SET doc = ? WHERE run_id = ?", (json.dumps(doc), job["run_id"]))
+    gateway = Source(lambda lo, hi, tags: [])
+    sync_turns(filled, gateway, now=T0)
+    assert min(lo for lo, _ in gateway.asked) >= parse_iso(job["started_at"]) - SLACK_S - 1
 
 
 def test_a_turn_with_a_tag_no_job_asked_for_is_not_joined(filled):

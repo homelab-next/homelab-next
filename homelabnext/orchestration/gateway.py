@@ -24,7 +24,7 @@ from typing import Any
 from conformance.protocols.inference import TurnSource
 from homelabnext.status.model import parse_iso
 
-from .store import MAX_JOB_S, TelemetryStore
+from .store import TelemetryStore
 
 #: a job's turns are re-read until it has been finished this long (a gateway may write its
 #: per-call log in batches)
@@ -38,14 +38,14 @@ MAX_WINDOW_S = 3600.0
 
 
 def _windows(
-    jobs: Iterable[Mapping[str, Any]],
+    jobs: Iterable[Mapping[str, Any]], floor: float
 ) -> list[tuple[float, float, list[Mapping[str, Any]]]]:
     """Read windows covering every job, oldest first, each with the jobs whose span it overlaps.
     Spans closer than :data:`MERGE_GAP_S` are read together, but no window is longer than
     :data:`MAX_WINDOW_S`: a run of jobs less than an hour apart (a week of first replay, a backlog
     after a gateway outage) is cut into windows a page budget can finish, rather than one window
     over all of the gateway's traffic that fails every run."""
-    spans = sorted((*_span(j), i, j) for i, j in enumerate(jobs))
+    spans = sorted((*_span(j, floor), i, j) for i, j in enumerate(jobs))
     merged: list[tuple[float, float, list[tuple[float, float, Mapping[str, Any]]]]] = []
     for lo, hi, _, job in spans:
         if merged and lo <= merged[-1][1] + MERGE_GAP_S:
@@ -65,14 +65,17 @@ def _windows(
     return out
 
 
-def _span(job: Mapping[str, Any]) -> tuple[float, float]:
-    """The time a job's turns can lie in, with :data:`SLACK_S` either side.  Ordered even when
-    the record's times are not (the store refuses those): a reversed span overlaps no window, so
-    its job would never be read or settled.  Never longer than :data:`.store.MAX_JOB_S` before the
-    finish (the store refuses a longer job too): a queue time of 0001-01-01 would otherwise be
-    read as some seventeen million one-hour windows, and no pass would ever reach the next job."""
-    q, f = parse_iso(job["queued_at"]), parse_iso(job["finished_at"])
-    return max(min(q, f), f - MAX_JOB_S) - SLACK_S, max(q, f) + SLACK_S
+def _span(job: Mapping[str, Any], floor: float) -> tuple[float, float]:
+    """The time a job's turns can lie in, with :data:`SLACK_S` either side: from its start (no
+    turn happens while it is queued, however long it waited; a job that never started is read
+    around its finish only) to its finish.  Ordered even when the record's times are not (the
+    store refuses those): a reversed span overlaps no window, so its job would never be read or
+    settled.  Never earlier than ``floor``, the retention cutoff (turns before it are purged
+    anyway): a start of 0001-01-01 would otherwise be read as some seventeen million one-hour
+    windows, and no pass would ever reach the next job."""
+    f = parse_iso(job["finished_at"])
+    s = parse_iso(job["started_at"]) if job.get("started_at") else f
+    return max(min(s, f), floor) - SLACK_S, max(s, f) + SLACK_S
 
 
 def sync_turns(
@@ -90,7 +93,7 @@ def sync_turns(
     outside the turn shape is refused by the store (:class:`ValueError`); what was read and
     settled before either stays, and the next run reads the jobs still unsettled."""
     pending = store.unsettled()
-    windows = _windows(pending)
+    windows = _windows(pending, now - store.retention_s)
     left = Counter(j["run_id"] for _, _, inside in windows for j in inside)
     seen: set[str] = set()  # a turn read by two adjacent windows is one turn
     settled = 0
