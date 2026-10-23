@@ -252,9 +252,9 @@ backfilled examples) and reviews, each one a `review` event file in its sidecar 
 `homelabnext/reviews.py`:
 
 ```yaml
-# lessons/<uid>.events/20261019T000000Z-review-agent-j8-lead.yml
+# lessons/<uid>.events/20261019T000000Z-review-agent-assessment-lead.yml
 event: review
-by: agent:j8-lead                # issuer:subject
+by: agent:assessment-lead        # issuer:subject
 kind: agent                      # agent | human
 role: check                      # check | audit | approve
 date: 2026-10-19
