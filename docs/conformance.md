@@ -171,11 +171,32 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` and `tests/conform/test_mutants.py` assert each mutant is caught **by that
-check**, so a regression in a suite shows up as a named check, not as silence.  The named check
+`hnx conform mutants` and `tests/conform/test_conform_mutants.py` assert each mutant is caught
+**by that check**, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes (no `requires`, not `skippable`): a mutant caught only by a
 check that can skip proves nothing about a target on which it skips, and the report counts it as
 not caught.  Each conformance gap fixed in a suite ships with the mutant that reproduces it.
+
+**Model the Protocol's clauses, not only the defects you expect.**  A suite that pins only what
+its own mutants model passes anything else: a review wrote sixteen defects, each breaking one
+sentence of a Protocol docstring, and every one passed its suite - a broker whose `submit` skipped
+the allowlist (anyone could queue any command and run it as its owner), an event bus whose stale
+`ack` swallowed the live redelivery's `nack` (the reference fake itself did this), records whose
+`approve` overturned a denial, secrets that read version `0` as the latest or deleted only the
+newest version, an identity provider that matched scopes as substrings, an object store whose
+`delete` reached every bucket.  So, when writing or reviewing a suite:
+
+* walk the Protocol docstring sentence by sentence and name the check that fails a subject
+  breaking it;
+* a second way into the same operation (the broker's `submit`/`run` next to `call`) gets every
+  gate the first one has;
+* probe the boundary values the type allows, not only the obvious bad one (version `0` and `-1`
+  as well as `9`; a `nan` or `inf` ttl as well as `-5`);
+* write state twice before checking it is all gone, and change what the caller handed over after
+  the call.
+
+`tests/conform/test_conform_protocol_mutants.py` keeps that review's defects as a table (broken
+fake -> the check that must fail it), each also registered in `MUTANTS`.
 
 The suites cover the protocol, not the handler behind it.  The broker's `ArgSpec` checks the
 shape of arguments, not their content: a validated `str` is still untrusted caller input, and the

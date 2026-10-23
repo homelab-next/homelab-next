@@ -90,6 +90,8 @@ has no section below.
 - Status hub: a pushed observation dated in the future is clamped to the hub's clock (and the skew recorded), so it still goes stale; only the service that declares a push source may publish for it, and only into its own module; an agent-activity sender may only write its own sessions.
 - Reviews: the content digest no longer covers the record's id, so allocating a number for an `LL-NEW` record keeps its reviews current; a requirement's `min` counts distinct reviewers, not reviews.
 - Invariant X-06 never checked `det:` ids: it read a top-level `det_map.yml` under a `detections:` key instead of `detections/det_map.yml` `entries:`. `detections lint-ids` now skips test fixtures and runs in `make detections` and CI; `hnx docs systems check` (L-05) now runs in CI.
+- The reference event bus fake settled in-flight state by message instead of by delivery, so a stale delivery (one handed out before a reopen, or settled again after its redelivery was fetched) settled the live redelivery: a crashed process's late `ack` swallowed the new process's `nack` and the message was lost. The reference identity provider fake accepted a `nan` or `inf` ttl (an immortal token).
+- The OpenBao secrets adapter passed `version=0` to KV v2, which reads it as "latest": `get(path, version=0)` returned the newest secret. Versions below 1 are now refused as absent.
 
 ### Security
 
@@ -112,6 +114,7 @@ has no section below.
 - MCP catalog check and import treat `--user user:password` and `--user=user:password` (and `--username`, `--proxy-user`, an attached `-uuser:password`, and httpie's `-a user:password` with its attached forms; short flags are case-sensitive, and after `-a` a listen address on an IP or `localhost` and a path whose host is dotted, an IP, `localhost` or a drive letter are not credentials) as credentials, like `-u`; the importer kept the literal in the draft's args.
 - `hnx mcp serve --scope-from-profile` requires `--policy` and `--lock` and verifies the profile against them (catalog check refuses a record that passes the profile without both); verified only against the ceiling stored in the file, a profile rewritten with a recomputed digest widened the server's scope.
 - No MCP record or grant may set `SSLKEYLOGFILE` (`DENIED_ENV`): Python's ssl, curl, NSS and Node write every TLS session's keys to the file it names.
+- Conformance suites closed against protocol-violating subjects that passed them (16 found in review, each now a mutant, `tests/conform/test_conform_protocol_mutants.py`): the broker suite checks the allowlist, argument validation and secret redaction on `submit`/`run` as well as `call` (a broker that let anyone queue and run any command passed); records pins that a decision is final (`decisions-are-final`: no approving a denied note or denying an approved one); secrets asks for versions 0 and negative, deletes two versions, checks a bad-version error on a path that holds the value, and that `put` stores a copy (`stored-data-is-a-copy`); idp matches scopes exactly, rejects a revoked token when a scope is required, and refuses a `nan`/`inf` ttl; object-store holds `head` and `delete` to NoSuchKey/NoSuchBucket and deletes in one bucket only; events adds `stale-delivery-settles-nothing` and `new-consumer-starts-at-creation`.
 
 ### Added
 
