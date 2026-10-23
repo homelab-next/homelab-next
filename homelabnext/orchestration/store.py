@@ -18,6 +18,9 @@ of the controller's service ids the store is configured with (``sources``, defau
   the turns joined by a tag belong to exactly one job (a unique index enforces it too; a store
   an earlier release left with two jobs on one tag is refused when it opens, :class:`ValueError`
   naming the count and how to fix it, since the index cannot be built over them);
+* an envelope attribute the envelope schema does not declare (a CloudEvents extension, which
+  would be free text beside the closed ``data``: :data:`ENVELOPE_ATTRIBUTES`) is refused the same
+  way, so the stored and exported envelope is names and numbers only;
 * a value the schema's pattern accepts but that is not real (a timestamp of 2026-02-30, an hour
   24, an offset of 99 hours), or timestamps out of order (queued after started or finished,
   started after finished, by more than :data:`ORDER_SLACK_S`), a time before :data:`EARLIEST`
@@ -114,6 +117,16 @@ _SOURCE = re.compile(r"svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 JOURNAL_MODE = "DELETE"
 #: the store's own failures (the database, the disk): a caller retries these, never a record's
 STORE_ERRORS = (sqlite3.Error, OSError)
+#: the envelope attributes a job record may carry: those ``schemas/events/envelope.schema.json``
+#: declares, each a constant, an id or a pattern.  The envelope is open to CloudEvents
+#: extensions, and an extension is free text this store would keep and export, so for this type
+#: any other attribute is refused (poison), as ``data`` refuses any field its schema does not name
+ENVELOPE_ATTRIBUTES = frozenset(
+    {
+        "specversion", "id", "source", "type", "time", "subject", "severity", "datacontenttype",
+        "dataschema", "correlationid", "assetid", "assetowner", "assetcriticality", "data",
+    }
+)  # fmt: skip
 #: (table, the time column retention is measured on)
 _RETAINED = (("jobs", "finished"), ("turns", "started"))
 
@@ -195,6 +208,12 @@ class TelemetryStore:
         """Store one ``homelabnext.agent.job.finished`` event (see the module docstring); raises
         :class:`EventError` for a body that must never be retried (poison)."""
         event = decode_event(body, types=[FINISHED_EVENT])
+        extra = sorted(set(event) - ENVELOPE_ATTRIBUTES)
+        if extra:
+            raise EventError(
+                "invalid event",
+                [f"envelope attribute {k!r:.40}: not one the envelope declares" for k in extra],
+            )
         if event["source"] not in self.sources:
             raise EventError(
                 "not the controller's job record",
@@ -427,6 +446,7 @@ def _instants(data: Mapping[str, Any], retention_s: float) -> dict[str, float]:
 __all__ = [
     "DEFAULT_RETENTION_DAYS",
     "EARLIEST",
+    "ENVELOPE_ATTRIBUTES",
     "JOURNAL_MODE",
     "STORE_ERRORS",
     "TelemetryStore",

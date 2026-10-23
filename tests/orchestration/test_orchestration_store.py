@@ -14,6 +14,7 @@ from orch_helpers import BLANK, CONTROLLER_EXAMPLE, DOTTED_EXAMPLE, EXAMPLES, T0
 
 from homelabnext.events.envelope import EventError
 from homelabnext.orchestration import ROLLUP_SCHEMA, cli, percentile, rollup
+from homelabnext.orchestration.export import export_lines
 from homelabnext.orchestration.pages import OrchestrationSite
 from homelabnext.orchestration.store import DEFAULT_RETENTION_DAYS, TelemetryStore, dedupe_sql
 from homelabnext.status.model import iso, parse_iso
@@ -541,3 +542,45 @@ def test_the_job_source_is_configuration_and_every_other_source_is_refused(tmp_p
     for bad in ([], ["llm-orchestrator"], ["svc:Bad Name"], ["svc:x", ""]):
         with pytest.raises(ValueError, match="sources"):
             TelemetryStore(tmp_path / "c.db", clock=lambda: T0, sources=bad)
+
+
+@pytest.mark.parametrize(
+    "attrs, needle",
+    [
+        ({"comment": "fake free text: the prompt was ..."}, "comment"),
+        ({"x": "1"}, "'x'"),
+        ({"subject": "run-0001 and then the user prompt text"}, "subject"),
+        ({"subject": "https://upstream.example.com/v1"}, "subject"),
+    ],
+)
+def test_the_envelope_is_closed_an_extension_or_a_free_text_subject_is_poison(store, attrs, needle):
+    """data is closed, and so is the envelope of this type: an extension attribute or a subject
+    that is not a run id is refused (poison), so the stored and exported envelope is names and
+    numbers only, as the data is."""
+    ev = examples()[0] | attrs
+    with pytest.raises(EventError) as exc:
+        store.consume(body(ev))
+    assert needle in "\n".join(exc.value.problems)
+    assert store.jobs() == []
+    for lines in export_lines(store):  # nothing of it is stored, so nothing is exported
+        raise AssertionError(lines)
+
+
+def test_every_envelope_attribute_an_example_sends_is_allowed(store):
+    """The attributes the controller sends (subject as the run id, severity, correlationid) are
+    the schema's own: closing the envelope refuses none of them."""
+    ev = json.loads((EXAMPLES / CONTROLLER_EXAMPLE).read_text(encoding="utf-8"))
+    assert store.consume(body(ev)).status == "processed"
+    (line,) = export_lines(store)
+    assert set(json.loads(line)["event"]) == {
+        "specversion", "id", "source", "type", "time", "subject", "correlationid", "data",
+    }  # fmt: skip
+
+
+def test_the_allowed_envelope_attributes_are_the_envelope_schemas_own():
+    from homelabnext.orchestration.store import ENVELOPE_ATTRIBUTES
+
+    envelope = json.loads(
+        (EXAMPLES.parents[0] / "envelope.schema.json").read_text(encoding="utf-8")
+    )
+    assert set(envelope["properties"]) == ENVELOPE_ATTRIBUTES
