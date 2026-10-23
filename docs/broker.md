@@ -269,15 +269,22 @@ refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window
 quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
 ```
 
-**Notifications from `serve`.** `hnx broker serve --notify-topic TOPIC` pages approval requests
-(see [Approvals](#approvals)) and the lane-quota notices through ntfy: the endpoint is the
-`notify` capability (`--registry services.yml`, else `HNX_ENDPOINT_NOTIFY`), never a literal; the
-access token is a secret reference, `--notify-token secret:broker/ntfy-token` (or
-`HNX_BROKER_NOTIFY_TOKEN`), whose value is read at send time from the environment variable it
+**Notifications from `serve`.** `hnx broker serve` pages approval requests (see
+[Approvals](#approvals)) and the lane-quota notices through ntfy when it has a topic:
+`$HNX_BROKER_NOTIFY_TOPIC`, `--notify-topic-file FILE` (or `$HNX_BROKER_NOTIFY_TOPIC_FILE`), or
+`--notify-topic TOPIC`, which is visible to every user in `ps` (if the ntfy server lets anonymous
+readers subscribe, the topic is a secret: use the file or the environment). The endpoint is the
+`notify` capability (`--registry services.yml`, else `HNX_ENDPOINT_NOTIFY`), never a literal. The
+access token is a secret reference, `--notify-token` (or `HNX_BROKER_NOTIFY_TOKEN`) naming
+`secret:broker/ntfy-token`, whose value is read at send time from the environment variable it
 names (`HNX_SECRET_BROKER_NTFY_TOKEN`, from a systemd credential or env file); a literal token is
-refused. State lives in `<state>/notify.json`; at most 20 messages an hour, each agent on its own
-budget. Without `--notify-topic` there are no notifications, and a lane-quota refusal is logged
-at WARNING once per agent and lane instead.
+refused. `serve` resolves the endpoint and checks the variable at start, and refuses a plaintext
+`http` endpoint to another host when a token would cross it, so a notifier that could never send
+stops it instead of failing every page; a send that fails later is logged at WARNING (at most
+every five minutes) and audited `notify-failed`. State lives in `<state>/notify.json` (a settled
+request's page is dropped from it); each agent may send 20 messages an hour on its own budget,
+and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
+refusal is logged at WARNING once per agent and lane instead.
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
 user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS

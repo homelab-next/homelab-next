@@ -228,3 +228,70 @@ def test_without_a_notifier_a_lane_quota_refusal_is_logged_once(tmp_path, caplog
                 svc.call("profile:triage", "memory.write", {"name": name, "content": "x"})
     hits = [r for r in caplog.records if "refuses its writes" in r.getMessage()]
     assert len(hits) == 1 and hits[0].levelname == "WARNING"
+
+
+def _notify_args(tmp_path, **over):
+    import argparse
+
+    doc = {"state": str(tmp_path / "state"), "notify_topic": "broker", "notify_topic_file": None,
+           "notify_token": "secret:broker/ntfy-token", "registry": None}  # fmt: skip
+    return argparse.Namespace(**{**doc, **over})
+
+
+def test_serve_checks_its_notify_endpoint_at_start(tmp_path, monkeypatch, caplog):
+    """A notifier that could never send started anyway: every page failed, leaving only an
+    audit record, and a token could be configured over plaintext."""
+    from homelabnext.broker.cli import NOTIFY_ALL_AGENTS_PER_HOUR, notifier_from_args
+
+    monkeypatch.delenv("HNX_ENDPOINT_NOTIFY", raising=False)
+    monkeypatch.setenv("HNX_SECRET_BROKER_NTFY_TOKEN", "fake-ntfy-token-3c1")
+    with pytest.raises(ValueError, match="notify endpoint"):
+        notifier_from_args(_notify_args(tmp_path))
+    plain = "http://n.svc.example.internal:8080"  # no-raw-endpoint: allow override syntax
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", plain)
+    with pytest.raises(ValueError, match="plaintext"):
+        notifier_from_args(_notify_args(tmp_path))
+    assert notifier_from_args(_notify_args(tmp_path, notify_token=None)) is not None
+    secure = "https://n.svc.example.internal:8443"  # no-raw-endpoint: allow override syntax
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", secure)
+    monkeypatch.delenv("HNX_SECRET_BROKER_NTFY_TOKEN")
+    with pytest.raises(ValueError, match="HNX_SECRET_BROKER_NTFY_TOKEN is not set"):
+        notifier_from_args(_notify_args(tmp_path))
+    monkeypatch.setenv("HNX_SECRET_BROKER_NTFY_TOKEN", "fake-ntfy-token-3c1")
+    with pytest.raises(ValueError, match="topic"):
+        notifier_from_args(_notify_args(tmp_path, notify_topic="no spaces/allowed"))
+    n = notifier_from_args(_notify_args(tmp_path))
+    assert n.rate_limit.max_sends_all_scopes == NOTIFY_ALL_AGENTS_PER_HOUR, "a global backstop"
+
+
+def test_the_notify_topic_can_stay_out_of_the_process_list(tmp_path, monkeypatch):
+    from homelabnext.broker.cli import notifier_from_args
+
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", "https://n.svc.example.internal:8443")
+    (tmp_path / "topic").write_text("hnx-ops-7f3\n")
+    n = notifier_from_args(_notify_args(tmp_path, notify_topic=None, notify_token=None,
+                                        notify_topic_file=str(tmp_path / "topic")))  # fmt: skip
+    assert n.sender.default_topic == "hnx-ops-7f3"
+    monkeypatch.setenv("HNX_BROKER_NOTIFY_TOPIC", "from-env")
+    n = notifier_from_args(_notify_args(tmp_path, notify_topic=None, notify_token=None))
+    assert n.sender.default_topic == "from-env"
+
+
+def test_a_failed_notification_is_logged_at_most_every_few_minutes(tmp_path, caplog):
+    from homelabnext.broker.service import BrokerService, load_manifest
+
+    class Down:
+        def register_pair(self, *a):
+            pass
+
+        def report(self, *a, **k):
+            raise RuntimeError("ntfy down")
+
+    manifest, docs = load_manifest(EXAMPLE)
+    svc = BrokerService(tmp_path / "s", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+                        data_root=tmp_path / "d", notifier=Down(), page_timers=False)  # fmt: skip
+    with caplog.at_level("WARNING", logger="homelabnext.broker.service"):
+        for _ in range(3):
+            svc.submit("profile:triage", "service.restart", {"grace_s": 1}, target="svc:queue")
+    hits = [r for r in caplog.records if "could not be sent" in r.getMessage()]
+    assert len(hits) == 1

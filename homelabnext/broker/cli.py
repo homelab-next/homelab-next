@@ -54,6 +54,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -125,10 +126,11 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--timeout", type=float, default=None, help="seconds to read one request")
     srv.add_argument(
         "--notify-topic",
-        default=os.environ.get("HNX_BROKER_NOTIFY_TOPIC"),
         help="page the approver (approval requests) and the operator (lane quotas) on this ntfy "
-        "topic; the endpoint is the notify capability (--registry, else HNX_ENDPOINT_NOTIFY)",
+        "topic (visible in ps: prefer $HNX_BROKER_NOTIFY_TOPIC or --notify-topic-file); the "
+        "endpoint is the notify capability (--registry, else HNX_ENDPOINT_NOTIFY)",
     )
+    srv.add_argument("--notify-topic-file", help="read the ntfy topic from this file's first line")
     srv.add_argument(
         "--notify-token",
         default=os.environ.get("HNX_BROKER_NOTIFY_TOKEN"),
@@ -284,14 +286,38 @@ def _usage_line(row: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: what serve's notifier may send: per agent, and over all agents together (a loose backstop)
+NOTIFY_PER_AGENT_PER_HOUR = 20
+NOTIFY_ALL_AGENTS_PER_HOUR = 60
+
+
+def _notify_topic(args) -> str | None:
+    """The topic from ``--notify-topic`` (visible in ``ps``), else ``$HNX_BROKER_NOTIFY_TOPIC``,
+    else the first line of ``--notify-topic-file`` (or ``$HNX_BROKER_NOTIFY_TOPIC_FILE``): the
+    file keeps a topic that anonymous readers could subscribe to out of the process list."""
+    topic = getattr(args, "notify_topic", None) or os.environ.get("HNX_BROKER_NOTIFY_TOPIC")
+    path = getattr(args, "notify_topic_file", None) or os.environ.get(
+        "HNX_BROKER_NOTIFY_TOPIC_FILE"
+    )
+    if not topic and path:
+        try:
+            topic = Path(path).read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        except (OSError, IndexError, UnicodeDecodeError):
+            raise ValueError(f"--notify-topic-file {path}: no topic can be read") from None
+    return topic or None
+
+
 def notifier_from_args(args) -> Any:
-    """The ntfy notifier ``serve`` pages through, or None without ``--notify-topic``: state-diffed
-    (``<state>/notify.json``), 20 sends an hour, each agent's messages on its own budget.  The
-    token is a ``secret:`` reference resolved at send time; a literal is refused, so no token
-    ever sits in a unit file, a shell history or ``ps``."""
-    topic = getattr(args, "notify_topic", None)
+    """The ntfy notifier ``serve`` pages through, or None without a topic: state-diffed
+    (``<state>/notify.json``), :data:`NOTIFY_PER_AGENT_PER_HOUR` sends an hour per agent and
+    :data:`NOTIFY_ALL_AGENTS_PER_HOUR` over all of them.  The token is a ``secret:`` reference
+    resolved at send time; a literal is refused, so no token ever sits in a unit file, a shell
+    history or ``ps``.  The endpoint is resolved now, and a plaintext one refused when a token
+    would cross it, so a misconfigured notifier stops ``serve`` instead of failing every send."""
+    topic = _notify_topic(args)
     if not topic:
         return None
+    from homelabnext._http import check_plaintext
     from homelabnext.notify import Notifier, NtfySender, RateLimit
     from homelabnext.registry.model import secret_env_name
     from homelabnext.state import StateStore
@@ -302,6 +328,8 @@ def notifier_from_args(args) -> Any:
         if not ref.startswith("secret:") or len(ref) <= len("secret:"):
             raise ValueError("--notify-token takes a secret reference (secret:NAME), not a token")
         var = secret_env_name(ref)
+        if not os.environ.get(var, "").strip():
+            raise ValueError(f"--notify-token {ref}: {var} is not set")
 
         def auth() -> str | None:
             value = os.environ.get(var, "").strip()
@@ -314,8 +342,21 @@ def notifier_from_args(args) -> Any:
 
         resolver = Resolver(load(args.registry))
     sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
+        raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")
+    try:
+        base = sender.base_url()
+    except Exception as exc:
+        raise ValueError(f"notify endpoint: {exc}") from None
+    if auth is not None:
+        check_plaintext(base, credentials=True, allow_plaintext=False)
     store = StateStore(Path(args.state) / "notify.json")
-    return Notifier(sender, store, rate_limit=RateLimit(max_sends=20, window_s=3600.0))
+    limit = RateLimit(
+        max_sends=NOTIFY_PER_AGENT_PER_HOUR,
+        window_s=3600.0,
+        max_sends_all_scopes=NOTIFY_ALL_AGENTS_PER_HOUR,
+    )
+    return Notifier(sender, store, rate_limit=limit)
 
 
 def _service(args) -> BrokerService:

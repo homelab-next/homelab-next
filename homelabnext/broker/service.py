@@ -153,6 +153,8 @@ DEFAULT_NOTIFY_WINDOW_S = 300.0
 _PAGE_IDS = 10
 #: how long after a page that could not be sent (a failed send, a spent budget) it is tried again
 PAGE_RETRY_S = 60.0
+#: the least time between two log lines about failed notifications (s)
+NOTIFY_WARN_EVERY_S = 300.0
 CALLABLE_HANDLER = "builtin/callable"
 EMPTY_MANIFEST = {
     "manifest_id": "in-process",
@@ -433,6 +435,7 @@ class BrokerService:
         self._lane_notice_at: dict[str, datetime] = {}  # lane-quota key -> its last notice
         self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
         self._lane_red: dict[str, tuple[str, str]] = {}  # lane-quota key -> (lane, actor)
+        self._notify_warned = float("-inf")  # when a failed send was last logged
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
             notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
@@ -1684,7 +1687,11 @@ class BrokerService:
                 scope = "actor-" + re.sub(r"[^a-z0-9-]+", "-", actor.lower())
                 return bool(self.notifier.report(key, state, msg, scope=scope))
             return bool(self.notifier.report(key, state, msg))
-        except Exception:
+        except Exception as exc:
+            now = self._mono()
+            if now - self._notify_warned >= NOTIFY_WARN_EVERY_S:  # logged, never a log flood
+                self._notify_warned = now
+                log.warning("a notification could not be sent: %s", type(exc).__name__)
             rid = request_id or (
                 key.removeprefix("broker-approval-") if key.startswith("broker-approval-") else None
             )
