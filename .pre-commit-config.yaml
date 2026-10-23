@@ -36,10 +36,10 @@ repos:
         language: system
         pass_filenames: true
       - id: spdx-header
-        name: SPDX header on Python, shell, YAML and TOML files
+        name: SPDX header on Python, shell, YAML, TOML and Jinja template files
         entry: python3 tools/check_spdx.py
         language: system
-        files: '\.(py|sh|ya?ml|toml)$'
+        files: '\.(py|sh|ya?ml|toml|j2)$'
         exclude: '(^|/)golden/'
       # Register keys: every record is identified by a uid (a UUIDv7 created with it, ADR-0019),
       # so nothing is allocated and two authors never collide.  `check-lost` refuses any commit in

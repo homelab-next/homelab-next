@@ -172,4 +172,4 @@ the same commands, credentials in OpenBao, deploys dispatched by hand from an Ac
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every source file carries an SPDX header.
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every Python, shell, YAML, TOML and Jinja template file carries an SPDX header (`tools/check_spdx.py`).

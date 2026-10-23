@@ -91,7 +91,7 @@
       "outputs": "one line per file without the header",
       "owner": "maintainers",
       "path": "tools/check_spdx.py",
-      "purpose": "Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.",
+      "purpose": "Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.",
       "status": "active",
       "trigger": [
         "ci:ci/lint",

@@ -53,7 +53,9 @@ tests on a laptop with no network and no private context.
    scope guard, records lifecycle, decide cascade, agent grant ceiling, reader rule and handoff,
    memory, screen, workflows, model budgets) keep >= 80% line coverage (`make coverage`).
    Suites stay trustworthy (`tests/suite_policy.py`, see "Skips, quarantine and time budgets").
-10. Every source file starts with `# SPDX-License-Identifier: Apache-2.0` (or the equivalent comment).
+10. Every Python, shell, YAML, TOML and Jinja template file starts with
+    `# SPDX-License-Identifier: Apache-2.0` (in a template: `{# SPDX-License-Identifier: Apache-2.0 -#}`,
+    which renders nothing; `tools/check_spdx.py` lists the suffixes it checks).
 
 ## Setup
 

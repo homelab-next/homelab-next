@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
+import re
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_spdx
@@ -53,3 +56,66 @@ def test_repo_tracked_files_all_have_header(monkeypatch):
     root = Path(__file__).resolve().parents[2]
     monkeypatch.chdir(root)
     assert check_spdx.main([]) == 0
+
+
+ROOT = Path(__file__).resolve().parents[2]
+JINJA_HEADER = "{# SPDX-License-Identifier: Apache-2.0 -#}"
+COMMENT = ("comment_begin", "comment", "comment_end")
+
+
+def _tracked_templates(monkeypatch):
+    monkeypatch.chdir(ROOT)
+    return [p for p in check_spdx.collect([]) if p.suffix == ".j2"]
+
+
+def test_jinja_templates_need_the_header(tmp_path: Path):
+    t = tmp_path / "unit.service.j2"
+    t.write_text("[Unit]\nDescription={{ name }}\n")
+    assert check_spdx.main([str(t)]) == 1
+    t.write_text(f"{JINJA_HEADER}\n[Unit]\n")
+    assert check_spdx.main([str(t)]) == 0
+
+
+def test_the_tree_walk_collects_templates(tmp_path: Path, monkeypatch):
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "a.conf.j2").write_text("x\n")
+    monkeypatch.chdir(tmp_path)  # not a git work tree: the directory walk
+    assert [p.as_posix() for p in check_spdx.collect([])] == ["templates/a.conf.j2"]
+    assert check_spdx.main([]) == 1
+
+
+def test_every_tracked_template_carries_the_header(monkeypatch):
+    templates = _tracked_templates(monkeypatch)
+    assert len(templates) >= 39
+    assert [str(p) for p in templates if check_spdx.missing_header(p)] == []
+
+
+def test_the_template_header_renders_nothing(monkeypatch):
+    """The header is a Jinja comment that also eats its own newline: a template's tokens, and so
+    its output in any context, are those of the same template without the header line."""
+    jinja2 = pytest.importorskip("jinja2")
+    seen = 0
+    for trim in (False, True):  # plain Jinja, and Ansible's template module (trim_blocks)
+        env = jinja2.Environment(trim_blocks=trim)
+        for p in _tracked_templates(monkeypatch):
+            text = p.read_text()
+            if not text.startswith(JINJA_HEADER + "\n"):
+                continue  # a script template: `#!` first, then the header as a shell comment
+            seen += 1
+            tokens = [(t, v) for _, t, v in env.lex(text)]
+            assert tuple(t for t, _ in tokens[:3]) == COMMENT, p
+            tokens = tokens[3:]
+            body = text[len(JINJA_HEADER) + 1 :]
+            assert tokens == [(t, v) for _, t, v in env.lex(body)], p
+    assert seen >= 2 * 31
+
+
+def test_the_pre_commit_hook_checks_the_same_suffixes():
+    text = (ROOT / ".pre-commit-config.yaml").read_text()
+    m = re.search(r"- id: spdx-header\n(?:\s+.*\n)*?\s+files: '(.+)'", text)
+    assert m, "the spdx-header hook has no files pattern"
+    rx = re.compile(m[1])
+    for suffix in check_spdx.SUFFIXES:
+        assert rx.search(f"a/b{suffix}"), suffix
+    for other in (".md", ".json", ".txt"):
+        assert not rx.search(f"a/b{other}"), other
