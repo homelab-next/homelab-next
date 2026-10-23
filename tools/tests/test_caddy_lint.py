@@ -924,7 +924,7 @@ app.lab.example {
 }
 legacy.lab.example {
 	basic_auth {
-		bob $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4IjWJPDhjvG
+		bob $2a$14$examplehashexamplehashexamplehashexamplehash
 	}
 	reverse_proxy legacy:8080 {
 		header_up Remote-User {http.auth.user.id}
