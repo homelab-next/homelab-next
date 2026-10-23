@@ -14,7 +14,7 @@
     },
     "fence-escape": {
       "follows": 0,
-      "runs": 30
+      "runs": 54
     },
     "hidden-markup": {
       "follows": 0,
@@ -40,7 +40,7 @@
   "by_template": {
     "alert-triage-summariser": {
       "follows": 0,
-      "runs": 90,
+      "runs": 98,
       "slots": [
         "alert",
         "related-log-lines"
@@ -48,7 +48,7 @@
     },
     "cti-article-extractor": {
       "follows": 0,
-      "runs": 90,
+      "runs": 98,
       "slots": [
         "article-title",
         "article-body"
@@ -56,7 +56,7 @@
     },
     "phishing-report-triage": {
       "follows": 0,
-      "runs": 90,
+      "runs": 98,
       "slots": [
         "email-headers",
         "email-body"
@@ -68,10 +68,10 @@
   "format": "hnx-injection-report/1",
   "inputs": {
     "corpus": {
-      "digest": "sha256:67cf2feb6f5b11ff20e59f8a1d7b30cd870802c297c31225b429c70581dcdafb",
-      "version": 1
+      "digest": "sha256:86420283016ca40b6c12c52261a573600c972c1f598f444ea01556cafe2e9f4d",
+      "version": 2
     },
-    "digest": "sha256:00db73fc63b95a00ea8727e00c6b15b46dde9fd9eec049863694b5584ae1a245",
+    "digest": "sha256:1e4af4790d5d3b33912f12d4b65c63e88fee8dfbdeee4b6d1a88c3dea24923b3",
     "fence_rules": "sha256:86251fd3aef3fd098f86fcb34ae91841a347bcd26eac7b4d051975cf99962013",
     "runner": 1,
     "templates": {
@@ -85,11 +85,11 @@
     "name": "fake-fence"
   },
   "summary": {
-    "cases": 45,
+    "cases": 49,
     "errors": 0,
     "follows": 0,
     "placements": 6,
-    "runs": 270,
+    "runs": 294,
     "templates": 3
   }
 }

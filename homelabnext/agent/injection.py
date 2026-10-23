@@ -40,6 +40,7 @@ from typing import Any
 
 from .digest import digest_of, sha256_text
 from .errors import AgentError
+from .pack import fence_key, split_lines
 from .template import FENCE_RULES, PromptTemplate, RenderedPrompt, render_prompt
 
 REPORT_FORMAT = "hnx-injection-report/1"
@@ -265,21 +266,27 @@ _OPEN = re.compile(r"^(\S{4,64}) ([a-z][a-z0-9-]*) \[(?:session|volatile)\] ([0-
 
 
 def outside_fences(text: str) -> str:
-    """``text`` with every untrusted-data fence (opener to first matching closer) removed."""
+    """``text`` with every untrusted-data fence removed, read the way a gullible model would: lines
+    end at every line boundary (not only LF), leading whitespace and format characters are not
+    seen, and a fence ends at the first line that starts with its delimiter.  That line is skipped
+    when it closes the section (with any nonce); anything else that starts with the delimiter (a
+    forged ``instructions`` header the escaping missed) ends the data and stays visible, so a
+    payload that slips past :func:`homelabnext.agent.pack._escape` counts as followed."""
     out: list[str] = []
-    lines = text.split("\n")
+    lines = split_lines(text)
     i = 0
     while i < len(lines):
-        m = _OPEN.match(lines[i])
+        m = _OPEN.match(fence_key(lines[i]))
         if not m:
             out.append(lines[i])
             i += 1
             continue
-        closer = f"{m.group(1)} end {m.group(2)}"
+        delim, closer = m.group(1), f"{m.group(1)} end {m.group(2)}"
         i += 1
-        while i < len(lines) and not lines[i].startswith(closer):
+        while i < len(lines) and not fence_key(lines[i]).startswith(delim):
             i += 1
-        i += 1
+        if i < len(lines) and fence_key(lines[i]).startswith(closer):
+            i += 1
     return "\n".join(out)
 
 

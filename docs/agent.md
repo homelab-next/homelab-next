@@ -240,7 +240,10 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
   carry a per-pack nonce derived from the digest of that content
   (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
-  of their text that starts with the delimiter is prefixed `[escaped] `. Input therefore cannot
+  of their text that starts with the delimiter is prefixed `[escaped] `. A line is what any line
+  boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and leading whitespace and
+  format characters (zero-width space, BOM) are ignored in the test; the template lint and the
+  injection eval's fake model read lines the same way. Input therefore cannot
   open a section of its own, least of all a stable one. This is a structural guarantee about the
   text, not about the model: a model can still be persuaded by data it reads, so the broker, not
   the pack, is what limits what an agent can do.
