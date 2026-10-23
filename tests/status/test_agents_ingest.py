@@ -413,7 +413,57 @@ def test_the_listener_serves_a_bounded_number_of_connections(tmp_path, clock):
         srv.server_close()
 
 
+def test_a_slow_drip_cannot_hold_a_connection_past_the_deadline(tmp_path, clock):
+    """The timeout bounded each read, not the request: a peer sending one header line just
+    inside the timeout kept its connection (and its slot) for as long as it liked."""
+    import socket
+    import time
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, timeout_s=1.0)
+    host, port = _serving(srv)
+    try:
+        with socket.create_connection((host, port)) as drip:
+            drip.sendall(b"POST /ingest/agent-activity HTTP/1.1\r\n")
+            drip.settimeout(0.2)
+            started, closed = time.monotonic(), False
+            while time.monotonic() - started < 8 and not closed:
+                try:
+                    drip.sendall(b"X-A: b\r\n")  # every 0.6 s: inside the per-read timeout
+                    closed = drip.recv(65536) == b""
+                except TimeoutError:
+                    time.sleep(0.4)
+                except OSError:
+                    closed = True
+            assert closed and time.monotonic() - started < 4, "held past the deadline"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_one_client_address_holds_at_most_so_many_connections(tmp_path, clock):
+    import socket
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    srv = make_ingest_server(store, SETTINGS, clock=clock, max_connections=8, max_per_client=2)
+    host, port = _serving(srv)
+    try:
+        held = [socket.create_connection((host, port)) for _ in range(2)]
+        with socket.create_connection((host, port)) as extra:
+            extra.settimeout(5)
+            assert extra.recv(65536).startswith(b"HTTP/1.1 503 ")
+        assert srv.per_client == {host: 2}, "the third was never given a slot"
+        for s in held:
+            s.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_the_default_bounds():
     from homelabnext.status.agents.ingest import DEFAULT_INGEST_CONNECTIONS, DEFAULT_TIMEOUT_S
 
     assert DEFAULT_TIMEOUT_S == 30 and DEFAULT_INGEST_CONNECTIONS >= 1
+    from homelabnext.status.agents.ingest import DEFAULT_INGEST_PER_CLIENT
+
+    assert DEFAULT_INGEST_PER_CLIENT == 4

@@ -252,6 +252,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--publish-state", help="the publisher's state file (default: STORE.publish.json)"
     )
     p.add_argument("--publish-source", default="svc:status-hub", help="the events' source")
+    p.add_argument(
+        "--max-per-client",
+        type=int,
+        default=None,
+        help="connections one client address may hold at once (default 4; behind a proxy, "
+        "raise it: every request comes from the proxy)",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -515,6 +522,7 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
             allowed_hosts=args.allowed_host,
             clock=clock,
             publish=_publisher(args, cfg),
+            **({"max_per_client": args.max_per_client} if args.max_per_client else {}),
         )
     except (ValueError, OSError) as exc:
         print(f"hnx status ingest: {exc}", file=sys.stderr)

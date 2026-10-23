@@ -26,6 +26,7 @@ else (after the AOS-1 monitor's ``hostAllowed``, MIT).
 from __future__ import annotations
 
 import contextlib
+import socket
 import threading
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
@@ -89,35 +90,107 @@ def host_allowed(host: str | None, origin: str | None, allowed: frozenset[str]) 
 
 class BoundedHTTPServer(ThreadingHTTPServer):
     """A :class:`ThreadingHTTPServer` that serves at most ``max_connections`` connections at
-    once: one more is answered ``503`` on the accepting thread and closed, without a thread of its
-    own, so clients that connect and send nothing cannot pin a thread and a socket each until the
-    host runs out (each handler also has a read timeout)."""
+    once, and at most ``max_per_client`` from one client address (None: no per-client cap): one
+    more is answered ``503`` on the accepting thread and closed, without a thread of its own, so
+    clients that connect and send nothing cannot pin a thread and a socket each until the host
+    runs out, and one host cannot take every slot.  ``deadline_s`` (None: none) bounds a whole
+    connection: when it passes, the socket is shut down, however slowly the peer keeps sending
+    (each handler's read timeout only bounds one read)."""
 
     daemon_threads = True
 
-    def __init__(self, address, handler, *, max_connections: int = DEFAULT_MAX_CONNECTIONS):
+    def __init__(
+        self,
+        address,
+        handler,
+        *,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_per_client: int | None = None,
+        deadline_s: float | None = None,
+    ):
         if max_connections < 1:
             raise ValueError("max_connections is at least 1")
+        if max_per_client is not None and max_per_client < 1:
+            raise ValueError("max_per_client is at least 1")
+        if deadline_s is not None and deadline_s <= 0:
+            raise ValueError("deadline_s is positive")
         self.slots = threading.BoundedSemaphore(max_connections)
+        self.max_per_client = max_per_client
+        self.deadline_s = deadline_s
+        self.per_client: dict[str, int] = {}
+        self._clients = threading.Lock()
         super().__init__(address, handler)
+
+    def _client(self, client_address) -> str:
+        return str(client_address[0]) if client_address else ""
+
+    def _take(self, client: str) -> bool:
+        with self._clients:
+            held = self.per_client.get(client, 0)
+            if self.max_per_client is not None and held >= self.max_per_client:
+                return False
+            self.per_client[client] = held + 1
+            return True
+
+    def _give(self, client: str) -> None:
+        with self._clients:
+            left = self.per_client.get(client, 1) - 1
+            if left > 0:
+                self.per_client[client] = left
+            else:
+                self.per_client.pop(client, None)
+
+    def _busy(self, request) -> None:
+        with contextlib.suppress(OSError):
+            request.setblocking(False)  # never block the accepting thread on this peer
+            request.send(_BUSY)
+        self.shutdown_request(request)
 
     def process_request(self, request, client_address) -> None:
         if not self.slots.acquire(blocking=False):
-            with contextlib.suppress(OSError):
-                request.setblocking(False)  # never block the accepting thread on this peer
-                request.send(_BUSY)
-            self.shutdown_request(request)
+            self._busy(request)
+            return
+        client = self._client(client_address)
+        if not self._take(client):
+            self.slots.release()
+            self._busy(request)
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
+            self._give(client)
             self.slots.release()
             raise
 
     def process_request_thread(self, request, client_address) -> None:
+        lock, open_, cut_off = threading.Lock(), [True], threading.Event()
+
+        def cut() -> None:  # the deadline: the handler's next read or write fails at once
+            with lock:
+                if open_[0]:
+                    cut_off.set()
+                    with contextlib.suppress(OSError):
+                        request.shutdown(socket.SHUT_RDWR)
+
+        timer = None
+        if self.deadline_s is not None:
+            timer = threading.Timer(self.deadline_s, cut)
+            timer.daemon = True
+            timer.start()
         try:
-            super().process_request_thread(request, client_address)
+            self.finish_request(request, client_address)
+        except Exception:
+            if (
+                not cut_off.is_set()
+            ):  # a handler failing on the socket the deadline shut is not news
+                self.handle_error(request, client_address)
         finally:
+            if timer is not None:
+                timer.cancel()
+            with lock:  # never shut down a descriptor that close has since handed to another
+                open_[0] = False
+            self.shutdown_request(request)
+            self._give(self._client(client_address))
             self.slots.release()
 
 
