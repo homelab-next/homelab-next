@@ -90,13 +90,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          fetch-depth: 0  # the base commit, for the append-only _frozen/ check
           persist-credentials: false
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
           extras: dev
-      - name: schema contracts (examples, negatives, additive evolution, frozen baselines)
-        run: python tools/schema_check.py --strict
+      - name: schema contracts (examples, negatives, additive evolution, frozen baselines, append-only _frozen/)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            python tools/schema_check.py --strict --base "$BASE"
+          else
+            python tools/schema_check.py --strict
+          fi
       - name: generated module schemas, examples and negatives are current
         run: python -m homelabnext.schemas --check
       - name: no raw endpoints

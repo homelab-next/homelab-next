@@ -330,3 +330,77 @@ def test_x_draft_on_a_released_major_is_refused_even_with_a_minor_bump(tmp_path,
     p.write_text(json.dumps(s))
     probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=[rel])
     assert not any("x-draft on a released major" in x.message for x in probs), probs
+
+
+def _copy_schemas(tmp_path):
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    return tmp_path / "schemas/platform"
+
+
+def _rename(d, old, new):
+    (d / f"{old}.schema.json").rename(d / f"{new}.schema.json")
+    for kind in ("examples", "negative"):
+        for f in list((d / kind).glob(f"{old}.*")):
+            f.rename(d / kind / (new + f.name[len(old) :]))
+
+
+def test_baselines_follow_the_id_not_the_file_name(tmp_path):
+    """Negative: renaming capability.schema.json does not shed its frozen 1.0 baseline, so x-draft
+    with a breaking change is still refused."""
+    d = _copy_schemas(tmp_path)
+    s = json.loads((d / "capability.schema.json").read_text())
+    s["properties"].pop(next(k for k in s["properties"] if k not in s.get("required", [])))
+    s["x-draft"] = "ADR-0000 (proposed): a planted rename"
+    (d / "capability.schema.json").write_text(json.dumps(s))
+    _rename(d, "capability", "capability_v2")
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("draft schema has a frozen copy of its own version" in m for m in probs), probs
+    assert any("x-draft on a released major" in m for m in probs), probs
+
+
+def test_two_files_with_one_id_are_refused(tmp_path):
+    """Negative: a second file carrying swap_record 1.1's $id would win $ref resolution."""
+    d = _copy_schemas(tmp_path)
+    (d / "zzswap_record.schema.json").write_text((d / "swap_record.schema.json").read_text())
+    for kind in ("examples", "negative"):
+        for f in (d / kind).glob("swap_record.*"):
+            (d / kind / ("zz" + f.name)).write_text(f.read_text())
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("/platform/swap_record/1.1 is also carried by" in m for m in probs), probs
+
+
+def test_a_frozen_name_no_live_schema_carries_is_refused(tmp_path):
+    """Negative: renaming a schema's $id orphans its frozen copies."""
+    d = _copy_schemas(tmp_path)
+    s = json.loads((d / "capability.schema.json").read_text())
+    s["$id"] = s["$id"].replace("/platform/capability/", "/platform/capability-renamed/")
+    (d / "capability.schema.json").write_text(json.dumps(s))
+    probs = [x.message for x in sc.check_repo(tmp_path, strict=True)]
+    assert any("frozen platform/capability is carried by no live schema" in m for m in probs)
+
+
+def test_frozen_is_append_only_against_the_base(tmp_path):
+    """Negative: with --base, deleting capability 1.0's only frozen copy (which lifts the gate for a
+    draft) or editing a frozen file is refused; adding one is not."""
+    import subprocess
+
+    _copy_schemas(tmp_path)
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", "schemas")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+    assert sc.frozen_lost(tmp_path, "HEAD") == []
+    (tmp_path / "schemas/_frozen/1.0/platform/capability.schema.json").unlink()
+    g = tmp_path / "schemas/_frozen/1.0/platform/guest.schema.json"
+    g.write_text(g.read_text() + " ")
+    (tmp_path / "schemas/_frozen/1.0/platform/new.schema.json").write_text("{}")
+    probs = {p.where: p.message for p in sc.frozen_lost(tmp_path, "HEAD")}
+    assert "removed" in probs["schemas/_frozen/1.0/platform/capability.schema.json"]
+    assert "changed" in probs["schemas/_frozen/1.0/platform/guest.schema.json"]
+    assert len(probs) == 2
+    assert sc.main(["--root", str(tmp_path), "--base", "HEAD"]) == 1

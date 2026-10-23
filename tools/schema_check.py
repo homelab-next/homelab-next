@@ -28,15 +28,21 @@ For every schema under ``schemas/<dir>/`` (top level only):
    was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: proposed, no
    loader or pilot yet) has no baseline and may change freely; ``--freeze`` skips it, and
    freezing it means removing ``x-draft``.  A draft is refused when **any** frozen baseline of
-   its major exists: only a schema never frozen, or a new major, can be a draft, so ``x-draft``
-   cannot lift the additivity gate off a released schema.
+   its major exists: only a schema never frozen, or a new major, can be a draft.  Baselines are
+   found by the ``$id`` name (``platform/guest``), never by file name, so renaming a file does not
+   shed them; and ``x-draft`` cannot lift the additivity gate off a released schema **while its
+   frozen baselines are kept**, which ``--base REF`` checks: every file under ``_frozen/`` at REF
+   still exists, byte-identical (append-only).  Without ``--base`` (no base commit) a deleted
+   baseline is not detected.
+6. no two schema files carry one ``$id``, and every frozen ``$id`` name is still carried by a
+   live schema (an orphaned baseline is a schema that was renamed or removed).
 
 Instances may be ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
 
 Semantic helpers that JSON Schema cannot express live here too:
 :func:`check_note_filename`, :func:`check_kanban_board`, :func:`check_profile_ceiling`.
 
-Usage: ``python tools/schema_check.py [--root DIR] [--freeze] [--strict]``
+Usage: ``python tools/schema_check.py [--root DIR] [--freeze] [--strict] [--base REF]``
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -382,21 +389,97 @@ def is_draft(schema: dict) -> bool:
     return isinstance(schema.get("x-draft"), str) and bool(schema["x-draft"].strip())
 
 
-def baselines(root: Path, schema_path: Path) -> list[tuple[int, int, Path]]:
-    out = []
+def frozen_index(root: Path) -> dict[str, list[tuple[int, int, Path]]]:
+    """Every frozen copy, keyed by its ``$id`` name (``platform/guest``): (major, minor, path)."""
+    out: dict[str, list[tuple[int, int, Path]]] = {}
     base = root / "schemas" / "_frozen"
-    if base.is_dir():
-        for vd in base.iterdir():
-            f = vd / schema_path.parent.name / schema_path.name
-            if f.is_file() and re.fullmatch(r"\d+\.\d+", vd.name):
-                a, b = vd.name.split(".")
-                out.append((int(a), int(b), f))
-    return sorted(out)
+    if not base.is_dir():
+        return out
+    for vd in sorted(base.iterdir()):
+        if not re.fullmatch(r"\d+\.\d+", vd.name):
+            continue
+        a, b = (int(x) for x in vd.name.split("."))
+        for f in sorted(vd.rglob("*.json")):
+            try:
+                pid = parse_id(json.loads(f.read_text(encoding="utf-8")))
+            except ValueError:
+                pid = None
+            key = pid[0] if pid else "<no $id> " + f.relative_to(base).as_posix()
+            out.setdefault(key, []).append((a, b, f))
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def baselines(
+    root: Path, schema_path: Path, index: dict[str, list[tuple[int, int, Path]]] | None = None
+) -> list[tuple[int, int, Path]]:
+    """The frozen copies of this schema, found by its ``$id`` name, not its file name."""
+    pid = parse_id(json.loads(schema_path.read_text(encoding="utf-8")))
+    if not pid:
+        return []
+    return list((frozen_index(root) if index is None else index).get(pid[0], []))
+
+
+def repo_problems(root: Path) -> list[Problem]:
+    """Across files: one ``$id`` per schema file, and no frozen name that no live schema carries."""
+    probs: list[Problem] = []
+    owners: dict[str, list[str]] = {}
+    names = set()
+    for p in schema_files(root):
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        rel = p.relative_to(root).as_posix()
+        if "$id" in doc:
+            owners.setdefault(doc["$id"], []).append(rel)
+        pid = parse_id(doc)
+        if pid:
+            names.add(pid[0])
+    for i, files in sorted(owners.items()):
+        if len(files) > 1:
+            probs += [
+                Problem(f, f"$id {i} is also carried by {sorted(set(files) - {f})}") for f in files
+            ]
+    for name, copies in sorted(frozen_index(root).items()):
+        if name not in names:
+            for _, _, f in copies:
+                probs.append(
+                    Problem(
+                        f.relative_to(root).as_posix(),
+                        f"frozen {name} is carried by no live schema (renamed or removed)",
+                    )
+                )
+    return probs
+
+
+def frozen_lost(root: Path, base: str) -> list[Problem]:
+    """Append-only ``_frozen/``: every file under it at ``base`` still exists, byte-identical."""
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+        ).stdout
+
+    try:
+        listing = git("ls-tree", "-r", base, "--", "schemas/_frozen")
+    except subprocess.CalledProcessError as exc:
+        return [Problem("schemas/_frozen", f"cannot read base {base}: {exc.stderr.strip()}")]
+    probs = []
+    for line in listing.splitlines():
+        meta, path = line.split("\t", 1)
+        blob = meta.split()[2]
+        f = root / path
+        if not f.is_file():
+            probs.append(Problem(path, f"frozen at {base} and removed (_frozen/ is append-only)"))
+        elif git("hash-object", "--", path).strip() != blob:
+            probs.append(Problem(path, f"frozen at {base} and changed (_frozen/ is append-only)"))
+    return probs
 
 
 # ---------------------------------------------------------------- repo check
 def check_schema(
-    root: Path, schema_path: Path, registry: Registry, strict: bool = False
+    root: Path,
+    schema_path: Path,
+    registry: Registry,
+    strict: bool = False,
+    index: dict[str, list[tuple[int, int, Path]]] | None = None,
 ) -> list[Problem]:
     rel = schema_path.relative_to(root).as_posix()
     probs: list[Problem] = []
@@ -444,15 +527,16 @@ def check_schema(
         probs.append(
             Problem(rel, "x-draft must say why the schema is a draft (a non-empty string)")
         )
+    bl = baselines(root, schema_path, index)
     if pid and is_draft(schema):
-        if frozen_path(root, schema_path, pid[1], pid[2]).is_file():
+        if any(b[:2] == (pid[1], pid[2]) for b in bl):
             probs.append(
                 Problem(
                     rel,
                     "a draft schema has a frozen copy of its own version (drop x-draft to freeze it)",
                 )
             )
-        released = [b for b in baselines(root, schema_path) if b[0] == pid[1]]
+        released = [b for b in bl if b[0] == pid[1]]
         if released:
             probs.append(
                 Problem(
@@ -462,7 +546,6 @@ def check_schema(
                 )
             )
     elif pid:
-        bl = baselines(root, schema_path)
         same_major = [b for b in bl if b[0] == pid[1]]
         if not same_major:
             probs.append(
@@ -480,13 +563,19 @@ def check_repo(
     dirs: Iterable[str] | None = None,
     strict: bool = False,
     only: Iterable[str] | None = None,
+    base: str | None = None,
 ) -> list[Problem]:
+    """Every schema's checks, plus the cross-file ones (one file per ``$id``, no orphaned frozen
+    name) and, with ``base``, append-only ``_frozen/`` against that commit."""
     registry = build_registry(root)
-    probs: list[Problem] = []
+    probs: list[Problem] = repo_problems(root)
+    index = frozen_index(root)
     for p in schema_files(root, dirs):
         if only is not None and p.relative_to(root / "schemas").as_posix() not in set(only):
             continue
-        probs += check_schema(root, p, registry, strict)
+        probs += check_schema(root, p, registry, strict, index)
+    if base:
+        probs += frozen_lost(root, base)
     return probs
 
 
@@ -553,11 +642,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--strict", action="store_true", help="missing baseline is an error")
     ap.add_argument("--dir", action="append", help="limit to schemas/<dir> (repeatable)")
+    ap.add_argument(
+        "--base",
+        help="a commit: every file under schemas/_frozen there must still exist, unchanged",
+    )
     args = ap.parse_args(argv)
     if args.freeze:
         for f in freeze(args.root):
             print(f"froze {f.relative_to(args.root)}")
-    probs = check_repo(args.root, args.dir, args.strict)
+    probs = check_repo(args.root, args.dir, args.strict, base=args.base)
     for p in probs:
         print(p)
     errors = [p for p in probs if p.severity == "error"]
