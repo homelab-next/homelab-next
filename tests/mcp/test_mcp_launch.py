@@ -325,6 +325,44 @@ def test_the_importer_reads_the_origin_from_the_launch_position():
     assert launch.parse("/opt/x/sh", []).ecosystem is None
 
 
+#: a launch that installs one package and runs another: the pin check sees only the last spec
+PACKAGE_TWICE = [
+    ("npx", ["--package", GH_PIN, "--package", "evil-pkg", "mcp-github"]),
+    ("npx", ["-p", "evil-pkg", "-p", GH_PIN, "mcp-github"]),
+    ("npx", ["--package=evil-pkg", "-p", GH_PIN, "mcp-github"]),
+    ("uvx", ["--from", "example-notes-mcp==1.2.0", "--from", "evil", "notes-mcp"]),
+    ("uv", ["tool", "run", "--from", "evil", "--from", "example-notes-mcp==1.2.0", "notes-mcp"]),
+]
+
+
+@pytest.mark.parametrize(("command", "args"), PACKAGE_TWICE, ids=lambda v: " ".join(v)[:50])
+def test_a_launch_that_names_its_package_twice_is_refused(command, args):
+    """``npx --package unpinned --package pinned@1.2.3 bin`` takes the last spec, passes the pin
+    check on it, and still installs and runs the unpinned package (mutant M17 survived)."""
+    assert "names its package more than once" in " ".join(launch.parse(command, args).problems)
+    rec, _ = importer.draft("probe", {"command": command, "args": args}, "t.json")
+    assert rec["origin"]["kind"] == "unknown", rec  # the catalog never takes it as pinned
+    assert "evil" not in str(rec["origin"])
+
+
+@pytest.mark.parametrize(
+    ("command", "args", "why"),
+    [
+        ("npx", ["--package"], "npx --package: no value"),
+        ("uvx", ["--from"], "uvx --from: no value"),
+        ("uv", ["run", "example-notes-mcp"], "only `uv tool run` launches a pinned package"),
+        ("uv", ["pip", "install", "x"], "only `uv tool run`"),
+        ("pipx", ["install", "example-notes-mcp"], "only `pipx run` launches a pinned package"),
+        ("docker", ["exec", "-i", "box", "srv"], "docker: only `docker run` launches"),
+        ("podman", ["start", "box"], "podman: only `podman run` launches"),
+    ],
+)
+def test_the_launch_parser_refuses_what_it_cannot_read(command, args, why):
+    got = launch.parse(command, args)
+    assert any(why in p for p in got.problems), got.problems
+    assert got.spec is None  # nothing is taken as the package it launches
+
+
 def test_every_example_record_renders_its_generated_launch():
     cat = servers.load(CATALOG)
     for sid, rec in cat:
