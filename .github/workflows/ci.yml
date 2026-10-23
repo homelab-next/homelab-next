@@ -88,16 +88,17 @@ jobs:
   # (the workflows here and the private-overlay deploy templates), nats-server (the lab's events
   # config) and docker compose (the lab bind guard's resolved pass; the runner image has it).  Each
   # is pinned by version and checksum: the Go tools by their module sum (go also checks it against
-  # the checksum database), zizmor by its wheel's sha256.  Bump a version and its checksum
-  # together (the hex of `go mod download -json <module>@<version>`'s Sum, PyPI's file listing).  HNX_REQUIRE_TOOLS
-  # turns their "not installed" skips into failures, so a broken install cannot pass as a skip.
+  # the checksum database), and each binary's build info must name that module, version and sum;
+  # zizmor by its wheel's sha256.  Bump a version and its checksum together (the hex of
+  # `go mod download -json <module>@<version>`'s Sum, PyPI's file listing).  Built with the
+  # workflow's GO_VERSION.  HNX_REQUIRE_TOOLS makes the tests' require_tool helper fail instead of
+  # skipping when one of them is missing, so a broken install cannot pass as a skip.
   # Not installed here: dnsmasq (an apt package, not pinnable by version on a moving runner image)
   # and playwright for node (a browser download).
   external-tools:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      TOOLS_GO_VERSION: "1.24"
       GOTOOLCHAIN: local  # the setup-go toolchain, never a download a module asks for
       ACTIONLINT_VERSION: "v1.7.11"
       # a module sum (go.sum's h1:) as hex: the SHA-256 of the module's file tree
@@ -117,7 +118,7 @@ jobs:
           extras: test
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          go-version: ${{ env.TOOLS_GO_VERSION }}
+          go-version: ${{ env.GO_VERSION }}
           cache: false
       - name: install actionlint, nats-server and zizmor (pinned versions, checksums verified)
         run: |
@@ -131,10 +132,22 @@ jobs:
               exit 1
             fi
           }
+          built_from() {  # BINARY MODULE VERSION SHA256: its build info names that module, exactly
+            want=$(python -c 'import base64, sys; print("h1:" + base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' "$4")
+            if ! go version -m "$1" | grep -qxF "$(printf '\tmod\t%s\t%s\t%s' "$2" "$3" "$want")"; then
+              echo "::error::$1 was not built from $2@$3 with the pinned sum"
+              go version -m "$1" | head -3
+              exit 1
+            fi
+          }
           pinned github.com/rhysd/actionlint "$ACTIONLINT_VERSION" "$ACTIONLINT_SUM_SHA256"
           GOBIN="$bin" go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
+          # a package path resolves to the longest module providing it: the binary must say
+          # it came from the pinned module, not from a nested one tagged later
+          built_from "$bin/actionlint" github.com/rhysd/actionlint "$ACTIONLINT_VERSION" "$ACTIONLINT_SUM_SHA256"
           pinned github.com/nats-io/nats-server/v2 "$NATS_SERVER_VERSION" "$NATS_SERVER_SUM_SHA256"
           GOBIN="$bin" go install "github.com/nats-io/nats-server/v2@$NATS_SERVER_VERSION"
+          built_from "$bin/nats-server" github.com/nats-io/nats-server/v2 "$NATS_SERVER_VERSION" "$NATS_SERVER_SUM_SHA256"
           printf 'zizmor==%s --hash=sha256:%s\n' "$ZIZMOR_VERSION" "$ZIZMOR_SHA256" > "$RUNNER_TEMP/zizmor.txt"
           python -m pip install --disable-pip-version-check --require-hashes --no-deps \
             --only-binary :all: -r "$RUNNER_TEMP/zizmor.txt"
@@ -147,7 +160,7 @@ jobs:
           actionlint -no-color
           zizmor --version
           zizmor --offline --no-progress --min-severity medium .github/
-      - name: the tests that call these tools; their "not installed" skips fail here
+      - name: the tests that call these tools; a missing one fails them here
         env:
           HNX_REQUIRE_TOOLS: actionlint,zizmor,nats-server,docker
         run: >-
