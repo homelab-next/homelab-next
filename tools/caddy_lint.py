@@ -22,9 +22,11 @@ IdP's answer omits it, and every Caddy up to 2.11.1 passes the underscore spelli
 must hold, everywhere:
 
   strip      every ``forward_auth`` sits directly inside a ``route`` block, and earlier in that
-             same ``route`` a ``request_header -<name>`` (or a ``-<prefix>*`` / ``-*<suffix>``
-             wildcard) deletes every header its ``copy_headers`` sets, in both the dash and the
-             underscore spelling. (Outside a ``route``, Caddy's directive order runs
+             same ``route`` a ``request_header -<name>`` (or a ``-*<part>*``, ``-<prefix>*`` or
+             ``-*<suffix>`` wildcard, matched case-insensitively as Caddy does) deletes every
+             header its ``copy_headers`` sets, in every spelling with ``-`` or ``_`` at each
+             separator (a CGI-style upstream folds both, so ``X-Authentik_Groups`` is the real
+             header too). (Outside a ``route``, Caddy's directive order runs
              ``forward_auth`` before ``request_header``, so the strip would delete the IdP's own
              headers instead of the client's.) A ``copy_headers`` that is itself templated
              cannot be checked and fails closed: list the headers literally.
@@ -163,12 +165,26 @@ def _copied(auth: Node) -> tuple[list[str], int | None]:
 
 
 def _covers(pattern: str, header: str) -> bool:
+    """Whether Caddy's ``request_header -<pattern>`` deletes ``header``: case-insensitive, with a
+    ``*x*`` (contains), ``x*`` (prefix) or ``*x`` (suffix) wildcard; any other ``*`` is literal."""
     p, h = pattern.lower(), header.lower()
+    if len(p) >= 2 and p.startswith("*") and p.endswith("*"):
+        return p[1:-1] in h
     if p.endswith("*"):
         return h.startswith(p[:-1])
     if p.startswith("*"):
         return h.endswith(p[1:])
     return p == h
+
+
+def spellings(header: str) -> list[str]:
+    """Every way to spell ``header`` with ``-`` or ``_`` at each separator (2**k for k of them):
+    a CGI-style upstream folds both into the same ``HTTP_X_..._...`` variable."""
+    parts = re.split(r"[-_]", header)
+    out = [parts[0]]
+    for part in parts[1:]:
+        out = [f"{o}{sep}{part}" for o in out for sep in "-_"]
+    return out
 
 
 def lint_caddy(text: str, path: str = "<text>", line_offset: int = 0) -> list[Finding]:
@@ -203,17 +219,17 @@ def lint_caddy(text: str, path: str = "<text>", line_offset: int = 0) -> list[Fi
                 )
             )
         for h in names:
-            for spelling in dict.fromkeys((h, h.replace("-", "_"))):
-                if not any(_covers(p, spelling) for p in deleted):
-                    findings.append(
-                        Finding(
-                            path,
-                            line,
-                            "strip",
-                            f"client-sent {spelling} is not deleted before forward_auth "
-                            "in the same route",
-                        )
+            missed = [sp for sp in spellings(h) if not any(_covers(p, sp) for p in deleted)]
+            if missed:
+                findings.append(
+                    Finding(
+                        path,
+                        line,
+                        "strip",
+                        f"client-sent {h} is not deleted before forward_auth in the same route "
+                        f"in every spelling (missed: {', '.join(missed)})",
                     )
+                )
     return findings
 
 

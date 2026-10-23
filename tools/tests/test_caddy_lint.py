@@ -18,8 +18,7 @@ GOOD = """\
 (hnx_forward_auth) {
 	route {
 		# client-sent identity headers never reach the service
-		request_header -X-Authentik-*
-		request_header -X_Authentik_*
+		request_header -*authentik*
 		forward_auth idp:9443 {
 			uri /outpost.goauthentik.io/auth/caddy
 			copy_headers X-Authentik-Username X-Authentik-Groups
@@ -36,6 +35,17 @@ app.lab.example {
 
 def _strip(text: str) -> list[str]:
     return [f.detail for f in lint.lint_caddy(textwrap.dedent(text))]
+
+
+def _missed(header: str, *spellings: str) -> str:
+    return (
+        f"client-sent {header} is not deleted before forward_auth in the same route in every "
+        f"spelling (missed: {', '.join(spellings)})"
+    )
+
+
+ALL_USER = ("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username",
+            "X_Authentik_Username")  # fmt: skip
 
 
 def test_the_generators_shape_passes():
@@ -59,22 +69,50 @@ def test_a_strip_after_forward_auth_does_not_count():
         forward_auth idp:9443 {
             copy_headers X-Authentik-Username
         }
-        request_header -X-Authentik-*
-        request_header -X_Authentik_*
+        request_header -*authentik*
     }
     """
-    assert _strip(text) == [
-        "client-sent X-Authentik-Username is not deleted before forward_auth in the same route",
-        "client-sent X_Authentik_Username is not deleted before forward_auth in the same route",
-    ]
+    assert _strip(text) == [_missed("X-Authentik-Username", *ALL_USER)]
 
 
 def test_the_underscore_spelling_is_required():
-    text = GOOD.replace("\t\trequest_header -X_Authentik_*\n", "")
+    text = GOOD.replace("-*authentik*", "-X-Authentik-*")
     assert _strip(text) == [
-        "client-sent X_Authentik_Username is not deleted before forward_auth in the same route",
-        "client-sent X_Authentik_Groups is not deleted before forward_auth in the same route",
+        _missed("X-Authentik-Username", *ALL_USER[1:]),
+        _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups",
+                "X_Authentik_Groups"),
+    ]  # fmt: skip
+
+
+def test_the_mixed_spellings_are_required():
+    """The snippet main generated: a dash and an underscore prefix wildcard.  A CGI-style
+    upstream folds X-Authentik_Groups into HTTP_X_AUTHENTIK_GROUPS too, and Caddy 2.11.1 passes
+    it through both wildcards (observed live)."""
+    text = GOOD.replace("-*authentik*", "-X-Authentik-*\n\t\trequest_header -X_Authentik_*")
+    assert _strip(text) == [
+        _missed("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username"),
+        _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups"),
     ]
+
+
+@pytest.mark.parametrize("pattern", ["*authentik*", "*AUTHENTIK*", "*Authentik-*", "*thent*"])
+def test_a_contains_wildcard_covers_every_spelling_in_any_case(pattern):
+    text = GOOD.replace("*authentik*", pattern)
+    if pattern == "*Authentik-*":  # a contains with a separator in it covers only that one
+        assert len(_strip(text)) == 2
+    else:
+        assert _strip(text) == []
+
+
+def test_header_names_match_case_insensitively():
+    text = GOOD.replace("-*authentik*", "-x-authentik-*\n\t\trequest_header -x_authentik_*")
+    text = text.replace("X-Authentik-Username X-Authentik-Groups", "X-AUTHENTIK-USER")
+    assert _strip(text) == [_missed("X-AUTHENTIK-USER", "X-AUTHENTIK_USER", "X_AUTHENTIK-USER")]
+
+
+def test_spellings():
+    assert lint.spellings("A-b_C") == ["A-b-C", "A-b_C", "A_b-C", "A_b_C"]
+    assert lint.spellings("Remote") == ["Remote"]
 
 
 def test_exact_names_cover_only_themselves():
@@ -82,22 +120,23 @@ def test_exact_names_cover_only_themselves():
     route {
         request_header -X-Authentik-Username
         request_header -X_Authentik_Username
+        request_header -X-Authentik_Username
+        request_header -X_Authentik-Username
         forward_auth idp:9443 {
             copy_headers X-Authentik-Username X-Authentik-Email
         }
     }
     """
     assert _strip(text) == [
-        "client-sent X-Authentik-Email is not deleted before forward_auth in the same route",
-        "client-sent X_Authentik_Email is not deleted before forward_auth in the same route",
-    ]
+        _missed("X-Authentik-Email", "X-Authentik-Email", "X-Authentik_Email",
+                "X_Authentik-Email", "X_Authentik_Email")
+    ]  # fmt: skip
 
 
 def test_a_strip_in_another_route_does_not_count():
     text = """\
     route {
-        request_header -X-Authentik-*
-        request_header -X_Authentik_*
+        request_header -*authentik*
     }
     route {
         forward_auth idp:9443 {
@@ -105,13 +144,14 @@ def test_a_strip_in_another_route_does_not_count():
         }
     }
     """
-    assert len(_strip(text)) == 2
+    assert len(_strip(text)) == 1
 
 
 def test_a_renamed_header_and_the_block_form_are_both_read():
     text = """\
     route {
         request_header -X-Remote-*
+        request_header -X_Remote-*
         request_header -*_User
         forward_auth idp:9443 {
             copy_headers {
@@ -122,15 +162,14 @@ def test_a_renamed_header_and_the_block_form_are_both_read():
     """
     assert _strip(text) == []
     assert _strip(text.replace("-*_User", "-*_Groups")) == [
-        "client-sent X_Remote_User is not deleted before forward_auth in the same route"
+        _missed("X-Remote-User", "X-Remote_User", "X_Remote_User")
     ]
 
 
 def test_a_templated_copy_headers_fails_closed():
     text = """\
     route {
-        request_header -X-Authentik-*
-        request_header -X_Authentik_*
+        request_header -*authentik*
         forward_auth idp:9443 {
             copy_headers {{ authentik_copy_headers }}
         }
@@ -142,7 +181,7 @@ def test_a_templated_copy_headers_fails_closed():
 
 
 def test_an_inline_allow_waives_a_forward_auth():
-    text = GOOD.replace("\t\trequest_header -X_Authentik_*\n", "").replace(
+    text = GOOD.replace("\t\trequest_header -*authentik*\n", "").replace(
         "forward_auth idp:9443 {",
         "forward_auth idp:9443 {  # caddy-lint: allow lab fixture",
     )
@@ -242,11 +281,11 @@ def test_generated_configs_are_checked(tmp_path, monkeypatch):
     monkeypatch.setattr(
         builtin,
         "_forward_auth_snippet",
-        lambda endpoint: original(endpoint).replace("\t\trequest_header -X_Authentik_*\n", ""),
+        lambda endpoint: original(endpoint).replace("-*authentik*", "-X-Authentik-*"),
     )
     findings, _ = lint.scan(tmp_path)
     assert {f.path for f in findings} == {"services.yml (caddy generator)"}
-    assert all("X_Authentik_" in f.detail for f in findings)
+    assert all("X_Authentik_" in f.detail for f in findings) and len(findings) == 2
 
 
 def test_main_reports_and_exits(tmp_path):

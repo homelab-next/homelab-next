@@ -3,10 +3,7 @@
 (hnx_forward_auth) {
 	route {
 		# client-sent identity headers never reach the service, whatever the IdP answers
-		request_header -X-Authentik-*
-		request_header -X_Authentik_*
-		request_header -X-Authentik-Username
-		request_header -X-Authentik-Groups
+		request_header -*authentik*
 		forward_auth https://idp.svc.example.internal:9443 {
 			uri /outpost.goauthentik.io/auth/caddy
 			copy_headers X-Authentik-Username X-Authentik-Groups

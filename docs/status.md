@@ -591,7 +591,8 @@ examples/status/agents.yml --bind <address> --allow-remote --allowed-host status
 **Check your edge** once: a request to the site with a forged `X-Authentik-Username` and no
 login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
 client-sent header the IdP omits) with the generated snippet, which deletes every client-sent
-`X-Authentik-*` and `X_Authentik_*` header inside the same `route` before `forward_auth`;
+header whose name contains `authentik` (any case, `-` or `_`) inside the same `route` before
+`forward_auth`;
 `tools/caddy_lint.py` fails CI on a pin or a config that does not. Every private view is
 appended to the access log (`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`,
 `session`, `event`), which is itself a private page. Detail content is rendered as escaped text

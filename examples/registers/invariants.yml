@@ -282,13 +282,13 @@ criteria:
     python3 -c 'import yaml' 2>/dev/null || exit 100;
     python3 tools/caddy_lint.py && echo edge strips identity headers
   expected: >-
-    exit 0 (every forward_auth deletes its copy_headers, both spellings, first in its route;
-    every Caddy pin 2.11.2 or later)
+    exit 0 (every forward_auth deletes its copy_headers, every - and _ spelling, first in its
+    route; every Caddy pin 2.11.2 or later)
   expect_regex: edge strips identity headers
   remediation: >-
-    Put forward_auth in a route that first runs request_header -X-Authentik-* and
-    -X_Authentik_* (or each copied header in both spellings), as the generated hnx_forward_auth
-    snippet does, and pin Caddy 2.11.2 or later. Otherwise a client sends its own username or
+    Put forward_auth in a route that first runs request_header -*authentik* (or deletes each
+    copied header in every - and _ spelling), as the generated hnx_forward_auth snippet does,
+    and pin Caddy 2.11.2 or later. Otherwise a client sends its own username or
     groups, the identity provider's answer omits them, and the service trusts the forgery.
 - id: F-17
   statement: Nothing at runtime points at the workstation.
