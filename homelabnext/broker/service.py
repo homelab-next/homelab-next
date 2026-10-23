@@ -422,9 +422,11 @@ class BrokerService:
         self._paging: set[str] = set()  # actors a page is being sent for right now
         # scheduling runs on a monotonic clock (an injected wall clock drives it in tests): a
         # wall-clock step can neither fire a page early nor strand one with no timer
-        if monotonic is None:
-            monotonic = time.monotonic if clock is _utcnow else (lambda: self.clock().timestamp())
-        self._mono = monotonic
+        self._mono = (
+            monotonic
+            if monotonic is not None
+            else (time.monotonic if clock is _utcnow else self._clock_seconds)
+        )
         self._last_page: dict[str, float] = {}  # actor -> when its last page went out
         self._retry_at: dict[str, float] = {}  # actor -> when a failed page may be tried again
         self._wakeups: list[float] = []  # a heap of times a page check is due
@@ -503,6 +505,10 @@ class BrokerService:
 
     def _now(self) -> datetime:
         return self.clock()
+
+    def _clock_seconds(self) -> float:
+        """Scheduling time from an injected clock (tests drive both with one clock)."""
+        return self.clock().timestamp()
 
     # ---------------------------------------------------------------- audit
     def _summarize(self, args: Mapping[str, Any], spec: Mapping[str, ArgSpec] | None):
