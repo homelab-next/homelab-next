@@ -73,10 +73,12 @@ observable ran one test file, so none of this could turn it red.
    approval, a client's prompt is not one), refuses `acts_via: broker` on anything but the
    broker's front, and floors classes in code (`servers.floor_problems`): a record of known
    acting software (ssh, shells, kubernetes, ansible, a file or repository writer, a secret
-   store, a sender), by a word of its id, package, image or bins, has a tool in that class; a
-   tool whose name acts carries an acting class; and a tool that writes is `file-write`, or
-   `record-write` only on a record that fronts a platform capability (an API that validates
-   what it writes). `tools/schema_check.py` judges `dependentSchemas`, `dependentRequired` and a
+   store, a sender), by a word of what it launches (package, image, bins, git repo or hosted
+   provider; not its id, the author's own label), has a tool in that class; a tool whose first
+   verb acts carries an acting class; and a tool whose first verb writes is `file-write`, or
+   `record-write` only on a record that fronts a capability the class table classes
+   `record-write` (an API that validates what it writes). A tool whose first verb reads is a read
+   by its name, so `get_commit` is not floored. A module's records are floored the same way. `tools/schema_check.py` judges `dependentSchemas`, `dependentRequired` and a
    new `anyOf`/`oneOf` instead of letting them through.
 5. **The shipped catalog.** `hnx-broker` is `acts_via: broker`. `ssh`, `shell`, `ansible`,
    `kubernetes`, `vault`, `filesystem`, `git`, `github`, `gitlab`, `slack`, `email`, `smtp`,

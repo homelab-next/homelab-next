@@ -238,11 +238,15 @@ entry N)`.
   origin, launch and its exact tools) may say `acts_via: broker`, and only it marks an acting tool
   `approval: true` (ADR-0030);
 - classes are floored in code, not only declared: a record of known acting software (by a word
-  of its id, package, image or bins: ssh, shells, kubernetes, ansible, docker, filesystem, git, a
-  secret store, chat or mail senders) has a tool in that class, a tool whose name acts (run,
-  exec, apply, deploy, delete, send, publish...) carries an acting class, and a tool that writes
-  is `file-write`, or `record-write` only on a record that fronts a platform capability
-  (`capabilities` or `implements`: an API that validates what it writes);
+  of what it launches, its package, image, bins, git repo or hosted provider, not its id: ssh,
+  shells, kubernetes, ansible, docker, filesystem, git, a secret store, chat or mail senders) has
+  a tool in that class; a tool whose first verb acts (run, exec, apply, deploy, delete, send,
+  publish, trigger, click, type...; `createIssue` is split at its camelCase) carries an acting
+  class; a tool whose first verb writes (create, update, write...) is `file-write`, or
+  `record-write` only on a record that fronts a capability the class table classes
+  `record-write` (`capabilities` or `implements`: an API that validates what it writes; a label
+  such as `cap:metrics` is not one); a tool whose first verb reads (`get_commit`,
+  `list_open_alerts`) is a read by its name. A module's contributed records are floored the same;
 - with the review policy: an `active` record carries current agent check, agent audit and human
   approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest
   examples/mcp/<id>.yml` gives the digest to stamp);
