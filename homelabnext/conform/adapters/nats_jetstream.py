@@ -501,12 +501,18 @@ class JetStreamConsumer:
 
     #: how many settled-for-good deliveries :meth:`dead_letters` waits for at most (the newest)
     EXPECT_DEAD_MAX = 1024
+    #: dead letters :meth:`dead_letters` remembers (the newest); older ones are no longer listed
+    DEAD_KEEP = 4096
 
     def __init__(self, bus: JetStreamBus, name: str, durable: str, max_deliver: int, gen: int):
         self.bus, self.name, self.durable = bus, name, durable
         self.max_deliver, self._gen = max_deliver, gen
         self.ack_wait = bus.ack_wait
         self._expect_dead: set[int] = set()
+        self._dead: list[Delivery] = []  # dead letters read so far, oldest first
+        self._dead_next = 1  # the next dead-letter stream sequence to read
+        #: stream sequences of dead letters whose original had aged out of the stream when read
+        self.dead_evicted: list[int] = []
 
     def __repr__(self) -> str:
         return f"JetStreamConsumer(name={self.name!r}, durable={self.durable!r})"
@@ -564,28 +570,36 @@ class JetStreamConsumer:
             bus._sleep(0.05)
 
     def _read_dead(self) -> list[Delivery]:
+        """The dead letters so far: those read before, plus the advisories since the last read.
+
+        The dead-letter stream is read from where the last call stopped, never again from the
+        start.  An advisory can outlive its original (the main stream evicts first, under its age
+        or byte limit): that dead letter cannot be listed, so it is skipped and its stream
+        sequence noted in :attr:`dead_evicted`, and the rest are still returned.
+        """
         bus = self.bus
         filt = f"$JS.EVENT.ADVISORY.CONSUMER.*.{bus.stream}.{self.durable}"
-        out: list[Delivery] = []
-        seq = 1
         while True:
             got = bus.api(
                 f"STREAM.MSG.GET.{bus.dlq_stream}",
-                {"seq": seq, "next_by_subj": filt},
+                {"seq": self._dead_next, "next_by_subj": filt},
                 missing="message",
             )
             if got is None:
-                return out
+                return list(self._dead)
             stored = got["message"]
-            seq = int(stored["seq"]) + 1
             adv = json.loads(base64.b64decode(stored.get("data") or ""))
             sseq = int(adv["stream_seq"])
             orig = bus.api(f"STREAM.MSG.GET.{bus.stream}", {"seq": sseq}, missing="message")
+            self._dead_next = int(stored["seq"]) + 1
             if orig is None:
-                raise EventsError(f"dead letter {sseq}: the original is no longer in the stream")
+                self.dead_evicted.append(sseq)
+                self._expect_dead.discard(sseq)  # it will never be listed: do not wait for it
+                del self.dead_evicted[: -self.DEAD_KEEP]
+                continue
             m = orig["message"]
             hdrs = parse_headers(base64.b64decode(m.get("hdrs") or ""))
-            out.append(
+            self._dead.append(
                 Delivery(
                     sseq,
                     bus._strip(m["subject"]),
@@ -595,6 +609,7 @@ class JetStreamConsumer:
                     _noop,
                 )
             )
+            del self._dead[: -self.DEAD_KEEP]
 
 
 # --------------------------------------------------------------------------- nats-py wire
