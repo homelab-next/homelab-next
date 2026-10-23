@@ -44,7 +44,7 @@ reverse guard (below) fails its CI if any part of an overlay is committed to it.
 |---|---|---|
 | Code, schemas, roles, the `hnx_secret` lookup, tools | public | plain text, Apache-2.0 |
 | A complete fictional lab, the overlay skeleton | public `examples/` | plain text, documentation values only |
-| Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs | private `lab/` | plain text under the repository's access control |
+| Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs, the module selection with the site's network scope (`lab/modules.yml`, [modules](modules.md#the-network-scope)) | private `lab/` | plain text under the repository's access control |
 | Real data that would hurt if the private repository leaked (WAN addresses, peer details) | private `lab/sealed/` | SOPS + age, one file at a time |
 | Inventory variables that must stay confidential and no role takes as a reference | private `ansible/inventory/*/group_vars/*/vault.yml` | ansible-vault |
 | Credentials (passwords, tokens, API keys, enrollment secrets), and the vault password | OpenBao | referenced in git as `secret:<name>`; the deploy reads them by name through its AppRole |
@@ -409,7 +409,7 @@ private leak check, so a pull request's code never sees a credential.
 | Where | Command | Fails on |
 |---|---|---|
 | private overlay CI | `python hnx/tools/private_leak_check.py private .` | a credential value in plain text (the `secret` patterns of `tools/leak_scan.py`, after masking well-formed ciphertext only); a sealed file (under `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule) not encrypted throughout; a `.sops.yaml` that narrows the sealed paths; a vault file that is not header plus hex; a file it could not scan and no `allow_unscanned` glob names; a committed decryption key (an age identity file, a vault password file) |
-| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under the skeleton's `private_paths` (`lab/`, `ansible/inventory/production/`); a `.sops.yaml`; any SOPS-encrypted file; a key file |
+| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under the skeleton's `private_paths` (`lab/`, `ansible/inventory/production/`); a `.sops.yaml`; any SOPS-encrypted file; a key file; a top-level `scope` block (a site's network scope) holding an address outside the documentation ranges |
 | public repository | `tools/leak_scan.py` (F-18, F-05) | private addresses, names, e-mails, keys and tokens, including an age identity |
 
 Real addresses and host names are allowed in the private check (that is what the overlay is for);

@@ -70,8 +70,12 @@ says what selecting someone else's module grants it.
    round-trip check, and X-07 becomes slot-keyed. A removal never touches another module's data.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
    providers per slot as instances, `none` or `pass-through` where the registry allows, placement,
-   lane-to-orchestration-instance bindings, real configuration values and the grants. Consumers
+   lane-to-orchestration-instance bindings, real configuration values, the grants, and the
+   site's **network scope** (trusted, target and excluded addresses: the one place a selection
+   holds addresses; a module declares the parts it reads and its reader fails closed). Consumers
    resolve a slot with `provider_for(slot, instance)` from the selection, never a product name.
+   The public repository holds the selection schema, fictional profiles in the documentation
+   ranges and the enforcement, never a real scope.
 10. **Supply chain**: a module declares its origin (in-tree, a pinned git commit or a hashed
     archive); the overlay pins a fetched module's tree digest and keeps its reviews keyed by it, and
     manifests join the review policy with a human tier for credentials, control planes, data grants

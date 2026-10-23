@@ -46,7 +46,8 @@ what it needs, what it offers and every entry it adds to a registry the core bui
 | **interface** | Something a module offers *other modules* (a sample handoff, a publishable output). Defined once, by its owner; providers reference it. |
 | **interchange format** | The neutral format at a boundary (OCSF, Sigma, CloudEvents, the S3 API, STIX, SARIF, ...). |
 | **bundle** | Feature modules a site installs together (the SOC bundle), each still removable. |
-| **site selection** | The overlay's `lab/modules.yml`: providers per slot, placement, lane bindings, real values, and the **grants** a module cannot give itself. |
+| **site selection** | The overlay's `lab/modules.yml`: providers per slot, placement, lane bindings, real values, the **grants** a module cannot give itself, and the site's network **scope**. |
+| **scope** | The site's addresses, in the selection's `scope:` block only: what is trusted (the lab's WAN, its networks, the operator's tooling), what may be targeted, and what is excluded. Private; public examples use documentation ranges. |
 
 "Pack" is not used: it already means a workflow pack and an agent context pack. The status hub's
 `module` field on a status source (a tile grouping) becomes `group` in service 2.7 (below).
@@ -86,7 +87,7 @@ licence: {kind, spdx|expires, tier, renewal}       # provider only
 credentials: [{secret, identity, holder, purpose}] # provider only; holder: provider|consumers|granted
 control_plane: [{kind, reader, description}]       # provider only
 identifiers: [{kind, name, on_remove}]
-requires:  {capabilities, model_roles, interfaces, hosts}     # hard
+requires:  {capabilities, model_roles, interfaces, hosts, scope}   # hard
 prefers:   {capabilities, interfaces}                         # soft, each with a fallback
 interfaces: [{id, version, kind, schema|schema_id, description}]  # interfaces this module OWNS
 provides:  {slots: {<slot>: {...}}, interfaces: [{interface, version, via}]}
@@ -197,6 +198,7 @@ is subsumed by the providers' and core modules' `requires`.
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
 | `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
+| `scope` | `{part, purpose}` | a part of the selection's [network scope](#the-network-scope) (`trusted.wan`, `trusted.nets`, `trusted.tooling`, `target`, `exclude.unattended_mutation`, `exclude.offensive`); the module reads those addresses from the selection, never from its own config. `requires` only: a module that reads scope has no fallback for it |
 
 A `prefers` entry names a `fallback`: `behaviour`, optionally a lighter slot `to`, and optionally
 `data` overrides. **A dataset bound to a preferred slot moves with the fallback**: a dataset's `via`
@@ -430,7 +432,8 @@ that slot's round trip").
   fictional. A key named like a credential (`password`, `token`, `secret`, `key`, `credential`,
   `api_key`, `private_key`) **must** be `type: secret`, whose default is a `secret:<id>/...` name. A
   string default carries no `<scheme>:` reference in any case (`secret:`, `SECRET:`, `vault:`) and no
-  address literal. A path default is relative, without `..`. An enum default is a string, one of its
+  address literal: a module that needs addresses requires a part of the site's
+  [network scope](#the-network-scope) instead. A path default is relative, without `..`. An enum default is a string, one of its
   `values` (loader).
 - `credentials[].holder`: `provider` (only the provider's roles read it), `consumers` (a template:
   the provider issues one credential **per consumer** at bind time, never shared, so a swap revokes
@@ -522,6 +525,7 @@ grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external
              internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
              public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:edge|cap:idp]},
              units: {<module>: [<unit>]}}
+scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
 ```
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
@@ -533,6 +537,51 @@ by guest id instead of re-declaring. A multi-slot provider is placed once per in
 consumer resolves a slot with **`provider_for(slot, instance)`** from the selection (today
 `homelabnext/broker/cli.py` reads a conformance target file instead). Model choice stays one line in
 the role table.
+
+### The network scope
+
+The site's addresses live in one place: the selection's `scope:` block, in the **private** overlay
+(`lab/modules.yml`; seal the file with SOPS if its WAN addresses would hurt in a leak, as
+[private overlay](private-overlay.md) describes for `lab/site.yml`). The public repository carries
+only the schema, the enforcement and fictional examples in the documentation ranges (RFC 5737's
+`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, and `2001:db8::/32`).
+
+```yaml
+scope:
+  trusted:
+    wan: [203.0.113.32/29]                  # the lab's own public addresses
+    nets: [192.0.2.0/24, 2001:db8:30::/48]  # its internal networks
+    tooling: [192.0.2.240/28]               # where the operator's own tooling runs from
+  target: [198.51.100.0/24, 192.0.2.0/24]   # what assessment tooling may touch
+  exclude:
+    unattended_mutation: [192.0.2.1/32]     # no unattended job changes these
+    offensive: [192.0.2.0/28]               # never the target of offensive tooling
+```
+
+- Each part is a non-empty list of IPv4 or IPv6 addresses or CIDR networks; the schema refuses an
+  empty list, a malformed entry and an unknown part. The loader rule (`scope_problems`) parses each
+  entry strictly (a network with host bits set is refused) and refuses a network listed twice.
+- A module **declares** the parts it reads (`requires.scope`): the external data collector needs
+  `trusted.wan`, so sessions from the lab's own addresses are dropped instead of being reported,
+  without keeping a list of its own. A selection that enables such a module with that part
+  missing or empty is refused. The one reader, `homelabnext.modules.rules.scope_networks(site,
+  part)`, **fails closed**: an absent, empty or malformed part raises `ScopeMissing`, never an
+  empty list, so a module can never run as if nothing were trusted or excluded.
+- Scope is the **only** place for addresses: a module config default refuses an address literal
+  (the schema), and so does a selection's config value (the loader), so an address cannot reach a
+  module around the scope block.
+- `tools/private_leak_check.py public` fails (`scope-address`) when a YAML or JSON document in the
+  public tree has a top-level `scope` block with an address or network outside the documentation
+  ranges anywhere under it (a misspelt part included, and a documentation address widened beyond
+  its range, `192.0.2.0/16`, too). It also catches what the leak scan does not flag, such as
+  `0.0.0.0/0` or `::/0`.
+- This block is the site's **network** scope. It is not `homelabnext.scope` ([scope guard](scope.md)),
+  which keeps writer tools off scratch targets by registry id.
+
+**Specified, not implemented**: what reads the exclusions. No module in the examples requires
+`target` or the `exclude` parts yet; the rule that an offensive or unattended-mutation reader
+requires them (and subtracts `exclude` from `target` before acting) lands with the first such
+module.
 
 ## What the loader checks
 
@@ -557,7 +606,9 @@ Specified here, applied to the examples by `homelabnext/modules/rules.py`:
    (the list above); no data prefix or records write prefix overlap.
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
-   values are declared keys, and a secret value is the module's own or granted; required core slots
+   values are declared keys, carry no address literal, and a secret value is the module's own or
+   granted; the scope block parses strictly, and every part a selected module requires is present
+   and non-empty; required core slots
    selected; instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
@@ -710,8 +761,8 @@ listed as deferred.
 
 ## Open questions
 
-The operator answered the twelve questions of the first draft provisionally (2026-10-23); this draft
-applies those answers, and the operator may override any of them.
+The operator answered the twelve questions of the first draft provisionally (2026-10-23), and
+question 13 since; this draft applies those answers, and the operator may override any of them.
 
 | # | Question | Provisional answer, as applied |
 |---|---|---|
@@ -727,6 +778,7 @@ applies those answers, and the operator may override any of them.
 | 10 | Where modules live | **`modules/<id>/`** and overlay **`lab/modules/<id>/`**, `hnx_modules` namespace package, no shadowing |
 | 11 | Licence probes | **warn at 30 days, page the owner at 7, red on expiry** |
 | 12 | Reviews | manifests **join the review policy**; human approval for credentials, control plane, data grants, egress and privileged slots |
+| 13 | Where the site's network scope lives | in the **private overlay's selection** (`scope:` in `lab/modules.yml`); the public repository holds the schema, documentation-range examples and the enforcement ([the network scope](#the-network-scope); decided 2026-10-23) |
 
 Still open:
 
