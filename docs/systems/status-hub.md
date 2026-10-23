@@ -103,7 +103,7 @@ reviews: []
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.status-hub`
+- Registry row (Veritas, ADR-0028): `services.status-hub`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 
