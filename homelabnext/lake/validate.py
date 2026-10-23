@@ -50,14 +50,19 @@ def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
             problems.append(f"{path}: integer {value} is outside the 64-bit range of a long")
         return value
     if t == "double":
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int | float)
-            or not math.isfinite(value)
-        ):
+        try:  # an int too large for a float raises OverflowError in isfinite() and float()
+            ok = not isinstance(value, bool) and isinstance(value, int | float)
+            ok = ok and math.isfinite(value)
+            num = float(value) if ok else None
+        except OverflowError:
+            problems.append(
+                f"{path}: a {len(str(abs(value)))}-digit integer is outside the range of a double"
+            )
+            return value
+        if num is None:
             problems.append(f"{path}: expected finite number, got {value!r}")
             return value
-        return float(value)
+        return num
     if t == "boolean":
         if not isinstance(value, bool):
             problems.append(f"{path}: expected boolean, got {type(value).__name__}")

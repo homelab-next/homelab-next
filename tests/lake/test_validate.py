@@ -89,3 +89,16 @@ def test_an_out_of_range_long_is_rejected_before_the_fake_lake_writes():
     with pytest.raises(RowRejected):  # not an OverflowError from SQLite mid-transaction
         lake.write_batch("authentication", [row(activity_id=2**64)], idempotency_key="b")
     assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 0}]
+
+
+def test_a_double_given_an_int_beyond_float_range_is_rejected():
+    v = get_schema("vulnerability_finding")
+    col = next(c.name for c in v.columns if c.type == "double")
+    doc = synthetic.vulnerability_finding(1)[0]
+    doc[col] = 10**400
+    with pytest.raises(
+        RowRejected, match=f"{col}: a 401-digit integer is outside"
+    ):  # not an OverflowError
+        normalize_rows(v, [doc])
+    doc[col] = 7  # an int in range is still taken as a double
+    assert normalize_rows(v, [doc])[0][col] == 7.0
