@@ -1280,6 +1280,32 @@ def test_a_claim_is_judged_by_its_brokers_instance_lock(tmp_path):
     assert svc.state.get_claim(rid)["instance"] == svc.state.instance_id()
 
 
+def test_a_sweep_by_another_broker_cannot_unlink_a_starting_instance(tmp_path, monkeypatch):
+    """A second broker's sweep landing between the create of live/<id> and its flock judged the
+    file gone and unlinked it: the live broker then held a lock nobody could find, and its
+    claims read interrupted."""
+    import fcntl
+
+    from homelabnext.broker import state as state_mod
+
+    d = tmp_path / "state"
+    starting, other = StateDir(d), StateDir(d)
+    real, fired = fcntl.flock, []
+
+    def racing(fd, op):
+        if op == fcntl.LOCK_EX and not fired:
+            fired.append(1)
+            other._sweep_live(d / "live")  # the other broker's first claim, at the worst moment
+        return real(fd, op)
+
+    monkeypatch.setattr(state_mod.fcntl, "flock", racing)
+    iid = starting.instance_id()
+    monkeypatch.setattr(state_mod.fcntl, "flock", real)
+    assert fired and (d / "live" / iid).is_file()
+    assert StateDir(d)._claimant_alive({"instance": iid}) is True
+    assert not list((d / "live").glob(".new-*")), "no temporary name is left behind"
+
+
 # -- single use: run consumes its approval exactly once ------------------------------------------
 
 

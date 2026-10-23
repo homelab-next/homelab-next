@@ -418,16 +418,29 @@ class StateDir:
                 live.mkdir(mode=0o700, exist_ok=True)
                 self._sweep_live(live)
                 iid = new_id("brk")
-                fd = os.open(live / iid, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                # locked under a hidden name the sweep never touches, then renamed into place: a
+                # sweep by another broker can never see live/<id> unlocked and unlink it
+                tmp = live / f".new-{iid}"
+                fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    os.rename(tmp, live / iid)
+                except BaseException:
+                    os.close(fd)
+                    with contextlib.suppress(FileNotFoundError):
+                        tmp.unlink()
+                    raise
                 self._instance = (iid, fd)
             return self._instance[0]
 
     @staticmethod
     def _sweep_live(live: Path) -> None:
         """Remove the lock files of instances that are gone (their lock can be taken), keeping
-        any whose claims still name them readable: a missing file also reads as gone."""
+        any whose claims still name them readable: a missing file also reads as gone.  A hidden
+        ``.new-<id>`` is an instance being created (locked, then renamed): never swept."""
         for p in live.iterdir():
+            if p.name.startswith("."):
+                continue
             if _instance_held(p) is False:
                 with contextlib.suppress(FileNotFoundError):
                     p.unlink()
