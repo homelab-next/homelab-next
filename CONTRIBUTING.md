@@ -153,7 +153,8 @@ and an entry that no longer excuses anything fails the lint.
   (root-only) tests listed in the module's `skips.yml` with the same fields and 90-day limit. A
   skip states its reason in the call, on one line: `t.Skip("docker not available")`, never
   `t.SkipNow()`, `t.Skipf(...)` or a message built elsewhere, in a test or in a helper
-  (`--check-sources` reads every `.go` file of the module and rejects those, because the stream
+  (`--check-sources` reads every `.go` file of the module, `testdata/` and `_*` directories
+  included since a test can import a package there, and rejects those, because the stream
   shows only the last line before `--- SKIP`). One limit of the stream: a parent test that fails
   silently (`t.Fail()`) next to a quarantined subtest is tolerated with it, so fail with a message.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget

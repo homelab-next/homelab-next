@@ -836,7 +836,10 @@ SKIP_SOURCES = {
         "// t.SkipNow() would hide the reason\n"
         "func TestD(t *testing.T) { if t.Skipped() { return } }\n"
     ),
-    "internal/ok/testdata/x_test.go": "func TestX(t *testing.T) { t.SkipNow() }\n",
+    # verify4.md (v4/cs): ./... skips testdata/ and _*, but an import compiles them
+    "internal/ok/testdata/h/h.go": "func NeedDocker(t T) { t.SkipNow() }\n",
+    "internal/ok/_h/h.go": "func NeedDocker(t T) { t.SkipNow() }\n",
+    "internal/ok/.cache/x.go": "func f(t T) { t.SkipNow() }\n",  # no import path reaches it
 }
 
 
@@ -850,18 +853,21 @@ def test_check_sources_rejects_skips_whose_reason_the_stream_cannot_show(tmp_pat
         "internal/bare/b_test.go:4",
         "internal/fmt/f_test.go:3",
         "internal/multi/m_test.go:3",
+        "internal/ok/_h/h.go:3",
         "internal/ok/ok.go:3",
+        "internal/ok/testdata/h/h.go:3",
         "internal/p/p_test.go:5",
         "internal/raw/r_test.go:3",
     ]
     assert "argument list must be one string literal" in found[0]
     assert "Skipf's reason is what its arguments format to" in found[1] and "Skipf" in found[2]
-    assert "reason spans lines" in found[3] and "reason spans lines" in found[6]
-    assert "SkipNow has no reason of its own" in found[4] and "SkipNow" in found[5]
+    assert "reason spans lines" in found[3] and "reason spans lines" in found[8]
+    assert all("SkipNow has no reason of its own" in f for f in found[4:8])
     assert policy.main(["--check-sources", str(tmp_path)]) == 1
     assert "SKIP CALL internal/p/p_test.go:5: .SkipNow: " in capsys.readouterr().out
     clean = tmp_path / "internal" / "ok"
-    (clean / "ok.go").unlink()
+    for helper in ("ok.go", "_h/h.go", "testdata/h/h.go"):
+        (clean / helper).unlink()
     assert policy.main(["--check-sources", str(clean)]) == 0
     assert policy.main(["--check-sources", str(tmp_path / "missing")]) == 2
 

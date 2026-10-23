@@ -556,7 +556,9 @@ def check_sources(root: Path) -> list[str]:
     """``--check-sources``: every skip in the module under ``root`` names its reason in the call.
 
     Every ``.go`` file is read (a helper in a non-test file skips just the same) and tokenized, so
-    comments and string literals are not code.  Each selector of ``Skip``, ``Skipf`` or ``SkipNow``
+    comments and string literals are not code.  ``testdata`` and ``_*`` directories are read too:
+    ``./...`` leaves them out, but a test that imports a package there compiles it, so a fixture
+    that calls ``SkipNow`` fails closed rather than being a helper no check sees.  Each selector of ``Skip``, ``Skipf`` or ``SkipNow``
     is checked, called or not, whatever is before the dot (``t.``, ``x.T().``, ``(*testing.T).``)
     and with any space or line break around it.  Accepted is only ``.Skip(<one string literal>)``,
     the literal the whole argument list and on one line; rejected are ``SkipNow`` (its reason is
@@ -570,8 +572,8 @@ def check_sources(root: Path) -> list[str]:
     out = []
     for path in sorted(root.rglob("*.go")):
         rel = path.relative_to(root)
-        if any(part == "testdata" or part.startswith(("_", ".")) for part in rel.parts[:-1]):
-            continue  # not a package, as for the go tool
+        if any(part.startswith(".") for part in rel.parts[:-1]):
+            continue  # no import path runs through a dot directory (.git, .cache)
         if not path.is_file():
             continue
         toks = [
