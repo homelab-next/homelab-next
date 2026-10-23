@@ -11,18 +11,13 @@ venv/
 .DS_Store
 /dist/
 /build/
-# Go build outputs of orchestrator/ (`make orchestrator-build` writes under /build/): binaries
-# `go build` drops in the module root, test binaries (go test -c), profiles and coverage
-/orchestrator/controller
-/orchestrator/vaultmcp
-/orchestrator/ctxstore
-/orchestrator/spillovermcp
-/orchestrator/mcpcatalog
-/orchestrator/bin/
-/orchestrator/**/*.test
-/orchestrator/**/*.prof
-/orchestrator/**/coverage.out
-/orchestrator/**/__debug_bin*
+# Go build outputs in any module: test binaries (go test -c), profiles, coverage, delve's binary.
+# Binaries are built into /build/ (go build -o); a module whose own build drops them anywhere else
+# ignores them in its own .gitignore, so no component's binary names are listed here.
+*.test
+*.prof
+coverage.out
+__debug_bin*
 # per-run private output (homelabnext/runs.py; HNX_RUNS_DIR moves it)
 /runs/
 .pytest_cache/

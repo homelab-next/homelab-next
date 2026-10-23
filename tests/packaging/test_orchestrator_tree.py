@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The repository is ready for the Go module at orchestrator/ before any Go code lands: build
+"""The repository is ready for Go modules (orchestrator/ first) before any Go code lands: build
 outputs are ignored, the module is owned and dependency-updated, and MANIFEST.in prunes it."""
 
 import shutil
@@ -19,18 +19,16 @@ import go_modules
 @pytest.mark.parametrize(
     ("path", "ignored"),
     [
-        ("orchestrator/controller", True),  # `go build ./cmd/controller` in the module root
-        ("orchestrator/vaultmcp", True),
-        ("orchestrator/internal/api/api.test", True),  # go test -c
+        ("orchestrator/internal/api/api.test", True),  # go test -c, in any module
+        ("labkit/probe/probe.test", True),
         ("orchestrator/internal/queue/cpu.prof", True),
         ("orchestrator/coverage.out", True),
-        ("orchestrator/bin/controller", True),
+        ("build/bin/controller", True),  # where binaries are built
         ("orchestrator/cmd/controller/main.go", False),
         ("orchestrator/internal/api/api_test.go", False),
         ("orchestrator/go.sum", False),
         ("orchestrator/skips.yml", False),
         ("orchestrator/internal/api/testdata/request.json", False),
-        ("homelabnext/controller", False),  # the names are scoped to orchestrator/
     ],
 )
 def test_go_build_outputs_are_ignored_and_sources_are_not(path, ignored):
@@ -39,6 +37,12 @@ def test_go_build_outputs_are_ignored_and_sources_are_not(path, ignored):
     )
     assert r.returncode in (0, 1), r.stderr
     assert (r.returncode == 0) is ignored
+
+
+def test_the_root_gitignore_names_no_components_binaries():
+    """A component's binary names belong to the component (its own .gitignore or /build/)."""
+    lines = [x for x in (ROOT / ".gitignore").read_text().splitlines() if not x.startswith("#")]
+    assert not [x for x in lines if "orchestrator" in x]
 
 
 def test_codeowners_own_the_go_module():
