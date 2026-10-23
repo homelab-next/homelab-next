@@ -495,3 +495,27 @@ def test_parking_costs_one_record_not_a_rewrite_of_the_queue(tmp_path):
     assert 1.9 < sizes[1] / sizes[0] < 2.1  # linear in the parks, not quadratic
     assert elapsed < 60, elapsed  # generous: the whole-queue rewrite took minutes at this size
     b.close()
+
+
+def test_an_abandon_drops_nothing_while_the_old_component_is_unreachable(tmp_path):
+    sc = Scenario(tmp_path)
+    sc.run_to_cutover()
+    b = sc.backend
+    for i in range(3):
+        b.writer.write_batch("dns_activity", [dict(lakes.rows_for("dns_activity")[0], uid=f"u{i}")], idempotency_key=f"k{i}")  # fmt: skip
+    inner = b.old._inner
+
+    class Unreachable:
+        def __getattr__(self, name):
+            return getattr(inner, name)
+
+        def write_batch(self, *a, **kw):
+            raise ConnectionError("old unreachable (transient)")
+
+    b.old._inner = Unreachable()
+    sc.clock.advance(hours=5)
+    with pytest.raises(SwapError, match="old unreachable"):
+        sc.runner.rollback("canary regression; old briefly unreachable", abandon_parked=True)
+    assert [p.idempotency_key for p in b.writer.pending] == ["k0", "k1", "k2"]  # nothing dropped
+    assert not any(e["kind"] == "abandoned-parked" for s in doc_of(sc)["steps"] for e in s["evidence"])  # fmt: skip
+    assert b.old_state().data["state"] == "stopped" and doc_of(sc)["route"]["flipped"] is True

@@ -117,6 +117,8 @@ class DualWriter:
         #: order)``) told of each change as it happens, so a backend can persist the queue at a
         #: cost of one record per change rather than one rewrite of the whole queue
         self.journal: Any = None
+        #: the last replay failure per component (``id()``), cleared by its next success
+        self.last_failure: dict[int, BaseException] = {}
 
     def rerouted(self, primary: Any, secondary: Any) -> DualWriter:
         """A writer for a new direction that keeps this one's parked batches, divergences and stats.
@@ -130,6 +132,7 @@ class DualWriter:
         new.stats = self.stats
         new._order = self._order
         new.journal = self.journal
+        new.last_failure = self.last_failure
         return new
 
     def _park(self, p: _Pending) -> None:
@@ -245,12 +248,14 @@ class DualWriter:
                     high_water=None if newer else p.high_water,
                 )
                 ok += 1
+                self.last_failure.pop(id(target), None)
                 self._settled(p)
                 if not newer:
                     self._mark(target, p.table, p.source, p.order)
             except Exception as exc:
                 still.append(p)
                 failed.append(target)
+                self.last_failure[id(target)] = exc
                 self._record(
                     "replay_failed",
                     p.table,

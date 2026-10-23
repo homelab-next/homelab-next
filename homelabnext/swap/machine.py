@@ -597,9 +597,9 @@ class SwapRunner:
             if not first.ok:
                 gone = _safe(lambda: self.backend.discard_parked(reason))
                 do("abandon parked writes", lambda: gone)
-                if gone.ok:
+                dropped = list(gone.data.get("discarded") or [])
+                if dropped:  # (also those dropped before the old component became unreachable)
                     # the dropped rows are evidence at once, before any later step can fail
-                    dropped = list(gone.data.get("discarded") or [])
                     fname = self._evidence(
                         doc, step, "abandoned-parked", "abandon",
                         {"swap_id": doc["swap_id"], "from_step": from_step, "reason": reason,

@@ -282,21 +282,40 @@ class LakeBackend(Backend):
             )
         return Outcome(True, detail)
 
+    #: errors that mean the old component could not be reached, not that it refused a batch: an
+    #: abandon stops on them and drops nothing more (a backend may widen this)
+    UNAVAILABLE: tuple[type[BaseException], ...] = (ConnectionError, TimeoutError)
+
     def discard_parked(self, reason: str) -> Outcome:
         """Drop only what the old component refuses: replay, drop the batch the replay stopped
         at, and repeat until nothing more is owed.  A batch behind a refused one is replayed, not
-        dropped."""
+        dropped.  When the old component cannot be reached at all (:attr:`UNAVAILABLE`) the loop
+        stops and nothing more is dropped: an unreachable component refuses nothing."""
         gone: list[dict[str, Any]] = []
+        unreachable: BaseException | None = None
         while True:
             self.writer.replay_pending(owed_to=self.old)
             head = self.writer.first_owed(self.old)
             if head is None:
+                break
+            err = self.writer.last_failure.get(id(self.old))
+            if isinstance(err, self.UNAVAILABLE):
+                unreachable = err
                 break
             gone += self.writer.discard_pending(
                 reason, keys=[head.idempotency_key], owed_to=self.old
             )
         gone = json.loads(json.dumps(gone, default=json_value))  # plain JSON, for the evidence
         keys = ", ".join(g["idempotency_key"] for g in gone) or "none"
+        if unreachable is not None:
+            left = self.writer.owed_to(self.old)
+            why = (
+                f"old unreachable ({type(unreachable).__name__}: {unreachable}); "
+                f"{left} parked batches kept"
+            )
+            if gone:
+                why += f"; discarded before that: {keys}"
+            return Outcome(False, why, {"discarded": gone, "unreachable": True, "pending": left})
         return Outcome(True, f"discarded {len(gone)} parked batches: {keys}", {"discarded": gone})
 
     def old_state(self) -> Outcome:
