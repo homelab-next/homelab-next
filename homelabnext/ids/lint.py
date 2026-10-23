@@ -54,6 +54,10 @@ def _is_doc_ip(token: str) -> bool:
     return any(ip in net for net in _DOC_NETS)
 
 
+#: the documentation ranges (RFC 5737, RFC 3849), for every check that tolerates only them
+DOCUMENTATION_NETS = tuple(_DOC_NETS)
+
+
 def _ip_tokens(text: str) -> Iterator[str]:
     for rx in (_V4_RE, _V6_RE):
         for m in rx.finditer(text):

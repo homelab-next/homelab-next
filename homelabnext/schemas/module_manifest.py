@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from homelabnext.modules.rules import SCOPE_PARTS
+
 __all__ = [
     "RESERVED_IDS",
     "lake_table_schema",
@@ -384,8 +386,20 @@ def _defs() -> dict[str, Any]:
                 "model_roles": arr(ref("requirement_model_role")),
                 "interfaces": arr(ref("requirement_interface")),
                 "hosts": arr(ref("requirement_host")),
+                "scope": arr(ref("requirement_scope")),
             },
-            desc="Everything the module needs, by slot, role or interface; never a product.",
+            desc="Everything the module needs, by slot, role, interface or part of the site's network scope; never a product.",
+        ),
+        "requirement_scope": obj(
+            {
+                "part": {
+                    "enum": list(SCOPE_PARTS),
+                    "description": "A part of the site selection's scope block. The module reads the addresses from the selection, never from its own config: a selection that enables it with the part missing or empty is refused (loader), and its reader fails closed.",
+                },
+                "purpose": text(200),
+            },
+            ["part"],
+            "A part of the site's network scope the module needs (the external data collector's trusted.wan, so it never reports the lab's own addresses).",
         ),
         "migration": obj(
             {
@@ -1208,7 +1222,7 @@ def lake_table_schema() -> dict[str, Any]:
 
 
 def module_selection_schema() -> dict[str, Any]:
-    """A site's module selection (docs/modules.md): hosts, slot choices, bindings and grants.
+    """A site's module selection (docs/modules.md): hosts, slot choices, bindings, grants, scope.
 
     Only the shape: every cross-reference (a provider fills the slot, an agent key exists, a grant
     is allowed) is a loader rule (``homelabnext/modules/rules.py``, ``site_problems``)."""
@@ -1328,12 +1342,56 @@ def module_selection_schema() -> dict[str, Any]:
         },
         desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
     )
+    octet = "(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+    address = {
+        "type": "string",
+        "maxLength": 64,
+        "anyOf": [
+            {"pattern": "^" + octet + "(?:\\." + octet + "){3}(?:/(?:3[0-2]|[12]?[0-9]))?" + G},
+            {
+                "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}"
+                "(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?" + G
+            },
+        ],
+        "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused.",
+    }
+    part = lambda desc: arr(address, desc, 1)  # noqa: E731
+    scope = obj(
+        {
+            "trusted": obj(
+                {
+                    "wan": part(
+                        "The lab's own public addresses: what the internet sees the lab as."
+                    ),
+                    "nets": part("The lab's own internal networks."),
+                    "tooling": part(
+                        "Where the operator's own tooling runs from (scanners, jump hosts, CI runners)."
+                    ),
+                },
+                desc="Addresses that are the lab itself: never reported as an outsider.",
+                minProperties=1,
+            ),
+            "target": part("What the lab's assessment tooling may touch."),
+            "exclude": obj(
+                {
+                    "unattended_mutation": part(
+                        "Never changed by an unattended job: a human approves each change."
+                    ),
+                    "offensive": part("Never the target of offensive tooling, even inside target."),
+                },
+                desc="Carve-outs every reader honours, whatever else names the address.",
+                minProperties=1,
+            ),
+        },
+        desc="The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present and non-empty (loader), and every reader fails closed.",
+        minProperties=1,
+    )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
         "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
         "title": "Module selection",
-        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, and the grants a module cannot give itself. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",
         "additionalProperties": False,
         "required": ["profile", "hosts", "slots"],
@@ -1360,6 +1418,7 @@ def module_selection_schema() -> dict[str, Any]:
                 "description": "Lane bindings for a selected provider's agents (its placement and config are per slot instance).",
             },
             "grants": grants,
+            "scope": scope,
         },
     }
 

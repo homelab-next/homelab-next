@@ -108,3 +108,9 @@ grants:
     external-collector:
       edge:
       - external
+scope:
+  trusted:
+    wan:
+    - 203.0.113.7/32
+    nets:
+    - 192.0.2.0/24

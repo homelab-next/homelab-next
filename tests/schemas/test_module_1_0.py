@@ -110,6 +110,7 @@ NEGATIVES = {
     "requirement-without-version": "requires/capabilities/0",
     "requires-bare-capability": "requires/capabilities/0",
     "requires-product-not-slot": "requires/capabilities/0/cap",
+    "requires-scope-unknown-part": "requires/scope/0/part",
     "reserved-id": "id",
     "retired-without-reason": "$",
     "reviews-inside-the-module": "$",
@@ -858,7 +859,15 @@ SELECTION_NEGATIVES = {
     "unknown-grant-kind": "grants",
     "choice-without-instance": "slots/notify",
     "lane-binding-without-real": "features/external-collector/agents/external-collector-analyst/lanes",
+    "scope-empty-list": "scope/trusted/wan",
+    "scope-malformed-cidr": "scope/target/0",
+    "scope-unknown-part": "scope/trusted",
 }
+
+
+def test_every_selection_negative_file_is_listed():
+    found = (ROOT / "schemas/platform/negative").glob("module_selection.*")
+    assert {p.stem.split(".", 1)[1] for p in found} == set(SELECTION_NEGATIVES)
 
 
 @pytest.mark.parametrize("name", sorted(SELECTION_NEGATIVES))
@@ -1119,6 +1128,43 @@ SITE_DEFECTS.update(
                 "resources", [{"kind": "tpu", "exclusive": False}]
             ),
             "no tpu named",
+        ),
+        "a module requiring a scope part, with no scope block": (
+            "single-box",
+            lambda s, m: s.pop("scope"),
+            "external-collector: requires scope.trusted.wan, which the site leaves missing or empty",
+        ),
+        "a module requiring a scope part the block leaves out": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].pop("wan"),
+            "external-collector: requires scope.trusted.wan",
+        ),
+        "an empty scope part (its reader fails closed)": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("wan", []),
+            "scope.trusted.wan: missing or empty",
+        ),
+        "a malformed CIDR in the scope": (
+            "full",
+            lambda s, m: s["scope"]["target"].__setitem__(0, "198.51.100.0/33"),
+            "scope.target[0]: '198.51.100.0/33' is not an address or network",
+        ),
+        "a scope network with host bits set": (
+            "full",
+            lambda s, m: s["scope"]["exclude"]["offensive"].__setitem__(0, "192.0.2.1/28"),
+            "has host bits set",
+        ),
+        "a scope network listed twice": (
+            "small-lab",
+            lambda s, m: s["scope"]["trusted"]["tooling"].append("192.0.2.200/32"),
+            "scope.trusted.tooling: a network is listed twice",
+        ),
+        "an address literal as a site config value": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "edge_region", "192.0.2.10"
+            ),
+            "edge_region: an address literal (addresses live in the selection's scope block",
         ),
         "count multiplies the footprint": (
             "single-box",

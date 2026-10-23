@@ -9,11 +9,13 @@ shows each rule refusing a planted defect.  Each function returns a list of prob
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.ids.lint import DOCUMENTATION_NETS, scan_text
 
 Doc = dict[str, Any]
 
@@ -42,6 +44,80 @@ SECTION = {"feature": "features", "core": "core", "provider": "providers"}
 SHARED_ADAPTERS = "homelabnext.conform.adapters."
 PRIVILEGED_SHARED_CONFIG = {"cap:edge", "cap:idp"}
 STATIC_HOSTING = "cap:static-hosting"
+#: the parts of a selection's scope block, as a module's requires.scope names them
+SCOPE_PARTS = (
+    "trusted.wan",
+    "trusted.nets",
+    "trusted.tooling",
+    "target",
+    "exclude.unattended_mutation",
+    "exclude.offensive",
+)
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+class ScopeMissing(ValueError):
+    """A scope part a reader needs is absent, empty or malformed: the reader stops (fails closed)."""
+
+
+def _scope_node(site: Doc, part: str) -> Any:
+    node: Any = site.get("scope")
+    for key in part.split("."):
+        node = node.get(key) if isinstance(node, dict) else None
+    return node
+
+
+def scope_networks(site: Doc, part: str) -> list[Network]:
+    """The networks of one scope part (``trusted.wan``), parsed strictly.
+
+    The one reader of a selection's addresses: an absent, empty or malformed part raises
+    :class:`ScopeMissing`, never an empty list, so a module that excludes its trusted addresses
+    can never run as if there were none."""
+    if part not in SCOPE_PARTS:
+        raise ScopeMissing(f"scope.{part}: no such scope part")
+    node = _scope_node(site, part)
+    if not isinstance(node, list) or not node:
+        raise ScopeMissing(f"scope.{part}: missing or empty")
+    out: list[Network] = []
+    for i, v in enumerate(node):
+        try:
+            if not isinstance(v, str):
+                raise TypeError("not a string")
+            out.append(ipaddress.ip_network(v, strict=True))
+        except (TypeError, ValueError) as exc:
+            raise ScopeMissing(
+                f"scope.{part}[{i}]: {v!r} is not an address or network ({exc})"
+            ) from exc
+    return out
+
+
+def is_documentation(net: Network) -> bool:
+    """True when every address of ``net`` is in a documentation range."""
+    return any(net.version == d.version and net.subnet_of(d) for d in DOCUMENTATION_NETS)
+
+
+def scope_problems(site: Doc) -> list[str]:
+    """The scope block itself: every present part parses strictly (no host bits, no malformed
+    CIDR), is non-empty and names no network twice.  Which parts must be present is the needing
+    modules' rule (``site_problems``)."""
+    out = []
+    for part in SCOPE_PARTS:
+        if _scope_node(site, part) is None:
+            continue
+        try:
+            nets = scope_networks(site, part)
+        except ScopeMissing as exc:
+            out.append(str(exc))
+            continue
+        if len(set(nets)) != len(nets):
+            out.append(f"scope.{part}: a network is listed twice")
+    return out
+
+
+def _address_literal(value: Any) -> bool:
+    return isinstance(value, str) and any(
+        v.code == "IP_LITERAL" for v in scan_text(value, allow_documentation=False)
+    )
 
 
 def us(mid: str) -> str:
@@ -577,6 +653,16 @@ def site_problems(
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units)
     out += _config_problems(site, sel, grants)
+    out += scope_problems(site)
+    for m in sel.values():
+        for need in m["requires"].get("scope", []):
+            try:
+                scope_networks(site, need["part"])
+            except ScopeMissing:
+                out.append(
+                    f"{m['id']}: requires scope.{need['part']}, which the site leaves missing or "
+                    "empty (its reader fails closed)"
+                )
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
     #: registry services an egress svc: target can name: every selected slot, every instance, and
@@ -798,9 +884,10 @@ def _binding_problems(site: Doc, mods: dict[str, Doc], sel: dict[str, Doc]) -> l
 
 
 def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
-    """A selection's config values: declared keys only, and a secret-typed value is a secret in
-    the module's own namespace or one granted to it in grants.secrets (the same rule as a
-    manifest default, so an overlay value cannot read another module's secret)."""
+    """A selection's config values: declared keys only, no address literal (the scope block is the
+    one place for addresses), and a secret-typed value is a secret in the module's own namespace
+    or one granted to it in grants.secrets (the same rule as a manifest default, so an overlay
+    value cannot read another module's secret)."""
     places = [
         (f"{sec}.{mid}", mid, b.get("config", {}))
         for sec in SECTION.values()
@@ -818,6 +905,12 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
         for k, v in cfg.items():
             if k not in spec:
                 out.append(f"{where}.config.{k}: the module declares no such key")
+                continue
+            if _address_literal(v):
+                out.append(
+                    f"{where}.config.{k}: an address literal (addresses live in the selection's "
+                    "scope block, which the module requires)"
+                )
                 continue
             secretish = isinstance(v, str) and v.lower().startswith("secret:")
             if spec[k]["type"] != "secret":

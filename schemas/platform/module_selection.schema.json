@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/platform/module_selection/1.0",
   "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
   "title": "Module selection",
-  "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, and the grants a module cannot give itself. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+  "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -651,6 +651,144 @@
         }
       },
       "description": "Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trusted": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "wan": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 64,
+                "anyOf": [
+                  {
+                    "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+                  },
+                  {
+                    "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+                  }
+                ],
+                "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+              },
+              "minItems": 1,
+              "description": "The lab's own public addresses: what the internet sees the lab as."
+            },
+            "nets": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 64,
+                "anyOf": [
+                  {
+                    "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+                  },
+                  {
+                    "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+                  }
+                ],
+                "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+              },
+              "minItems": 1,
+              "description": "The lab's own internal networks."
+            },
+            "tooling": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 64,
+                "anyOf": [
+                  {
+                    "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+                  },
+                  {
+                    "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+                  }
+                ],
+                "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+              },
+              "minItems": 1,
+              "description": "Where the operator's own tooling runs from (scanners, jump hosts, CI runners)."
+            }
+          },
+          "description": "Addresses that are the lab itself: never reported as an outsider.",
+          "minProperties": 1
+        },
+        "target": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "anyOf": [
+              {
+                "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+              },
+              {
+                "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+              }
+            ],
+            "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+          },
+          "minItems": 1,
+          "description": "What the lab's assessment tooling may touch."
+        },
+        "exclude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "unattended_mutation": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 64,
+                "anyOf": [
+                  {
+                    "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+                  },
+                  {
+                    "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+                  }
+                ],
+                "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+              },
+              "minItems": 1,
+              "description": "Never changed by an unattended job: a human approves each change."
+            },
+            "offensive": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 64,
+                "anyOf": [
+                  {
+                    "pattern": "^(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(?:/(?:3[0-2]|[12]?[0-9]))?$(?!\\n)"
+                  },
+                  {
+                    "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?$(?!\\n)"
+                  }
+                ],
+                "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused."
+              },
+              "minItems": 1,
+              "description": "Never the target of offensive tooling, even inside target."
+            }
+          },
+          "description": "Carve-outs every reader honours, whatever else names the address.",
+          "minProperties": 1
+        }
+      },
+      "description": "The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present and non-empty (loader), and every reader fails closed.",
+      "minProperties": 1
     }
   }
 }

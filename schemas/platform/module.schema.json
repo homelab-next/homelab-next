@@ -1038,9 +1038,42 @@
           "items": {
             "$ref": "#/$defs/requirement_host"
           }
+        },
+        "scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/requirement_scope"
+          }
         }
       },
-      "description": "Everything the module needs, by slot, role or interface; never a product."
+      "description": "Everything the module needs, by slot, role, interface or part of the site's network scope; never a product."
+    },
+    "requirement_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "part"
+      ],
+      "properties": {
+        "part": {
+          "enum": [
+            "trusted.wan",
+            "trusted.nets",
+            "trusted.tooling",
+            "target",
+            "exclude.unattended_mutation",
+            "exclude.offensive"
+          ],
+          "description": "A part of the site selection's scope block. The module reads the addresses from the selection, never from its own config: a selection that enables it with the part missing or empty is refused (loader), and its reader fails closed."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "description": "A part of the site's network scope the module needs (the external data collector's trusted.wan, so it never reports the lab's own addresses)."
     },
     "migration": {
       "type": "object",

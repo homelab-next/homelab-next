@@ -69,6 +69,12 @@ allow:
     reason: central product roles enroll guests by address; the synthetic guests use documentation addresses (the data under test)
   - path: "tests/roles/test_control_roles.py"
     reason: the firewall, drill and directory tests use documentation addresses and example.internal registry endpoints as the data under test
+  - path: "schemas/platform/negative/module_selection.*.yml"
+    reason: negative selections generated from the example site profiles, whose scope blocks hold documentation addresses only (private_leak_check enforces it)
+  - path: "tests/modules/test_module_rules.py"
+    reason: the scope reader's tests; documentation-range networks are the data under test
+  - path: "tests/schemas/test_module_1_0.py"
+    reason: site-rule cases plant documentation-range scope entries and config values to prove they are refused
   - path: "schemas/platform/negative/service.*.yml"
     reason: negative registry fixtures derived from the synthetic example lab (documentation addresses only)
   - path: "docs/compute-model.md"
