@@ -59,6 +59,7 @@ import argparse
 import contextlib
 import json
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -365,13 +366,23 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         return 2
     host, port = srv.server_address[:2]
     print(f"status hub (read-only) on http://{host}:{port}/  (Ctrl-C stops)")
+    _serve(srv, store)
+    return 0
+
+
+def _serve(srv, store) -> None:
+    """Serve until interrupted, purging ``store`` past retention on a timer meanwhile (a
+    long-running listener must not keep agent activity past ``retention_days`` on disk)."""
+    stop = threading.Event()
+    if store is not None:
+        store.retention_timer(stop)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         srv.server_close()
-    return 0
 
 
 def _power_specs(args, specs):
@@ -510,12 +521,7 @@ def _ingest(args, cfg, store, clock: Callable[[], float]) -> int:
         return 2
     host, port = srv.server_address[:2]
     print(f"agent-activity ingest on http://{host}:{port}/ingest/agent-activity  (Ctrl-C stops)")
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        srv.server_close()
+    _serve(srv, store)
     return 0
 
 

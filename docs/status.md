@@ -291,8 +291,10 @@ Bearer` credentials, secret-key values; typed labels such as `[REDACTED:token:1]
 phone, card, national id and addresses too when `redact_personal_data` is on); the **cap** (after
 redaction, so a cut never leaves half a secret the screener cannot see); validation again; the
 write. A secret the screener recognises never reaches the disk. Rows older than
-`retention_days` (by event time or by arrival) are deleted when the store opens and on every
-write.
+`retention_days` (by event time or by arrival) are deleted when the store opens, on every
+write, by any read once the last purge is a minute old (so a long-running console never serves a
+row much past retention, even with the ingest quiet), and every minute by a timer in the
+long-running `hnx status serve` and `hnx status ingest` (so an idle store is purged on disk).
 
 ### Collecting: sources and the push ingest
 
