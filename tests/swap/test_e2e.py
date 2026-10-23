@@ -591,3 +591,22 @@ def test_a_missing_registry_starts_unflipped(tmp_path):
     sc.registry.unlink()
     b = _backend_like(sc, None)
     assert b.writer.primary is b.old and b.old_state().data["state"] == "running"
+
+
+def test_the_journal_is_compacted_as_settled_records_pile_up(tmp_path):
+    from homelabnext.swap.dualwrite import _Pending
+    from homelabnext.swap.journal import ParkedJournal
+
+    path = tmp_path / "parked.jsonl"
+    j = ParkedJournal(path, compact_every=10)
+    rows = [dict(lakes.rows_for("dns_activity")[0], uid=f"r{i}") for i in range(20)]
+    for n in range(1, 101):  # a flapping candidate: park and settle all day
+        j.park("new", _Pending("dns_activity", rows, f"k{n}", "s", str(n), None, n))
+        j.settled(n)
+    j.park("new", _Pending("dns_activity", rows, "live", "s", "101", None, 101))
+    j.close()
+    lines = path.read_text().splitlines()
+    assert len(lines) < 25, len(lines)  # not 201: compacted every 10 settles
+    again = ParkedJournal(path)
+    assert [r["idempotency_key"] for r in again.state.parked] == ["live"]
+    again.close()

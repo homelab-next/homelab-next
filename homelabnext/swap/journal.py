@@ -17,8 +17,9 @@ to open, rather than drop parked writes.  The file is ``0600``, and an exclusive
 ``<path>.lock`` (opened without following a symlink) is held for the journal's lifetime: a second
 backend on the same path is refused, so two writers can never overwrite each other's batches.
 ``close()`` releases it, and so does a journal that is garbage-collected unclosed (a finalizer).
-An append after ``close()`` raises: parked batches are never kept in memory only by mistake.  Stale temp files of a crashed compaction
-are removed at open.
+An append after ``close()`` raises: parked batches are never kept in memory only by mistake.  It is also compacted in place after every
+``compact_every`` settled records, so rows parked and settled in one long-lived process do not
+pile up.  Stale temp files of a crashed compaction are removed at open.
 """
 
 from __future__ import annotations
@@ -41,6 +42,9 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 FILE_MODE = 0o600
+#: settled records after which the journal is compacted in place (a flapping candidate parks and
+#: settles rows all day; without this they stay in the file until the next open)
+COMPACT_EVERY = 1000
 _TMP = re.compile(r"^\.(?P<name>.+)\.(?P<pid>\d+)\.[0-9a-f]+\.tmp$")
 
 
@@ -72,8 +76,10 @@ def _pid_alive(pid: int) -> bool:
 
 
 class ParkedJournal:
-    def __init__(self, path: str | os.PathLike):
+    def __init__(self, path: str | os.PathLike, *, compact_every: int = COMPACT_EVERY):
         self.path = Path(path)
+        self.compact_every = max(1, int(compact_every))
+        self._settled_since = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             lock_fd = os.open(
@@ -175,16 +181,40 @@ class ParkedJournal:
         os.fsync(fh.fileno())
 
     def park(self, owed_to: str, p: Any) -> None:
-        self._append({"op": "park", "owed_to": owed_to, **p.to_dict()})
+        rec = {"op": "park", "owed_to": owed_to, **p.to_dict()}
+        self._append(rec)
+        st = self.state
+        st.parked = [r for r in st.parked if int(r["order"]) != int(p.order)]
+        st.parked.append(json.loads(json.dumps(rec, default=json_value)))
+        st.parked.sort(key=lambda r: int(r["order"]))
+        st.last_order = max(st.last_order, int(p.order))
 
     def settled(self, order: int) -> None:
         self._append({"op": "settled", "order": int(order)})
+        self.state.parked = [r for r in self.state.parked if int(r["order"]) != int(order)]
+        self._settled_since += 1
+        if self._settled_since >= self.compact_every:
+            self.compact()
 
     def mark(self, on: str, table: str, source: str, order: int) -> None:
         self._append({"op": "mark", "on": on, "table": table, "source": source, "order": order})
+        k = (on, table, source)
+        self.state.marks[k] = max(order, self.state.marks.get(k, 0))
+        self.state.last_order = max(self.state.last_order, int(order))
 
     def old_down(self, down: bool) -> None:
         self._append({"op": "old", "down": bool(down)})
+        self.state.old_down = bool(down)
+
+    def compact(self) -> None:
+        """Rewrite the journal as its live records only (atomically) and append from there."""
+        if self.closed or self._res["fh"] is None:
+            raise LakeError(f"the parked-batch journal {self.path} is closed")
+        self._res["fh"].close()
+        self._res["fh"] = None
+        self._compact()
+        self._res["fh"] = open(self.path, "a", encoding="utf-8")  # noqa: SIM115 - held open
+        self._settled_since = 0
 
     def close(self) -> None:
         """Release the file and the lock (idempotent); later appends raise."""
