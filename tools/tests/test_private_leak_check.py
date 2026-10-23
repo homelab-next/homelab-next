@@ -654,6 +654,12 @@ ADDRESS_CASES = {
     "mapped loopback beside a real address": (
         f"scope:\n  bind: '::ffff:{LOOPBACK}'\n  wan: ['{PADDED}/32']\n"
     ),
+    # VERIFY4 SF3: a Python subscript assignment, this repository's own test idiom
+    "subscript, short form": f'site["scope"]["target"] = ["{SHORT_PRIVATE}/16"]\n',
+    "subscript, zero-padded": f'site["scope"]["trusted"]["wan"] = ["{PADDED}/32"]\n',
+    "subscript, integer": f"site['scope']['trusted']['wan'] = [{PUBLIC_INT}]\n",
+    "subscript, augmented": f'site["scope"]["target"] += ["{PADDED}/32"]\n',
+    "subscript, multi-line": f'site["scope"] = {{\n    "target": ["{PRIVATE_NET}"],\n}}\n',
     # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
     "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
     "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
@@ -845,6 +851,8 @@ PASSING_ELSEWHERE = [
     f"scope:\n  bind: {LOOPBACK}\n  any: {UNSPECIFIED}:9090\n  metadata: {METADATA}\n"
     + "  v6: '[" + ":" * 2 + "1]:9090'\n  wild: '[" + ":" * 2 + "]:80'\n  ll: 'fe80" + "::1%eth0'\n"
     + f"  mapped: '::ffff:{LOOPBACK}'\n",
+    # VERIFY4 SF3: a comparison is no assignment
+    'assert site["scope"]["n"] == 17' + "00000000\n",
 ]
 
 
@@ -987,6 +995,7 @@ LINEAR_SHAPES = {
         "x.json",
         lambda n: "[" + ",".join(f'{{"scope":"a","id":{i}}}' for i in range(n)) + "]",
     ),
+    "subscripts that never assign": ("x.py", lambda n: '["scope"]' * n + "\n"),
     "one-line HTML with entities": (
         "x.html",
         lambda n: "".join(

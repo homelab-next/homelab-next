@@ -83,7 +83,8 @@ and only while its marker says ``fictional: true``.  Findings:
                    the raw text under every ``scope`` key (any case, quoted or not, ``scope:``,
                    ``scope =`` at a line's start, ``[scope]``/``[[scope]]`` headers, dotted
                    ``scope.x`` keys, a comment before the colon, Markdown `` `scope`: ``,
-                   ``**scope**:``, ``_scope_:`` and table rows, and the same after decoding
+                   ``**scope**:``, ``_scope_:`` and table rows, a subscript assignment
+                   ``x["scope"][...] = ...``, and the same after decoding
                    YAML, JSON and TOML escapes, an escaped line break and HTML character
                    references; never a call's ``scope=`` keyword argument or an HTML
                    attribute), which also reads what does not parse (Markdown prose and fences
@@ -770,14 +771,18 @@ SCOPE_EXEMPT = {
 #: Markdown spellings count (`` `scope`: ``, ``**scope**:``, ``_scope_:``, a table row whose first
 #: cell is ``scope``).  Never a key: a call's keyword argument (``fixture(scope="module")``,
 #: ``f(a, scope=x)``) or an HTML or XML attribute (``<th scope="row">``): ``scope =`` counts only
-#: at a line's start or, spaced, inside a TOML inline table.
+#: at a line's start or, spaced, inside a TOML inline table.  A Python subscript assignment
+#: (``site["scope"]["target"] = [...]``) is a key; a comparison (``==``) is not.
 _SCOPE_KEY = re.compile(
     r"""(?<![\w$-])[`*_"']*scope[`*_"'\]}]*"""  # Markdown `scope`, **scope**, _scope_, quotes
     r"""(?:[ \t]*(?:\#[^\n]*)?\n)*[ \t]*"""  # comment lines and line breaks before the colon
     r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_])"""  # scope: or a dotted scope.x key
     r"""|^[ \t]*["']?scope["']?[ \t]*=(?!=)"""  # scope = at a line's start (TOML, INI)
     r"""|(?<=[{,])[ \t]*["']?scope["']?[ \t]+=[ \t]"""  # in a TOML inline table, spaced
-    r"""|^[ \t]*\|[ \t]*[`*_]*scope(?:\.[\w.]+)?[`*_]*[ \t]*\|""",  # a Markdown table row
+    r"""|^[ \t]*\|[ \t]*[`*_]*scope(?:\.[\w.]+)?[`*_]*[ \t]*\|"""  # a Markdown table row
+    # a subscript assignment (site["scope"][...] = ..., also |= and +=), never a comparison;
+    # at most eight subscripts of at most 256 characters each, so a run of them stays linear
+    r"""|\[[ \t]*["']scope["'][ \t]*\](?:[ \t]*\[[^\]\n]{0,256}+\]){0,8}+[ \t]*[|+]?=(?!=)""",
     re.I | re.M,
 )
 #: a TOML table header line (``[a.b]``, ``[[a."b"]]``): the whole line, nothing after but a comment
