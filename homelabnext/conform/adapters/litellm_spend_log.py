@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import math
+import numbers
 import os
 import re
 import urllib.error
@@ -86,6 +87,30 @@ MAX_TIMEOUT = 600
 _SECRET_REF = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
 
 
+def _plain_float(value: object) -> float | None:
+    """``value`` as a plain ``float``, or None for a bool or a non-real.  The range is checked on
+    the converted value, so a subclass that overrides its comparisons cannot pass a check and
+    reach the socket as something else."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out if type(out) is float else None
+
+
+def _plain_int(value: object) -> int | None:
+    """``value`` as a plain ``int``, or None for a bool or a non-integral (see :func:`_plain_float`)."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        return None
+    try:
+        out = int(value)
+    except (TypeError, ValueError):
+        return None
+    return out if type(out) is int else None
+
+
 class SpendLogError(TurnSourceError):
     """The spend log could not be read (configuration, transport, refusal, shape)."""
 
@@ -123,15 +148,13 @@ class SpendLogReader:
             check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
         except ValueError as exc:
             raise SpendLogError(str(exc)) from None
-        if not 1 <= page_size <= 1000 or max_pages < 1:
+        page_size, max_pages = _plain_int(page_size), _plain_int(max_pages)
+        if page_size is None or max_pages is None or not 1 <= page_size <= 1000 or max_pages < 1:
             raise SpendLogError("page_size is 1..1000 and max_pages positive")
         # a socket refuses a negative timeout and overflows on a huge one at read time, which
         # failed every pass with a traceback instead of a configuration error at startup
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, int | float)
-            or not 0 < timeout <= MAX_TIMEOUT
-        ):
+        timeout = _plain_float(timeout)
+        if timeout is None or not 0 < timeout <= MAX_TIMEOUT:
             raise SpendLogError(f"timeout is seconds, 0 < timeout <= {MAX_TIMEOUT}")
         self.url = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{SPEND_LOGS_PATH}"
         self.key_ref, self._env, self.timeout = key, env, timeout

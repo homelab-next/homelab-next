@@ -228,6 +228,78 @@ def test_the_reader_takes_a_timeout_inside_its_range(timeout):
     assert SpendLogReader("https://gateway.example.com", timeout=timeout).timeout == timeout
 
 
+class _LyingFloat(float):
+    """Says it is inside any range it is compared with, whatever its value."""
+
+    def __gt__(self, other):
+        return True
+
+    def __lt__(self, other):
+        return True
+
+    def __ge__(self, other):
+        return True
+
+    def __le__(self, other):
+        return True
+
+
+class _LyingInt(int):
+    """The same lie for the integer options."""
+
+    def __gt__(self, other):
+        return True
+
+    def __lt__(self, other):
+        return True
+
+    def __ge__(self, other):
+        return True
+
+    def __le__(self, other):
+        return True
+
+
+@pytest.mark.parametrize("timeout", [_LyingFloat(-1.0), _LyingFloat(1e308)])
+def test_a_timeout_whose_comparisons_lie_is_judged_by_its_value(timeout):
+    """The range is checked on a plain float: a subclass that answers every comparison with True
+    reached the socket as -1 or 1e308 and failed every read, as the original bug did."""
+    with pytest.raises(SpendLogError, match="0 < timeout <= 600"):
+        SpendLogReader("https://gateway.example.com", timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [_LyingFloat(15.0), 7])
+def test_an_accepted_timeout_is_stored_as_a_plain_float(timeout):
+    stored = SpendLogReader("https://gateway.example.com", timeout=timeout).timeout
+    assert type(stored) is float and stored == float(timeout)
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        {"page_size": _LyingInt(5000)},
+        {"page_size": _LyingInt(0)},
+        {"max_pages": _LyingInt(-1)},
+        {"page_size": True},
+        {"max_pages": True},
+        {"max_pages": 1e308},
+        {"page_size": 10.0},
+        {"page_size": "10"},
+    ],
+)
+def test_page_size_and_max_pages_are_plain_ints_in_range(option):
+    """max_pages=1e308 raised a TypeError inside range() on the first read and page_size=True was
+    taken as 1; a lying int subclass passed the range check with any value."""
+    with pytest.raises(SpendLogError, match="page_size is 1..1000"):
+        SpendLogReader("https://gateway.example.com", **option)
+
+
+def test_accepted_page_options_are_stored_as_plain_ints():
+    reader = SpendLogReader("https://gateway.example.com", page_size=_LyingInt(10), max_pages=3)
+    assert (type(reader.page_size), type(reader.max_pages)) == (int, int)
+    assert (reader.page_size, reader.max_pages) == (10, 3)
+
+
 @pytest.mark.parametrize(
     "key",
     [
