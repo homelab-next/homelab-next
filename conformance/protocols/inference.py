@@ -110,27 +110,41 @@ TURN_FIELDS = (
 #: used with ``fullmatch`` only (a ``$`` would let a trailing newline through)
 TURN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 #: what no name holds although its characters allow it, as lookaheads (used in both patterns
-#: below, and in ``agent.job.finished``'s ``model``): a URL (a scheme, ``:/``, as in
-#: ``https://`` or ``https:/x``), an IPv4 address, a ``host:port/``, or a mail address (``@``
-#: then a dotted domain whose last label is letters: ``alice@example.com``).  An ``@`` before
-#: a version (``model@v1.2``, ``claude-sonnet@vertex.v2``, ``...-v2@20241022``) is a name, and so
-#: is ``alice@corp``: a single label after ``@`` is indistinguishable from a deployment-qualified
-#: alias (``sonnet@vertex``), so it is accepted.  Whitespace and control characters are outside
-#: both character sets.  A pattern can never refuse every disguise; this refuses the shapes a
-#: careless source would emit
+#: below, and in ``agent.job.finished``'s ``model``): a URL (a scheme, ``:/`` after two or more
+#: characters, as in ``https://`` or ``https:/x``; a drive letter, ``C:/models/x``, is a path),
+#: an IPv4 address as a token of its own (a dotted quad alone, after ``x:`` or between ``/``;
+#: never a four-part version such as ``v1.0.0.1``), a ``host:port/``, or a mail address (``@``
+#: then a dotted domain whose last label is letters, a trailing dot or ``_`` in a label
+#: included: ``alice@example.com``, ``bob@example.com.``).  An ``@`` before a version
+#: (``model@v1.2``, ``claude-sonnet@vertex.v2``, ``...-v2@20241022``) is a name, and so is
+#: ``alice@corp``: a single label after ``@`` is indistinguishable from a deployment-qualified
+#: alias (``sonnet@vertex``), so it is accepted.  Whitespace, control characters and ``+`` (the
+#: separator of ``+``-joined prose and ``user+tag@`` addresses; no model, alias or call type uses
+#: it) are outside both character sets.
+#:
+#: The residual is an identifier-shaped channel: words joined by ``_``, ``.``, ``-`` or ``/``
+#: (``the_prompt_was_...``) pass, as they do in ``run_id``, ``gateway_tag`` and ``tools[].name``,
+#: since refusing them would refuse real names (``together_ai``, ``Q4_K_M``, dotted versions).
+#: The rule stops a careless source (prose with spaces, URLs, addresses), not a hostile one; the
+#: producers are the pinned controller and the operator's gateway.  A controller whose model
+#: value fails :data:`MODEL_PATTERN` sends ``model: null`` (the record stays, the name is
+#: unknown), as an adapter maps such a turn name to null
 NOT_URL_OR_ADDRESS = (
-    r"(?!.*:/)"
-    r"(?!(?:.*[^0-9])?[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?![0-9]))"
+    r"(?!.{2,}:/)"
+    r"(?!(?:.*[:/@])?[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?:[:/]|$))"
     r"(?!.*:[0-9]{2,5}/)"
-    r"(?!.*@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9._-]))"
+    r"(?!.*@(?:[A-Za-z0-9_-]+\.)+[A-Za-z]{2,}\.?(?![A-Za-z0-9.]))"
 )
-#: ``model``, what served the call: up to 256 characters; a leading ``/`` (a vLLM model path)
+#: the longest ``model``: a served model's path or a cloud ARN can be long
+MODEL_MAX = 512
+#: ``model``, what served the call: up to :data:`MODEL_MAX` characters; a leading ``/`` (a vLLM
+#: model path), ``./`` (llama-server's ``-m ./models/x.gguf``, never ``..``) or a drive letter,
 #: and ``//`` (a provider prefix before a path: ``hosted_vllm//models/x``) are allowed, ``@``
 #: carries a version, ``:`` a tag (``ollama:llama3``) or an ARN's parts
-MODEL_PATTERN = NOT_URL_OR_ADDRESS + r"[A-Za-z0-9/][A-Za-z0-9._:/@+-]{0,255}"
+MODEL_PATTERN = NOT_URL_OR_ADDRESS + rf"(?!\.\.)[A-Za-z0-9/.][A-Za-z0-9._:/@-]{{0,{MODEL_MAX - 1}}}"
 #: ``model_role`` and ``call_type``, an alias or a kind of call: up to 128 characters, starting
 #: with a letter or a digit, never ``//``
-LABEL_PATTERN = NOT_URL_OR_ADDRESS + r"(?!.*//)[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}"
+LABEL_PATTERN = NOT_URL_OR_ADDRESS + r"(?!.*//)[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}"
 _NAME_RULES = {
     "model": re.compile(MODEL_PATTERN),
     "model_role": re.compile(LABEL_PATTERN),

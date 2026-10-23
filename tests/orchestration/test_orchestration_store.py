@@ -679,3 +679,20 @@ def test_a_job_finished_more_than_a_day_ahead_is_poison(store):
     for key in ("queued_at", "started_at", "finished_at"):
         near["data"][key] = iso(T0 + 3600)  # an hour of clock skew is a record
     assert store.consume(body(near)).status == "processed"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "./models/llama-3.2-3b-instruct-q4_k_m.gguf",
+        "qwen2.5-7b-instruct-v1.0.0.1",
+        "C:/models/x.gguf",
+        "m" * 512,
+    ],
+)
+def test_a_served_model_name_the_runtimes_report_never_poisons_the_job(store, model):
+    """llama-server and vLLM report the -m path (./models/...), versions have four parts, and a
+    poisoned job loses its whole usage record, not one field."""
+    ev = examples()[0]
+    ev["data"] = ev["data"] | {"model": model}
+    assert store.consume(body(ev)).status == "processed"

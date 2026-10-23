@@ -49,7 +49,7 @@ failures; `finished` is the usage record of every outcome.
 | `local_attempts` | integer >= 0 | |
 | `cloud_fallback_used` | boolean | |
 | `backend` | string or null | the logical backend name as the controller emits it (1 to 64 of `A-Za-z0-9._-`; a leading dot or digit is fine); no `:` or `/`, so never a URL or host:port |
-| `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); the turn record's `model` rule (below): no whitespace, URL or mail address |
+| `model` | string or null | opaque: the usage file's model, else the request's (a vLLM model path is possible); the turn record's `model` rule (below): no whitespace, URL or mail address. The controller sends null when its value fails the rule |
 | `queued_at`, `finished_at` | date-time | |
 | `started_at` | date-time or null | null for a job that never started |
 | `queue_wait_s`, `wall_s` | number >= 0 or null | null for a job that never started |
@@ -81,16 +81,25 @@ as `agent.activity`'s summary tier ([status](status.md) ([[status]]) section 6):
   the wrong kind (`turn_problems`), so a new adapter cannot widen what is kept. `call_type` is the
   gateway's own name for the kind of call (LiteLLM: `acompletion` and so on): opaque, per
   provider, for display and grouping only. The names follow one rule, `is_name`, which the
-  record and every adapter share. `model` is up to 256 of `A-Za-z0-9._:/@+-`, and may start with
-  `/` (a vLLM path) or hold `//` (`hosted_vllm//models/x`), `@` before a version
+  record and every adapter share. `model` is up to 512 of `A-Za-z0-9._:/@-`, and may start with
+  `/` (a vLLM path), `./` (llama-server's `-m ./models/x.gguf`; never `..`) or a drive letter
+  (`C:/models/x.gguf`), or hold `//` (`hosted_vllm//models/x`), `@` before a version
   (`model@v1.2`, `claude-sonnet@vertex.v2`) and `:` (`ollama:llama3`, a Bedrock ARN).
   `model_role` and `call_type` are up to 128 of the same characters, start with a letter or a
-  digit, and never hold `//`. Neither ever holds whitespace, a control character, a URL scheme
-  (`:/`, so `https://` and `https:/x`), an IPv4 address, a `host:port/`, or a mail address (`@` and
-  a dotted domain whose last label is letters, `alice@example.com`). `alice@corp` is accepted: a
-  single label after `@` cannot be told from a deployment-qualified alias such as
-  `sonnet@vertex`. A pattern cannot refuse every disguise; it refuses what a careless source
-  emits. The tests plant forbidden values (all fictional) and
+  digit, and never hold `//`. Neither ever holds whitespace, a control character, `+`, a URL
+  scheme (`:/` after two or more characters, so `https://` and `https:/x`), an IPv4 address as a
+  token of its own (a dotted quad alone or after `x:`; a version such as `v1.0.0.1` is fine), a
+  `host:port/`, or a mail address (`@` and a dotted domain whose last label is letters,
+  `alice@example.com`, `bob@example.com.`). `alice@corp` is accepted: a single label after `@`
+  cannot be told from a deployment-qualified alias such as `sonnet@vertex`. The job record's
+  `model` takes the same rule, so the controller sends `model: null` when its value fails it (the
+  record is kept and the name is unknown); a value that fails it is otherwise poison and costs the
+  whole record. A pattern cannot refuse every disguise; it refuses what a careless source
+  emits. What remains is an identifier-shaped channel: words joined by `_`, `.`, `-` or `/`
+  (`the_prompt_was_...`) pass, up to 512 characters per job and 768 per turn, as they do in
+  `run_id`, `gateway_tag` and `tools[].name`; refusing them would refuse real names
+  (`together_ai`, `Q4_K_M`, dotted versions). The producers are the pinned controller and the
+  operator's gateway, not an adversary. emits. The tests plant forbidden values (all fictional) and
   check that neither the store file nor the page holds them.
 
 ## Data flow

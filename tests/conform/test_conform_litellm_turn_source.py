@@ -6,6 +6,8 @@ read-only viewer key by secret name over a guarded transport, paging."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from conformance.fakes.inference_target import FakeTurnSource, fake_turns
@@ -238,12 +240,18 @@ REAL_MODELS = [
     "arn:aws:bedrock:us-east-1:123456789012:inference-profile/"
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
     "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/" + "a" * 150,
+    "./models/llama-3.2-3b-instruct-q4_k_m.gguf", "models/7B/ggml-model-q4_0.gguf",
+    "qwen2.5-7b-instruct-v1.0.0.1", "C:/models/x.gguf", "ft:gpt-4o-mini:org:custom:id",
+    "together_ai/meta-llama/Llama-3-8b", "m" * 512,
 ]  # fmt: skip
 NOT_NAMES = [
     "https://gateway.example.com/v1", "https:/gateway.example/v1", "ftp://x",
     "s3://bucket/key", "alice@example.com", "ops@corp.example", "x@gateway.example.com/v1",
     "has spaces", "tab\there", "new\nline", "nul\x00", "bell\x07", "", "-leading-dash",
-    "192.0.2.5", "192.0.2.5:8443", "gw.example:8443/v1", "a" * 257,  # no-raw-endpoint: allow refused names
+    "192.0.2.5", "192.0.2.5:8443", "gw.example:8443/v1", "a" * 513,  # no-raw-endpoint: allow refused names
+    "x:192.0.2.5", "x/192.0.2.5/y", "x@192.0.2.5",  # no-raw-endpoint: allow refused names
+    "../models/x", "..", "summarise+the+papers+and+mail+them", "email+alice@corp",
+    "bob@example.com.", "bob@exa_mple.com", "bob@example.com-x", "C:/x/https://y",
 ]  # fmt: skip
 
 
@@ -292,3 +300,12 @@ def test_the_adapter_and_the_record_share_one_name_rule():
             turn = turn_from_row(row | {col: value}, TAGS_SET)
             assert turn_problems(turn) == [], (col, value)
             assert turn[key] == (value if is_name(key, value) else None), (col, value)
+
+
+def test_the_residual_identifier_shaped_channel_is_documented():
+    """No pattern refuses words joined by "_" or "." without refusing real names (together_ai,
+    Q4_K_M, dotted versions); the rule says so instead of claiming more."""
+    import conformance.protocols.inference as inference
+
+    text = Path(inference.__file__).read_text(encoding="utf-8")
+    assert "identifier-shaped" in text and "model: null" in text
