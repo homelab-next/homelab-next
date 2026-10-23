@@ -64,6 +64,20 @@ class Widened(FakeTurnSource):
         ]
 
 
+class SmuggledName(FakeTurnSource):
+    """Widening inside allowed fields: a URL in model, an address in call_type."""
+
+    def turns(self, start, end, tags):
+        return [
+            t
+            | {
+                "model": "https://gateway.example.com/v1",
+                "call_type": "alice@example.com",
+            }
+            for t in super().turns(start, end, tags)
+        ]
+
+
 class EveryTag(FakeTurnSource):
     def turns(self, start, end, tags):
         return super().turns(start, end, {t["gateway_tag"] for t in self.log})
@@ -89,11 +103,12 @@ class FreshIds(FakeTurnSource):
     [
         (FakeTurnSource(fake_turns()), []),
         (Widened(fake_turns()), ["turn-records-are-neutral"]),
+        (SmuggledName(fake_turns()), ["turn-records-are-neutral"]),
         (EveryTag(fake_turns()), ["turn-records-only-the-asked-tags"]),
         (Unwindowed(fake_turns()), ["turn-records-in-the-window"]),
         (FreshIds(fake_turns()), ["turn-records-stable-ids"]),
     ],
-    ids=["conforming", "widened", "every-tag", "unwindowed", "fresh-ids"],
+    ids=["conforming", "widened", "smuggled-name", "every-tag", "unwindowed", "fresh-ids"],
 )
 def test_each_turn_records_check_fails_on_its_defect(source, fails):
     from conformance.fakes.inference_target import TURN_TAGS, TURN_WINDOW
@@ -211,3 +226,28 @@ def test_every_spelling_of_the_master_key_is_refused(key):
     """Each of these is delivered in the master key's own variable, so each is the master key."""
     with pytest.raises(SpendLogError, match="master key"):
         SpendLogReader("https://gateway.example.com", key)
+
+
+@pytest.mark.parametrize(
+    "key, value, ok",
+    [
+        ("model", "meta-llama/Llama-3.1-8B-Instruct", True),
+        ("model", "llama3:8b", True),
+        ("model", "claude-3-5-sonnet-v2@20241022", True),
+        ("model", "custom/hermes-agent", True),
+        ("model_role", "smart", True),
+        ("call_type", "acompletion", True),
+        ("model", "https://gateway.example.com/v1", False),
+        ("model", "gateway.example.com//v1", False),
+        ("model", "alice@example.com", False),
+        ("model_role", "smart@example", False),
+        ("call_type", "alice@example.com", False),
+        ("call_type", "http://x", False),
+    ],
+)
+def test_a_name_is_never_a_url_or_an_address(key, value, ok):
+    from conformance.fakes.inference_target import fake_turns
+    from conformance.protocols.inference import turn_problems
+
+    probs = turn_problems(fake_turns()[0] | {key: value})
+    assert probs == [] if ok else probs == [f"{key} is not a name"], probs
