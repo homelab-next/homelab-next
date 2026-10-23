@@ -1441,6 +1441,8 @@ class BrokerService:
         timer is armed for the earliest (best effort: :meth:`poll_pages` also runs at start and
         on every submit, settle and pending listing, and derives what is due from state)."""
         with self._paged_lock:
+            if when in self._wakeups:
+                return  # already queued (a retry, a floor): one entry per time
             heapq.heappush(self._wakeups, when)
         self._arm()
 
@@ -1460,13 +1462,15 @@ class BrokerService:
             if self._timer is not None:
                 self._timer[1].cancel()
             timer = threading.Timer(nxt - now + 0.05, self._timer_fired)
+            timer.args = (timer,)
             timer.daemon = True
             self._timer = (nxt, timer)
             timer.start()
 
-    def _timer_fired(self) -> None:
+    def _timer_fired(self, timer: threading.Timer | None = None) -> None:
         with self._paged_lock:
-            self._timer = None
+            if self._timer is not None and self._timer[1] is timer:
+                self._timer = None  # only its own: a timer re-armed since stays armed
         try:
             self.poll_pages()
         except Exception:  # a timer thread: log it, the next poll tries again

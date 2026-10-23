@@ -1414,6 +1414,39 @@ def test_a_sweep_by_another_broker_cannot_unlink_a_starting_instance(tmp_path, m
     assert not list((d / "live").glob(".new-*")), "no temporary name is left behind"
 
 
+def test_an_abandoned_instance_temp_file_is_swept_once_stale(tmp_path):
+    import os
+
+    d = tmp_path / "state"
+    live = d / "live"
+    live.mkdir(parents=True)
+    old, fresh = live / ".new-brk-0000000000000001", live / ".new-brk-0000000000000002"
+    for p in (old, fresh):
+        p.write_text("")
+    now = fresh.stat().st_mtime + 5
+    os.utime(old, (now - 3600, now - 3600))
+    StateDir(d)._sweep_live(live, now=now)
+    assert not old.exists() and fresh.exists(), "a recent one may be mid-create"
+
+
+def test_the_page_heap_holds_one_entry_per_time_and_a_stale_timer_keeps_the_new_one(tmp_path):
+    sent = []
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, notifier=_notifier(sent))
+    svc.page_timers = False
+    for _ in range(5):
+        svc._wake_at(1000.0)
+    assert svc._wakeups.count(1000.0) == 1
+    import threading
+
+    old, new = threading.Timer(60, lambda: None), threading.Timer(60, lambda: None)
+    svc._timer = (2000.0, new)
+    svc._timer_fired(old)  # a timer replaced since it was armed fires late
+    assert svc._timer == (2000.0, new), "the armed timer is not forgotten"
+    svc._timer_fired(new)
+    assert svc._timer is None
+
+
 # -- single use: run consumes its approval exactly once ------------------------------------------
 
 

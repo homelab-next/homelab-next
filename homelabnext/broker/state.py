@@ -102,6 +102,9 @@ _SUBDIRS = (
     "runs",
 )
 _KEY_BYTES = 32
+#: an abandoned ``live/.new-<id>`` (its creator died between create and rename) older than this
+#: is swept, when nobody holds its lock
+STALE_NEW_S = 600.0
 #: how many of the newest audit records every start re-indexes into ``decisions/``
 RECONCILE_AUDIT = 256
 #: written once a full rebuild of ``decisions/`` has finished (an interrupted one runs again)
@@ -434,11 +437,23 @@ class StateDir:
             return self._instance[0]
 
     @staticmethod
-    def _sweep_live(live: Path) -> None:
+    def _sweep_live(live: Path, now: float | None = None) -> None:
         """Remove the lock files of instances that are gone (their lock can be taken), keeping
         any whose claims still name them readable: a missing file also reads as gone.  A hidden
-        ``.new-<id>`` is an instance being created (locked, then renamed): never swept."""
+        ``.new-<id>`` is an instance being created (locked, then renamed): swept only once it is
+        :data:`STALE_NEW_S` old and unlocked (its creator died between create and rename).
+        ``now`` (epoch seconds) defaults to the real time: a file's age is against it."""
+        now = time.time() if now is None else now
         for p in live.iterdir():
+            if p.name.startswith(".new-"):
+                try:
+                    stale = now - p.stat().st_mtime > STALE_NEW_S
+                except FileNotFoundError:
+                    continue
+                if stale and _instance_held(p) is False:
+                    with contextlib.suppress(FileNotFoundError):
+                        p.unlink()
+                continue
             if p.name.startswith("."):
                 continue
             if _instance_held(p) is False:
