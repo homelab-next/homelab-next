@@ -1,38 +1,51 @@
 # SPDX-License-Identifier: Apache-2.0
 # Reference site profile 1 of 3 (fictional): everything on one box. In a private overlay a site's
-# selection is lab/modules.yml; these public examples show the three shapes a lab is carved into.
-# One all-in-one provider covers collect, the hot index, detection and alerting; there is no lake,
-# so the external data collector falls back to the suite's index (its prefers). Footprints placed
-# on each host are summed against its memory less headroom, as the lab-in-a-box budget is.
+# selection is lab/modules.yml (platform/module_selection, specified in docs/modules.md); these
+# public examples show the three shapes a lab is carved into. One all-in-one provider covers
+# collect, the hot index, detection and alerting; there is no lake, so the external data collector
+# falls back to the suite's index (its prefers) and its sessions dataset follows it there with the
+# index's retention. Every selected module has a manifest, core modules included, and every
+# footprint is summed per host over cpu, memory, disk and GPU memory, less the host's headroom.
 profile: single-box
 hosts:
-  box: {kind: host, cpu: 8, memory_mb: 16384, disk_gb: 1000, headroom_mb: 2048}
-  collector-edge: {kind: external, cpu: 1, memory_mb: 1024, disk_gb: 25, headroom_mb: 256}
-# providers these examples do not define; the loader would read their manifests
-outside_examples: [example-orchestrator, example-agent-runtime, example-records, example-secrets]
+  # capacity stands in for the host's platform/guest record (resources), which a real site references
+  box:
+    kind: host
+    capacity: {cpu: 16, memory_mb: 16384, disk_gb: 1000, gpu_memory_mb: 8192}
+    resources: [{name: gpu0, kind: gpu}]
+    headroom: {memory_mb: 2048}
+  collector-edge:
+    kind: external
+    capacity: {cpu: 1, memory_mb: 1024, disk_gb: 25}
+    headroom: {memory_mb: 256}
 slots:
-  secrets:
-    - {provider: example-secrets, instance: secrets}
-  object-store:
-    - {provider: example-object-store, instance: samples, placement: {store: box}}
-  siem-source:
-    - {provider: example-siem-suite, instance: siem, placement: {suite: box}}
-  hot-index:
-    - {provider: example-siem-suite, instance: siem, placement: {suite: box}}
-  detections:
-    - {provider: example-siem-suite, instance: siem, placement: {suite: box}}
-  notify:
-    - {provider: example-siem-suite, instance: siem, placement: {suite: box}}
-  log-pipeline: pass-through      # the suite's agents already emit the store's format
+  secrets: [{provider: example-platform, instance: platform, placement: {platform: box}}]
+  idp: [{provider: example-platform, instance: platform}]
+  edge: [{provider: example-platform, instance: platform}]
+  dns: [{provider: example-platform, instance: platform}]
+  backup: [{provider: example-platform, instance: platform}]
+  events: [{provider: example-platform, instance: platform}]
+  broker: [{provider: example-platform, instance: platform}]
+  records: [{provider: example-platform, instance: platform}]
+  orchestration: [{provider: example-platform, instance: platform}]
+  agent-runtime: [{provider: example-agent-runtime, instance: runtime, placement: {runtime: box}}]
+  inference: [{provider: example-inference, instance: inference, placement: {server: box}}]
+  object-store: [{provider: example-object-store, instance: samples, placement: {store: box}}]
+  siem-source: [{provider: example-siem-suite, instance: siem, placement: {suite: box}}]
+  hot-index: [{provider: example-siem-suite, instance: siem}]
+  detections: [{provider: example-siem-suite, instance: siem}]
+  notify: [{provider: example-siem-suite, instance: siem}]
+  log-pipeline: pass-through      # the suite's agents already emit the index's format
   lake-catalog: none
   lake-query: none
-  orchestration:
-    - {provider: example-orchestrator, instance: orchestrator}
-  agent-runtime:
-    - {provider: example-agent-runtime, instance: runtime}
-  records:
-    - {provider: example-records, instance: records}
 features:
   external-collector:
     placement: {edge: collector-edge, receiver: box}
     config: {edge_region: region-example-1, mode: quiet}
+    agents:
+      external-collector-analyst: {lanes: {real: platform, shadow: platform}}
+core:
+  core-staff:
+    agents:
+      core-staff-scorecard: {lanes: {real: platform}}
+grants: {}

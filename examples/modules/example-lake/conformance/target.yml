@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider's contracted slots.
+name: example-lake
+capabilities:
+  lake-catalog:
+    adapter: hnx_modules.example_lake.lake_catalog:make
+  lake-query:
+    adapter: hnx_modules.example_lake.lake_query:make

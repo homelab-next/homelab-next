@@ -1,22 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
 # A minimal feature module (fictional) on the other side of the external data collector's
-# sample-handoff interface. It requires the interface by name and version, never the collector, so
-# any module that provides sample-handoff 1.0 satisfies it; with none selected it degrades.
+# sample-handoff interface. It OWNS that interface (the consumer decides what it needs to detonate
+# a file safely), so any module that provides sample-handoff 1.0 satisfies it and the collector
+# never names the sandbox; with no producer selected it degrades. Its detonation guest is
+# `isolated`: no route to the lab, enforced by the generated network policy, and no egress.
+manifest_version: "1.0"
 id: example-sandbox
 kind: feature
 title: Example sandbox
 description: Detonates files offered through the sample-handoff interface on an isolated guest and
   writes one report per file.
 owner: detection-team
+author: agent:example-builder
 status: draft
-version: 0.1.0
+version: 0.2.0
+origin: {kind: in-tree}
 bundle: {id: soc, group: exposure-management}
 requires:
   capabilities:
     - cap: cap:object-store
       version: "1.0"
       instance: samples
-      purpose: reads offered files and writes reports beside them
+      purpose: reads offered files and writes reports under its own prefix
     - cap: cap:exposure-management
       provisional: true
       formats:
@@ -24,31 +29,68 @@ requires:
           version: 1.3.0
           schema_id: https://schemas.example.internal/homelabnext/ocsf/vulnerability_finding/1.0
           classes: [vulnerability_finding]
+        - {format: sarif, version: 2.1.0}
       purpose: the detonation engine; findings go to the lake in the findings schema (no contract yet)
+    - cap: cap:orchestration
+      version: "1.0"
+      purpose: runs the analyst when a sample arrives
+    - cap: cap:agent-runtime
+      provisional: true
+      purpose: the runtime the analyst's job is dispatched to
+    - cap: cap:records
+      version: "1.0"
+      purpose: the analyst files one note per report
+  model_roles:
+    - role: mdl:main-reasoner
+      purpose: summarises a detonation report
   hosts:
     - role: detonation
       kind: vm
-      exposure: internal
+      exposure: isolated
       footprint: {cpu: 4, memory_mb: 4096, disk_gb: 80}
-      roles: [role:sandbox_guest]
+      roles: [role:example_sandbox_guest]
       purpose: an isolated guest with no route to the lab
+interfaces:
+  - id: sample-handoff
+    version: "1.0"
+    kind: object-prefix
+    schema: interfaces/collected-sample.schema.json
+    description: files a producer offers for detonation, each under files/ with its sidecar under meta/
 prefers:
   interfaces:
     - interface: sample-handoff
       version: "1.0"
-      purpose: files collected by another module, with their sidecars
+      cardinality: all
+      purpose: files collected by other modules, with their sidecars
       fallback:
         behaviour: the sandbox only takes files a person submits
+egress: none
 contributes:
   roles:
-    - file: roles/sandbox_guest
+    - file: roles/example_sandbox_guest
+  agents:
+    - key: example-sandbox-analyst
+      profile: profile:example-sandbox-analyst
+      charter: agents/example-sandbox-analyst.md
+      spec: agents/example-sandbox-analyst.spec.yml
+      needs:
+        - {cap: cap:records, access: write, scope: [findings/example-sandbox/]}
+      tools: [records.write_note]
+      prompts:
+        real: prompts/example-sandbox-analyst.real.yml
+      trigger: {interface: sample-handoff}
+      lanes:
+        production: real
+        real:
+          writes: [findings/example-sandbox/]
 data:
   - id: reports
     kind: object-prefix
-    prefix: reports/
+    prefix: example-sandbox/reports/
+    via: {cap: cap:object-store, instance: samples}
     description: one detonation report per file
-    export: {format: object-tree, via: role:sandbox_guest}
-    import: {format: object-tree, via: role:sandbox_guest}
+    export: {formats: [object-tree, sarif], via: role:example_sandbox_guest}
+    import: {formats: [object-tree], via: role:example_sandbox_guest}
     retention: {days: 365}
 lifecycle:
   install: {playbook: playbooks/install.yml}
@@ -56,4 +98,3 @@ lifecycle:
   remove:
     playbook: playbooks/remove.yml
     audit: [inventory, playbooks, hv-config, hv-volumes, live-refs, contributions]
-author: agent:example-builder

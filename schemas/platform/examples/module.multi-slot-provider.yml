@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # An all-in-one provider that fills several slots, as examples/modules/example-siem-suite/module.yml.
+manifest_version: '1.0'
 id: example-siem-suite
 kind: provider
 title: Detection suite on Litware SIEM
 description: Fills the siem-source, hot-index, detections and notify slots with Litware SIEM, an all-in-one
   product for sites that cannot run the full pipeline.
 owner: detection-team
+author: agent:example-builder
 status: draft
-version: 0.1.0
+version: 0.2.0
+origin:
+  kind: in-tree
 product:
   name: litware-siem
   display: Litware SIEM
@@ -16,12 +20,14 @@ licence:
   kind: open-source
   spdx: MPL-2.0
 credentials:
-- secret: secret:siem/enrollment-password
+- secret: secret:example-siem-suite/enrollment-password
   identity: password
-  purpose: agents enroll with it
-- secret: secret:siem/api-token
+  holder: consumers
+  purpose: the template of the per-host enrollment secrets issued to collecting hosts
+- secret: secret:example-siem-suite/api-token
   identity: token
-  purpose: the adapter's read and rule-load API
+  holder: provider
+  purpose: the adapters' read and rule-load API
 identifiers:
 - kind: dns-name
   name: siem
@@ -29,6 +35,7 @@ identifiers:
 requires:
   capabilities:
   - cap: cap:secrets
+    version: '1.0'
     purpose: enrollment and API credentials are read by name
   hosts:
   - role: suite
@@ -39,86 +46,58 @@ requires:
       memory_mb: 3072
       disk_gb: 250
     roles:
-    - role:litware_siem
+    - role:example_siem_suite
     purpose: runs the whole suite on one host
 provides:
-- slot: cap:siem-source
-  formats:
-  - format: ocsf
-    version: 1.3.0
-    classes:
-    - authentication
-    - network_activity
-  adapter: hnx_modules.example_siem_suite.source:make_source
-  provisional: true
-  reason: the siem-source slot has no contract yet; the suite's agents emit OCSF it can read back
-  migration:
-    format: jsonl
-    export: role:litware_siem
-    import: role:litware_siem
-- slot: cap:hot-index
-  formats:
-  - format: ocsf
-    version: 1.3.0
-    classes:
-    - authentication
-    - network_activity
-  adapter: hnx_modules.example_siem_suite.index:make_index
-  provisional: true
-  reason: the hot-index slot has no contract yet (search over recent OCSF rows)
-  migration:
-    format: jsonl
-    export: role:litware_siem
-    import: role:litware_siem
-- slot: cap:detections
-  formats:
-  - format: sigma
-    version: '2.0'
-  adapter: hnx_modules.example_siem_suite.detections:make_engine
-  conformance:
-    target: conformance/target.yml
-  migration:
-    format: sigma
-    export: role:litware_siem
-    import: role:litware_siem
-- slot: cap:notify
-  adapter: hnx_modules.example_siem_suite.notify:make_sender
-  conformance:
-    target: conformance/target.yml
-  migration:
-    format: jsonl
-    export: role:litware_siem
-    import: role:litware_siem
+  slots:
+    siem-source:
+      formats:
+      - format: ocsf
+        version: 1.3.0
+        classes:
+        - authentication
+        - network_activity
+      adapter: hnx_modules.example_siem_suite.source:make_source
+      provisional: true
+      reason: the siem-source slot has no contract yet; the suite's agents emit OCSF it can read back
+    hot-index:
+      formats:
+      - format: ocsf
+        version: 1.3.0
+        classes:
+        - authentication
+        - network_activity
+      adapter: hnx_modules.example_siem_suite.index:make_index
+      provisional: true
+      reason: the hot-index slot has no contract yet (search over recent OCSF rows)
+      migration:
+        formats:
+        - jsonl
+        export: role:example_siem_suite
+        import: role:example_siem_suite
+    detections:
+      formats:
+      - format: sigma
+        version: '2.0'
+      adapter: hnx_modules.example_siem_suite.detections:make_engine
+      conformance:
+        target: conformance/target.yml
+      migration:
+        formats:
+        - sigma
+        export: role:example_siem_suite
+        import: role:example_siem_suite
+    notify:
+      adapter: hnx_modules.example_siem_suite.notify:make_sender
+      conformance:
+        target: conformance/target.yml
+egress: none
 contributes:
   roles:
-  - file: roles/litware_siem
+  - file: roles/example_siem_suite
   preflight:
-  - role: role:litware_siem
+  - role: role:example_siem_suite
     hook: readiness
-data:
-- id: index
-  kind: database
-  description: the suite's recent events, as OCSF rows on export
-  export:
-    format: jsonl
-    via: role:litware_siem
-  import:
-    format: jsonl
-    via: role:litware_siem
-  retention:
-    days: 30
-- id: rules
-  kind: files
-  prefix: rules/
-  description: the loaded detection rules, exported as Sigma with their det ids
-  export:
-    format: sigma
-    via: role:litware_siem
-  import:
-    format: sigma
-    via: role:litware_siem
-  retention:
-    keep: forever
 lifecycle:
   install:
     playbook: playbooks/install.yml
@@ -135,4 +114,3 @@ lifecycle:
     - secret-names
     - dns
     - contributions
-author: agent:example-builder

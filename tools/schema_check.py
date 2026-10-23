@@ -25,7 +25,9 @@ For every schema under ``schemas/<dir>/`` (top level only):
    ``viking://`` URIs;
 5. the schema is an *additive* evolution of its frozen baseline
    (``schemas/_frozen/<major>.<minor-at-freeze>/...``) unless the major version
-   was bumped.
+   was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: proposed, no
+   loader or pilot yet) has no baseline and may change freely; it must not have a frozen copy
+   at its own version, ``--freeze`` skips it, and freezing it means removing ``x-draft``.
 
 Instances may be ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
 
@@ -165,6 +167,7 @@ _ANNOTATIONS = {
     "readOnly",
     "writeOnly",
     "x-defs-only",
+    "x-draft",
     "$anchor",
 }
 _NUM_LOWER = {
@@ -362,7 +365,7 @@ def freeze(root: Path) -> list[Path]:
     for p in schema_files(root):
         s = json.loads(p.read_text(encoding="utf-8"))
         pid = parse_id(s)
-        if not pid:
+        if not pid or is_draft(s):
             continue
         dest = frozen_path(root, p, pid[1], pid[2])
         if not dest.exists():
@@ -370,6 +373,11 @@ def freeze(root: Path) -> list[Path]:
             shutil.copyfile(p, dest)
             written.append(dest)
     return written
+
+
+def is_draft(schema: dict) -> bool:
+    """True for a schema marked ``x-draft``: proposed, not frozen, free to change."""
+    return isinstance(schema.get("x-draft"), str) and bool(schema["x-draft"].strip())
 
 
 def baselines(root: Path, schema_path: Path) -> list[tuple[int, int, Path]]:
@@ -430,7 +438,19 @@ def check_schema(
             continue
         for v in scan_document(doc):
             probs.append(Problem(f.relative_to(root).as_posix(), f"lint {v}"))
-    if pid:
+    if "x-draft" in schema and not is_draft(schema):
+        probs.append(
+            Problem(rel, "x-draft must say why the schema is a draft (a non-empty string)")
+        )
+    if pid and is_draft(schema):
+        if frozen_path(root, schema_path, pid[1], pid[2]).is_file():
+            probs.append(
+                Problem(
+                    rel,
+                    "a draft schema has a frozen copy of its own version (drop x-draft to freeze it)",
+                )
+            )
+    elif pid:
         bl = baselines(root, schema_path)
         same_major = [b for b in bl if b[0] == pid[1]]
         if not same_major:

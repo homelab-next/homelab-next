@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # A provider module (fictional): fills the object-store slot with the fictional product "Northwind
 # Objects". This directory is the only place the product's name may appear (docs/modules.md, the
-# product-name lint). Its contract is the S3 API, so it binds through the shared s3 adapter.
+# product-name lint). Its contract is the S3 API, so it binds through the shared s3 adapter (an
+# allowlisted shared adapter); every secret is in its own namespace, and consumers get their own
+# key pairs at bind time (holder: consumers), so no two modules share a credential.
+manifest_version: "1.0"
 id: example-object-store
 kind: provider
 title: Object store on Northwind Objects
 description: Fills the object-store slot with Northwind Objects, an S3-compatible store; proved by the
   object-store conformance suite through the shared S3 adapter.
 owner: platform-team
+author: agent:example-builder
 status: draft
-version: 0.1.0
+version: 0.2.0
+origin: {kind: in-tree}
 product:
   name: northwind-objects
   display: Northwind Objects
@@ -19,64 +24,53 @@ licence:
   kind: open-source
   spdx: Apache-2.0
 credentials:
-  - secret: secret:object-store/access-key
+  - secret: secret:example-object-store/access-key
     identity: key-pair
-    purpose: the access key pair consumers sign requests with
-  - secret: secret:object-store/admin-token
+    holder: consumers
+    purpose: the template of the per-consumer key pairs the store issues at bind time
+  - secret: secret:example-object-store/admin-token
     identity: token
+    holder: provider
     purpose: the store's own admin API, used by the role only
-identifiers:
-  - {kind: dns-name, name: objects, on_remove: keep}
-  - {kind: bucket, name: lake, on_remove: keep}
 requires:
   capabilities:
     - cap: cap:secrets
-      purpose: the access key pair is read by name at run time
+      version: "1.0"
+      purpose: the admin token and the issued key pairs are read by name at run time
   hosts:
     - role: store
       kind: vm
       exposure: internal
       footprint: {cpu: 2, memory_mb: 1024, disk_gb: 200}
-      roles: [role:northwind_objects]
+      roles: [role:example_object_store]
       purpose: runs the store
 provides:
-  - slot: cap:object-store
-    formats:
-      - {format: s3, version: '2006-03-01'}
-    adapter: homelabnext.conform.adapters.s3:make_object_store
-    features: [metadata]
-    conformance:
-      target: conformance/target.yml
-    migration:
-      format: object-tree
-      export: role:northwind_objects
-      import: role:northwind_objects
+  slots:
+    object-store:
+      formats:
+        - {format: s3, version: '2006-03-01'}
+      adapter: homelabnext.conform.adapters.s3:make_object_store
+      features: [metadata]
+      conformance:
+        target: conformance/target.yml
+      migration:
+        formats: [object-tree]
+        export: role:example_object_store
+        import: role:example_object_store
+egress: none
 contributes:
   roles:
-    - file: roles/northwind_objects
+    - file: roles/example_object_store
   services:
     - file: registry/services.yml
   preflight:
-    - {role: role:northwind_objects, hook: readiness}
-data:
-  - id: objects
-    kind: object-prefix
-    prefix: buckets/
-    description: every bucket and object the slot's consumers stored
-    export: {format: object-tree, via: role:northwind_objects}
-    import: {format: object-tree, via: role:northwind_objects}
-    retention: {keep: forever}
+    - {role: role:example_object_store, hook: readiness}
 config:
   data_dir:
     type: path
-    description: where the store keeps its data on the host
-    default: /srv/objects
+    description: where the store keeps its data, relative to the module's data root on the host
+    default: objects
     overlay: optional
-  access_key:
-    type: secret
-    description: the access key pair consumers sign with
-    default: secret:object-store/access-key
-    overlay: required
 lifecycle:
   install: {playbook: playbooks/install.yml}
   upgrade: {playbook: playbooks/upgrade.yml, note: a pinned version bump; the role's upgrade hook records it}
@@ -84,4 +78,3 @@ lifecycle:
     playbook: playbooks/remove.yml
     export_first: true
     audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]
-author: agent:example-builder

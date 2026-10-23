@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The example-sandbox-analyst's real-lane prompt (agent/prompt_template).
+id: example-sandbox-analyst-real
+version: 1
+description: Summary of one detonation report (real lane).
+persona: persona:example-sandbox-analyst
+budget_chars: 8000
+system: |
+  You summarise one sandbox detonation report for {{ lab-name }}. You take no actions.
+instructions: |
+  Summarise the report in the "report" section and write one finding note under {{ write-prefix }}.
+slots:
+  - name: lab-name
+    trust: trusted
+    description: The lab's display name from configuration.
+    example: example lab
+  - name: write-prefix
+    trust: trusted
+    description: The lane's write prefix from the agent's lanes.
+    example: findings/example-sandbox/
+  - name: report
+    trust: untrusted
+    description: The detonation report; it quotes attacker-controlled strings.
+    max_chars: 6000
+    example: 'the file opened one outbound connection that the isolated guest refused'

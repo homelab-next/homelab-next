@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# Criteria the module contributes, in the invariant register's shape (registers/invariant).
-# Module criterion ids are an open question (docs/modules.md): today ids are checklist rows
-# (^[A-Z]-NN$), so these placeholders use NEW until a module id form is agreed.
+# Criteria the module contributes, in the invariant register's shape. Module criterion ids are
+# <module id>/<slug> (registers/invariant 1.1, specified in docs/modules.md), so they never take a
+# core pillar letter. The plugin is the module's own entry point (contributes.entry_points).
 criteria:
-- id: X-NEW
+- id: external-collector/sessions-fresh
   statement: The external data collector's sessions land in the lake within their batch window.
   evidence: plugin
   plugin: external_collector

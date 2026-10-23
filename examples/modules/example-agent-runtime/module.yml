@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# A provider of the agent-runtime slot (fictional "Adatum Runtime"). The slot has no contract
+# yet, so the entry is provisional with a reason; agent-runtime is required in the core but is not
+# a privileged slot, so provisional is allowed until its contract lands.
+manifest_version: "1.0"
+id: example-agent-runtime
+kind: provider
+title: Agent runtime on Adatum Runtime
+description: Fills agent-runtime with Adatum Runtime (fictional).
+owner: platform-team
+author: agent:example-builder
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: adatum-runtime
+  display: Adatum Runtime
+  version: 0.9.3
+licence:
+  kind: open-source
+  spdx: MIT
+requires:
+  hosts:
+    - role: runtime
+      kind: any
+      exposure: internal
+      footprint: {cpu: 1, memory_mb: 512, disk_gb: 20}
+      roles: [role:example_agent_runtime]
+      purpose: runs Adatum Runtime
+provides:
+  slots:
+    agent-runtime:
+      adapter: hnx_modules.example_agent_runtime.agent_runtime:make
+      provisional: true
+      reason: the agent-runtime slot has no contract or conformance suite yet
+egress: none
+contributes:
+  roles:
+    - file: roles/example_agent_runtime
+  preflight:
+    - {role: role:example_agent_runtime, hook: readiness}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, contributions]

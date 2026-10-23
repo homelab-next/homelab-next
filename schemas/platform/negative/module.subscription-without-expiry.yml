@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # A subscription, trial or commercial licence states when it lapses.
+manifest_version: '1.0'
 id: example-static-host
 kind: provider
 title: Static hosting on Wingtip Pages
 description: Fills the static-hosting slot with Wingtip Pages, a hosted static site service that the publishing
   module pushes gated content to.
 owner: platform-team
+author: agent:example-builder
 status: draft
-version: 0.1.0
+version: 0.2.0
+origin:
+  kind: in-tree
 product:
   name: wingtip-pages
   display: Wingtip Pages
@@ -16,9 +20,10 @@ licence:
   kind: subscription
   tier: free (one site, no access rules)
 credentials:
-- secret: secret:publishing/deploy-token
+- secret: secret:example-static-host/deploy-token
   identity: token
-  purpose: deploys the site; held only by the publisher host
+  holder: granted
+  purpose: deploys the site; readable only by the identity the overlay grants (the publish gate)
 control_plane:
 - kind: site-settings
   reader: hnx_modules.example_static_host.control:read_settings
@@ -26,43 +31,13 @@ control_plane:
 requires:
   capabilities:
   - cap: cap:secrets
+    version: '1.0'
     purpose: the deploy token is read by name
 provides:
-- slot: cap:static-hosting
-  adapter: hnx_modules.example_static_host.adapter:make_site
-  provisional: true
-  reason: static-hosting has no contract yet; the obvious standard is a directory of files published atomically
-    at one site name, with a listing to compare against
-  migration:
-    format: object-tree
-    export: role:wingtip_pages_deploy
-    import: role:wingtip_pages_deploy
-contributes:
-  roles:
-  - file: roles/wingtip_pages_deploy
-data:
-- id: site
-  kind: files
-  prefix: site/
-  description: the published site as last deployed (the publishing module's manifest is the record)
-  export:
-    format: object-tree
-    via: role:wingtip_pages_deploy
-  import:
-    format: object-tree
-    via: role:wingtip_pages_deploy
-  retention:
-    keep: transient
-lifecycle:
-  install:
-    playbook: playbooks/install.yml
-  upgrade:
-    playbook: playbooks/upgrade.yml
-  remove:
-    playbook: playbooks/remove.yml
-    audit:
-    - secret-names
-    - dns
-    - live-refs
-    - contributions
-author: agent:example-builder
+  slots:
+    static-hosting:
+      adapter: hnx_modules.example_static_host.adapter:make_site
+      provisional: true
+      reason: static-hosting has no contract yet; the obvious standard is a directory of files published
+        atomically at one site name, with a listing to compare against
+egress: none

@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-# Agent tools are slot-named (<slot>.<tool>), never a product's tool name.
+# Agent tools are slot-named (<slot>.<tool>).
+manifest_version: '1.0'
 id: external-collector
 kind: feature
 title: External data collector
 description: Collects connection attempts and dropped files on an internet-facing host outside the lab,
-  lands sessions in the lake, hands files to a sandbox and keeps one agent that reports on them.
+  lands sessions in the lake, offers files to a sandbox and keeps one agent that reports on them.
 owner: detection-team
+author: agent:example-builder
 status: draft
-version: 0.1.0
+version: 0.2.0
+origin:
+  kind: in-tree
 bundle:
   id: soc
   group: threat-intel
@@ -21,13 +25,13 @@ requires:
     - format: s3
       version: '2006-03-01'
     instance: samples
-    purpose: the receiver stores collected files under samples/ with a metadata sidecar
+    purpose: the receiver stores collected files and their sidecars under its own prefix
   - cap: cap:notify
     version: '1.0'
     purpose: pages once when sessions stop arriving and once on recovery
   - cap: cap:orchestration
     version: '1.0'
-    purpose: runs the agent's daily job in both lanes
+    purpose: runs the agent's daily job in each lane
   - cap: cap:agent-runtime
     provisional: true
     purpose: the runtime the orchestrator dispatches the agent's job to (no contract yet)
@@ -46,8 +50,8 @@ requires:
       memory_mb: 512
       disk_gb: 20
     roles:
-    - role:collector_edge
-    purpose: the collector itself, outside the lab; sends only outward to the receiver
+    - role:external_collector_edge
+    purpose: the collector itself, outside the lab; it sends only to the receiver
   - role: receiver
     kind: vm
     exposure: internal
@@ -56,7 +60,7 @@ requires:
       memory_mb: 384
       disk_gb: 10
     roles:
-    - role:collector_receiver
+    - role:external_collector_receiver
     purpose: receives batches, writes the lake and the object store
 prefers:
   capabilities:
@@ -71,21 +75,26 @@ prefers:
     purpose: the receiver writes session rows with commit-then-checkpoint idempotency
     fallback:
       to: cap:hot-index
-      behaviour: sessions are indexed as the same OCSF rows in the detection engine's own index; retention
-        drops to that index's window
+      behaviour: sessions are indexed as the same OCSF rows in the detection engine's own index
+      data:
+      - dataset: sessions
+        retention:
+          days: 30
+        formats:
+        - jsonl
   - cap: cap:lake-query
     version: '1.0'
-    purpose: the agent and the freshness check read the sessions table
+    purpose: the agent and the freshness criterion read the sessions table
     fallback:
       to: cap:hot-index
-      behaviour: the agent and the freshness check query the detection engine's index instead, over its
-        shorter window only
+      behaviour: the agent and the freshness criterion query the detection engine's index instead, over
+        its shorter window only
   - cap: cap:detections
     version: '1.0'
     formats:
     - format: sigma
       version: '2.0'
-    purpose: the module's Sigma rules run on the detection engine
+    purpose: the module's Sigma rule runs on the detection engine
     fallback:
       behaviour: the credential-reuse rule does not run; sessions are still collected and reported
   - cap: cap:siem-source
@@ -95,69 +104,55 @@ prefers:
       behaviour: the collector host's own logs are not searched; its sessions still land
 provides:
   interfaces:
-  - id: sample-handoff
+  - interface: sample-handoff
     version: '1.0'
-    kind: object-prefix
-    schema: interfaces/collected-sample.schema.json
     via:
       cap: cap:object-store
-      prefix: samples/
-    description: one collected file per object under samples/, with a JSON sidecar a sandbox reads before
-      it detonates the file
-  - id: publishable-output
+      instance: samples
+      prefix: external-collector/samples/
+    description: one collected file per object under files/, its sidecar under meta/
+  - interface: publishable-output
     version: '1.0'
-    kind: object-prefix
-    schema: interfaces/publishable-item.schema.json
     via:
       cap: cap:object-store
-      prefix: publish/
-    description: the weekly public report, each item marked with its TLP; only the publishing module takes
-      it off the lab, after its gate
+      instance: samples
+      prefix: external-collector/publish/
+    description: the weekly public report; only the publishing module takes it off the lab
+egress:
+- host: edge
+  to:
+  - svc:external-collector-receiver
+  purpose: ships signed batches to the receiver and nothing else
 contributes:
   roles:
-  - file: roles/collector_edge
-  - file: roles/collector_receiver
+  - file: roles/external_collector_edge
+  - file: roles/external_collector_receiver
   services:
   - file: registry/services.yml
   status_sources:
-  - status:collector-freshness
+  - status:external-collector-freshness
   notify_pairs:
   - problem: 'External data collector: no new sessions'
     recovery: 'External data collector: sessions arriving again'
-    sender: roles/collector_receiver/files/freshness.py
   scheduler_jobs:
-  - file: units/fleet_units.yml
-  - timer: timer:collector_receiver/pull
+  - timer: timer:external_collector_receiver/pull
   lake_tables:
-  - table: table:collector.sessions
-    schema_id: https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0
-    retention_days: 180
-    maintenance:
-      compact: true
-      expire_snapshots_days: 7
-    freshness:
-      cadence: batch
-      stale_after_s: 172800
+  - file: lake/sessions.table.yml
   preflight:
-  - role: role:collector_receiver
+  - role: role:external_collector_receiver
     hook: readiness
   mcp_servers:
-  - file: mcp/collector-probe.yml
+  - file: mcp/external-collector-probe.yml
   agents:
-  - key: collector-analyst
-    profile: profile:collector-analyst
-    charter: agents/collector-analyst.md
-    spec: agents/collector-analyst.spec.yml
-    model_role: mdl:main-reasoner
+  - key: external-collector-analyst
+    profile: profile:external-collector-analyst
+    charter: agents/external-collector-analyst.md
+    spec: agents/external-collector-analyst.spec.yml
     needs:
     - cap: cap:lake-query
       access: read
       scope:
-      - table:collector.sessions
-    - cap: cap:object-store
-      access: read
-      scope:
-      - samples/
+      - table:external_collector.sessions
     - cap: cap:records
       access: write
       scope:
@@ -165,20 +160,30 @@ contributes:
     tools:
     - lake-query.query
     - records.write_note
-    - collector-probe.status
+    - external-collector-probe.last_batch
     - northwind_query
     prompts:
-      real: prompts/collector-analyst.real.yml
-      shadow: prompts/collector-analyst.shadow.yml
+      real: prompts/external-collector-analyst.real.yml
+      shadow: prompts/external-collector-analyst.shadow.yml
     schedule:
       on_calendar: '*-*-* 06:10:00 UTC'
-      lanes:
-      - real
-      - shadow
     state:
     - cursor.json
     roster:
       recall: true
+    lanes:
+      production: real
+      real:
+        writes:
+        - findings/external-collector/
+        - state/external-collector/
+        description: what consumers read
+      shadow:
+        writes:
+        - findings/external-collector-shadow/
+        - state/external-collector-shadow/
+        compare_to: real
+        description: a candidate prompt or model, graded against the real lane
   invariants:
   - file: invariants/criteria.yml
   entry_points:
@@ -186,71 +191,76 @@ contributes:
     name: external_collector
     object: hnx_modules.external_collector.checks:register
   detections:
-  - file: detections/collector-credential-reuse.yml
+  - file: detections/external-collector-credential-reuse.yml
   docs:
   - file: docs/external-collector.md
 data:
 - id: sessions
   kind: lake-table
-  table: table:collector.sessions
+  table: table:external_collector.sessions
+  via:
+    cap: cap:lake-catalog
   description: one row per connection attempt the collector saw
   export:
-    format: parquet
-    via: role:collector_receiver
+    formats:
+    - parquet
+    via: role:external_collector_receiver
   import:
-    format: parquet
-    via: role:collector_receiver
+    formats:
+    - parquet
+    via: role:external_collector_receiver
   retention:
     days: 180
 - id: samples
   kind: object-prefix
-  prefix: samples/
+  prefix: external-collector/samples/
+  via:
+    cap: cap:object-store
+    instance: samples
   description: files dropped on the collector, with their sidecars
   export:
-    format: object-tree
-    via: role:collector_receiver
+    formats:
+    - object-tree
+    via: role:external_collector_receiver
   import:
-    format: object-tree
-    via: role:collector_receiver
+    formats:
+    - object-tree
+    via: role:external_collector_receiver
   retention:
     days: 90
 - id: report
   kind: object-prefix
-  prefix: publish/
+  prefix: external-collector/publish/
+  via:
+    cap: cap:object-store
+    instance: samples
   description: rendered report items offered for publishing
   export:
-    format: object-tree
-    via: role:collector_receiver
+    formats:
+    - object-tree
+    via: role:external_collector_receiver
   import:
-    format: object-tree
-    via: role:collector_receiver
+    formats:
+    - object-tree
+    via: role:external_collector_receiver
   retention:
     days: 30
 - id: findings
   kind: records-prefix
   prefix: findings/external-collector/
+  via:
+    cap: cap:records
   description: the agent's finding notes
   export:
-    format: markdown-tree
-    via: role:collector_receiver
+    formats:
+    - markdown-tree
+    via: role:external_collector_receiver
   import:
-    format: markdown-tree
-    via: role:collector_receiver
+    formats:
+    - markdown-tree
+    via: role:external_collector_receiver
   retention:
     keep: forever
-lanes:
-  production: real
-  real:
-    writes:
-    - findings/external-collector/
-    - state/external-collector/
-    description: what consumers read
-  shadow:
-    writes:
-    - findings/external-collector-shadow/
-    - state/external-collector-shadow/
-    compare_to: real
-    description: a candidate prompt or model, graded against the real lane
 config:
   edge_region:
     type: string
@@ -260,12 +270,12 @@ config:
   batch_signing:
     type: secret
     description: the token the edge signs batches with
-    default: secret:collector/ingest-token
+    default: secret:external-collector/ingest-token
     overlay: required
   receiver:
     type: svc
     description: the registry service the edge sends batches to
-    default: svc:collector-receiver
+    default: svc:external-collector-receiver
     overlay: optional
   batch_every_s:
     type: duration_s
@@ -304,4 +314,3 @@ lifecycle:
     - dns
     - proxy
     - contributions
-author: agent:example-builder

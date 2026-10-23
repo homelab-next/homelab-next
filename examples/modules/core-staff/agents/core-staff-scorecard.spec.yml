@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Profile spec for `hnx agent compile` (docs/agent.md): a staff agent in a core module. No ceiling
+# here; the overlay's ceiling policy owns it, and the overlay's roster assigns any staff code.
+id: profile:core-staff-scorecard
+persona: persona:core-staff-scorecard
+model_role: mdl:main-reasoner
+capabilities: [cap:cases, cap:records]
+tier: read
+data_tier: local-only
+reads_untrusted: false
+budgets: {max_input_tokens: 32000, max_output_tokens: 3000, max_runtime_s: 900, max_tool_calls: 20}

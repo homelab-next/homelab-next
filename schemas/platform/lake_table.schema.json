@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/lake_table/1.0",
+  "x-draft": "ADR-0027 (proposed): promoted from the module manifest's inline lake tables; not frozen",
+  "title": "Lake table declaration",
+  "description": "One lake table's operational declaration (docs/modules.md): owner, schema, retention, maintenance and freshness. A module contributes its own tables (namespace = its id, - as _); the core declares its OCSF tables the same way, so lake maintenance enumerates records instead of keeping a list. Columns are never here: they come from the table schema (x-lake).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "owner",
+    "retention_days",
+    "freshness"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^table:[a-z][a-z0-9]*(?:_[a-z0-9]+)*\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*$(?!\\n)",
+      "description": "table:<namespace>.<name>."
+    },
+    "owner": {
+      "type": "string",
+      "maxLength": 48,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "description": "The owning module id (core-* for a core table)."
+    },
+    "schema_id": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^https://schemas\\.example\\.internal/homelabnext/[a-z0-9_/.-]+/[0-9]+\\.[0-9]+$(?!\\n)"
+    },
+    "schema": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$(?!\\n)",
+      "description": "A table schema with an x-lake block, in the owning module."
+    },
+    "retention_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3650
+    },
+    "maintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compact": {
+          "type": "boolean"
+        },
+        "expire_snapshots_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cadence",
+        "stale_after_s"
+      ],
+      "properties": {
+        "cadence": {
+          "enum": [
+            "continuous",
+            "batch"
+          ],
+          "description": "batch: judged against the table's own load schedule."
+        },
+        "stale_after_s": {
+          "type": "integer",
+          "minimum": 60
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "schema_id"
+      ]
+    },
+    {
+      "required": [
+        "schema"
+      ]
+    }
+  ]
+}

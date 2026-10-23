@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ADR log: twenty-five records, five headings each, a status, sequential numbering."""
+"""The ADR log: five headings each, a status, sequential numbering apart from reserved numbers."""
 
 from __future__ import annotations
 
@@ -14,8 +14,18 @@ STATUSES = {"proposed", "accepted", "rejected"}
 ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 
 
-def test_twenty_five_sequential_adrs():
-    assert [int(p.name[:4]) for p in ADRS] == list(range(1, 26))
+#: numbers held by open pull requests, so a later ADR does not take them (each reason names the
+#: holder); an entry goes when its ADR merges, and one whose ADR exists is an error
+RESERVED = {
+    25: "orchestration telemetry (pull request #38)",
+    26: "the orchestrator as a component of this repository (planned with it)",
+}
+
+
+def test_sequential_adrs_apart_from_reserved_numbers():
+    numbers = [int(p.name[:4]) for p in ADRS]
+    assert not set(numbers) & set(RESERVED), "a reserved number now has its ADR: drop the entry"
+    assert sorted(numbers + list(RESERVED)) == list(range(1, max(numbers) + 1))
 
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider's contracted slots.
+name: example-inference
+capabilities:
+  inference:
+    adapter: hnx_modules.example_inference.inference:make

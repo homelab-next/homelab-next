@@ -53,8 +53,10 @@ component-tests:
 hermetic-lint:
 	$(PY) tools/hermetic_lint.py
 
+# the generated module-manifest schemas, examples and negatives match their generators
 schemas:
 	$(PY) $(SCHEMA_CHECK) --strict
+	$(PY) -m homelabnext.schemas --check
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages

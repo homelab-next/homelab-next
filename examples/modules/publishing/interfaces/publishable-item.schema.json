@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/modules/publishing/publishable-item/1.0",
+  "title": "Publishable item sidecar",
+  "description": "The JSON sidecar beside each item a producer offers through publishable-output 1.0 (owned by the publishing module). tlp is the producer's CLAIM: the gate excludes red and amber, re-derives the marking from the content (a TLP marker or a deny-listed name in the body blocks it) and scans everything before it leaves the lab. Only inert media types are accepted: the gate renders HTML itself, so no producer ships markup or script.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tlp", "title", "media_type", "produced_at", "sha256"],
+  "properties": {
+    "tlp": {"enum": ["clear", "green", "amber", "amber+strict", "red"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "media_type": {"enum": ["text/markdown", "application/json", "image/png"]},
+    "produced_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

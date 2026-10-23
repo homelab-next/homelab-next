@@ -15,7 +15,11 @@ SCHEMAS = [
     p
     for p in sc.schema_files(ROOT, OWNED)
     if p.relative_to(ROOT / "schemas").as_posix() != "platform/service.json"
+    and not sc.is_draft(json.loads(p.read_text()))
 ]
+#: schemas still drafts (x-draft: proposed, no loader or pilot yet): no frozen baseline, free to
+#: change until their ADR is accepted; joining or leaving this set is a reviewed change
+DRAFTS = {"platform/module.schema.json", "platform/lake_table.schema.json"}
 
 
 def _major(path) -> int:
@@ -229,3 +233,62 @@ def test_the_newline_guard_rejects_what_python_alone_accepted():
     old, new = {"pattern": "^[a-z]+$"}, {"pattern": "^[a-z]+$(?!\\n)"}
     assert sc.errors_for(old, "abc\n", REG) == []  # the defect, under Python's re
     assert sc.errors_for(new, "abc\n", REG) and sc.errors_for(new, "abc", REG) == []
+
+
+# ----- draft schemas (x-draft): not frozen until their ADR is accepted -----
+def test_the_draft_schemas_are_exactly_the_listed_ones():
+    found = {
+        p.relative_to(ROOT / "schemas").as_posix()
+        for p in sc.schema_files(ROOT)
+        if sc.is_draft(json.loads(p.read_text()))
+    }
+    assert found == DRAFTS
+
+
+@pytest.mark.parametrize("rel", sorted(DRAFTS))
+def test_a_draft_has_no_frozen_copy_and_passes_strict(rel):
+    path = ROOT / "schemas" / rel
+    _, major, minor = sc.parse_id(json.loads(path.read_text()))
+    assert not sc.frozen_path(ROOT, path, major, minor).is_file()
+    assert sc.check_schema(ROOT, path, sc.build_registry(ROOT), strict=True) == []
+
+
+def _draft_repo(tmp_path):
+    """A copy of the schemas where platform/module is a draft with no frozen copy."""
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas/platform/module.schema.json"
+    s = json.loads(p.read_text())
+    s["x-draft"] = "ADR-0027 (proposed): a test draft"
+    p.write_text(json.dumps(s))
+    sc.frozen_path(tmp_path, p, 1, 0).unlink(missing_ok=True)
+    return p
+
+
+def test_a_frozen_copy_of_a_draft_is_an_error(tmp_path):
+    p = _draft_repo(tmp_path)
+    dest = sc.frozen_path(tmp_path, p, 1, 0)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(p.read_text())
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("draft schema has a frozen copy" in x.message for x in probs)
+
+
+def test_freeze_skips_a_draft_and_removing_x_draft_requires_a_baseline(tmp_path):
+    p = _draft_repo(tmp_path)
+    assert all("module.schema.json" not in str(w) for w in sc.freeze(tmp_path))
+    s = json.loads(p.read_text())
+    del s["x-draft"]
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("no frozen baseline" in x.message for x in probs)
+
+
+def test_an_empty_x_draft_is_refused(tmp_path):
+    p = _draft_repo(tmp_path)
+    s = json.loads(p.read_text())
+    s["x-draft"] = " "
+    p.write_text(json.dumps(s))
+    probs = sc.check_repo(tmp_path, ["platform"], strict=True, only=["platform/module.schema.json"])
+    assert any("x-draft must say why" in x.message for x in probs)
