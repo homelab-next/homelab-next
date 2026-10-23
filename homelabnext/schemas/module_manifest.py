@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from homelabnext.modules.scope import SCOPE_PARTS
+from homelabnext.modules.scope import ENTRY_PATTERN, PART_DOCS, SCOPE_PARTS, scope_tree
 
 __all__ = [
     "RESERVED_IDS",
@@ -1221,6 +1221,37 @@ def lake_table_schema() -> dict[str, Any]:
     }
 
 
+def scope_entry_schema() -> dict[str, Any]:
+    """One entry of a scope part: the pattern :func:`homelabnext.modules.scope.parse_entry`
+    matches too, so the schema and the reader agree on every entry's text."""
+    return {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": ENTRY_PATTERN,
+        "description": "An IPv4 or IPv6 address or CIDR network: no host bits (IPv4 here, IPv6 in the loader), no leading zeros, no zone id, no whitespace, no IPv4 written inside or embedded in IPv6 (mapped, compatible, NAT64). The loader also refuses /0, special-use blocks (loopback, link-local, multicast, unspecified, reserved), a trusted network broader than /8 (IPv4) or /32 (IPv6), and a network listed twice.",
+    }
+
+
+def scope_schema() -> dict[str, Any]:
+    """The selection's ``scope`` object, generated from ``SCOPE_PARTS`` (one source of truth)."""
+    part = lambda name: arr(ref("scope_entry"), PART_DOCS[name], 1)  # noqa: E731
+    props: dict[str, Any] = {}
+    for group, leaves in scope_tree().items():
+        if leaves is None:
+            props[group] = part(group)
+        else:
+            props[group] = obj(
+                {leaf: part(f"{group}.{leaf}") for leaf in leaves},
+                desc=PART_DOCS[group],
+                minProperties=1,
+            )
+    return obj(
+        props,
+        desc="The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32, 3fff::/20), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present (loader), and every reader fails closed.",
+        minProperties=1,
+    )
+
+
 def module_selection_schema() -> dict[str, Any]:
     """A site's module selection (docs/modules.md): hosts, slot choices, bindings, grants, scope.
 
@@ -1342,50 +1373,7 @@ def module_selection_schema() -> dict[str, Any]:
         },
         desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
     )
-    octet = "(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
-    address = {
-        "type": "string",
-        "maxLength": 64,
-        "anyOf": [
-            {"pattern": "^" + octet + "(?:\\." + octet + "){3}(?:/(?:3[0-2]|[12]?[0-9]))?" + G},
-            {
-                "pattern": "^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}"
-                "(?:/(?:12[0-8]|1[01][0-9]|[1-9]?[0-9]))?" + G
-            },
-        ],
-        "description": "An IPv4 or IPv6 address or CIDR network. The loader parses it strictly: a network with host bits set is refused.",
-    }
-    part = lambda desc: arr(address, desc, 1)  # noqa: E731
-    scope = obj(
-        {
-            "trusted": obj(
-                {
-                    "wan": part(
-                        "The lab's own public addresses: what the internet sees the lab as."
-                    ),
-                    "nets": part("The lab's own internal networks."),
-                    "tooling": part(
-                        "Where the operator's own tooling runs from (scanners, jump hosts, CI runners)."
-                    ),
-                },
-                desc="Addresses that are the lab itself: never reported as an outsider.",
-                minProperties=1,
-            ),
-            "target": part("What the lab's assessment tooling may touch."),
-            "exclude": obj(
-                {
-                    "unattended_mutation": part(
-                        "Never changed by an unattended job: a human approves each change."
-                    ),
-                    "offensive": part("Never the target of offensive tooling, even inside target."),
-                },
-                desc="Carve-outs every reader honours, whatever else names the address.",
-                minProperties=1,
-            ),
-        },
-        desc="The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present and non-empty (loader), and every reader fails closed.",
-        minProperties=1,
-    )
+    scope = scope_schema()
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
@@ -1420,6 +1408,7 @@ def module_selection_schema() -> dict[str, Any]:
             "grants": grants,
             "scope": scope,
         },
+        "$defs": {"scope_entry": scope_entry_schema()},
     }
 
 

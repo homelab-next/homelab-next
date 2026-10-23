@@ -24,6 +24,7 @@ import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.modules import rules as mr
+from homelabnext.modules import scope as ms
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
@@ -865,6 +866,65 @@ SELECTION_NEGATIVES = {
 }
 
 
+#: scope entries -> (the schema accepts, the reader accepts).  The two agree on every entry's text
+#: (one pattern, ENTRY_PATTERN); the reader alone refuses what a pattern cannot say.
+D1, D2 = "192.0.2", "198.51.100"
+SCOPE_ENTRIES = {
+    f"{D1}.0/24": (True, True),
+    f"{D2}.128/25": (True, True),
+    "2001:db8:30::/48": (True, True),
+    "2001:DB8::1": (True, True),
+    # text: refused by both
+    "2001:db8::1%eth0": (False, False),  # zone id
+    f"::ffff:{D1}.0/120": (False, False),  # IPv4 written inside IPv6
+    ":".join(("", "", "ffff", "c000", "200/120")): (False, False),  # IPv4-mapped, hex
+    ":".join(("64", "ff9b", "", "c000", "201")): (False, False),  # NAT64
+    ":".join(("0", "0", "0", "0", "0", "ffff", "c000", "201")): (False, False),  # mapped, long
+    ":::::::": (False, False),
+    "1::2::3": (False, False),
+    f"{D1}.1/24": (False, False),  # IPv4 host bits
+    f"{D1}.0/024": (False, False),  # leading zeros
+    f" {D1}.0/24": (False, False),
+    f"{D1}.0/24\n": (False, False),
+    # meaning: the schema's pattern cannot say it, the reader refuses
+    "2001:db8::1/64": (True, False),  # IPv6 host bits
+    "0.0.0.0/0": (True, False),
+    ".".join(("224", "0", "0", "0/4")): (True, False),  # multicast
+    "fe80::/64": (True, False),
+}
+
+
+@pytest.mark.parametrize("entry", sorted(SCOPE_ENTRIES))
+def test_the_schema_and_the_reader_agree_on_a_scope_entry(entry):
+    """Negative and positive: the schema never accepts less than the reader, and refuses exactly
+    the entry texts the reader refuses (the semantic rows are the reader's alone)."""
+    site = copy.deepcopy(SITES["full"])
+    site["scope"]["target"] = [entry]
+    schema_ok = not any(e.startswith("scope/") for e in sc.errors_for(SELECTION, site, REG))
+    try:
+        ms.parse_entry(entry, "target")
+        reader_ok = True
+    except ValueError:
+        reader_ok = False
+    assert (schema_ok, reader_ok) == SCOPE_ENTRIES[entry]
+
+
+def test_the_selection_schema_scope_is_generated_from_the_parts():
+    """The schema's scope leaves are exactly SCOPE_PARTS, as is the manifest's requires.scope
+    enum: adding a part to one cannot leave the other behind."""
+    scope = SELECTION["properties"]["scope"]["properties"]
+    leaves = set()
+    for group, d in scope.items():
+        if d.get("type") == "object":
+            leaves |= {f"{group}.{k}" for k in d["properties"]}
+        else:
+            leaves.add(group)
+    assert leaves == set(ms.SCOPE_PARTS)
+    enum = SCHEMA["$defs"]["requirement_scope"]["properties"]["part"]["enum"]
+    assert enum == list(ms.SCOPE_PARTS)
+    assert SELECTION["$defs"]["scope_entry"]["pattern"] == ms.ENTRY_PATTERN
+
+
 def test_every_selection_negative_file_is_listed():
     found = (ROOT / "schemas/platform/negative").glob("module_selection.*")
     assert {p.stem.split(".", 1)[1] for p in found} == set(SELECTION_NEGATIVES)
@@ -1142,12 +1202,12 @@ SITE_DEFECTS.update(
         "an empty scope part (its reader fails closed)": (
             "full",
             lambda s, m: s["scope"]["trusted"].__setitem__("wan", []),
-            "scope.trusted.wan: missing or empty",
+            "scope.trusted.wan: empty",
         ),
         "a malformed CIDR in the scope": (
             "full",
             lambda s, m: s["scope"]["target"].__setitem__(0, "198.51.100.0/33"),
-            "scope.target[0]: '198.51.100.0/33' is not an address or network",
+            "scope.target[0]: '198.51.100.0/33' is not a usable address or network",
         ),
         "a scope network with host bits set": (
             "full",
