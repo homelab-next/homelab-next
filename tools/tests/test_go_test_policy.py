@@ -769,16 +769,17 @@ SKIP_SOURCES = {
     "internal/multi/m_test.go": 'func TestMulti(t *testing.T) { t.Skip("feature flag off\\ndocker not available") }\n',
     "internal/bare/b_test.go": "func TestBare(t *testing.T) { t.Skip() }\nfunc TestVar(t *testing.T) { t.Skipf(msg) }\n",
     "internal/raw/r_test.go": "func TestRaw(b *testing.B) { b.Skip(`one\ntwo`) }\n",
-    # accepted: a one-line literal (Skipf formats it), a comment, Skipped(), test data
+    # verify3.md: a helper in a non-test file skips too, and Skipf's reason is its formatted args
+    "internal/ok/ok.go": "func f(t T) { t.SkipNow() }\n",
+    "internal/fmt/f_test.go": 'func TestF(t *testing.T) { t.Skipf("%s not installed", "flock") }\n',
+    # accepted: a one-line literal, a comment, Skipped(), test data
     "internal/ok/o_test.go": (
         'func TestA(t *testing.T) { t.Skip("docker not available") }\n'
-        'func TestB(t *testing.T) { t.Skipf("%s not installed", "flock") }\n'
         "func TestC(t *testing.T) { t.Skip(`dnsmasq not installed`) }\n"
         "// t.SkipNow() would hide the reason\n"
         "func TestD(t *testing.T) { if t.Skipped() { return } }\n"
     ),
     "internal/ok/testdata/x_test.go": "func TestX(t *testing.T) { t.SkipNow() }\n",
-    "internal/ok/ok.go": "func f(t T) { t.SkipNow() }\n",  # not a test file
 }
 
 
@@ -790,18 +791,111 @@ def test_check_sources_rejects_skips_whose_reason_the_stream_cannot_show(tmp_pat
     assert [f.split(": ", 1)[0] for f in found] == [
         "internal/bare/b_test.go:3",
         "internal/bare/b_test.go:4",
+        "internal/fmt/f_test.go:3",
         "internal/multi/m_test.go:3",
+        "internal/ok/ok.go:3",
         "internal/p/p_test.go:5",
         "internal/raw/r_test.go:3",
     ]
-    assert "SkipNow() has no reason of its own" in found[3]
-    assert "reason spans lines" in found[2] and "reason spans lines" in found[4]
-    assert "needs a string literal reason" in found[0] and "needs a string literal" in found[1]
+    assert "argument list must be one string literal" in found[0]
+    assert "Skipf's reason is what its arguments format to" in found[1] and "Skipf" in found[2]
+    assert "reason spans lines" in found[3] and "reason spans lines" in found[6]
+    assert "SkipNow has no reason of its own" in found[4] and "SkipNow" in found[5]
     assert policy.main(["--check-sources", str(tmp_path)]) == 1
-    assert "SKIP CALL internal/p/p_test.go:5: t.SkipNow(...)" in capsys.readouterr().out
+    assert "SKIP CALL internal/p/p_test.go:5: .SkipNow: " in capsys.readouterr().out
     clean = tmp_path / "internal" / "ok"
+    (clean / "ok.go").unlink()
     assert policy.main(["--check-sources", str(clean)]) == 0
     assert policy.main(["--check-sources", str(tmp_path / "missing")]) == 2
+
+
+# verify3.md (v3/cs): each test logs "docker not available" and then skips some other way, so the
+# logged line is read as its reason; the old check found 0 of these 9
+BYPASSES = {
+    "method value": "f := t.SkipNow\n\tf()",
+    "method expression": "(*testing.T).SkipNow(t)",
+    "a call's result": "suite{t}.T().SkipNow()",
+    "line break after the dot": "t.\n\t\tSkipNow()",
+    "after a // in a string": 't.Run("http://x", func(t *testing.T) { t.SkipNow() })',
+    "two arguments": 't.Skip("later", "\\ndocker not available")',
+    "Skipf with a newline argument": 't.Skipf("%s", "later\\ndocker not available")',
+    "Skipf of an error": 't.Skipf("docker: %v", err)',
+    "a concatenation": 't.Skip("later" + "\\n" + "docker not available")',
+    "a constant": "t.Skip(reason)",
+    "Skip as a value": 'skip := t.Skip\n\tskip("x")',
+    "a hex newline escape": 't.Skip("later\\x0adocker not available")',
+    "an octal newline escape": 't.Skip("later\\012docker not available")',
+    "a unicode newline escape": 't.Skip("later\\u000Adocker not available")',
+    "a carriage return": 't.Skip("later\\rdocker not available")',
+    "a comment inside the selector": "t. /* x */ SkipNow()",
+}
+
+
+@pytest.mark.parametrize("call", BYPASSES.values(), ids=BYPASSES.keys())
+def test_check_sources_sees_every_way_a_skip_can_take_its_reason_from_a_log(tmp_path, call):
+    (tmp_path / "p").mkdir()
+    (tmp_path / "p" / "p_test.go").write_text(
+        'package p\n\nimport "testing"\n\nfunc TestX(t *testing.T) {\n'
+        f'\tt.Log("docker not available")\n\t{call}\n}}\n'
+    )
+    found = policy.check_sources(tmp_path)
+    assert len(found) == 1 and found[0].startswith("p/p_test.go:7: ."), found
+
+
+def test_check_sources_reads_helpers_in_non_test_files(tmp_path):
+    (tmp_path / "testutil").mkdir()
+    (tmp_path / "testutil" / "testutil.go").write_text(
+        'package testutil\n\nimport "testing"\n\n'
+        "// NeedDocker skips with whatever was logged last.\n"
+        "func NeedDocker(t testing.TB) { t.SkipNow() }\n"
+    )
+    found = policy.check_sources(tmp_path)
+    assert [f.split(": ", 1)[0] for f in found] == ["testutil/testutil.go:6"]
+
+
+ACCEPTED = {
+    "a literal": 't.Skip("docker not available")',
+    "a raw literal": "t.Skip(`docker not available`)",
+    "a trailing comma": 't.Skip(\n\t\t"docker not available",\n\t)',
+    "a space before the call": 't.Skip ("docker not available")',
+    "a backslash and an n": 't.Skip("C:\\\\new not available")',
+    "a line comment": "// t.SkipNow() would hide the reason",
+    "a block comment": '/* t.SkipNow()\n\tt.Skipf("%v", err) */',
+    "a string": 'msg := "call t.SkipNow() here"\n\t_ = msg',
+    "a raw string over lines": "msg := `t.\nSkipNow()`\n\t_ = msg",
+    "a quote rune": 'q := \'"\'\n\t_ = q\n\tt.Skip("docker not available")',
+    "a backquote rune": "q := '`'\n\t_ = q\n\tt.Skip(\"docker not available\")",
+    "Skipped": "if t.Skipped() {\n\t\treturn\n\t}",
+    "a float with a leading dot": "x := .5\n\t_ = x",
+}
+
+
+@pytest.mark.parametrize("code", ACCEPTED.values(), ids=ACCEPTED.keys())
+def test_check_sources_accepts_one_literal_and_ignores_comments_and_literals(tmp_path, code):
+    (tmp_path / "p_test.go").write_text(
+        f'package p\n\nimport "testing"\n\nfunc TestX(t *testing.T) {{\n\t{code}\n}}\n'
+    )
+    assert policy.check_sources(tmp_path) == []
+
+
+def test_go_tokens_keep_lines_and_tell_literals_from_code():
+    toks = policy.go_tokens("a := \"x.y\" // t.Skip\nb := `\n`.\n\tc /* d\ne */ '.' 1.5\n")
+    assert [(t.kind, t.text, t.line) for t in toks] == [
+        ("ident", "a", 1),
+        ("op", ":", 1),
+        ("op", "=", 1),
+        ("string", '"x.y"', 1),
+        ("comment", "// t.Skip", 1),
+        ("ident", "b", 2),
+        ("op", ":", 2),
+        ("op", "=", 2),
+        ("raw", "`\n`", 2),
+        ("op", ".", 3),
+        ("ident", "c", 4),
+        ("comment", "/* d\ne */", 4),
+        ("rune", "'.'", 5),
+        ("number", "1.5", 5),
+    ]
 
 
 def test_the_go_job_checks_the_skip_calls_before_the_tests():

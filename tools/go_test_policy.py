@@ -23,9 +23,10 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
   ``TestMain`` or ``init``, a timeout -- and one whose only failing tests are quarantined unless
   every test in it has a verdict and the package wrote nothing beyond its ``FAIL`` summary, so a
   quarantine cannot hide a hang, a race reported after the tests or a ``TestMain`` crash;
-* with ``--check-sources DIR`` (instead of a run): a ``SkipNow()``, or a ``Skip``/``Skipf`` whose
-  reason is not a one-line string literal, in a ``*_test.go`` under DIR -- the forms whose reason
-  the stream cannot show (see ``skip_reason``);
+* with ``--check-sources DIR`` (instead of a run): any use of ``SkipNow`` or ``Skipf``, or a
+  ``Skip`` whose whole argument list is not one one-line string literal, in any ``.go`` file
+  under DIR (a helper's too, called or taken as a method value) -- the forms whose reason the
+  stream cannot show (see ``skip_reason`` and ``check_sources``);
 * a skip whose reason (the last line the test wrote before ``--- SKIP``) matches none of the
   ``skip_reasons`` regular expressions of ``[tool.pytest.ini_options]`` in pyproject.toml, or one
   that ``--forbid`` names for this run (a reason that is legitimate elsewhere, such as a tool CI
@@ -261,7 +262,7 @@ def skip_reason(res: Result) -> str:
     For ``t.Skip("<one line>")`` that is the message, and earlier ``t.Log`` lines are not taken
     for it.  The stream cannot tell that apart from ``t.Log(...); t.SkipNow()`` (the logged line
     becomes the reason) or from the last line of a multi-line message, so ``--check-sources``
-    rejects those forms in the test sources: a skip states its reason in the call, on one line.
+    rejects those forms in the module's sources: a skip states its reason in the call, on one line.
     """
     out = res.output
     ends = [i for i, line in enumerate(out) if SKIP_LINE.match(line)]
@@ -513,47 +514,116 @@ def _oneline(lines: list[str], limit: int = 200) -> str:
     return " | ".join(line.strip() for line in lines[-5:] if line.strip())[:limit]
 
 
-# a skip call: t.Skip(...), t.Skipf(...), t.SkipNow() on any receiver (t, b, f, tb)
-SKIP_CALL = re.compile(r"\b\w+\.(SkipNow|Skipf?)\(")
+# a skip method named by a selector: t.Skip(...), x.T().SkipNow(), (*testing.T).Skipf, f := t.SkipNow
+SKIP_NAMES = frozenset({"Skip", "Skipf", "SkipNow"})
+
+# Go's tokens (the spec's lexical elements), enough to tell code from comments and literals: a
+# rune literal is one token, so '"' starts no string; a number takes its dot, so .5 is no selector
+_GO_TOKEN = re.compile(
+    r"""(?P<space>[ \t\r\n]+)
+      | (?P<comment>//[^\n]*|/\*.*?(?:\*/|\Z))
+      | (?P<raw>`[^`]*(?:`|\Z))
+      | (?P<string>"(?:[^"\\\n]|\\.)*(?:"|$))
+      | (?P<rune>'(?:[^'\\\n]|\\.)*(?:'|$))
+      | (?P<number>\.?[0-9](?:[eEpP][+-]|[0-9A-Za-z_.])*)
+      | (?P<ident>[^\W\d]\w*)
+      | (?P<op>.)""",
+    re.VERBOSE | re.DOTALL | re.MULTILINE,
+)
+# an interpreted literal's escapes, one at a time: \\\\n in the source is a backslash, an n
+_ESCAPE = re.compile(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{3}|.)", re.DOTALL)
 
 
-def check_sources(root: Path) -> list[str]:
-    """``--check-sources``: every skip in the ``*_test.go`` files under ``root`` names its reason.
+@dataclass(frozen=True)
+class GoToken:
+    kind: str  # comment, raw, string, rune, number, ident or op; space is dropped
+    text: str
+    line: int
 
-    Rejected: ``SkipNow()`` (its reason would be whatever the test logged last), and ``Skip`` or
-    ``Skipf`` whose first argument is not a string literal or whose literal spans lines (only its
-    last line would be read as the reason).  Lines that are ``//`` comments are not code.
-    """
-    out = []
-    for path in sorted(root.rglob("*_test.go")):
-        rel = path.relative_to(root)
-        if any(part == "testdata" or part.startswith(("_", ".")) for part in rel.parts[:-1]):
-            continue  # not a package, as for the go tool
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for m in SKIP_CALL.finditer(text):
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            if "//" in text[line_start : m.start()]:
-                continue
-            why = _skip_call_problem(m.group(1), text[m.end() :])
-            if why:
-                line = text.count("\n", 0, m.start()) + 1
-                out.append(f"{rel.as_posix()}:{line}: {m.group(0)}...): {why}")
+
+def go_tokens(text: str) -> list[GoToken]:
+    """The tokens of Go source ``text``, comments included and white space left out."""
+    out, line = [], 1
+    for m in _GO_TOKEN.finditer(text):
+        kind = m.lastgroup or "op"
+        if kind != "space":
+            out.append(GoToken(kind, m.group(), line))
+        line += m.group().count("\n")
     return out
 
 
-def _skip_call_problem(name: str, rest: str) -> str | None:
+def check_sources(root: Path) -> list[str]:
+    """``--check-sources``: every skip in the module under ``root`` names its reason in the call.
+
+    Every ``.go`` file is read (a helper in a non-test file skips just the same) and tokenized, so
+    comments and string literals are not code.  Each selector of ``Skip``, ``Skipf`` or ``SkipNow``
+    is checked, called or not, whatever is before the dot (``t.``, ``x.T().``, ``(*testing.T).``)
+    and with any space or line break around it.  Accepted is only ``.Skip(<one string literal>)``,
+    the literal the whole argument list and on one line; rejected are ``SkipNow`` (its reason is
+    whatever the test logged last), ``Skipf`` (its reason is what the arguments format to: the last
+    line of ``%v`` of an error), ``Skip`` with no, several or a non-literal argument, and a method
+    value or expression, whose eventual call cannot be read here.
+
+    It reads the sources, not types: a skip through reflection, or inside a dependency outside the
+    tree (the module cache), is not seen; so a ``Skip`` method of an unrelated type is checked too.
+    """
+    out = []
+    for path in sorted(root.rglob("*.go")):
+        rel = path.relative_to(root)
+        if any(part == "testdata" or part.startswith(("_", ".")) for part in rel.parts[:-1]):
+            continue  # not a package, as for the go tool
+        if not path.is_file():
+            continue
+        toks = [
+            t
+            for t in go_tokens(path.read_text(encoding="utf-8", errors="replace"))
+            if t.kind != "comment"
+        ]
+        for i, tok in enumerate(toks[:-1]):
+            name = toks[i + 1]
+            if (tok.kind, tok.text) != ("op", ".") or name.kind != "ident":
+                continue
+            why = _skip_problem(name.text, toks[i + 2 :]) if name.text in SKIP_NAMES else None
+            if why:
+                out.append(f"{rel.as_posix()}:{tok.line}: .{name.text}: {why}")
+    return out
+
+
+def _skip_problem(name: str, rest: list[GoToken]) -> str | None:
+    use = 'use Skip("<one-line reason>")'
     if name == "SkipNow":
-        return 'SkipNow() has no reason of its own: use Skip("<why>") on one line'
-    arg = rest.lstrip()
-    if not arg.startswith(('"', "`")):
-        return f"{name} needs a string literal reason as its first argument"
-    if arg[0] == "`":
-        literal = arg[1 : arg.find("`", 1)]
-        multi = "\n" in literal
-    else:
-        m = re.match(r'"((?:[^"\\\n]|\\.)*)"', arg)
-        multi = m is None or "\\n" in m.group(1)
-    return f"{name}'s reason spans lines: only its last line would be read" if multi else None
+        return f"SkipNow has no reason of its own (the last line logged is read): {use}"
+    if name == "Skipf":
+        return f"Skipf's reason is what its arguments format to, unseen here: {use}"
+    if not rest or rest[0].text != "(":
+        return f"Skip as a method value or expression: its call cannot be checked: {use}"
+    args = rest[1:4]
+    texts = [t.text for t in args]
+    one = (
+        len(args) >= 2
+        and args[0].kind in ("string", "raw")
+        and (texts[1] == ")" or texts[1:3] == [",", ")"])
+    )
+    if not one:
+        return f"Skip's whole argument list must be one string literal: {use}"
+    lit = args[0]
+    multi = "\n" in lit.text if lit.kind == "raw" else _breaks_line(lit.text)
+    return f"Skip's reason spans lines: only its last line would be read: {use}" if multi else None
+
+
+def _breaks_line(literal: str) -> bool:
+    """An interpreted string literal with an escape for a line feed or carriage return in it."""
+    for m in _ESCAPE.finditer(literal):
+        e = m.group()[1:]
+        if e[0] in "xuU" and len(e) > 1:
+            code = int(e[1:], 16)
+        elif len(e) == 3 and e.isdigit():
+            code = int(e, 8)
+        else:
+            code = {"n": 10, "r": 13}.get(e, 0)
+        if code in (10, 13):
+            return True
+    return False
 
 
 def list_privileged(policy: Policy) -> list[str]:
@@ -647,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         "--check-sources",
         type=Path,
         metavar="DIR",
-        help="check the skip calls of the *_test.go files under DIR instead of judging a run",
+        help="check every Skip/Skipf/SkipNow in the .go files under DIR instead of judging a run",
     )
     args = ap.parse_args(argv)
     try:
