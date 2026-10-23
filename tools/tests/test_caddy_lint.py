@@ -3,12 +3,15 @@
 
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caddy_lint as lint
@@ -584,23 +587,31 @@ def test_the_site_level_strip_covers_a_renamed_copy_too():
     )
 
 
-def test_a_named_route_runs_its_directives_in_order_and_its_invoker_needs_the_strip():
+def test_a_named_route_is_not_a_route_and_its_invoker_needs_the_strip():
+    """Caddy 2.11.1 and 2.11.7 adapt only the first directive of a named route (observed: of
+    request_header, forward_auth and reverse_proxy only the strip survives), so a forward_auth
+    directly in one is not in a route; inside a route block in it, it is."""
     named = """\
 &(authed) {
-	request_header -*authentik*
-	forward_auth idp:9443 {
-		copy_headers X-Authentik-Username
+	route {
+		request_header -*authentik*
+		forward_auth idp:9443 {
+			copy_headers X-Authentik-Username
+		}
+		reverse_proxy app:8080
 	}
-	reverse_proxy app:8080
 }
 app.lab.example {
 	%s
 	invoke authed
 }
 """
-    found = lint.lint_caddy(named % "")
-    assert [(f.line, f.rule) for f in found] == [(8, "strip")]
+    assert [(f.line, f.rule) for f in lint.lint_caddy(named % "")] == [(10, "strip")]
     assert lint.lint_caddy(named % "request_header -*authentik*") == []
+    flat = named.replace("\troute {\n", "").replace("\t\treverse_proxy app:8080\n\t}\n", "")
+    flat = flat.replace("\t\t", "\t")
+    found = lint.lint_caddy(flat % "request_header -*authentik*")
+    assert [f.detail for f in found] == ["forward_auth is not directly inside a route block"]
 
 
 def test_the_generated_sites_need_their_site_level_strip():
@@ -1241,3 +1252,308 @@ def test_a_missing_dependency_exits_2(tmp_path, monkeypatch):
 )  # fmt: skip
 def test_review_probes(change, expected):
     assert [f.rule for f in lint.lint_caddy(GOOD.replace(*change))] == expected
+
+
+# ---------------------------------------------------------------- Caddy's own JSON (semantic)
+
+
+def _fa(*copied: str, dial: str = "idp:9443") -> dict:
+    """A forward_auth as caddy adapt writes it: a reverse_proxy whose handle_response copies."""
+    sets = [
+        {
+            "handle": [
+                {
+                    "handler": "headers",
+                    "request": {"set": {h: [f"{{http.reverse_proxy.header.{h}}}"]}},
+                }
+            ]
+        }
+        for h in copied
+    ]
+    return {
+        "handler": "reverse_proxy",
+        "upstreams": [{"dial": dial}],
+        "handle_response": [{"match": {"status_code": [2]}, "routes": sets}],
+    }
+
+
+def _del(*patterns: str) -> dict:
+    return {"handler": "headers", "request": {"delete": list(patterns)}}
+
+
+def _proxy(dial: str = "app:8080", **request) -> dict:
+    h: dict = {"handler": "reverse_proxy", "upstreams": [{"dial": dial}]}
+    if request:
+        h["headers"] = {"request": request}
+    return h
+
+
+def _sub(*routes: dict) -> dict:
+    return {"handler": "subroute", "routes": list(routes)}
+
+
+def _route(*handle: dict, **kw) -> dict:
+    return {"handle": list(handle), **kw}
+
+
+def _config(*routes: dict, **server) -> dict:
+    return {
+        "apps": {
+            "http": {"servers": {"srv0": {"listen": [":443"], "routes": list(routes), **server}}}
+        }
+    }
+
+
+IDS = ("X-Authentik-Username", "X-Authentik-Groups")
+AUTH_ROUTE = _route(_sub(_route(_del("*authentik*"), _fa(*IDS))))
+
+
+def _judged(doc: dict) -> list[tuple[str, str]]:
+    return [
+        (rule, detail.split(": ", 1)[0]) for rule, detail in lint.judge_json(doc)
+    ]  # (rule, where)
+
+
+def test_the_generated_shape_passes_the_semantic_check():
+    site = _route(_sub(_route(_del("*authentik*")), _route(_sub(_route(_del("*authentik*"), _fa(*IDS)))), _route(_proxy())),
+                  match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
+    idp = _route(
+        _sub(_route(_proxy("idp:9443"))), match=[{"host": ["login.lab.example"]}], terminal=True
+    )
+    assert lint.judge_json(_config(site, idp)) == []
+
+
+@pytest.mark.parametrize(
+    ("routes", "expected"),
+    [
+        # a handle group beside the auth route: Caddy sorts it first (review a02)
+        ([_route(_sub(_route(_proxy("api:8080"))), match=[{"path": ["/api/*"]}], group="group0"), AUTH_ROUTE, _route(_proxy())],
+         [("semantic", "srv0 routes[0]/handle[0]/routes[0]/handle[0]")]),
+        # a matcher on the auth route (a03): the other paths skip it
+        ([{**AUTH_ROUTE, "match": [{"path": ["/admin/*"]}]}, _route(_proxy())], [("semantic", "srv0 routes[1]/handle[0]")]),
+        # the strip after forward_auth deletes the IdP's answer, not the client's headers
+        ([_route(_sub(_route(_fa(*IDS), _del("*authentik*")))), _route(_proxy())],
+         [("semantic", "srv0 routes[0]/handle[0]/routes[0]/handle[0]")]),
+        # a delete only some requests run (a matcher on the strip's route), before a forward_auth
+        # whose route does not strip again
+        ([_route(_del("*authentik*"), match=[{"path": ["/x"]}]), _route(_sub(_route(_fa(*IDS)))), _route(_proxy())],
+         [("semantic", "srv0 routes[1]/handle[0]/routes[0]/handle[0]"), ("semantic", "srv0 routes[2]/handle[0]")]),
+        # a site-level strip covers every path
+        ([_route(_del("*authentik*")), _route(_sub(_route(_proxy("api:8080"))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
+        # an upstream's own header_up delete counts for that upstream
+        ([_route(_sub(_route(_proxy("api:8080", delete=["*authentik*"]))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
+    ],
+)  # fmt: skip
+def test_every_upstream_is_reached_with_the_identity_headers_deleted(routes, expected):
+    assert _judged(_config(*routes)) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_ops", "expected"),
+    [
+        ({"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}}, "reset"),  # p04
+        ({"add": {"x_authentik_groups": ["admins"]}}, "reset"),
+        ({"replace": {"X-Authentik-Groups": [{"search_regexp": "^.*$", "replace": "admins"}]}}, "reset"),  # a08
+        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
+        ({"set": {"{http.request.header.X-Name}": ["{http.request.header.X-Evil}"]}}, "semantic"),  # a06b
+        ({"set": {"{http.vars.a}{http.vars.b}": [""]}}, "semantic"),  # a04
+        ({"set": {"Host": ["{upstream_hostport}"]}, "delete": ["X-Authentik-Groups"]}, None),
+    ],
+)  # fmt: skip
+def test_an_identity_header_set_after_the_strip_is_a_finding(request_ops, expected):
+    doc = _config(_route(_del("*authentik*")), AUTH_ROUTE, _route(_proxy(**request_ops)))
+    assert [rule for rule, _ in lint.judge_json(doc)] == ([expected] if expected else [])
+
+
+def test_only_the_auth_answer_may_set_an_identity_header_in_handle_response():
+    fa = _fa(*IDS)
+    fa["handle_response"][0]["routes"].append(
+        {
+            "handle": [
+                {
+                    "handler": "headers",
+                    "request": {"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}},
+                }
+            ]
+        }
+    )
+    doc = _config(
+        _route(_del("*authentik*")), _route(_sub(_route(_del("*authentik*"), fa))), _route(_proxy())
+    )
+    assert [rule for rule, _ in lint.judge_json(doc)] == ["reset"]
+
+
+def test_the_idps_own_site_and_another_sites_copied_name_are_not_held_to_the_rule():
+    renamed = _route(_sub(_route(_del("*authentik*", "remote*")), _route(_sub(_route(_del("*authentik*", "remote*"), _fa("Remote-User")))), _route(_proxy())),
+                     match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
+    legacy = _route(_sub(_route(_proxy("legacy:8080", set={"Remote-User": ["{http.auth.user.id}"]}))),
+                    match=[{"host": ["legacy.lab.example"]}], terminal=True)  # fmt: skip
+    idp = _route(
+        _sub(_route(_proxy("authentik-server:9000"))),
+        match=[{"host": ["authentik.lab.example"]}],
+        terminal=True,
+    )
+    assert lint.judge_json(_config(renamed, legacy, idp)) == []
+    # without a host matcher keeping it apart, the legacy proxy is in the auth site
+    legacy.pop("match")
+    assert {rule for rule, _ in lint.judge_json(_config(renamed, legacy))} == {"reset", "semantic"}
+
+
+def test_handle_errors_starts_from_what_the_site_deleted_first():
+    api = _route(
+        _sub(_route(_proxy("api:8080", delete=["*authentik*"]))),
+        match=[{"path": ["/api/*"]}],
+        group="g",
+    )
+    site = _route(_sub(_route(_del("*authentik*")), api, AUTH_ROUTE, _route(_proxy())),
+                  match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
+    errors = {
+        "routes": [
+            _route(
+                _sub(_route(_proxy("errors:8080"))),
+                match=[{"host": ["app.lab.example"]}],
+                terminal=True,
+            )
+        ]
+    }
+    assert lint.judge_json(_config(site, errors=errors)) == []
+    site["handle"][0]["routes"].pop(0)  # no site-level strip: the error path proxies the forgery
+    assert _judged(_config(site, errors=errors)) == [
+        ("semantic", "srv0 errors[0]/handle[0]/routes[0]/handle[0]")
+    ]
+
+
+def test_a_named_route_and_an_unknown_handler():
+    named = {"authed": _route(_sub(_route(_del("*authentik*"), _fa(*IDS))), _proxy())}
+    invoke = {"handler": "invoke", "name": "authed"}
+    assert lint.judge_json(_config(_route(invoke), named_routes=named)) == []
+    missing = _config(_route({"handler": "invoke", "name": "nope"}, _proxy()), _route(_fa(*IDS)))
+    assert ("semantic", "srv0 routes[0]/handle[0]") in _judged(missing)
+    plugin = _config(
+        _route(_del("*authentik*"), {"handler": "set_identity"}), AUTH_ROUTE, _route(_proxy())
+    )
+    assert _judged(plugin) == [("semantic", "srv0 routes[0]/handle[1]")]
+
+
+def _fake_caddy(tmp_path: Path, doc: object | None, error: str = "") -> str:
+    """A stand-in caddy binary, beside (not in) the tree under test, that answers `version` and
+    prints ``doc`` for `adapt`."""
+    script = tmp_path.parent / f"{tmp_path.name}-fake-caddy"
+    body = json.dumps(doc) if doc is not None else ""
+    script.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = version ]; then echo v2.11.7 fake; exit 0; fi\n'
+        f"cat <<'JSON'\n{body}\nJSON\n"
+        + (f"echo '{json.dumps({'level': 'error', 'msg': error})}' >&2\nexit 1\n" if error else "")
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_scan_judges_what_caddy_adapt_returns(tmp_path):
+    (tmp_path / "Caddyfile").write_text(GOOD)
+    (tmp_path / "doc.md").write_text("```caddyfile\n" + GOOD + "```\n")
+    bypass = _config(
+        _route(_sub(_route(_proxy("api:8080"))), match=[{"path": ["/api/*"]}], group="g"),
+        AUTH_ROUTE,
+        _route(_proxy()),
+    )
+    adapter = lint.Adapter(_fake_caddy(tmp_path, bypass))
+    findings, counts = lint.scan(tmp_path, adapter=adapter)
+    assert sorted({(f.path, f.rule) for f in findings}) == [
+        ("Caddyfile", "semantic"),
+        ("doc.md", "semantic"),
+    ]
+    assert counts["adapted"] == 2 and counts["caddy"] == "v2.11.7"
+    # Caddy refusing a Caddyfile is a finding; refusing a markdown example leaves it to the text lint
+    adapter = lint.Adapter(_fake_caddy(tmp_path, None, "File to import not found: auth"))
+    findings, counts = lint.scan(tmp_path, adapter=adapter)
+    assert [(f.path, f.rule, f.detail) for f in findings] == [
+        (
+            "Caddyfile",
+            "semantic",
+            "caddy adapt refuses it (File to import not found: auth): the semantic check cannot judge it",
+        )
+    ]
+    assert counts["text_only"] == 2 and counts["adapted"] == 0
+
+
+def test_the_ci_run_requires_caddy_and_a_local_run_says_what_it_skipped(tmp_path, monkeypatch):
+    (tmp_path / "Caddyfile").write_text(GOOD)
+    monkeypatch.delenv("HNX_CADDY", raising=False)
+    monkeypatch.setattr(lint.shutil, "which", lambda name: None)
+    out, err = io.StringIO(), io.StringIO()
+    assert lint.main([str(tmp_path)], out=out, err=err) == 0
+    assert "the semantic check (caddy adapt) did not run" in err.getvalue()
+    assert "caddy adapt not run, 1 text only" in out.getvalue()
+    monkeypatch.setenv("HNX_CADDY_REQUIRED", "1")
+    err = io.StringIO()
+    assert lint.main([str(tmp_path)], out=io.StringIO(), err=err) == 2
+    assert "HNX_CADDY_REQUIRED is set and no caddy binary was found" in err.getvalue()
+    assert (
+        lint.main(
+            [str(tmp_path), "--caddy", _fake_caddy(tmp_path, _config(AUTH_ROUTE))],
+            out=out,
+            err=err,
+        )
+        == 0
+    )
+
+
+def test_a_caddy_json_or_yaml_config_in_the_tree_is_judged(tmp_path):
+    """Review SF6: caddy adapt of p04 saved as edge/caddy.json (and as YAML) spoofed live on
+    2.11.7, and the scan neither read it nor counted it."""
+    p04 = _config(
+        _route(_sub(_route(_del("X-Authentik-*"), _fa(*IDS)))),
+        _route(_proxy(set={"X-Authentik-Groups": ["{http.request.header.X-Evil}"]})),
+    )
+    (tmp_path / "edge").mkdir()
+    (tmp_path / "edge" / "caddy.json").write_text(json.dumps(p04))
+    (tmp_path / "edge" / "caddy.yaml").write_text(yaml.safe_dump(p04))
+    (tmp_path / "edge" / "route.json").write_text(
+        json.dumps({"routes": [_route(_proxy())]})
+    )  # a fragment
+    (tmp_path / "other.json").write_text('{"handler": "file", "level": "info"}')  # not Caddy
+    findings, counts = lint.scan(tmp_path)
+    got = sorted({(f.path, f.rule) for f in findings})
+    assert got == [("edge/caddy.json", "reset"), ("edge/caddy.json", "semantic"),
+                   ("edge/caddy.yaml", "reset"), ("edge/caddy.yaml", "semantic"),
+                   ("edge/route.json", "coverage")]  # fmt: skip
+    assert counts["json_configs"] == 2
+
+
+def test_a_global_order_option_fails_closed():
+    text = "{\n\torder request_header after reverse_proxy\n}\n" + GOOD
+    assert [(f.line, f.rule) for f in lint.lint_caddy(text)] == [(2, "parse")]
+
+
+CADDY_BIN = os.environ.get("HNX_CADDY") or shutil.which("caddy")
+live = pytest.mark.skipif(
+    CADDY_BIN is None, reason="caddy not installed (set HNX_CADDY or put caddy on PATH)"
+)
+
+
+@live
+@pytest.mark.parametrize(
+    ("text", "rules"),
+    [
+        (PAST % ("", "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"), {"semantic"}),
+        (PAST % ("", " /admin/*", ""), {"semantic"}),
+        (PAST % ("request_header -*authentik*", "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"), set()),
+        (AUTHENTIK_LAYOUT, set()),
+        ((NAMED_LATER % ("import setid X-Authentik-Groups", "")).replace("\t\t\tcopy", "\t\t\turi /auth\n\t\t\tcopy"), {"reset"}),
+    ],
+)  # fmt: skip
+def test_live_caddy_adapt(text, rules):
+    doc, err = lint.Adapter(CADDY_BIN).adapt(text, None)
+    assert err == "" and {rule for rule, _ in lint.judge_json(doc)} == rules
+
+
+@live
+def test_live_the_tree_passes_the_semantic_check():
+    out, err = io.StringIO(), io.StringIO()
+    assert lint.main([str(REPO), "--json", "--caddy", CADDY_BIN], out=out, err=err) == 0, (
+        out.getvalue()
+    )
+    doc = json.loads(out.getvalue())
+    assert doc["adapted"] >= 7 and doc["findings"] == []

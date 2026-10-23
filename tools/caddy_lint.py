@@ -95,10 +95,14 @@ from __future__ import annotations
 import argparse
 import ast
 import fnmatch
+import functools
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -116,6 +120,8 @@ if str(REPO_ROOT) not in sys.path:
 MIN_CADDY = (2, 11, 2)
 MIN_CADDY_TEXT = ".".join(map(str, MIN_CADDY))
 DEFAULT_ALLOWLIST = "tools/caddy_lint.allow.yml"
+#: the caddy binary for the semantic check (``caddy adapt``), and the flag CI sets to require it
+CADDY_ENV, CADDY_REQUIRED_ENV = "HNX_CADDY", "HNX_CADDY_REQUIRED"
 INLINE_ALLOW = re.compile(r"caddy-lint:\s*allow\s+\S")
 GIT_LS_FILES = ("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
 #: outside git: directories that never hold a config of the tree's own
@@ -631,9 +637,14 @@ def _resets(nodes: list[Node], copied: set[str]) -> list[Finding]:
     return out
 
 
-#: a named route (Caddy 2.8+): ``&(name) { ... }``, run by ``invoke name``; its directives run in
-#: the order written, as a ``route``'s do
+#: a named route (Caddy 2.8+): ``&(name) { ... }``, run by ``invoke name``. It is not a ``route``:
+#: Caddy 2.11.1 and 2.11.7 adapt only its first directive (observed), so a strip and a
+#: ``forward_auth`` belong in a ``route`` block inside it
 NAMED_ROUTE = re.compile(r"^&\((?P<name>[^()]+)\)$")
+
+
+#: the directives whose default order the strip rules rely on
+ORDER_MODELED = {"request_header", "forward_auth", "route", "handle", "handle_path", "header"}
 
 
 def _kind(node: Node) -> str:
@@ -658,7 +669,7 @@ def _covers_mark(pattern: str) -> bool:
 
 
 def _check_auth(node: Node) -> list[Finding]:
-    """One ``forward_auth``: no matcher, directly inside a ``route`` (or a named route), after
+    """One ``forward_auth``: no matcher, directly inside a ``route``, after
     a delete of every spelling of every header its ``copy_headers`` sets."""
     findings = []
     line, where = node.line, node.path
@@ -673,7 +684,7 @@ def _check_auth(node: Node) -> list[Finding]:
             )
         )
     route = node.parent
-    if route is None or not (route.name == "route" or _kind(route) == "named"):
+    if route is None or route.name != "route":
         findings.append(
             Finding(where, line, "strip", "forward_auth is not directly inside a route block")
         )
@@ -771,6 +782,21 @@ def lint_caddy(
         if _kind(c) in ("site", "named"):
             label = " ".join(c.tokens) if _kind(c) == "site" else ""
             scopes.append((c, label, list(_walk(c)), c.children))
+    for c in root.children:
+        if _kind(c) != "global":
+            continue
+        for n in _walk(c):
+            moved = [t for t in n.tokens[1:] if t in ORDER_MODELED]
+            if n.name == "order" and moved:
+                findings.append(
+                    Finding(
+                        n.path,
+                        n.line,
+                        "parse",
+                        f"the global order option moves {moved[0]}: the lint reads directives in "
+                        "Caddy's default order",
+                    )
+                )
     for site, label, nodes, direct in scopes:
         invoked = [
             named[n.tokens[1]]
@@ -793,6 +819,393 @@ def lint_caddy(
             findings += _site_strip(site, direct, names, label)
         findings += _resets(nodes, {_norm(h) for h in names})
     return list(dict.fromkeys(findings))
+
+
+# ---------------------------------------------------------------- Caddy's own JSON
+
+#: handlers that pass the request on with its headers as they are
+JSON_PASS = {
+    "vars", "rewrite", "encode", "request_body", "map", "templates", "push", "tracing",
+    "metrics", "log_append", "authentication", "intercept", "copy_response_headers",
+}  # fmt: skip
+#: handlers that answer the request themselves: nothing after them runs
+JSON_END = {"static_response", "file_server", "error", "copy_response", "acme_server"}
+#: a forward-auth copy: a header set to exactly the auth answer's own header
+RP_HEADER_VALUE = re.compile(r"(?i)^\{(?:http\.reverse_proxy|rp)\.header\.[^{}]+\}$")
+MARK = "*authentik*"  # the requirement "every header carrying authentik is deleted"
+
+
+def _covers_key(pattern: str, key: str) -> bool:
+    return _covers_mark(pattern) if key == MARK else _covers(pattern, key)
+
+
+def _copies(rp: dict) -> list[str]:
+    """The request headers a reverse_proxy's ``handle_response`` sets from the proxied answer's
+    own headers: what Caddy's ``forward_auth`` ``copy_headers`` adapts to."""
+    out: list[str] = []
+    stack: list = [rp.get("handle_response")]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, list):
+            stack += x
+        elif isinstance(x, dict):
+            if x.get("handler") == "headers" and isinstance(x.get("request"), dict):
+                for f, vals in (x["request"].get("set") or {}).items():
+                    if (
+                        isinstance(vals, list)
+                        and vals
+                        and all(RP_HEADER_VALUE.match(str(v)) for v in vals)
+                    ):
+                        out.append(f)
+            stack += [v for v in x.values() if isinstance(v, (list, dict))]
+    return out
+
+
+def _is_auth(h: object) -> bool:
+    return (
+        isinstance(h, dict)
+        and h.get("handler") == "reverse_proxy"
+        and bool(h.get("handle_response"))
+    )
+
+
+def _contains_auth(x: object, named: dict) -> bool:
+    if _is_auth(x):
+        return True
+    if isinstance(x, dict):
+        if x.get("handler") == "invoke" and x.get("name") in named:
+            return _contains_auth(named[x["name"]], {})
+        return any(_contains_auth(v, named) for v in x.values())
+    if isinstance(x, list):
+        return any(_contains_auth(v, named) for v in x)
+    return False
+
+
+class _Judge:
+    """Caddy's own JSON for one server, judged in the order Caddy runs it. A request walks the
+    routes in order; a route with a matcher (or in a ``handle`` group) may or may not run, so a
+    header is known deleted after it only when it is deleted on both ways. In a server with a
+    ``forward_auth`` (a ``reverse_proxy`` with ``handle_response``), every ``reverse_proxy`` a
+    request reaches, the auth one included, must be reached with every header carrying
+    ``authentik`` and every spelling of every copied header deleted first; a host-matched
+    terminal site with no auth in it (the IdP's own site) is not held to that. Anywhere, a
+    header set, added or replaced whose name is not literal, carries ``authentik`` or is a
+    copied one, or that copies such a header through a placeholder, is a finding; only the auth
+    answer's own ``handle_response`` may set those, from the answer's headers."""
+
+    def __init__(self, server: str, srv: dict):
+        self.server, self.srv, self.out = server, srv, []
+        self.named = srv.get("named_routes") if isinstance(srv.get("named_routes"), dict) else {}
+        everything = [srv.get("routes"), (srv.get("errors") or {}).get("routes"), self.named]
+        self.everything = everything
+        self.auth = _contains_auth(everything, self.named)
+        self.depth = 0
+        self.use(everything)
+
+    def use(self, scope: object) -> None:
+        """The identity headers of ``scope``: what its forward_auths copy (a site's own, or the
+        whole server's for routes no host matcher keeps apart)."""
+        copied: list[str] = []
+        stack: list = [scope]
+        while stack:
+            x = stack.pop()
+            if _is_auth(x):
+                copied += _copies(x)
+            if isinstance(x, dict):
+                if x.get("handler") == "invoke" and x.get("name") in self.named:
+                    stack.append(self.named[x["name"]])
+                stack += [v for v in x.values() if isinstance(v, (list, dict))]
+            elif isinstance(x, list):
+                stack += x
+        copied = list(dict.fromkeys(copied))
+        self.idents = {_norm(c) for c in copied}
+        self.keys = {MARK} | {sp.lower() for c in copied for sp in spellings(c)}
+
+    def site(self, r: dict) -> None:
+        self.use(r if r.get("match") and r.get("terminal") else self.everything)
+
+    def add(self, rule: str, where: str, detail: str) -> None:
+        self.out.append((rule, f"{self.server} {where}: {detail}"))
+
+    def run(self) -> list[tuple[str, str]]:
+        primary = self.srv.get("routes") if isinstance(self.srv.get("routes"), list) else []
+        st: frozenset | None = frozenset()
+        for i, r in enumerate(primary):
+            if st is None:
+                break
+            if isinstance(r, dict):
+                self.site(r)
+                st = self.route(r, st, self.in_scope(r), f"routes[{i}]")
+        # handle_errors runs on the same request after the site's own routes failed: whatever
+        # the site deleted before anything else (its site-level strip) is already gone
+        errors = (self.srv.get("errors") or {}).get("routes")
+        for i, r in enumerate(errors if isinstance(errors, list) else []):
+            if isinstance(r, dict):
+                same = [
+                    p for p in primary if isinstance(p, dict) and p.get("match") == r.get("match")
+                ]
+                starts = [self.prefix(p) for p in (same or primary) if isinstance(p, dict)]
+                start = frozenset.intersection(*starts) if starts else frozenset()
+                scope = (
+                    self.auth and any(_contains_auth(p, self.named) for p in same)
+                    if same
+                    else self.in_scope(r)
+                )
+                self.site(same[0] if same else r)
+                self.route(r, start, scope, f"errors[{i}]")
+        return self.out
+
+    def in_scope(self, r: dict) -> bool:
+        """A site with no forward_auth of its own beside one that has it (the IdP's site)."""
+        other_site = r.get("match") and r.get("terminal") and not _contains_auth(r, self.named)
+        return self.auth and not other_site
+
+    def prefix(self, r: dict) -> frozenset:
+        """What a route deletes before anything else it does (headers handlers first in it,
+        or first in its subroute's first unconditional route)."""
+        st: frozenset = frozenset()
+        for h in r.get("handle") or []:
+            if not isinstance(h, dict):
+                break
+            if h.get("handler") == "headers":
+                st = self.deleted(h.get("request"), st)
+            elif h.get("handler") == "subroute":
+                for sub in h.get("routes") or []:
+                    if (
+                        not isinstance(sub, dict)
+                        or sub.get("match")
+                        or sub.get("group") is not None
+                    ):
+                        break
+                    got = self.prefix(sub)
+                    st |= got
+                    if any(not isinstance(x, dict) or x.get("handler") != "headers"
+                           for x in sub.get("handle") or []):  # fmt: skip
+                        break
+                break
+            else:
+                break
+        return st
+
+    def routes(self, rs: object, st: frozenset, scope: bool, loc: str) -> frozenset | None:
+        cur: frozenset | None = st
+        for i, r in enumerate(rs if isinstance(rs, list) else []):
+            if cur is None:
+                return None
+            if isinstance(r, dict):
+                cur = self.route(r, cur, scope, f"{loc}/routes[{i}]")
+        return cur
+
+    def route(self, r: dict, st: frozenset, scope: bool, loc: str) -> frozenset | None:
+        out: frozenset | None = st
+        for j, h in enumerate(r.get("handle") or []):
+            if out is None:
+                break
+            out = self.handler(h, out, scope, f"{loc}/handle[{j}]")
+        maybe = bool(r.get("match")) or r.get("group") is not None
+        if r.get("terminal"):
+            return st if maybe else None
+        if not maybe:
+            return out
+        return st if out is None else st & out
+
+    def handler(self, h: object, st: frozenset, scope: bool, loc: str) -> frozenset | None:
+        if not isinstance(h, dict):
+            return st
+        kind = h.get("handler")
+        if kind == "subroute":
+            errors = (h.get("errors") or {}).get("routes")
+            if errors:
+                self.routes(errors, st, scope, f"{loc}/errors")
+            return self.routes(h.get("routes"), st, scope, loc)
+        if kind == "headers":
+            return self.headers(h.get("request"), st, loc, copy=False)
+        if kind == "reverse_proxy":
+            request = (h.get("headers") or {}).get("request")
+            if _is_auth(h):
+                copied = {sp.lower() for c in _copies(h) for sp in spellings(c)}
+                if scope:
+                    self.require(st, {MARK} | copied, loc, "forward_auth")
+                self.headers(request, None, loc, copy=False)  # the auth request's own header_up
+                for k, resp in enumerate(h.get("handle_response") or []):
+                    if isinstance(resp, dict):
+                        self.depth += 1
+                        self.copy_routes(resp.get("routes"), f"{loc}/handle_response[{k}]")
+                        self.depth -= 1
+                return st
+            local = self.headers(request, st, loc, copy=False)
+            if scope:
+                self.require(local, self.keys, loc, "the upstream")
+            return None
+        if kind == "invoke":
+            name = h.get("name")
+            if name not in self.named or self.depth > 16:
+                self.add("semantic", loc, f"invoke {name!r}: no such named route")
+                return st
+            self.depth += 1
+            got = self.route(self.named[name], st, scope, f"named_routes[{name}]")
+            self.depth -= 1
+            return got
+        if kind in JSON_PASS:
+            return st
+        if kind in JSON_END:
+            return None
+        if scope:
+            self.add("semantic", loc, f"handler {kind!r} is not one the lint knows: it cannot "
+                     "tell what it does to the request's headers")  # fmt: skip
+        return st
+
+    def copy_routes(self, rs: object, loc: str) -> None:
+        """A forward_auth's ``handle_response``: the one place an identity header is set."""
+        for i, r in enumerate(rs if isinstance(rs, list) else []):
+            for j, h in enumerate((r.get("handle") or []) if isinstance(r, dict) else []):
+                if isinstance(h, dict) and h.get("handler") == "headers":
+                    self.headers(h.get("request"), None, f"{loc}/routes[{i}]/handle[{j}]", True)
+
+    def headers(self, ops: object, st: frozenset | None, loc: str, copy: bool) -> frozenset | None:
+        if not isinstance(ops, dict):
+            return st
+        for kind in ("add", "set", "replace"):
+            for field_, vals in (ops.get(kind) or {}).items():
+                values = [v.get("replace", "") if isinstance(v, dict) else str(v)
+                          for v in (vals if isinstance(vals, list) else [vals])]  # fmt: skip
+                self.judge_set(kind, str(field_), values, loc, copy and kind == "set")
+        return None if st is None else self.deleted(ops, st)
+
+    def deleted(self, ops: object, st: frozenset) -> frozenset:
+        """``st`` plus what a headers handler's request ``delete`` covers."""
+        deletes = [str(d) for d in ((ops.get("delete") if isinstance(ops, dict) else None) or [])]
+        return st | {k for k in self.keys if any(_covers_key(p, k) for p in deletes)}
+
+    def judge_set(self, kind: str, field_: str, values: list[str], loc: str, copy: bool) -> None:
+        if "{" in field_ or "}" in field_:
+            self.add("semantic", loc, f"headers {kind} {field_}: a header name taken from a "
+                     "placeholder can name an identity header")  # fmt: skip
+            return
+
+        def identity(name: str) -> bool:
+            return "authentik" in name.lower() or _norm(name) in self.idents
+
+        if identity(field_) and not (
+            copy and values and all(RP_HEADER_VALUE.match(v) for v in values)
+        ):
+            self.add("reset", loc, f"headers {kind} sets the identity header {field_}: only "
+                     "forward_auth's copy_headers may set it")  # fmt: skip
+            return
+        for v in values:
+            for m in HEADER_PLACEHOLDER.finditer(v):
+                if identity(m.group("name")) and not (copy and RP_HEADER_VALUE.match(v)):
+                    self.add("reset", loc, f"headers {kind} {field_} copies the identity header "
+                             f"{m.group('name')}")  # fmt: skip
+                    return
+
+    def require(self, st: frozenset | None, needed: set[str], loc: str, what: str) -> None:
+        missing = sorted(needed - (st or frozenset()), key=lambda k: (k != MARK, k))
+        if MARK in missing:  # the names carrying authentik go with it
+            missing = [k for k in missing if k == MARK or "authentik" not in k]
+        if missing:
+            self.add("semantic", loc, f"{what} is reached on a path where client-sent "
+                     f"{', '.join(missing)} is not deleted first (a matcherless "
+                     "request_header -*authentik* first in the site covers every path)")  # fmt: skip
+
+
+def caddy_shape(doc: object) -> bool:
+    """Whether ``doc`` is a Caddy JSON config: ``apps.http.servers`` is an object."""
+    apps = doc.get("apps") if isinstance(doc, dict) else None
+    http = apps.get("http") if isinstance(apps, dict) else None
+    return isinstance(http, dict) and isinstance(http.get("servers"), dict)
+
+
+def judge_json(doc: object) -> list[tuple[str, str]]:
+    """``(rule, detail)`` for each problem in a Caddy JSON config (see ``_Judge``)."""
+    if not caddy_shape(doc):
+        return [("semantic", "not a Caddy config: no apps.http.servers")]
+    out: list[tuple[str, str]] = []
+    for name, srv in doc["apps"]["http"]["servers"].items():  # type: ignore[index]
+        if isinstance(srv, dict):
+            out += _Judge(str(name), srv).run()
+    return list(dict.fromkeys(out))
+
+
+#: a Caddy JSON handler outside a full config (a route posted to the admin API, say)
+JSON_FRAGMENT = {"reverse_proxy": ("upstreams", "handle_response"), "headers": ("request",),
+                 "subroute": ("routes",)}  # fmt: skip
+
+
+def caddy_fragment(x: object) -> str | None:
+    """The first Caddy handler in ``x`` that is not inside a full config: a ``reverse_proxy``
+    with ``upstreams``, a ``headers`` with ``request``, a ``subroute`` with ``routes``."""
+    if isinstance(x, dict):
+        keys = JSON_FRAGMENT.get(str(x.get("handler")))
+        if keys and any(k in x for k in keys):
+            return str(x["handler"])
+        x = list(x.values())
+    if isinstance(x, list):
+        for v in x:
+            got = caddy_fragment(v)
+            if got:
+                return got
+    return None
+
+
+class Adapter:
+    """``caddy adapt`` run on a Caddyfile: Caddy's own reading of it, as JSON."""
+
+    def __init__(self, binary: str):
+        self.binary = binary
+        try:
+            got = subprocess.run([binary, "version"], capture_output=True, timeout=60, check=False)
+            self.version = (got.stdout.decode("utf-8", "replace").split() or ["?"])[0]
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise MissingDependency(f"caddy binary {binary} does not run ({exc})") from None
+
+    def adapt(self, text: str | None, file: Path | None) -> tuple[object | None, str]:
+        """The JSON Caddy builds from ``file`` (or ``text``, written to a scratch file), or None
+        and Caddy's own error. The environment is empty: a ``{$VAR}`` reads as unset."""
+        with tempfile.TemporaryDirectory() as tmp:
+            if file is not None:
+                file = file.resolve()
+            else:
+                file = Path(tmp) / "Caddyfile"
+                file.write_text(text or "", encoding="utf-8")
+            try:
+                got = subprocess.run(
+                    [self.binary, "adapt", "--adapter", "caddyfile", "--config", str(file)],
+                    capture_output=True,
+                    timeout=120,
+                    check=False,
+                    cwd=tmp,
+                    env={"HOME": tmp, "XDG_CONFIG_HOME": tmp, "XDG_DATA_HOME": tmp},
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return None, f"caddy adapt did not run ({exc.__class__.__name__})"
+            err = got.stderr.decode("utf-8", "replace").replace(f"{file.parent}/", "")
+        if got.returncode != 0:
+            msgs = []
+            for ln in err.splitlines():
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    rec = None
+                if isinstance(rec, dict):
+                    if rec.get("level") in ("error", "fatal"):
+                        msgs.append(str(rec.get("msg") or rec.get("error") or ""))
+                elif ln.strip():
+                    msgs.append(ln.strip())
+            return None, (msgs[-1] if msgs else f"exit {got.returncode}")[:240]
+        try:
+            return json.loads(got.stdout), ""
+        except ValueError:
+            return None, "caddy adapt printed no JSON"
+
+
+def find_caddy(explicit: str | None) -> str | None:
+    """The ``caddy`` binary: ``--caddy``, else ``$HNX_CADDY``, else ``caddy`` on PATH."""
+    if explicit:
+        return explicit
+    if os.environ.get(CADDY_ENV):
+        return os.environ[CADDY_ENV]
+    return shutil.which("caddy")
 
 
 # ---------------------------------------------------------------- pins
@@ -830,6 +1243,13 @@ TEXT_PINS = (
     re.compile(r"caddyserver/caddy/releases/download/(?P<v>[^/\s]+)/"),
     re.compile(r"\bcaddy_(?P<v>\d[\w.+-]*?)_(?:linux|darwin|windows|freebsd|openbsd|netbsd)_"),
 )
+
+
+@functools.lru_cache(maxsize=4)
+def _compose(text: str) -> tuple:
+    """Every YAML document of ``text`` as nodes, composed once per file however many checks read
+    it (libyaml's loader when it is there)."""
+    return tuple(yaml.compose_all(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)))
 
 
 def version_ok(version: str) -> bool:
@@ -1008,7 +1428,7 @@ def lint_pins(text: str, path: str = "<text>") -> list[Finding]:
             if key.lower() == "image" or key.lower().endswith("_image") or _tagged_caddy(v):
                 pins.image(line(node), v)
 
-    for doc in yaml.compose_all(text, Loader=yaml.SafeLoader):
+    for doc in _compose(text):
         if doc is not None:
             walk(doc)
     pins.text(images=False, keys=False)
@@ -1143,7 +1563,7 @@ def _generated(text: str, rel: str) -> tuple[str | None, list[Finding]]:
 
 def _is_registry(text: str) -> bool:
     """One YAML document whose top level has ``registry_version`` and ``services``."""
-    docs = [d for d in yaml.compose_all(text, Loader=yaml.SafeLoader) if d is not None]
+    docs = [d for d in _compose(text) if d is not None]
     if len(docs) != 1 or not isinstance(docs[0], yaml.MappingNode):
         return False
     keys = {k.value for k, _ in docs[0].value if isinstance(k, yaml.ScalarNode)}
@@ -1226,12 +1646,12 @@ def md_blocks(text: str) -> tuple[list[tuple[str, str, int]], list[tuple[int, st
     return blocks, outside
 
 
-def _yaml_caddy(text: str, rel: str, ctx: CaddyContext) -> tuple[list[Finding], int]:
+def _yaml_caddy(text: str, rel: str, ctx: CaddyContext) -> tuple[list[Finding], list[Pending]]:
     """A Caddyfile embedded in a YAML/JSON string (an Ansible ``copy: content:``): any string
     with a ``forward_auth`` that reads as a directive is linted as one."""
     findings: list[Finding] = []
-    n = 0
-    stack = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+    found: list[Pending] = []
+    stack = list(_compose(text))
     while stack:
         node = stack.pop()
         if isinstance(node, yaml.MappingNode):
@@ -1241,19 +1661,124 @@ def _yaml_caddy(text: str, rel: str, ctx: CaddyContext) -> tuple[list[Finding], 
         elif isinstance(node, yaml.ScalarNode) and isinstance(node.value, str):
             v = node.value
             if FORWARD_AUTH_LINE.search(v) and ("{" in v or "\n" in v.strip()):
-                n += 1
                 offset = node.start_mark.line + (1 if node.style in ("|", ">") else 0)
                 findings += lint_caddy(v, rel, offset, ctx=ctx)
+                found.append(Pending(rel, offset + 1, v, None, strict=not TEMPLATE_TEXT.search(v)))
+    return findings, found
+
+
+def _plain(node: yaml.Node) -> object:
+    """A composed YAML node as plain data, unknown tags (``!vault``) read as their value."""
+    if isinstance(node, yaml.MappingNode):
+        return {str(_plain(k)): _plain(v) for k, v in node.value}
+    if isinstance(node, yaml.SequenceNode):
+        return [_plain(v) for v in node.value]
+    tag, value = node.tag.rsplit(":", 1)[-1], node.value
+    if tag == "bool":
+        return str(value).lower() in ("true", "yes", "on")
+    if tag == "int":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    return None if tag == "null" else value
+
+
+def _json_configs(text: str, rel: str, json_file: bool) -> tuple[list[Finding], int]:
+    """Caddy JSON (or the same structure in YAML) judged as Caddy runs it, and a coverage
+    finding for a Caddy handler outside a full config (the lint cannot tell where it runs)."""
+    if json_file:
+        try:
+            docs = [json.loads(text)]
+        except ValueError:
+            return [], 0  # the YAML reader already reported what it could not parse
+    else:
+        docs = [_plain(d) for d in _compose(text) if d is not None]
+    findings: list[Finding] = []
+    n = 0
+    for doc in docs:
+        if caddy_shape(doc):
+            n += 1
+            findings += [Finding(rel, 0, rule, detail) for rule, detail in judge_json(doc)]
+        elif (handler := caddy_fragment(doc)) is not None:
+            findings.append(
+                Finding(
+                    rel,
+                    0,
+                    "coverage",
+                    f"a Caddy {handler} handler outside a full Caddy config (apps.http.servers): "
+                    "the lint cannot tell which requests reach it; keep Caddy JSON whole, or list "
+                    f"it in {DEFAULT_ALLOWLIST} with the reason it is covered",
+                )
+            )
     return findings, n
 
 
+#: a Caddyfile that is a template still to be rendered: Caddy cannot read it yet
+TEMPLATE_NAME = re.compile(r"(?i)\.(j2|jinja2?|tmpl|tpl)$")
+TEMPLATE_TEXT = re.compile(r"\{\{|\{%|\$\{")
+#: an import of the generated snippet by a config that does not define it
+IMPORTS_GENERATED = re.compile(r"(?m)^[ \t]*import[ \t]+hnx_forward_auth[ \t]*$")
+
+
+@dataclass
+class Pending:
+    """A Caddyfile for the semantic check: its file (when Caddy can read it in place) or its
+    text, and whether Caddy refusing it is a finding (``strict``) or leaves it to the text lint
+    (a markdown example)."""
+
+    rel: str
+    line: int
+    text: str | None
+    file: Path | None
+    strict: bool = True
+
+
+def _semantic(item: Pending, adapter: Adapter) -> tuple[list[Finding], bool]:
+    """The ``semantic`` findings for one Caddyfile, from Caddy's own JSON of it, and whether it
+    was judged."""
+    text, file = item.text, item.file
+    if file is not None:
+        text = file.read_text(encoding="utf-8")
+    if text is not None and IMPORTS_GENERATED.search(text) and "(hnx_forward_auth)" not in text:
+        try:
+            from homelabnext.generators.builtin import _forward_auth_snippet
+        except ImportError as exc:
+            raise MissingDependency(f"homelabnext ({exc})") from None
+        text, file = _forward_auth_snippet("idp:9443") + text, None
+    doc, err = adapter.adapt(text, file)
+    if doc is None:
+        if not item.strict:
+            return [], False
+        return [
+            Finding(
+                item.rel,
+                item.line,
+                "semantic",
+                f"caddy adapt refuses it ({err}): the semantic check cannot judge it",
+            )
+        ], False
+    if not caddy_shape(doc):
+        return [], True  # no site at all (only snippets, or nothing): nothing reaches anything
+    return [Finding(item.rel, item.line, r, d) for r, d in judge_json(doc)], True
+
+
 def scan(
-    root: Path, allow: list[tuple[str, str]] | None = None
+    root: Path, allow: list[tuple[str, str]] | None = None, adapter: Adapter | None = None
 ) -> tuple[list[Finding], dict[str, int | str]]:
     findings: list[Finding] = []
-    counts: dict[str, int | str] = {"files": 0, "caddy_configs": 0, "generated": 0}
+    counts: dict[str, int | str] = {
+        "files": 0,
+        "caddy_configs": 0,
+        "generated": 0,
+        "json_configs": 0,
+        "adapted": 0,
+        "text_only": 0,
+        "caddy": adapter.version if adapter else "none",
+    }
     ctx = CaddyContext(root)
     unread: list[tuple[str, int]] = []  # files with a forward_auth the lint did not read
+    pending: list[Pending] = []  # Caddyfiles for the semantic check
     listed, counts["discovery"] = files(root)
     for p, rel in listed:
         name = p.name
@@ -1264,6 +1789,10 @@ def scan(
                 counts["caddy_configs"] += 1
                 ctx.parsed.add(rel)
                 findings += lint_caddy(text, rel, base=p.parent, ctx=ctx)
+                if TEMPLATE_NAME.search(name) or TEMPLATE_TEXT.search(text):
+                    counts["text_only"] += 1  # a template: Caddy reads it once it is rendered
+                else:
+                    pending.append(Pending(rel, 0, None, p))
                 continue
             if name == "Dockerfile" or name.startswith("Dockerfile.") or p.suffix == ".dockerfile":
                 counts["files"] += 1
@@ -1271,7 +1800,12 @@ def scan(
                 continue
             text = p.read_text(encoding="utf-8")
             low = text.lower()
-            if "caddy" not in low and "forward_auth" not in low:
+            structured = p.suffix in (".yml", ".yaml", ".json")
+            if (
+                "caddy" not in low
+                and "forward_auth" not in low
+                and not (structured and "handler" in low)
+            ):
                 continue
             counts["files"] += 1
             if p.suffix == ".md":
@@ -1281,22 +1815,30 @@ def scan(
                     if lang in ("caddy", "caddyfile") or FORWARD_AUTH.search(body):
                         counts["caddy_configs"] += 1
                         findings += lint_caddy(body, rel, offset, ctx=ctx)
+                        pending.append(Pending(rel, offset + 1, body, None, strict=False))
                 unread += [(rel, no) for no, ln in outside if FORWARD_AUTH_BARE.match(ln)]
                 pins = _Pins(rel, text)
                 pins.text()
                 findings += pins.findings
-            elif p.suffix in (".yml", ".yaml", ".json"):
+            elif structured:
                 findings += lint_pins(text, rel)
-                found, n = _yaml_caddy(text, rel, ctx)
+                found, embedded = _yaml_caddy(text, rel, ctx)
                 findings += found
+                pending += embedded
+                counts["caddy_configs"] += len(embedded)
+                judged, n = _json_configs(text, rel, p.suffix == ".json")
+                findings += judged
                 counts["caddy_configs"] += n
+                counts["json_configs"] += n
                 if _is_registry(text):
                     site, problems = _generated(text, rel)
                     findings += problems
                     if site is not None:
                         counts["generated"] += 1
                         counts["caddy_configs"] += 1
-                        findings += lint_caddy(site, f"{rel} (caddy generator)", ctx=ctx)
+                        label = f"{rel} (caddy generator)"
+                        findings += lint_caddy(site, label, ctx=ctx)
+                        pending.append(Pending(label, 0, site, None))
             else:
                 if p.suffix == ".py":
                     findings += lint_python(text, rel)
@@ -1324,6 +1866,15 @@ def scan(
                     f"Caddyfile, or list it in {DEFAULT_ALLOWLIST} with the reason it is covered",
                 )
             )
+    for item in pending:
+        if item.rel in ctx.imported:
+            continue  # Caddy reads it through the config that imports it
+        if adapter is None:
+            counts["text_only"] += 1
+            continue
+        got, judged = _semantic(item, adapter)
+        findings += got
+        counts["adapted" if judged else "text_only"] += 1
     return apply_allowlist(findings, allow or []), counts
 
 
@@ -1376,6 +1927,9 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     parser.add_argument("root", nargs="?", default=".", help="the tree to check")
     parser.add_argument("--json", action="store_true", help="findings as JSON on stdout")
     parser.add_argument("--allowlist", help=f"default: <root>/{DEFAULT_ALLOWLIST}")
+    parser.add_argument(
+        "--caddy", help=f"the caddy binary for the semantic check (default: ${CADDY_ENV}, PATH)"
+    )
     try:
         opts = parser.parse_args(argv)
     except SystemExit as exc:
@@ -1396,11 +1950,28 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     except AllowlistError as exc:
         print(f"caddy_lint: bad allowlist: {exc}", file=err)
         return 2
+    binary = find_caddy(opts.caddy)
+    required = os.environ.get(CADDY_REQUIRED_ENV, "") not in ("", "0")
     try:
-        findings, counts = scan(root, allow)
+        if binary is None and required:
+            raise MissingDependency(
+                f"caddy ({CADDY_REQUIRED_ENV} is set and no caddy binary was found: "
+                f"--caddy, ${CADDY_ENV} or PATH)"
+            )
+        adapter = Adapter(binary) if binary else None
+        findings, counts = scan(root, allow, adapter)
     except MissingDependency as exc:
         print(f"caddy_lint: missing dependency: {exc}", file=err)
         return 2
+    if adapter is None:
+        print(
+            f"caddy_lint: no caddy binary (--caddy, ${CADDY_ENV} or PATH): the semantic check "
+            f"(caddy adapt) did not run, so the text lint alone judged {counts['text_only']} "
+            "Caddyfile(s); it does not see what Caddy's own reading shows (the handler order "
+            "after Caddy sorts the directives, a plugin directive's effect on headers). CI runs "
+            f"it with a pinned Caddy and {CADDY_REQUIRED_ENV}=1",
+            file=err,
+        )
     if counts["discovery"] == "walk":
         print(
             f"caddy_lint: {root} is not a git work tree: reading every file under it "
@@ -1413,9 +1984,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     else:
         for f in findings:
             print(f"{f.path}:{f.line}: [{f.rule}] {f.detail}", file=err)
+        semantic = (
+            f"caddy adapt ({counts['caddy']}) judged {counts['adapted']}"
+            if adapter
+            else "caddy adapt not run"
+        )
         print(
             f"caddy_lint: {len(findings)} finding(s); {counts['caddy_configs']} Caddy configs "
-            f"({counts['generated']} generated) in {counts['files']} files",
+            f"({counts['generated']} generated, {counts['json_configs']} JSON) in "
+            f"{counts['files']} files; {semantic}, {counts['text_only']} text only",
             file=out,
         )
     return 1 if findings else 0
