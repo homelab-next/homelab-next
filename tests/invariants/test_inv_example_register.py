@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from homelabnext.invariants import Context, run_criteria
+from homelabnext.invariants.plugins.pillar_x import SERVER_ONLY
 from homelabnext.registers.schema import validate_invariants
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -40,6 +41,18 @@ def test_every_criterion_is_a_checklist_row_with_the_same_meaning():
         assert c["id"] in rows, f"{c['id']} is not a checklist row"
         if c["evidence"] != "plugin":  # plugin rows word their statement for the plugin
             assert c["statement"].rstrip(".") == rows[c["id"]], c["id"]
+
+
+def test_no_criterion_is_a_plugin_that_can_only_skip():
+    """A criterion whose check reports skip everywhere is a placeholder that reads as run (the
+    runner exits 0 on it); a SERVER row with no check yet is a deferred criterion with a why."""
+    for c in register()["criteria"]:
+        if c["evidence"] == "plugin":
+            assert c["plugin"] not in SERVER_ONLY, c["id"]
+        if c.get("deferred"):
+            assert c["evidence"] in ("server", "manual") and len(c["why"]) > 60, c["id"]
+    for i in SERVER_ONLY:
+        assert by_id()[i]["evidence"] == "server" and by_id()[i]["deferred"] is True, i
 
 
 def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():

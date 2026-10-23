@@ -7,7 +7,7 @@ Every row is a property that must be **continuously true**, with an observable t
 - **SERVER**: needs the running platform (hypervisors, network, real products). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
 
 Criteria register in `invariants.yml` using the same shape as these rows (statement, observable, expected, remediation). Exit codes: 0 pass, 1 fail, >= 100 could not measure.
-Pillar X rows are implemented as runner plugins (`evidence: plugin`); X-02, X-07 and X-08 always report `skip` with a `SERVER:` reason.
+Pillar X rows are implemented as runner plugins (`evidence: plugin`), except X-02, X-07 and X-08: they are SERVER rows with no check yet, registered as deferred `evidence: server` criteria with a `why`, so the runner neither runs nor counts them.
 
 ## F - Foundation
 

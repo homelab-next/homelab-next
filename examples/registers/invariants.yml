@@ -1004,18 +1004,39 @@ criteria:
   remediation: Replace the raw rule number with its det logical id from the detection map.
 - id: X-02
   statement: Registry rows match live listeners.
-  evidence: plugin
-  plugin: X-02
+  evidence: server
+  deferred: true
+  why: >-
+    No check exists yet: it needs the running platform's listeners (per host, `ss -ltnp` or the
+    collector's port inventory) to compare with the registry, and nothing collects them today.
+    Until one does, the runner does not run it; the `X-02` plugin only ever reported skip.
+  observable: >-
+    on each host, list the listening sockets and compare with the registry: every registry row has
+    health, metrics, backup and auth mode, and every live listener maps to a row
   remediation: Add the missing registry row or remove the stray listener.
 - id: X-07
-  statement: Every stateful product's export hook is exercised in a restore drill.
-  evidence: plugin
-  plugin: X-07
+  statement: Export hooks are exercised.
+  evidence: server
+  deferred: true
+  why: >-
+    No check exists yet: it needs restore-drill records from the running platform (F-10) to read,
+    and there is no record format for a drill's export-hook run. Until one exists, the runner does
+    not run it; the `X-07` plugin only ever reported skip.
+  observable: >-
+    for each stateful product, the newest restore drill (<= 90 days) restored the product's export
+    made by its export hook, and the drill record names the export
   remediation: Run a restore drill for the product; a hook that was never exercised is a liability.
 - id: X-08
-  statement: Every cutover has a swap record with parity, rollback and flip commits.
-  evidence: plugin
-  plugin: X-08
+  statement: Cutover commits are audited.
+  evidence: server
+  deferred: true
+  why: >-
+    No check exists yet: it needs the list of cutovers that happened on the platform (registry
+    flips in the private overlay's history) to match against swap records, and no real cutover has
+    been recorded. Until then the runner does not run it; the `X-08` plugin only ever reported skip.
+  observable: >-
+    every registry flip commit in the overlay's history has a closed swap record
+    (`hnx swap status RECORD`) with parity, rollback and flip evidence
   remediation: Record the cutover with the swap kit; a cutover with no record is unauditable.
 - id: X-09
   statement: Every customization is owned and none is expired.
