@@ -102,3 +102,29 @@ class PathResolvingObjectStore(FakeObjectStore):
 
     def get(self, bucket, key):
         return super().get(*self._where(bucket, key))
+
+
+class DeleteEveryBucketObjectStore(FakeObjectStore):
+    """Defect: ``delete(bucket, key)`` removes ``key`` from every bucket, not just ``bucket``."""
+
+    def delete(self, bucket: str, key: str) -> None:
+        self._bucket(bucket)
+        for objects in self._b.values():
+            objects.pop(key, None)
+
+
+class HeadMissingIsEmptyObjectStore(FakeObjectStore):
+    """Defect: ``head`` of a missing key returns a zero-size object instead of NoSuchKey."""
+
+    def head(self, bucket: str, key: str) -> ObjectInfo:
+        try:
+            return super().head(bucket, key)
+        except NoSuchKey:
+            return ObjectInfo(key, 0, "", {})
+
+
+class DeleteMissingBucketObjectStore(FakeObjectStore):
+    """Defect: ``delete`` on a bucket that does not exist succeeds instead of NoSuchBucket."""
+
+    def delete(self, bucket: str, key: str) -> None:
+        self._b.get(bucket, {}).pop(key, None)

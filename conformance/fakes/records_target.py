@@ -124,3 +124,27 @@ class UnconfinedReadRecordsTarget(FakeRecordsTarget):
         self.list(lane)  # the lane name itself is still checked
         note = read_note(self._dir / lane / name, lane)
         return dict(note.frontmatter), note.body
+
+
+class ReapprovingRecordsTarget(FakeRecordsTarget):
+    """Defect: ``approve`` also accepts a note already in ``decided/denied`` and moves it to
+    approved, so an operator's denial is overturned."""
+
+    def approve(self, name: str) -> None:
+        if name in self.list("decided/denied"):
+            src = self._dir / "decided/denied" / name
+            src.rename(self._dir / "decided/approved" / name)
+            return
+        super().approve(name)
+
+
+class RedenyingRecordsTarget(FakeRecordsTarget):
+    """Defect: ``deny`` of a note already in ``decided/approved`` moves it to denied, so an
+    approval is quietly withdrawn."""
+
+    def deny(self, name: str, reason: str | None = None) -> None:
+        if name in self.list("decided/approved"):
+            src = self._dir / "decided/approved" / name
+            src.rename(self._dir / "decided/denied" / name)
+            return
+        super().deny(name, reason)

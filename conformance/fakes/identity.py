@@ -147,3 +147,30 @@ class NoExpiryIdentityProvider(FakeIdentityProvider):
             return super().verify(token, required_scope)
         finally:
             self._clock = real
+
+
+class SubstringScopeIdentityProvider(FakeIdentityProvider):
+    """Defect: the required scope is matched as a substring of the granted scopes, so a token
+    for ``readwrite`` passes a check for ``read``."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        claims = super().verify(token)
+        if required_scope is not None and required_scope not in " ".join(claims.scopes):
+            raise Forbidden(f"missing scope {required_scope!r}")
+        return claims
+
+
+class ScopedSkipsRevocationIdentityProvider(FakeIdentityProvider):
+    """Defect: revocation is checked only when no scope is required, so a revoked token still
+    passes every scoped check."""
+
+    def verify(self, token: str, required_scope: str | None = None) -> Claims:
+        if required_scope is None:
+            return super().verify(token)
+        body = self._decode(token)
+        if self._clock() >= body["exp"]:
+            raise InvalidToken("token expired")
+        claims = Claims(body["sub"], tuple(body["scp"]), body["iat"], body["exp"], body["jti"])
+        if required_scope not in claims.scopes:
+            raise Forbidden(f"missing scope {required_scope!r}")
+        return claims

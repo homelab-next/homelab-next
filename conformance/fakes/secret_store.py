@@ -133,3 +133,59 @@ class NegativeTtlSecretStore(FakeSecretStore):
         lease = Lease(f"lease-{self._n}", path, self._clock() + ttl, dict(sec.data))
         self._leases[lease.id] = (lease, False)
         return lease
+
+
+class VersionZeroIsLatestSecretStore(FakeSecretStore):
+    """Defect: ``version=0`` is read as "no version given", so it returns the latest."""
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        return super().get(path, version or None)
+
+
+class NegativeVersionSecretStore(FakeSecretStore):
+    """Defect: only the upper bound is checked, so a negative version indexes from the end."""
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        versions = self._v.get(path)
+        if not versions:
+            raise SecretNotFound(f"no secret at {path!r}")
+        v = len(versions) if version is None else version
+        if v > len(versions):
+            raise SecretNotFound(f"no version {v} at {path!r}")
+        return Secret(path, v, dict(versions[v - 1]))
+
+
+class VersionErrorLeaksSecretStore(FakeSecretStore):
+    """Defect: the "no such version" error of a path that holds a secret echoes the latest
+    value."""
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        versions = self._v.get(path)
+        if versions and version is not None and not 1 <= version <= len(versions):
+            raise SecretNotFound(f"no version {version} at {path!r}; latest is {versions[-1]}")
+        return super().get(path, version)
+
+
+class DeletesLatestOnlySecretStore(FakeSecretStore):
+    """Defect: ``delete`` removes the latest version only; older versions stay readable."""
+
+    def delete(self, path: str) -> None:
+        if path not in self._v:
+            raise SecretNotFound(f"no secret at {path!r}")
+        self._v[path].pop()
+        if not self._v[path]:
+            del self._v[path]
+
+
+class AliasingSecretStore(FakeSecretStore):
+    """Defect: the caller's mapping is stored and handed back by reference, so changing it after
+    ``put`` (or changing what ``get`` returned) rewrites the stored secret."""
+
+    def put(self, path: str, data: Mapping[str, str]) -> int:
+        self._check_path(path, data)
+        self._v.setdefault(path, []).append(data)  # type: ignore[arg-type]
+        return len(self._v[path])
+
+    def get(self, path: str, version: int | None = None) -> Secret:
+        s = super().get(path, version)
+        return Secret(s.path, s.version, self._v[path][s.version - 1])

@@ -199,3 +199,44 @@ class SilentForeignAccessBroker(FakeBroker):
 
     def _deny_foreign(self, caller, request_id, operation, req):
         return None
+
+
+class SubmitSkipsAllowlistBroker(FakeBroker):
+    """Defect: ``submit`` checks the arguments but not the allowlist, so a caller allowed
+    nothing can submit any registered command and then run it as the request's owner."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if extra.get("operation") == "submit" and entry is not None:
+            problems = arg_problems(entry[1], args)
+            if problems:
+                self._log(caller, command, "invalid", entry[1], args, **extra)
+                raise InvalidArguments("; ".join(problems))
+            return entry
+        return super()._admit(caller, command, args, **extra)
+
+
+class SubmitSkipsArgsBroker(FakeBroker):
+    """Defect: ``submit`` checks the allowlist but not the arguments, so the handler later runs
+    with missing, unexpected or mistyped arguments."""
+
+    def _admit(self, caller, command, args, **extra):
+        entry = self._cmds.get(command)
+        if (
+            extra.get("operation") == "submit"
+            and entry is not None
+            and command in self._allow.get(caller, set())
+        ):
+            return entry
+        return super()._admit(caller, command, args, **extra)
+
+
+class DeferredClearAuditBroker(FakeBroker):
+    """Defect: ``call`` is redacted, but the audit records of ``submit`` and ``run`` carry the
+    secret arguments in the clear."""
+
+    def _log(self, caller, command, outcome, spec, args, **extra):
+        if extra.get("operation") in ("submit", "run"):
+            self._audit.append(AuditRecord(caller, command, outcome, dict(args), **extra))
+            return
+        super()._log(caller, command, outcome, spec, args, **extra)

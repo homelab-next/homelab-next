@@ -150,3 +150,15 @@ class DoubleSettleEventBus(FakeEventBus):
     """A second nack (or a nack after an ack) queues the message again."""
 
     consumer_class = _ResettlingConsumer
+
+
+class ReplayingEventBus(FakeEventBus):
+    """Defect: a new durable consumer starts at the beginning of the log, so it is handed every
+    message published before it existed."""
+
+    def consumer(self, name: str, subject: str, *, max_deliver: int = 3) -> FakeConsumer:
+        new = name not in self._consumers
+        c = super().consumer(name, subject, max_deliver=max_deliver)
+        if new:
+            c._cursor = 1
+        return c
