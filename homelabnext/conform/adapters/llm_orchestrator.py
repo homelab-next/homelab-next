@@ -537,7 +537,12 @@ def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> _Recorded:
 
 
 def _start_recorded(fixes: tuple[str, ...], priority: int, grace: float) -> LLMOrchestrator:
-    from conformance.fakes.llm_orchestrator_api import FakeController
+    try:
+        from conformance.fakes.llm_orchestrator_api import FakeController
+    except ImportError as exc:  # pragma: no cover - a wheel carries no conformance/
+        raise AdapterConfigError(
+            "recorded_fake needs a source checkout (conformance/fakes)"
+        ) from exc
 
     directory = tempfile.mkdtemp(prefix="hnx-orch-profiles-")
     fake = FakeController(directory, fixes=fixes).start()
