@@ -1,24 +1,29 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by Ansible (role compose_app). Do not edit.
 {# Every key comes from the allowlist in validate.yml and every scalar is JSON-quoted, so no value
-   can add YAML of its own. Secrets are never rendered here: see compose_app_secret_env. #}
-name: {{ compose_app_name | to_json }}
+   can add YAML of its own; every `$` is written `$$`, so docker compose reads each value literally
+   and never interpolates the environment of whoever runs `compose up` into it (a volume
+   `${X:-/}:/host` would otherwise mount the host root). Secrets are never rendered here: see
+   compose_app_secret_env. #}
+{% macro q(value) %}{{ value | string | replace('$', '$$') | to_json }}{% endmacro %}
+{% macro ql(values) %}{{ values | map('string') | map('replace', '$', '$$') | list | to_json }}{% endmacro %}
+name: {{ q(compose_app_name) }}
 services:
 {% for sname, svc in compose_app_spec.services | dictsort %}
 {%   set env_files = svc.env_file | default([]) + ([compose_app_dir ~ '/secrets/' ~ sname ~ '.env'] if sname in compose_app_secret_env else []) %}
-  {{ sname | to_json }}:
-    image: {{ (svc.image ~ ':' ~ svc.tag ~ '@' ~ svc.digest) | to_json }}
-    restart: {{ svc.restart | default(compose_app_restart_policy) | string | to_json }}
+  {{ q(sname) }}:
+    image: {{ q(svc.image ~ ':' ~ svc.tag ~ '@' ~ svc.digest) }}
+    restart: {{ q(svc.restart | default(compose_app_restart_policy)) }}
 {% if svc.command is defined %}
-    command: {{ svc.command | to_json }}
+    command: {{ ql(svc.command) if svc.command is sequence and svc.command is not string else q(svc.command) }}
 {% endif %}
 {% if svc.user is defined %}
-    user: {{ svc.user | string | to_json }}
+    user: {{ q(svc.user) }}
 {% endif %}
-    security_opt: {{ compose_app_security_opt | to_json }}
-    cap_drop: {{ compose_app_cap_drop | to_json }}
+    security_opt: {{ ql(compose_app_security_opt) }}
+    cap_drop: {{ ql(compose_app_cap_drop) }}
 {% if svc.cap_add | default([]) | length > 0 %}
-    cap_add: {{ svc.cap_add | to_json }}
+    cap_add: {{ ql(svc.cap_add) }}
 {% endif %}
 {% if svc.privileged is defined %}
     privileged: {{ svc.privileged | bool | to_json }}
@@ -27,48 +32,48 @@ services:
     read_only: {{ svc.read_only | bool | to_json }}
 {% endif %}
 {% if svc.mem_limit is defined %}
-    mem_limit: {{ svc.mem_limit | string | to_json }}
+    mem_limit: {{ q(svc.mem_limit) }}
 {% endif %}
 {% if env_files | length > 0 %}
     env_file:
 {% for f in env_files %}
-      - {{ f | to_json }}
+      - {{ q(f) }}
 {% endfor %}
 {% endif %}
 {% if svc.environment | default({}) | length > 0 %}
     environment:
 {% for k, v in svc.environment | dictsort %}
-      {{ k | to_json }}: {{ v | string | to_json }}
+      {{ q(k) }}: {{ q(v) }}
 {% endfor %}
 {% endif %}
 {% if svc.ports | default([]) | length > 0 %}
     ports:
 {% for p in svc.ports %}
-      - {{ p | string | to_json }}
+      - {{ q(p) }}
 {% endfor %}
 {% endif %}
 {% if svc.volumes | default([]) | length > 0 %}
     volumes:
 {% for v in svc.volumes %}
-      - {{ v | to_json }}
+      - {{ q(v) }}
 {% endfor %}
 {% endif %}
 {% if svc.depends_on | default([]) | length > 0 %}
     depends_on:
 {% for d in svc.depends_on %}
-      {{ d | to_json }}:
+      {{ q(d) }}:
         condition: service_healthy
 {% endfor %}
 {% endif %}
     healthcheck:
-      test: {{ svc.healthcheck.test | to_json }}
-      interval: {{ svc.healthcheck.interval | default('30s') | string | to_json }}
-      timeout: {{ svc.healthcheck.timeout | default('5s') | string | to_json }}
+      test: {{ ql(svc.healthcheck.test) }}
+      interval: {{ q(svc.healthcheck.interval | default('30s')) }}
+      timeout: {{ q(svc.healthcheck.timeout | default('5s')) }}
       retries: {{ svc.healthcheck.retries | default(3) | int }}
-      start_period: {{ svc.healthcheck.start_period | default('10s') | string | to_json }}
+      start_period: {{ q(svc.healthcheck.start_period | default('10s')) }}
     logging:
       driver: json-file
       options:
-        max-size: {{ compose_app_log_max_size | string | to_json }}
-        max-file: {{ compose_app_log_max_file | string | to_json }}
+        max-size: {{ q(compose_app_log_max_size) }}
+        max-file: {{ q(compose_app_log_max_file) }}
 {% endfor %}

@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.suite_policy import require_tool
+
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 GOLDEN = Path(__file__).parent / "golden"
@@ -260,6 +262,8 @@ def app_vars(tmp_path, s=None, **kw):
         "compose_app_group": GROUP,
         "compose_app_start": False,
         "compose_app_validate_with_docker": docker_compose_ok(),
+        # spec() mounts /srv/shared, outside the app's own directories: listed with its reason
+        "compose_app_bind_extra": [{"path": "/srv/shared", "reason": "fictional shared media"}],
     }
     d.update(kw)
     return d
@@ -273,8 +277,7 @@ def test_compose_app_renders_golden_byte_identical(tmp_path):
 
 
 def test_compose_app_output_passes_docker_compose_config(tmp_path):
-    if not docker_compose_ok():
-        pytest.skip("docker compose not available")
+    require_tool("docker", docker_compose_ok)
     r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path))
     assert r.returncode == 0, r.stdout + r.stderr
     c = subprocess.run(
@@ -355,11 +358,60 @@ REJECTED = {
     ),
     "docker socket via /run": lambda s: s["services"]["web"].update(volumes=["/run:/host-run"]),
     "host root": lambda s: s["services"]["web"].update(volumes=["/:/host:ro"]),
+    "host root as /.": lambda s: s["services"]["web"].update(volumes=["/.:/host"]),
+    "host root as //": lambda s: s["services"]["web"].update(volumes=["//:/host"]),
+    "host root as /./": lambda s: s["services"]["web"].update(volumes=["/./:/host"]),
+    "docker state with a doubled slash": lambda s: s["services"]["web"].update(
+        volumes=["/var//lib/docker:/d"]
+    ),
+    "docker state with a trailing slash": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/docker/:/d"]
+    ),
+    "docker state through ..": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/app/../docker:/d"]
+    ),
+    "host root through a relative ..": lambda s: s["services"]["web"].update(
+        volumes=["../../../../../..:/host"]
+    ),
+    "containerd socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/containerd/containerd.sock:/c.sock"]
+    ),
+    "containerd state": lambda s: s["services"]["web"].update(volumes=["/var/lib/containerd:/c"]),
+    "podman socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/podman/podman.sock:/p.sock"]
+    ),
+    "rootless podman socket": lambda s: s["services"]["web"].update(
+        volumes=["/run/user/1000/podman/podman.sock:/p.sock"]
+    ),
+    "rootless runtime directory": lambda s: s["services"]["web"].update(
+        volumes=["/run/user/1000:/u"]
+    ),
+    "cri-o socket": lambda s: s["services"]["web"].update(
+        volumes=["/var/run/crio/crio.sock:/c.sock"]
+    ),
+    "podman storage": lambda s: s["services"]["web"].update(
+        volumes=["/var/lib/containers/storage:/s"]
+    ),
+    "all of /var": lambda s: s["services"]["web"].update(volumes=["/var:/v"]),
+    # compose interpolation in a source: the text hides host root and the docker socket
+    "interpolated host root": lambda s: s["services"]["web"].update(volumes=["${X:-/}:/host"]),
+    "interpolated docker socket": lambda s: s["services"]["web"].update(
+        volumes=["${X:-/var/run/docker}.sock:/s.sock"]
+    ),
+    "home through $HOME": lambda s: s["services"]["web"].update(volumes=["$HOME:/home"]),
+    "home through ~": lambda s: s["services"]["web"].update(volumes=["~:/home"]),
     "privileged": lambda s: s["services"]["web"].update(privileged=True),
     "cap_add SYS_ADMIN": lambda s: s["services"]["web"].update(cap_add=["SYS_ADMIN"]),
     "cap_add CAP_ALL": lambda s: s["services"]["web"].update(cap_add=["CAP_ALL"]),
     "user root": lambda s: s["services"]["web"].update(user="root"),
     "user 0:0": lambda s: s["services"]["web"].update(user="0:0"),
+    "user 00": lambda s: s["services"]["web"].update(user="00"),
+    "user 000:0": lambda s: s["services"]["web"].update(user="000:0"),
+    "user root:root": lambda s: s["services"]["web"].update(user="root:root"),
+    "user as the integer 0": lambda s: s["services"]["web"].update(user=0),
+    "group 0": lambda s: s["services"]["web"].update(user="1000:0"),
+    "group 000": lambda s: s["services"]["web"].update(user="1000:000"),
+    "group root": lambda s: s["services"]["web"].update(user="1000:root"),
     "bad mem_limit": lambda s: s["services"]["web"].update(mem_limit="lots"),
 }
 
@@ -376,6 +428,192 @@ def test_compose_app_rejects_spec_violation(tmp_path, case):
     )
     assert r.returncode != 0, case
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+@pytest.mark.parametrize("vol", ["${X:-/}:/host", "~:/home"])
+def test_compose_app_names_the_interpolation_rule_when_it_refuses(tmp_path, vol):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "has a refused bind source" in r.stdout + r.stderr
+
+
+def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path):
+    """compose interpolates `$` in every value from the environment of whoever runs `compose up`;
+    the template writes `$$`, so the container gets exactly the text of the spec."""
+    s = spec(
+        environment={"MODE": "${HOME}", "COUNT": "$X"},
+        command=["sh", "-c", "echo $PATH ${Y:-/}"],
+    )
+    s["services"]["web"]["healthcheck"]["test"] = ["CMD-SHELL", 'test -n "$HOSTNAME"']
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    web = services_of(tmp_path)["web"]
+    assert web["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
+    assert web["command"] == ["sh", "-c", "echo $$PATH $${Y:-/}"]
+    if not docker_compose_ok():
+        return
+    c = subprocess.run(
+        ["docker", "compose", "-f", str(tmp_path / "app" / "docker-compose.yml"), "config",
+         "--format", "json"],
+        capture_output=True, text=True,
+        # HOME is a value an interpolation would show; DOCKER_CONFIG keeps the docker CLI's own
+        # config and plugins where they were (a HOME it cannot read hides the compose plugin)
+        env={**os.environ, "HOME": str(tmp_path / "home"), "X": "/", "Y": "/",
+             "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", os.path.expanduser("~/.docker"))},
+    )  # fmt: skip
+    assert c.returncode == 0, c.stderr
+    # compose prints a literal `$` re-escaped as `$$`; an interpolated value would be the HOME or /
+    got = json.loads(c.stdout)["services"]["web"]
+    assert got["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
+    assert got["command"] == ["sh", "-c", "echo $$PATH $${Y:-/}"]
+    assert got["healthcheck"]["test"] == ["CMD-SHELL", 'test -n "$$HOSTNAME"']
+
+
+def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
+    """Relative sources, named and anonymous volumes, paths under the bind roots and listed paths
+    (hidden directories and the listed secrets directory included) pass the allow-list, the
+    canonical-source and the runtime rules."""
+    data = tmp_path / "app" / "data"
+    vols = [
+        "./secrets:/run/app-secrets:ro",
+        "./secretsx:/x",
+        "/var/lib/cache",
+        "./data/web:/var/lib/web",
+        f"{data}/.config/app:/config:ro",
+        f"{data}:/state",
+        "/srv/shared:/shared:ro",
+        "/run/systemd/journal:/run/systemd/journal:ro",
+        "named-volume:/cache",
+    ]
+    extra = [
+        {"path": "/srv/shared", "reason": "fictional shared media"},
+        {"path": "/run/systemd/journal", "reason": "the journal socket, read-only"},
+        {"path": str(tmp_path / "app" / "secrets"), "reason": "fictional: reads its own env files"},
+    ]
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(
+            tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
+            compose_app_bind_extra=extra,
+        ),
+    )  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert services_of(tmp_path)["web"]["volumes"] == vols
+
+
+OUTSIDE_THE_ROOTS = [
+    "/etc:/host-etc",
+    "/proc:/host-proc",
+    "/dev:/host-dev",
+    "/boot:/b",
+    "/root:/r",
+    "/run/systemd:/s",
+    "/var/run/dbus/system_bus_socket:/d.sock",
+    "/run/buildkit/buildkitd.sock:/b.sock",
+    "/var/lib/rancher:/k3s",
+    "/var/log/app:/logs",
+    "/srv/other:/o",
+]
+
+
+@pytest.mark.parametrize("vol", OUTSIDE_THE_ROOTS)
+def test_compose_app_refuses_a_host_path_outside_the_bind_roots(tmp_path, vol):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "a host path outside the allowed roots" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def refused_sources(r):
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    return out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
+
+
+def test_compose_app_env_file_paths_follow_the_bind_source_rule(tmp_path):
+    """compose reads an env_file on the deploy host and hands it to the container: it used to be
+    any string, so /etc/shadow or another application's secrets were accepted."""
+    other = str(tmp_path / "other-app" / "secrets" / "db.env")
+    ok = ["app.env", "./conf/web.env", f"{tmp_path / 'app' / 'data'}/web.env"]
+    s = spec(env_file=[*ok, "/etc/shadow", other])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    assert refused_sources(r) == ["env_file=/etc/shadow", f"env_file={other}"]
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_compose_app_refuses_the_app_directory_and_its_secrets_unless_listed(tmp_path):
+    """`.` and secrets/ hold every service's 0600 env file: any service could mount them all."""
+    d = tmp_path / "app"
+    vols = [".:/src:ro", "./secrets:/s", f"{d}/secrets:/s2", f"{d}:/app", "./secrets/db.env:/e"]
+    s = spec(volumes=vols, env_file=["secrets/db.env", "./secrets/db.env"])
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    )
+    want = [".", "./secrets", f"{d}/secrets", str(d), "./secrets/db.env"]
+    assert refused_sources(r) == [*want, "env_file=secrets/db.env", "env_file=./secrets/db.env"]
+
+
+def test_compose_app_bind_root_is_a_directory_boundary(tmp_path):
+    # a sibling whose name only starts like the data root is outside it
+    vol = f"{tmp_path / 'app'}-other:/x"
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
+    )
+    assert r.returncode != 0
+    assert "outside the allowed roots" in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"compose_app_bind_roots": ["/var"]},
+        {"compose_app_bind_roots": ["/"]},
+        {"compose_app_bind_roots": ["/etc"]},
+        {"compose_app_bind_roots": ["relative/dir"]},
+        {"compose_app_bind_roots": ["/var/lib/docker"]},
+        {"compose_app_bind_extra": [{"path": "/srv/shared"}]},
+        {"compose_app_bind_extra": [{"path": "/srv/shared", "reason": "x"}]},
+        {"compose_app_bind_extra": [{"path": "/etc", "reason": "fictional, far too wide"}]},
+    ],
+    ids=["var", "root", "etc", "relative", "docker", "no reason", "short reason", "etc listed"],
+)
+def test_compose_app_refuses_a_bind_root_or_listing_that_is_too_wide(tmp_path, over):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, compose_app_validate_with_docker=False, **over),
+    )
+    assert r.returncode != 0
+    assert "compose_app_bind_roots must be" in r.stdout + r.stderr
 
 
 def services_of(tmp_path):
@@ -414,6 +652,35 @@ def test_compose_app_escape_hatches_need_their_explicit_flag(tmp_path, over, fla
     web = services_of(tmp_path)["web"]
     for k, v in over.items():
         assert web[k] == v
+
+
+def test_compose_app_docker_socket_flag_unlocks_only_the_socket(tmp_path):
+    """The flag used to pass every source the runtime pattern matched: host root, /var, /run,
+    any path holding docker.sock. Only the socket itself passes now."""
+    refused = ["/", "/var", "/var/lib/docker", "/run/user/1000", "/root/docker.sock"]
+    vols = ["/var/run/docker.sock:/var/run/docker.sock"] + [
+        f"{v}:/m{i}" for i, v in enumerate(refused)
+    ]
+    v = app_vars(
+        tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
+        compose_app_allow_docker_socket=True,
+    )  # fmt: skip
+    r = run_role(tmp_path, "compose_app", "main", v)
+    assert r.returncode != 0
+    out = r.stdout + r.stderr
+    listed = out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
+    assert listed == refused
+
+
+@pytest.mark.parametrize(
+    ("user", "ok"), [("1000:0", True), ("1000:root", True), ("0:0", False), ("00", False)]
+)
+def test_compose_app_root_group_alone_has_its_own_flag(tmp_path, user, ok):
+    v = app_vars(
+        tmp_path, spec(user=user), compose_app_validate_with_docker=False,
+        compose_app_allow_root_group=True,
+    )  # fmt: skip
+    assert (run_role(tmp_path, "compose_app", "main", v).returncode == 0) is ok
 
 
 def test_compose_app_dropping_no_new_privileges_needs_the_flag(tmp_path):
@@ -474,7 +741,11 @@ def test_compose_app_placeholder_digest_allowed_only_when_flagged(tmp_path):
 
 
 def test_compose_app_backup_manifest_lists_bind_sources(tmp_path):
-    v = app_vars(tmp_path)
+    # an anonymous volume (a container path alone) has no host source: accepted, as on main
+    # before the bind allow-list, and not a path to back up
+    s = spec()
+    s["services"]["db"]["volumes"] = ["/var/lib/postgresql/data"]
+    v = app_vars(tmp_path, s)
     assert run_role(tmp_path, "compose_app", "main", v).returncode == 0
     r = run_role(tmp_path, "compose_app", "backup", v)
     assert r.returncode == 0, r.stdout + r.stderr

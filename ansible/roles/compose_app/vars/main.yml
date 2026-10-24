@@ -8,8 +8,21 @@ compose_app_restart_policies: ["no", always, on-failure, unless-stopped]
 compose_app_repository_pattern: '^(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*\Z'
 # host_ip:host_port:container_port[/proto]; the host address is never implied
 compose_app_port_pattern: '^(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}:[0-9]{1,5}(?:/(?:tcp|udp))?\Z'
-# a bind source that hands the container the docker daemon (or the host root / runtime dir)
-compose_app_docker_socket_pattern: 'docker\.sock|^/(?:var/)?run(?:/docker)?/?(?::|\Z)|^/(?::|\Z)|^/var/lib/docker(?:/|:|\Z)'
+# a bind source that hands the container a container runtime (docker, containerd, podman, CRI-O:
+# a socket, its runtime or state directory, or a directory above one) or the host root; it is
+# matched against the source exactly as written, so a non-canonical source is refused first
+compose_app_docker_socket_pattern: '(?:docker|containerd|podman|crio|cri-dockerd)\.sock|^/(?::|\Z)|^/(?:var/)?run(?::|\Z)|^/(?:var/)?run/(?:docker|containerd|podman|crio)(?:/|:|\Z)|^/(?:var/)?run/user(?:/[^/:]+)?(?::|\Z)|^/(?:var/)?run/user/[^/:]+/(?:docker|containerd|podman)(?:/|:|\Z)|^/var(?:/lib)?(?::|\Z)|^/var/lib/(?:docker|containerd|containers)(?:/|:|\Z)'
+# a bind source the kernel would read differently from the text: `//`, a `.` or `..` component
+# (other than a leading `./`) or a trailing `/` (/., //, /var//lib/docker and /var/lib/docker/ are
+# all host root or docker's state, and compose passes them through unchanged); matched against the
+# source alone, i.e. the volume up to its first `:`
+compose_app_noncanonical_source_pattern: '//|(?:^|/)\.\.(?:/|\Z)|/\.(?:/|\Z)|./\Z'
+# a volume compose would interpolate: any `$` (${X:-/}, $HOME) or a source starting with `~`; the
+# template writes `$` as `$$`, so this only keeps a spec from relying on interpolation at all
+compose_app_interpolated_volume_pattern: '\$|^~'
+# a directory too wide to be a bind root or a listed bind source: it holds the host's own
+# configuration, devices, kernel interfaces, users' homes or every other application's data
+compose_app_host_wide_pattern: '^/(?:etc|proc|sys|dev|boot|root|run|var|var/run|var/lib|var/log|usr|usr/local|home|opt|srv|mnt|media|tmp|lib|lib64|bin|sbin)?\Z'
 compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|private_?key|credential)'
 # capabilities that amount to privileged: refused in cap_add unless compose_app_allow_privileged
 compose_app_dangerous_caps:

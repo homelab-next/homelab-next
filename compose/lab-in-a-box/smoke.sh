@@ -7,8 +7,9 @@
 #
 #   compose/lab-in-a-box/smoke.sh [--keep] [--no-build] [--report-dir DIR]
 #
-# Exit codes: 0 all good; 1 a service or check failed; 2 usage; 3 docker or compose missing
-# (nothing was run); 4 refused a non-loopback LAB_BIND (see bind_guard.sh; nothing was run).
+# Exit codes: 0 all good; 1 a service or check failed; 2 usage; 3 docker or compose missing, or the
+# bind guard could not resolve the compose configuration (nothing was run); 4 refused a
+# non-loopback LAB_BIND or published port (see bind_guard.sh; nothing was run).
 # The conformance step degrades gracefully: with no `hnx conform` it is reported as "skipped"
 # and does not fail the run.  Settings: .env.example, overridden by .env, overridden by the
 # environment (the order docker compose itself uses).
@@ -24,8 +25,8 @@
 #     "0": all good
 #     "1": a service or check failed
 #     "2": usage
-#     "3": docker or compose missing
-#     "4": refused a non-loopback LAB_BIND
+#     "3": docker or compose missing, or the compose configuration could not be resolved
+#     "4": refused a non-loopback LAB_BIND or published port
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +49,9 @@ done
 LAB_GUARD_DIR="$here"
 # shellcheck source=bind_guard.sh
 . "$here/bind_guard.sh"
-lab_bind_guard || exit 4
+lab_bind_guard
+guard_status=$?
+[ "$guard_status" -eq 0 ] || exit "$guard_status"  # 3 cannot resolve, 4 refused
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   echo "smoke.sh: docker with the compose plugin is required; nothing was run" >&2
