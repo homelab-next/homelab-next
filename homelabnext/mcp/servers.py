@@ -40,6 +40,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -926,13 +927,15 @@ ACTING_VERBS = frozenset((
     "deploy", "delete", "remove", "destroy", "ssh", "push", "commit", "merge", "send", "post",
     "publish", "kill", "restart", "stop", "start", "install", "upgrade", "trigger", "invoke",
     "reboot", "shutdown", "scale", "rollback", "drop", "click", "type", "fill", "submit", "press",
+    "enable", "disable", "block", "unblock", "revoke", "grant", "rotate", "reset", "approve",
+    "reject", "lock", "unlock", "quarantine", "isolate",
 ))  # fmt: skip
 #: tool-name words that write: such a tool carries a broker_only class, or record-write on a
 #: record that fronts a platform capability (its API validates what it writes)
 WRITING_VERBS = frozenset((
     "write", "create", "update", "put", "upload", "add", "link", "propose", "annotate",
     "set", "edit", "save", "open", "cancel", "insert", "patch", "modify", "append", "rename",
-    "move", "comment", "reply", "assign", "close", "import",
+    "move", "comment", "reply", "assign", "close", "import", "upsert", "sync",
 ))  # fmt: skip
 #: tool-name words that read: a tool whose first verb is one of these (``get_commit``,
 #: ``list_open_alerts``) is judged a read by its name, whatever noun follows
@@ -1002,8 +1005,11 @@ def floor_problems(
     api = any("record-write" in (table.get(c) or ()) for c in fronts)
     for x in tools:
         name, cls = str(x.get("name")), set(x.get("classes") or ())
-        first = next((w for w in _word_list(name) if w in VERBS), None)
-        verbs = {first} - READING_VERBS - {None}
+        parts = _word_list(name)
+        first = next((w for w in parts if w in VERBS), None)
+        # and the verb after each "and"/"or": get_or_create_issue creates
+        joined = {b for a, b in pairwise(parts) if a in {"and", "or"}}
+        verbs = ({first} | joined) - READING_VERBS - {None}
         if verbs & ACTING_VERBS and not cls & only:
             out.append(f"{where}: tool {name} acts by its name, so it carries an acting class "
                        f"({', '.join(sorted(only))})")  # fmt: skip

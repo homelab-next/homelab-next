@@ -545,6 +545,8 @@ def _floor_rec(rid: str, tools, package: str | None = None, **extra) -> dict:
             "tool browser_click acts by its name",
         ),
         (_floor_rec("ci", [("trigger_pipeline", ["egress"])]), "tool trigger_pipeline acts"),
+        (_floor_rec("idp", [("disable_user", ["read"])]), "tool disable_user acts"),
+        (_floor_rec("forge", [("get_or_create_issue", ["egress"])]), "get_or_create_issue writes"),
         # record-write needs a capability the class table classes record-write, not any label
         (
             _floor_rec("homeauto", [("set_state", ["record-write"])], capabilities=["cap:metrics"]),
