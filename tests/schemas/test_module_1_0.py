@@ -24,6 +24,7 @@ import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.modules import rules as mr
+from homelabnext.modules import scope as ms
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
@@ -110,6 +111,7 @@ NEGATIVES = {
     "requirement-without-version": "requires/capabilities/0",
     "requires-bare-capability": "requires/capabilities/0",
     "requires-product-not-slot": "requires/capabilities/0/cap",
+    "requires-scope-unknown-part": "requires/scope/0/part",
     "reserved-id": "id",
     "retired-without-reason": "$",
     "reviews-inside-the-module": "$",
@@ -399,6 +401,18 @@ def _ag(d):
 
 
 MODULE_DEFECTS = {
+    "a module reading addresses without exclude.offensive": (
+        "external-collector",
+        lambda d: d["requires"].__setitem__("scope", [{"part": "trusted.wan"}]),
+        "requires.scope: trusted.wan without exclude.offensive",
+    ),
+    "an unattended module reading addresses without exclude.unattended_mutation": (
+        "external-collector",
+        lambda d: d["requires"].__setitem__(
+            "scope", [{"part": "target"}, {"part": "exclude.offensive"}]
+        ),
+        "requires.scope: target without exclude.unattended_mutation",
+    ),
     "another profile's id (ceiling takeover)": (
         "external-collector",
         lambda d: _ag(d).__setitem__("profile", "profile:staff-validator"),
@@ -858,7 +872,97 @@ SELECTION_NEGATIVES = {
     "unknown-grant-kind": "grants",
     "choice-without-instance": "slots/notify",
     "lane-binding-without-real": "features/external-collector/agents/external-collector-analyst/lanes",
+    "scope-empty-list": "scope/trusted/wan",
+    "scope-malformed-cidr": "scope/target/0",
+    "scope-unknown-part": "scope/trusted",
 }
+
+
+#: scope entries -> (the schema accepts, the reader accepts).  The two agree on every entry's text
+#: (one pattern, ENTRY_PATTERN); the reader alone refuses what a pattern cannot say.
+D1, D2 = "192.0.2", "198.51.100"
+SCOPE_ENTRIES = {
+    f"{D1}.0/24": (True, True),
+    f"{D2}.128/25": (True, True),
+    "2001:db8:30::/48": (True, True),
+    "2001:DB8::1": (True, True),
+    # text: refused by both
+    "2001:db8::1%eth0": (False, False),  # zone id
+    f"::ffff:{D1}.0/120": (False, False),  # IPv4 written inside IPv6
+    ":".join(("", "", "ffff", "c000", "200/120")): (False, False),  # IPv4-mapped, hex
+    ":".join(("64", "ff9b", "", "c000", "201")): (False, False),  # NAT64
+    ":".join(("0", "0", "0", "0", "0", "ffff", "c000", "201")): (False, False),  # mapped, long
+    ":::::::": (False, False),
+    "1::2::3": (False, False),
+    f"{D1}.1/24": (False, False),  # IPv4 host bits
+    f"{D1}.0/024": (False, False),  # leading zeros
+    f" {D1}.0/24": (False, False),
+    f"{D1}.0/24\n": (False, False),
+    # meaning: the schema's pattern cannot say it, the reader refuses
+    "2001:db8::1/64": (True, False),  # IPv6 host bits
+    "0.0.0.0/0": (True, False),
+    ".".join(("224", "0", "0", "0/4")): (True, False),  # multicast
+    "fe80::/64": (True, False),
+}
+
+
+@pytest.mark.parametrize("entry", sorted(SCOPE_ENTRIES))
+def test_the_schema_and_the_reader_agree_on_a_scope_entry(entry):
+    """Negative and positive: the schema never accepts less than the reader, and refuses exactly
+    the entry texts the reader refuses (the semantic rows are the reader's alone)."""
+    site = copy.deepcopy(SITES["full"])
+    site["scope"]["target"] = [entry]
+    schema_ok = not any(e.startswith("scope/") for e in sc.errors_for(SELECTION, site, REG))
+    try:
+        ms.parse_entry(entry, "target")
+        reader_ok = True
+    except ValueError:
+        reader_ok = False
+    assert (schema_ok, reader_ok) == SCOPE_ENTRIES[entry]
+
+
+@pytest.mark.parametrize("value", ["0.0.0.0", "::", ".".join("2104"), "cafe::beef", f"{D1}.10"])
+def test_a_site_config_value_that_is_no_site_address_is_accepted(value):
+    """S7: a bind address, a version, a label or a documentation address is not refused."""
+    site = copy.deepcopy(SITES["single-box"])
+    site["features"]["external-collector"]["config"]["edge_region"] = value
+    assert mr.site_problems(site, MODULES, SLOTS) == []
+
+
+def test_an_explicit_empty_exclusion_and_a_dynamic_wan_source_are_valid_shapes():
+    """S3: "nothing excluded" is an explicit [] (absent still fails closed), and trusted.wan may
+    name a dynamic source; the schema takes both, so freezing it later is not a breaking change.
+    The rules accept the empty exclusion and refuse the dynamic source until a reader exists."""
+    site = copy.deepcopy(SITES["full"])
+    site["scope"]["exclude"] = {"offensive": [], "unattended_mutation": []}
+    assert sc.errors_for(SELECTION, site, REG) == []
+    assert mr.site_problems(site, MODULES, SLOTS) == []
+    site["scope"]["trusted"]["wan"] = [{"source": "wan-dhcp"}]
+    assert sc.errors_for(SELECTION, site, REG) == []
+    assert any("specified, not implemented" in p for p in mr.site_problems(site, MODULES, SLOTS))
+    site["scope"]["trusted"]["nets"] = [{"source": "wan-dhcp"}]  # only trusted.wan has the form
+    assert any(e.startswith("scope/trusted/nets") for e in sc.errors_for(SELECTION, site, REG))
+
+
+def test_the_selection_schema_scope_is_generated_from_the_parts():
+    """The schema's scope leaves are exactly SCOPE_PARTS, as is the manifest's requires.scope
+    enum: adding a part to one cannot leave the other behind."""
+    scope = SELECTION["properties"]["scope"]["properties"]
+    leaves = set()
+    for group, d in scope.items():
+        if d.get("type") == "object":
+            leaves |= {f"{group}.{k}" for k in d["properties"]}
+        else:
+            leaves.add(group)
+    assert leaves == set(ms.SCOPE_PARTS)
+    enum = SCHEMA["$defs"]["requirement_scope"]["properties"]["part"]["enum"]
+    assert enum == list(ms.SCOPE_PARTS)
+    assert SELECTION["$defs"]["scope_entry"]["pattern"] == ms.ENTRY_PATTERN
+
+
+def test_every_selection_negative_file_is_listed():
+    found = (ROOT / "schemas/platform/negative").glob("module_selection.*")
+    assert {p.stem.split(".", 1)[1] for p in found} == set(SELECTION_NEGATIVES)
 
 
 @pytest.mark.parametrize("name", sorted(SELECTION_NEGATIVES))
@@ -1119,6 +1223,61 @@ SITE_DEFECTS.update(
                 "resources", [{"kind": "tpu", "exclusive": False}]
             ),
             "no tpu named",
+        ),
+        "a module requiring a scope part, with no scope block": (
+            "single-box",
+            lambda s, m: s.pop("scope"),
+            "external-collector: requires scope.trusted.wan, which the site leaves missing",
+        ),
+        "a module requiring a scope part the block leaves out": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].pop("wan"),
+            "external-collector: requires scope.trusted.wan",
+        ),
+        "an empty scope part (its reader fails closed)": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("wan", []),
+            "scope.trusted.wan: empty",
+        ),
+        "a malformed CIDR in the scope": (
+            "full",
+            lambda s, m: s["scope"]["target"].__setitem__(0, f"{D2}.0/33"),
+            f"scope.target[0]: '{D2}.0/33' is not a usable address or network",
+        ),
+        "a scope network with host bits set": (
+            "full",
+            lambda s, m: s["scope"]["exclude"]["offensive"].__setitem__(0, f"{D1}.1/28"),
+            "has host bits set",
+        ),
+        "a dynamic WAN source (specified, not implemented)": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("wan", [{"source": "wan-dhcp"}]),
+            "dynamic WAN sources are specified, not implemented",
+        ),
+        "an empty trusted part (only an exclusion may be [])": (
+            "full",
+            lambda s, m: s["scope"]["trusted"].__setitem__("nets", []),
+            "scope.trusted.nets: empty (only an exclusion may be an explicit [])",
+        ),
+        "a scope network listed twice": (
+            "small-lab",
+            lambda s, m: s["scope"]["trusted"]["tooling"].append(f"{D1}.200/32"),
+            "scope.trusted.tooling: a network is listed twice",
+        ),
+        "an address literal as a site config value": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "edge_region", ".".join(("10", "20", "0", "1"))
+            ),
+            "edge_region: an address literal (" + ".".join(("10", "20", "0", "1")) + "): a lab "
+            "address belongs in the selection's scope block",
+        ),
+        "a zero-padded address as a site config value": (
+            "single-box",
+            lambda s, m: s["features"]["external-collector"]["config"].__setitem__(
+                "edge_region", "010.020.000.001"
+            ),
+            "edge_region: an address literal (010.020.000.001)",
         ),
         "count multiplies the footprint": (
             "single-box",

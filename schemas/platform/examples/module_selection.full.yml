@@ -178,3 +178,22 @@ grants:
   secrets:
     publishing:
     - secret:example-static-host/deploy-token
+scope:
+  trusted:
+    wan:
+    - 203.0.113.32/29
+    nets:
+    - 192.0.2.0/24
+    - 2001:db8:30::/48
+    tooling:
+    - 192.0.2.240/28
+  target:
+  - 198.51.100.0/24
+  - 192.0.2.0/24
+  exclude:
+    unattended_mutation:
+    - 192.0.2.1/32
+    - 192.0.2.2/32
+    offensive:
+    - 192.0.2.0/28
+    - 198.51.100.128/25
