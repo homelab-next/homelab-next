@@ -401,7 +401,10 @@ Every secret is referenced only in the `env:` or `with:` of the step that needs 
 `run:` script as an expression (that is how a value ends up in a shell command line), and nothing
 turns on `set -x` or step debug logging. `tests/overlay/` lints the templates by the same rules as
 this repository's own workflows, and runs `actionlint` and zizmor (`zizmor --offline`; checked
-with 1.31.1) over them when those tools are installed (the tests skip otherwise).
+with 1.31.1) over them when those tools are installed (the tests skip otherwise). CI's
+`external-tools` job installs both at pinned versions with verified checksums and requires them
+(`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
+push.
 
 `checks.yml` runs on every pull request with no secret and no Environment: it only runs the
 private leak check, so a pull request's code never sees a credential.
@@ -411,7 +414,7 @@ private leak check, so a pull request's code never sees a credential.
 | Where | Command | Fails on |
 |---|---|---|
 | private overlay CI | `python hnx/tools/private_leak_check.py private .` | a credential value in plain text (the `secret` patterns of `tools/leak_scan.py`, after masking well-formed ciphertext only); a sealed file (under `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule) not encrypted throughout; a `.sops.yaml` that narrows the sealed paths; a vault file that is not header plus hex; a file it could not scan and no `allow_unscanned` glob names; a committed decryption key (an age identity file, a vault password file) |
-| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under the skeleton's `private_paths` (`lab/`, `ansible/inventory/production/`); a `.sops.yaml`; any SOPS-encrypted file; a key file; a site's network scope in public git: in any file, an address-like token outside the documentation ranges under a `scope` key (at any depth; judged both on a parse of any file that is JSON, TOML or YAML and on the raw text, so Markdown prose and fences count too; an accidental commit is the threat model, deliberate obfuscation is review's), and at the few paths where a scope block may sit (the example site profiles, the generated selection examples and negatives) an entry that is not a documentation network, a block out of the selection's shape, or a file too large, too deep or malformed to parse ([modules](modules.md#the-network-scope) lists what it does not cover) |
+| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under `lab/` or `ansible/inventory/production/` (pinned in the tool, so neither editing nor deleting the skeleton marker switches them off) or under a further path the skeleton's `private_paths` adds; a skeleton marker whose `private_paths` drops a pinned path; a `.sops.yaml`; any SOPS-encrypted file, whatever its name or extension; a key file; a site's network scope in public git: in any file, an address-like token outside the documentation ranges under a `scope` key (at any depth; judged both on a parse of any file that is JSON, TOML or YAML and on the raw text, so Markdown prose and fences count too; an accidental commit is the threat model, deliberate obfuscation is review's), and at the few paths where a scope block may sit (the example site profiles, the generated selection examples and negatives) an entry that is not a documentation network, a block out of the selection's shape, or a file too large, too deep or malformed to parse ([modules](modules.md#the-network-scope) lists what it does not cover) |
 | public repository | `tools/leak_scan.py` (F-18, F-05) | private addresses, names, e-mails, keys and tokens, including an age identity |
 
 Real addresses and host names are allowed in the private check (that is what the overlay is for);

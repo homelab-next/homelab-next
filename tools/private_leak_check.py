@@ -68,11 +68,18 @@ committed here.  The fictional skeleton under ``examples/private-overlay/`` is t
 and only while its marker says ``fictional: true``.  Findings:
 
   overlay-marker   a ``.hnx-private-overlay.yml`` outside the skeleton (or not fictional);
-  overlay-path     a file under one of the skeleton marker's ``private_paths`` (the private
-                   layout, e.g. ``lab/``), at the root of this tree;
+  overlay-path     a file under a private layout path: :data:`PRIVATE_PATHS` (pinned here, so
+                   the change that adds ``lab/...`` cannot also switch the rule off by editing
+                   or deleting the skeleton marker) plus any further ``private_paths`` the
+                   skeleton marker lists, at the root of this tree;
+  private-paths    a skeleton marker whose ``private_paths`` leaves out a pinned path (the
+                   template would teach a layout this check does not guard);
   sops-config      a ``.sops.yaml`` outside the skeleton;
-  ciphertext       a SOPS-encrypted file (sealed real data does not belong in public git
-                   either: it is one leaked key away from plain text);
+  ciphertext       a SOPS-encrypted file, whatever its name (sealed real data does not belong in
+                   public git either: it is one leaked key away from plain text); every file
+                   that reads as text is checked, not only ``.yml``/``.json``/``.env``/``.ini``,
+                   because sops writes any format under any name (``wg0.conf.enc``, the JSON
+                   of ``--input-type binary``);
   scope-address    a site's network scope in public git.  The union of two rules over EVERY
                    file the scanner reads (any suffix; line ends CRLF or CR normalised first):
                    (1) the parse pass: a file that parses as JSON, TOML or YAML (by content;
@@ -181,6 +188,8 @@ EXIT_CLEAN, EXIT_HIT, EXIT_CONFIG = 0, 1, 2
 MARKER = ".hnx-private-overlay.yml"
 SOPS_CONFIG = ".sops.yaml"
 SKELETON = "examples/private-overlay/"
+#: the private layout: never committed to the public tree, whatever the skeleton marker says
+PRIVATE_PATHS = ("lab/", "ansible/inventory/production/")
 #: what is always sealed, whatever the overlay's own .sops.yaml says (directory prefixes)
 SEALED_PATHS = ("lab/sealed/",)
 #: the one file name under a sealed path that stays plain (it says what the directory is for)
@@ -1748,12 +1757,22 @@ def scope_findings(rel: str, text: str) -> list[Finding]:
 
 def check_public(root: Path) -> list[Finding]:
     skeleton_marker = root / SKELETON / MARKER
-    private_paths: list[str] = []
+    private_paths = list(PRIVATE_PATHS)
+    out: list[Finding] = []
     if skeleton_marker.is_file():
-        private_paths = [
+        declared = [
             p.rstrip("/") + "/" for p in read_marker(skeleton_marker).get("private_paths", [])
         ]
-    out: list[Finding] = []
+        for p in PRIVATE_PATHS:
+            if p not in declared:
+                out.append(
+                    Finding(
+                        f"{SKELETON}{MARKER}",
+                        "private-paths",
+                        f"private_paths leaves out {p}, which this check pins",
+                    )
+                )
+        private_paths += [p for p in declared if p not in private_paths]
     for rel, f in _files(root):
         in_skeleton = rel.startswith(SKELETON)
         name = rel.rsplit("/", 1)[-1]
@@ -1770,10 +1789,10 @@ def check_public(root: Path) -> list[Finding]:
         hit = next((p for p in private_paths if rel.startswith(p)), None)
         if hit:
             out.append(Finding(rel, "overlay-path", f"under the private layout path {hit}"))
-        text = _text(f)
+        text = _text(f)  # any name: sops writes every format under every file name
         if text is None:
             continue
-        if f.suffix in (".yml", ".yaml", ".json", ".env", ".ini") and sops_format(text):
+        if sops_format(text):
             out.append(Finding(rel, "ciphertext", "a SOPS-encrypted file in public git"))
             continue
         out += scope_findings(rel, text)

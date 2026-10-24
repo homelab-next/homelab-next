@@ -8,8 +8,10 @@ tests on a laptop with no network and no private context.
 1. **Sign off every commit** (Developer Certificate of Origin): `git commit -s`. The sign-off
    certifies you may submit the work under Apache-2.0. CI's `dco` job fails a pull request with
    a commit that lacks a `Signed-off-by:` for its author. Commit with your GitHub noreply address
-   (Settings -> Emails); CI rejects any other author or committer e-mail. Commits authored by a
-   GitHub App bot (Dependabot) are exempt; the maintainer who merges them takes the sign-off.
+   (Settings -> Emails); CI rejects any other author or committer e-mail. Dependabot's own
+   commits, in a pull request GitHub records as opened by Dependabot, are exempt; the maintainer
+   who merges them takes the sign-off. A bot's address in a commit's author field exempts
+   nothing on its own: anyone can set it.
 2. **Every schema change ships an example and a negative** (an input that must be rejected).
    Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
    may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
@@ -168,7 +170,10 @@ and an entry that no longer excuses anything fails the lint.
 - **No silent skips.** A skip's reason must match one of the `skip_reasons` patterns in
   `[tool.pytest.ini_options]` (an optional extra or external tool is absent, the platform cannot run
   the test). Anything else, including a bare `@pytest.mark.skip`, fails. Prefer
-  `pytest.importorskip("module")` for optional extras and `reason="<tool> not installed"` for tools.
+  `pytest.importorskip("module")` for optional extras, and `require_tool("<tool>")`
+  (`tests/suite_policy.py`) for an external tool: it returns the tool's path or skips with
+  "<tool> is not installed", and fails instead where `HNX_REQUIRE_TOOLS=<tool>,...` (or the older
+  `HNX_REQUIRE_GO=1`, for `go`) says the tool must be there; CI sets it where it installs tools.
   A genuinely new legitimate cause is a reviewed one-line addition to `skip_reasons`.
 - **Quarantine, not deletion, for a flaky test:**
   `@pytest.mark.quarantine(owner="<team-or-handle>", until="YYYY-MM-DD", reason="<what is flaky>")`.
@@ -198,7 +203,13 @@ whose message has a `Fixes: <issue or description>` trailer. Use one of them for
 the same commit add or change a test that **fails without the fix and passes with it** (write the
 test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`) checks
 both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
-run on the fix's parent commit, must fail. `make fix-check` runs the first half locally
+run on the fix's parent commit, must have at least one failing test. One rule covers Python and Go:
+a test that fails on the parent only because it does not build, collect or import counts as failing
+only if every such error names a symbol (or module, or Go package) that the fix's own diff adds;
+any other build, collection or import error, and any error that is not a failing test, means the
+fix cannot be proven. A fix whose only test files are fixtures, `conftest.py` or other non-test
+files (outside a Go package's `testdata/`) cannot be proven either. All of these are reported,
+never passed. `make fix-check` runs the first half locally
 (`make fix-check PROVE=1` both). A fix that cannot have a test (a documentation typo, a CI setting)
 says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiver.
 

@@ -7,17 +7,11 @@ must be there (CI's test leg that installs it): then a missing toolchain fails, 
 cannot quietly stop running.  Use it as ``@pytest.mark.usefixtures("go_toolchain")``.
 """
 
-import os
-import shutil
-
 import pytest
+
+from tests.suite_policy import require_tool
 
 
 @pytest.fixture
 def go_toolchain() -> str:
-    go = shutil.which("go")
-    if go is None:
-        if os.environ.get("HNX_REQUIRE_GO") == "1":
-            pytest.fail("go is not on PATH, and HNX_REQUIRE_GO=1 requires it", pytrace=False)
-        pytest.skip("go is not installed")
-    return go
+    return require_tool("go")  # skips, or fails under HNX_REQUIRE_GO=1 / HNX_REQUIRE_TOOLS=go

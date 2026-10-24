@@ -52,7 +52,8 @@ A hook that cannot be implemented yet still exists and says so explicitly
 * A task that uses a secret-looking variable carries `no_log: true` (RL011). No
   `shell` or `raw`, and no `command` given a templated free-form string: use `argv`
   (RL012). TLS validation is never turned off (RL013). No privileged container or
-  docker socket in `defaults/`, `vars/` or `templates/` (RL014).
+  container-runtime socket (docker, containerd, podman, CRI-O) in `defaults/`, `vars/` or
+  `templates/` (RL014).
 * Versions are pinned; in real use they come from the registry row.
 
 ## 4. Service names come from the registry
@@ -127,10 +128,48 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 * Secrets never go in `environment` (a secret-looking key is refused unless it ends
   in `_FILE`). They go in `compose_app_secret_env`, which the role writes to
   `secrets/<service>.env` (mode 0600, `no_log`, no diff) and passes as an `env_file`.
-* A privileged container or a dangerous `cap_add`, a docker socket (or host root,
-  `/run`) bind mount, and an explicit root `user` are refused unless
+* Every value is written with `$` doubled (`$$`), so docker compose never interpolates the
+  deploy host's environment into `docker-compose.yml`, and a volume holding `$` or a source starting with `~`
+  is refused outright (`${X:-/}:/host` is the host root once compose has read it). The spec is
+  the literal text the container gets: write `$HOME`, not compose's own escape `$$HOME`, which
+  the role writes as `$$$$HOME` and the container receives as `$$HOME`.
+* Bind sources are an allow-list: a host path is mounted only under `compose_app_bind_roots`
+  (the application's own directory and data directory by default; never a host-wide directory
+  such as `/etc`, `/var` or `/srv`) or when it is listed on its own, with a reason, in
+  `compose_app_bind_extra` (`[{path, reason}]`). A `./relative` source, a named volume and an
+  anonymous volume (a container path alone, `/var/lib/app`) need neither. The application
+  directory itself (`.`, `compose_app_dir`) and its `secrets/` directory are the exception: they
+  hold every service's 0600 env file and the rendered compose file, so mounting them (or reading
+  one as an `env_file`) needs their own `compose_app_bind_extra` entry.
+* An `env_file` is a host path as well: compose reads it on the deploy host, usually as root, and
+  hands its contents to the container. Its path follows the bind-source rule (relative to the
+  project directory, under `compose_app_bind_roots`, or listed in `compose_app_bind_extra`;
+  canonical, no `$`, no leading `~`), so `/etc/shadow` or another application's
+  `secrets/<service>.env` is refused. Its **contents are interpolated** from the deploy host's
+  environment, unlike `docker-compose.yml`: `A=${HOME}` and `A="$HOME"` both reach the container
+  as the deploy user's home. Single-quote a value (`A='${HOME}'`) or write `$$` to keep it literal,
+  as the role does for `compose_app_secret_env`. Everything else (`/etc`, `/proc`, `/dev`, `/boot`, `/root`, `/run/systemd`, the D-Bus
+  and buildkitd sockets, another runtime's state) is refused.
+* A volume's bind source must be canonical (no `//`, no `.` or `..` component other than a
+  leading `./`, no trailing `/`): compose passes `/.`, `//` and `/var//lib/docker` through
+  unchanged and the kernel reads them as `/` and docker's state.
+* The bind checks read the text of a path; they do not resolve symlinks. A bind root that is
+  itself a symlink, or a symlink a container plants in its own data directory that another
+  service's spec later mounts by sub-path, is followed by docker at `up`. Keep the roots real
+  directories, and do not mount one service's data directory into another by sub-path.
+* A privileged container or a dangerous `cap_add`, a container-runtime socket or state
+  directory (docker, containerd, podman, CRI-O; or host root, `/run`, `/var`) bind mount, and an
+  explicit root `user` (the user or the group `root` or zero in any spelling: `0`, `00`,
+  `000:0`, `root:root`; the root group alone, `1000:0`, needs `compose_app_allow_root_group`,
+  for images built to run as an arbitrary uid in group 0) are refused unless
   `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
-  `compose_app_allow_root` is set.
+  `compose_app_allow_root` is set. A service with no `user:` runs as its image's default user,
+  often root: set `user:` to a non-root id.
+* `compose_app_allow_docker_socket` by itself lets through only the docker socket
+  (`/var/run/docker.sock`, `/run/docker.sock`). Another runtime's socket or state directory
+  (containerd, podman, a rootless `/run/user/<uid>/docker.sock`, `/var/lib/docker`) needs the
+  flag and its own `compose_app_bind_extra` entry; host root, `/run`, `/var` and `/var/lib` cannot
+  be listed, so they stay refused.
 
 ## 7. Linter rules
 
@@ -150,7 +189,7 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 | RL011 | secret-looking variable used in a task without `no_log: true` |
 | RL012 | `shell`/`raw`, or `command` with a templated free-form string |
 | RL013 | `validate_certs: false` |
-| RL014 | privileged container or docker socket in defaults/vars/templates |
+| RL014 | privileged container, container-runtime socket (docker, containerd, podman, CRI-O) or a bind source spelled with compose interpolation (`$VAR`, `${VAR:-/}`, `~`) in defaults/vars/templates |
 | PB001 | playbook targets a hostname instead of a capability group |
 | PB002 | play without `hosts:` |
 
