@@ -103,7 +103,8 @@
       no leading `~` (docker compose would interpolate them from the deploy host's environment); the
       source canonical (no //, no . or .. component other than a leading ./, no trailing /); a
       container-runtime socket or state directory (docker, containerd, podman, CRI-O) or host root
-      needs compose_app_allow_docker_socket
+      needs compose_app_allow_docker_socket, which by itself unlocks only /var/run/docker.sock and
+      /run/docker.sock (any other runtime path must also be listed in compose_app_bind_extra)
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -113,7 +114,10 @@
 # with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory
 # and a named volume is docker's; anything else on the host (/etc, /proc, /dev, /root, the
 # systemd and D-Bus sockets, another runtime's state) is refused, and the runtime sockets still
-# need compose_app_allow_docker_socket on top.
+# need compose_app_allow_docker_socket on top. That flag lets through only the docker socket
+# itself (/var/run/docker.sock, /run/docker.sock), never host root, /var, /run or a path that
+# merely contains docker.sock; another runtime path needs the flag and its own listing (host root,
+# /run, /var and /var/lib cannot be listed).
 - name: Validate the bind roots and listed bind sources
   ansible.builtin.assert:
     that:
@@ -158,7 +162,7 @@
       {%-     for r in roots -%}
       {%-       if src == r or src.startswith(r ~ '/') -%}{%- set ns.ok = true -%}{%- endif -%}
       {%-     endfor -%}
-      {%-     if compose_app_allow_docker_socket | bool and src is search(compose_app_docker_socket_pattern) -%}
+      {%-     if compose_app_allow_docker_socket | bool and src in ['/var/run/docker.sock', '/run/docker.sock'] -%}
       {%-       set ns.ok = true -%}
       {%-     endif -%}
       {%-   endif -%}

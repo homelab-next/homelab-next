@@ -86,7 +86,10 @@ argument_specs:
         default: []
       compose_app_allow_docker_socket:
         type: bool
-        description: Permit a container-runtime socket or state directory, host root or /run bind mount.
+        description: >-
+          Permit the docker socket (/var/run/docker.sock or /run/docker.sock) as a bind source; any
+          other container-runtime socket or state directory also needs its own
+          compose_app_bind_extra entry, and host root, /run, /var and /var/lib stay refused.
         default: false
       compose_app_allow_root:
         type: bool

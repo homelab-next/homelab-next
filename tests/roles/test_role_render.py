@@ -609,6 +609,24 @@ def test_compose_app_escape_hatches_need_their_explicit_flag(tmp_path, over, fla
         assert web[k] == v
 
 
+def test_compose_app_docker_socket_flag_unlocks_only_the_socket(tmp_path):
+    """The flag used to pass every source the runtime pattern matched: host root, /var, /run,
+    any path holding docker.sock. Only the socket itself passes now."""
+    refused = ["/", "/var", "/var/lib/docker", "/run/user/1000", "/root/docker.sock"]
+    vols = ["/var/run/docker.sock:/var/run/docker.sock"] + [
+        f"{v}:/m{i}" for i, v in enumerate(refused)
+    ]
+    v = app_vars(
+        tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
+        compose_app_allow_docker_socket=True,
+    )  # fmt: skip
+    r = run_role(tmp_path, "compose_app", "main", v)
+    assert r.returncode != 0
+    out = r.stdout + r.stderr
+    listed = out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
+    assert listed == refused
+
+
 @pytest.mark.parametrize(
     ("user", "ok"), [("1000:0", True), ("1000:root", True), ("0:0", False), ("00", False)]
 )

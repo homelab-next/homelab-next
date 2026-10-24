@@ -148,6 +148,11 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   `compose_app_allow_privileged`, `compose_app_allow_docker_socket` or
   `compose_app_allow_root` is set. A service with no `user:` runs as its image's default user,
   often root: set `user:` to a non-root id.
+* `compose_app_allow_docker_socket` by itself lets through only the docker socket
+  (`/var/run/docker.sock`, `/run/docker.sock`). Another runtime's socket or state directory
+  (containerd, podman, a rootless `/run/user/<uid>/docker.sock`, `/var/lib/docker`) needs the
+  flag and its own `compose_app_bind_extra` entry; host root, `/run`, `/var` and `/var/lib` cannot
+  be listed, so they stay refused.
 
 ## 7. Linter rules
 
