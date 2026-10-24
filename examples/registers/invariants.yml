@@ -1066,7 +1066,7 @@ criteria:
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
     python3 -m pytest -q -p no:cacheprovider tests/models/test_model_store.py
-    tests/roles/test_serving_roles.py -k "model_store and (revision or sha256)"
+    tests/roles/test_serving_roles.py -k "store_check or (model_store and (revision or sha256))"
   expected: >-
     exit 0 with every selected test passed and none skipped (missing, resized, changed or unlisted
     files fail the store check, and the model_store role fetches by commit and refuses a

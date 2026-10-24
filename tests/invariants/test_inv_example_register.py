@@ -8,6 +8,7 @@ the same name (as F-01..F-03 once did) is how two documents drift apart while bo
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -186,6 +187,42 @@ def test_pytest_rows_run_a_named_selection_and_refuse_a_partial_run():
             "1 failed, 3 passed",
         ):
             assert not rx.search(partial), (i, partial)
+
+
+# tests a row's selection must reach: the claims its checklist row makes, each one test
+ROW_CLAIMS = {
+    # "missing, resized, changed or unlisted files fail" and "fetches by commit, refuses a mismatch"
+    "A-09": [
+        "test_store_check_passes_on_the_manifests_files_and_fails_on_a_changed_byte",
+        "test_store_check_reports_missing_resized_and_unlisted_files",
+        "test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes",
+        "test_model_store_refuses_a_download_whose_sha256_is_not_the_manifests",
+    ],
+    # "a backend id, Ollama or a direct connection is refused"
+    "A-11": [
+        "test_open_webui_points_at_the_gateway_with_its_own_key",
+        "test_open_webui_refuses_anything_but_the_gateway",
+    ],
+}
+
+
+@pytest.mark.parametrize("row", sorted(ROW_CLAIMS))
+def test_a_narrowed_pytest_row_still_selects_its_row_s_claims(row):
+    """A-09's `-k` was narrowed to the role's revision and sha256 tests and silently dropped every
+    store-check test, the row's first claim; `--collect-only` is how the runner would select."""
+    pytest.importorskip("jsonschema")
+    obs = by_id()[row]["observable"]
+    args = shlex.split(obs.split("python3 -m pytest", 1)[1])
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", *args],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO)},
+    )
+    assert proc.returncode == 0, proc.stdout[-2000:]
+    collected = {line.split("::")[-1].split("[")[0] for line in proc.stdout.splitlines()}
+    assert [t for t in ROW_CLAIMS[row] if t not in collected] == []
 
 
 def test_a_pytest_row_fails_when_its_tests_fail(tmp_path, monkeypatch):
