@@ -15,7 +15,7 @@ REGISTERS_OUT := build/registers
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring"
+	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
@@ -288,11 +288,12 @@ changelog-check:
 #   M-03 no private notify/state/lake helpers outside the shared libraries, and no copy-paste
 #        beyond tools/dup_check.baseline.json (which only shrinks)
 #   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
+#   F-23 no Caddy config lets a client set its own identity headers; Caddy pinned >= 2.11.2
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring run-output-lint
-check: helpers-lint dup-check tls-lint workstation-lint keyring-check run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
+check: helpers-lint dup-check tls-lint caddy-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
 	$(PY) tools/shared_helpers_lint.py .
@@ -304,6 +305,9 @@ dup-check:
 # `$(PY) tools/dup_check.py --update-baseline --allow-increase "<reason>"` by hand.
 dup-baseline:
 	$(PY) tools/dup_check.py --update-baseline .
+
+caddy-lint:
+	$(PY) tools/caddy_lint.py .
 
 tls-lint:
 	$(PY) tools/tls_verify_lint.py .
@@ -336,9 +340,11 @@ fix-check:
 	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
-# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
+# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown;
+# filelock and setuptools since 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940
+# and GHSA-xmj3-9gf7-h52w).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= ruff pyarrow certifi
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi filelock setuptools
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
 	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
