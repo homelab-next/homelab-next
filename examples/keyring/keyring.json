@@ -6,7 +6,7 @@
       "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
       "profile:responder": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d"
     },
-    "registry": "81def9d1b96c48f45f71adc8d1c07ef8c381f9dee5987f230138151f843e5d61"
+    "registry": "5a210420bb5c5f60ed4ea6e782d268ef6a4f49633b90c8ad93a408973a6cbf89"
   },
   "keyring_version": 1,
   "principals": [
