@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from conformance.fakes.orchestrator import (
+    AttemptScopedHoldOrchestrator,
     FakeOrchestrator,
     LateResultLandsOrchestrator,
     LeakOnFailureOrchestrator,
@@ -183,3 +184,15 @@ def test_a_leak_on_one_path_behind_a_run_table_capacity_fails_that_paths_check(l
     # and the same capacity() with no leak passes every holds check
     res = run_checks(suite.SUITE, _RunTableCapacity, only=HOLDS)
     assert {r.check: r.status for r in res} == dict.fromkeys(HOLDS, "pass")
+
+
+def test_a_run_between_attempts_is_live():
+    """A retry is the same run: a hold scoped to an attempt (released when it fails, as when
+    liveness is judged by whether an attempt's process exists) fails the retry check, and the fake
+    passes it."""
+    (res,) = run_checks(
+        suite.SUITE, AttemptScopedHoldOrchestrator, only=["retrying-run-keeps-its-hold"]
+    )
+    assert res.status == "fail" and "liveness is the run's" in res.evidence, res
+    (res,) = run_checks(suite.SUITE, FakeOrchestrator, only=["retrying-run-keeps-its-hold"])
+    assert res.status == "pass", res

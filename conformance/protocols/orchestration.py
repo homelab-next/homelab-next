@@ -16,7 +16,10 @@ a. *Capacity is held only by live work, and live work keeps it.*  A hold exists 
    terminal state holds nothing.  Holds are released on success, failure,
    cancel, deadline expiry, worker death and orchestrator restart -- never only by a TTL.  A TTL
    is a backstop for a defect in this contract, not the way holds end: a hold that outlives its
-   worker until a timer fires is capacity taken from live work by dead work.
+   worker until a timer fires is capacity taken from live work by dead work.  A run between
+   attempts (an attempt failed and a retry is pending, backing off or waiting for a backend) is
+   live: it stays ``running`` and keeps its holds.  Liveness is the orchestrator's own record
+   of the run's worker, never whether an attempt's process happens to exist at that moment.
 b. *Cancelling a running run stops it.*  ``cancel`` on a ``running`` run stops its worker; the
    run ends ``cancelled`` within ``cancel_grace_s`` (the subject's attribute, else
    :data:`CANCEL_GRACE_S`) and its holds are released, whether or not the job body cooperates.

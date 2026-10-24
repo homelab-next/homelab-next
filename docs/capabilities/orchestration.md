@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **Named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate, and hold capacity only for live work.**
 
 - Contract: [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py) (`conformance.protocols.orchestration:Orchestrator`)
-- Conformance suite: [`conformance.suites.orchestration`](../../conformance/suites/orchestration.py) (16 checks: 16 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.orchestration`](../../conformance/suites/orchestration.py) (17 checks: 17 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -35,7 +35,10 @@ a. *Capacity is held only by live work, and live work keeps it.*  A hold exists 
    terminal state holds nothing.  Holds are released on success, failure,
    cancel, deadline expiry, worker death and orchestrator restart -- never only by a TTL.  A TTL
    is a backstop for a defect in this contract, not the way holds end: a hold that outlives its
-   worker until a timer fires is capacity taken from live work by dead work.
+   worker until a timer fires is capacity taken from live work by dead work.  A run between
+   attempts (an attempt failed and a retry is pending, backing off or waiting for a backend) is
+   live: it stays `running` and keeps its holds.  Liveness is the orchestrator's own record
+   of the run's worker, never whether an attempt's process happens to exist at that moment.
 b. *Cancelling a running run stops it.*  `cancel` on a `running` run stops its worker; the
    run ends `cancelled` within `cancel_grace_s` (the subject's attribute, else
    `CANCEL_GRACE_S`) and its holds are released, whether or not the job body cooperates.
@@ -252,13 +255,14 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `killed-worker-fails-run-and-frees-capacity` | MUST | a run whose worker dies ends failed, its capacity is released, and nothing the dead worker produces lands | `admission`, `fault-injection` |
 | `deadline-expiry-frees-capacity` | MUST | a run past its deadline ends failed with an error naming the deadline, releases its capacity without waiting for its body, and its late result is discarded | `admission`, `deadline` |
 | `restart-reconciles-runs-and-capacity` | MUST | after a restart a run that was executing is ended (never run a second time), no dead worker holds capacity or reports a result, and queued runs and idempotency keys survive | `admission`, `fault-injection` |
+| `retrying-run-keeps-its-hold` | MUST | a run between attempts is live: after a failed attempt it stays running and keeps its hold through the retry, then releases it when the retry succeeds | `admission` |
 | `capacity-returns-to-zero-after-churn` | MUST | after runs that succeed, fail, retry and are cancelled queued or running, no hold remains | `admission` |
 
 ### Features an adapter may declare
 
 | Feature | Kind | Checks that need it |
 |---|---|---|
-| `admission` | product feature (checks skip without it) | `cancel-running-run-frees-capacity`, `killed-worker-fails-run-and-frees-capacity`, `deadline-expiry-frees-capacity`, `restart-reconciles-runs-and-capacity`, `capacity-returns-to-zero-after-churn` |
+| `admission` | product feature (checks skip without it) | `cancel-running-run-frees-capacity`, `killed-worker-fails-run-and-frees-capacity`, `deadline-expiry-frees-capacity`, `restart-reconciles-runs-and-capacity`, `retrying-run-keeps-its-hold`, `capacity-returns-to-zero-after-churn` |
 | `deadline` | product feature (checks skip without it) | `deadline-expiry-frees-capacity` |
 | `fault-injection` | test hook (a MUST check needing it is `untested` without it) | `killed-worker-fails-run-and-frees-capacity`, `restart-reconciles-runs-and-capacity` |
 
@@ -268,6 +272,7 @@ Each is a deliberately broken fake (`hnx conform run orchestration --target brok
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `attempt-scoped-hold` | `retrying-run-keeps-its-hold` | a failed attempt returns the run's slot and the retry runs holding nothing |
 | `idempotency-ignored` | `idempotency-key-runs-once` | a repeated key starts a second run |
 | `leak-on-cancel` | `cancel-running-run-frees-capacity` | cancelling a running run never returns its slot |
 | `leak-on-kill` | `killed-worker-fails-run-and-frees-capacity` | a dead worker's run fails but its slot is never returned |
@@ -461,4 +466,4 @@ No service in `examples/services.yml` declares `capability: orchestration`.
    hnx conform run orchestration --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (16) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (17) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

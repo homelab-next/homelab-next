@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from conformance.fakes.orchestrator import (
+    AttemptScopedHoldOrchestrator,
     FakeOrchestrator,
     LeakOnCancelOrchestrator,
     LeakOnKillOrchestrator,
@@ -423,6 +424,45 @@ def _(o):
 
 
 @SUITE.check(
+    "retrying-run-keeps-its-hold",
+    "a run between attempts is live: after a failed attempt it stays running and keeps its hold "
+    "through the retry, then releases it when the retry succeeds",
+    requires=["admission"],
+)
+def _(o):
+    _, base, _ = _capacity(o)
+    gate, name, g, failed = _Gate(), uniq("job"), _grace(o), []
+
+    def flaky(p):
+        if not failed:
+            failed.append(1)
+            raise RuntimeError("transient")
+        return gate(p)
+
+    o.define(name, flaky, retries=1)
+    rid = o.submit(name, {}, idempotency_key=uniq("k"))
+    t = _drive(o, rid, START_S + g)
+    try:
+        assert gate.started.wait(START_S), f"the retry never started within {START_S}s"
+        st = o.wait(rid, timeout=0)
+        assert st.state == "running", f"a run retrying after a failed attempt is {st.state}"
+        assert _until(lambda: rid in _capacity(o)[2], g, _step(o)), (
+            "a run retrying after a failed attempt holds no capacity: liveness is the run's, "
+            f"not an attempt's ({o.capacity()})"
+        )
+        gate.release.set()
+        st = o.wait(rid, timeout=START_S)
+        assert (st.state, st.attempts) == ("succeeded", 2), f"status {st}"
+        assert _until(lambda: _released(o, rid, base), g, _step(o)), (
+            f"a retried run finished but its capacity is still held: {o.capacity()}"
+        )
+    finally:
+        gate.release.set()
+    t.join(g)
+    _admits(o)
+
+
+@SUITE.check(
     "capacity-returns-to-zero-after-churn",
     "after runs that succeed, fail, retry and are cancelled queued or running, no hold remains",
     requires=["admission"],
@@ -500,6 +540,12 @@ MUTANTS = {
         LyingCapacityOrchestrator,
         "cancel-running-run-frees-capacity",
         "a stopped run's slot leaks while capacity() reports only running holders",
+        features=frozenset({"admission"}),
+    ),
+    "attempt-scoped-hold": Mutant(
+        AttemptScopedHoldOrchestrator,
+        "retrying-run-keeps-its-hold",
+        "a failed attempt returns the run's slot and the retry runs holding nothing",
         features=frozenset({"admission"}),
     ),
     "restart-reruns-live-run": Mutant(
