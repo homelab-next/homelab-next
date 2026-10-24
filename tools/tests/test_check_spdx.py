@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_spdx
@@ -111,10 +112,10 @@ def test_the_template_header_renders_nothing(monkeypatch):
 
 
 def test_the_pre_commit_hook_checks_the_same_suffixes():
-    text = (ROOT / ".pre-commit-config.yaml").read_text()
-    m = re.search(r"- id: spdx-header\n(?:\s+.*\n)*?\s+files: '(.+)'", text)
-    assert m, "the spdx-header hook has no files pattern"
-    rx = re.compile(m[1])
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text())
+    hooks = [h for repo in config["repos"] for h in repo["hooks"] if h["id"] == "spdx-header"]
+    assert len(hooks) == 1 and hooks[0].get("files"), "the spdx-header hook has no files pattern"
+    rx = re.compile(hooks[0]["files"])
     for suffix in check_spdx.SUFFIXES:
         assert rx.search(f"a/b{suffix}"), suffix
     for other in (".md", ".json", ".txt"):
