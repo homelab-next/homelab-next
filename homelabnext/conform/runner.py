@@ -12,7 +12,15 @@ from typing import Any
 
 from .core import CheckResult, Suite, run_checks
 from .registry import ConformError, find_root, load_module, load_suite
-from .target import Binding, Target, adapter_origin, binding_from_mapping, load_target, make_factory
+from .target import (
+    Binding,
+    Target,
+    adapter_origin,
+    binding_features,
+    binding_from_mapping,
+    load_target,
+    make_factory,
+)
 
 __all__ = [
     "MIN_CHECKS",
@@ -114,7 +122,11 @@ def run_capability(
         run_obj.meta = provenance(capability, binding, root)
         factory = make_factory(binding, suite, root)
         run_obj.results = run_checks(
-            suite, factory, features=binding.features, waive=binding.waive, only=only
+            suite,
+            factory,
+            features=binding_features(binding, root),
+            waive=binding.waive,
+            only=only,
         )
     except ConformError:
         raise
@@ -137,7 +149,7 @@ def run(
     binding = binding_from_mapping(capability, target)
     suite = load_suite(capability, root)
     factory = make_factory(binding, suite, root)
-    return run_checks(suite, factory, features=binding.features, waive=binding.waive)
+    return run_checks(suite, factory, features=binding_features(binding, root), waive=binding.waive)
 
 
 def suite_digest(capability: str, root: str | Path | None = None) -> str | None:
@@ -196,7 +208,7 @@ def mutation_runs(capability: str, root: str | Path | None = None) -> list[Mutan
     out: list[MutantRun] = []
     specs = {s.id: s for s in suite.specs}
     for name, m in mod.MUTANTS.items():
-        res = run_checks(suite, m.factory)
+        res = run_checks(suite, m.factory, features=m.features)
         failed = [r.check for r in res if not r.ok]
         status = {r.check: r.status for r in res}
         spec = specs.get(m.fails)
@@ -205,9 +217,28 @@ def mutation_runs(capability: str, root: str | Path | None = None) -> list[Mutan
             reason = f"no check {m.fails!r} in the suite"
         elif spec.severity != "must":
             reason = f"check {m.fails!r} is a SHOULD; only a MUST failure fails a capability"
-        elif spec.can_skip:
+        elif spec.can_skip_with(m.features):
             reason = f"check {m.fails!r} can skip (requires/skippable), so it proves nothing"
+        elif lacking := _undeclared(m):
+            reason = (
+                f"the mutant declares {', '.join(lacking)} but its subject does not, so the "
+                "check fails for a missing feature, not for the defect"
+            )
         elif status.get(m.fails) != "fail":
             reason = f"check {m.fails!r} did not fail (status {status.get(m.fails)})"
         out.append(MutantRun(capability, name, m.description, m.fails, failed, not reason, reason))
     return out
+
+
+def _undeclared(m: Any) -> list[str]:
+    """Features ``m`` declares that a subject from its factory does not declare itself."""
+    if not m.features:
+        return []
+    subject = m.factory()
+    try:
+        have = set(getattr(subject, "features", ()))
+    finally:
+        close = getattr(subject, "close", None)
+        if callable(close):
+            close()
+    return sorted(m.features - have)
