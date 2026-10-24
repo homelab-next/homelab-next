@@ -97,6 +97,6 @@ services:
     port: 443
     health: {kind: tcp}
     owner: platform-team
-    version: "2.8.4"
+    version: "2.11.7"
     tls: public
     public_hostname: portal.lab.example

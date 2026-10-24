@@ -127,6 +127,32 @@ and an entry that no longer excuses anything fails the lint.
   `validate_certs`/`verify_ssl`/`insecure_skip_verify`-style key turning verification off in YAML
   or JSON (role tasks are also covered by role-lint RL013). Allowlist:
   `tools/tls_verify.allow.yml`, or `tls-verify: allow <reason>` on the line.
+- `tools/caddy_lint.py` (F-23): over every Caddy config in the tree (`git ls-files`: Caddyfiles
+  and their templates and imports, markdown fences, Caddyfiles in YAML, Caddy JSON/YAML, the
+  `caddy` generator's output for each registry), in a config with a `forward_auth` anywhere
+  every site that runs it or proxies deletes the identity headers first at site level with no
+  matcher (`request_header -*authentik*`, as the generator writes it; the IdP's own site is
+  exempt), every `forward_auth` sits in a `route`, with no matcher, after a delete (site level
+  or in the route) of each header its `copy_headers` sets in every `-`/`_` spelling; no header directive sets, adds
+  or copies an identity header (`copy_headers A>B` is the way to rename one), or rewrites one
+  through a `*` field; no FastCGI `env` sets an
+  identity CGI variable or a client-chosen value (only `REMOTE_USER`, `AUTH_USER` and
+  `REDIRECT_REMOTE_USER` may take the IdP's answer, after the site-level strip: PHP rebuilds
+  `PHP_AUTH_*` from the client's `Authorization`; and if the app falls back to the
+  `Remote-User` header, strip `Remote-User`/`Remote_User` too, or use
+  `copy_headers X-Authentik-Username>Remote-User` with
+  `env REMOTE_USER {http.request.header.Remote-User}`); no `forward_auth` (or forward-auth site proxy)
+  dials a request placeholder (`dial`); what the lint cannot read (a heredoc, `{$ENV}` in
+  directive position, a header name that is a placeholder, an import outside the tree, a
+  `forward_auth` in a `.conf` nothing imports, a Python string or a caddy-docker-proxy label)
+  fails closed; and every Caddy pin (registry `impl: caddy`,
+  `caddy_*version` keys, any `.../caddy` image, Dockerfile `FROM`/`COPY --from` and `xcaddy
+  build`, `caddy=` packages, `go.mod`, `.env`) is 2.11.2 or later. With a `caddy` binary on PATH
+  (or `HNX_CADDY`) it also judges Caddy's own `caddy adapt` JSON; CI pins one and requires it,
+  and a local run without one says what it skipped. Exceptions: `caddy-lint: allow <reason>` on
+  the line, or `tools/caddy_lint.allow.yml` (a file path, the `rules` it excuses and a reason).
+  It guards against accidental misconfiguration: Caddy config authors are trusted and reviewed,
+  and deliberate obfuscation is left to review.
 - `tools/workstation_refs.py` (F-17): runtime configuration (roles, playbooks, inventory, compose,
   examples, generator templates, golden outputs) names no home directory, workstation path or
   host, and no role step runs on the Ansible control node. Allowlist:

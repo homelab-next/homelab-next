@@ -103,6 +103,12 @@ jobs:
   schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Caddy's own reading of every Caddyfile (caddy adapt) for the F-23 semantic check. Version
+      # and checksum are pinned together: bump both from the release's checksums file
+      # (caddy_<version>_checksums.txt, which publishes SHA-512).
+      CADDY_VERSION: "2.11.7"
+      CADDY_SHA512: "a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -130,6 +136,20 @@ jobs:
         run: python tools/dup_check.py .
       - name: TLS certificate verification never disabled (F-07)
         run: python tools/tls_verify_lint.py .
+      - name: install caddy (pinned release, checksum verified) for the F-23 semantic check
+        run: |
+          set -euo pipefail
+          archive="caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          base="https://github.com/caddyserver/caddy/releases/download"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" "$base/v${CADDY_VERSION}/${archive}"
+          echo "${CADDY_SHA512}  $RUNNER_TEMP/$archive" | sha512sum -c -
+          mkdir -p "$RUNNER_TEMP/caddy"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/caddy" caddy
+          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
+      - name: no Caddy config lets a client set its own identity headers, Caddy pinned >= 2.11.2 (F-23)
+        env:
+          HNX_CADDY_REQUIRED: "1"  # the semantic check must run here; a local run may skip it
+        run: python tools/caddy_lint.py .
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .
       - name: no private overlay, SOPS ciphertext or decryption key in the public tree (ADR-0021)
