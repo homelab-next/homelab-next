@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.modules.scope import (
+    ScopeMissing,
+    address_literals,
+    manifest_scope_problems,
+    scope_networks,
+    scope_problems,
+)
 
 Doc = dict[str, Any]
 
@@ -137,6 +144,7 @@ def module_problems(
         out.append("kind core: a core module lives in the public modules/ tree")
     if doc.get("replaced_by") == mid:
         out.append("replaced_by names the module itself")
+    out += manifest_scope_problems(doc)
     roles = _roles(doc)
     for r in roles:
         if not _named(r[5:], mid, "_"):
@@ -655,6 +663,16 @@ def site_problems(
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units)
     out += _config_problems(site, sel, grants)
+    out += scope_problems(site)
+    for m in sel.values():
+        for need in m["requires"].get("scope", []):
+            try:
+                scope_networks(site, m, need["part"])
+            except ScopeMissing:
+                out.append(
+                    f"{m['id']}: requires scope.{need['part']}, which the site leaves missing, "
+                    "empty or unusable (its reader fails closed)"
+                )
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
     #: registry services an egress svc: target can name: every selected slot, every instance, and
@@ -876,9 +894,10 @@ def _binding_problems(site: Doc, mods: dict[str, Doc], sel: dict[str, Doc]) -> l
 
 
 def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
-    """A selection's config values: declared keys only, and a secret-typed value is a secret in
-    the module's own namespace or one granted to it in grants.secrets (the same rule as a
-    manifest default, so an overlay value cannot read another module's secret)."""
+    """A selection's config values: declared keys only, no address literal (the scope block is the
+    one place for addresses), and a secret-typed value is a secret in the module's own namespace
+    or one granted to it in grants.secrets (the same rule as a manifest default, so an overlay
+    value cannot read another module's secret)."""
     places = [
         (f"{sec}.{mid}", mid, b.get("config", {}))
         for sec in SECTION.values()
@@ -896,6 +915,23 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
         for k, v in cfg.items():
             if k not in spec:
                 out.append(f"{where}.config.{k}: the module declares no such key")
+                continue
+            literal = None
+            # not scanned: integer, duration_s and boolean keys.  Their value is a number by
+            # schema, and any integer of 2**24 or more is also an IPv4 address (a byte count of
+            # 170000000 reads as one in 10/8), so scanning them would refuse ordinary sizes; a module
+            # that reads an address out of an integer key is a defect in that module
+            # (docs/modules.md, "The network scope")
+            if spec[k]["type"] not in ("integer", "duration_s", "boolean"):
+                text = str(v) if isinstance(v, int) and not isinstance(v, bool) else v
+                literal = address_literals(text) if isinstance(text, str) else None
+            if literal:
+                out.append(
+                    f"{where}.config.{k}: an address literal ({literal[0]}): a lab address "
+                    "belongs in the selection's scope block, which the module requires; an "
+                    "external endpoint (a resolver, an NTP server) is a hostname or a svc: "
+                    "reference"
+                )
                 continue
             secretish = isinstance(v, str) and v.lower().startswith("secret:")
             if spec[k]["type"] != "secret":
