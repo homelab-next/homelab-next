@@ -404,9 +404,10 @@ def test_cli_lint_exit_codes(tmp_path, capsys):
 
 def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
     doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
-    doc["capabilities"]["cap:notify"] = ["read"]
+    # a site capability the packaged table does not know (a packaged one may not be classed down)
+    doc["capabilities"]["cap:site-notes"] = ["read"]
     _write(tmp_path / "classes.yml", doc)
-    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:notify"]})
+    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:site-notes"]})
     assert (
         cli.main(
             [

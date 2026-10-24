@@ -349,6 +349,15 @@ def test_a_classes_file_cannot_class_a_packaged_grant_down(tmp_path, kind, name,
     assert "egress" in ToolClasses.load(tmp_path / "classes.yml").classify(kind, name)
 
 
+def test_a_classes_file_may_drop_a_class_that_forbids_nothing(tmp_path):
+    """Forbidding more: cap:lake-query classed egress instead of read loses only read."""
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["capabilities"]["cap:lake-query"] = ["egress"]
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
+    got = ToolClasses.load(tmp_path / "classes.yml").classify("capabilities", "cap:lake-query")
+    assert list(got) == ["egress"]
+
+
 # ---------------------------------------------------------------- lint
 def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
     from homelabnext.agent import readers
