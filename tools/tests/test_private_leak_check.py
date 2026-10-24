@@ -68,6 +68,18 @@ SOPS_META = (
     "    version: 3.9.0\n"
 )
 SOPS_FILE = f"wan:\n    address: {enc()}\n    port_unencrypted: 51820\n" + SOPS_META
+SOPS_JSON = json.dumps(  # what `sops --input-type binary` writes, under any file name
+    {
+        "data": enc(b"[Interface]"),
+        "sops": {
+            "age": [{"recipient": "age1fake", "enc": "x"}],
+            "lastmodified": "2026-10-21T00:00:00Z",
+            "mac": enc(b"fake-mac"),
+            "version": "3.9.0",
+        },
+    }
+)
+SOPS_DOTENV = f"WG_KEY={enc()}\nsops_mac={enc(b'fake-mac')}\nsops_version=3.9.0\n"
 
 
 def overlay(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -495,6 +507,11 @@ def test_public_tree_with_only_the_skeleton_passes(tmp_path):
         ("ansible/inventory/production/hosts.yml", "all: {}\n", "overlay-path"),
         (".sops.yaml", SOPS_RULES, "sops-config"),
         ("examples/thing.yml", SOPS_FILE, "ciphertext"),
+        # sops writes any format under any name: the check reads content, not the suffix
+        ("conf/wg0.conf.enc", SOPS_JSON, "ciphertext"),
+        ("conf/secrets.toml", SOPS_JSON, "ciphertext"),
+        ("conf/app.secret", SOPS_FILE, "ciphertext"),
+        ("conf/app.conf", SOPS_DOTENV, "ciphertext"),
         ("keys/ops.agekey", "x\n", "key-file"),
     ],
 )
@@ -505,6 +522,33 @@ def test_public_tree_with_private_material_fails(tmp_path, rel, text, rule):
     p.write_text(text)
     assert rule in rules(plc.check_public(root))
     assert run("public", str(root)).returncode == 1
+
+
+@needs_skeleton
+@pytest.mark.parametrize("edit", ["delete", "empty", "narrow"])
+def test_the_change_that_adds_a_private_path_cannot_switch_the_rule_off(tmp_path, edit):
+    root = public_tree(tmp_path)
+    (root / "lab").mkdir()
+    (root / "lab" / "hosts.yml").write_text("all: {}\n")
+    m = root / "examples" / "private-overlay" / ".hnx-private-overlay.yml"
+    if edit == "delete":
+        m.unlink()
+    else:
+        keep = ": []\n" if edit == "empty" else ":\n  - ansible/inventory/production/\n"
+        text = m.read_text()
+        listed = ":\n  - lab/\n  - ansible/inventory/production/\n"
+        assert listed in text
+        m.write_text(text.replace(listed, keep))
+    found = plc.check_public(root)
+    assert any(f.rule == "overlay-path" and f.path == "lab/hosts.yml" for f in found), found
+    if edit != "delete":  # a marker that leaves out a pinned path is a finding of its own
+        assert "private-paths" in rules(found)
+
+
+@needs_skeleton
+def test_the_skeleton_marker_names_every_pinned_private_path():
+    declared = plc.read_marker(SKELETON / ".hnx-private-overlay.yml")["private_paths"]
+    assert set(plc.PRIVATE_PATHS) <= {p.rstrip("/") + "/" for p in declared}
 
 
 @needs_skeleton

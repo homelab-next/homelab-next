@@ -3,8 +3,9 @@
 #
 # `python3 hnx/tools/private_leak_check.py private .` refuses to run on a tree without this file:
 # its rules allow real addresses and host names, so they must never run on the public repository
-# by accident.  The public repository reads `private_paths` below from this skeleton to fail its
-# own CI if any of those paths is ever committed there.
+# by accident.  The public repository's CI fails if any `private_paths` entry below is ever
+# committed there; `lab/` and `ansible/inventory/production/` are pinned in the check itself, so
+# this list may add paths but never drop those two.
 hnx_private_overlay: 1
 
 # Only the public skeleton says this.  Delete the line in your private copy.

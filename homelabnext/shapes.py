@@ -35,13 +35,41 @@ VERSION_CONTEXT_RE = re.compile(
 )
 
 
+#: the separators inside a name: a plain deny-list term matches across any run of them, or none
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
+
+
+def _words(part: str) -> str:
+    words = [re.escape(w) for w in _NAME_SEPARATORS.split(part) if w]
+    return r"[-_.]*".join(words)
+
+
+def _term(raw: str) -> str:
+    """The regex of a plain deny-list term (see :func:`compile_denylist`)."""
+    parts = [_words(p) for p in raw.split() if _words(p)]
+    if not parts:
+        raise re.error(f"{raw!r} has no letters or digits")
+    # not after a letter or digit; not before a letter, and when the term itself ends in a digit
+    # (an address, a number) not before another digit either: name2 is a variant of name, but
+    # a longer number is not a variant of a number.  Whitespace matches only where the term
+    # itself has it.
+    end = r"(?![^\W_])" if raw.rstrip()[-1:].isdigit() else r"(?![^\W\d_])"
+    return r"(?<![^\W_])" + r"\s+".join(parts) + end
+
+
 def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
     """Parse deny-list lines into ``[(line number, regex)]``.
 
-    One term per line; blank lines and ``#`` comments are skipped.  A plain term matches as a
-    whole word (``-`` counts as part of a word), case-insensitively; ``re:<regex>`` is a raw
-    case-insensitive regex.  Raises ``ValueError`` naming the line of a bad regex.  An empty
-    result is returned as is: whether an empty list is acceptable is the caller's decision.
+    One term per line; blank lines and ``#`` comments are skipped.  A plain term matches
+    case-insensitively wherever it is not part of a longer run of letters and digits: ``-``,
+    ``_`` and ``.`` are separators, not part of a word, so ``name`` also matches ``name-core``,
+    ``name_core``, ``name.example`` and ``name2`` (a term ending in a digit is not extended by
+    more digits).  The ``-``, ``_`` and ``.`` inside a term match any run of those separators, or
+    none, so ``some-name`` also matches ``some_name`` and ``somename``; whitespace matches only
+    where the term itself has whitespace, so ``some-name`` does not match the phrase
+    ``some name``.  ``re:<regex>`` is a raw case-insensitive
+    regex.  Raises ``ValueError`` naming the line of a bad regex.  An empty result is returned
+    as is: whether an empty list is acceptable is the caller's decision.
     """
     terms: list[tuple[int, re.Pattern[str]]] = []
     for lineno, raw in enumerate(lines, 1):
@@ -49,10 +77,7 @@ def compile_denylist(lines: Iterable[str]) -> list[tuple[int, re.Pattern[str]]]:
         if not raw or raw.startswith("#"):
             continue
         try:
-            if raw.startswith("re:"):
-                rx = re.compile(raw[3:], re.IGNORECASE)
-            else:
-                rx = re.compile(r"(?<![\w-])" + re.escape(raw) + r"(?![\w-])", re.IGNORECASE)
+            rx = re.compile(raw[3:] if raw.startswith("re:") else _term(raw), re.IGNORECASE)
         except re.error as exc:
             raise ValueError(f"deny-list line {lineno}: bad regex ({exc})") from exc
         terms.append((lineno, rx))

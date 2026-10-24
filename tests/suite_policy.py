@@ -18,6 +18,17 @@ not anchored).  Each pattern names a legitimate, visible cause: an optional extr
 is absent, the platform cannot run the test.  Any other skip -- including one with no reason -- is
 turned into a failure.  ``xfail`` and ``-m`` deselection are not skips.
 
+**Required tools.**  A test that needs an external tool asks for it through one helper,
+:func:`require_tool` (``go_toolchain`` and the docker and linter checks use it): it returns the
+tool's path, or skips with ``"<tool> is not installed"`` (a registered skip reason).  Where the
+environment says the tool must be there, the helper fails the test instead of skipping, so a
+broken install cannot pass as a skip.  ``HNX_REQUIRE_TOOLS`` names the required tools
+(comma-separated, e.g. ``actionlint,zizmor,nats-server,docker,go``); ``HNX_REQUIRE_GO=1``, the
+older switch for Go, still means ``go``.  The decision is made by the helper from the tool's
+name, not by reading the wording of a skip afterwards: a test that skips for a tool on its own
+(its own ``skipif``, an early return) is outside the contract, so every such test goes through
+the helper (``tests/gates/test_suite_policy.py`` checks the tools CI requires).
+
 **Quarantine.**  ``@pytest.mark.quarantine(owner="team-or-handle", until="YYYY-MM-DD",
 reason="...")`` lets a known-flaky test keep running without breaking the build (it becomes a
 non-strict ``xfail``) for a bounded time.  The owner, the date and the reason are required; a date
@@ -30,7 +41,8 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable
+import shutil
+from collections.abc import Callable, Iterable
 from datetime import date
 from pathlib import Path
 
@@ -131,6 +143,36 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def _state(config: pytest.Config) -> dict:
     return config.stash[_STATE]
+
+
+def required_tools(env: dict[str, str] | None = None) -> set[str]:
+    """The tools the environment requires: ``HNX_REQUIRE_TOOLS`` (comma-separated), plus ``go``
+    when ``HNX_REQUIRE_GO=1``."""
+    env = os.environ if env is None else env
+    tools = {t.strip() for t in env.get("HNX_REQUIRE_TOOLS", "").split(",") if t.strip()}
+    if env.get("HNX_REQUIRE_GO") == "1":
+        tools.add("go")
+    return tools
+
+
+def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
+    """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
+    PATH).  Missing: skip with ``"<name> is not installed"``, or fail when the environment
+    requires the tool (:func:`required_tools`)."""
+    path = shutil.which(name)
+    ok = (path is not None) if available is None else bool(path and available())
+    if ok:
+        return path or name
+    if name in required_tools():
+        switch = (
+            "HNX_REQUIRE_GO=1"
+            if name == "go" and os.environ.get("HNX_REQUIRE_GO") == "1"
+            else "HNX_REQUIRE_TOOLS"
+        )
+        pytest.fail(
+            f"{name} is not on PATH (or not usable), and {switch} requires it", pytrace=False
+        )
+    pytest.skip(f"{name} is not installed")
 
 
 def _silent_skip(config: pytest.Config, rep) -> None:
