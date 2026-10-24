@@ -48,8 +48,11 @@ on that stand-in, both as recorded and with the proposed fixes turned on.
 ## Holds: capacity is held only by live work
 
 The contract requires that a slot, lease or token reservation lives only as long as the worker it
-was granted to (clauses a-e in `conformance/protocols/orchestration.py`, ADR-0029). Five MUST
-checks hold an implementation to it: `cancel-running-run-frees-capacity`,
+was granted to (clauses a-e in `conformance/protocols/orchestration.py`, ADR-0029). A run between
+attempts (a failed attempt, a retry backing off or waiting for a backend) is live: liveness is the
+orchestrator's record of the run's worker, never whether an attempt's process exists at that moment,
+and `retrying-run-keeps-its-hold` checks that a retrying run stays `running` with its hold. Five
+more MUST checks hold an implementation to the release side: `cancel-running-run-frees-capacity`,
 `killed-worker-fails-run-and-frees-capacity`, `deadline-expiry-frees-capacity`,
 `restart-reconciles-runs-and-capacity` and `capacity-returns-to-zero-after-churn`. Each needs
 `admission`; the kill and restart ones also need `fault-injection`, and the deadline one

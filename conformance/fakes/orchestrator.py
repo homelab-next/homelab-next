@@ -161,11 +161,15 @@ class FakeOrchestrator:
                 r["result"], r["error"] = result, error
                 if error is None:
                     break
+                self._attempt_failed(run_id)
         with self._cv:
             if self._accepts(run_id, token):
                 r["state"] = "succeeded" if r["error"] is None else "failed"
                 self._release(run_id, "done")
             self._cv.notify_all()
+
+    def _attempt_failed(self, run_id: str) -> None:
+        """An attempt failed and the run may retry: it stays live and keeps its hold."""
 
     def _stop(self, run_id: str, state: str, error: str | None, *, why: str) -> None:
         r = self._runs[run_id]
@@ -306,3 +310,16 @@ class LeakOnFailureOrchestrator(FakeOrchestrator):
             self._holds[run_id] = -1
         else:
             super()._release(run_id, why)
+
+
+class AttemptScopedHoldOrchestrator(FakeOrchestrator):
+    """Defect: the hold belongs to an attempt, not to the run.  A failed attempt returns the slot
+    and the retry runs holding nothing, as when liveness is judged by an attempt's process: the
+    run is live between attempts, but admission no longer counts it."""
+
+    def _attempt_failed(self, run_id: str) -> None:
+        self._holds.pop(run_id, None)
+        self._cv.notify_all()
+
+    def _live(self, run_id: str, token: int) -> bool:
+        return self._runs[run_id]["state"] == "running"
