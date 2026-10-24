@@ -3,7 +3,7 @@
 
 Exit codes: 0 ok, 1 an invalid guest set (or a failed ``baselines --check``), 2 a usage error or an
 input that cannot be read or parsed (the site, the guest directory or a guest, policies, nodes,
-keys or baselines file); ``plan --exit-code`` also exits 2 when there are changes."""
+keys or baselines file), 3 ``plan --exit-code`` found changes (as ``hnx site plan --exit-code``)."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(pl)
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
     pl.add_argument("--against", required=True, help="directory holding the previous render")
-    pl.add_argument("--exit-code", action="store_true", help="exit 2 when there are changes")
+    pl.add_argument("--exit-code", action="store_true", help="exit 3 when there are changes")
     b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
     _common(b)
     b.add_argument("--json", action="store_true", help="print the report as JSON")
@@ -158,7 +158,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     p = make_plan(read_tree(args.against), files)
     print(f"plan: {p.summary()}")
     print(p.diff, end="")
-    return 2 if (args.exit_code and not p.empty) else 0
+    # 3, not 2: 2 is an input that cannot be read, which must never read as "changes pending"
+    return 3 if (args.exit_code and not p.empty) else 0
 
 
 if __name__ == "__main__":
