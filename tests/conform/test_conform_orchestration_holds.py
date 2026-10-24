@@ -133,3 +133,53 @@ def test_more_defects_the_holds_checks_catch(defect, check, monkeypatch):
     monkeypatch.setattr(defect, "cancel_grace_s", 0.2)
     (res,) = run_checks(suite.SUITE, defect, only=[check])
     assert res.status == "fail", res
+
+
+class _RunTableCapacity(FakeOrchestrator):
+    """``capacity()`` read from the run table (the runs that are ``running``), not from the slots
+    admission counts: it looks clean whatever leaked."""
+
+    leak_on: tuple[str, ...] = ()
+
+    def capacity(self):
+        with self._cv:
+            live = frozenset(r for r in self._holds if self._runs[r]["state"] == "running")
+            return Capacity(self.slots, len(live), live)
+
+    def _release(self, run_id, why):
+        failed = why == "done" and self._runs[run_id]["state"] == "failed"
+        if why in self.leak_on or (failed and "failure" in self.leak_on):
+            self._holds[run_id] = -1  # the slot is never returned
+        else:
+            super()._release(run_id, why)
+
+    def _reconcile(self):
+        if "restart" not in self.leak_on:
+            return super()._reconcile()
+        for run_id in self._holds:
+            self._holds[run_id] = -1
+        for r in self._runs.values():
+            if r["state"] == "running":
+                r["state"], r["error"] = "failed", "orchestrator restarted: worker lost"
+        self._cv.notify_all()
+
+
+@pytest.mark.parametrize(
+    ("leak", "check"),
+    [
+        ("kill", "killed-worker-fails-run-and-frees-capacity"),
+        ("deadline", "deadline-expiry-frees-capacity"),
+        ("restart", "restart-reconciles-runs-and-capacity"),
+        ("failure", "capacity-returns-to-zero-after-churn"),
+    ],
+)
+def test_a_leak_on_one_path_behind_a_run_table_capacity_fails_that_paths_check(leak, check):
+    """A slot leaked on one path only (a crash, a timeout, a restart, a failed attempt) while
+    ``capacity()`` reports from the run table passes every report-based assertion; the check of
+    that path must still fail it, by effect: freed capacity does not admit new runs."""
+    defect = type(f"LeakOn{leak.title()}", (_RunTableCapacity,), {"leak_on": (leak,)})
+    (res,) = run_checks(suite.SUITE, defect, only=[check])
+    assert res.status == "fail" and "freed capacity does not admit" in res.evidence, res
+    # and the same capacity() with no leak passes every holds check
+    res = run_checks(suite.SUITE, _RunTableCapacity, only=HOLDS)
+    assert {r.check: r.status for r in res} == dict.fromkeys(HOLDS, "pass")

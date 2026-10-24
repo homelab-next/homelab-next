@@ -54,10 +54,11 @@ checks hold an implementation to it: `cancel-running-run-frees-capacity`,
 `restart-reconciles-runs-and-capacity` and `capacity-returns-to-zero-after-churn`. Each needs
 `admission`; the kill and restart ones also need `fault-injection`, and the deadline one
 `deadline`. Each of the four that stop a run also requires that the stopped worker's result never
-lands after its body returns. The cancel check also requires a live, still-blocked run to keep
-its hold for two graces (a timer standing in for the release fails) and, where a limit is
-reported, the freed capacity to admit `limit` new runs promptly (a `capacity()` that reports free
-slots admission still counts fails). A restart must end
+lands after its body returns. Each of the five ends, where a limit is reported, by requiring the
+freed capacity to admit `limit` new runs promptly: a `capacity()` that reports free slots
+admission still counts fails, whichever path leaked the slot. The cancel check also requires a
+live, still-blocked run to keep its hold for two graces (a timer standing in for the release
+fails). A restart must end
 a run that was executing; it may not run it again, since its old worker may still be executing.
 An implementation's `cancel_grace_s` may not exceed `MAX_CANCEL_GRACE_S` (10 s): a longer grace
 would let "released when the body returned" pass for "released on cancel".

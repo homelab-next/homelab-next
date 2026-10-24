@@ -296,10 +296,12 @@ def _late_result_discarded(o: Any, rid: str, gate: _Gate, t: threading.Thread) -
 
 
 def _admits(o: Any) -> None:
-    """Capacity by effect, not by report: with a limit, ``limit`` new runs all start promptly
-    (after a cancel: a ``capacity()`` that lies does so whatever freed the slot).  A
-    ``capacity()`` that says the slots are free while admission still counts them fails here.
-    Without a limit (the controller reports none) only the report can be judged."""
+    """Capacity by effect, not by report: with a limit, ``limit`` new runs all start promptly.
+    A ``capacity()`` that says the slots are free while admission still counts them fails here.
+    Every holds check ends with it, because a leak is specific to the path that stopped the run
+    (a slot not returned on the timeout or crash path) while a ``capacity()`` read from the run
+    table looks clean on all of them.  Without a limit (the controller reports none) only the
+    report can be judged."""
     limit, _, _ = _capacity(o)
     if limit is None:
         return
@@ -317,8 +319,9 @@ def _admits(o: Any) -> None:
         )
     finally:
         gate.release.set()
-    for rid in rids:
-        assert o.wait(rid, timeout=START_S).state == "succeeded"
+    for rid in rids:  # released, each ends at once (a slot taken back by a timer never does)
+        st = o.wait(rid, timeout=bound)
+        assert st.state == "succeeded", f"a new run released by its body ended {st} in {bound}s"
 
 
 @SUITE.check(
@@ -360,6 +363,7 @@ def _(o):
         _late_result_discarded(o, rid, gate, t)
     finally:
         gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
@@ -385,6 +389,7 @@ def _(o):
         _late_result_discarded(o, rid, gate, t)
     finally:
         gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
@@ -414,6 +419,7 @@ def _(o):
         _late_result_discarded(o, rid, gate, t)
     finally:
         gate.release.set()
+    _admits(o)
 
 
 @SUITE.check(
@@ -453,6 +459,7 @@ def _(o):
         )
     finally:
         gate.release.set()
+    _admits(o)
 
 
 def make_fake():
