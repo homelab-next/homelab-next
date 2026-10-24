@@ -336,9 +336,11 @@ fix-check:
 	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
-# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
+# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown;
+# filelock and setuptools since 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940
+# and GHSA-xmj3-9gf7-h52w).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= ruff pyarrow certifi
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi filelock setuptools
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
 	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
