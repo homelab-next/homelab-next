@@ -153,6 +153,18 @@ class ToolClasses:
                     f"{p}: broker_only leaves out {lost}, which the packaged table lets a profile "
                     "hold only through the broker (a table may forbid more, never less)"
                 )
+            for kind in ("capabilities", "tiers"):
+                mine = doc.get(kind) if isinstance(doc.get(kind), Mapping) else {}
+                for name, was in sorted((packaged.get(kind) or {}).items()):
+                    lost = (
+                        sorted(set(was or ()) - set(mine.get(name) or ())) if name in mine else []
+                    )
+                    if lost:
+                        raise SpecError(
+                            f"{p}: {kind} entry {name} leaves out {lost}, which the packaged "
+                            "table classes it (a table may class more, never less; leave it out "
+                            "and it is unclassified, which is refused)"
+                        )
         from homelabnext.mcp import servers
 
         try:

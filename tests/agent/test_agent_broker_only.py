@@ -331,6 +331,24 @@ def test_a_classes_file_cannot_narrow_broker_only(tmp_path, capsys):
         ToolClasses({**doc, "mcp": {}})
 
 
+@pytest.mark.parametrize(
+    ("kind", "name", "down"),
+    [("capabilities", "cap:dns", ["read"]), ("capabilities", "cap:hypervisor", []),
+     ("tiers", "privileged", ["read"])],
+)  # fmt: skip
+def test_a_classes_file_cannot_class_a_packaged_grant_down(tmp_path, kind, name, down):
+    """VERIFY1: the table "may forbid more, never less", but an overlay copy could class cap:dns
+    (or cap:hypervisor, or the privileged tier) read, and an actor holding it then passed."""
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc[kind][name] = down
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
+    with pytest.raises(SpecError, match=f"{kind} entry {name} leaves out"):
+        ToolClasses.load(tmp_path / "classes.yml")
+    doc[kind][name] = sorted({*yaml.safe_load(DEFAULT_CLASSES.read_text())[kind][name], "egress"})
+    (tmp_path / "classes.yml").write_text(yaml.safe_dump(doc))
+    assert "egress" in ToolClasses.load(tmp_path / "classes.yml").classify(kind, name)
+
+
 # ---------------------------------------------------------------- lint
 def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
     from homelabnext.agent import readers

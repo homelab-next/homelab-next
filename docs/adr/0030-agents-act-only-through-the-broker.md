@@ -33,7 +33,8 @@ observable ran one test file, so none of this could turn it red.
    that changes something elsewhere (chat, mail, a notification, an HTTP request), an effect the
    broker's notify actions already carry; reading the web stays `egress`. A table passed with
    `--classes` may list more, never fewer (the loader refuses one that drops a listed class, as
-   for `reader_forbidden`), and an empty list is refused.
+   for `reader_forbidden`, or that classes a packaged capability or tier without one of its
+   packaged classes), and an empty list is refused.
 2. **The rule `actors-act-via-broker` applies to every profile, reader or not**
    (`homelabnext.agent.readers.broker_problems`, beside the reader rule):
    - a granted MCP server with a tool in a `broker_only` class is refused unless it is **the

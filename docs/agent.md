@@ -146,7 +146,8 @@ through allowlisted broker actions (G-04).
   table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
   its own is refused (it would class servers by hand and skip the catalog's status and data-tier
   rules), and so is one whose `reader_forbidden` or `broker_only` leaves out a class the packaged
-  table lists (a table may forbid more, never less).
+  table lists, or that classes one of the packaged table's capabilities or tiers without a class
+  the packaged table gives it (`cap:dns: [read]`): a table may forbid more, never less.
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
