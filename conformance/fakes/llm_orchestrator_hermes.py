@@ -26,6 +26,7 @@ repository's environment.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import sys
 import urllib.error
@@ -77,9 +78,16 @@ def decode(prompt: str) -> dict[str, Any] | None:
     return None
 
 
+@functools.cache
+def _opener() -> urllib.request.OpenerDirector:
+    """One proxy-free opener per process: building one loads the CA bundle, and the conformance
+    run calls this stand-in in-process for every job."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
     # the handler host is always loopback; never route it through a proxy from the environment
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = _opener()
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),

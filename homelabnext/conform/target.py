@@ -179,6 +179,18 @@ def adapter_origin(dotted: str, root: str | Path | None = None) -> str | None:
     return spec.origin if spec is not None else None
 
 
+def binding_features(binding: Binding, root: str | Path | None = None) -> tuple[str, ...]:
+    """The features a run of ``binding`` declares: the target file's, or for a built-in
+    ``broken:<mutant>`` the mutant's own :attr:`~homelabnext.conform.core.Mutant.features`."""
+    builtin = binding.builtin or ""
+    if builtin != "broken" and not builtin.startswith("broken:"):
+        return tuple(binding.features)
+    mutants = load_module(binding.capability, root).MUTANTS
+    _, _, name = (binding.builtin or "").partition(":")
+    m = mutants.get(name or next(iter(mutants), ""))
+    return tuple(sorted(m.features)) if m is not None else ()
+
+
 def make_factory(
     binding: Binding, suite: Suite | None = None, root: str | Path | None = None
 ) -> Callable[[], Any]:
