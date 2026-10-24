@@ -465,10 +465,14 @@ def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path)
     c = subprocess.run(
         ["docker", "compose", "-f", str(tmp_path / "app" / "docker-compose.yml"), "config",
          "--format", "json"],
-        capture_output=True, text=True, env={**os.environ, "HOME": "/root", "X": "/", "Y": "/"},
+        capture_output=True, text=True,
+        # HOME is a value an interpolation would show; DOCKER_CONFIG keeps the docker CLI's own
+        # config and plugins where they were (a HOME it cannot read hides the compose plugin)
+        env={**os.environ, "HOME": str(tmp_path / "home"), "X": "/", "Y": "/",
+             "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", os.path.expanduser("~/.docker"))},
     )  # fmt: skip
     assert c.returncode == 0, c.stderr
-    # compose prints a literal `$` re-escaped as `$$`; an interpolated value would be /root or /
+    # compose prints a literal `$` re-escaped as `$$`; an interpolated value would be the HOME or /
     got = json.loads(c.stdout)["services"]["web"]
     assert got["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
     assert got["command"] == ["sh", "-c", "echo $$PATH $${Y:-/}"]
