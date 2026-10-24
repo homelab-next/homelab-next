@@ -1,0 +1,173 @@
+# SPDX-License-Identifier: Apache-2.0
+"""docs/interfaces.md: "Exit codes everywhere: 0 ok, 1 a check failed, 2 misconfiguration or bad
+input".  A file that is missing or cannot be parsed is bad input, never "a check failed", and is
+reported in one line, never a traceback; sibling commands must agree, or a script that tells
+"the registry is wrong" from "the path is wrong" by exit code is right for only some of them."""
+
+import pathlib
+import shutil
+
+import pytest
+
+from homelabnext import cli
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
+# commands that read one document named on the command line
+COMMANDS = [
+    ["registry", "validate"],
+    ["site", "validate"],
+    ["swap", "status"],
+    ["status", "views", "check"],
+    ["models", "store", "validate"],
+    ["broker", "validate"],
+]
+MALFORMED = {"bad.yml": b"a: [1,\n", "bad.json": b"{not json"}
+
+
+@pytest.mark.parametrize("cmd", COMMANDS, ids=" ".join)
+def test_a_missing_file_is_exit_2(tmp_path, capsys, cmd):
+    assert cli.main([*cmd, str(tmp_path / "nosuch.yml")]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and err.strip()
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED))
+@pytest.mark.parametrize("cmd", COMMANDS, ids=" ".join)
+def test_a_file_that_does_not_parse_is_exit_2(tmp_path, capsys, cmd, name):
+    (tmp_path / name).write_bytes(MALFORMED[name])
+    assert cli.main([*cmd, str(tmp_path / name)]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and err.strip()
+
+
+@pytest.mark.parametrize("cmd", COMMANDS, ids=" ".join)
+def test_a_readable_but_invalid_document_is_not_exit_2(tmp_path, capsys, cmd):
+    """The positive control: each command reaches its loader and validator, so a usage error
+    (argparse's own exit 2) can never be what satisfies the tests above."""
+    shutil.copy(REPO / "examples" / "services.yml", tmp_path / "services.yml")  # site's registry
+    (tmp_path / "doc.yml").write_text('{"a": 1}\n')  # parses as JSON and as YAML
+    assert cli.main([*cmd, str(tmp_path / "doc.yml")]) == 1
+    assert "Traceback" not in capsys.readouterr().err
+
+
+# hnx guests reads a directory and a --site file; each can be missing or not parse
+GUESTS = REPO / "tests" / "compute" / "fleet"
+SITE = REPO / "tests" / "compute" / "site.yml"
+
+
+def _guests(capsys, directory, site):
+    rc = cli.main(["guests", "validate", str(directory), "--site", str(site)])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    return rc, err
+
+
+def test_guests_validate_reads_a_good_fleet(capsys):
+    assert _guests(capsys, GUESTS, SITE)[0] == 0
+
+
+@pytest.mark.parametrize("name", ["nosuch.yml", *sorted(MALFORMED)])
+def test_guests_with_a_bad_site_file_is_exit_2(tmp_path, capsys, name):
+    if name in MALFORMED:
+        (tmp_path / name).write_bytes(MALFORMED[name])
+    rc, err = _guests(capsys, GUESTS, tmp_path / name)
+    assert rc == 2 and err.strip()
+
+
+def test_guests_with_a_missing_directory_is_exit_2(tmp_path, capsys):
+    rc, err = _guests(capsys, tmp_path / "nosuch", SITE)
+    assert rc == 2 and "not a directory" in err
+
+
+@pytest.mark.parametrize("name", ["_backup_policies.yml", "_nodes.yml", "_baselines.yml"])
+def test_guests_with_a_side_file_that_does_not_parse_is_exit_2(tmp_path, capsys, name):
+    fleet = tmp_path / "fleet"
+    shutil.copytree(GUESTS, fleet)
+    (fleet / name).write_bytes(MALFORMED["bad.yml"])
+    rc, err = _guests(capsys, fleet, SITE)
+    assert rc == 2 and name in err
+
+
+def test_guests_with_a_guest_file_that_does_not_parse_is_exit_2(tmp_path, capsys):
+    fleet = tmp_path / "fleet"
+    shutil.copytree(GUESTS, fleet)
+    (fleet / "broken.yml").write_bytes(MALFORMED["bad.yml"])
+    rc, err = _guests(capsys, fleet, SITE)
+    assert rc == 2 and "broken.yml: unreadable YAML" in err
+
+
+def test_guests_with_an_invalid_but_readable_guest_is_a_failed_check(tmp_path, capsys):
+    fleet = tmp_path / "fleet"
+    shutil.copytree(GUESTS, fleet)
+    (fleet / "broken.yml").write_text("id: broken\n")  # parses; fails the schema
+    rc, err = _guests(capsys, fleet, SITE)
+    assert rc == 1 and "broken.yml" in err
+
+
+def test_an_invalid_but_readable_registry_is_still_a_failed_check(tmp_path, capsys):
+    (tmp_path / "services.yml").write_text("schema_version: '2.0'\nservices: 3\n")
+    assert cli.main(["registry", "validate", str(tmp_path / "services.yml")]) == 1
+
+
+# commands that read a document named on the command line beside other arguments: each case is
+# (argv before the document, argv after it, files to write first, the readable control's exit)
+REGISTER_OK = (
+    "version: 1\ncriteria:\n- id: F-01\n  statement: A check that always holds.\n"
+    "  evidence: auto\n  observable: 'true'\n  expected: exit 0\n"
+    "  remediation: Nothing to do; this criterion always holds.\n"
+)
+SIBLINGS = {
+    "models serving check": (["models", "serving", "check"], ["out"], {}, '{"a": 1}\n', 1),
+    "invariants run": (
+        ["invariants", "run"],
+        ["--no-notify", "--out", "res.json"],
+        {},
+        REGISTER_OK,
+        0,
+    ),
+    "agent compile": (
+        ["agent", "compile", "--library", "lib.yml"],
+        [],
+        {"lib.yml": "parts: {a: a.md}\n"},
+        '{"id": "x"}\n',
+        1,
+    ),
+}
+
+
+def _sibling(tmp_path, monkeypatch, capsys, key, doc):
+    pre, post, files, _, _ = SIBLINGS[key]
+    monkeypatch.chdir(tmp_path)
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    rc = cli.main([*pre, doc, *post])
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    return rc, err
+
+
+@pytest.mark.parametrize("key", sorted(SIBLINGS))
+def test_a_sibling_with_a_readable_document_reaches_its_check(tmp_path, monkeypatch, capsys, key):
+    (tmp_path / "doc.yml").write_text(SIBLINGS[key][3])
+    assert _sibling(tmp_path, monkeypatch, capsys, key, "doc.yml")[0] == SIBLINGS[key][4]
+
+
+@pytest.mark.parametrize("name", ["nosuch.yml", *sorted(MALFORMED)])
+@pytest.mark.parametrize("key", sorted(SIBLINGS))
+def test_a_sibling_with_a_missing_or_malformed_document_is_exit_2(
+    tmp_path, monkeypatch, capsys, key, name
+):
+    if name in MALFORMED:
+        (tmp_path / name).write_bytes(MALFORMED[name])
+    rc, err = _sibling(tmp_path, monkeypatch, capsys, key, name)
+    assert rc == 2 and name in err
+
+
+def test_invariants_run_with_unreadable_previous_results_is_exit_2(tmp_path, monkeypatch, capsys):
+    """`--out` is read back as the previous run for paging: a truncated file there (a full disk, a
+    killed run) printed a JSONDecodeError traceback with exit 1, a failed fleet, every hour after."""
+    (tmp_path / "doc.yml").write_text(REGISTER_OK)
+    (tmp_path / "res.json").write_text('{"results": ')
+    rc, err = _sibling(tmp_path, monkeypatch, capsys, "invariants run", "doc.yml")
+    assert rc == 2 and "res.json" in err

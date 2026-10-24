@@ -171,7 +171,8 @@ jobs:
   # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
   coverage:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # one pytest per group of units, Python subprocesses measured too: slower than the old single run
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -674,6 +675,8 @@ jobs:
         with:
           python-version: "3.12"
           extras: test,ansible  # a fix to an ansible plugin proves its test like any other
+          # a register criterion's test may run the tools its observable needs (Q-06)
+          packages: ruff pip-audit
       # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass); the
       # pinned GO_VERSION, which switches to a newer toolchain a module's go.mod asks for
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0

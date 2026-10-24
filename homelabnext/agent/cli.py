@@ -33,10 +33,12 @@ Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets, read
 data_tier, model_role}}}``, owned and reviewed separately from the specs (``data_tier`` and
 ``model_role`` are attested there: a profile must match, and only an attested ``local-only``
 profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
-Exit codes: 0 ok, 1 refused (missing part, ceiling, reader, broker or budget violation, bad
-input; for ``lint``, a reader holding an acting tool, a profile acting other than through the
-broker, or no profile found at all), 3 (``pack`` only) the pack
-was assembled but is ``deferred``.  ``prompts lint`` and ``injection`` exit 1 on any problem,
+Exit codes: 0 ok, 1 refused (missing part, ceiling, reader, broker or budget violation, an
+invalid spec, policy, lock, manifest or inputs document; for ``lint``, a reader holding an acting
+tool, a profile acting other than through the broker, or no profile found at all), 2 a usage
+error or a spec, library, policy, lock, manifest, inputs, profile or broker file that cannot be
+read or parsed, 3 (``pack`` only) the pack was assembled but is ``deferred``.  ``prompts lint``
+and ``injection`` exit 1 on any problem,
 instruction-follow, error or stale report.  ``--classes FILE`` replaces the packaged
 capability-class table (``homelabnext/agent/tool_classes.yml``) for ``compile``, ``verify`` and
 ``lint``; its ``mcp`` section is always the MCP catalog's (a table with its own is refused).
@@ -62,13 +64,20 @@ from .readers import RULES, ToolClasses, lint_paths
 from .schemas import schema_errors
 
 
+class _Unreadable(Exception):
+    """An input document cannot be read or parsed: bad input, exit 2 (docs/interfaces.md)."""
+
+
 def _load(path: str) -> Any:
-    text = Path(path).read_text(encoding="utf-8")
-    if path.endswith(".json"):
-        return json.loads(text)
     import yaml
 
-    return yaml.safe_load(text)
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+        if path.endswith(".json"):
+            return json.loads(text)
+        return yaml.safe_load(text)
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+        raise _Unreadable(f"cannot read {path}: {exc}") from None
 
 
 def _library(path: str) -> PartsLibrary:
@@ -320,6 +329,9 @@ def main(argv: list[str]) -> int:
         for r in pack["deferred_reasons"]:
             print(f"deferred: {r}", file=sys.stderr)
         return 0 if pack["status"] == "ready" else 3
+    except _Unreadable as exc:
+        print(f"hnx agent {args.cmd}: {exc}", file=sys.stderr)
+        return 2
     except (AgentError, OSError, ValueError, RegistryError) as exc:
         print(f"hnx agent {args.cmd}: {exc}", file=sys.stderr)
         return 1

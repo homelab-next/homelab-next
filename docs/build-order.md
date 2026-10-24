@@ -26,7 +26,7 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 
 | Phase | Goal | Contract / artefact | How it is proven without hardware | Where | Checklist |
 |---|---|---|---|---|---|
-| P0 | CI, skeleton and the leak gate | licence, CI workflow, ADR log, leak scan | CI itself; the scan has positive and negative fixtures | `.github/workflows/`, `tools/`, `docs/adr/` | F, Q |
+| P0 | CI, skeleton and the leak gate | licence, CI workflow, ADR log, leak scan | CI itself; the scan has positive and negative fixtures | `.github/workflows/`, `tools/`, `docs/adr/` | F, F-08, Q |
 | P1 | Contracts: schemas in git | logical ids, event envelope, pinned OCSF subsets, agent, broker and records schemas | every schema has examples and negatives; additive evolution is checked against frozen baselines | `schemas/`, `tools/schema_check.py` | T, X-03 |
 | P2 | Names: registry, aliases, generators | `services.yml`, resolver, generated DNS/hosts/scrape targets, the no-raw-endpoint gate | golden outputs from a synthetic example lab | `homelabnext/registry/`, `examples/` | X-01 |
 | P3 | One shared client library per seam | lake, notify, state, records, events, decision cascade | each ships an in-memory fake; crash-safety and idempotency tests | `homelabnext/` | S, O, P, R, A, K |
@@ -52,7 +52,7 @@ phases, so the public work is a prerequisite and not a duplicate.
 | Phase | Goal | Consumes | Checklist |
 |---|---|---|---|
 | S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 | F-01, F-02, F-09-F-11, F-13, F-14, C |
-| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16 |
+| S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16, F-24 |
 | S3 | Data platform: object store, catalog, query engine; copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S |
 | S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 | D, T |
 | S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 | P, R, K |

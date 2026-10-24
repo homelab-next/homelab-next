@@ -157,10 +157,10 @@ fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions
 
-Twelve architecture decision records live in [docs/adr/](docs/adr/README.md): schemas in git,
-registry and DNS aliases, shared libraries, role interface, swap procedure, detections as code,
-model roles, export hooks, bus placement, records lifecycle, the public/private split, and the
-deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
+29 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
+line for each. The first twelve cover schemas in git, registry and DNS aliases, shared libraries,
+role interface, swap procedure, detections as code, model roles, export hooks, bus placement,
+records lifecycle, the public/private split, and the deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
 the same commands, credentials in OpenBao, deploys dispatched by hand from an Actions Environment) is
 [ADR-0021](docs/adr/0021-public-and-private-repositories.md), with the full guide in
 [docs/private-overlay.md](docs/private-overlay.md).
@@ -173,4 +173,4 @@ the same commands, credentials in OpenBao, deploys dispatched by hand from an Ac
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every source file carries an SPDX header.
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every Python, shell, YAML, TOML, Go and Jinja template file carries an SPDX header (`tools/check_spdx.py`).

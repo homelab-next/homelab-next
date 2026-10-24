@@ -116,6 +116,11 @@ class ComputeError(Exception):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
+class ComputeUnreadable(ComputeError):
+    """An input file (site, guest, policies, nodes, keys, baselines) or the guest directory cannot
+    be read or parsed: bad input (``hnx guests`` exit 2), not an invalid guest set (exit 1)."""
+
+
 @dataclass(frozen=True)
 class Guest:
     """A schema-valid guest.  ``raw`` is the document; properties give defaulted access."""
