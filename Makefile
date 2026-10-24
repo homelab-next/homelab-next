@@ -35,12 +35,18 @@ fmt:
 	$(RUFF) check --fix .
 	$(RUFF) format .
 
+# The same selection as CI's test job (tools/tests/test_make_matches_ci.py holds them equal):
+# test_this_repo_meets_the_floor runs tools/coverage_floor.py, the whole suite again under
+# coverage, which no suite time budget allows for; `coverage` below runs it on its own, as CI's
+# coverage job does.
+PYTEST_ARGS := -q -m "not live" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 test:
-	$(PY) -m pytest -q
+	$(PY) -m pytest $(PYTEST_ARGS)
 
-# broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling each keep
-# >= 80% line coverage from their own tests.  Not a prerequisite of `check`: `test` already runs
-# tools/tests/test_coverage_floor.py, which enforces the same floor; this target prints the table.
+# Q-07: each security-critical unit (broker, scope guard, records lifecycle, decide cascade, the
+# agent grant ceiling and the others listed in tools/coverage_floor.py) keeps >= 80% line
+# coverage from its own tests.  A prerequisite of `check`, as the coverage job is of CI.
+check: coverage
 coverage:
 	$(PY) tools/coverage_floor.py
 
@@ -232,8 +238,8 @@ projects:
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
-# `test` already runs the fast CLI gates through the register and the rest would repeat ~30 s of
-# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
+# its CLI gates are gates of `check` already and the rest would repeat ~60 s of what `check` has
+# just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
 INVARIANTS_OUT := build/invariants/results.json
 .PHONY: invariants
 invariants:

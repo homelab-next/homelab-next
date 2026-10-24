@@ -1,3 +1,4 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
 {% set host = lookup('hnx_registry', rsyslog_forward_collector_id, field='host') -%}
 # Managed by homelabnext (role rsyslog_forward, control log-forward); local changes are overwritten.
 {{ rsyslog_forward_selector }} action(type="omfwd"

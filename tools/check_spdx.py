@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: check-spdx
 #   kind: check
-#   purpose: Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.
+#   purpose: Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.
 #   owner: maintainers
 #   trigger: [ci:ci/lint, make:spdx, pre-commit:spdx-header]
 #   invariant: [Q-09]
@@ -14,11 +14,14 @@
 #     "1": some file does not
 """Fail if a source or config file lacks an SPDX-License-Identifier header in its first 5 lines.
 
-Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml`` and ``*.go`` (a Go file puts
-``// SPDX-License-Identifier: Apache-2.0`` on line 1, above any ``//go:build`` line; ``go.mod`` and
-``go.sum`` are tool-written and not checked, and so is a generated Go file: one whose header,
-above the ``package`` clause, has the Go convention's ``// Code generated ... DO NOT EDIT.``
-line).  With no arguments the file list is
+Checked: ``*.py``, ``*.sh``, ``*.yml``, ``*.yaml``, ``*.toml``, ``*.go`` and Jinja templates
+``*.j2``.  A Go file puts ``// SPDX-License-Identifier: Apache-2.0`` on line 1, above any
+``//go:build`` line; ``go.mod`` and ``go.sum`` are tool-written and not checked, and so is a
+generated Go file: one whose header, above the ``package`` clause, has the Go convention's
+``// Code generated ... DO NOT EDIT.`` line.  A Jinja template carries the header as a
+whitespace-trimming comment (``{# SPDX-License-Identifier: Apache-2.0 -#}``), so the rendered file
+is unchanged, or as a shell comment after a ``#!`` line.  Other suffixes (``*.tf``, ``*.sql``,
+``*.tmpl`` and data formats) are not checked.  With no arguments the file list is
 ``git ls-files`` (falling back to a directory walk outside a work tree).  Two escape hatches,
 both reviewed in this file rather than spread through the tree:
 
@@ -38,7 +41,7 @@ from pathlib import Path
 
 HEADER = "SPDX-License-Identifier: Apache-2.0"
 ANY_HEADER = re.compile(r"SPDX-License-Identifier:\s*\S")
-SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".go"}
+SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".go", ".j2"}
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"}
 GENERATED = (
     "*/golden/*",

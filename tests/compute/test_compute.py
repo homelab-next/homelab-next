@@ -438,7 +438,20 @@ def test_cli_plan_against_previous_render(tmp_path, capsys):
     capsys.readouterr()
     code = run_cli("plan", *BASE, "--target", "inventory", "--against", str(out), "--exit-code")
     text = capsys.readouterr().out
-    assert code == 2 and "1 to change" in text and "host_vars/" not in text.split("\n")[0]
+    assert code == 3 and "1 to change" in text and "host_vars/" not in text.split("\n")[0]
+    # an input that cannot be read is 2, never the code a script reads as "changes pending"
+    missing = tmp_path / "nosuch"
+    code = run_cli(
+        "plan",
+        str(missing),
+        *BASE[1:],
+        "--target",
+        "inventory",
+        "--against",
+        str(out),
+        "--exit-code",
+    )
+    assert code == 2 and "not a directory" in capsys.readouterr().err
 
 
 def test_cli_unknown_target_rejected():

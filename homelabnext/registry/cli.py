@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx`` command line: validate, resolve, generate, check.
 
-Exit codes: 0 ok, 1 invalid input or drift, 2 usage error.
+Exit codes: 0 ok, 1 an invalid registry, an unresolvable capability or drift, 2 usage error or a
+registry file that cannot be read or parsed.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import sys
 from pathlib import Path
 
 from homelabnext.generators import GENERATORS, check_tree, flatten, generate, write_tree
-from homelabnext.registry.model import RegistryError, load
+from homelabnext.registry.model import RegistryError, RegistryUnreadable, load
 from homelabnext.registry.resolver import ResolutionError, Resolver
 
 
@@ -51,6 +52,9 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         return 0
     try:
         reg = load(args.registry)
+    except RegistryUnreadable as exc:
+        print(f"hnx: {exc}", file=err)
+        return 2
     except RegistryError as exc:
         print(f"hnx: {exc}", file=err)
         return 1

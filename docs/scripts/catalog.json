@@ -80,12 +80,16 @@
     {
       "exit": {
         "0": "both sections present",
-        "1": "a section is missing or the version cannot be read"
+        "1": "a section is missing",
+        "2": "the version or CHANGELOG.md cannot be read"
       },
       "id": "check-changelog",
       "inputs": [
         "CHANGELOG.md",
         "homelabnext/_version.py"
+      ],
+      "invariant": [
+        "F-15"
       ],
       "kind": "check",
       "language": "python",
@@ -114,7 +118,7 @@
       "outputs": "one line per file without the header",
       "owner": "maintainers",
       "path": "tools/check_spdx.py",
-      "purpose": "Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.",
+      "purpose": "Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.",
       "status": "active",
       "trigger": [
         "ci:ci/lint",
@@ -237,7 +241,7 @@
       ],
       "kind": "check",
       "language": "python",
-      "outputs": "a per-unit coverage table; --json FILE writes it as JSON",
+      "outputs": "a per-unit coverage table (--json FILE evaluates an existing coverage json report instead)",
       "owner": "maintainers",
       "path": "tools/coverage_floor.py",
       "purpose": "Fail when a security-critical unit drops below its line-coverage floor from its own tests.",
@@ -580,7 +584,8 @@
       "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
       "invariant": [
         "F-05",
-        "F-18"
+        "F-18",
+        "Q-06"
       ],
       "kind": "check",
       "language": "python",
@@ -598,6 +603,7 @@
         "make:secret-scan",
         "pre-commit:leak-scan",
         "pre-commit:secret-scan",
+        "script:coverage-floor",
         "script:private-leak-check"
       ]
     },

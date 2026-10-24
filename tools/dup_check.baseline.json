@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 35,
-  "duplicated_lines": 441,
-  "total_lines": 49760,
-  "duplicated_percent": 0.89
+  "clones": 34,
+  "duplicated_lines": 427,
+  "total_lines": 112960,
+  "duplicated_percent": 0.38
  },
  "increases": [],
  "clones": {
@@ -88,18 +88,6 @@
     "0ab26ac7d7",
     "1524c40da6",
     "16719c69a8"
-   ]
-  },
-  "4a758f2d038d3617": {
-   "tokens": 56,
-   "lines": 7,
-   "count": 1,
-   "files": [
-    "homelabnext/agent/cli.py",
-    "homelabnext/agent/prompts_cli.py"
-   ],
-   "fingerprints": [
-    "08b762c94e"
    ]
   },
   "502e634be2b80e35": {
@@ -190,6 +178,20 @@
     "0e3c1d554e"
    ]
   },
+  "8b1d814f19a33860": {
+   "tokens": 80,
+   "lines": 6,
+   "count": 1,
+   "files": [
+    "homelabnext/network/validate.py",
+    "homelabnext/registry/model.py"
+   ],
+   "fingerprints": [
+    "02581e8bc6",
+    "031fbc6010",
+    "152f00aef6"
+   ]
+  },
   "8ea3fbc0510ad430": {
    "tokens": 78,
    "lines": 13,
@@ -238,20 +240,6 @@
    ],
    "fingerprints": [
     "037da7bccf"
-   ]
-  },
-  "a2369042c5c75ed4": {
-   "tokens": 80,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "homelabnext/network/validate.py",
-    "homelabnext/registry/model.py"
-   ],
-   "fingerprints": [
-    "02581e8bc6",
-    "031fbc6010",
-    "152f00aef6"
    ]
   },
   "b30ee47e71aac6ae": {
