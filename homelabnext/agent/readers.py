@@ -205,6 +205,8 @@ class ToolClasses:
                 + " (hnx mcp catalog check)"
             )
         review_policy = _review_policy(cat)
+        # the table's broker_only, read once (a default read per record cost ~20 ms each)
+        floor_only = list(doc.get("broker_only") or ()) or table_broker_only()
         meta = {
             sid: {
                 "status": rec.get("status"),
@@ -223,7 +225,7 @@ class ToolClasses:
                 "reviewed": rec.get("acts_via") == "broker" and reviews_current(rec, review_policy),
                 # its declared classes are below their floor (servers.floor_problems): what it
                 # declares is not what it does, so no grant of it is judged on what it declares
-                "below_floor": bool(servers.floor_problems(rec, f"{sid}.yml")),
+                "below_floor": bool(servers.floor_problems(rec, f"{sid}.yml", floor_only)),
             }
             for sid, rec in cat
         }
@@ -306,10 +308,21 @@ def table_vocabulary(path: str | Path | None = None) -> list[str]:
 
 def table_broker_only(path: str | Path | None = None) -> list[str]:
     """The classes ``tool_classes.yml`` lets a profile hold only through the broker."""
+    if path is None:  # the packaged table never changes under a running process
+        return list(_packaged_broker_only())
+    return list(_broker_only_of(str(path)))
+
+
+@cache
+def _packaged_broker_only() -> tuple[str, ...]:
+    return _broker_only_of(str(DEFAULT_CLASSES))
+
+
+def _broker_only_of(path: str) -> tuple[str, ...]:
     import yaml
 
-    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
-    return sorted((doc.get("broker_only") or ()) if isinstance(doc, Mapping) else ())
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    return tuple(sorted((doc.get("broker_only") or ()) if isinstance(doc, Mapping) else ()))
 
 
 def table_capabilities(path: str | Path | None = None) -> list[str]:
