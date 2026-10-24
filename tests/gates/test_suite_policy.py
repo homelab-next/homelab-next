@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -59,6 +60,95 @@ def test_skip_reasons():
 def test_check_quarantine(kwargs, problem):
     got = sp.check_quarantine(kwargs, TODAY, 90)
     assert (got is None) if problem is None else (problem in got), got
+
+
+@pytest.mark.parametrize(
+    ("env", "want"),
+    [
+        ({}, set()),
+        ({"HNX_REQUIRE_TOOLS": " zizmor , nats-server ,"}, {"zizmor", "nats-server"}),
+        ({"HNX_REQUIRE_GO": "1"}, {"go"}),  # the older switch still works
+        ({"HNX_REQUIRE_GO": "0", "HNX_REQUIRE_TOOLS": "docker"}, {"docker"}),
+        ({"HNX_REQUIRE_GO": "1", "HNX_REQUIRE_TOOLS": "go,actionlint"}, {"go", "actionlint"}),
+    ],
+)
+def test_required_tools(env, want):
+    assert sp.required_tools(env) == want
+
+
+@pytest.mark.parametrize(
+    ("env", "outcome", "why"),
+    [
+        ({}, pytest.skip.Exception, "hnx-fake-lint is not installed"),
+        ({"HNX_REQUIRE_TOOLS": "other"}, pytest.skip.Exception, "hnx-fake-lint is not installed"),
+        (
+            {"HNX_REQUIRE_TOOLS": "hnx-fake-lint"},
+            pytest.fail.Exception,
+            "HNX_REQUIRE_TOOLS requires",
+        ),
+    ],
+)
+def test_require_tool_skips_or_fails(monkeypatch, tmp_path, env, outcome, why):
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing here
+    monkeypatch.delenv("HNX_REQUIRE_TOOLS", raising=False)
+    monkeypatch.delenv("HNX_REQUIRE_GO", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(outcome, match=why):
+        sp.require_tool("hnx-fake-lint")
+
+
+def test_require_tool_returns_the_path_and_honours_its_availability_check(monkeypatch, tmp_path):
+    tool = tmp_path / "hnx-fake-lint"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("HNX_REQUIRE_TOOLS", "hnx-fake-lint")
+    assert sp.require_tool("hnx-fake-lint") == str(tool)
+    with pytest.raises(pytest.fail.Exception):  # on PATH but not usable (docker without compose)
+        sp.require_tool("hnx-fake-lint", lambda: False)
+
+
+def test_a_required_tools_skip_is_a_failure_end_to_end(tmp_path):
+    _project(
+        tmp_path,
+        a__test_tools="""
+            from tests.suite_policy import require_tool
+
+            def test_needs_lint():
+                require_tool("hnx-fake-lint")
+
+            def test_needs_other():
+                require_tool("hnx-fake-other")
+        """,
+    )
+    proc = _pytest(tmp_path, env={"HNX_REQUIRE_TOOLS": "hnx-fake-lint"})
+    assert proc.returncode == 1, proc.stdout
+    assert "HNX_REQUIRE_TOOLS requires it" in proc.stdout
+    assert "1 failed, 1 skipped" in proc.stdout
+    assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
+
+
+CI_REQUIRED = ("actionlint", "zizmor", "nats-server", "docker", "go")
+
+
+def test_the_tools_ci_requires_are_only_skipped_through_the_helper():
+    """A skip that names one of these tools in its own words is outside the HNX_REQUIRE_TOOLS
+    contract (CI could not turn it into a failure): it must go through require_tool."""
+    tools = "|".join(map(re.escape, CI_REQUIRED))
+    own = re.compile(
+        rf"(?:pytest\.skip\(|reason=)\s*f?[\"'][^\"']*\b(?:{tools})\b[^\"']*\bnot "
+        r"(?:installed|available)\b"
+    )
+    offenders = []
+    for base in ("tests", "tools/tests", "conformance"):
+        for f in sorted((Path(ROOT) / base).rglob("*.py")):
+            if f.name == "suite_policy.py" or f.name == "test_suite_policy.py":
+                continue
+            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if own.search(line):
+                    offenders.append(f"{f.relative_to(ROOT)}:{n}: {line.strip()}")
+    assert offenders == []
 
 
 def _project(tmp_path, ini_budgets="", **files):

@@ -33,6 +33,8 @@ import yaml
 from fake_openbao import FakeOpenBao as FakeBao
 from fake_openbao import self_signed
 
+from tests.suite_policy import require_tool
+
 ROOT = Path(__file__).resolve().parents[2]
 SKELETON = ROOT / "examples" / "private-overlay"
 TEMPLATES = sorted((SKELETON / ".github" / "workflows").glob("*.yml"))
@@ -170,8 +172,8 @@ def test_only_the_deploy_workflow_may_name_the_deploy_runner(tmp_path, runs_on):
     assert not any("only deploy.yml may" in p for p in lint_workflow(deploy))
 
 
-@pytest.mark.skipif(shutil.which("actionlint") is None, reason="actionlint is not installed")
 def test_actionlint_accepts_the_templates():
+    require_tool("actionlint")
     r = subprocess.run(
         ["actionlint", "-no-color", *map(str, TEMPLATES)], capture_output=True, text=True
     )
@@ -260,9 +262,9 @@ def test_deploy_reads_role_credentials_from_openbao(deploy):
     assert len(ca) == 1 and "BAO_CACERT=" in ca[0]["run"]
 
 
-@pytest.mark.skipif(shutil.which("zizmor") is None, reason="zizmor is not installed")
 def test_zizmor_accepts_the_templates():
     """docs/private-overlay.md says the templates pass zizmor (checked with 1.31.1, offline)."""
+    require_tool("zizmor")
     r = subprocess.run(
         ["zizmor", "--offline", "--no-progress", *map(str, TEMPLATES)],
         capture_output=True,

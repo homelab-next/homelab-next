@@ -138,7 +138,9 @@ relay's audit read, and plays the edge for the approver. What it asserts, step b
 The lab trades every protection for a small footprint, so it binds published ports to loopback
 only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 `LAB_I_UNDERSTAND_UNAUTHENTICATED=1` is set **and** every credential differs from its
-`.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`); docker publishes ports through
+`.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`, which judges the configuration
+`docker compose config` resolves, refuses a `.env` line it cannot read, and refuses when it
+cannot resolve the configuration at all); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
 run with `no-new-privileges` and `cap_drop: [ALL]` (postgres and uptime add back what their
 entrypoints need; OpenBao keeps docker's defaults). A real deployment changes each service as follows:

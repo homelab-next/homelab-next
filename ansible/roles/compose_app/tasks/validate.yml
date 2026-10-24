@@ -63,25 +63,152 @@
       # ports: an explicit host address, always
       - item.value.ports | default([]) | reject('string') | list | length == 0
       - item.value.ports | default([]) | reject('match', compose_app_port_pattern) | list | length == 0
-      # volumes: short syntax only; no docker socket and no host root or /run unless allowed
-      - item.value.volumes | default([]) | reject('string') | list | length == 0
-      - item.value.volumes | default([]) | select('search', compose_app_docker_socket_pattern) | list | length == 0 or compose_app_allow_docker_socket | bool
       # privilege
       - not (item.value.privileged | default(false) | bool) or compose_app_allow_privileged | bool
       - item.value.cap_add | default([]) | reject('string') | list | length == 0
       - item.value.cap_add | default([]) | reject('match', '^[A-Z][A-Z_]*\Z') | list | length == 0
       - item.value.cap_add | default([]) | map('regex_replace', '^CAP_', '') | intersect(compose_app_dangerous_caps) | length == 0 or compose_app_allow_privileged | bool
       - item.value.user is not defined or (item.value.user | string) is match('^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
-      - item.value.user is not defined or (item.value.user | string).split(':')[0] not in ['0', 'root'] or compose_app_allow_root | bool
+      # root in any spelling: the runtime reads a numeric user or group as a number (00, 000:0),
+      # so a zero or the name root is refused as the user (compose_app_allow_root) and as the group
+      # (compose_app_allow_root_group, or compose_app_allow_root, which covers both)
+      - item.value.user is not defined or compose_app_allow_root | bool or (item.value.user | string).split(':')[0] is not match('^(?:root|0+)\Z')
+      - item.value.user is not defined or compose_app_allow_root | bool or compose_app_allow_root_group | bool or (item.value.user | string).split(':')[1:] | select('match', '^(?:root|0+)\Z') | list | length == 0
       - item.value.read_only | default(false) is boolean
       - item.value.mem_limit is not defined or (item.value.mem_limit | string) is match('^[0-9]+[bkmgBKMG]?\Z')
       - item.value.env_file | default([]) | reject('string') | list | length == 0
+      - item.value.env_file | default([]) | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - item.value.env_file | default([]) | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
     fail_msg: >-
       service '{{ item.key }}' is refused: environment keys must be plain names and secret-looking ones
       belong in compose_app_secret_env (a *_FILE pointer is fine); ports must be host_ip:host_port:container_port;
-      a docker socket or host-root mount needs compose_app_allow_docker_socket; privileged, or cap_add of
-      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root needs
-      compose_app_allow_root; mem_limit looks like 256m
+      privileged, or cap_add of
+      {{ compose_app_dangerous_caps }}, needs compose_app_allow_privileged; running as root (user root or 0, written
+      any way) needs compose_app_allow_root, and the root group compose_app_allow_root_group; mem_limit looks like 256m;
+      env_file is a list of canonical paths without `$` or a leading `~`
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# Volumes are judged as docker compose and the kernel will read them: a source spelled with
+# compose interpolation ($VAR, ${VAR:-/}) or a leading ~ is whatever the deploy host's environment
+# says, and /., // or a trailing / is a different path from its text, so both are refused before
+# the source is matched against the rules.
+- name: Validate each service (volumes)
+  ansible.builtin.assert:
+    that:
+      - item.value.volumes | default([]) | reject('string') | list | length == 0
+      - item.value.volumes | default([]) | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - item.value.volumes | default([]) | select('search', ':') | map('regex_replace', '(?s):.*', '') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - item.value.volumes | default([]) | select('search', compose_app_docker_socket_pattern) | list | length == 0 or compose_app_allow_docker_socket | bool
+    fail_msg: >-
+      service '{{ item.key }}' has a refused bind source: volumes are short-syntax strings; no `$` and
+      no leading `~` (docker compose would interpolate them from the deploy host's environment); the
+      source canonical (no //, no . or .. component other than a leading ./, no trailing /); a
+      container-runtime socket or state directory (docker, containerd, podman, CRI-O) or host root
+      needs compose_app_allow_docker_socket, which by itself unlocks only /var/run/docker.sock and
+      /run/docker.sock (any other runtime path must also be listed in compose_app_bind_extra)
+  loop: "{{ compose_app_spec.services | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# Bind sources are an allow-list: a host path is mounted only when it lies under one of
+# compose_app_bind_roots (the application's own directories by default) or is listed on its own,
+# with a reason, in compose_app_bind_extra. A relative source (./x) stays in the project directory,
+# and a named volume and an anonymous one (a container path alone, /var/lib/app) are docker's; anything else on the host (/etc, /proc, /dev, /root, the
+# systemd and D-Bus sockets, another runtime's state) is refused, and the runtime sockets still
+# need compose_app_allow_docker_socket on top. That flag lets through only the docker socket
+# itself (/var/run/docker.sock, /run/docker.sock), never host root, /var, /run or a path that
+# merely contains docker.sock; another runtime path needs the flag and its own listing (host root,
+# /run, /var and /var/lib cannot be listed).
+- name: Validate the bind roots and listed bind sources
+  ansible.builtin.assert:
+    that:
+      - compose_app_bind_roots is sequence and compose_app_bind_roots is not string
+      - compose_app_bind_roots | reject('string') | list | length == 0
+      - compose_app_bind_roots | reject('match', '^/') | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - compose_app_bind_roots | select('match', compose_app_host_wide_pattern) | list | length == 0
+      - compose_app_bind_roots | select('search', compose_app_docker_socket_pattern) | list | length == 0
+      - compose_app_bind_extra is sequence and compose_app_bind_extra is not string
+      - compose_app_bind_extra | reject('mapping') | list | length == 0
+      - compose_app_bind_extra | rejectattr('path', 'defined') | list | length == 0
+      - compose_app_bind_extra | rejectattr('reason', 'defined') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | reject('string') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | reject('match', '^/') | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('search', compose_app_interpolated_volume_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('search', compose_app_noncanonical_source_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='path') | select('match', compose_app_host_wide_pattern) | list | length == 0
+      - compose_app_bind_extra | map(attribute='reason') | map('string') | map('trim') | select('match', '^.{10,}') | list | length == compose_app_bind_extra | length
+    fail_msg: >-
+      compose_app_bind_roots must be a list of absolute, canonical directories, none of them a
+      host-wide directory (/, /etc, /proc, /sys, /dev, /boot, /root, /run, /var, /var/lib, /usr,
+      /home, /opt, /srv, /tmp ...) or a container-runtime path; compose_app_bind_extra must be a list
+      of {path, reason} with an absolute, canonical path and a reason of at least 10 characters
+
+# An env_file is a host path too: docker compose reads it on the deploy host, as the user running
+# compose (root, usually), and hands its contents to the container, so /etc/shadow or another
+# application's secrets/<service>.env would reach this one. Its path follows the bind-source rule
+# (relative to the project directory, under compose_app_bind_roots or listed), the runtime flag
+# aside: a socket is never an env_file.
+- name: Validate each service (bind and env_file sources inside the allowed roots)
+  vars:
+    _compose_app_outside: >-
+      {%- set roots = compose_app_bind_roots | list -%}
+      {%- set listed = compose_app_bind_extra | map(attribute='path') | list -%}
+      {%- set out = [] -%}
+      {%- set sources = [] -%}
+      {%- for v in item.value.volumes | default([]) -%}
+      {%-   if v is search(':') or v is not match('^/') -%}
+      {%-     set _ = sources.append({'kind': 'volume', 'src': v | regex_replace('(?s):.*', ''), 'shown': v | regex_replace('(?s):.*', '')}) -%}
+      {%-   endif -%}
+      {#- a container path alone is an anonymous volume: no host source -#}
+      {%- endfor -%}
+      {%- for f in item.value.env_file | default([]) -%}
+      {%-   set _ = sources.append({'kind': 'env_file', 'src': f, 'shown': 'env_file=' ~ f}) -%}
+      {%- endfor -%}
+      {%- for s in sources -%}
+      {%-   set src = s.src -%}
+      {%-   set ns = namespace(ok=false) -%}
+      {%-   if s.kind == 'volume' and src is match('^[A-Za-z0-9][A-Za-z0-9_.-]*\Z') -%}
+      {#-     a named volume is docker's -#}
+      {%-     set ns.ok = true -%}
+      {%-   elif src is not match('^/') -%}
+      {#-     ./relative (an env_file may also be a bare relative path): the project directory -#}
+      {%-     if s.kind == 'env_file' or src is match('^\./|^\.\Z') -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-   else -%}
+      {%-     if src in listed -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-     for r in roots -%}
+      {%-       if src == r or src.startswith(r ~ '/') -%}{%- set ns.ok = true -%}{%- endif -%}
+      {%-     endfor -%}
+      {%-     if s.kind == 'volume' and compose_app_allow_docker_socket | bool and src in ['/var/run/docker.sock', '/run/docker.sock'] -%}
+      {%-       set ns.ok = true -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {#-   the project directory itself and its secrets/ hold every service's 0600 env file and
+              the rendered compose file: never mounted or read wholesale unless listed -#}
+      {%-   if not (s.kind == 'volume' and src is match('^[A-Za-z0-9][A-Za-z0-9_.-]*\Z')) -%}
+      {%-     if src == '.' -%}{%- set path = compose_app_dir -%}
+      {%-     elif src is match('^\./') -%}{%- set path = compose_app_dir ~ src[1:] -%}
+      {%-     elif src is not match('^/') -%}{%- set path = compose_app_dir ~ '/' ~ src -%}
+      {%-     else -%}{%- set path = src -%}{%- endif -%}
+      {%-     if path not in listed and (path == compose_app_dir or path == compose_app_dir ~ '/secrets' or path.startswith(compose_app_dir ~ '/secrets/')) -%}
+      {%-       set ns.ok = false -%}
+      {%-     endif -%}
+      {%-   endif -%}
+      {%-   if not ns.ok -%}{%- set _ = out.append(s.shown) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out | join(' ') }}
+  ansible.builtin.assert:
+    that:
+      - _compose_app_outside | length == 0
+    fail_msg: >-
+      service '{{ item.key }}' mounts or reads a host path outside the allowed roots ({{ _compose_app_outside }}):
+      a bind source or env_file must be ./relative, a named volume (bind sources), under
+      compose_app_bind_roots ({{ compose_app_bind_roots | join(', ') }}) or listed with a reason
+      in compose_app_bind_extra; the application directory itself ({{ compose_app_dir }}, `.`) and
+      its secrets/ directory need their own entry there
   loop: "{{ compose_app_spec.services | dict2items }}"
   loop_control:
     label: "{{ item.key }}"

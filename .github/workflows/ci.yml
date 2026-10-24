@@ -84,6 +84,89 @@ jobs:
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 
+  # The linters and validators some tests call only when they are installed: actionlint and zizmor
+  # (the workflows here and the private-overlay deploy templates), nats-server (the lab's events
+  # config) and docker compose (the lab bind guard's resolved pass; the runner image has it).  Each
+  # is pinned by version and checksum: the Go tools by their module sum (go also checks it against
+  # the checksum database), and each binary's build info must name that module, version and sum;
+  # zizmor by its wheel's sha256.  Bump a version and its checksum together (the hex of
+  # `go mod download -json <module>@<version>`'s Sum, PyPI's file listing).  Built with the
+  # workflow's GO_VERSION.  HNX_REQUIRE_TOOLS makes the tests' require_tool helper fail instead of
+  # skipping when one of them is missing, so a broken install cannot pass as a skip.
+  # Not installed here: dnsmasq (an apt package, not pinnable by version on a moving runner image)
+  # and playwright for node (a browser download).
+  external-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local  # the setup-go toolchain, never a download a module asks for
+      ACTIONLINT_VERSION: "v1.7.11"
+      # a module sum (go.sum's h1:) as hex: the SHA-256 of the module's file tree
+      ACTIONLINT_SUM_SHA256: "9be692b82a42202952f17d36c4c1b867cb3cedf0873ec02d6240285864198041"
+      # the lab image's version (compose/lab-in-a-box/docker-compose.yml): bump the two together
+      NATS_SERVER_VERSION: "v2.10.22"
+      NATS_SERVER_SUM_SHA256: "62deb7046bb67370dd32805935c47aa63190c24fdab2b294ed55fce3a89bc430"
+      ZIZMOR_VERSION: "1.31.1"  # docs/private-overlay.md names the version the templates pass
+      ZIZMOR_SHA256: "58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410"  # manylinux_2_28_x86_64 wheel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: test
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: install actionlint, nats-server and zizmor (pinned versions, checksums verified)
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/tools"
+          mkdir -p "$bin"
+          pinned() {  # MODULE VERSION SHA256: download the module, compare its h1: sum with the pin
+            got=$(go mod download -json "$1@$2" | python -c 'import base64, json, sys; s = json.load(sys.stdin)["Sum"]; print(base64.b64decode(s.removeprefix("h1:")).hex())')
+            if [ "$got" != "$3" ]; then
+              echo "::error::$1@$2 has sum $got, not the pinned $3"
+              exit 1
+            fi
+          }
+          built_from() {  # BINARY MODULE VERSION SHA256: its build info names that module, exactly
+            want=$(python -c 'import base64, sys; print("h1:" + base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' "$4")
+            if ! go version -m "$1" | grep -qxF "$(printf '\tmod\t%s\t%s\t%s' "$2" "$3" "$want")"; then
+              echo "::error::$1 was not built from $2@$3 with the pinned sum"
+              go version -m "$1" | head -3
+              exit 1
+            fi
+          }
+          pinned github.com/rhysd/actionlint "$ACTIONLINT_VERSION" "$ACTIONLINT_SUM_SHA256"
+          GOBIN="$bin" go install "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION"
+          # a package path resolves to the longest module providing it: the binary must say
+          # it came from the pinned module, not from a nested one tagged later
+          built_from "$bin/actionlint" github.com/rhysd/actionlint "$ACTIONLINT_VERSION" "$ACTIONLINT_SUM_SHA256"
+          pinned github.com/nats-io/nats-server/v2 "$NATS_SERVER_VERSION" "$NATS_SERVER_SUM_SHA256"
+          GOBIN="$bin" go install "github.com/nats-io/nats-server/v2@$NATS_SERVER_VERSION"
+          built_from "$bin/nats-server" github.com/nats-io/nats-server/v2 "$NATS_SERVER_VERSION" "$NATS_SERVER_SUM_SHA256"
+          printf 'zizmor==%s --hash=sha256:%s\n' "$ZIZMOR_VERSION" "$ZIZMOR_SHA256" > "$RUNNER_TEMP/zizmor.txt"
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps \
+            --only-binary :all: -r "$RUNNER_TEMP/zizmor.txt"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: actionlint and zizmor on this repository's workflows and actions
+        # medium and above: zizmor 1.31.1 also prints low-severity "self-repository" style help on
+        # every local `uses: ./.github/actions/...`, which is not a finding about this repository
+        run: |
+          actionlint -version
+          actionlint -no-color
+          zizmor --version
+          zizmor --offline --no-progress --min-severity medium .github/
+      - name: the tests that call these tools; a missing one fails them here
+        env:
+          HNX_REQUIRE_TOOLS: actionlint,zizmor,nats-server,docker
+        run: >-
+          python -m pytest -q -m "not live" -rs
+          tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
+
   # Broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling: each keeps
   # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
   coverage:
@@ -575,11 +658,13 @@ jobs:
           fi
 
   # Q-08: every bugfix commit of this push or pull request touches a test file, and that test fails
-  # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes").
+  # on the fix's parent (tools/fix_has_test.py --prove; CONTRIBUTING.md "Bug fixes"). 25 minutes:
+  # a push to main re-proves the whole merged range and is never cancelled, so a timeout there
+  # turns main red; a 17-fix range took about 4 minutes on CI.
   regression-tests:
     needs: go-modules
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -643,7 +728,9 @@ jobs:
           fi
 
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a
-  # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1); GitHub App bots are exempt.
+  # Signed-off-by trailer for its author (CONTRIBUTING.md, ground rule 1).  Dependabot cannot certify
+  # the DCO, so its commits are exempt, but only in a pull request GitHub says Dependabot opened:
+  # a commit's author email is whatever the committer typed, so it never exempts on its own.
   dco:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -657,13 +744,22 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_USER_LOGIN: ${{ github.event.pull_request.user.login }}
+          PR_USER_TYPE: ${{ github.event.pull_request.user.type }}
         run: |
           set -euo pipefail
           bad=0
+          dependabot="49699333+dependabot[bot]@users.noreply.github.com"
+          from_dependabot=0
+          if [ "$PR_USER_TYPE" = "Bot" ] && [ "$PR_USER_LOGIN" = "dependabot[bot]" ]; then
+            from_dependabot=1
+          fi
           for c in $(git rev-list --no-merges "$BASE..$HEAD_SHA"); do
             author=$(git log -1 --format='%ae' "$c")
-            # GitHub App bots (Dependabot) cannot certify the DCO; the maintainer who merges does.
-            if [[ "$author" =~ ^[0-9]+\+[a-z0-9-]+\[bot\]@users\.noreply\.github\.com$ ]]; then
+            # Dependabot cannot certify the DCO; the maintainer who merges does.  Exempt only its
+            # own commits in its own pull request (GitHub's record of who opened it, not the
+            # commit metadata, which anyone can set)
+            if [ "$from_dependabot" = 1 ] && [ "$author" = "$dependabot" ]; then
               continue
             fi
             if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$c" \
