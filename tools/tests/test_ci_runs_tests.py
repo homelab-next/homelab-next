@@ -31,6 +31,8 @@ GUARDED_JOBS = ("test", "lint", "leak-scan", "secret-scan")
 GUARDED_COMMANDS = ("pytest", "ruff check", "tools/leak_scan.py", "gitleaks")
 #: trigger keys that run the workflow on only some changes
 NARROWING = ("paths", "paths-ignore", "branches-ignore", "types")
+#: GitHub's default pull_request activity types: a `types:` list holding all of them narrows nothing
+PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
 #: the flag-value pairs of CI's pytest selection
 PAIRS = {("-m", "not live"), ("--deselect", FLOOR_TEST)}
 
@@ -47,7 +49,9 @@ def _on(doc):
 def trigger_problems(doc) -> list[str]:
     on = _on(doc) or {}
     out = []
-    if "push" not in on or (on["push"] or {}).get("branches") != ["main"]:
+    branches = (on.get("push") or {}).get("branches") or []
+    # more branches than main widen the trigger; a negated pattern can take main back out
+    if "main" not in branches or any(str(b).startswith("!") for b in branches):
         out.append("push: must start on every push to main")
     if "pull_request" not in on:
         out.append("pull_request: must start on every pull request")
@@ -55,8 +59,12 @@ def trigger_problems(doc) -> list[str]:
         out.append("pull_request: a branches filter skips some pull requests")
     for event in ("push", "pull_request"):
         for key in NARROWING:
-            if key in (on.get(event) or {}):
-                out.append(f"{event}: {key} would skip some changes")
+            value = (on.get(event) or {}).get(key)
+            if value is None:
+                continue
+            if event == "pull_request" and key == "types" and set(value) >= PR_DEFAULT_TYPES:
+                continue  # e.g. adding ready_for_review: every default type still starts it
+            out.append(f"{event}: {key} would skip some changes")
     return out
 
 
@@ -113,9 +121,19 @@ def job_problems(doc) -> list[str]:
     return out
 
 
-def _test_run(doc) -> str:
-    (run,) = [s["run"] for s in doc["jobs"]["test"]["steps"] if "pytest" in s.get("run", "")]
-    return run
+def _pytest_runs(doc) -> list[str]:
+    """Every test-job step that runs pytest.  A step that only names it (installing a plugin,
+    printing a version) is not one, and an extra pytest run cannot shrink the full one."""
+    runs = [s.get("run", "") for s in doc["jobs"]["test"]["steps"]]
+    return [r for r in runs if shlex.split(r)[:3] == ["python", "-m", "pytest"]]
+
+
+def selection_problems(doc) -> list[str]:
+    runs = _pytest_runs(doc)
+    if not runs:
+        return ["the test job has no `python -m pytest` step"]
+    found = [pytest_problems(r) for r in runs]
+    return [] if [] in found else [p for f in found for p in f]
 
 
 def test_ci_starts_on_every_push_to_main_and_every_pull_request():
@@ -123,7 +141,7 @@ def test_ci_starts_on_every_push_to_main_and_every_pull_request():
 
 
 def test_the_test_job_runs_every_suite_with_no_selection_but_ci_s_own():
-    assert pytest_problems(_test_run(_ci())) == []
+    assert selection_problems(_ci()) == []
     with (ROOT / "pyproject.toml").open("rb") as f:
         ini = tomllib.load(f)["tool"]["pytest"]["ini_options"]
     # no positional path: pytest's testpaths decide, so every suite runs
@@ -195,7 +213,39 @@ def test_a_narrowing_trigger_filter_is_caught(event, key):
 def test_a_branch_filter_on_pull_requests_or_another_push_branch_is_caught():
     assert trigger_problems(_edited(lambda d: _on(d).update(pull_request={"branches": ["x"]})))
     assert trigger_problems(_edited(lambda d: _on(d).update(push={"branches": ["release"]})))
+    assert trigger_problems(_edited(lambda d: _on(d).update(push={"branches": ["main", "!main"]})))
     assert trigger_problems(_edited(lambda d: _on(d).pop("pull_request")))
+    narrow = {"types": ["opened", "reopened"]}  # no synchronize: a pushed fix is never tested
+    assert trigger_problems(_edited(lambda d: _on(d).update(pull_request=narrow)))
+
+
+# --- legitimate edits that widen or leave CI's selection alone pass ----------------------------
+
+
+def test_widening_the_triggers_is_not_a_problem():
+    wide = {"types": ["opened", "synchronize", "reopened", "ready_for_review"]}
+    assert trigger_problems(_edited(lambda d: _on(d).update(pull_request=wide))) == []
+    more = {"branches": ["main", "release/**"]}
+    assert trigger_problems(_edited(lambda d: _on(d).update(push=more))) == []
+
+
+def test_another_step_naming_or_running_pytest_is_not_a_problem():
+    def edit(doc):
+        steps = doc["jobs"]["test"]["steps"]
+        steps.insert(-1, {"run": "python -m pip install pytest-timeout"})
+        steps.append({"run": "python -m pytest -q tests/cli -p no:randomly"})
+
+    doc = _edited(edit)
+    assert selection_problems(doc) == [] and job_problems(doc) == []
+
+
+def test_a_test_job_whose_only_pytest_is_narrowed_is_still_caught():
+    def edit(doc):
+        for s in doc["jobs"]["test"]["steps"]:
+            if s.get("run", "").startswith("python -m pytest"):
+                s["run"] += " --ignore=tests/broker"
+
+    assert selection_problems(_edited(edit))
 
 
 @pytest.mark.parametrize("job", GUARDED_JOBS)
@@ -208,7 +258,7 @@ def test_a_conditional_guarded_job_is_caught(job, key):
 def test_a_conditional_pytest_step_is_caught(key):
     def edit(doc):
         for s in doc["jobs"]["test"]["steps"]:
-            if "pytest" in s.get("run", ""):
+            if s.get("run", "").startswith("python -m pytest"):
                 s[key] = "github.event_name == 'push'"
 
     assert job_problems(_edited(edit))
@@ -220,7 +270,9 @@ def test_pytest_addopts_in_any_env_is_caught(scope):
         target = {
             "workflow": doc,
             "job": doc["jobs"]["test"],
-            "step": next(s for s in doc["jobs"]["test"]["steps"] if "pytest" in s.get("run", "")),
+            "step": next(
+                s for s in doc["jobs"]["test"]["steps"] if s.get("run", "").startswith("python -m")
+            ),
         }[scope]
         target.setdefault("env", {})["PYTEST_ADDOPTS"] = "--ignore=tests/broker"
 

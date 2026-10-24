@@ -58,11 +58,12 @@ def make_pytest_args():
 
 def ci_pytest_args():
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    runs = [s["run"] for s in ci["jobs"]["test"]["steps"] if "pytest" in s.get("run", "")]
+    # the full run: a `python -m pytest` step selecting "not live" (one that only installs a
+    # plugin, or runs a subset beside it, is not what make test mirrors)
+    runs = [shlex.split(s.get("run", "")) for s in ci["jobs"]["test"]["steps"]]
+    runs = [w for w in runs if w[:3] == ["python", "-m", "pytest"] and "not live" in w]
     assert len(runs) == 1, runs
-    words = shlex.split(runs[0])
-    assert words[:3] == ["python", "-m", "pytest"], words
-    return words[3:]
+    return runs[0][3:]
 
 
 def test_make_test_selects_what_the_ci_test_job_selects():
