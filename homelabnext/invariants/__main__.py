@@ -51,7 +51,11 @@ def main(argv=None) -> int:
     if ns.plugins_dir:
         load_directory(registry, ns.plugins_dir)
     out = pathlib.Path(ns.out) if ns.out else reg_path.with_name("invariants.results.json")
-    previous = json.loads(out.read_text()) if out.exists() else None
+    try:  # the last results: a truncated file (a full disk, a killed run) is bad input too
+        previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
+    except (OSError, UnicodeDecodeError, ValueError) as ex:
+        print(f"[invariants] FATAL: cannot read previous results {out}: {ex}", file=sys.stderr)
+        return 2
     skip = set(ns.skip.split(",")) if ns.skip else set()
     doc = run_criteria(
         [c for c in reg["criteria"] if c["id"] not in skip],

@@ -162,3 +162,12 @@ def test_a_sibling_with_a_missing_or_malformed_document_is_exit_2(
         (tmp_path / name).write_bytes(MALFORMED[name])
     rc, err = _sibling(tmp_path, monkeypatch, capsys, key, name)
     assert rc == 2 and name in err
+
+
+def test_invariants_run_with_unreadable_previous_results_is_exit_2(tmp_path, monkeypatch, capsys):
+    """`--out` is read back as the previous run for paging: a truncated file there (a full disk, a
+    killed run) printed a JSONDecodeError traceback with exit 1, a failed fleet, every hour after."""
+    (tmp_path / "doc.yml").write_text(REGISTER_OK)
+    (tmp_path / "res.json").write_text('{"results": ')
+    rc, err = _sibling(tmp_path, monkeypatch, capsys, "invariants run", "doc.yml")
+    assert rc == 2 and "res.json" in err
