@@ -12,7 +12,8 @@ which secret holds each key, and any extra non-agent keys.  From those three thi
   environment reference only;
 * ``litellm/keys.json``    - the virtual keys to create (``/key/generate`` bodies; LiteLLM keeps
   keys in Postgres, not in the config file), each naming the environment variable holding the
-  key, never the key;
+  key, never the key, and each tagged ``metadata["hnx-managed"]`` so provisioning can delete the
+  keys of profiles later removed from the spec;
 * ``bifrost/config.json``  - providers (one per backend, role -> model id as key aliases), virtual
   keys, per-role rate limits and budgets, routing rules for ordered bindings and fallbacks;
 * ``bifrost/pricing.json``, ``bifrost/model-parameters.json`` - empty local datasheets: Bifrost
@@ -41,7 +42,8 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
 
 :func:`audit` re-checks the *rendered* files (``hnx gen gateway --check`` runs it on what is on
 disk), so a hand edit that adds a cloud fallback to a local-only role fails the check even though
-the generator would never write it.
+the generator would never write it; it also fails a key in ``keys.json`` without the
+``hnx-managed`` tag or with a duplicate alias, since provisioning prunes by that tag.
 """
 
 from __future__ import annotations
@@ -53,7 +55,7 @@ import ipaddress
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -86,6 +88,9 @@ ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
+#: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
+#: whose alias the spec no longer declares, and never touches an untagged one
+MANAGED = "hnx-managed"
 #: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
 #: API domains of hosted model providers: no service domain or local host may sit under one, so a
@@ -165,6 +170,9 @@ class Spec:
     service_domain: str = "svc.example.internal"
     #: hosts that resolved through a registry service in a non-cloud zone
     registry_hosts: frozenset[str] = frozenset()
+    #: this gateway's identity: the value of every key's ``metadata["hnx-managed"]`` tag, which
+    #: provisioning prunes by (unnamed: keys are tagged ``true`` and never pruned)
+    name: str = ""
 
 
 def internal_host(spec: Spec, host: str) -> bool:
@@ -306,8 +314,14 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     _one_line("spec", dict(doc), problems)
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
-        "backends", "local_only", "keys", "bifrost", "serving",
+        "backends", "local_only", "keys", "bifrost", "serving", "name",
     }  # fmt: skip
+    spec_name = doc.get("name", "")
+    if spec_name != "" and not (isinstance(spec_name, str) and SLUG_RE.match(spec_name)):
+        problems.append(
+            f"name {spec_name!r} must be a lower-case slug (it tags this gateway's keys)"
+        )
+        spec_name = ""
     for k in sorted(set(doc) - known):
         problems.append(f"unknown key {k!r}")
 
@@ -526,6 +540,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     )
 
     spec = Spec(
+        name=spec_name,
         source=source,
         table=table,
         backends=backends,
@@ -811,7 +826,11 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             "key_alias": k.name,
             "key_env": secret_env_name(k.secret),
             "models": sorted(_allowed(spec, k)),
-            "metadata": {"owner": k.owner or k.name, "data_tier": k.data_tier},
+            "metadata": {
+                "owner": k.owner or k.name,
+                "data_tier": k.data_tier,
+                MANAGED: spec.name or True,
+            },
             **(
                 {"rpm_limit": _per_minute(k.max_requests, k.window_s)}
                 if k.max_requests and k.window_s
@@ -825,7 +844,8 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         }
         for k in sorted(spec.keys, key=lambda k: k.name)
     ]
-    return head + body, json.dumps({"keys": keys}, indent=2) + "\n"
+    doc_keys: dict[str, Any] = {"managed_by": spec.name} if spec.name else {}
+    return head + body, json.dumps(doc_keys | {"keys": keys}, indent=2) + "\n"
 
 
 def _allowed(spec: Spec, key: Key) -> set[str]:
@@ -1076,6 +1096,40 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
     bf = files.get("bifrost/config.json")
     if bf is not None:
         problems += [f"bifrost/config.json: {p}" for p in _audit_bifrost(bf, hosts, strict, spec)]
+    kj = files.get("litellm/keys.json")
+    if kj is not None:
+        problems += [f"litellm/keys.json: {p}" for p in _audit_keys(kj, spec.name)]
+    return problems
+
+
+def _audit_keys(text: str, name: str = "") -> list[str]:
+    """Every key is tagged ``hnx-managed`` with this gateway's ``name`` (what provisioning prunes
+    by; ``true`` for an unnamed spec), ``managed_by`` says the same, and aliases are unique."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = None
+    keys = doc.get("keys") if isinstance(doc, dict) else None
+    if not isinstance(keys, list):
+        return ["not a JSON object with a keys list"]
+    problems, seen = [], set()
+    want: Any = name or True
+    if doc.get("managed_by", "") != name:
+        problems.append(f"managed_by is {doc.get('managed_by')!r}, the spec's name is {name!r}")
+    for k in keys:
+        alias = k.get("key_alias") if isinstance(k, Mapping) else None
+        if not alias:
+            problems.append("a key has no key_alias")
+            continue
+        if alias in seen:
+            problems.append(f"key {alias} is declared twice")
+        seen.add(alias)
+        tag = (k.get("metadata") or {}).get(MANAGED)
+        if tag != want or type(tag) is not type(want):
+            problems.append(
+                f"key {alias} is not tagged metadata.{MANAGED}={want!r}: provisioning would "
+                "never delete it once its profile is removed"
+            )
     return problems
 
 
@@ -1190,6 +1244,10 @@ def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
 
 
 # ---------------------------------------------------------------------------- provisioning
+#: ``/key/list`` page size (LiteLLM's maximum)
+_PAGE = 100
+
+
 def provision_litellm(
     keys_doc: Mapping[str, Any],
     base_url: str,
@@ -1197,6 +1255,9 @@ def provision_litellm(
     *,
     environ: Mapping[str, str],
     allow_plaintext: bool = False,
+    prune: bool = True,
+    dry_run: bool = False,
+    emit: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Create, update or rotate every key of ``litellm/keys.json`` on a running LiteLLM proxy.
 
@@ -1211,6 +1272,16 @@ def provision_litellm(
       so it stops working, and the new value is created;
     * the alias is unknown: the key is created.
 
+    Then (``prune``, the default) every key on the proxy whose ``metadata["hnx-managed"]`` equals
+    this file's ``managed_by`` (the gateway spec's ``name``) and whose alias the file no longer
+    declares is deleted: a profile removed from the spec must not leave a working key behind.
+    Keys tagged by another gateway spec, or not at all, are never touched; a file without
+    ``managed_by`` (an unnamed spec) prunes nothing, and one that declares no keys refuses to.
+    Untagged keys whose alias the file does not declare are listed (a key made before the tag
+    existed has to be deleted by hand once).  ``dry_run`` sends no write and says what would
+    change.  Each line is passed to ``emit`` as it happens, so a failure part-way still shows
+    what was done.
+
     Idempotent.  Returns one line per key.
     """
     import urllib.error
@@ -1220,6 +1291,20 @@ def provision_litellm(
     from homelabnext._http import check_plaintext, safe_urlopen
 
     check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
+    declared_keys = keys_doc.get("keys") if isinstance(keys_doc, Mapping) else None
+    if not isinstance(declared_keys, list) or not all(
+        isinstance(k, Mapping) and k.get("key_alias") for k in declared_keys
+    ):
+        raise GatewaySpecError(
+            "keys file: not an object with a list of keys, each with a key_alias"
+        )
+    identity = keys_doc.get("managed_by")
+    out: list[str] = []
+
+    def say(line: str) -> None:
+        out.append(line)
+        if emit is not None:
+            emit(line)
 
     def call(path: str, body: dict | None = None) -> tuple[int, str]:
         req = urllib.request.Request(
@@ -1238,6 +1323,10 @@ def provision_litellm(
         if status != 200:
             raise GatewaySpecError(f"key {alias}: {what}: HTTP {status}: {text[:200]}")
 
+    def write(alias: str, path: str, body: dict) -> None:
+        if not dry_run:
+            ok(alias, path, *call(path, body))
+
     def tokens_of(alias: str) -> list[str]:
         q = urllib.parse.urlencode({"key_alias": alias, "return_full_object": "true"})
         status, text = call(f"/key/list?{q}")
@@ -1246,18 +1335,18 @@ def provision_litellm(
             listed = json.loads(text).get("keys") or []
         except (ValueError, AttributeError):
             raise GatewaySpecError(f"key {alias}: /key/list: not a key list") from None
-        out = []
+        found = []
         for item in listed:  # tokens, or full objects with return_full_object
             if isinstance(item, Mapping):
                 if item.get("key_alias") not in (None, alias):
                     continue  # a substring match from an older proxy: not this key
                 item = item.get("token")
             if isinstance(item, str) and item:
-                out.append(item)
-        return out
+                found.append(item)
+        return found
 
-    out = []
-    for k in keys_doc.get("keys") or []:
+    would = "would be " if dry_run else ""
+    for k in declared_keys:
         alias = k["key_alias"]
         value = environ.get(k["key_env"], "")
         if not value:
@@ -1267,15 +1356,74 @@ def provision_litellm(
         existing = tokens_of(alias)
         stale = [t for t in existing if t != digest]
         if stale:  # rotated (or duplicated): the old value must stop working before the new one
-            ok(alias, "/key/delete", *call("/key/delete", {"keys": stale}))
+            write(alias, "/key/delete", {"keys": stale})
         if digest in existing:
-            ok(alias, "/key/update", *call("/key/update", params | {"key": digest}))
+            write(alias, "/key/update", params | {"key": digest})
             verb = "rotated" if stale else "updated"
         else:
-            ok(alias, "/key/generate", *call("/key/generate", params | {"key": value}))
+            write(alias, "/key/generate", params | {"key": value})
             verb = "rotated" if stale else "created"
-        out.append(f"key {alias}: {verb} ({', '.join(k['models'])})")
+        say(f"key {alias}: {would}{verb} ({', '.join(k['models'])})")
+    if not prune:
+        return out
+    declared = {k["key_alias"] for k in declared_keys}
+    if not declared:
+        say("prune refused: the keys file declares no keys (a wrong or empty file must not delete)")
+        return out
+    if not isinstance(identity, str) or not identity:
+        say("prune skipped: the keys file has no managed_by (give the gateway spec a name)")
+        return out
+    mine, untagged = _listed_keys(call, ok, identity)
+    for alias, tokens in sorted(mine.items()):
+        if alias not in declared:
+            write(alias, "/key/delete", {"keys": sorted(tokens)})
+            say(f"key {alias}: {would}deleted (no longer declared by {identity})")
+    left = sorted(a for a in untagged if a not in declared)
+    if left:
+        say(
+            f"{len(left)} untagged key(s) whose alias this file does not declare were left alone "
+            f"(delete by hand if they belonged to a removed profile): {', '.join(left)}"
+        )
     return out
+
+
+def _listed_keys(call: Any, ok: Any, identity: str) -> tuple[dict[str, set[str]], set[str]]:
+    """Over every ``/key/list`` page: alias -> tokens of the keys tagged with ``identity``, and
+    the aliases of keys carrying no :data:`MANAGED` tag at all."""
+    import urllib.parse
+
+    mine: dict[str, set[str]] = {}
+    untagged: set[str] = set()
+    page, pages = 1, 1
+    while page <= pages:
+        q = urllib.parse.urlencode({"return_full_object": "true", "page": page, "size": _PAGE})
+        status, text = call(f"/key/list?{q}")
+        ok("*", "/key/list", status, text)
+        try:
+            doc = json.loads(text)
+            listed = doc.get("keys") or []
+            pages = int(doc.get("total_pages") or 1)
+        except (ValueError, AttributeError, TypeError):
+            raise GatewaySpecError("/key/list: not a key list") from None
+        for item in listed:
+            if not isinstance(item, Mapping):
+                continue  # a bare token carries no metadata: not provably anyone's
+            meta = item.get("metadata")
+            if isinstance(meta, str):  # some versions return the JSON column as text
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = None
+            meta = meta if isinstance(meta, Mapping) else {}
+            token, alias = item.get("token"), item.get("key_alias")
+            if not (token and alias):
+                continue
+            if meta.get(MANAGED) == identity:
+                mine.setdefault(str(alias), set()).add(str(token))
+            elif MANAGED not in meta:
+                untagged.add(str(alias))
+        page += 1
+    return mine, untagged
 
 
 # ---------------------------------------------------------------------------- CLI
@@ -1296,6 +1444,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     pv.add_argument(
         "--allow-plaintext", action="store_true", help="send the master key over http (lab only)"
     )
+    pv.add_argument(
+        "--keep-undeclared",
+        action="store_true",
+        help=f"do not delete this gateway's {MANAGED} keys whose alias the file no longer declares",
+    )
+    pv.add_argument("--dry-run", action="store_true", help="send no write; print what would change")
     args = ap.parse_args(list(argv) if argv is not None else None)
     if args.cmd == "provision":
         import os
@@ -1306,11 +1460,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 2
         try:
             doc = json.loads(Path(args.keys).read_text(encoding="utf-8"))
-            lines = provision_litellm(
-                doc, url, master, environ=os.environ, allow_plaintext=args.allow_plaintext
+            provision_litellm(
+                doc,
+                url,
+                master,
+                environ=os.environ,
+                allow_plaintext=args.allow_plaintext,
+                prune=not args.keep_undeclared,
+                dry_run=args.dry_run,
+                emit=lambda line: print(line, flush=True),
             )
-            for line in lines:
-                print(line)
         except (OSError, ValueError) as exc:
             print(f"gateway: {exc}", file=sys.stderr)
             return 1

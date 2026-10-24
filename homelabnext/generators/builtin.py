@@ -126,29 +126,28 @@ def hosts_file(reg: Registry) -> dict[str, str]:
 # 3 ---------------------------------------------------------------- Caddy
 #: the identity headers forward_auth copies from the IdP's answer onto the request
 FORWARD_AUTH_HEADERS = ("X-Authentik-Username", "X-Authentik-Groups")
-#: the prefix every identity header of the IdP's carries: a client-sent one is always dropped
-IDENTITY_HEADER_PREFIX = "X-Authentik-"
-#: the same prefix spelled with underscores: Caddy up to 2.11.1 passes ``X_Authentik_Groups``
-#: through a strip of ``X-Authentik-*``, and a CGI-style upstream (PHP-FPM, WSGI ``environ``,
-#: Django ``META``) folds it into the same ``HTTP_X_AUTHENTIK_GROUPS`` as the real header
-IDENTITY_HEADER_PREFIX_UNDERSCORE = IDENTITY_HEADER_PREFIX.replace("-", "_")
+#: the word every identity header of the IdP's carries.  The snippet deletes every client-sent
+#: header whose name contains it, in any case and with any separators: a CGI-style upstream
+#: (PHP-FPM, WSGI ``environ``, Django ``META``) folds ``-`` and ``_`` alike, so
+#: ``X-Authentik-Groups``, ``X_Authentik_Groups`` and the mixed ``X-Authentik_Groups`` all become
+#: ``HTTP_X_AUTHENTIK_GROUPS``, and a prefix wildcard per spelling misses the mixed ones (Caddy up
+#: to 2.11.1 passes them; 2.11.7's ``reverse_proxy`` happens to drop every name with an ``_``)
+IDENTITY_HEADER_MARK = "authentik"
 
 
 def _forward_auth_snippet(endpoint: str) -> str:
     """The ``hnx_forward_auth`` snippet.  Before ``forward_auth`` runs, every identity header a
-    *client* sent is deleted: Caddy 2.9.0 to 2.11.1 keep a client-sent header that the IdP's
-    answer omits, so without the strip a client could name its own user or groups to the
-    service.  The deletes and ``forward_auth`` sit in one ``route``, which runs its directives in
-    the order written (``forward_auth`` otherwise sorts before ``request_header``, and the strip
-    would delete the IdP's own headers instead)."""
-    strip = "".join(f"\t\trequest_header -{h}\n" for h in FORWARD_AUTH_HEADERS)
+    *client* sent is deleted (``request_header -*authentik*``: Caddy matches a ``*x*`` delete
+    case-insensitively anywhere in the name, so every separator and case spelling goes): Caddy
+    2.9.0 to 2.11.1 keep a client-sent header that the IdP's answer omits, so without the strip a
+    client could name its own user or groups to the service.  The delete and ``forward_auth`` sit
+    in one ``route``, which runs its directives in the order written (``forward_auth`` otherwise
+    sorts before ``request_header``, and the strip would delete the IdP's own headers instead)."""
     return (
         "(hnx_forward_auth) {\n"
         "\troute {\n"
         "\t\t# client-sent identity headers never reach the service, whatever the IdP answers\n"
-        f"\t\trequest_header -{IDENTITY_HEADER_PREFIX}*\n"
-        f"\t\trequest_header -{IDENTITY_HEADER_PREFIX_UNDERSCORE}*\n"
-        f"{strip}"
+        f"\t\trequest_header -*{IDENTITY_HEADER_MARK}*\n"
         f"\t\tforward_auth {endpoint} {{\n"
         "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
         f"\t\t\tcopy_headers {' '.join(FORWARD_AUTH_HEADERS)}\n"
@@ -171,7 +170,13 @@ def caddy(reg: Registry) -> dict[str, str]:
     for s in reg.sorted_services():
         if not s.public_hostname:
             continue
-        auth_block = "\timport hnx_forward_auth\n" if (s.auth == "idp" and idp) else ""
+        auth_block = ""
+        if s.auth == "idp" and idp:
+            # the site-level strip runs before every handle and route of the site (Caddy sorts
+            # request_header first), so a path that never reaches the snippet's route (a handle
+            # added beside it, a matcher on a route) still reaches the service without the
+            # client's identity headers; the route-level strip in the snippet stays as well
+            auth_block = f"\trequest_header -*{IDENTITY_HEADER_MARK}*\n\timport hnx_forward_auth\n"
         proxy_block = ""
         if s.front_door and auth_block:
             # the shared secret that tells the service this request came through the edge (and

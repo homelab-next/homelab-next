@@ -18,7 +18,6 @@ ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 #: holder); an entry goes when its ADR merges, and one whose ADR exists is an error
 RESERVED = {
     26: "the orchestrator as a component of this repository (planned with it)",
-    29: "holds released by liveness (open on claude/orchestration-holds)",
 }
 
 

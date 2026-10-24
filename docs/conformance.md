@@ -78,7 +78,10 @@ def _(store):  # the subject: any implementation of the Protocol
   what the implementation offers: a check with `requires=[...]` is skipped, not failed, when one
   is absent.  *Test hooks* (`clock-control`, `fault-injection`) only let the suite reach a state:
   a `must` check that needs an undeclared hook is **`untested`**, which fails the capability like
-  a failure, so not declaring a hook is never a way around a MUST.  Security properties do not
+  a failure, so not declaring a hook is never a way around a MUST.  The product decides first: a
+  check that needs both a product feature and a hook skips when the product feature is absent
+  (a target without `admission` has no capacity for a killed worker to leak), and is
+  `untested` only when the product is there and the hook is not.  Security properties do not
   hide behind a hook at all: token and lease expiry use `tick()` when the subject has it and
   otherwise wait in real time (a one-second ttl).  Skips never count as a pass of anything.
 * **Waivers.** A target may waive a `should` check with a written reason; the report shows it.
@@ -178,7 +181,9 @@ MUTANTS = {
 
 `hnx conform mutants` and `tests/conform/test_conform_mutants.py` assert each mutant is caught
 **by that check**, so a regression in a suite shows up as a named check, not as silence.  The named check
-must be a `must` that always executes (no `requires`, not `skippable`): a mutant caught only by a
+must be a `must` that always executes against the mutant (not `skippable`, and every feature it
+`requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
+mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a
 check that can skip proves nothing about a target on which it skips, and the report counts it as
 not caught.  Each conformance gap fixed in a suite ships with the mutant that reproduces it.
 

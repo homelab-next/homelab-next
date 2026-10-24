@@ -3,6 +3,9 @@
 # from serving.yml (port, and locality local), and every binding resolves to a store entry its
 # engine may serve.
 #   hnx gen gateway render examples/model-serving/gateway.yml examples/model-serving/gateway
+# the gateway's identity: every key it declares is tagged with it, and provisioning deletes
+# only keys with this tag that the spec no longer declares (docs/llm-gateway.md)
+name: model-serving-example
 roles: model_roles.json
 serving: serving.yml
 domain: example.internal

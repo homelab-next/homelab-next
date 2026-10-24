@@ -275,6 +275,32 @@ criteria:
   remediation: >-
     Trust the internal CA instead of turning verification off; a client that skips verification
     accepts any certificate, so anyone on the path can read and change its traffic.
+- id: F-23
+  statement: No Caddy config lets a client set its own identity headers.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 tools/caddy_lint.py; rc=$?; [ "$rc" -eq 2 ] && exit 100;
+    [ "$rc" -eq 0 ] && echo edge strips identity headers; exit "$rc"
+  expected: >-
+    exit 0 (in a config with forward_auth, every site that runs it or proxies strips identity
+    headers at site level first, the IdP's own site excepted; every forward_auth sits in a route
+    after a delete of its copy_headers, every - and _ spelling; no header directive sets or
+    rewrites an identity header, no FastCGI env sets an identity variable from the client, no
+    forward_auth dial is chosen by the request; nothing the lint cannot read; with a caddy binary, Caddy's
+    own adapted JSON reaches no upstream with one undeleted; every Caddy pin 2.11.2 or later);
+    exit 100 when the lint cannot run (a missing dependency or a bad allowlist), which is
+    could-not-measure. A run without a caddy binary judges the Caddyfiles by text only and says
+    so; CI's schemas job pins Caddy and requires it.
+  expect_regex: edge strips identity headers
+  remediation: >-
+    Put request_header -*authentik* first in every site that runs forward_auth or proxies in a
+    config that has one, and forward_auth
+    in a route that first runs request_header -*authentik* (or deletes each copied header in
+    every - and _ spelling), as the generated sites and hnx_forward_auth snippet do, and pin
+    Caddy 2.11.2 or later. Otherwise a client sends its own username or groups, on a path that
+    skips the auth route or when the identity provider's answer omits them, and the service
+    trusts the forgery.
 - id: F-17
   statement: Nothing at runtime points at the workstation.
   evidence: auto
