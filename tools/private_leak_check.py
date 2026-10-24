@@ -778,9 +778,10 @@ SCOPE_EXEMPT = {
 _SCOPE_KEY = re.compile(
     r"""(?<![\w$-])[`*_"']*scope[`*_"'\]}]*"""  # Markdown `scope`, **scope**, _scope_, quotes
     r"""(?:[ \t]*(?:\#[^\n]*)?\n)*[ \t]*"""  # comment lines and line breaks before the colon
-    # scope: or a dotted scope.x key, which needs its own : or = (scope.get( is no key); the
-    # path is at most 256 characters, possessive, so a run of them stays linear
-    r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_][\w"'`*. \t-]{0,256}+(?::(?!:)|[|+]?=(?!=)))"""
+    # scope: or a dotted scope.x key, which needs its own : or = (scope.get( is no key), an
+    # index allowed (helm --set scope.target[0]=); the path is at most 256 characters,
+    # possessive, so a run of them stays linear
+    r"""(?::(?!:)|\.[ \t]*["']?[A-Za-z_][\w"'`*. \t\[\]-]{0,256}+(?::(?!:)|[|+]?=(?!=)))"""
     r"""|^[ \t]*["']?scope["']?[ \t]*=(?!=)"""  # scope = at a line's start (TOML, INI)
     r"""|(?<=[{,])[ \t]*["']?scope["']?[ \t]+=[ \t]"""  # in a TOML inline table, spaced
     r"""|^[ \t]*\|[ \t]*[`*_]*scope(?:\.[\w.]+)?[`*_]*[ \t]*\|"""  # a Markdown table row

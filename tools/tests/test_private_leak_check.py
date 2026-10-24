@@ -666,6 +666,7 @@ ADDRESS_CASES = {
     "toml spaced dotted key": f'scope . trusted . wan = ["{PADDED}/32"]\n',
     "toml quoted dotted key": f'scope."trusted".wan = ["{PADDED}/32"]\n',
     "attribute assignment": f'self.scope.target = ["{PRIVATE_NET}"]\n',
+    "indexed dotted key": f"helm upgrade x . --set scope.target[0]={SHORT_PRIVATE}/16\n",
     # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
     "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
     "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
