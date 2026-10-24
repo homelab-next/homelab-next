@@ -20,8 +20,8 @@ Only what the ``orchestration`` adapter touches, each shape taken from the contr
 * reload -- re-reads every ``*.yaml`` in the profiles directory, keyed by ``agent_key``, ``500``
   on a bad file with the old registry kept (``handlers.go:216-228``,
   ``internal/profile/profile.go:171-200``);
-* scheduling -- one job at a time (``-concurrency`` defaults to 1, ``cmd/controller/main.go:31``),
-  lowest priority number first, then submit order.  The live controller admits on a 2 s tick
+* scheduling -- ``concurrency`` jobs at a time (``-concurrency`` defaults to 1,
+  ``cmd/controller/main.go:31``), lowest priority number first, then submit order.  The live controller admits on a 2 s tick
   (``main.go:225``), so a cancel sent right after a submit nearly always lands first; to make that
   deterministic here a job becomes admittable once its status has been read (a client is waiting
   on it) or ``admit_delay`` seconds after it was submitted, whichever comes first;
@@ -31,12 +31,31 @@ Only what the ``orchestration`` adapter touches, each shape taken from the contr
   the ``response_body``, a non-zero exit fails the job with ``hermes -z failed: exit status N
   (stderr: ...)`` as ``local_failed_reason`` (``internal/hermesagent/invoker.go:379-382``), once
   -- there is no retry.  Any other ``agent_key`` takes the passthrough
-  (``scheduler.go:535-565``) to a backend that is not there: ``failed``, cloud fallback used.
+  (``scheduler.go:535-565``) to a backend that is not there: ``failed``, cloud fallback used;
+* holds -- a profiled job reserves a slot on its backend (``primary-local``) when it is
+  dispatched and releases it in a defer on every exit path (``scheduler.go:409-435``,
+  ``executeViaHermesAgent``); the hermes call runs under the job's context, so a cancel
+  (``Scheduler.CancelRun``, ``scheduler.go:229-238``, called by the cancel handler) kills the
+  process and the defer releases the slot;
+* restart -- :meth:`FakeController.restart` models a controller process restart: in-memory
+  counters, reservations and workers are gone (a hermes process the old controller started may
+  outlive it, but whatever it produces is never recorded), the job rows persist, and startup runs
+  ``ReconcileOrphans`` (``internal/store/store.go:659-678``): ``admitted`` jobs go back to
+  ``queued``, ``running`` jobs become ``failed`` with ``controller-restart-reconciliation``;
+  ``awaiting_inference`` is left alone, as there (no job here ever enters it).  The idempotency
+  index is a table, so keys survive.  :meth:`FakeController.kill` makes one job's hermes process
+  die (``signal: killed``), the way an OOM kill or a crash would.
 
 ``fixes`` turns on the controller changes proposed for the two failing MUST checks (the patch
 series in docs/orchestration-controller.md): ``reject-unknown-agent-key`` answers ``404 unknown
 agent_key`` for an unprofiled key without ``request_body``; ``max-attempts`` honours a profile's
-``max_attempts`` (same run id, never after a cancel) and reports ``attempts``.
+``max_attempts`` (same run id, never after a cancel) and reports ``attempts``.  It also takes
+the :data:`UPSTREAM` changes that landed in the controller after ``a52a1c4``:
+``backend-inflight`` serves ``GET /admin/backend-inflight`` (``internal/api/server.go``,
+``WithBackendInFlight``; ``hermesagent.Policy.InFlightSnapshot``): ``{"backends": {name:
+{"in_flight": n, "reserved_runs": [run ids]}}}``, a backend listed once it has been used.
+Only slots are modelled: the token-weighted reservations and exclusive leases the live
+controller also keeps are not.
 """
 
 from __future__ import annotations
@@ -57,6 +76,11 @@ from conformance.fakes import llm_orchestrator_hermes as hermes
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow fake server binds loopback only
 FIXES = frozenset({"reject-unknown-agent-key", "max-attempts"})
+#: controller changes that landed upstream after a52a1c4 (not proposals), opt-in like ``fixes``
+UPSTREAM = frozenset({"backend-inflight"})
+#: ``store.ReconcileFailedReason``
+RECONCILE_REASON = "controller-restart-reconciliation"
+BACKEND = "primary-local"
 TRANSITIONS = {
     "queued": ("admitted", "cancelled"),
     "admitted": ("running", "queued"),
@@ -75,18 +99,29 @@ class FakeController:
         fixes: Iterable[str] = (),
         admit_delay: float = 2.0,
         tick: float = 0.02,
+        concurrency: int = 1,
         clock: Callable[[], float] = time.monotonic,
         runtime: Callable[..., tuple[int, str, str]] = hermes.run,
     ):
         self.fixes = frozenset(fixes)
-        if not self.fixes <= FIXES:
-            raise ValueError(f"unknown fixes {sorted(self.fixes - FIXES)}; known {sorted(FIXES)}")
+        known = FIXES | UPSTREAM
+        if not self.fixes <= known:
+            raise ValueError(f"unknown fixes {sorted(self.fixes - known)}; known {sorted(known)}")
+        if concurrency < 1:
+            raise ValueError("concurrency must be >= 1")
+        self.concurrency = concurrency
         self.profiles_dir = Path(profiles_dir)
         self.admit_delay, self.tick = admit_delay, tick
         self._clock, self._runtime = clock, runtime
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._seq = 0
+        # in-memory state a restart loses: the epoch tags what belongs to the current process
+        self._epoch = 0
+        self._workers: dict[str, int] = {}  # run id -> epoch of the execution holding a slot
+        self._reserved: dict[str, int] = {}  # run id -> epoch, a reservation on BACKEND
+        self._backends: set[str] = set()  # backends with an in-flight counter
+        self._kills: dict[str, threading.Event] = {}  # run id -> its hermes process's kill
         self.profiles: dict[str, dict[str, Any]] = self._load_profiles()
         self._stop = threading.Event()
         self._server: ThreadingHTTPServer | None = None
@@ -217,18 +252,58 @@ class FakeController:
             if "cancelled" not in TRANSITIONS.get(job["state"], ()):
                 return 409, "job is not in a cancellable state"
             job["state"] = "cancelled"
+            kill = self._kills.get(run_id)
+        if kill is not None:  # cancelRun: the job's context is cancelled, its process killed
+            kill.set()
         return 200, ""
+
+    def inflight(self) -> tuple[int, Any]:
+        if "backend-inflight" not in self.fixes:
+            return 404, "404 page not found"
+        with self._lock:
+            out = {b: {"in_flight": 0, "reserved_runs": []} for b in sorted(self._backends)}
+            for run_id in self._reserved:
+                out[BACKEND]["in_flight"] += 1
+                out[BACKEND]["reserved_runs"].append(run_id)
+        return 200, {"backends": out}
+
+    # ---------------------------------------------------------------- fault injection
+    def kill(self, run_id: str) -> bool:
+        """The hermes process of ``run_id`` dies; False when it has none running."""
+        with self._lock:
+            kill = self._kills.get(run_id)
+        if kill is None:
+            return False
+        kill.set()
+        return True
+
+    def restart(self) -> None:
+        """A controller process restart: memory lost, rows kept, then ReconcileOrphans."""
+        with self._lock:
+            self._epoch += 1
+            self._workers.clear()
+            self._reserved.clear()
+            self._backends.clear()
+            self._kills.clear()  # the old processes are not this process's to kill
+            for job in self._jobs.values():
+                if job["state"] == "admitted":
+                    job["state"] = "queued"
+                elif job["state"] == "running":
+                    job["state"] = "failed"
+                    job["local_failed_reason"] = job.get("local_failed_reason") or RECONCILE_REASON
 
     # ---------------------------------------------------------------- scheduling
     def _schedule(self) -> None:
         while not self._stop.wait(self.tick):
-            job = self._admit()
-            if job is not None:
-                self._execute(job)
+            while (admitted := self._admit()) is not None:
+                job, epoch = admitted
+                threading.Thread(target=self._execute, args=(job, epoch), daemon=True).start()
 
-    def _admit(self) -> dict[str, Any] | None:
+    def _admit(self) -> tuple[dict[str, Any], int] | None:
         now = self._clock()
         with self._lock:
+            if len(self._workers) >= self.concurrency:
+                return None
             ready = [
                 j
                 for j in self._jobs.values()
@@ -239,29 +314,82 @@ class FakeController:
                 return None
             job = min(ready, key=lambda j: (j["priority"], j["seq"]))
             job["state"] = "running"
+            job["epoch"] = self._epoch
             job["started_at"] = datetime.fromtimestamp(0, UTC).isoformat().replace("+00:00", "Z")
-            return job
+            self._workers[job["run_id"]] = self._epoch
+            self._kills[job["run_id"]] = threading.Event()
+            return job, self._epoch
 
-    def _finish(self, job: dict[str, Any], state: str, **fields: Any) -> None:
+    def _finish(self, job: dict[str, Any], epoch: int, state: str, **fields: Any) -> None:
         with self._lock:
-            if job["state"] != "running":  # a cancel won the compare-and-swap: keep it
-                return
+            if job["state"] != "running" or job.get("epoch") != epoch:
+                return  # a cancel won the compare-and-swap, or a restart reconciled the row
             job.update(fields)
             job["state"] = state
 
-    def _execute(self, job: dict[str, Any]) -> None:
+    def _release(self, table: dict[str, int], run_id: str, epoch: int) -> None:
+        """A defer of the execution of ``epoch``: a restart already dropped what it held."""
+        with self._lock:
+            if table.get(run_id) == epoch:
+                del table[run_id]
+
+    def _call(self, run_id: str, argv: list[str]) -> tuple[int, str, str]:
+        """One hermes invocation, which a kill (or a cancel) ends at once, as exec.CommandContext
+        would; the stand-in's own work is abandoned, the way a killed process's is."""
+        with self._lock:
+            kill = self._kills.get(run_id) or threading.Event()
+        box: list[tuple[int, str, str]] = []
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                box.append(self._runtime(argv))
+            finally:
+                done.set()
+
+        threading.Thread(target=run, daemon=True).start()
+        while not done.wait(0.01):
+            if kill.is_set():
+                return -9, "", ""
+        return box[0] if box else (1, "", "hermes stand-in raised")
+
+    def _execute(self, job: dict[str, Any], epoch: int) -> None:
+        run_id = job["run_id"]
+        try:
+            self._run_job(job, epoch)
+        finally:
+            self._release(self._workers, run_id, epoch)
+            with self._lock:
+                if self._epoch == epoch:
+                    self._kills.pop(run_id, None)
+
+    def _run_job(self, job: dict[str, Any], epoch: int) -> None:
+        run_id = job["run_id"]
         with self._lock:
             profile = self.profiles.get(job["agent_key"])
         if profile is None:
             self._finish(
-                job, "failed", cloud=True, local_failed_reason="primary-local: unreachable"
+                job, epoch, "failed", cloud=True, local_failed_reason="primary-local: unreachable"
             )
             return
         toolsets = (profile.get("toolsets") or {}).get("real") or ""
         if not toolsets:
             reason = f"{job['agent_key']} profile is missing its toolsets configuration"
-            self._finish(job, "failed", local_failed_reason=reason)
+            self._finish(job, epoch, "failed", local_failed_reason=reason)
             return
+        with self._lock:  # ReserveBackend; the defer below is ReleaseReservedBackend
+            if self._epoch != epoch:
+                return
+            self._reserved[run_id] = epoch
+            self._backends.add(BACKEND)
+        try:
+            self._attempts(job, epoch, profile, toolsets)
+        finally:
+            self._release(self._reserved, run_id, epoch)
+
+    def _attempts(
+        self, job: dict[str, Any], epoch: int, profile: dict[str, Any], toolsets: str
+    ) -> None:
         prompt = (job["task_description"] or profile.get("default_task_description", "")) + (
             _CONTRACTS
         )
@@ -269,21 +397,30 @@ class FakeController:
         if "max-attempts" in self.fixes:
             limit = max(int(profile.get("max_attempts") or 1), 1)
         for attempt in range(1, limit + 1):
-            code, out, err = self._runtime(["-z", prompt, "--toolsets", toolsets])
+            code, out, err = self._call(job["run_id"], ["-z", prompt, "--toolsets", toolsets])
             with self._lock:
-                job["attempts"] = attempt
-                cancelled = job["state"] != "running"
-            if code == 0 or cancelled:
+                if job.get("epoch") == epoch:
+                    job["attempts"] = attempt
+                cancelled = job["state"] != "running" or job.get("epoch") != epoch
+            if code == 0 or code == -9 or cancelled:
                 break
         if code == 0:
             self._finish(
-                job, "done", response_body=out.rstrip("\n"), local_backend_used="primary-local"
+                job,
+                epoch,
+                "done",
+                response_body=out.rstrip("\n"),
+                local_backend_used="primary-local",
             )
             return
-        reason = f"hermes -z failed: exit status {code}"
+        reason = (
+            "hermes -z failed: signal: killed"
+            if code == -9
+            else (f"hermes -z failed: exit status {code}")
+        )
         if err.strip():
             reason += f" (stderr: {err.strip()})"
-        self._finish(job, "failed", local_failed_reason=reason)
+        self._finish(job, epoch, "failed", local_failed_reason=reason)
 
 
 def _handler(ctl: FakeController) -> type[BaseHTTPRequestHandler]:
@@ -315,6 +452,8 @@ def _handler(ctl: FakeController) -> type[BaseHTTPRequestHandler]:
             parts = self.path.split("?")[0].strip("/").split("/")
             if len(parts) == 2 and parts[0] == "jobs":
                 self._send(*ctl.status(parts[1]))
+            elif parts == ["admin", "backend-inflight"]:
+                self._send(*ctl.inflight())
             else:
                 self._send(404, "404 page not found")
 
