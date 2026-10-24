@@ -56,6 +56,29 @@
     },
     {
       "exit": {
+        "0": "clean",
+        "1": "a finding (strip, reset, dial, parse, coverage, generate, semantic, pin or allowlist)",
+        "2": "usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)"
+      },
+      "id": "caddy-lint",
+      "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, Caddy JSON/YAML, registries, Dockerfiles, other pins), the caddy generator, tools/caddy_lint.allow.yml and a caddy binary when one is available (required in CI)",
+      "invariant": [
+        "F-23"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per unprotected forward_auth or site, identity header set outside copy_headers, construct the lint cannot read, unread config, path Caddy's own JSON shows reaching an upstream unstripped, vulnerable Caddy pin or stale allowlist rule",
+      "owner": "maintainers",
+      "path": "tools/caddy_lint.py",
+      "purpose": "Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:caddy-lint"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
         "1": "a section is missing",
         "2": "the version or CHANGELOG.md cannot be read"
