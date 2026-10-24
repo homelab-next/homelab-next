@@ -207,6 +207,31 @@ def test_a_must_needing_an_undeclared_test_hook_is_untested_not_skipped():
     assert declared["needs-clock"].status == "pass"
 
 
+def test_a_missing_product_feature_skips_even_when_the_hook_is_missing_too():
+    """The product decides first: with no ``admission`` there is no capacity for a fault to
+    leak, so a MUST needing ``admission`` and ``fault-injection`` skips on a target with
+    neither; only a target that has the product but not the hook is ``untested``."""
+    s = Suite("d", "d")
+    s.check("needs-both", "x", requires=["admission", "fault-injection"])(lambda x: None)
+    assert by_id(run_checks(s, object))["needs-both"].status == "skip"
+    assert "admission" in by_id(run_checks(s, object))["needs-both"].evidence
+    product_only = by_id(run_checks(s, object, features=["admission"]))["needs-both"]
+    assert product_only.status == "untested" and not product_only.ok
+    both = by_id(run_checks(s, object, features=["admission", "fault-injection"]))
+    assert both["needs-both"].status == "pass"
+
+
+def test_can_skip_with_counts_the_features_a_subject_declares():
+    s = Suite("d", "d")
+    s.check("needs-both", "x", requires=["admission", "fault-injection"])(lambda x: None)
+    s.check("soft", "x", skippable=True)(lambda x: None)
+    specs = {sp.id: sp for sp in s.specs}
+    assert specs["needs-both"].can_skip
+    assert specs["needs-both"].can_skip_with(["admission"])
+    assert not specs["needs-both"].can_skip_with(["admission", "fault-injection", "deadline"])
+    assert specs["soft"].can_skip_with(["anything"])  # skippable always can
+
+
 def test_unknown_only_ids_are_a_misconfiguration():
     with pytest.raises(ValueError, match="no check"):
         run_checks(_suite(), Subject, only=["passes", "no-such-id"])
