@@ -17,8 +17,12 @@
                                                   ``docs/terms.md``).
 ``keyring build|check SOURCES``                   generate the keyring from its sources, or fail
                                                   when the committed one has drifted (M-12).
-``lint [PATH ...]``                               readers cannot act: every agent profile and
-                                                  context manifest under PATH (default ``.``).
+``lint [PATH ...]``                               readers cannot act (G-03) and actors act only
+                                                  through the broker (G-13): every agent profile
+                                                  and context manifest under PATH (default
+                                                  ``.``); ``--rule R`` runs one of the two,
+                                                  ``--policy P`` supplies each profile's
+                                                  ``direct_mcp`` (without it no direct server).
 ``prompts lint [PATH ...]``                         G-01 template lint (default: shipped templates).
 ``prompts render TEMPLATE [--values FILE]``         render a template (default: its examples).
 ``injection run [--fake MODE | --role ROLE ...]``   G-02 injection eval; ``--check`` a golden.
@@ -29,11 +33,12 @@ Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets, read
 data_tier, model_role}}}``, owned and reviewed separately from the specs (``data_tier`` and
 ``model_role`` are attested there: a profile must match, and only an attested ``local-only``
 profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
-Exit codes: 0 ok, 1 refused (missing part, ceiling, reader or budget violation, an invalid spec,
-policy, lock, manifest or inputs document; for ``lint``, a reader holding an acting tool or no
-profile found at all), 2 a usage error or a spec, library, policy, lock, manifest, inputs,
-profile or broker file that cannot be read or parsed, 3 (``pack`` only) the pack was assembled
-but is ``deferred``.  ``prompts lint`` and ``injection`` exit 1 on any problem,
+Exit codes: 0 ok, 1 refused (missing part, ceiling, reader, broker or budget violation, an
+invalid spec, policy, lock, manifest or inputs document; for ``lint``, a reader holding an acting
+tool, a profile acting other than through the broker, or no profile found at all), 2 a usage
+error or a spec, library, policy, lock, manifest, inputs, profile or broker file that cannot be
+read or parsed, 3 (``pack`` only) the pack was assembled but is ``deferred``.  ``prompts lint``
+and ``injection`` exit 1 on any problem,
 instruction-follow, error or stale report.  ``--classes FILE`` replaces the packaged
 capability-class table (``homelabnext/agent/tool_classes.yml``) for ``compile``, ``verify`` and
 ``lint``; its ``mcp`` section is always the MCP catalog's (a table with its own is refused).
@@ -55,7 +60,7 @@ from .compiler import CeilingPolicy, PartsLibrary, compile_profile, verify_profi
 from .errors import AgentError
 from .pack import assemble_pack
 from .prompts_cli import add_injection_parser, add_prompts_parser, run_injection, run_prompts
-from .readers import ToolClasses, lint_paths
+from .readers import RULES, ToolClasses, lint_paths
 from .schemas import schema_errors
 
 
@@ -167,9 +172,21 @@ def main(argv: list[str]) -> int:
     v.add_argument("--lock", help="reviewed digests: {profiles: {<profile id>: <digest>}}")
     for sp in (c, v):
         sp.add_argument("--classes", help="capability-class table (default: the packaged one)")
-    li = sub.add_parser("lint", help="readers cannot act: lint every agent profile and manifest")
+    li = sub.add_parser(
+        "lint",
+        help="readers cannot act, actors act via the broker: lint every profile and manifest",
+    )
     li.add_argument("paths", nargs="*", default=["."])
     li.add_argument("--classes", help="capability-class table (default: the packaged one)")
+    li.add_argument(
+        "--rule",
+        choices=RULES,
+        action="append",
+        help="run only this rule (repeatable; default all)",
+    )
+    li.add_argument(
+        "--policy", help="ceiling policy whose direct_mcp entries allow acts_via: direct servers"
+    )
     p = sub.add_parser("pack", help="assemble a context pack")
     p.add_argument("manifest")
     p.add_argument("--inputs", required=True)
@@ -210,9 +227,27 @@ def main(argv: list[str]) -> int:
         classes = ToolClasses.load(args.classes) if getattr(args, "classes", None) else None
         if args.cmd == "lint":
             notes: list[tuple[str, str]] = []
-            problems, counts = lint_paths(args.paths, classes, notes)
-            for where, prob in problems:
-                print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+            rules = tuple(args.rule or RULES)
+            policy = _policy(args.policy) if args.policy else None
+            if policy is not None:
+                notes += [(str(args.policy), n) for n in policy.direct_notes(classes)]
+            by_rule: dict[str, list[tuple[str, str]]] = {}
+            problems, counts = lint_paths(
+                args.paths, classes, notes, policy=policy, rules=rules, by_rule=by_rule
+            )
+            judged = {x for got in by_rule.values() for x in got}
+            for where, prob in problems:  # a file that is not there or does not parse
+                if (where, prob) not in judged:
+                    print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+            for rule in rules:  # each rule's own problems and count
+                got = by_rule.get(rule, [])
+                for where, prob in got:
+                    print(f"hnx agent lint: {where}: {prob}", file=sys.stderr)
+                print(
+                    f"hnx agent lint: {rule}: {counts['profile']} profile(s), "
+                    f"{counts['manifest']} manifest(s), {len(got)} problem(s)",
+                    file=sys.stderr,
+                )
             for where, note in notes:
                 print(f"hnx agent lint: note: {where}: {note}", file=sys.stderr)
             print(

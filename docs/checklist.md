@@ -222,7 +222,7 @@ Untrusted content cannot drive actions.
 | G-01 | Untrusted content is delimited | Every prompt template wraps ingested content in untrusted-data delimiters (template lint: `hnx agent prompts lint`) | PUBLIC-NOW |
 | G-02 | Prompt-injection defences are tested | Injection corpus passes with 0 instruction-follows before each model or prompt change (`hnx agent injection run`; CI against the fence-respecting fake with a golden report, `make injection-eval` against a real model) | PUBLIC-NOW |
 | G-03 | Readers cannot act | Agents that read raw content hold no shell, file-write or egress tool (profile lint and refusal test: `reads_untrusted`, `hnx agent lint`, compiler and `verify` refuse) | PUBLIC-NOW |
-| G-04 | Actors act only through allowlisted actions | Actors receive validated structured input; actions pass the allowlist (`homelabnext.agent.handoff`: only a validated `report_result` output is accepted, free text never becomes an action parameter, undeclared or unlisted actions are refused) | PUBLIC-NOW |
+| G-04 | Actors act only through allowlisted actions | Actors receive validated structured input; actions pass the allowlist (`homelabnext.agent.handoff`: only a validated `report_result` output is accepted, free text never becomes an action parameter, undeclared or unlisted actions are refused); the observable also runs the broker rule over every profile (G-13), since an actor holding a direct tool is not limited to allowlisted actions | PUBLIC-NOW |
 | G-05 | Agents are never admin | No agent identity can use sudo or read admin credentials | SERVER |
 | G-06 | Agent egress is allowlisted | A connection to a non-allowlisted destination is refused | SERVER |
 | G-07 | Kernel enforcement is active | Runtime policy loaded on every AI host; a write outside allowed paths is blocked and reported | SERVER |
@@ -230,6 +230,7 @@ Untrusted content cannot drive actions.
 | G-09 | Every AI action is auditable | Model and tool calls logged off-host tamper-evidently | SERVER |
 | G-10 | Rate and cost limits hold | Exceeding a limit throttles and alerts (test) (`homelabnext/registry/limits.py`) | PUBLIC-NOW |
 | G-11 | Model versions are pinned | Each model is pinned by version and hash; changes pass CI evaluation (`hnx golden pins check`) | PUBLIC-NOW |
+| G-13 | Agents act only through the broker | Any profile, reader or not, holds an acting grant (exec, file-write, send, credential) only through the broker: an acting MCP server is the broker's own front (structural, with its exact tools) or a direct exception (a `direct_reason`, a current human approve review and the ceiling policy's `direct_mcp` entry for that profile), every capability classed (an unclassed one is refused), no acting capability but `cap:broker`, an acting tier only with `cap:broker` (`hnx agent lint --rule actors-act-via-broker` with the ceiling policy; the compiler, `verify`, the client render and the module rules refuse; ADR-0030) | PUBLIC-NOW |
 
 ## K - Fast classifiers and decision specs
 
@@ -306,4 +307,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 183 criteria across 16 pillars; 99 PUBLIC-NOW, 84 SERVER.
+**Totals:** 184 criteria across 16 pillars; 100 PUBLIC-NOW, 84 SERVER.

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.1",
   "title": "MCP catalog record",
-  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`).",
+  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -219,6 +219,19 @@
         "$ref": "#/$defs/tool"
       }
     },
+    "acts_via": {
+      "enum": [
+        "broker",
+        "direct"
+      ],
+      "description": "How the server's acting tools (a tool in a broker_only class of homelabnext/agent/tool_classes.yml: exec, file-write, send, credential) reach the world (1.1, ADR-0030). broker: only the broker's own MCP front (hnx-broker, checked structurally: its origin, launch and exact tools), whose tools are calls to the broker, which allowlists, approves and audits them; direct: the server acts itself, so a profile may hold it only by an exception: a direct_reason here, a current human approve review of the record, and the ceiling policy's direct_mcp entry for that profile. An active or deprecated server with an acting tool must declare it (hnx mcp catalog check)."
+    },
+    "direct_reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "description": "Why the server acts directly rather than through the broker (1.1); required with acts_via: direct and only allowed with it."
+    },
     "author": {
       "type": "string",
       "pattern": "^(unknown|[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+)$(?!\\n)",
@@ -292,6 +305,32 @@
       }
     }
   ],
+  "dependentSchemas": {
+    "acts_via": {
+      "if": {
+        "properties": {
+          "acts_via": {
+            "const": "direct"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "direct_reason"
+        ]
+      }
+    },
+    "direct_reason": {
+      "properties": {
+        "acts_via": {
+          "const": "direct"
+        }
+      },
+      "required": [
+        "acts_via"
+      ]
+    }
+  },
   "$defs": {
     "slug": {
       "type": "string",
@@ -641,13 +680,14 @@
               "exec",
               "file-write",
               "egress",
+              "send",
               "credential"
             ]
           }
         },
         "approval": {
           "type": "boolean",
-          "description": "Calling it needs a person's approval (through the broker or the client)."
+          "description": "Calling it needs a person's approval. Only the broker grants one (bound to the request, consumed once, audited): a client's own confirmation prompt is not an approval. So true on an acting tool (a broker_only class) is allowed only on a server whose record says acts_via: broker (hnx mcp catalog check); a server that acts directly says false, which is what it is."
         },
         "description": {
           "type": "string",

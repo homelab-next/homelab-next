@@ -954,17 +954,24 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker
+    --policy examples/mcp/clients/policy/ceilings.yml &&
     python3 -m pytest -q -p no:cacheprovider tests/agent/test_agent_handoff.py
+    tests/agent/test_agent_broker_only.py
   expected: >-
     exit 0 with every selected test passed and none skipped (raw text and invalid reports refused,
-    free-text fields never become action parameters, undeclared or unlisted actions denied); exit
-    100 when a test dependency is not installed, which is could-not-measure
+    free-text fields never become action parameters, undeclared or unlisted actions denied), after
+    every profile and manifest of the repository passed the broker rule (an actor's only acting
+    grant is the broker, G-13); exit 100 when a test dependency is not installed, which is
+    could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
   remediation: >-
     Fix homelabnext/agent/handoff.py so an actor only accepts a validated report and binds action
-    parameters to constrained output fields; an actor driven by free text can be steered by
-    whatever its reader ingested.
+    parameters to constrained output fields, and take every acting grant but the broker off the
+    profiles `hnx agent lint --rule actors-act-via-broker` names; an actor driven by free text can
+    be steered by whatever its reader ingested, and one holding a direct tool is not limited to
+    allowlisted actions at all.
 - id: M-09
   statement: Agent memory is controlled.
   evidence: auto
@@ -1184,14 +1191,36 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
-    python3 -m homelabnext.cli agent lint
+    python3 -m homelabnext.cli agent lint --rule readers-cannot-act
   expected: >-
     exit 0: no profile or context manifest that reads untrusted content holds a shell, file-write,
-    egress or credential grant
+    egress or credential grant (how an actor acts is G-13's)
   expect_regex: '[1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
   remediation: >-
     Split the agent: the reader keeps no acting grant and hands validated structured output to an
     actor; a reader that can act turns one injected sentence into an action.
+- id: G-13
+  statement: Agents act only through the broker.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli agent lint --rule actors-act-via-broker
+    --policy examples/mcp/clients/policy/ceilings.yml
+  expected: >-
+    exit 0 (judged with the ceiling policy, so a reviewed direct exception its direct_mcp lists
+    passes; a lab's register names its own policy): no agent profile or context manifest, reader
+    or not, holds an acting grant (exec,
+    file-write, send, credential) other than through the broker: an acting MCP server is the
+    broker's own front or a reviewed direct exception the ceiling policy lists for that profile,
+    every capability is classed and none acts but cap:broker, and an acting tier only with
+    cap:broker
+  expect_regex: 'actors-act-via-broker: [1-9]\d* profile\(s\), \d+ manifest\(s\), 0 problem\(s\)'
+  remediation: >-
+    Grant hnx-broker and cap:broker and ask the broker for a named action instead of the acting
+    server or capability. A direct exception is a catalog record with acts_via: direct, a
+    direct_reason and a current human approve review, plus the ceiling policy's direct_mcp entry
+    for that one profile. An agent that acts outside the broker acts unallowlisted, unapproved and
+    unaudited (ADR-0030).
 - id: G-10
   statement: Rate and cost limits hold.
   evidence: auto

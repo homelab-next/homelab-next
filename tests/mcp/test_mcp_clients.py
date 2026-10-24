@@ -202,7 +202,7 @@ def test_llm_orchestrator_catalog_and_grants_are_its_format():
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
-        "env": {"NOTES_ROOT": "/srv/notes", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
+        "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
         "timeout": 120,
     }
     assert "lake" not in kinds and "hnx-catalog" not in kinds  # remote / per-instance args
@@ -252,16 +252,23 @@ def test_the_grants_block_is_spliced_in_place():
 
 
 def test_a_deprecated_grant_renders_with_a_note(tmp_path):
+    # the shipped catalog deprecates nothing since ADR-0030 retired bash, exec and terminal
+    d = tmp_path / "mcp"
+    shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
+    _lax_review_policy(tmp_path)
+    rec = yaml.safe_load((d / "fetch.yml").read_text())
+    rec.update(status="deprecated", reason="moved to web", replaced_by="web")
+    (d / "fetch.yml").write_text(yaml.safe_dump(rec))
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["fetch"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     text, notes = clients.render_profile(
-        CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
+        servers.load(d), prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert "bash" in json.loads(text)["mcpServers"]
-    assert any("deprecated" in n and "grant 'shell' instead" in n for n in notes)
+    assert "fetch" in json.loads(text)["mcpServers"]
+    assert any("deprecated" in n and "grant 'web' instead" in n for n in notes)
 
 
 def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
@@ -270,7 +277,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     client's working directory."""
     prof = tmp_path / "p.json"
     doc = json.loads(COLLECTOR.read_text())
-    doc["mcp"] = doc["mcp_ceiling"] = ["bash"]
+    doc["mcp"] = doc["mcp_ceiling"] = ["fetch"]
     doc["reads_untrusted"] = False
     prof.write_text(json.dumps(doc))
     with pytest.raises(clients.RenderError, match="npm_prefix is not given"):
@@ -280,7 +287,7 @@ def test_render_anchors_npx_at_an_absolute_npm_prefix(tmp_path):
     text, _ = clients.render_profile(
         CATALOG, prof, "claude-code", policy=WIDE, npm_prefix=NPM_PREFIX
     )
-    assert json.loads(text)["mcpServers"]["bash"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
+    assert json.loads(text)["mcpServers"]["fetch"]["args"][:2] == ["-y", f"--prefix={NPM_PREFIX}"]
     spec = tmp_path / "spec.yml"
     spec.write_text(yaml.safe_dump({
         "client": "claude-code", "catalog": str(ROOT / "examples" / "mcp"), "policy": "pol.yml",
@@ -639,9 +646,9 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
             clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     # llm-orchestrator's catalog holds every grantable stdio server, granted or not
     (d / "notes.yml").write_text(pristine)
-    rec = yaml.safe_load((d / "shell.yml").read_text())
+    rec = yaml.safe_load((d / "cases.yml").read_text())
     rec["transport"]["args"] = ["--api-key=fakeshort"]
-    (d / "shell.yml").write_text(yaml.safe_dump(rec))
+    (d / "cases.yml").write_text(yaml.safe_dump(rec))
     kw = {"lanes": ["real", "shadow"], "policy": WIDE}
     assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
@@ -702,3 +709,24 @@ def test_render_needs_the_review_policy_and_runs_the_full_record_check(tmp_path,
     (d / "notes.yml").write_text(yaml.safe_dump(notes))
     with pytest.raises(clients.RenderError, match="egress names internet but no tool"):
         clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
+
+
+def test_the_orchestrator_catalog_has_no_kind_for_a_server_that_acts_directly():
+    """ADR-0030: a server that acts other than through the broker is a kind of the orchestrator's
+    catalog only when a rendered profile is granted it (a policy's direct_mcp exception); else its
+    controller refuses any profile's grant of it, a barrier behind the profile checks."""
+    text, notes = clients.orch_catalog(CATALOG, (), CTX)
+    kinds = yaml.safe_load(text)["kinds"]
+    assert "hnx-broker" in kinds  # acts through the broker
+    for sid in ("shell", "ssh", "ansible", "kubernetes", "vault", "filesystem", "git", "github"):
+        assert sid not in kinds, sid
+    # a lab that reviewed shell (active): no kind unless a rendered profile is granted it
+    cat = copy.deepcopy(CATALOG)
+    cat.servers["shell"]["status"] = "active"
+    text, notes = clients.orch_catalog(cat, (), CTX)
+    assert "shell" not in yaml.safe_load(text)["kinds"]
+    assert any(n.startswith("shell: acts other than through the broker") for n in notes)
+    text, _ = clients.orch_catalog(cat, {"shell"}, CTX)
+    assert "shell" in yaml.safe_load(text)["kinds"]
+    shipped = yaml.safe_load((SPECS / "llm-orchestrator" / "mcp_catalog.yaml").read_text())
+    assert not {"shell", "ssh", "ansible", "kubernetes", "vault"} & set(shipped["kinds"])

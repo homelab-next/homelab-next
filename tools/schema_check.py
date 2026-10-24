@@ -223,12 +223,29 @@ _TIGHTENING_IF_NEW = (
         "propertyNames",
         "not",
         "patternProperties",
-        "dependentRequired",
         "minContains",
         "maxContains",
         "unevaluatedProperties",
     }
 )
+
+
+#: additive evolutions the structural check cannot prove (a pattern widened by moving it into a
+#: new ``anyOf``), each argued by hand: {(schema name, frozen version): {path: why}}. Nothing may
+#: join for a change the check can judge.
+PROVEN_BY_HAND = {
+    ("registers/register_event", "1.0"): {
+        "$.allOf[3].then.properties.from.anyOf": "1.1 widens ^[a-z]+$ to ^[a-z]+(?:-[a-z]+)*$",
+        "$.allOf[3].then.properties.to.anyOf": "1.1 widens ^[a-z]+$ to ^[a-z]+(?:-[a-z]+)*$",
+    },
+}
+
+
+def additive_problems(old: dict, new: dict, name: str, frozen: str) -> list[str]:
+    """:func:`is_additive` less the evolutions :data:`PROVEN_BY_HAND` for ``name`` against its
+    frozen version ``frozen``."""
+    proven = PROVEN_BY_HAND.get((name, frozen), {})
+    return [r for r in is_additive(old, new) if r.split(":", 1)[0] not in proven]
 
 
 def _newline_guard_only(old: str, new: str) -> bool:
@@ -353,6 +370,8 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
         elif key == "$ref":
             if ov != nv:
                 out.append(f"{p}: $ref changed {ov} -> {nv}")
+        elif key in {"dependentSchemas", "dependentRequired"}:
+            out += _dependent_problems(old, ov, nv, key, p)
         elif ov != nv and key not in _ANNOTATIONS:
             out.append(f"{p}: changed {ov!r} -> {nv!r}")
     for key in new:
@@ -362,10 +381,95 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
             out.append(f"{path}.{key}: new constraint '{key}' added (tightens)")
         elif key == "additionalProperties" and new[key] is False:
             out.append(f"{path}.additionalProperties: tightened to false")
-        elif key in {"allOf", "if", "unevaluatedItems"}:
+        elif key in {"anyOf", "oneOf"} and _implied_branch(old, new[key], key):
+            continue  # every old document already meets a branch (the old schema implies it)
+        elif key in {"allOf", "anyOf", "oneOf", "if", "unevaluatedItems"} | _NEW_SUBSCHEMA:
             out.append(f"{path}.{key}: new constraint '{key}' added (tightens)")
+        elif key == "additionalProperties" and isinstance(new[key], dict):
+            out.append(f"{path}.additionalProperties: new constraint (a schema) added (tightens)")
+        elif key in {"dependentSchemas", "dependentRequired"}:
+            out += _dependent_problems(old, {}, new[key], key, f"{path}.{key}")
         elif key == "type":
             out.append(f"{path}.type: type constraint added")
+    return out
+
+
+#: keywords that constrain through a subschema or a reference: new where the old schema had none,
+#: each one can refuse a document the old schema accepted (``$ref`` to any definition, ``items``
+#: or ``contains`` on an array), so a new one tightens
+_NEW_SUBSCHEMA = {"$ref", "$dynamicRef", "items", "prefixItems", "contains", "additionalItems"}
+
+
+def _open_keys(old: dict, branch: Any) -> bool:
+    """``branch`` constrains, under ``properties``, a key that ``old`` does not declare but an old
+    document may still carry (``old`` allows additional or pattern properties), at any depth:
+    :func:`is_additive` does not compare a property the old schema did not declare."""
+    if not isinstance(branch, dict) or not isinstance(branch.get("properties"), dict):
+        return False
+    props = old.get("properties") if isinstance(old.get("properties"), dict) else {}
+    closed = old.get("additionalProperties", True) is False and not old.get("patternProperties")
+    for name, sub in branch["properties"].items():
+        if name not in props:
+            if not closed:
+                return True
+        elif isinstance(props[name], dict) and _open_keys(props[name], sub):
+            return True
+    return False
+
+
+def _merged(old: dict, branch: Any) -> Any:
+    """``old`` with a new alternative's constraints added (``required`` united, ``properties``
+    merged one level, anything else the branch's)."""
+    if not isinstance(branch, dict):
+        return branch
+    out = dict(old)
+    for k, v in branch.items():
+        if k == "required" and isinstance(v, list):
+            out[k] = sorted(set(old.get(k) or ()) | set(v))
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {**(old.get(k) or {}), **{n: _merged((old.get(k) or {}).get(n) or {}, sub)
+                                                for n, sub in v.items()}}  # fmt: skip
+        else:
+            out[k] = v
+    return out
+
+
+def _implied_branch(old: dict, branches: Any, key: str = "anyOf") -> bool:
+    """A new ``anyOf``/``oneOf`` is additive only when the old schema already implies one of its
+    branches: ``old`` and ``old`` with that branch's constraints added accept the same documents
+    (for example a required field moved into an alternative it already satisfies), and the branch
+    constrains no property the old schema left open (:func:`_open_keys`). A ``oneOf`` with more
+    than one branch is never proven: an old document may meet two branches, and then it fails."""
+    if not isinstance(branches, list) or (key == "oneOf" and len(branches) != 1):
+        return False
+    return any(not _open_keys(old, b) and is_additive(old, _merged(old, b)) == [] for b in branches)
+
+
+def _dependent_problems(old: dict, ov: Any, nv: Any, key: str, p: str) -> list[str]:
+    """``dependentSchemas``/``dependentRequired`` entries: an existing one evolves additively
+    (a schema: :func:`is_additive`; a list of names: nothing newly required), and a new one is
+    additive only when it is keyed by a property the old schema did not have, so no document the
+    old schema accepted can trigger it."""
+    out: list[str] = []
+    if not isinstance(ov, dict) or not isinstance(nv, dict):
+        return [f"{p}: changed (cannot prove compatible)"]
+    old_props = old.get("properties") if isinstance(old.get("properties"), dict) else {}
+    for name, sub in nv.items():
+        if name in ov:
+            if key == "dependentSchemas":
+                out += is_additive(ov[name], sub, f"{p}.{name}")
+            elif set(sub) - set(ov[name]):
+                out.append(f"{p}.{name}: newly required {sorted(set(sub) - set(ov[name]))}")
+        elif (
+            name in old_props
+            or old.get("additionalProperties", True) is not False
+            or old.get("patternProperties")
+        ):
+            # an old document could already carry the key (a declared property, any key when
+            # additional properties were allowed, or one a pattern property admits), so the new
+            # entry tightens
+            out.append(f"{p}.{name}: new constraint on an existing key (tightens)")
+    # an entry removed is a constraint removed: that only loosens
     return out
 
 
@@ -650,7 +754,7 @@ def check_schema(
             )
         for _, _, bf in same_major:
             old = json.loads(bf.read_text(encoding="utf-8"))
-            for reason in is_additive(old, schema):
+            for reason in additive_problems(old, schema, pid[0], bf.parent.parent.name):
                 probs.append(Problem(rel, f"not additive vs {bf.parent.parent.name}: {reason}"))
     return probs
 

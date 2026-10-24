@@ -41,6 +41,7 @@ EXTRA_PARTS = {
     "cap:notify": "Send notifications.",
     "cap:secrets": "Read secrets.",
     "cap:made-up": "Not classified anywhere.",
+    "cap:broker": "Ask the broker for named actions.",
 }
 
 # one grant per forbidden class, through each kind of grant (MCP server, capability, tier)
@@ -51,7 +52,7 @@ FORBIDDEN = [
     ("mcp", "vault", "credential"),
     ("capabilities", "cap:orchestration", "exec"),
     ("capabilities", "cap:object-store", "file-write"),
-    ("capabilities", "cap:notify", "egress"),
+    ("capabilities", "cap:notify", "egress, send"),
     ("capabilities", "cap:secrets", "credential"),
     ("tier", "execute", "exec"),
     ("tier", "privileged", "credential, exec"),
@@ -148,15 +149,16 @@ def test_reader_is_the_default_fail_closed():
         compile_profile(s, _lib())
 
 
-def test_non_reader_actor_may_hold_acting_grants():
+def test_non_reader_actor_may_hold_acting_grants_through_the_broker():
+    # an actor acts, but only through the broker (G-13, ADR-0030): hnx-broker and cap:broker
     s = _with(
-        _with(_with(spec(), "mcp", "shell"), "capabilities", "cap:orchestration"), "tier", "execute"
+        _with(_with(spec(), "mcp", "hnx-broker"), "capabilities", "cap:broker"), "tier", "execute"
     )
     s["reads_untrusted"] = False
     policy = _permissive_policy(s)
     s.pop("ceiling")
     p = compile_profile(s, _lib(), policy=policy)
-    assert p["reads_untrusted"] is False and "shell" in p["grants"]["mcp"]
+    assert p["reads_untrusted"] is False and "hnx-broker" in p["grants"]["mcp"]
     assert verify_profile(p) == []
 
 
@@ -337,6 +339,7 @@ def test_a_classes_file_cannot_narrow_the_reader_ban(tmp_path, capsys):
 
 # ---------------------------------------------------------------- lint
 def test_lint_passes_on_the_repository():
+    # both rules by default: readers cannot act (G-03), actors act via the broker (G-13)
     problems, counts = lint_paths([ROOT])
     assert problems == []
     assert counts["profile"] >= 3 and counts["manifest"] >= 1
@@ -358,7 +361,7 @@ def test_lint_fails_on_a_reader_profile_and_on_a_reader_manifest(tmp_path):
     _write(tmp_path / "agent.json", bad)
     _write(
         tmp_path / "actor.yml",
-        {**spec(), "id": "profile:actor", "mcp": ["shell"], "reads_untrusted": False},
+        {**spec(), "id": "profile:actor", "mcp": ["hnx-broker"], "reads_untrusted": False},
     )
     lean = {"id": "profile:lean", "persona": "persona:a", "mcp": ["browser"], "capabilities": []}
     _write(tmp_path / "lean.yml", lean)
@@ -378,7 +381,7 @@ def test_lint_fails_on_a_reader_profile_and_on_a_reader_manifest(tmp_path):
 
 
 def test_manifest_without_input_sections_is_not_a_reader():
-    doc = {"id": "m", "tools": ["shell"], "sections": [{"name": "c", "source": "static"}]}
+    doc = {"id": "m", "tools": ["fetch"], "sections": [{"name": "c", "source": "static"}]}
     assert manifest_problems(doc) == []
 
 
@@ -401,9 +404,10 @@ def test_cli_lint_exit_codes(tmp_path, capsys):
 
 def test_cli_lint_accepts_a_custom_table(tmp_path, capsys):
     doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
-    doc["capabilities"]["cap:notify"] = ["read"]
+    # a site capability the packaged table does not know (a packaged one may not be classed down)
+    doc["capabilities"]["cap:site-notes"] = ["read"]
     _write(tmp_path / "classes.yml", doc)
-    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:notify"]})
+    _write(tmp_path / "spec.yml", {**spec(), "capabilities": ["cap:site-notes"]})
     assert (
         cli.main(
             [
@@ -469,18 +473,25 @@ def test_grantable_is_an_allowlist_and_a_data_tier_is_required():
     assert "whose data is local-only" in grant_problems({"mcp": ["ok"]}, table, "p", "public")[0]
 
 
-def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys):
+def test_a_deprecated_grant_is_reported_with_its_replacement(tmp_path, capsys, monkeypatch):
+    from homelabnext.agent import readers
     from homelabnext.agent.readers import grant_notes
 
-    notes = grant_notes({"mcp": ["bash", "shell"]})
-    assert len(notes) == 1 and "'bash', which is deprecated" in notes[0]
-    assert "grant 'shell' instead" in notes[0]
+    # the shipped catalog deprecates nothing since ADR-0030 retired bash, exec and terminal
+    d = _catalog_copy(tmp_path)
+    rec = yaml.safe_load((d / "fetch.yml").read_text())
+    rec.update(status="deprecated", reason="moved to web", replaced_by="web")
+    (d / "fetch.yml").write_text(yaml.safe_dump(rec))
+    monkeypatch.setattr(readers, "default_classes", lambda: ToolClasses.load(catalog=d))
+    notes = grant_notes({"mcp": ["fetch", "web"]})
+    assert len(notes) == 1 and "'fetch', which is deprecated" in notes[0]
+    assert "grant 'web' instead" in notes[0]
     p = tmp_path / "p.yml"
-    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["bash"],
+    p.write_text(yaml.safe_dump({"id": "profile:x", "persona": "persona:a", "mcp": ["fetch"],
                                  "capabilities": [], "reads_untrusted": False}))  # fmt: skip
     assert cli.main(["agent", "lint", str(p)]) == 0  # a warning, not a refusal
     err = capsys.readouterr().err
-    assert "note:" in err and "grant 'shell' instead" in err
+    assert "note:" in err and "grant 'web' instead" in err
     found: list[tuple[str, str]] = []
     lint_paths([p], None, found)
     assert found and "deprecated" in found[0][1]

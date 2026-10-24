@@ -298,6 +298,7 @@ def module_problems(
             out.append(f"{e['file']}: MCP record id starts with {mid}")
         if rec.get("capabilities") and doc["kind"] != "provider":
             out.append(f"{e['file']}: only a provider's MCP record fronts a slot")
+    out += broker_rule_problems(doc, mod_dir, load)
     plugins = {ep["name"] for ep in eps if ep["group"] == "homelabnext.invariants.checks"}
     for e in c.get("invariants", []):
         for cr in load(mod_dir / e["file"])["criteria"]:
@@ -365,6 +366,83 @@ def module_problems(
             out.append(
                 f"shared_config {sc_['target']}: needs an overlay grant (grants.shared_config)"
             )
+    return out
+
+
+def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
+    """Actors act only through the broker (checklist G-13, ADR-0030), for what a module
+    contributes.  A module contributes no authority (ADR-0027, "contributes (never authority)"):
+    its effects are contributed as broker actions (the broker manifest and handlers), never as an
+    MCP tool or a grant.  So a contributed MCP record has no acting tool (a ``broker_only``
+    class) and declares no ``acts_via`` at all (``broker`` is only the broker's own front;
+    ``direct`` is an exception only the overlay's own catalog and ceiling policy make), and a
+    contributed agent's spec holds no acting grant: no acting MCP server (the broker's front
+    included), no acting capability (``cap:broker`` included) and no acting tier.  The overlay
+    that selects the module may grant its agent the broker in its own ceiling policy and spec."""
+    from homelabnext.agent.readers import broker_problems, default_classes
+    from homelabnext.mcp import servers
+
+    c = doc.get("contributes", {})
+    if not c.get("mcp_servers") and not c.get("agents"):
+        return []
+    classes = default_classes()
+    only = set(classes.broker_only)
+    records: dict[str, Doc] = {}
+    out: list[str] = []
+    for e in c.get("mcp_servers", []):
+        rec = load(mod_dir / e["file"])
+        records[rec["id"]] = rec
+        acting = sorted(
+            str(t.get("name")) for t in rec.get("tools") or () if set(t.get("classes") or ()) & only
+        )
+        if acting:
+            out.append(
+                f"{e['file']}: MCP record tool(s) {', '.join(acting)} act: a module contributes "
+                "no authority (ADR-0027); its effects are broker actions, never an MCP tool"
+            )
+        if "acts_via" in rec:
+            out.append(
+                f"{e['file']}: MCP record declares acts_via: a module's record never does (broker "
+                "is only the broker's own front; a direct exception is only the overlay's)"
+            )
+        # its classes are floored as the catalog check floors them: a run_command classed read
+        # is an acting tool declared down, not a reading one
+        out += servers.floor_problems(rec, e["file"], only)
+
+    def acts(sid: str) -> bool:
+        return any(set(t.get("classes") or ()) & only for t in records[sid].get("tools") or ())
+
+    for a in _agents(doc):
+        key = a["key"]
+        spec = load(mod_dir / a["spec"])
+        who = str(spec.get("id"))
+        mcp = [m for m in spec.get("mcp") or [] if m not in records]
+        caps = list(spec.get("capabilities") or [])
+        grants = {"mcp": mcp, "capabilities": caps, "tier": spec.get("tier")}
+        out += [f"agent {key}: {p}" for p in broker_problems(grants, classes, who)]
+        for m in sorted(set(mcp)):
+            if set(classes.classify("mcp", m) or ()) & only and not broker_problems(
+                {"mcp": [m]}, classes, who
+            ):
+                out.append(f"agent {key}: spec grants acting MCP server {m!r}: a module grants "
+                           "its own agent no acting tool (ADR-0027)")  # fmt: skip
+        if "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds cap:broker: a module grants its own agent no "
+                       "acting capability (ADR-0027)")  # fmt: skip
+        tier = classes.classify("tiers", str(spec.get("tier"))) if spec.get("tier") else None
+        if tier and set(tier) & only and "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds an acting tier: a module grants its own agent "
+                       "no acting tier (ADR-0027)")  # fmt: skip
+        for sid in sorted({m for m in spec.get("mcp") or [] if m in records and acts(m)}):
+            out.append(f"agent {key}: spec grants the module's acting MCP record {sid}")
+        for t in a.get("tools", []):
+            sid, _, name = t.partition(".")
+            rec = records.get(sid)
+            if rec is not None and any(
+                x.get("name") == name and set(x.get("classes") or ()) & only
+                for x in rec.get("tools") or ()
+            ):
+                out.append(f"agent {key}: tool {t} acts: a module's agent holds no acting tool")
     return out
 
 
