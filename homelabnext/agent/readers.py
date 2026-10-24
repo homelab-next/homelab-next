@@ -23,6 +23,17 @@ server's classes are the union of its tools'.  A grant missing from that table i
 reader (unknown is never assumed safe), and :func:`grant_problems` refuses, for every profile, an
 MCP server the catalog does not hold, a retired or draft one, and a local-only server granted to a
 profile whose data may go to the cloud.
+
+Actors act only through the broker (checklist G-13, ADR-0030), and this applies to **every**
+profile, reader or not: :func:`broker_problems` refuses a granted MCP server with a tool in a
+``broker_only`` class (exec, file-write, send, credential) unless it is the broker's own front
+(``acts_via: broker``, checked structurally by
+:func:`homelabnext.mcp.servers.broker_front_problems`, with current reviews), or says ``acts_via:
+direct`` with a ``direct_reason``, carries a current human approve review and is listed for the
+profile in the ceiling policy's ``direct_mcp`` (an exception the policy owner makes per profile
+and server); a capability the table does not class, or a ``broker_only`` one other than
+``cap:broker``; and a tier whose classes are ``broker_only`` (execute, privileged) without
+``cap:broker``.
 """
 
 from __future__ import annotations
@@ -42,10 +53,20 @@ KINDS = ("mcp", "capabilities", "tiers")
 GRANTABLE = ("active", "deprecated")
 #: the data tiers a catalog server may declare (``schemas/platform/mcp_server.schema.json``)
 DATA_TIERS = ("local-only", "cloud-allowed")
+#: how a catalog server's acting tools reach the world (``acts_via``, mcp_server 1.1): through the
+#: broker, or directly (an exception: a reason, a human approve review and a policy listing)
+ACTS_VIA = ("broker", "direct")
+#: the one acting grant a profile may hold: the broker's own capability (its tier needs it too)
+BROKER_CAPABILITY = "cap:broker"
 #: an id a message may quote: a profile or manifest id (``profile:<slug>``) as the schemas spell
 #: it.  Messages reach stdout, stderr and CI logs, and a document under ``--grants`` is not
 #: schema-checked first, so any other value (a token pasted into a grant list) is never quoted.
 _ID = re.compile(r"(?:[a-z]+:)?[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: the rules a lint applies (``hnx agent lint --rule``): readers-cannot-act (G-03, with the
+#: catalog's grant rules) and actors-act-via-broker (G-13)
+READERS = "readers-cannot-act"
+BROKER = "actors-act-via-broker"
+RULES = (READERS, BROKER)
 
 
 class ToolClasses:
@@ -73,8 +94,10 @@ class ToolClasses:
         self.reader_forbidden = frozenset(doc.get("reader_forbidden") or ())
         if not self.reader_forbidden:
             raise SpecError(f"{source}: 'reader_forbidden' is empty (that would allow everything)")
+        #: classes no profile may hold except through the broker (G-13)
+        self.broker_only = frozenset(doc.get("broker_only") or ())
         self.table: dict[str, dict[str, tuple[str, ...]]] = {}
-        unknown: set[str] = set(self.reader_forbidden) - set(self.classes)
+        unknown: set[str] = (set(self.reader_forbidden) | self.broker_only) - set(self.classes)
         for kind in KINDS:
             entries = doc.get(kind) or {}
             if not isinstance(entries, Mapping):
@@ -87,6 +110,10 @@ class ToolClasses:
                 self.table[kind][str(name)] = tuple(sorted(set(cls)))
         if unknown:
             raise SpecError(f"{source}: undeclared classes {sorted(unknown)}")
+        if not self.broker_only:
+            raise SpecError(
+                f"{source}: 'broker_only' is empty (that would let any profile act directly)"
+            )
 
     @classmethod
     def load(cls, path: str | Path | None = None, catalog: str | Path | None = None) -> ToolClasses:
@@ -95,7 +122,8 @@ class ToolClasses:
         :func:`homelabnext.mcp.servers.default_dir`, so a private overlay's catalog is used where
         its examples directory is).  A table with an ``mcp`` section of its own is refused: it
         would class servers, and skip the catalog's status and data-tier rules, by hand; so is
-        one whose ``reader_forbidden`` leaves out a class the packaged table forbids."""
+        one whose ``reader_forbidden`` or ``broker_only`` leaves out a class the packaged table
+        lists."""
         import yaml
 
         p = Path(path) if path else DEFAULT_CLASSES
@@ -117,6 +145,33 @@ class ToolClasses:
                     f"{p}: reader_forbidden leaves out {lost}, which the packaged table forbids a "
                     "reader (a table may forbid more, never less)"
                 )
+            lost = sorted(
+                set(packaged.get("broker_only") or ()) - set(doc.get("broker_only") or ())
+            )
+            if lost:
+                raise SpecError(
+                    f"{p}: broker_only leaves out {lost}, which the packaged table lets a profile "
+                    "hold only through the broker (a table may forbid more, never less)"
+                )
+            # a forbidden class (reader_forbidden or broker_only) is never lost from a packaged
+            # capability or tier: cap:dns classed read would let an actor hold it directly
+            forbidden = set(packaged.get("reader_forbidden") or ()) | set(
+                packaged.get("broker_only") or ()
+            )
+            for kind in ("capabilities", "tiers"):
+                mine = doc.get(kind) if isinstance(doc.get(kind), Mapping) else {}
+                for name, was in sorted((packaged.get(kind) or {}).items()):
+                    lost = (
+                        sorted((set(was or ()) & forbidden) - set(mine.get(name) or ()))
+                        if name in mine
+                        else []
+                    )
+                    if lost:
+                        raise SpecError(
+                            f"{p}: {kind} entry {name} leaves out {lost}, which the packaged "
+                            "table classes it (a table may forbid more, never less; leave it "
+                            "out and it is unclassified, which is refused)"
+                        )
         from homelabnext.mcp import servers
 
         try:
@@ -149,6 +204,9 @@ class ToolClasses:
                 + more
                 + " (hnx mcp catalog check)"
             )
+        review_policy = _review_policy(cat)
+        # the table's broker_only, read once (a default read per record cost ~20 ms each)
+        floor_only = list(doc.get("broker_only") or ()) or table_broker_only()
         meta = {
             sid: {
                 "status": rec.get("status"),
@@ -156,6 +214,18 @@ class ToolClasses:
                 "data_tier": rec.get("data_tier"),
                 "replaced_by": rec.get("replaced_by"),
                 "internet": reaches_internet(rec),
+                "acts_via": rec.get("acts_via"),
+                "direct_reason": bool(rec.get("direct_reason")),
+                # only a direct server's exception needs it, so only those are evaluated
+                "human_approved": rec.get("acts_via") == "direct"
+                and human_approved(rec, review_policy),
+                # only the structural broker front, with current reviews, acts via the broker
+                "broker_front": rec.get("acts_via") == "broker"
+                and not servers.broker_front_problems(rec),
+                "reviewed": rec.get("acts_via") == "broker" and reviews_current(rec, review_policy),
+                # its declared classes are below their floor (servers.floor_problems): what it
+                # declares is not what it does, so no grant of it is judged on what it declares
+                "below_floor": bool(servers.floor_problems(rec, f"{sid}.yml", floor_only)),
             }
             for sid, rec in cat
         }
@@ -169,6 +239,51 @@ class ToolClasses:
     def classify(self, kind: str, name: str) -> tuple[str, ...] | None:
         """Classes of one grant, or ``None`` if the table does not know it."""
         return self.table[kind].get(name)
+
+
+def _review_policy(cat: Any) -> Any:
+    """The review policy beside the catalog (``review-policy.yml``), or None; an unreadable one is
+    None too, so a human review counts only as ``kind: human`` from a non-``agent:`` identity
+    (``hnx mcp catalog check`` reports the policy itself)."""
+    from homelabnext.mcp import servers
+    from homelabnext.reviews import ReviewError
+
+    try:
+        return servers.default_policy(cat)
+    except (ReviewError, OSError):
+        return None
+
+
+def _evaluation(rec: Mapping[str, Any], review_policy: Any = None) -> Any:
+    """The record's reviews judged against its current content and status."""
+    from homelabnext.mcp import servers
+    from homelabnext.reviews import evaluate
+
+    return evaluate(
+        rec.get("reviews"),
+        author=rec.get("author"),
+        digest=servers.record_digest(rec),
+        artefact=servers.ARTEFACT,
+        state=str(rec.get("status")),
+        policy=review_policy,
+    )
+
+
+def human_approved(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
+    """The record carries a passing ``kind: human``, ``role: approve`` review of its current
+    content (a review of an earlier content does not count), from a human reviewer of
+    ``review_policy`` when one is given."""
+    ev = _evaluation(rec, review_policy)
+    return any(r.get("role") == "approve" and r.get("kind") == "human" for r in ev.current)
+
+
+def reviews_current(rec: Mapping[str, Any], review_policy: Any = None) -> bool:
+    """The record carries the reviews its status needs, all of its current content: with a review
+    policy, what it asks of ``mcp-server.<status>``; without one, a current human approve."""
+    if review_policy is None:
+        return human_approved(rec, review_policy)
+    ev = _evaluation(rec, review_policy)
+    return not ev.problems and not ev.missing
 
 
 def reaches_internet(rec: Mapping[str, Any]) -> bool:
@@ -191,6 +306,25 @@ def table_vocabulary(path: str | Path | None = None) -> list[str]:
     return sorted((doc.get("classes") or {}) if isinstance(doc, Mapping) else ())
 
 
+def table_broker_only(path: str | Path | None = None) -> list[str]:
+    """The classes ``tool_classes.yml`` lets a profile hold only through the broker."""
+    if path is None:  # the packaged table never changes under a running process
+        return list(_packaged_broker_only())
+    return list(_broker_only_of(str(path)))
+
+
+@cache
+def _packaged_broker_only() -> tuple[str, ...]:
+    return _broker_only_of(str(DEFAULT_CLASSES))
+
+
+def _broker_only_of(path: str) -> tuple[str, ...]:
+    import yaml
+
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    return tuple(sorted((doc.get("broker_only") or ()) if isinstance(doc, Mapping) else ()))
+
+
 def table_capabilities(path: str | Path | None = None) -> list[str]:
     """The ``cap:`` ids ``tool_classes.yml`` classifies."""
     import yaml
@@ -198,6 +332,15 @@ def table_capabilities(path: str | Path | None = None) -> list[str]:
     doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
     caps = doc.get("capabilities") if isinstance(doc, Mapping) else None
     return sorted(caps or ())
+
+
+def table_capability_classes(path: str | Path | None = None) -> dict[str, list[str]]:
+    """The packaged table's classes of each ``cap:`` id it classifies."""
+    import yaml
+
+    doc = yaml.safe_load(Path(path or DEFAULT_CLASSES).read_text(encoding="utf-8")) or {}
+    caps = doc.get("capabilities") if isinstance(doc, Mapping) else None
+    return {str(k): list(v or ()) for k, v in (caps or {}).items()}
 
 
 def grant_problems(
@@ -311,37 +454,172 @@ def reader_problems(
     return problems
 
 
+def broker_problems(
+    grants: Mapping[str, Any],
+    classes: ToolClasses | None = None,
+    who: str = "profile",
+    direct: Iterable[str] | None = None,
+) -> list[str]:
+    """Rule ``actors-act-via-broker`` (checklist G-13, ADR-0030), for ANY profile: every grant
+    that would let it act (a ``broker_only`` class) other than through the broker.
+
+    ``grants`` has ``mcp``, ``capabilities`` and optionally ``tier``.  ``direct`` is the ceiling
+    policy's ``direct_mcp`` for this profile (:meth:`CeilingPolicy.direct_mcp`); ``None`` (no
+    policy at hand) allows no ``acts_via: direct`` server.  An MCP server the catalog does not
+    hold is left to :func:`grant_problems`, which refuses it for every profile.
+    """
+    classes = classes or default_classes()
+    who = _shown(who)
+    only = classes.broker_only
+    problems: list[str] = []
+    for _, name in _entries(grants.get("mcp")):
+        got = classes.classify("mcp", name)
+        acting = sorted(set(got or ()) & only)
+        record = (classes.catalog or {}).get(name) or {}
+        # a broker claim is judged by the broker front's own test below, not by the floor
+        if record.get("below_floor") and record.get("acts_via") != "broker":
+            problems.append(
+                f"{who} is granted MCP server {name!r}, whose record declares its tools below "
+                "their class floor (hnx mcp catalog check says which): agents act only through "
+                "the broker"
+            )
+            continue
+        if not acting:
+            continue
+        meta = (classes.catalog or {}).get(name)
+        if meta is None:
+            problems.append(
+                f"{who} is granted MCP server {name!r} ({', '.join(acting)}), and no catalog "
+                "record says how it acts (acts_via): agents act only through the broker"
+            )
+            continue
+        via = meta.get("acts_via")
+        if via == "broker":
+            if not meta.get("broker_front"):
+                problems.append(
+                    f"{who} is granted MCP server {name!r} ({', '.join(acting)}), which says "
+                    "acts_via: broker but is not the broker's own MCP front (hnx-broker, "
+                    "exactly its tools): agents act only through the broker"
+                )
+            elif not meta.get("reviewed"):
+                problems.append(
+                    f"{who} is granted MCP server {name!r} ({', '.join(acting)}), the broker's "
+                    "front, whose record lacks current reviews: a change to it is reviewed "
+                    "before an agent holds it"
+                )
+            continue
+        if via != "direct":
+            problems.append(
+                f"{who} is granted MCP server {name!r} ({', '.join(acting)}), whose record "
+                "does not say acts_via: broker: agents act only through the broker"
+            )
+            continue
+        missing = []
+        if not meta.get("direct_reason"):
+            missing.append("a direct_reason on its record")
+        if not meta.get("human_approved"):
+            missing.append("a current human approve review on its record")
+        if direct is None:
+            missing.append(
+                "a ceiling policy listing it in direct_mcp for this profile (none given)"
+            )
+        elif name not in set(direct):
+            missing.append("the ceiling policy's direct_mcp entry for this profile")
+        if missing:
+            problems.append(
+                f"{who} is granted MCP server {name!r} ({', '.join(acting)}), which acts "
+                f"directly (acts_via: direct) without {' and '.join(missing)}: agents act only "
+                "through the broker"
+            )
+    caps = set(_names(grants.get("capabilities")))
+    for at, name in _entries(grants.get("capabilities")):
+        if name == BROKER_CAPABILITY:
+            continue
+        got = classes.classify("capabilities", name)
+        if got is None:  # unknown is never assumed not to act (the tier rule's own wording)
+            problems.append(
+                f"{who} holds an unknown capability (capabilities entry {at}), which is not "
+                f"classified in {classes.source} (unknown is never assumed not to act)"
+            )
+            continue
+        acting = sorted(set(got) & only)
+        if acting:
+            problems.append(
+                f"{who} holds capability {name!r} ({', '.join(acting)}): agents act only "
+                f"through the broker; {BROKER_CAPABILITY} is the one acting capability (ask it "
+                "for a named action)"
+            )
+    if grants.get("tier") is not None:
+        tier = str(grants["tier"])
+        got = classes.classify("tiers", tier)
+        if got is None:
+            problems.append(
+                f"{who} holds an unknown tier (its tier), which is not classified in "
+                f"{classes.source} (unknown is never assumed not to act)"
+            )
+        elif set(got) & only and BROKER_CAPABILITY not in caps:
+            problems.append(
+                f"{who} holds tier {tier!r} ({', '.join(sorted(set(got) & only))}) without "
+                f"{BROKER_CAPABILITY}: an acting tier acts only through the broker"
+            )
+    return problems
+
+
 def is_reader(doc: Mapping[str, Any]) -> bool:
     """A profile or spec reads untrusted content unless it says ``reads_untrusted: false``."""
     return doc.get("reads_untrusted", True) is not False
 
 
-def profile_problems(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
-    """Catalog problems (:func:`grant_problems`, every profile) and reader problems (readers) for
-    any agent-profile shape: a spec, a compiled ``agent/profile`` (grants under ``grants``) or the
-    lean ``platform/agent_profile`` (``mcp``/``capabilities`` at the top).
+def profile_problems(
+    doc: Mapping[str, Any],
+    classes: ToolClasses | None = None,
+    policy: Any = None,
+    rules: Iterable[str] = RULES,
+) -> list[str]:
+    """Catalog problems (:func:`grant_problems`, every profile), reader problems (readers) and
+    broker problems (:func:`broker_problems`, every profile) for any agent-profile shape: a spec,
+    a compiled ``agent/profile`` (grants under ``grants``) or the lean ``platform/agent_profile``
+    (``mcp``/``capabilities`` at the top).  ``policy`` (a :class:`CeilingPolicy`) supplies the
+    profile's ``direct_mcp``; without one no ``acts_via: direct`` server is allowed.  ``rules``
+    picks :data:`READERS` (catalog and reader rules) and/or :data:`BROKER`.
     """
     if "reads_untrusted" in doc and not isinstance(doc["reads_untrusted"], bool):
         return ["reads_untrusted must be true or false"]
     grants = doc.get("grants") if isinstance(doc.get("grants"), Mapping) else doc
     who = str(doc.get("id", "profile"))
     tier = doc.get("data_tier") if isinstance(doc.get("data_tier"), str) else None
-    problems = grant_problems(grants, classes, who, tier)
-    if not is_reader(doc):
-        return problems
-    return problems + reader_problems(grants, classes, who)
+    problems: list[str] = []
+    if READERS in rules:
+        problems += grant_problems(grants, classes, who, tier)
+        if is_reader(doc):
+            problems += reader_problems(grants, classes, who)
+    if BROKER in rules:
+        direct = policy.direct_mcp(who) if policy is not None else None
+        problems += broker_problems(grants, classes, who, direct)
+    return problems
 
 
-def manifest_problems(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
-    """A context manifest's ``tools`` (MCP servers) must be grantable catalog servers; and a
-    manifest with any ``source: input`` section feeds untrusted content to its agent, so its
-    tools obey the reader rule too."""
+def manifest_problems(
+    doc: Mapping[str, Any],
+    classes: ToolClasses | None = None,
+    policy: Any = None,
+    rules: Iterable[str] = RULES,
+) -> list[str]:
+    """A context manifest's ``tools`` (MCP servers) must be grantable catalog servers that act,
+    if at all, through the broker (a manifest is bound to a persona, not to a profile, so no
+    policy names a direct exception for it); and a manifest with any ``source: input`` section
+    feeds untrusted content to its agent, so its tools obey the reader rule too."""
     sections = doc.get("sections") or []
     who = f"manifest {doc.get('id', '?')}"
-    problems = grant_problems({"mcp": doc.get("tools") or []}, classes, who)
-    if not any(isinstance(s, Mapping) and s.get("source") == "input" for s in sections):
-        return problems
-    return problems + reader_problems({"mcp": doc.get("tools") or []}, classes, who)
+    tools = {"mcp": doc.get("tools") or []}
+    problems: list[str] = []
+    if READERS in rules:
+        problems += grant_problems(tools, classes, who)
+        if any(isinstance(s, Mapping) and s.get("source") == "input" for s in sections):
+            problems += reader_problems(tools, classes, who)
+    if BROKER in rules:
+        problems += broker_problems(tools, classes, who)
+    return problems
 
 
 def doc_notes(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:
@@ -434,9 +712,16 @@ def lint_paths(
     paths: Iterable[str | Path],
     classes: ToolClasses | None = None,
     notes: list[tuple[str, str]] | None = None,
+    *,
+    policy: Any = None,
+    rules: Iterable[str] = RULES,
+    by_rule: dict[str, list[tuple[str, str]]] | None = None,
 ) -> tuple[list[tuple[str, str]], dict[str, int]]:
-    """Apply the reader rule to every agent profile (spec, compiled or lean runtime view) and
-    every context manifest found under ``paths`` (files, or directories searched through git).
+    """Apply the reader rule and the broker rule (``rules``: :data:`RULES`) to every agent
+    profile (spec, compiled or lean runtime view) and every context manifest found under
+    ``paths`` (files, or directories searched through git); ``policy`` supplies each profile's
+    ``direct_mcp`` (without one no ``acts_via: direct`` server is allowed); ``by_rule``, when
+    given, receives each rule's problems (one walk of the tree serves every rule).
 
     Returns ``([(file, problem)], {"profile": n, "manifest": m})``; ``notes``, when given, receives
     ``(file, warning)`` for every deprecated grant (:func:`grant_notes`).  Schema negatives and frozen
@@ -447,6 +732,7 @@ def lint_paths(
 
     import yaml
 
+    rules = tuple(rules)
     problems: list[tuple[str, str]] = []
     counts = {"profile": 0, "manifest": 0}
     for raw in paths:
@@ -470,7 +756,11 @@ def lint_paths(
                     continue
                 counts[kind] += 1
                 check = profile_problems if kind == "profile" else manifest_problems
-                problems += [(str(f), p) for p in check(doc, classes)]
+                for rule in rules:  # one walk of the tree, each problem under its rule
+                    got = [(str(f), p) for p in check(doc, classes, policy, (rule,))]
+                    problems += got
+                    if by_rule is not None:
+                        by_rule.setdefault(rule, []).extend(got)
                 if notes is not None:
                     notes += [(str(f), n) for n in doc_notes(doc, classes)]
     return problems, counts

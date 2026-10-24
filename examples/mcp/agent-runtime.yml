@@ -2,7 +2,7 @@
 # MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
 # like every example: the package, image and hash values name nothing real.
 id: agent-runtime
-description: 'The LLM orchestrator''s tool server: its queue and job submission.'
+description: 'The LLM orchestrator''s tool server: its queue, read-only. A job is submitted only through the broker action agent.job.submit (ADR-0030).'
 owner: platform-team
 status: active
 origin:
@@ -21,9 +21,8 @@ data_tier: local-only
 capabilities: ['cap:agent-runtime']
 tools:
 - {name: queue_summary, classes: [read], approval: false}
-- {name: submit_job, classes: [exec], approval: true}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:398435e2fbcf'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:398435e2fbcf'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:398435e2fbcf'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:5766c59ff4be'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:5766c59ff4be'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:5766c59ff4be'}

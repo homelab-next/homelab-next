@@ -24,6 +24,7 @@ from .compiler import (
 from .digest import canonical_json, digest_of, sha256_text
 from .errors import (
     AgentError,
+    BrokerViolation,
     BudgetError,
     CatalogViolation,
     CeilingViolation,
@@ -36,7 +37,7 @@ from .handoff import Accepted, Handoff, HandoffError, HandoffRefused
 from .keyring import build_keyring
 from .memory import MemoryAccessError, MemoryStore, MemoryUpdateError
 from .pack import TIERS, assemble_pack
-from .readers import ToolClasses, grant_problems, lint_paths, reader_problems
+from .readers import ToolClasses, broker_problems, grant_problems, lint_paths, reader_problems
 from .report import validate_report
 from .screen import Screener, screen_text
 from .terms import TERMS_SECTION, terms_text
@@ -49,6 +50,7 @@ __all__ = [
     "TIER_RANK",
     "Accepted",
     "AgentError",
+    "BrokerViolation",
     "BudgetError",
     "CatalogViolation",
     "CeilingPolicy",
@@ -69,6 +71,7 @@ __all__ = [
     "ToolClasses",
     "access_block",
     "assemble_pack",
+    "broker_problems",
     "build_keyring",
     "canonical_json",
     "check_budgets",

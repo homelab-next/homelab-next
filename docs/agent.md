@@ -145,8 +145,9 @@ through allowlisted broker actions (G-04).
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
   table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
   its own is refused (it would class servers by hand and skip the catalog's status and data-tier
-  rules), and so is one whose `reader_forbidden` leaves out a class the packaged table forbids (a
-  table may forbid a reader more, never less).
+  rules), and so is one whose `reader_forbidden` or `broker_only` leaves out a class the packaged
+  table lists, or that classes one of the packaged table's capabilities or tiers without a class
+  the packaged table gives it (`cap:dns: [read]`): a table may forbid more, never less.
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
@@ -197,6 +198,53 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   broker_manifest=)`: schema, closed `output_schema`, every reference constrained, the reader
   passes the G-03 rule, the actor has `reads_untrusted: false`, every action is in the broker
   manifest and granted to the actor at its tier. Tests: `tests/agent/test_agent_handoff.py`.
+
+### Actors act only through the broker (G-13)
+
+Every agent action goes through the broker ([ADR-0030](adr/0030-agents-act-only-through-the-broker.md)),
+where it is allowlisted, approved against the
+request digest and audited. The reader rule above keeps acting grants from readers; this rule,
+`actors-act-via-broker` (`homelabnext.agent.readers.broker_problems`), applies to **every**
+profile, reader or not, and to every context manifest's tools. `tool_classes.yml` lists the
+acting classes, `broker_only: [exec, file-write, send, credential]` (`send`: chat, mail, a
+notification, an HTTP request; reading the web stays `egress`); a profile may hold a grant in
+one of them only through the broker:
+
+- **MCP servers.** A granted server with an acting tool is refused unless it is the broker's own
+  front: its record says `acts_via: broker` and is structurally that front, fixed in code (id
+  `hnx-broker`, first-party `homelabnext/broker/mcp_tools.py`, exactly the tools that module
+  registers, [[mcp]]), with the reviews its status needs for its current content. No other
+  record can claim `broker`. The one exception
+  is a **direct** server: its record says `acts_via: direct` with a `direct_reason` and carries a
+  current human `approve` review, and the ceiling policy's entry for the profile lists it in
+  `direct_mcp` (the policy owner's exception per profile and server, like `internet_mcp`; a spec's
+  own ceiling cannot make it, and without a policy no direct server passes). A review line is
+  text an author can write: the real control is a human's review of the pull request that adds
+  the record and the `direct_mcp` line (CODEOWNERS on the catalog, the ceiling policies and the
+  class table). The shipped catalog's direct servers (`ssh`, `shell`, `ansible`, `kubernetes`,
+  `vault`, `filesystem`, `git`, `github`, `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are
+  unreviewed drafts that no profile can hold.
+- **Capabilities.** Judged failing closed: a capability the table does not class is refused, and
+  the table classes every capability the registry, the conformance contracts, `capabilities.yml`
+  and the module slots name. No acting capability but `cap:broker`: `cap:hypervisor`,
+  `cap:secrets`, `cap:idp`, `cap:orchestration`, `cap:object-store`, `cap:notify` and the
+  registry's acting aliases (`cap:automation`, `cap:agent-runtime`, `cap:records-db`, `cap:dns`,
+  `cap:edge-proxy`, `cap:dataflow`, `cap:backup`...) are refused outright.
+- **Tiers.** `execute` and `privileged` need `cap:broker`.
+
+`compile_profile` raises `BrokerViolation` (after the catalog check, whatever the ceiling allows);
+`verify_profile` judges a compiled profile with the policy's `direct_mcp`; `hnx agent lint` runs
+both rules (`--rule readers-cannot-act|actors-act-via-broker` runs one and prints its own count,
+`--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the tree
+serving both); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
+a module contributes no acting record and gives its own agent no acting grant) refuse the same.
+Checklist G-13 runs the lint with `--rule actors-act-via-broker` and the ceiling policy,
+G-03 with `--rule readers-cannot-act`, and G-04's observable runs the broker rule before its tests.
+
+So an actor that must change something holds `hnx-broker` and `cap:broker` and asks for a named
+broker action (`broker_call`, `broker_submit`); its `tier` bounds which actions the manifest
+grants it. An overlay that granted a direct acting server fails lint, `verify`, compile and render
+after the upgrade until the grant becomes a broker action or a reviewed exception.
 
 ## Context-pack assembler
 
@@ -534,7 +582,7 @@ hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
                [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
                [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
-hnx agent lint [PATH ...] [--classes FILE]
+hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker] [--policy POLICY.yml]
 hnx agent prompts lint [TEMPLATE|DIR ...]
 hnx agent prompts render TEMPLATE [--values VALUES.yml]
 hnx agent injection run [--fake fence|naive | --role ROLE --registry R --roles T] [--out F] [--check GOLDEN]
@@ -542,9 +590,10 @@ hnx agent injection check-report REPORT
 ```
 
 `LIBRARY.yml` is `{parts: {<logical id>: <path relative to the file>}}`; paths may not escape its
-directory. `compile` exits 1 on a missing part, ceiling, reader, include or budget violation; `verify` exits 1 on
-any problem, including a reader holding an acting grant and a digest that is not the one in the
-lock; `lint` exits 1 on any reader problem or when it finds no profile. `pack` prints the
+directory. `compile` exits 1 on a missing part, ceiling, reader, broker, include or budget violation; `verify` exits 1 on
+any problem, including a reader holding an acting grant, a profile acting other than through the
+broker and a digest that is not the one in the lock; `lint` exits 1 on any reader or broker
+problem or when it finds no profile. `pack` prints the
 hash and status on stderr and exits 0 when ready, **3 when deferred**, 1 on invalid input.
 Install the extra with `pip install 'homelabnext[agent]'`.
 
@@ -554,5 +603,7 @@ Install the extra with `pip install 'homelabnext[agent]'`.
 hash seeds), ceiling and budget rejection, missing-id errors, truncation and tier reporting,
 deferral, report validation, linked knowledge (grant filtering, inactive records, review
 filters, budget by rank, pack determinism, a reader gaining no grant), schema examples and negatives, the reader rule (refusal per class,
-passing reader and actor, tampered profile, lint), the screener evaluation set, the golden-suite compatibility check,
+passing reader and actor, tampered profile, lint), the broker rule (`tests/agent/test_agent_broker_only.py`: every acting grant
+outside the broker refused, the direct exception's three conditions, the gap analysis' rogue actor through verify, lint and
+render), the screener evaluation set, the golden-suite compatibility check,
 and the broker decision table.

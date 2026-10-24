@@ -2,7 +2,7 @@
 """The MCP catalog: one record per MCP server, the single source of truth (ADR-0024).
 
 A catalog is a directory of YAML records, ``<catalog>/<id>.yml``, each one
-``schemas/platform/mcp_server.schema.json`` (1.0).  The example lab's is ``examples/mcp/``; a real
+``schemas/platform/mcp_server.schema.json`` (1.1: ``acts_via``, ADR-0030).  The example lab's is ``examples/mcp/``; a real
 lab's lives in its private overlay beside its registry (``lab/mcp/``), found the same way the other
 example data is (``HNX_EXAMPLES_DIR``, ``HNX_DATA_DIR``; ``docs/private-overlay.md``).
 
@@ -27,8 +27,10 @@ typed, no setting, secret or parameter env key configures the process or its lau
 (:data:`DENIED_ENV`) and no parameter env key is shared, templates name only
 builtins and parameters, endpoints and hosts resolve in the registry and every registry ``mcp``
 entry resolves to a catalog server, a retired or deprecated server says why, ``replaced_by`` names
-an active server, ``implements`` names a capability contract, and an active server carries the
-reviews the review policy asks of ``mcp-server.active``.
+an active server, ``implements`` names a capability contract, an active or deprecated server
+with an acting tool (a ``broker_only`` class of the capability-class table) says how it acts
+(``acts_via``, :func:`acts_via_problems`) and only a broker one marks such a tool ``approval: true``,
+and an active server carries the reviews the review policy asks of ``mcp-server.active``.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -840,6 +843,225 @@ def _tool_problems(rec: Mapping[str, Any], where: str, vocabulary: Iterable[str]
     return out
 
 
+#: the broker's own MCP front (``hnx broker mcp``, docs/mcp.md): the one record that may say
+#: ``acts_via: broker`` (ADR-0030). Fixed here, in code, and never read from data, so no record
+#: (an overlay's, a module's, a relabelled vendor package) can name itself into it.
+BROKER_FRONT_ID = "hnx-broker"
+BROKER_FRONT_PATH = "homelabnext/broker/mcp_tools.py"
+BROKER_FRONT_ENTRY = "broker-mcp"
+
+
+def broker_tools() -> frozenset[str]:
+    """The tools the broker's MCP front really registers (:data:`homelabnext.broker.mcp_tools.TOOLS`)."""
+    from homelabnext.broker.mcp_tools import TOOLS
+
+    return frozenset(TOOLS)
+
+
+def broker_front_problems(rec: Mapping[str, Any]) -> list[str]:
+    """Why ``rec`` may not say ``acts_via: broker`` (empty: it is the broker's own front). It must
+    be the record :data:`BROKER_FRONT_ID`, first-party from :data:`BROKER_FRONT_PATH`, launched as
+    ``hnx broker-mcp``, and list exactly the tools the broker's front registers: an extra tool
+    (a ``raw_shell`` added to the record) is not a broker call, whatever the record says."""
+    origin = rec.get("origin") if isinstance(rec.get("origin"), Mapping) else {}
+    t = rec.get("transport") if isinstance(rec.get("transport"), Mapping) else {}
+    if (
+        rec.get("id") != BROKER_FRONT_ID
+        or origin.get("kind") != "first-party"
+        or origin.get("path") != BROKER_FRONT_PATH
+        or t.get("type") != "stdio"
+        or t.get("bin") != "hnx"
+        or t.get("entry") != BROKER_FRONT_ENTRY
+    ):
+        return [
+            f"only the broker's own MCP front ({BROKER_FRONT_ID}: first-party "
+            f"{BROKER_FRONT_PATH}, launched as hnx {BROKER_FRONT_ENTRY}) acts through the "
+            "broker; any other acting server says acts_via: direct"
+        ]
+    names = {str(x.get("name")) for x in rec.get("tools") or () if isinstance(x, Mapping)}
+    real = broker_tools()
+    out = []
+    if names - real:
+        out.append(
+            f"lists tool(s) {', '.join(sorted(names - real))} the broker's MCP front does not "
+            f"register ({BROKER_FRONT_PATH})"
+        )
+    if real - names:
+        out.append(
+            f"leaves out tool(s) {', '.join(sorted(real - names))} the broker's MCP front "
+            f"registers ({BROKER_FRONT_PATH})"
+        )
+    return out
+
+
+#: known acting software, by a word of what the record launches (its package, image or bins; not
+#: its id, which is the author's own label: an ``obsidian-vault`` or ``ssh-audit`` reader is not a
+#: secret store or a shell), and the class its tools must include: a record cannot declare it down
+#: to read or record-write (ADR-0030). Code, not data, like the broker front.
+ACTING_SOFTWARE = {
+    **dict.fromkeys(("ssh", "shell", "bash", "sh", "zsh", "exec", "terminal", "tmux"), "exec"),
+    **dict.fromkeys(
+        (
+            "kubernetes",
+            "kubectl",
+            "k8s",
+            "helm",
+            "ansible",
+            "docker",
+            "podman",
+            "terraform",
+            "opentofu",
+            "salt",
+            "puppet",
+            "systemd",
+        ),
+        "exec",
+    ),
+    **dict.fromkeys(("filesystem", "fs", "files", "git"), "file-write"),
+    **dict.fromkeys(("vault", "openbao", "secrets", "keychain", "keyring"), "credential"),
+    **dict.fromkeys(("slack", "email", "smtp", "mail", "ntfy", "sms", "teams", "discord"), "send"),
+}
+#: tool-name words that act: such a tool carries a broker_only class
+ACTING_VERBS = frozenset((
+    "run", "exec", "execute", "shell", "command", "cmd", "kubectl", "apply", "playbook",
+    "deploy", "delete", "remove", "destroy", "ssh", "push", "commit", "merge", "send", "post",
+    "publish", "kill", "restart", "stop", "start", "install", "upgrade", "trigger", "invoke",
+    "reboot", "shutdown", "scale", "rollback", "drop", "click", "type", "fill", "submit", "press",
+    "enable", "disable", "block", "unblock", "revoke", "grant", "rotate", "reset", "approve",
+    "reject", "lock", "unlock", "quarantine", "isolate",
+))  # fmt: skip
+#: tool-name words that write: such a tool carries a broker_only class, or record-write on a
+#: record that fronts a platform capability (its API validates what it writes)
+WRITING_VERBS = frozenset((
+    "write", "create", "update", "put", "upload", "add", "link", "propose", "annotate",
+    "set", "edit", "save", "open", "cancel", "insert", "patch", "modify", "append", "rename",
+    "move", "comment", "reply", "assign", "close", "import", "upsert", "sync",
+))  # fmt: skip
+#: tool-name words that read: a tool whose first verb is one of these (``get_commit``,
+#: ``list_open_alerts``) is judged a read by its name, whatever noun follows
+READING_VERBS = frozenset((
+    "get", "list", "search", "read", "describe", "show", "query", "find", "fetch", "count",
+    "view", "lookup", "inspect", "browse", "explain", "diff", "check", "summarize", "status",
+))  # fmt: skip
+VERBS = ACTING_VERBS | WRITING_VERBS | READING_VERBS
+
+
+def _word_list(value: str) -> list[str]:
+    """The words of one name, in order: split on anything not a letter or digit and at a camelCase
+    boundary (``createIssue`` is create, issue)."""
+    value = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", value.rsplit("/", 1)[-1])
+    return [w for w in re.split(r"[^a-z0-9]+", value.lower()) if w]
+
+
+def _words(*values: Any) -> set[str]:
+    out: set[str] = set()
+    for v in values:
+        for x in v if isinstance(v, (list, tuple)) else (v,):
+            if isinstance(x, str):
+                out |= set(_word_list(x))
+    return out
+
+
+@cache
+def _capability_classes() -> Mapping[str, Any]:
+    from homelabnext.agent.readers import table_capability_classes
+
+    return table_capability_classes()
+
+
+def floor_problems(
+    rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
+) -> list[str]:
+    """Tool classes are not only self-declared (ADR-0030, S1): a record of known acting software
+    (:data:`ACTING_SOFTWARE`, by a word of its package, image or bins) has a tool in that class; a
+    tool whose first verb acts (:data:`ACTING_VERBS`) carries a ``broker_only`` class; one whose
+    first verb writes (:data:`WRITING_VERBS`), and any ``record-write`` tool, writes either in a
+    ``broker_only`` class or as ``record-write`` on a record that fronts a platform capability the
+    class table classes ``record-write`` (``capabilities`` or ``implements``: an API that validates
+    what it writes; a label such as ``cap:metrics`` is not one). A tool whose first verb reads
+    (:data:`READING_VERBS`) is a read by its name. The broker's own front is judged by
+    :func:`broker_front_problems` instead."""
+    if rec.get("acts_via") == "broker" and not broker_front_problems(rec):
+        return []
+    if broker_only is None:
+        from homelabnext.agent.readers import table_broker_only
+
+        broker_only = table_broker_only()
+    only = set(broker_only)
+    origin = rec.get("origin") if isinstance(rec.get("origin"), Mapping) else {}
+    t = rec.get("transport") if isinstance(rec.get("transport"), Mapping) else {}
+    words = _words(origin.get("package"), str(origin.get("image") or "").split(":")[0],
+                   origin.get("bins"), origin.get("provider"), origin.get("repo"),
+                   t.get("bin"))  # fmt: skip
+    tools = [x for x in rec.get("tools") or () if isinstance(x, Mapping)]
+    have = {c for x in tools for c in x.get("classes") or ()}
+    out = [
+        f"{where}: is {w} software, so a tool is classed {cls} (classes cannot be declared down)"
+        for w, cls in sorted(ACTING_SOFTWARE.items())
+        if w in words and cls not in have
+    ]
+    table = _capability_classes()
+    fronts = [*(rec.get("capabilities") or ()), *(rec.get("implements") or ())]
+    api = any("record-write" in (table.get(c) or ()) for c in fronts)
+    for x in tools:
+        name, cls = str(x.get("name")), set(x.get("classes") or ())
+        parts = _word_list(name)
+        first = next((w for w in parts if w in VERBS), None)
+        # and the verb after each "and"/"or": get_or_create_issue creates
+        joined = {b for a, b in pairwise(parts) if a in {"and", "or"}}
+        verbs = ({first} | joined) - READING_VERBS - {None}
+        if verbs & ACTING_VERBS and not cls & only:
+            out.append(f"{where}: tool {name} acts by its name, so it carries an acting class "
+                       f"({', '.join(sorted(only))})")  # fmt: skip
+        elif (
+            (verbs & WRITING_VERBS or "record-write" in cls)
+            and not cls & only
+            and not ("record-write" in cls and api)
+        ):
+            out.append(f"{where}: tool {name} writes, so it is file-write, or record-write on "
+                           "a record that fronts a platform capability the class table classes "
+                           "record-write (capabilities or implements)")  # fmt: skip
+    return out
+
+
+def acts_via_problems(
+    rec: Mapping[str, Any], where: str, broker_only: Iterable[str] | None = None
+) -> list[str]:
+    """ADR-0030 for one record a profile may be granted (active or deprecated): a server with an
+    acting tool (a class in ``broker_only``, default the packaged table's) declares ``acts_via``
+    (R3.3), and ``approval: true`` on an acting tool needs ``acts_via: broker`` (R3.2): only the
+    broker grants an approval, so a server that acts directly cannot promise one."""
+    if rec.get("acts_via") == "broker" and rec.get("status") not in GRANTABLE:
+        return [f"{where}: acts_via: broker, but {p}" for p in broker_front_problems(rec)]
+    if rec.get("status") not in GRANTABLE:
+        return []
+    if broker_only is None:
+        from homelabnext.agent.readers import table_broker_only
+
+        broker_only = table_broker_only()
+    only = set(broker_only)
+    acting = [t for t in rec.get("tools") or () if set(t.get("classes") or ()) & only]
+    if not acting and rec.get("acts_via") != "broker":
+        return []
+    via = rec.get("acts_via")
+    out: list[str] = [f"{where}: acts_via: broker, but {p}" for p in broker_front_problems(rec)
+                      if via == "broker"]  # fmt: skip
+    if via is None and acting:
+        out.append(
+            f"{where}: tool(s) {', '.join(sorted(str(t.get('name')) for t in acting))} act "
+            f"({', '.join(sorted(only))} classes) but the record does not say how (acts_via: "
+            "broker when each is a broker call, else direct with a direct_reason)"
+        )
+    for t in acting:
+        if t.get("approval") is True and via != "broker":
+            out.append(
+                f"{where}: tool {t.get('name')} says approval: true but the server does not act "
+                "through the broker (acts_via: broker): only the broker grants an approval, a "
+                "client's prompt is not one (say approval: false)"
+            )
+    return out
+
+
 def _egress_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     egress = rec.get("egress")
     classes = {c for t in rec.get("tools") or () for c in t.get("classes") or ()}
@@ -1202,6 +1424,9 @@ def check(
 
         vocabulary = table_vocabulary()
     vocabulary = list(vocabulary)
+    from homelabnext.agent.readers import table_broker_only
+
+    broker_only = table_broker_only()
     keep = None if only is None else set(only)
     out = list(cat.problems) if keep is None else [
         p for p in cat.problems if p.split(":", 1)[0] in {f"{s}.yml" for s in keep}
@@ -1224,6 +1449,8 @@ def check(
         out += launch_problems(rec, where)
         out += path_bin_problems(rec, where, source_root)
         out += _tool_problems(rec, where, vocabulary)
+        out += acts_via_problems(rec, where, broker_only)
+        out += floor_problems(rec, where, broker_only)
         out += _egress_problems(rec, where)
         out += remote_problems(rec, where, registry)
         out += _env_collision_problems(rec, where)

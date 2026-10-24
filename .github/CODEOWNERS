@@ -16,3 +16,9 @@
 /MANIFEST.in              @PeteSampras
 /pyproject.toml           @PeteSampras
 /SECURITY.md              @PeteSampras
+# ADR-0030: the controls on how an agent acts are the MCP catalog (acts_via, a direct
+# server's record), the ceiling policies (direct_mcp) and the class table; an agent can write a
+# review line, so the human control is review of these paths
+/examples/mcp/                       @PeteSampras
+/examples/mcp/clients/policy/        @PeteSampras
+/homelabnext/agent/tool_classes.yml  @PeteSampras
