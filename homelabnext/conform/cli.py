@@ -58,10 +58,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _human_run(run: CapabilityRun, verbose: bool) -> str:
-    lines = [
-        f"{'PASS' if run.ok else 'FAIL'}  {run.capability}  target={run.target}  "
-        f"{len(run.executed)} executed"
-    ]
+    # could-not-measure (exit 100) is neither a pass nor a failure (docs/conformance.md)
+    verdict = "COULD NOT MEASURE" if run.error else ("PASS" if run.ok else "FAIL")
+    lines = [f"{verdict}  {run.capability}  target={run.target}  {len(run.executed)} executed"]
     if run.error:
         lines.append(f"  ERROR {run.error}")
     if run.too_few:

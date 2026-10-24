@@ -113,6 +113,10 @@ class ViewsError(ValueError):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
+class ViewsUnreadable(ViewsError):
+    """The views file cannot be read or parsed: bad input, not invalid views."""
+
+
 @cache
 def _validator():
     import jsonschema
@@ -175,7 +179,7 @@ def load_views(
     try:
         doc = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
-        raise ViewsError(f"cannot read views {path}: {exc}") from None
+        raise ViewsUnreadable(f"cannot read views {path}: {exc}") from None
     problems = views_problems(doc, registry, specs)
     if problems:
         raise ViewsError(f"invalid views {path}", problems)

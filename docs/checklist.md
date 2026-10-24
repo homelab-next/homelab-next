@@ -3,11 +3,11 @@
 
 Every row is a property that must be **continuously true**, with an observable that someone who has never seen the platform can run.
 
-- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. These are the rows the invariants runner (`python3 -m homelabnext.invariants run`) can execute from this repository.
-- **SERVER**: needs the running platform (hypervisors, network, real products). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
+- **PUBLIC-NOW**: decidable on a laptop or in CI with fakes, fixtures and goldens. Every one has a criterion in `examples/registers/invariants.yml` that the invariants runner (`python3 -m homelabnext.invariants run`) executes from this repository, with no exception (`tests/invariants/test_inv_example_register.py` holds every row to this).
+- **SERVER**: needs the running platform (hypervisors, network, real products, and the settings of the hosted repository, such as branch protection). The row is documented; the interface and a fake exist where the plan calls for one; nothing here pretends to test it.
 
 Criteria register in `invariants.yml` using the same shape as these rows (statement, observable, expected, remediation). Exit codes: 0 pass, 1 fail, >= 100 could not measure.
-Pillar X rows are implemented as runner plugins (`evidence: plugin`); X-02, X-07 and X-08 always report `skip` with a `SERVER:` reason.
+Pillar X rows are implemented as runner plugins (`evidence: plugin`), except X-02, X-07 and X-08: they are SERVER rows with no check yet, registered as deferred `evidence: server` criteria with a `why`, so the runner neither runs nor counts them.
 
 ## F - Foundation
 
@@ -19,10 +19,10 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-02 | Network segments are enforced | From a monitored-system segment, connections to management and AI-worker segments are refused; only listed flows succeed (reachability matrix) | SERVER |
 | F-03 | People authenticate with SSO and MFA | Every web UI redirects an unauthenticated request to SSO or demands its own MFA; 0 anonymous UIs | SERVER |
 | F-04 | Every service and agent has its own identity | Credential inventory: no credential shared by two consumers; no service or agent holds admin rights | SERVER |
-| F-05 | Secrets are not in git or readable on disk | Secret scan over full history reports 0 unaccepted findings; 0 secret files readable by other | PUBLIC-NOW |
+| F-05 | Secrets are not in git | Secret scan of the tracked tree (`tools/leak_scan.py --groups secret`) and of the full history (CI's pinned `gitleaks git` over every fetched ref) reports 0 unaccepted findings | PUBLIC-NOW |
 | F-06 | Credentials are short-lived and rotated | Every inventoried secret is within its rotate-by date | SERVER |
 | F-07 | Internal TLS is verified | 0 clients with certificate verification disabled (lint over client config; RL013 for roles); endpoints present certificates from the internal CA (`tools/tls_verify_lint.py` over Python and YAML/JSON) | PUBLIC-NOW |
-| F-08 | The main branch is protected by CI | Branch protection requires passing checks; CI runs tests, lint, secret scan on every change | PUBLIC-NOW |
+| F-08 | The main branch is protected by CI | Branch protection on the hosted repository requires the ci.yml checks to pass before a merge (`gh api repos/OWNER/REPO/branches/main/protection`; a manual criterion). That CI runs tests, lint and the secret scan on every change is decided from the checkout by Q-01 and Q-06 | SERVER |
 | F-09 | Backups follow 3-2-1 with an immutable copy | Newest backup < 24 h; offsite or immutable copy < 7 days; a delete attempt with the automation identity fails | SERVER |
 | F-10 | Restores are proven | A full-system restore drill was completed <= 90 days ago and verified | SERVER |
 | F-11 | The monitoring is itself monitored | Stopping the alerting service raises an external dead-man alert within 15 minutes | SERVER |
@@ -38,6 +38,7 @@ Platform-wide properties. Most need a running platform; the repository-level one
 | F-21 | The public tree carries no part of a private overlay | `tools/private_leak_check.py public .` exits 0: no overlay marker outside the fictional skeleton, no file under the skeleton's private layout paths, no `.sops.yaml`, no SOPS ciphertext, no key file; a private overlay's CI runs the same tool as `private ROOT` (no plaintext credential value after masking well-formed ciphertext only; every file under the pinned `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule SOPS-encrypted throughout, with real metadata, no key set twice, and every value a well-formed `ENC[]` token but the keys of the SOPS-default or marker-pinned `unencrypted_suffix` (a file's own other suffix is partial), never partially; a token is masked only in a SOPS file and only as a whole value or comment; a `.sops.yaml` that narrows that set is a finding; every vault file the bare header-plus-hex envelope; a file it cannot scan fails unless the marker's `allow_unscanned` names it; ADR-0021) | PUBLIC-NOW |
 | F-22 | The CI deploy reaches only what the site declares | With a site `tailnet.deploy`, `hnx site validate` refuses a wildcard (`*`, `any`) or unknown destination zone and a port beyond SSH without an `exceptions` entry and reason; `hnx guests render DIR --site SITE --target tailscale-acl` emits `tag:ci-deploy` in `tagOwners`, its TCP 22 rule to the declared zones only, and a policy `tests` block (accept the declared zones on 22, deny other ports, every other tag, and any zone tag back to the deploy tag) that holds against the rendered rules (`homelabnext/tailnet.py`, `tests/compute/test_tailnet_deploy.py`; ADR-0021) | PUBLIC-NOW |
 | F-23 | No Caddy config lets a client set its own identity headers | `tools/caddy_lint.py` exits 0 over every Caddy config in the tree (the files `git ls-files` lists: Caddyfiles and their templates and imports, markdown fences, Caddyfiles embedded in YAML, Caddy JSON/YAML, the `caddy` generator's output for every registry that loads): in a config with a `forward_auth` anywhere, every site that runs it or proxies (`reverse_proxy`, `php_fastcgi`), whatever it dials, deletes at site level and with no matcher every header carrying `authentik` and every copied one (`request_header -*authentik*` first in the site; the IdP's own site, whose every proxy dials the IdP, is the one exemption); every `forward_auth` sits directly in a `route`, after a delete (site level, or earlier in that route) of each header its `copy_headers` sets, in every `-`/`_` spelling, and has no matcher; no header directive sets, adds or replaces a header named after `authentik` or a copied name, or copies one through a header placeholder, and none rewrites them through a `*` field from a placeholder value; no FastCGI `env` sets an identity CGI variable (`HTTP_<identity header>`, `REMOTE_USER`, `AUTH_*`) or any variable from a client-chosen value; no `forward_auth` dial, and no proxy dial in a forward-auth site, is a request placeholder;  a construct the lint cannot read (a heredoc, a multi-line quoted token, a brace sharing a line, `{$ENV}` or a template in directive position, a header name that is not literal, an import it cannot follow or substitute, a global `order` option) or a `forward_auth` in a file it does not read fails closed; with a `caddy` binary (pinned 2.11.7 and required in CI; a local run without one says so and relies on the text rules), Caddy's own `caddy adapt` JSON reaches no `reverse_proxy` with an identity header undeleted on any path and sets none outside the auth answer; and every Caddy pin is 2.11.2 or later by semver (registry `impl: caddy`, `caddy_*version`/`_tag`/`_release` keys, any image whose last path segment is `caddy` behind any prefix, Dockerfile `FROM`/`COPY --from`/`RUN --mount` and `xcaddy build` with `ARG` defaults resolved, `caddy=` packages, `go.mod`, `.env`; an unresolvable pin fails, an image built on Caddy needs a reviewed allow); threat model: accidental misconfiguration of the tree's Caddyfiles and Caddy JSON (authors are trusted and reviewed; deliberate obfuscation, the operator's environment and caddy-docker-proxy labels (a `caddy.*forward_auth` label is a coverage finding) are out of scope; that every human-facing service is reachable only through the authed front door is the separate front-door work's job, Rule 1) | PUBLIC-NOW |
+| F-24 | Secrets are not readable on disk | On every host, 0 files holding a secret are readable by other; the `config_leak_scan` role reports secret-looking values outside its accepted paths (path, line, pattern; never the value) | SERVER |
 
 ## C - Collection
 
@@ -156,7 +157,7 @@ Caught before deploy.
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request; main is green | PUBLIC-NOW |
+| Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request (`tools/tests/test_ci_runs_tests.py`); main is green (the forge's latest run: `gh run list --branch main --workflow ci --limit 1`) | PUBLIC-NOW |
 | Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date (`tests/suite_policy.py`: per-suite budgets, registered skip reasons, `quarantine` marker with owner and expiry) | PUBLIC-NOW |
 | Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them; an unmarked test that reaches a non-loopback address fails (`tests/network_guard.py`) | PUBLIC-NOW |
 | Q-04 | Every component ships tests | CI fails a component directory with no tests (`tools/component_tests.py`, reviewed allowlist) | PUBLIC-NOW |
@@ -305,4 +306,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 182 criteria across 16 pillars; 100 PUBLIC-NOW, 82 SERVER.
+**Totals:** 183 criteria across 16 pillars; 99 PUBLIC-NOW, 84 SERVER.

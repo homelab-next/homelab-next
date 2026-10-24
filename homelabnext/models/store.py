@@ -37,6 +37,7 @@ __all__ = [
     "Entry",
     "Store",
     "StoreError",
+    "StoreUnreadable",
     "bindings_problems",
     "check_disk",
     "load",
@@ -80,6 +81,10 @@ class ProblemsError(ValueError):
 
 class StoreError(ProblemsError):
     """The store manifest is malformed.  ``problems`` lists every defect found."""
+
+
+class StoreUnreadable(StoreError):
+    """The store manifest is not JSON: bad input, not an invalid manifest."""
 
 
 @dataclass(frozen=True)
@@ -354,7 +359,7 @@ def load(path: str | Path) -> Store:
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except ValueError as exc:
-        raise StoreError(f"{path}: not JSON ({exc})") from None
+        raise StoreUnreadable(f"{path}: not JSON ({exc})") from None
     return Store.from_dict(doc)
 
 

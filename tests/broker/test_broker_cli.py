@@ -34,6 +34,18 @@ def test_validate_unreadable_and_non_mapping(tmp_path, capsys):
     capsys.readouterr()
 
 
+@pytest.mark.parametrize(
+    "name, data",
+    [("bad.yml", b"a: [1,\n"), ("bad.json", b"{not json"), ("bin.yml", b"\xff\xfe: x\n")],
+)
+def test_validate_a_malformed_manifest_is_exit_2_without_a_traceback(tmp_path, capsys, name, data):
+    (tmp_path / name).write_bytes(data)
+    assert main(["validate", str(tmp_path / name)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"hnx broker validate: cannot read {tmp_path / name}: ")
+    assert "Traceback" not in err
+
+
 def test_validate_shows_lane_usage_and_warns_near_the_quota(tmp_path, capsys):
     """A lane at its quota refused the agent alone: nothing showed the operator a lane directory
     filling up, nor one already over its quota on the day --data-root was pointed at it."""

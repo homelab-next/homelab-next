@@ -221,11 +221,11 @@ def _out(args, payload: Any, text: str) -> None:
 
 def _validate(args) -> int:
     path = Path(args.path)
-    try:
-        from .service import _read_doc
+    from .service import _parse_errors, _read_doc
 
+    try:
         manifest = _read_doc(path)
-    except (OSError, ValueError) as exc:
+    except _parse_errors() as exc:  # malformed YAML too: a usage error, never a traceback
         print(f"hnx broker validate: cannot read {path}: {exc}", file=sys.stderr)
         return 2
     if not isinstance(manifest, dict):
