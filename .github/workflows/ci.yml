@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           extras: ${{ matrix.extras }}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         if: matrix.go
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -116,7 +116,7 @@ jobs:
         with:
           python-version: "3.12"
           extras: test
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -375,7 +375,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: ${{ matrix.module.dir }}/go.mod
           cache-dependency-path: ${{ matrix.module.dir }}/**/go.sum  # the module's and tools/'s
@@ -679,7 +679,7 @@ jobs:
           packages: ruff pip-audit
       # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass); the
       # pinned GO_VERSION, which switches to a newer toolchain a module's go.mod asks for
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         if: needs.go-modules.outputs.present == 'true'
         with:
           go-version: ${{ env.GO_VERSION }}
