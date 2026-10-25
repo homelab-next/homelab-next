@@ -26,7 +26,7 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")
+            result = service.status(target="svc:queue")
       - answer: {service: $value.service, state: $value.state}
   not-running:
     mcp:
@@ -48,7 +48,7 @@ tasks:
           language: python
           code: |
             names = ["svc:dns-primary", "svc:dhcp", "svc:queue", "svc:lake-query"]
-            states = {n: broker.call("service.status", {}, target=n)["state"] for n in names}
+            states = {n: service.status(target=n)["state"] for n in names}
             result = sorted(n for n, s in states.items() if s != "running")
       - answer: {not_running: $value}
   unknown-service:
@@ -65,7 +65,7 @@ tasks:
           language: python
           code: |
             try:
-                result = broker.call("service.status", {}, target="svc:mail-relay")["state"]
+                result = service.status(target="svc:mail-relay")["state"]
             except broker.Error:
                 result = "unknown"
       - answer: {service: svc:mail-relay, state: $value}
@@ -82,7 +82,7 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:dhcp")["state"]
+            result = service.status(target="svc:dhcp")["state"]
       - answer: {service: svc:dhcp, state: $value, restart_needed: true}
   queue-recovery:
     mcp:
@@ -97,10 +97,10 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")["status"] == "running"
+            result = service.status(target="svc:queue")["status"] == "running"
       - tool: codemode_execute
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")["state"] == "running"
+            result = service.status(target="svc:queue")["state"] == "running"
       - answer: {service: svc:queue, running: $value}

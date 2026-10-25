@@ -200,6 +200,27 @@ def _message(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:8000]
 
 
+def _execute(source: str, glb: dict) -> dict:
+    """Compile and run the program in ``glb``; the result header of how it ended."""
+    try:
+        code = compile(source, "<program>", "exec")
+    except (SyntaxError, ValueError) as exc:
+        return {"status": "error", "error": {"kind": "syntax", "message": _message(exc)}}
+    try:
+        exec(code, glb)
+    except Denied:
+        return {"status": "denied"}
+    except Error as exc:
+        return {"status": "error", "error": {"kind": "broker", "message": _message(exc)}}
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            msg = f"SystemExit: {exc.code}"
+            return {"status": "error", "error": {"kind": "runtime", "message": msg}}
+    except BaseException as exc:  # Paused included: the pending check decides
+        return {"status": "error", "error": {"kind": "runtime", "message": _message(exc)}}
+    return {"status": "ok"}
+
+
 def _program(cfg: dict, out_w: int, res_w: int, code_fd: int) -> None:
     """The run's own process: a fresh fork of the zygote, its own session, then the program."""
     os.setsid()
@@ -210,6 +231,8 @@ def _program(cfg: dict, out_w: int, res_w: int, code_fd: int) -> None:
     os.close(devnull)
     os.close(out_w)
     with os.fdopen(code_fd, "rb") as f:  # the program, from an unlinked file the parent wrote
+        size = int(f.readline())  # the prelude's length in bytes, then the prelude, the program
+        prelude = f.read(size).decode("utf-8")
         source = f.read().decode("utf-8")
     os.chdir(cfg["workdir"])
     os.environ.clear()
@@ -223,26 +246,15 @@ def _program(cfg: dict, out_w: int, res_w: int, code_fd: int) -> None:
     broker = _Broker(cfg, cfg.pop("token"))
     sys.addaudithook(_hook(cfg, roots))
 
-    header: dict = {"status": "ok"}
     body = b""
     glb = {"__name__": "__program__", "__builtins__": builtins, "broker": broker}
-    try:
-        code = compile(source, "<program>", "exec")
-    except (SyntaxError, ValueError) as exc:
-        header = {"status": "error", "error": {"kind": "syntax", "message": _message(exc)}}
+    try:  # the prelude first, in the program's namespace (rule h): a failure is the sandbox's
+        exec(compile(prelude, "<prelude>", "exec"), glb)
+    except BaseException as exc:
+        error = {"kind": "sandbox", "message": "the prelude failed: " + _message(exc)}
+        header = {"status": "error", "error": error}
     else:
-        try:
-            exec(code, glb)
-        except Denied:
-            header = {"status": "denied"}
-        except Error as exc:
-            header = {"status": "error", "error": {"kind": "broker", "message": _message(exc)}}
-        except SystemExit as exc:
-            if exc.code not in (None, 0):
-                msg = f"SystemExit: {exc.code}"
-                header = {"status": "error", "error": {"kind": "runtime", "message": msg}}
-        except BaseException as exc:  # Paused included: the pending check below decides
-            header = {"status": "error", "error": {"kind": "runtime", "message": _message(exc)}}
+        header = _execute(source, glb)
     if broker.pending is not None and broker._sticky:
         header = {"status": "paused", "pending": [broker.pending]}
     if header["status"] == "ok":

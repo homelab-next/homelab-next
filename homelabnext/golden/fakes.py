@@ -51,7 +51,7 @@ from homelabnext import paths
 from homelabnext.agent.digest import digest_of
 from homelabnext.agent.injection import Corpus, found, outside_fences, squashed_views
 from homelabnext.codemode.mcp_tools import CodemodeIndex
-from homelabnext.codemode.runner import Runner, load_index
+from homelabnext.codemode.runner import Runner, load_index, load_preludes
 
 from .agentic import (
     EXECUTE,
@@ -580,6 +580,7 @@ class FakeBackend:
                 state,
                 tap=self._tap,
                 index=self.world.index,
+                preludes=self.world.preludes,
                 actions_for=lambda actor: list(self.grant),
                 clock=lambda: CLOCK,
             )
@@ -606,6 +607,7 @@ class FakeWorld:
 
         self.index_dir = Path(index_dir) if index_dir is not None else default_index()
         self.index = load_index(self.index_dir)
+        self.preludes = load_preludes(self.index_dir)
         self.model = model
         self.executor = ForkingExecutor()
         self._root = Path(tempfile.mkdtemp(prefix="hnx-golden-codemode-"))
@@ -684,6 +686,9 @@ def fake_report(
     profiles = sorted({str(s.profile) for s, _, _ in loaded})
     extra = {
         "index": {p: file_digest(index_dir / p.split(":", 1)[1] / "search.json") for p in profiles},
+        "preludes": {
+            p: file_digest(index_dir / p.split(":", 1)[1] / "prelude.py") for p in profiles
+        },
         "scripts": {s.name: file_digest(script_of(path)) for s, _, path in loaded},
         "codemode_suites": digest_of(CODEMODE_SUITES),
     }

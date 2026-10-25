@@ -38,15 +38,18 @@ a run, a value cut to a `truncated` prefix of its pinned JSON, the printed outpu
 call of a paused run. The broker is an endpoint the harness serves where the executor declares
 (`broker_bind`) and a token scoped to the run, never an environment variable; the executor owns
 the transport, and its broker client caps calls (`max_calls`, refused as `call-cap-reached`).
-The suite `conformance/suites/codemode_executor.py` has sixteen MUST checks: the five above plus
+The suite `conformance/suites/codemode_executor.py` has seventeen MUST checks: the five above plus
 a broker round trip, errors, denials, a denial's reason, a pause the program cannot swallow,
-broker errors, the call cap, oversized, unencodable and unknown-language programs refused, and
-(with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`.
+broker errors, the call cap, oversized, unencodable and unknown-language programs refused,
+(with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`, and (phase 2,
+CM-10) `stubs-reach-the-broker`: with the generated prelude `run(..., prelude=...)` takes (rule h),
+a program calling a stub reaches the broker with its action, its keywords as params and its
+target, on the wire exactly as the `broker.call` it stands for.
 The client-side pause and call cap are behaviour, not enforcement: the broker's refusal on a
 paused or over-cap token is, and has landed with CM-5a (the `broker-tokens` checks
 `paused-token-refused` and `call-cap-enforced-by-the-broker`, at the broker's API). Its mutants are
 `open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap`,
-`pause-catchable` and `bare-wire`, and the reference page is
+`pause-catchable`, `bare-wire` and `prelude-dropped`, and the reference page is
 [capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
 programs per language, and a declared language a check has no program for fails it as
 untested. The reference fake forks each program from a warm Python process that never runs one
@@ -65,15 +68,45 @@ hnx codemode gen --check    # writes nothing; exit 1 on drift (make gates, CI)
 hnx codemode gen --manifest path/to/manifest.yml --out build/codemode   # another manifest
 ```
 
-Per profile the manifest grants actions to, `<out>/<profile>/` gets three files from one model
+Per profile the manifest grants actions to, `<out>/<profile>/` gets four files from one model
 (`homelabnext/codemode/model.py`):
 
 - `types.d.ts`: a `declare namespace` per action prefix, one function per action taking the
   params as one object;
 - `stubs.pyi`: a class per namespace bound to a module-level name, keyword-only parameters;
+- `prelude.py`: the **runtime prelude**, which binds those namespaces in the sandbox (below);
 - `search.json`, for `codemode_search` and `codemode_describe`: per action `name`, `call` (what a
   program writes), `summary`, `tier`, `needs_approval`, `kind` (exec or lane), `params` (the exact
-  JSON Schema), `result` (type name and schema, or null) and `signatures` (one line per language).
+  JSON Schema), `target` (`required`, `optional` or null), `result` (type name and schema, or
+  null) and `signatures` (one line per language).
+
+**Actions about a target.** A request may name the `svc:` target it is about (the broker hands it
+to an exec handler as `HNX_BROKER_TARGET`), and nothing in a manifest said which actions read one,
+so a handler document now declares it: `target: required` or `optional` (`schemas/broker/handler`
+1.3, additive; absent, the action takes none; a lane action never does). The broker does not
+enforce it (a request naming a target for an action that ignores it is still allowed, as before);
+it is the generator's statement of what the handler reads. The method then takes a `target`
+beside its params: keyword-only in Python (`service.status(*, target: str, verbose: bool = ...)`,
+a required target first), a property of the argument object in TypeScript (`status(args: {
+target: string; verbose?: boolean })`), noted as the request's target and never a param. A
+parameter named `target` on such an action is refused (exit 2), since it would shadow the
+request's. Both example handlers read the target, so `service.status` and `service.restart`
+declare it `required`.
+
+**The runtime prelude.** `prelude.py` is Python source the executor runs in the program's own
+namespace, inside the sandbox and before the program, with `broker` already bound (CM-4 rule h,
+the check `stubs-reach-the-broker`). It defines each namespace as an object whose methods are
+`broker.call` of their action, bound when the prelude runs: `service.status(target="svc:queue",
+verbose=True)` is exactly `broker.call("service.status", {"verbose": True}, target="svc:queue")`,
+the same request with the same token, so the broker checks it the same way, and a program that
+rebinds `broker` does not redirect the stubs. It passes every other keyword through as a param
+(the broker validates params, so a misspelt one is `invalid-params`, a denied call), holds no
+state, secret or check of its own, and `broker.call` keeps working beside it. The runner hands it
+to the executor with each program (`homelabnext.codemode.runner.load_preludes`, taken only beside
+a search index carrying the same model digest); a profile without one runs with `broker` alone. A
+call that needs approval goes through `broker.call` too, which pauses the run like a submit. The
+prelude is Python only: a TypeScript executor (CM-7, CM-8) needs one generated for it, and the
+`.d.ts` already types the same calls.
 
 **Calls are synchronous** in both languages (`def method(...)`, `function method(args): R`, no
 `Promise`): a call returns its result, and a call that needs approval pauses the whole run until
@@ -153,9 +186,10 @@ state directory. One run:
    `paused`;
 4. the runner serves the run's endpoint (the CM-4 wire, one JSON line per call, a fresh listener
    per run on an ephemeral port of the executor's `broker_bind`) and the executor runs the
-   program with it and the token. The program's view is CM-4's plus `broker.submit(action,
-   args)` and a `target=` keyword (the wire's optional `op` and `target`, which the executor
-   contract's `submit-and-target-relayed` check holds an executor to);
+   program with it, the token and the actor's runtime prelude ([CM-3](#cm-3-the-generator)).
+   The program's view is CM-4's plus `broker.submit(action, args)`, a `target=` keyword (the
+   wire's optional `op` and `target`, which the executor contract's `submit-and-target-relayed`
+   check holds an executor to) and the generated namespaces (`service.status(target=...)`);
 5. the token is spent `paused` when the run ended on a pause, else `finished`, and the result is
    held to `schemas/codemode/execution_result` before it is returned (a result that fails is a
    runner bug, `RunnerError`, which the broker reports `handler-failed`). A journal failure

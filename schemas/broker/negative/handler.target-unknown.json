@@ -1,0 +1,17 @@
+{
+  "action": "dns.lookup",
+  "audit": true,
+  "description": "Resolve one service's name (read only).",
+  "handler": "handlers/dns-lookup.sh",
+  "handler_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "idempotent": true,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "requires_approval": false,
+  "target": "always",
+  "tier": "read",
+  "timeout_s": 10
+}

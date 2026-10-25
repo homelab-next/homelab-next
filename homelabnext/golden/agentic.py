@@ -113,8 +113,10 @@ MODE_TOOLS: dict[str, dict[str, str]] = {
         "codemode_describe": CODEMODE_TOOLS["codemode_describe"] + " Arguments: {name}.",
         EXECUTE: (
             "Run one program (the broker action codemode.execute). Arguments: {language: "
-            f"{LANGUAGE}, code}}. In the program, broker.call(action, params, target='svc:<name>') "
-            "is one broker request of yours and returns its result; a refused call raises "
+            f"{LANGUAGE}, code}}. In the program, each call codemode_describe shows is bound "
+            "(service.status(target='svc:<name>'), its params as keywords), and so is "
+            "broker.call(action, params, target='svc:<name>'): each call is one broker request "
+            "of yours and returns its result; a refused call raises "
             "broker.Denied and a failed one broker.Error, both catchable. Assign what you want "
             "back to `result`: only the execution result returns to you."
         ),

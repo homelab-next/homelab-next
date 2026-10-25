@@ -34,6 +34,7 @@ from conformance.fakes.code_executor import (
     NoCallCapExecutor,
     NoTimeoutExecutor,
     OpenEgressExecutor,
+    PreludeDroppedExecutor,
     ReusedStateExecutor,
     UnboundedResultExecutor,
 )
@@ -53,6 +54,8 @@ from conformance.protocols.codemode_executor import (
     UnencodableProgram,
     UnsupportedLanguage,
 )
+from homelabnext.codemode.model import Method, ProfileModel
+from homelabnext.codemode.render import render_prelude
 from homelabnext.conform.core import Mutant, Suite
 
 from ._util import raises
@@ -74,7 +77,7 @@ DENY_REASON, ERROR_REASON = "action-not-granted", "handler-failed"
 
 
 class _Broker:
-    """A stand-in broker: ``echo`` returns its args, ``hold`` is pending approval, ``fail``
+    """A stand-in broker: ``echo`` (and any ``echo.*``) returns its args, ``hold`` is pending approval, ``fail``
     answers with an error, ``deny`` and anything else is denied, and a call with another token is
     denied.  Records every call it answers, and the pending replies it gave."""
 
@@ -124,7 +127,7 @@ class _Broker:
         action = req.get("action")
         if req.get("token") != self.token:
             return {"ok": False, "denied": True, "reason": "token-invalid"}
-        if action == "echo":
+        if action == "echo" or (isinstance(action, str) and action.startswith("echo.")):
             return {"ok": True, "value": req.get("args")}
         if action == "hold":
             rid = f"req-{len(self.pending) + 1}"
@@ -172,16 +175,23 @@ def _languages(ex: Any, *programs: Mapping[str, str]) -> list[str]:
 
 
 def _run(
-    ex: Any, program: str, broker: _Broker, limits: Limits = LIMITS, language: str = "python"
+    ex: Any,
+    program: str,
+    broker: _Broker,
+    limits: Limits = LIMITS,
+    language: str = "python",
+    prelude: str = "",
 ) -> ExecutionResult:
     """``ex.run`` with a bound: a run that has not returned well past its own wall cap fails
-    the check instead of hanging the harness."""
+    the check instead of hanging the harness.  A prelude is passed only when there is one, so
+    every other check asks of the executor exactly what it did before rule h."""
     box: dict[str, Any] = {}
+    extra = {"prelude": prelude} if prelude else {}
 
     def go() -> None:
         try:
             box["result"] = ex.run(
-                program, language=language, broker=broker.endpoint, limits=limits
+                program, language=language, broker=broker.endpoint, limits=limits, **extra
             )
         except BaseException as exc:  # handed to the check below, as the subject raised it
             box["error"] = exc
@@ -252,6 +262,77 @@ def _(ex):
                 {"op": "call", "target": "svc:queue"},
                 {"op": "submit", "target": None},
             ], f"{lang}: the wire carried {b.wire}"
+
+
+#: the generated namespaces the stub check's prelude binds (``hnx codemode gen``'s own renderer):
+#: one action about a required target, one about an optional one, one about none
+_STUB_METHODS = (
+    Method(
+        "echo.lookup",
+        "echo",
+        "lookup",
+        "read",
+        False,
+        "exec",
+        "Look one name up.",
+        {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        None,
+        "required",
+    ),
+    Method("echo.leases", "echo", "leases", "read", False, "exec", "List.", {}, None, "optional"),
+    Method("echo.status", "echo", "status", "read", False, "exec", "Report.", {"type": "object"}),
+)
+#: what each stub call of the check's program stands for: (action, params, target)
+_STUB_CALLS = (
+    ("echo.lookup", {"name": "files"}, "svc:dns"),
+    ("echo.leases", {}, None),
+    ("echo.leases", {}, "svc:dhcp"),
+    ("echo.status", {"verbose": True}, None),
+)
+
+
+def stub_prelude() -> str:
+    """The runtime prelude of the stub check, as the runner would hand it to the executor."""
+    return render_prelude(ProfileModel("profile:conformance", "conformance", _STUB_METHODS))
+
+
+@SUITE.check(
+    "stubs-reach-the-broker",
+    "with the prelude the runner hands over (the generated namespaces), a program calling a stub "
+    "reaches the broker with that stub's action, its keywords as the params and its target as "
+    "the call's target, exactly as the broker.call it stands for; broker.call works beside it",
+)
+def _(ex):
+    stubs = {
+        "python": "out = [echo.lookup(target='svc:dns', name='files'), echo.leases(),\n"
+        "       echo.leases(target='svc:dhcp'), echo.status(verbose=True)]\n"
+        "result = out + [broker.call('echo', {'n': 1})]\n",
+    }
+    plain = {
+        "python": "".join(
+            f"broker.call({a!r}, {p!r}{'' if t is None else f', target={t!r}'})\n"
+            for a, p, t in _STUB_CALLS
+        ),
+    }
+    prelude = {"python": stub_prelude()}
+    for lang in _languages(ex, stubs, plain, prelude):
+        with _broker(ex) as b:
+            res = _run(ex, stubs[lang], b, language=lang, prelude=prelude[lang])
+            value = _ok(res, "a program calling the generated stubs")
+            want = [p for _, p, _ in _STUB_CALLS] + [{"n": 1}]
+            assert value == want, f"{lang}: the stubs returned {value!r}, not {want!r}"
+            sent = [(a, args) for _, a, args in b.calls]
+            assert sent == [(a, p) for a, p, _ in _STUB_CALLS] + [("echo", {"n": 1})], (
+                f"{lang}: the stub calls reached the broker as {sent}"
+            )
+            assert {t for t, _, _ in b.calls} == {b.token}, f"{lang}: a stub call lost the token"
+            stub_wire = b.wire[: len(_STUB_CALLS)]
+        with _broker(ex) as b:  # the same calls through broker.call: the wire must match
+            _ok(_run(ex, plain[lang], b, language=lang), "the same calls through broker.call")
+            assert stub_wire == b.wire, (
+                f"{lang}: a stub call's op and target went out as {stub_wire}, where broker.call "
+                f"sends {b.wire}"
+            )
 
 
 @SUITE.check(
@@ -744,6 +825,11 @@ MUTANTS = {
         BareWireExecutor,
         "submit-and-target-relayed",
         "the broker client drops a call's op and target: a submit goes out as a call",
+    ),
+    "prelude-dropped": Mutant(
+        PreludeDroppedExecutor,
+        "stubs-reach-the-broker",
+        "the prelude is never run: a program sees only broker, not the generated namespaces",
     ),
     "unbounded-result": Mutant(
         UnboundedResultExecutor,

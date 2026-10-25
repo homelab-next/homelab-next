@@ -25,6 +25,7 @@ from homelabnext.codemode.runner import (
     SocketRunnerBroker,
     SocketSandboxBroker,
     load_index,
+    load_preludes,
     unwrap,
 )
 from homelabnext.conform.runner import mutation_runs, run_capability
@@ -122,6 +123,43 @@ def test_an_exec_result_is_unwrapped_to_its_output(tmp_path, executor):
         "svc:queue",
         "ok",
     )
+
+
+def test_a_program_calls_the_generated_stubs_through_the_prelude(tmp_path, executor):
+    svc, _runner, _ = _example(tmp_path, executor, preludes=load_preludes(INDEX))
+    res = _run(
+        svc,
+        "a = service.status(target='svc:queue', verbose=True)\n"
+        "b = broker.call('service.status', {'verbose': True}, target='svc:queue')\n"
+        "result = [a, a == b]\n",
+    )
+    assert res["status"] == "ok", res
+    want = {"service": "svc:queue", "state": "running", "params": {"verbose": True}}
+    assert res["value"] == [want, True]
+    assert [(c["action"], c.get("target"), c["outcome"]) for c in res["calls"]] == [
+        ("service.status", "svc:queue", "ok")
+    ] * 2
+    # without the prelude a program has broker alone, as before
+    svc, _runner, _ = _example(tmp_path / "bare", executor)
+    res = _run(svc, "result = service.status(target='svc:queue')\n")
+    assert (res["status"], res["error"]["kind"], res["calls"]) == ("error", "runtime", [])
+
+
+def test_a_prelude_is_taken_only_beside_an_index_of_the_same_model(tmp_path):
+    preludes = load_preludes(INDEX)
+    assert sorted(preludes) == ["profile:reader", "profile:triage"]
+    assert "service = _namespaces" in preludes[AGENT]["python"]
+    for slug in ("reader", "triage"):
+        (tmp_path / slug).mkdir()
+        for name in ("prelude.py", "search.json"):
+            (tmp_path / slug / name).write_bytes((INDEX / slug / name).read_bytes())
+    stale = tmp_path / "triage" / "prelude.py"
+    lines = stale.read_text().split("\n")
+    lines[0] = lines[0].rsplit(" ", 1)[0] + " sha256:" + "0" * 64
+    stale.write_text("\n".join(lines))
+    assert sorted(load_preludes(tmp_path)) == ["profile:reader"]
+    (tmp_path / "reader" / "search.json").write_text("{not json")
+    assert load_preludes(tmp_path) == {}
 
 
 def test_a_call_needing_approval_pauses_and_waits_without_a_token(tmp_path, executor):

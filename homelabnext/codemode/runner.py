@@ -14,8 +14,9 @@ with ``params`` a ``schemas/codemode/execution_request``, while that request is 
    listing the actions the actor is granted (never ``codemode.*``; the broker narrows them to what
    ``decide()`` admits, and the call cap and lifetime come from the request's budget);
 3. serves the run's broker endpoint (:class:`_Relay`, the CM-4 wire, a fresh listener per run on
-   an ephemeral port of the executor's ``broker_bind``) and hands the program, the endpoint and
-   the token to the :class:`~conformance.protocols.codemode_executor.CodeExecutor`;
+   an ephemeral port of the executor's ``broker_bind``) and hands the program, the endpoint, the
+   token and the actor's runtime prelude (the generated namespaces, :func:`load_preludes`) to
+   the :class:`~conformance.protocols.codemode_executor.CodeExecutor`;
 4. turns every call the program makes into a broker request made **with the token**: ``call`` is
    ``token_call``, ``submit`` is ``token_submit``, and on a resume the step that paused is
    ``token_run`` of the paused request; each is journalled (:mod:`.journal`): its intent before
@@ -176,6 +177,7 @@ __all__ = [
     "SocketRunnerBroker",
     "SocketSandboxBroker",
     "load_index",
+    "load_preludes",
     "unwrap",
 ]
 
@@ -270,6 +272,32 @@ def load_index(directory: str | os.PathLike[str]) -> dict[str, dict[str, dict[st
     return out
 
 
+def load_preludes(directory: str | os.PathLike[str]) -> dict[str, dict[str, str]]:
+    """The generator's runtime preludes under ``directory`` (``<profile>/prelude.py``, ``hnx
+    codemode gen``): ``{profile id: {language: source}}``.  A prelude is taken only beside a
+    readable search index of the same model (the digest both markers carry), so the namespaces
+    it binds are the ones ``codemode_describe`` shows; anything else is skipped (logged), and a
+    profile without one runs its programs with ``broker`` alone."""
+    out: dict[str, dict[str, str]] = {}
+    root = Path(directory)
+    for path in sorted(root.glob("*/prelude.py")):
+        index = path.parent / "search.json"
+        if path.is_symlink() or path.parent.is_symlink() or index.is_symlink():
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+            doc = json.loads(index.read_text(encoding="utf-8"))
+            profile, marker = doc["profile"], doc["_generated"]
+            same = source.split("\n", 1)[0].rsplit(" ", 1)[1] == marker.rsplit(" ", 1)[1]
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+            same = False
+        if not same or not isinstance(profile, str):
+            log.warning("codemode: a prelude under %s does not match its index; skipped", root)
+            continue
+        out[profile] = {"python": source}
+    return out
+
+
 # ---------------------------------------------------------------- the socket adapters
 class SocketRunnerBroker:
     """The runner's three operations over the broker socket, as its ``codemode.runners`` peer
@@ -350,7 +378,10 @@ class Runner:
     may list for that actor (default: the actor's actions in ``index``, the generator's search
     index, :func:`load_index`), which the broker narrows again.  ``index`` also gives each
     action's ``kind`` (an exec envelope is unwrapped) and ``result`` schema (an output is checked
-    against it).  ``relay_uids``, when given, are the only local users whose connections the
+    against it).  ``preludes`` (:func:`load_preludes`) are the generated runtime preludes per
+    actor and language, handed to the executor with each program (CM-4 rule h) so the program
+    can call the namespaces ``codemode_describe`` shows; without one it has ``broker`` alone.
+    ``relay_uids``, when given, are the only local users whose connections the
     relay accepts.  Register it with ``broker.register_runner(runner.runner_id, runner.handle)``
     in process; over the socket the manifest's ``codemode.execute`` handler is the runner's
     client (CM-8)."""
@@ -365,6 +396,7 @@ class Runner:
         sandbox_broker: Any = None,
         actions_for: Callable[[str], Iterable[str]] | None = None,
         index: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
+        preludes: Mapping[str, Mapping[str, str]] | None = None,
         sandbox_id: str = DEFAULT_SANDBOX_ID,
         relay_uids: Iterable[int] | None = None,
         clock: Callable[[], datetime] = _utcnow,
@@ -383,6 +415,7 @@ class Runner:
         self.executor = executor
         self.runner_id = runner_id
         self.index = {p: dict(v) for p, v in (index or {}).items()}
+        self.preludes = {p: dict(v) for p, v in (preludes or {}).items()}
         if actions_for is None:
             actions_for = self._indexed_actions
         self.actions_for = actions_for
@@ -631,8 +664,14 @@ class Runner:
             limits = self._limits(run, params)
             with _Relay(self, run, tuple(self.executor.broker_bind)) as relay:
                 endpoint = BrokerEndpoint(relay.host, relay.port, token=run.secret)
+                prelude = self.preludes.get(run.actor, {}).get(params["language"], "")
+                extra = {"prelude": prelude} if prelude else {}  # CM-4 rule h
                 res = self.executor.run(
-                    params["code"], language=params["language"], broker=endpoint, limits=limits
+                    params["code"],
+                    language=params["language"],
+                    broker=endpoint,
+                    limits=limits,
+                    **extra,
                 )
         except ExecutorError as exc:
             failure = ("sandbox", _line(f"{type(exc).__name__}: {exc}"))
