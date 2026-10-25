@@ -228,6 +228,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "pending|audit|import-proposals",
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
     ),
+    "codemode": (
+        "Code Mode (ADR-0031): gen (the per-profile stubs and search index; --check for drift)",
+        lambda a: importlib.import_module("homelabnext.codemode.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
