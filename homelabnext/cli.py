@@ -130,7 +130,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     ),
     "registers": (
         "lessons/runbooks/invariants: build pages, split|join record files, links blocks, review, "
-        "events (migrate|add), decide transitions",
+        "summaries lint, events (migrate|add), decide transitions",
         _registers,
     ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),

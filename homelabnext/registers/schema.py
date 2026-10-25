@@ -70,7 +70,7 @@ LESSON_STATUSES = PITFALL_STATUSES + PRACTICE_STATUSES[:3]
 INACTIVE_STATUSES = frozenset({"retired", "incorporated", "superseded"})
 LESSON_COMMON = frozenset(
     {"uid", "type", "order", "title", "kind", "status", "date", "systems", "author", "reviews"}
-    | {"review_by", "related", "notes", "last_verified"}
+    | {"review_by", "related", "notes", "last_verified", "summary"}
 )
 PITFALL_FIELDS = frozenset(
     {"recurrences", "symptom", "contributing_factor", "root_cause", "preventive_control"}
@@ -82,7 +82,7 @@ PRACTICE_FIELDS = frozenset(
 )
 RUNBOOK_FIELDS = frozenset(
     {"uid", "type", "order", "title", "purpose", "systems", "steps", "author", "reviews"}
-    | {"review_by", "superseded_by", "related", "lessons", "last_verified"}
+    | {"review_by", "superseded_by", "related", "lessons", "last_verified", "summary"}
 )
 #: the record type each register holds (its entries' ``type``)
 RECORD_TYPE = {"lessons": "lesson", "runbooks": "runbook"}
@@ -190,6 +190,19 @@ def _identity(e, who, kind, problems):
         problems.append(f"{who}: `order` must be a number (the sort key among its siblings)")
     if "parent" in e:
         problems.append(f"{who}: a {RECORD_TYPE[kind]} has no parent (registers are flat)")
+
+
+def _summary(e, who, problems):
+    """Optional ``summary:``: the record's level 0 (ADR-0032), one reviewed line of at most 160
+    characters (:func:`homelabnext.context.levels.check_summary`).  Missing is a warning of
+    ``hnx registers summaries``, not a problem here; malformed is."""
+    if "summary" not in e:
+        return
+    from homelabnext.context.levels import check_summary  # lazy: context imports the graph
+
+    why = check_summary(e["summary"])
+    if why:
+        problems.append(f"{who}: {why}")
 
 
 def _related(e, who, problems):
@@ -591,6 +604,7 @@ def validate_lessons(data, policy=None, *, require_reviews: bool = True) -> list
         if extra:
             problems.append(f"{who}: unknown field(s) for a {kind} {sorted(extra)}")
         _text(e, "title", problems, who, 4)
+        _summary(e, who, problems)
         _related(e, who, problems)
         if not _date(e.get("date")):
             problems.append(f"{who}: `date` must be ISO YYYY-MM-DD")
@@ -619,6 +633,7 @@ def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> lis
         if extra:
             problems.append(f"{who}: unknown field(s) {sorted(extra)}")
         _text(e, "title", problems, who, 4)
+        _summary(e, who, problems)
         _related(e, who, problems)
         _lessons(e, who, problems)
         _text(e, "purpose", problems, who)

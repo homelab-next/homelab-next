@@ -2,6 +2,7 @@
   "uid": "01a15e4e-0000-7000-8000-000000000002",
   "type": "lesson",
   "title": "Stale cache served after config change",
+  "summary": "A config-only change skipped the proxy reload and served a stale page; the role now reloads on any template change and probes a canary.",
   "date": "2026-01-01",
   "systems": [
     "web-proxy"

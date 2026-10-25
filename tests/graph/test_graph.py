@@ -230,7 +230,8 @@ def test_event_files_are_not_nodes_and_derived_attrs_hold(repo_copy):
     assert list((repo_copy / LESSONS).glob("*.events/*.yml"))  # the copy has sidecars
     assert not [n for n in g.nodes.values() if ".events/" in n.path]
     attrs = g.nodes[f"lesson:{U['LL-001']}"].attrs
-    assert attrs["review_count"] == 2 and attrs["recurrences"] == 1
+    reviews = _review_events(repo_copy / LESSONS / F("LL-001"))
+    assert attrs["review_count"] == len(reviews) >= 2 and attrs["recurrences"] == 1
 
 
 def test_dangling_runbook_reference_fails(tmp_path, repo_copy):
@@ -648,11 +649,13 @@ def test_reviewed_counts_only_current_valid_passing_reviews(tmp_path, repo_copy)
         return build(root)[0].nodes[f"lesson:{U['LL-001']}"].attrs.get("reviewed")
 
     assert reviewed() == ["agent_check", "audit"]
-    check, audit = (yaml.safe_load(f.read_text("utf-8")) for f in _review_events(lesson))
+    filed = [yaml.safe_load(f.read_text("utf-8")) for f in _review_events(lesson)]
+    # the example's current check and audit: the latest of each role
+    check, audit = ([r for r in filed if r["role"] == role][-1] for role in ("check", "audit"))
     meta = yaml.safe_load(lesson.read_text(encoding="utf-8").split("---\n", 2)[1])
     front(lesson, title=meta["title"] + " (edited after review)")  # content changed
     attrs = build(root)[0].nodes[f"lesson:{U['LL-001']}"].attrs
-    assert "reviewed" not in attrs and attrs["review_count"] == 2
+    assert "reviewed" not in attrs and attrs["review_count"] == len(filed)
 
     def stamp(author, reviews, *, refused=None):
         """Replace the review events by ``reviews`` of the content as it is with ``author``.

@@ -124,7 +124,7 @@ def test_editing_a_reviewed_record_drops_its_reviews(ll):
     e["root_cause"] += " (and nobody asked the client)"
     with pytest.raises(RegisterError, match="needs agent check, agent audit") as ex:
         validate_lessons(ll, POLICY)
-    assert "2 review(s) are of an earlier content" in str(ex.value)
+    assert f"{len(e['reviews'])} review(s) are of an earlier content" in str(ex.value)
     restamp(e)
     validate_lessons(ll, POLICY)
 
