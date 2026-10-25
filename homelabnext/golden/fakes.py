@@ -371,7 +371,7 @@ def _checkout_only() -> HarnessError:
     return HarnessError("the Code Mode golden fakes need a source checkout (conformance/fakes)")
 
 
-def _fixture_broker(fixtures: Mapping[str, Mapping[str, Any]]) -> Any:
+def _fixture_broker() -> Any:
     try:
         from conformance.fakes.command_broker import FakeBroker
     except ImportError as exc:  # checkout-only, as the module doc says
@@ -384,7 +384,7 @@ def _fixture_broker(fixtures: Mapping[str, Mapping[str, Any]]) -> Any:
 
         def __init__(self) -> None:
             super().__init__()
-            self.fixtures = copy.deepcopy(dict(fixtures))
+            self.fixtures: dict[str, Any] = {}
             self.target: str | None = None
 
         def answer(self, action: str):
@@ -416,8 +416,9 @@ def _fixture_broker(fixtures: Mapping[str, Mapping[str, Any]]) -> Any:
 
 
 class _TappedRunner(Runner):
-    """The reference runner, recording every request the program sent with its token (the
-    relay's view: a call refused before it reached the broker too)."""
+    """The reference runner, recording the requests the program sent with its token that the
+    relay refused itself, so they took no step and reached no broker (the result's ``calls`` hold
+    the others; :func:`~homelabnext.golden.agentic.execution_attempts` reads those)."""
 
     def __init__(self, *args: Any, tap: list[Attempt], **kw: Any) -> None:
         super().__init__(*args, **kw)
@@ -425,7 +426,10 @@ class _TappedRunner(Runner):
         self._tap_lock = threading.Lock()
 
     def serve_call(self, run, msg):
+        before = run.next_step
         reply = super().serve_call(run, msg)
+        if run.next_step != before:  # it took a step: it is one of the result's calls
+            return reply
         token = msg.get("token") if isinstance(msg, Mapping) else None
         if isinstance(token, str) and run.secret and hmac.compare_digest(token, run.secret):
             action = msg.get("action")
@@ -449,15 +453,13 @@ def _reply_outcome(reply: Any) -> tuple[str, str]:
 class FakeBackend:
     """One run's broker world (see the module doc); built by :class:`FakeWorld`."""
 
-    def __init__(
-        self, world: FakeWorld, suite: Suite, fixtures: Mapping[str, Any], mode: str
-    ) -> None:
+    def __init__(self, world: FakeWorld, suite: Suite, mode: str) -> None:
         self.world = world
         self.actor = str(suite.profile)
         self.grant = sorted(suite.grant)
         self.mode = mode
         entries = world.index[self.actor]
-        self.broker = _fixture_broker(fixtures)
+        self.broker = _fixture_broker()
         for action in self.grant:
             self.broker.register(action, self.broker.answer(action), _specs(entries[action]))
         extra = [CODEMODE_EXECUTE] if mode == "codemode" else []
@@ -468,6 +470,10 @@ class FakeBackend:
         self._runner: _TappedRunner | None = None
         self._tap: list[Attempt] = []
         self._executions = 0
+
+    def seed(self, fixtures: Mapping[str, Any]) -> None:
+        """What the granted actions answer for this run, per target (a copy)."""
+        self.broker.fixtures = copy.deepcopy(dict(fixtures))
 
     def actions(self) -> dict[str, Any]:
         rows = []
@@ -505,7 +511,7 @@ class FakeBackend:
                 "calls": [],
             }
             return refused, []
-        runner = self._runner_for()
+        self._runner_for()
         self._executions += 1
         params = {
             "execution_id": f"golden-{self._executions}",
@@ -519,9 +525,8 @@ class FakeBackend:
         except BrokerError as exc:
             reason = getattr(exc, "reason", "") or type(exc).__name__
             return {"status": "error", "refused": reason, "calls": []}, [
-                Attempt("action", CODEMODE_EXECUTE, "denied", reason)
+                Attempt("action", CODEMODE_EXECUTE, "denied", str(reason)[:64])
             ]
-        del runner
         return dict(result), list(self._tap[start:])
 
     def _runner_for(self) -> _TappedRunner:
@@ -561,8 +566,8 @@ class FakeWorld:
         self._n += 1
         return self._root / f"run-{self._n}"
 
-    def __call__(self, suite: Suite, task: Any, fixtures: Mapping[str, Any], mode: str):
-        return FakeBackend(self, suite, fixtures, mode)
+    def __call__(self, suite: Suite, task: Any, mode: str) -> FakeBackend:
+        return FakeBackend(self, suite, mode)
 
     def close(self) -> None:
         self.executor.close()

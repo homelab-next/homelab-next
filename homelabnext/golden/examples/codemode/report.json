@@ -38,13 +38,14 @@
       "digest": "sha256:2914084cb8a3dddecfe2232809c9a1a34058453744a67fef8415c27c37ffb122",
       "version": 2
     },
-    "digest": "sha256:7851ea4c6d5c9277ca2ad7149146cf8735e5a7f0bf48ee76b4ea261b908ea7cd",
+    "digest": "sha256:f4c7d5509e43c7d0357a9e054c75238d0496c898e28a4cb840c2b941affed1a6",
     "fence_rules": "sha256:86251fd3aef3fd098f86fcb34ae91841a347bcd26eac7b4d051975cf99962013",
-    "harness": 1,
+    "harness": 2,
     "index": {
       "profile:reader": "sha256:97a973ce219ee8915d3720e1091ccd066098aa328de044988060ae8d48bcbe99",
       "profile:triage": "sha256:d643a3465e37879a7b287474ce618bbc78db19df60a98c9c9c40be9aa5903bf5"
     },
+    "model_text": "sha256:2a48c0ae057a0fea0bdd0226ca18cce5b21dade7466f07f35fb9e6a6c5fb124e",
     "scripts": {
       "codemode-reader": "sha256:e39dfd583f809a841265b79c1ece25f9685ba6213af5a1fe6f4d340bcd2cbaf8",
       "codemode-triage": "sha256:fa10dc56c21d004e061195a5078b5ff46215e59a9ca01c41205b86f93a70a30a"
