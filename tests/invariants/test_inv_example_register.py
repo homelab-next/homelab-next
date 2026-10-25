@@ -100,7 +100,7 @@ GATED += ["F-21", "F-23", "Q-01", "Q-06"]
 # the CLI gates of `make check` and CI (fast: they run in `make invariants`)
 FAST_GATES = ["D-04", "T-07", "R-01", "R-03", "R-04", "R-07", "M-12", "G-01", "G-02", "G-03"]
 FAST_GATES += ["G-11", "G-13", "K-02", "K-03", "K-04", "K-12", "K-15", "L-05", "F-19"]
-FAST_GATES += ["P-14", "R-09", "A-08", "A-10"]
+FAST_GATES += ["P-14", "R-09", "A-08", "A-10", "A-14"]
 # the rows proven by named tests: the criterion runs that pytest selection (slow, like D-07)
 PYTEST_ROWS = ["T-02", "T-04", "S-06", "S-07", "O-08", "P-02", "P-03", "P-07", "A-03", "A-04"]
 PYTEST_ROWS += [
@@ -160,6 +160,24 @@ def test_fast_cli_gates_are_red_on_an_empty_checkout(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(REPO))
     res = _run(tmp_path, [i for i in FAST_GATES if i not in ("G-01", "K-15")])
     assert {i for i, r in res.items() if r["status"] not in ("fail", "error")} == set()
+
+
+def test_a14_fails_on_a_home_that_names_an_address_or_an_engine_model_id(tmp_path, monkeypatch):
+    """A-14 over the example controller's homes: they pass; a home naming an engine address or
+    model id (tests/generators/fixtures/hermes-homes/fail) fails, and so does no home at all."""
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    example = tmp_path / "examples" / "llm-orchestrator-gateway"
+    example.mkdir(parents=True)
+    shutil.copy(REPO / "examples/llm-orchestrator-gateway/model_roles.json", example)
+    assert _run(tmp_path, ["A-14"])["A-14"]["status"] == "fail"  # no home: nothing checked
+    shutil.copytree(REPO / "examples/llm-orchestrator-gateway/homes", example / "homes")
+    assert _run(tmp_path, ["A-14"])["A-14"]["status"] == "pass"
+    fixtures = REPO / "tests/generators/fixtures/hermes-homes/fail"
+    for bad in sorted(fixtures.iterdir()):
+        shutil.copytree(bad, example / "homes" / bad.name)
+        r = _run(tmp_path, ["A-14"])["A-14"]
+        assert r["status"] == "fail" and bad.name in r["evidence"], (bad.name, r)
+        shutil.rmtree(example / "homes" / bad.name)
 
 
 def test_p14_accepts_zero_problems_only():

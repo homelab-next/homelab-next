@@ -62,6 +62,42 @@ A per-run deadline is the product feature `deadline`: `submit(..., deadline_s=s)
 still unfinished `s` seconds after it was submitted ends `failed`, with an error that names
 the deadline, and releases its holds.
 
+**Optional features** (additive, ADR-0001; their checks are the extended suite
+`orchestration-features`, `conformance/suites/orchestration_features.py`, so a target that
+declares none of them, such as a StackStorm-backed adapter, skips them all):
+
+f. *Priority* (product feature `priority`): `submit(..., priority=p)`, an `int` from 1, where
+   1 starts first.  Among queued runs a lower number SHOULD start first; ties start in submit
+   order.  Ordering can only be observed while a single slot is free, so its check is a SHOULD
+   that needs `admission` and a reported limit.  An implementation may bound the number from
+   above (the controller takes 1..100) and refuses a value outside its range with `ValueError`.
+g. *Shadow runs* (product feature `shadow`): `submit(..., shadow=True)`.  Every attempt of a
+   shadow run executes on the `shadow` lane and none on the `real` one, and every attempt of
+   an ordinary run on `real`.  A job has at most one unfinished (queued or running) shadow run:
+   a shadow submit with a new idempotency key while one is unfinished raises
+   `ShadowRunPending` (the controller's `429`), while a repeated key still returns its
+   run, and ordinary runs and other jobs' shadow runs are not limited by it.
+h. *Constraints* (product feature `constraints`): `define(..., constraints={"require_tags":
+   [...], "min_context": int, "exclusive": bool})`.  A run executes only on a backend
+   (`OrchestrationFeatures.backends`) whose `tags` hold every required tag and whose
+   `max_context` is at least `min_context`, on every attempt.  A job whose constraints no
+   backend satisfies is rejected (`define` or `submit` raises an
+   `OrchestrationError`, `ConstraintsUnsatisfiable` for preference) or its runs
+   stay queued (or end `failed`) without executing.  An `exclusive` run has its backend to
+   itself: while it executes there, no other run executes on that backend, and it does not start
+   on a backend another run is executing on.
+i. *Local-only jobs* (product feature `local-only`): `define(..., local_only=True)`.  No
+   attempt of such a run executes on a backend whose `locality` is `cloud`: a failed attempt
+   is retried locally or not at all, and a local-only run that fails is never re-run on cloud
+   (under its run id or a new one).
+j. *Listing runs* (product feature `list-runs`): `runs(state=None)` returns every submitted
+   run exactly once (a repeated idempotency key adds none, a retry adds none), each in its
+   current state; with `state` only the runs in that state.
+
+`shadow`, `constraints` and `local-only` are observed through
+`OrchestrationFeatures.placements` (where each attempt of a run executed: backend and lane)
+and `OrchestrationFeatures.backends`.
+
 ## How to use it
 
 Every operation of the contract. A subject (an adapter's object) implements the Protocols below; methods documented on data types are part of the contract too.
@@ -171,6 +207,37 @@ def submit(
 
 **Returns:** `str`
 
+### `DefineOptions` (Protocol)
+
+Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
+
+Features `constraints` (runs execute only on backends that satisfy them) and
+`local-only` (no attempt executes on a cloud backend).  A target takes the keywords of the
+features it declares.
+
+#### `DefineOptions.define`
+
+```python
+def define(
+    name: str,
+    handler: Callable[[Mapping[str, Any]], Any],
+    *,
+    retries: int = 0,
+    constraints: Mapping[str, Any] | None = None,
+    local_only: bool = False,
+) -> None
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `name` | `str` | required | positional or keyword |
+| `handler` | `Callable[[Mapping[str, Any]], Any]` | required | positional or keyword |
+| `retries` | `int` | `0` | keyword-only |
+| `constraints` | `Mapping[str, Any] \| None` | `None` | keyword-only |
+| `local_only` | `bool` | `False` | keyword-only |
+
+**Returns:** `None`
+
 ### `FaultInjection` (Protocol)
 
 Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
@@ -201,7 +268,109 @@ def restart() -> None
 
 The orchestrator restarts in place: durable state kept, workers and memory lost.
 
+### `OrchestrationFeatures` (Protocol)
+
+Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
+
+The calls the optional features add.  `backends` and `placements` are how `shadow`,
+`constraints` and `local-only` are observed; `runs` is feature `list-runs`.
+
+#### `OrchestrationFeatures.backends`
+
+```python
+def backends() -> tuple[Backend, ...]
+```
+
+**Returns:** `tuple[Backend, ...]`
+
+Every backend a run may be placed on.
+
+#### `OrchestrationFeatures.placements`
+
+```python
+def placements(run_id: str) -> tuple[Placement, ...]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `run_id` | `str` | required | positional or keyword |
+
+**Returns:** `tuple[Placement, ...]`
+
+Where each attempt of `run_id` that started executing ran, in attempt order.
+
+#### `OrchestrationFeatures.runs`
+
+```python
+def runs(state: str | None = None) -> list[RunStatus]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `state` | `str \| None` | `None` | positional or keyword |
+
+**Returns:** `list[RunStatus]`
+
+Every submitted run once, in its current state; with `state`, only those in it.
+
+### `SubmitOptions` (Protocol)
+
+Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
+
+Features `priority` (`priority=1` starts first among queued runs, a SHOULD) and
+`shadow` (the run executes on the shadow lane only; one unfinished shadow run per job,
+`ShadowRunPending` otherwise).  A target takes the keywords of the features it
+declares.
+
+#### `SubmitOptions.submit`
+
+```python
+def submit(
+    name: str,
+    params: Mapping[str, Any],
+    *,
+    idempotency_key: str,
+    priority: int | None = None,
+    shadow: bool = False,
+) -> str
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `name` | `str` | required | positional or keyword |
+| `params` | `Mapping[str, Any]` | required | positional or keyword |
+| `idempotency_key` | `str` | required | keyword-only |
+| `priority` | `int \| None` | `None` | keyword-only |
+| `shadow` | `bool` | `False` | keyword-only |
+
+**Returns:** `str`
+
 ## Data shapes in and out
+
+### `Backend` (dataclass, frozen)
+
+Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
+
+A backend a run can execute on (features `constraints` and `local-only`).
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | `str` | required |  |
+| `locality` | `str` | required | local \| cloud |
+| `tags` | `frozenset[str]` | `frozenset()` |  |
+| `max_context` | `int \| None` | `None` | the longest context it admits; None when it does not say |
+
+### `Placement` (dataclass, frozen)
+
+Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/orchestration.py).
+
+Where one attempt of a run executed.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `attempt` | `int` | required | 1 for the first attempt |
+| `backend` | `str` | required | a Backend.name |
+| `lane` | `str` | required | real \| shadow |
 
 ### `RunStatus` (dataclass, frozen)
 
@@ -220,6 +389,8 @@ Defined in [`conformance.protocols.orchestration`](../../conformance/protocols/o
 | Name | Value |
 |---|---|
 | `CANCEL_GRACE_S` | `5.0` |
+| `LANES` | `('real', 'shadow')` |
+| `LOCALITIES` | `('local', 'cloud')` |
 | `MAX_CANCEL_GRACE_S` | `10.0` |
 | `TERMINAL` | `('succeeded', 'failed', 'cancelled')` |
 
@@ -230,6 +401,8 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | Exception | Base | Meaning | Named by |
 |---|---|---|---|
 | `OrchestrationError` | `Exception` |  |  |
+| `ConstraintsUnsatisfiable` | `OrchestrationError` | Feature `constraints`: no backend satisfies the job's constraints. |  |
+| `ShadowRunPending` | `OrchestrationError` | Feature `shadow`: the job already has an unfinished shadow run (the controller's 429). |  |
 | `UnknownJob` | `OrchestrationError` |  | `Orchestrator.submit` |
 
 ### JSON Schemas
@@ -343,6 +516,14 @@ The mapping (docs/orchestration-controller.md has the whole table):
   so it is never compared.  With API authentication on, the route needs an admin token, which
   this adapter does not send.  The recorded stand-in is started only by the first contract call,
   and its features come from `fixes`, so a check that skips never starts one.
+* `submit(..., priority=p)` (feature `priority`) -> the job's `priority` (1..100, lowest
+  admitted first, then submit order: `handlers.go:97-111` and the scheduler's queue order); a
+  value outside that range is refused with `ValueError` before it is sent, and without one the
+  adapter's own `priority` (default 50) is sent.  `priority` is the only optional feature
+  (`orchestration-features`) declared: the job API reports neither the backend nor the lane
+  an attempt ran on (`shadow`, `constraints`, `local-only`) and has no list route
+  (`list-runs`).  Its check needs a reported limit, which `capacity()` never has, so it
+  skips here.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -408,6 +589,14 @@ The mapping (docs/orchestration-controller.md has the whole table):
   so it is never compared.  With API authentication on, the route needs an admin token, which
   this adapter does not send.  The recorded stand-in is started only by the first contract call,
   and its features come from `fixes`, so a check that skips never starts one.
+* `submit(..., priority=p)` (feature `priority`) -> the job's `priority` (1..100, lowest
+  admitted first, then submit order: `handlers.go:97-111` and the scheduler's queue order); a
+  value outside that range is refused with `ValueError` before it is sent, and without one the
+  adapter's own `priority` (default 50) is sent.  `priority` is the only optional feature
+  (`orchestration-features`) declared: the job API reports neither the backend nor the lane
+  an attempt ran on (`shadow`, `constraints`, `local-only`) and has no list route
+  (`list-runs`).  Its check needs a reported limit, which `capacity()` never has, so it
+  skips here.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not

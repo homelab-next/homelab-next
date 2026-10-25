@@ -131,6 +131,7 @@ file.
    | Code Mode stubs and search index, `examples/codemode/<profile>/{types.d.ts,stubs.pyi,search.json}` (ADR-0031) | the example broker manifest `examples/broker/manifest.yml` and its handler documents | `hnx codemode gen --check` (`make gates`, CI) |
    | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/{litellm,bifrost}/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
    | LLM gateway config, `examples/model-serving/gateway/{litellm,bifrost}/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
+   | LLM gateway config, `examples/llm-orchestrator-gateway/gateway/{litellm,bifrost}/` | the example's role table and `gateway.yml` (whose `controller:` block also holds the controller's backends and homes to them) | pytest `tests/generators/test_agent_homes.py` (CI); `make gateway-check` (`make check`) |
    | vLLM instances, `examples/model-serving/vllm_server/instances.yml` | `examples/model-serving/serving.yml`, the model store, the role table | `hnx models serving check` (`make models-check`); pytest `tests/models/test_serving_plan.py` (CI) |
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |

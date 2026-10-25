@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The gateway in front of the orchestration controller's engines (docs/orchestration-controller.md,
+# "Model calls through the gateway").  Fictional, like every example.  gateway/ is generated:
+#   hnx gen gateway render examples/llm-orchestrator-gateway/gateway.yml \
+#     examples/llm-orchestrator-gateway/gateway
+# and `--check` (make gateway-check) also reads the controller's backend list: every backend
+# name is a svc: here, its home's model.default is a role bound to it, and its max_context is that
+# role's max_context_tokens.
+name: llm-orchestrator-example
+roles: model_roles.json
+domain: example.internal
+master_key: secret:llm-gateway/master-key
+database_url: secret:llm-gateway/database-url
+backends:
+  svc:vllm-a: {locality: local, port: 8000}
+  svc:vllm-b: {locality: local, port: 8000}
+keys:
+  # one key per home until per-agent keys are possible (docs/orchestration-controller.md)
+  - name: home-vllm-a
+    key: secret:llm-gateway/key-home-vllm-a
+    roles: [mdl:main-reasoner-a]
+    data_tier: local-only
+  - name: home-vllm-b
+    key: secret:llm-gateway/key-home-vllm-b
+    roles: [mdl:main-reasoner-b]
+    data_tier: local-only
+controller:
+  config: controller.yaml
+  homes:                      # one HERMES_HOME per local backend
+    vllm-a: homes/vllm-a
+    vllm-b: homes/vllm-b

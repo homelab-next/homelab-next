@@ -49,7 +49,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # 45 since the 3.12 job's pytest alone took 34.5 min on a runner (2026-10-25), past 35 with
+    # setup; main measured 28-29 min for the whole job the same day
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

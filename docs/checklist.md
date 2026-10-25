@@ -216,6 +216,7 @@ Tiered: screen, fast model, heavy model.
 | A-11 | Chat goes through the gateway | Open WebUI's only backend is the gateway URL with its own key by secret name; a backend id, Ollama or a direct connection is refused (`open_webui` role, `tests/roles/test_serving_roles.py`) | PUBLIC-NOW |
 | A-12 | The serving stack runs on the GPU host | `vllm_server` health passes on the CMP 170HX host for every instance; TP/PP benchmarked; the docs/model-serving.md hardware items checked off | SERVER |
 | A-13 | Served model bytes are pinned end to end | `uv run pytest tests/models tests/roles/test_serving_roles.py` exits 0: vLLM `args` are a typed allowlist (`homelabnext.models.serving.ALLOWED_ARGS`, mirrored into `vllm_server/vars/main.yml` and the schema, held equal by a test); a serving spec states `exposure` and the gateway refuses a loopback plan or a registry port that is not the plan's; `model_store` fetches into staging and renames only sha256-verified files into place, locks promoted exports (store-owned, sticky `exports/`), and writes per-entry listings; every vLLM unit runs `ExecStartPre=hnx-model-verify` (listing hashes to the pinned digest, `sha256sum --check --strict`); `check_disk` refuses files resolving out of their entry/blobs; Open WebUI's target must resolve to the registry's `llm-gateway` capability; units allow only their own `/dev/nvidiaN` | PUBLIC-NOW |
+| A-14 | No agent home names an IP address or an engine model id | Every `HERMES_HOME/config.yaml` names the gateway by name and a role alias only: no IPv4 or IPv6 address (documentation ranges included) and no engine model id (a role-table binding's `model_id`, or a model store entry's `served_model_name` or hub repository) anywhere in it (`hnx gen gateway homes` over the example controller's homes, `examples/llm-orchestrator-gateway/homes/`; docs/orchestration-controller.md) | PUBLIC-NOW |
 
 ## G - AI safety guardrails
 
@@ -311,4 +312,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 184 criteria across 16 pillars; 100 PUBLIC-NOW, 84 SERVER.
+**Totals:** 185 criteria across 16 pillars; 101 PUBLIC-NOW, 84 SERVER.

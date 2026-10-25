@@ -39,6 +39,14 @@ The mapping (docs/orchestration-controller.md has the whole table):
   so it is never compared.  With API authentication on, the route needs an admin token, which
   this adapter does not send.  The recorded stand-in is started only by the first contract call,
   and its features come from ``fixes``, so a check that skips never starts one.
+* ``submit(..., priority=p)`` (feature ``priority``) -> the job's ``priority`` (1..100, lowest
+  admitted first, then submit order: ``handlers.go:97-111`` and the scheduler's queue order); a
+  value outside that range is refused with ``ValueError`` before it is sent, and without one the
+  adapter's own ``priority`` (default 50) is sent.  ``priority`` is the only optional feature
+  (``orchestration-features``) declared: the job API reports neither the backend nor the lane
+  an attempt ran on (``shadow``, ``constraints``, ``local-only``) and has no list route
+  (``list-runs``).  Its check needs a reported limit, which ``capacity()`` never has, so it
+  skips here.
 * ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -292,7 +300,7 @@ class LLMOrchestrator:
         :class:`OrchestrationError`, so a transient fault makes the run unmeasured instead of
         quietly skipping the capacity checks."""
         if self._features is None:
-            feats = {"fault-injection"} if self._faults is not None else set()
+            feats = {"priority"} | ({"fault-injection"} if self._faults is not None else set())
             status, raw = self._request("GET", "/admin/backend-inflight")
             if status == 200:
                 self._parse_inflight(status, raw)
@@ -339,10 +347,16 @@ class LLMOrchestrator:
         self._host.handlers[key] = handler
         self._reload()
 
-    def submit(self, name, params, *, idempotency_key):
+    def submit(self, name, params, *, idempotency_key, priority=None):
         _, _, unknown_job = _protocol()
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
+        if priority is None:
+            priority = self._priority
+        elif (
+            isinstance(priority, bool) or not isinstance(priority, int) or not 1 <= priority <= 100
+        ):
+            raise ValueError("priority must be an int from 1 to 100 (the controller's range)")
         key = self._agent_key(name)
         token, mac = self._host.issue(key, params)
         job = {
@@ -355,7 +369,7 @@ class LLMOrchestrator:
         }
         body = {
             "agent_key": key,
-            "priority": self._priority,
+            "priority": priority,
             "idempotency_key": f"hnxconf-{run_token()}-{idempotency_key}",
             "task_description": encode_job(job),
         }
@@ -487,7 +501,7 @@ class _Recorded:
         self._fixes, self._priority = fixes, priority
         self._real: LLMOrchestrator | None = None
         admission = {"admission"} if "backend-inflight" in fixes else set()
-        self.features = frozenset({"fault-injection", *admission})
+        self.features = frozenset({"fault-injection", "priority", *admission})
 
     def __repr__(self) -> str:
         return "LLMOrchestrator(<recorded stand-in>)"
@@ -500,8 +514,8 @@ class _Recorded:
     def define(self, name, handler, *, retries=0):
         return self._o().define(name, handler, retries=retries)
 
-    def submit(self, name, params, *, idempotency_key):
-        return self._o().submit(name, params, idempotency_key=idempotency_key)
+    def submit(self, name, params, *, idempotency_key, priority=None):
+        return self._o().submit(name, params, idempotency_key=idempotency_key, priority=priority)
 
     def wait(self, run_id, timeout=5.0):
         return self._o().wait(run_id, timeout)

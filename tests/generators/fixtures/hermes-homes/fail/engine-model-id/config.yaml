@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# fails A-14: the engine's own model id instead of a role alias
+model:
+  default: example-27b
+  base_url: https://llm-gateway.example.internal/v1

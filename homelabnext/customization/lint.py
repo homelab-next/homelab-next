@@ -26,12 +26,12 @@ CU017  warning  a link names a legacy code (LL-003): write the record's uid inst
 
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+from homelabnext import endpoint_gate
 
 from .links import resolve_links
 from .model import (
@@ -71,28 +71,19 @@ _scan_text = None
 
 def _tools_path() -> Path | None:
     """tools/no_raw_endpoints.py of a verified checkout, else None (see homelabnext.paths)."""
-    from homelabnext import paths
-
-    try:
-        return paths.checkout_tool("no_raw_endpoints.py", feature="custom lint")
-    except paths.NotACheckout:
-        return None
+    return endpoint_gate.gate_path("custom lint")
 
 
 def _load_scanner():
-    """Reuse the repository gate's own detection (tools/no_raw_endpoints.py) so a customization
-    can never pass lint and then fail CI. Falls back to a smaller built-in matcher when the
-    tools directory is not shipped (installed wheel)."""
+    """Reuse the repository gate's own detection (tools/no_raw_endpoints.py, through
+    :mod:`homelabnext.endpoint_gate`) so a customization can never pass lint and then fail CI.
+    Falls back to a smaller built-in matcher when the tools directory is not shipped (installed
+    wheel)."""
     global _scan_text
     if _scan_text is not None:
         return _scan_text
-    tools = _tools_path()
-    if tools is not None:
-        spec = importlib.util.spec_from_file_location("hnx_no_raw_endpoints", tools)
-        assert spec and spec.loader
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod  # dataclasses need the module registered
-        spec.loader.exec_module(mod)
+    mod = endpoint_gate.load("custom lint") if _tools_path() is not None else None
+    if mod is not None:
         _scan_text = lambda text: [f.text for f in mod.scan_text("x", text)]  # noqa: E731
     else:
         rx = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|://[^\s/:]+:\d+|\blocalhost:\d+")

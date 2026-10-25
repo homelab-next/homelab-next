@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# A gateway spec whose controller disagrees with it in each of the five ways --check refuses
+# (tests/generators/test_agent_homes.py).  Fictional.
+name: controller-fail
+roles: model_roles.json
+domain: example.internal
+master_key: secret:llm-gateway/master-key
+database_url: secret:llm-gateway/database-url
+backends:
+  svc:vllm-a: {locality: local, port: 8000}
+  svc:vllm-b: {locality: local, port: 8000}
+  svc:vllm-d: {locality: local, port: 8000}
+  svc:vllm-e: {locality: local, port: 8000}
+controller:
+  config: controller.yaml
+  homes:
+    vllm-a: homes/vllm-a
+    vllm-b: homes/vllm-b
+    vllm-d: homes/vllm-d
+    vllm-e: homes/vllm-e

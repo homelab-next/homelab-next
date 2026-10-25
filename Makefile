@@ -123,10 +123,14 @@ models-check:
 # the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
 GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
+# the gateway in front of the orchestration controller's engines: --check also holds the
+# controller's backend list and its HERMES_HOMEs to the spec (docs/orchestration-controller.md)
+ORCH_GATEWAY := examples/llm-orchestrator-gateway
 .PHONY: gateway-check gateway-render
 check: gateway-check
 gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
+	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
 
 # the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
 # MCP entries and every profile's grants resolve to it, and the rendered example client configs
@@ -145,6 +149,7 @@ mcp-render:
 # after changing the role table, a profile or the gateway spec: regenerate and commit
 gateway-render:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))
+	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway
 
 # after changing the example store, its role table or its serving spec: regenerate and commit
 .PHONY: serving-render

@@ -12,7 +12,13 @@ from conformance.fakes.orchestrator import (
     LateResultLandsOrchestrator,
     LeakOnFailureOrchestrator,
 )
-from conformance.protocols.orchestration import Admission, Capacity, Deadlines, FaultInjection
+from conformance.protocols.orchestration import (
+    Admission,
+    Capacity,
+    Deadlines,
+    FaultInjection,
+    OrchestrationFeatures,
+)
 from conformance.suites import orchestration as suite
 from homelabnext.conform.core import run_checks
 
@@ -20,7 +26,9 @@ from homelabnext.conform.core import run_checks
 def test_the_fake_offers_every_optional_part_of_the_contract():
     o = FakeOrchestrator()
     assert isinstance(o, Admission) and isinstance(o, Deadlines) and isinstance(o, FaultInjection)
-    assert o.features == {"admission", "deadline", "fault-injection"}
+    assert isinstance(o, OrchestrationFeatures)
+    optional = {"priority", "shadow", "constraints", "local-only", "list-runs"}
+    assert o.features == {"admission", "deadline", "fault-injection", *optional}
     assert o.capacity() == Capacity(2, 0, frozenset())
 
 
