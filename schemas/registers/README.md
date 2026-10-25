@@ -13,7 +13,8 @@ schema violation.
 | `decision_spec.json` (1.3) | `question_set`, `decision_table`, `tiers`, `error_direction`, `on_error: escalate`, `latency_budget_ms`, `sample_audit_pct`; optional `callers` (`inline`, `batch`); optional `noise_gate` (`deescalate` labels, named `corroborators`) |
 
 `summary` (lesson 2.1, runbook 2.2; ADR-0032) is the record's level 0: one reviewed line of at most
-160 characters with no control character, which the MCP `context_for` serves instead of the content.
+160 characters with no control or invisible format character (the schema's pattern refuses the common
+ones; the lint and the record validation refuse every Cc, Cf, Zl, Zp and Cs character), which the MCP `context_for` serves instead of the content.
 It is part of the review digest. `hnx registers summaries` (run by `make registers`) fails a malformed
 one and counts a record or docs page without one as a warning; the record validation refuses a
 malformed one too. Baselines `_frozen/2.1/registers/lesson.schema.json` and
