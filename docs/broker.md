@@ -380,6 +380,16 @@ ordinary `run` path and answers `{result, request_id, request_digest}`.
 A resumed run that ends without pausing again finishes the execution, so the runner reads
 `paused_by_state` before it resumes.
 
+**Do not poll with `token_run`.** Every `token_run` past its binding check counts against the
+cap, refused or not, and the cap is the execution's: a resume inherits only what is left. A
+program that polls `token_run` until its request is approved spends the execution's calls, and
+once it reaches `call-cap-reached` the execution can never run that request (a further resume is
+refused `call-cap-reached` at issue). The runner waits on `token_status`'s `paused_by_state`,
+which counts nothing, and resumes only when it reads `approved`. An approval that expired unused
+reads `expired`: the request waits for a fresh approval. With a notifier the approver is paged
+again; without one nothing is re-sent, and a relay (the hub's Approvals page) shows the request
+with `approval_state: expired` and the form to approve it again.
+
 **Crashes and retention.** At start, and at most once a minute while issuing, the broker sweeps
 `<state>/codemode/`: an in-flight run whose broker instance is gone ends `crashed` (its live
 token spent, the execution not resumable; a paused one stays paused), expired entries leave the
@@ -390,12 +400,28 @@ live index, and the tokens of an execution that ended (finished or crashed) more
 it acts for every agent, and one program's refused resumes must not lock out every other's. A
 sandbox's refusals count only before its token is admitted; a refusal after admission is bounded
 by the token's cap. Those that count are keyed by the sandbox's uid **and the presented token**
-(its digest), so on a pool uid shared by many programs one program's refusals (its own cap, its own
+(its token id), so on a pool uid shared by many programs one program's refusals (its own cap, its own
 paused token) limit only itself. A request that presents no known token (garbage, a wrong secret, a
 malformed request) counts against the uid's own ceiling instead, ten times the limit
 (`UNKNOWN_TOKEN_FACTOR`), and never against a valid token's key, so one program's garbage cannot
-rate-limit another's valid token; the records of refused unknown secrets are coalesced to one per
-peer a minute, the next one carrying how many were not written (`args.coalesced`).
+rate-limit another's valid token.
+
+**Coalesced refusal records.** Two kinds of refusal are recorded at most once per transport peer
+a minute (the service's monotonic clock; a clock stepped back ends a window): a secret that names
+no token (`token-invalid`), and a sandbox's request the transport refuses before any token is read
+(no bearer line, a malformed body, a `token` field in the body, an unknown operation; kind
+`sandbox-refused`). The first refusal of a window is recorded as usual, with its own operation,
+outcome (`invalid` or `denied`) and reason (`request-invalid`, `request-malformed`,
+`unknown-operation`, `token-invalid`, ...), and `args.coalesced` set to how many the peer's previous
+window held back when there were any. The ones after it in the window are counted, not written.
+When the window ends with some held back, one **flush record** is written: operation `connect`,
+outcome `denied`, reason the kind (`token-invalid` or `sandbox-refused`), caller the peer
+(`UNKNOWN_TOKEN_CALLER` for an unknown secret), `via` the peer, and `args.coalesced` the count. It
+flattens what it summarises: the held-back refusals' own outcomes and reasons are not kept, only
+how many there were (the first record of the window shows a real one). The flush runs on a timer
+armed when a window first holds one back and on the token sweep; a refusal by the same peer
+before either carries the count on its own record instead. When the trail cannot take the flush
+record, the count is kept for the next flush and a warning is logged.
 
 **Throughput: one lock for every token call (known limit).** Every token call holds the token
 store's `flock` for its whole decision: the token checks and the count, `decide()`, the audit
@@ -424,14 +450,15 @@ codemode:
 
 A runner asking to call gets `not-a-sandbox`, a sandbox asking to issue `not-a-codemode-runner`,
 and an agent's caller peer can do neither. The contract is the broker's (`CodemodeTokens` in
-`conformance/protocols/broker.py`, feature `codemode-tokens`), and its twelve checks are the
+`conformance/protocols/broker.py`, feature `codemode-tokens`), and its thirteen checks are the
 extended suite `broker-tokens` (`hnx conform run broker-tokens --target broker-reference`;
 `hnx conform mutants broker-tokens`): `token-narrows-never-widens`,
 `actor-comes-from-the-token`, `call-cap-enforced-by-the-broker`, `call-cap-is-per-execution`,
 `paused-token-refused`, `spent-token-refused`, `expired-token-refused`,
 `resume-needs-a-paused-execution-and-same-code`, `token-run-runs-only-the-paused-request`,
+`token-run-names-a-denied-request` (with the `approval-control` test hook),
 `answers-carry-the-request`, `runner-bound-to-its-runs` and `secret-never-stored-or-echoed`,
-whose thirteen mutants are each caught by their own check alone. Unit tests:
+whose fourteen mutants are each caught by their own check alone. Unit tests:
 `tests/broker/test_broker_codemode_tokens.py`.
 
 ## Running the service
@@ -850,20 +877,28 @@ A Code Mode sandbox (a `codemode.sandboxes` peer, [above](#code-mode-capability-
 the same protocol with one addition, so that its token never travels inside a body the broker
 parses, audits or names in a log line: the token goes on a **bearer line** of its own.
 
-- **Detection.** When the first line of a request starts with `hnxcmt_` (the prefix every token
-  has; `BEARER_PREFIX` of `homelabnext/broker/tokens.py`), that line is the bearer and the request
-  body is the line after it. Any other first line is the body, as for every other peer: a token
+- **Reading.** A request without a bearer line is read as before: up to its first newline, or up
+  to EOF (a client may close its write side instead of sending the newline), within the read
+  timeout (`--timeout`), else `request-timeout`. When the first line starts with `hnxcmt_` (the
+  prefix every token has; `BEARER_PREFIX` of `homelabnext/broker/tokens.py`), that line is the
+  bearer and the read goes on to the next newline or EOF: the body is the line after the bearer,
+  and anything after the body's newline is ignored, as it is for every request.
+- **Detection.** Any first line without the prefix is the body, as for every other peer: a token
   sent without its prefix, or anything not JSON, is parsed as the body and answered
   `request-malformed`.
 - **The bearer line.** At most 256 bytes (`MAX_BEARER_BYTES`) before its newline, else the request
   is answered `request-too-large` without being parsed; a trailing `\r` is stripped and the line
-  is decoded as ASCII. The body after it keeps the usual limit (`--max-request-bytes`), and EOF
-  right after the bearer line is an empty body (`request-malformed`).
+  is decoded as ASCII, a byte that is not ASCII becoming a replacement character, so such a
+  bearer is a secret no token has: `token-invalid`, like a well-formed bearer whose secret is
+  unknown, wrong or of a token since removed. The body after it keeps the usual limit
+  (`--max-request-bytes`), and EOF right after the bearer line is an empty body
+  (`request-malformed`).
 - **Who sends one.** Only a sandbox, and only with `token-call`, `token-submit` and `token-run`:
   a bearer line from any other peer, and a sandbox's token operation without one, are
-  `request-invalid`; so is a body naming a `token` field. A client that will not send a malformed
-  token (not the prefix, not one printable ASCII line) reports `token-invalid`, as the broker
-  would (`BrokerClient` does).
+  `request-invalid`; so is a body naming a `token` field. `BrokerClient` will not send a malformed
+  token (not the prefix, not one printable ASCII line of at most 256 bytes): it raises `Denied`
+  with reason `token-invalid` itself, unsent, which is the broker's answer to a secret it does
+  not know (the broker would read a line without the prefix as the body: `request-malformed`).
 - **Example.** `hnxcmt_<43 characters>\n{"v": 1, "op": "token-call", "action": "dns.lookup",
   "params": {"name": "app-01"}}\n`; the answer is one JSON object as usual. A `token-issue`
   answer carries the new token's secret beside the result, `{"ok": true, "result": {"claims":

@@ -23,9 +23,10 @@ Features are of two kinds.  *Product* features (``streaming``, ``wildcards``, ..
 the implementation offers; a check needing one is skipped when it is absent.  *Test hooks*
 (:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``, ``approval-control``) only let the
 suite reach a state; a ``must`` check that needs an undeclared hook is ``untested``, which fails
-like a failure - not declaring a hook cannot be a way around a MUST.  The product decides first: a check that also
-needs a product feature the target does not declare is skipped, hook or no hook, because there
-is nothing to test (a target without ``admission`` has no capacity for a fault to leak).
+like a failure - not declaring a hook cannot be a way around a MUST.  The product decides first:
+a check that also needs a product feature the target does not declare is skipped, hook or no
+hook, because there is nothing to test (a target without ``admission`` has no capacity for a
+fault to leak).
 
 Severity follows RFC 2119 loosely: ``must`` is part of the contract (a failure fails the
 capability and the exit code); ``should`` is expected behaviour whose absence is reported but

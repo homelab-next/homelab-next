@@ -112,8 +112,10 @@ runner's view of its own token, including the state of the request a pause waits
 waits for a fresh one), `denied`, `done`, ...).  Another runner's token reads as no token
 (`unknown-token`); an identity that is no runner gets `not-a-codemode-runner`.
 
-A sandbox client that refuses to send a malformed token (not the prefix, not one printable
-ASCII line) answers it as the broker would, `token-invalid`.
+A sandbox client that will not send a malformed token (not the prefix, not one printable ASCII
+line of at most 256 bytes) refuses it itself, unsent, as `Denied` with reason `token-invalid`
+- the broker's answer to a secret it does not know (it would answer a line without the prefix
+`request-malformed`, since such a line is read as the body).
 
 Hooks: a target declaring `clock-control` offers `tick(seconds)`, moving the clock that
 `issued_at` and expiry are judged by; one declaring `approval-control` offers
