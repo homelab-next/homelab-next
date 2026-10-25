@@ -142,10 +142,11 @@ suite_budgets = [
   # (both wait in real time).  main runs it under the 60s default on CI; on a loaded 4-core box
   # this branch measured +11% CPU (54s vs 49s) and +9-39% wall over main, the excess mostly those
   # waits: 90 is 1.5x the default it would otherwise sit at; 100 since CI measured 90.3s once the
-  # orchestration suite reached 17 checks; 110 since the codemode-executor suite, whose checks run
-  # real programs (0.3s a suite run, about 1.9s for a report over it and its five mutants, about
-  # 8s across this directory's runs of it)
-  "tests/conform = 110",
+  # orchestration suite reached 17 checks; 125 since the codemode-executor suite, whose checks run
+  # real programs (0.45s a suite run, about 3.5s for a report over it and its seven mutants,
+  # about 12s across this directory): main measured 99.4s on a loaded local box and this branch
+  # about 110s there, against 90.3s for main on CI
+  "tests/conform = 125",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed

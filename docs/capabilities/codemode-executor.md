@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **The sandbox for one Code Mode program: broker-only egress, no credentials, caps, disposable.**
 
 - Contract: [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py) (`conformance.protocols.codemode_executor:CodeExecutor`)
-- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (15 checks: 14 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (16 checks: 15 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -42,7 +42,10 @@ c. *Limits are enforced.*  A program that exceeds a cap in `Limits` (CPU seconds
    `output_bytes`.  Broker calls are capped by `max_calls`: the executor's broker client
    refuses a call past the cap without sending it, as a denial with reason
    `call-cap-reached`, and the run goes on (`calls` is in `LIMITS` for a runner that
-   ends a run on the cap; this contract does not).
+   ends a run on the cap; this contract does not).  The client-side cap is behaviour, not
+   enforcement: the client runs inside the sandbox, within the program's reach.  Enforcing a
+   capped token is the broker's (token claims, ADR-0031 decision 6), proved by the runner
+   contract (CM-5).
 d. *Disposable.*  Every run starts from nothing: no file, environment variable or interpreter
    state that an earlier run wrote is visible to a later one.  A writable scratch directory
    (the working directory, `TMPDIR` and `HOME`) exists for the run and goes with it.
@@ -57,8 +60,9 @@ f. *Every outcome is a result.*  A program that does not compile, raises, exits 
    `ERROR_KINDS` and `error.message` is one line of at most `MESSAGE_MAX`
    characters with no control character, line separator or bidirectional override.  `run`
    itself raises only for the caller's own mistakes: a language not in `languages`
-   (`UnsupportedLanguage`) and a program longer than `MAX_PROGRAM_CHARS`
-   characters (`ProgramTooLarge`), before anything runs.
+   (`UnsupportedLanguage`), a program longer than `MAX_PROGRAM_CHARS`
+   characters (`ProgramTooLarge`) and one that is not encodable as UTF-8, such as one
+   holding a lone surrogate (`UnencodableProgram`), before anything runs.
 g. *The broker's answers reach the program as the broker gave them.*  A denial raises
    `broker.Denied` carrying the broker's `reason`; a program that lets it escape ends with
    status `denied`.  An error reply raises `broker.Error` (catchable, with `reason`); an
@@ -66,7 +70,9 @@ g. *The broker's answers reach the program as the broker gave them.*  A denial r
    with error kind `broker`.  A pending reply (the call needs approval) pauses the whole run:
    it raises `broker.Paused`, a `BaseException` that `except Exception` does not catch,
    every later call raises it again, and the run ends with status `paused` and the call in
-   `pending` however the program handled it.  Resuming is the runner's (CM-5).
+   `pending` however the program handled it.  Resuming is the runner's (CM-5).  Like the
+   call cap, the client-side pause is behaviour, not enforcement: refusing calls on a paused
+   token is the broker's, checked by the runner contract.
 
 **The program's view (language `python`).**  The program is module source.  It sees one name
 of its own, `broker`: `broker.call(action, args=None)` sends one request to the broker and
@@ -127,10 +133,11 @@ def run(
 **Returns:** `ExecutionResult`
 
 Runs `program` in a fresh sandbox to its end or a cap.  Raises UnsupportedLanguage
-for a language not in `languages` and ProgramTooLarge for a program longer than
-MAX_PROGRAM_CHARS characters, before anything runs.
+for a language not in `languages`, ProgramTooLarge for a program longer than
+MAX_PROGRAM_CHARS characters and UnencodableProgram for one that is not UTF-8 text,
+before anything runs.
 
-**Raises:** `UnsupportedLanguage`, `ProgramTooLarge`
+**Raises:** `UnsupportedLanguage`, `ProgramTooLarge`, `UnencodableProgram`
 
 ## Data shapes in and out
 
@@ -205,7 +212,7 @@ A call that needs approval: the run paused on it.
 | `LIMITS` | `('cpu', 'memory', 'wall', 'calls', 'output')` |
 | `MAX_PROGRAM_CHARS` | `65536` |
 | `MESSAGE_MAX` | `2000` |
-| `MESSAGE_UNSAFE` | `'[\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]'` |
+| `MESSAGE_UNSAFE` | `'[\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff\\ud800-\\udfff]'` |
 | `REPLIES` | `('ok', 'denied', 'pending', 'error')` |
 | `STATUSES` | `('ok', 'paused', 'denied', 'error', 'limit')` |
 | `VALUE_JSON` | `{'ensure_ascii': False, 'separators': (',', ':'), 'allow_nan': False}` |
@@ -218,6 +225,7 @@ Adapters raise these (never a bare product exception); a check that expects a re
 |---|---|---|---|
 | `ExecutorError` | `Exception` |  |  |
 | `ProgramTooLarge` | `ExecutorError` | The program is longer than `MAX_PROGRAM_CHARS` characters. | `CodeExecutor.run` |
+| `UnencodableProgram` | `ExecutorError` | The program is not encodable as UTF-8 (it holds a lone surrogate). | `CodeExecutor.run` |
 | `UnsupportedLanguage` | `ExecutorError` | The executor does not run programs in the requested language. | `CodeExecutor.run` |
 
 ### JSON Schemas
@@ -242,6 +250,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `pending-pauses-the-run` | MUST | a call that needs approval ends the run paused, with the call pending; the program cannot swallow it |  |
 | `broker-error-is-an-error` | MUST | an error reply is a catchable broker.Error; escaping, it or an unreachable broker ends the run with error kind broker |  |
 | `call-cap-enforced` | MUST | a call past max_calls is refused before the broker as call-cap-reached, and the run goes on |  |
+| `unencodable-program-refused` | MUST | a program that is not UTF-8 text (a lone surrogate) is refused before anything runs |  |
 | `oversized-program-refused` | MUST | a program longer than 65536 characters is refused before anything runs; one of exactly that length runs |  |
 | `unknown-language-refused` | MUST | a language the executor does not list is refused before anything runs |  |
 | `output-returned` | SHOULD | what the program prints comes back as output |  |
@@ -289,6 +298,7 @@ No service in `examples/services.yml` declares `capability: codemode-executor`.
        CodeExecutor,
        ExecutorError,
        ProgramTooLarge,
+       UnencodableProgram,
        UnsupportedLanguage,
    )
    ```
@@ -316,4 +326,4 @@ No service in `examples/services.yml` declares `capability: codemode-executor`.
    hnx conform run codemode-executor --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

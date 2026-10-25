@@ -7,6 +7,7 @@ the broker is served where the executor says, and the fake's output cut, program
 and kill of a run stopped before it started its session.
 """
 
+import json
 import os
 import socket
 
@@ -18,7 +19,9 @@ from conformance.protocols.codemode_executor import (
     MESSAGE_MAX,
     BrokerEndpoint,
     Limits,
+    PendingCall,
     ProgramTooLarge,
+    UnencodableProgram,
 )
 from conformance.suites import codemode_executor as suite
 from homelabnext.conform.core import run_checks
@@ -127,3 +130,75 @@ def test_a_run_stopped_before_its_session_exists_still_dies(monkeypatch):
     assert (res.status, res.limit) == ("limit", "wall")
     (pid,) = pids
     assert not os.path.exists(f"/proc/{pid}"), "the stopped run's process outlived run()"
+
+
+def test_a_split_character_is_dropped_not_replaced():
+    assert fake.cut_text("aé".encode() * 3, 4) == "aéa"  # "aéaé" cut at 4 bytes: é dropped
+    assert "\ufffd" not in fake.cut_text("é".encode() * 3000, 4095)
+    assert fake.cut_text(b"\xff\xe2\x82", 2) == ""  # a replacement that does not fit is dropped
+    # three bytes of a four-byte character: a U+FFFD would fit, and must still not appear
+    assert fake.cut_text("\U0001f600".encode() * 2, 7) == "\U0001f600"
+
+
+def test_a_lone_surrogate_program_is_refused_not_a_crash():
+    ex = fake.ForkingExecutor()
+    endpoint = BrokerEndpoint(LOOPBACK, 9, "t")
+    with pytest.raises(UnencodableProgram):
+        ex.run("result = '\ud800'", language="python", broker=endpoint, limits=Limits())
+    assert issubclass(UnencodableProgram, ValueError)
+
+
+def test_messages_lose_zero_width_bidi_bom_and_surrogate_characters():
+    msg = fake.clean_message("a\u200bb\u200fc\u061cd\ufeffe\ud800f\tg")
+    assert msg == "a b c d e f\tg"
+
+
+_PENDING = {
+    "step": 1,
+    "action": "hold",
+    "request_id": "req-1",
+    "request_digest": "sha256:" + "0" * 64,
+}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"not json",
+        b"[1, 2]",
+        b'{"status": "running"}',
+        b'{"status": "limit", "limit": "cpu"}',  # a limit is the parent's to decide
+        b'{"status": "error", "error": "a string"}',
+        b'{"status": "paused"}',
+        b'{"status": "paused", "pending": []}',
+        b'{"status": "paused", "pending": [{"step": 1}]}',
+        b'{"status": "paused", "pending": ["x"]}',
+        json.dumps({"status": "paused", "pending": [{**_PENDING, "step": "1"}]}).encode(),
+        json.dumps({"status": "paused", "pending": [{**_PENDING, "step": -1}]}).encode(),
+        json.dumps({"status": "paused", "pending": [{**_PENDING, "request_id": 7}]}).encode(),
+    ],
+)
+def test_a_forged_or_malformed_result_header_is_a_sandbox_error(header):
+    res = fake.outcome(header, b"", False, "")
+    assert (res.status, res.error.kind) == ("error", "sandbox"), res
+
+
+def test_an_unreadable_value_is_a_sandbox_error():
+    res = fake.outcome(b'{"status": "ok"}', b"{not json", False, "")
+    assert (res.status, res.error.kind) == ("error", "sandbox")
+
+
+def test_a_valid_pending_header_is_cleaned_and_kept():
+    entry = {**_PENDING, "action": "hold\u2028x"}
+    res = fake.outcome(
+        json.dumps({"status": "paused", "pending": [entry]}).encode(), b"", False, ""
+    )
+    assert res.status == "paused"
+    assert res.pending == (PendingCall(1, "hold x", "req-1", _PENDING["request_digest"]),)
+
+
+def test_an_error_header_with_an_unknown_kind_or_unsafe_message_is_cleaned():
+    header = {"status": "error", "error": {"kind": "made-up", "message": "a\nb" + "x" * 3000}}
+    res = fake.outcome(json.dumps(header).encode(), b"", False, "")
+    assert res.error.kind == "sandbox" and len(res.error.message) == MESSAGE_MAX
+    assert "\n" not in res.error.message

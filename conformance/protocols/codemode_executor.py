@@ -23,7 +23,10 @@ c. *Limits are enforced.*  A program that exceeds a cap in :class:`Limits` (CPU 
    ``output_bytes``.  Broker calls are capped by ``max_calls``: the executor's broker client
    refuses a call past the cap without sending it, as a denial with reason
    ``call-cap-reached``, and the run goes on (``calls`` is in :data:`LIMITS` for a runner that
-   ends a run on the cap; this contract does not).
+   ends a run on the cap; this contract does not).  The client-side cap is behaviour, not
+   enforcement: the client runs inside the sandbox, within the program's reach.  Enforcing a
+   capped token is the broker's (token claims, ADR-0031 decision 6), proved by the runner
+   contract (CM-5).
 d. *Disposable.*  Every run starts from nothing: no file, environment variable or interpreter
    state that an earlier run wrote is visible to a later one.  A writable scratch directory
    (the working directory, ``TMPDIR`` and ``HOME``) exists for the run and goes with it.
@@ -38,8 +41,9 @@ f. *Every outcome is a result.*  A program that does not compile, raises, exits 
    :data:`ERROR_KINDS` and ``error.message`` is one line of at most :data:`MESSAGE_MAX`
    characters with no control character, line separator or bidirectional override.  ``run``
    itself raises only for the caller's own mistakes: a language not in ``languages``
-   (:class:`UnsupportedLanguage`) and a program longer than :data:`MAX_PROGRAM_CHARS`
-   characters (:class:`ProgramTooLarge`), before anything runs.
+   (:class:`UnsupportedLanguage`), a program longer than :data:`MAX_PROGRAM_CHARS`
+   characters (:class:`ProgramTooLarge`) and one that is not encodable as UTF-8, such as one
+   holding a lone surrogate (:class:`UnencodableProgram`), before anything runs.
 g. *The broker's answers reach the program as the broker gave them.*  A denial raises
    ``broker.Denied`` carrying the broker's ``reason``; a program that lets it escape ends with
    status ``denied``.  An error reply raises ``broker.Error`` (catchable, with ``reason``); an
@@ -47,7 +51,9 @@ g. *The broker's answers reach the program as the broker gave them.*  A denial r
    with error kind ``broker``.  A pending reply (the call needs approval) pauses the whole run:
    it raises ``broker.Paused``, a ``BaseException`` that ``except Exception`` does not catch,
    every later call raises it again, and the run ends with status ``paused`` and the call in
-   ``pending`` however the program handled it.  Resuming is the runner's (CM-5).
+   ``pending`` however the program handled it.  Resuming is the runner's (CM-5).  Like the
+   call cap, the client-side pause is behaviour, not enforcement: refusing calls on a paused
+   token is the broker's, checked by the runner contract.
 
 **The program's view (language ``python``).**  The program is module source.  It sees one name
 of its own, ``broker``: ``broker.call(action, args=None)`` sends one request to the broker and
@@ -95,6 +101,7 @@ __all__ = [
     "Limits",
     "PendingCall",
     "ProgramTooLarge",
+    "UnencodableProgram",
     "UnsupportedLanguage",
 ]
 
@@ -112,9 +119,13 @@ REPLIES = ("ok", "denied", "pending", "error")
 MAX_PROGRAM_CHARS = 65536
 #: the longest ``ExecutionError.message``, in characters
 MESSAGE_MAX = 2000
-#: characters an error message never holds: controls (tab aside), line and paragraph separators
-#: and bidirectional overrides (schemas/codemode's single-line pattern)
-MESSAGE_UNSAFE = r"[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+#: characters an error message (or a pending call's text) never holds: controls (tab aside),
+#: line and paragraph separators, bidirectional marks and overrides, zero-width characters, the
+#: byte-order mark and lone surrogates (schemas/codemode's single-line pattern)
+MESSAGE_UNSAFE = (
+    r"[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029"
+    r"\u202a-\u202e\u2066-\u2069\ufeff\ud800-\udfff]"
+)
 #: the value's serialization: ``json.dumps(value, **VALUE_JSON)``, encoded as UTF-8
 VALUE_JSON = {"ensure_ascii": False, "separators": (",", ":"), "allow_nan": False}
 #: where the harness serves the broker unless the executor declares ``broker_bind`` (not in
@@ -132,6 +143,10 @@ class UnsupportedLanguage(ExecutorError, ValueError):
 
 class ProgramTooLarge(ExecutorError, ValueError):
     """The program is longer than :data:`MAX_PROGRAM_CHARS` characters."""
+
+
+class UnencodableProgram(ExecutorError, ValueError):
+    """The program is not encodable as UTF-8 (it holds a lone surrogate)."""
 
 
 @dataclass(frozen=True)
@@ -206,5 +221,6 @@ class CodeExecutor(Protocol):
         self, program: str, *, language: str, broker: BrokerEndpoint, limits: Limits
     ) -> ExecutionResult:
         """Runs ``program`` in a fresh sandbox to its end or a cap.  Raises UnsupportedLanguage
-        for a language not in ``languages`` and ProgramTooLarge for a program longer than
-        MAX_PROGRAM_CHARS characters, before anything runs."""
+        for a language not in ``languages``, ProgramTooLarge for a program longer than
+        MAX_PROGRAM_CHARS characters and UnencodableProgram for one that is not UTF-8 text,
+        before anything runs."""

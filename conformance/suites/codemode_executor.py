@@ -49,6 +49,7 @@ from conformance.protocols.codemode_executor import (
     Limits,
     PendingCall,
     ProgramTooLarge,
+    UnencodableProgram,
     UnsupportedLanguage,
 )
 from homelabnext.conform.core import Mutant, Suite
@@ -375,6 +376,16 @@ def _(ex):
             {"python": "for _ in range(1024):\n    print('x' * 1023)\nresult = 'printed'\n"},
             Limits(output_bytes=4096),
         ),
+        # four-byte characters: a line is 4093 bytes, so the cap falls three bytes into a
+        # character, which is dropped, never returned half or as U+FFFD
+        (
+            "output",
+            {
+                "python": "for _ in range(1024):\n    print('\\U0001f600' * 1023)\n"
+                "result = 'printed'\n"
+            },
+            Limits(output_bytes=4096),
+        ),
     ]
     langs = _languages(ex, *(programs for _, programs, _ in cases))
     with _broker(ex) as b:
@@ -385,6 +396,7 @@ def _(ex):
                 f"not ('limit', {cap!r})"
             )
             assert len(res.output.encode()) <= limits.output_bytes, f"{cap}: output past its cap"
+            assert "\ufffd" not in res.output, f"{cap}: the output cut left a broken character"
 
 
 @SUITE.check(
@@ -564,12 +576,14 @@ def _(ex):
             got = _ok(_run(ex, caught[lang], b, language=lang), "a caught error reply")
             assert got == ERROR_REASON, f"the program read reason {got!r}, not {ERROR_REASON!r}"
             _error(_run(ex, escaped[lang], b, language=lang), "broker", "an escaping error reply")
-        # an endpoint nothing listens on: the port was the broker's, now closed
-        gone = _Broker(_bind(ex))
-        endpoint = gone.endpoint
-        gone.close()
-        box = _Gone(endpoint)
-        _error(_run(ex, unreachable[lang], box, language=lang), "broker", "an unreachable broker")
+        # an endpoint nothing answers on: a socket held bound but not listening for the run, so
+        # the port cannot be taken by anything else meanwhile
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as held:
+            held.bind(_bind(ex))
+            host, port = held.getsockname()[:2]
+            box = _Gone(BrokerEndpoint(host, port, secrets.token_hex(16)))
+            res = _run(ex, unreachable[lang], box, language=lang)
+        _error(res, "broker", "an unreachable broker")
 
 
 class _Gone:
@@ -595,6 +609,24 @@ def _(ex):
             got = _ok(res, "three calls under a cap of two")
             assert len(b.calls) == 2, f"the broker saw {len(b.calls)} calls under a cap of two"
             assert got == [{"i": 0}, {"i": 1}, "call-cap-reached"], got
+
+
+@SUITE.check(
+    "unencodable-program-refused",
+    "a program that is not UTF-8 text (a lone surrogate) is refused before anything runs",
+)
+def _(ex):
+    programs = {"python": "broker.call('echo', {})\nresult = '\ud800'\n"}
+    for lang in _languages(ex, programs):
+        with _broker(ex) as b:
+            raises(
+                lambda lang=lang: ex.run(
+                    programs[lang], language=lang, broker=b.endpoint, limits=LIMITS
+                ),
+                "a program holding a lone surrogate",
+                UnencodableProgram,
+            )
+            assert b.calls == [], f"the refused program ran: {b.calls}"
 
 
 @SUITE.check(

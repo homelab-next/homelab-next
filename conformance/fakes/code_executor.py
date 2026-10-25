@@ -55,12 +55,14 @@ from conformance.protocols.codemode_executor import (
     MAX_PROGRAM_CHARS,
     MESSAGE_MAX,
     MESSAGE_UNSAFE,
+    STATUSES,
     BrokerEndpoint,
     ExecutionError,
     ExecutionResult,
     Limits,
     PendingCall,
     ProgramTooLarge,
+    UnencodableProgram,
     UnsupportedLanguage,
 )
 
@@ -71,13 +73,24 @@ _UNSAFE = re.compile(MESSAGE_UNSAFE)
 _REAP_S = 2.0  # how long a killed run's process may take to be reported gone
 
 
+def _boundary(data: bytes) -> bytes:
+    """``data`` without a UTF-8 sequence cut short at its end."""
+    for back in range(1, min(4, len(data)) + 1):
+        b = data[-back]
+        if b & 0xC0 != 0x80:  # the last lead byte (or ASCII)
+            need = 1 if b < 0x80 else 2 if b >> 5 == 0b110 else 3 if b >> 4 == 0b1110 else 4
+            return data[:-back] if need > back and b >= 0xC0 else data
+    return data
+
+
 def cut_text(data: bytes, limit: int) -> str:
-    """``data`` as text of at most ``limit`` UTF-8 bytes: invalid bytes become U+FFFD, and the
-    text is cut on a character boundary after that (a replacement can be longer than the byte it
-    replaces, so cutting the bytes first is not enough)."""
-    text = data[:limit].decode("utf-8", "replace")
+    """``data`` as text of at most ``limit`` UTF-8 bytes.  The bytes are cut, then cut back to a
+    character boundary, so a character split by the cap is dropped, not turned into U+FFFD;
+    invalid bytes elsewhere become U+FFFD, which can be longer than the byte it replaces, so the
+    text is cut again, on a boundary, when that pushes it over."""
+    text = _boundary(data[:limit]).decode("utf-8", "replace")
     raw = text.encode()
-    return text if len(raw) <= limit else raw[:limit].decode("utf-8", "ignore")
+    return text if len(raw) <= limit else _boundary(raw[:limit]).decode("utf-8")
 
 
 def clean_message(text: str) -> str:
@@ -221,6 +234,10 @@ class ForkingExecutor:
             )
         if len(program) > MAX_PROGRAM_CHARS:
             raise ProgramTooLarge(f"{len(program)} characters, over {MAX_PROGRAM_CHARS}")
+        try:
+            program.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise UnencodableProgram(f"not UTF-8 text at character {exc.start}") from None
         workdir = self._workdir()
         try:
             return self._run(program, broker, limits, workdir)
@@ -283,7 +300,7 @@ class ForkingExecutor:
         deadline = started + self._wall_s(limits)
         budget = self._result_budget(limits)
         output, result = bytearray(), bytearray()
-        header: dict | None = None
+        header: bytes | None = None  # the child's header line, parsed by outcome() at the end
         truncated = False
         open_fds = {out_fd, r_fd}
         stop: str | None = None  # the cap that ended the run
@@ -304,7 +321,7 @@ class ForkingExecutor:
             ready, _, _ = select.select(watch, [], [], min(_POLL_S, deadline - now))
             for fd in ready:
                 if fd is chan:
-                    exit_code.append(json.loads(chan.recv(4096) or b'{"exit": -9}')["exit"])
+                    exit_code.append(_exit_code(chan.recv(4096)))
                     continue
                 chunk = os.read(fd, 65536)
                 if not chunk:
@@ -317,7 +334,7 @@ class ForkingExecutor:
                     result += chunk
                     if header is None and b"\n" in result:
                         line, _, rest = bytes(result).partition(b"\n")
-                        header, result = json.loads(line), bytearray(rest)
+                        header, result = line, bytearray(rest)
                     elif header is None and len(result) > _HEADER_MAX:
                         open_fds.discard(fd)  # not a header: the sandbox is misbehaving
                         result.clear()
@@ -333,27 +350,78 @@ class ForkingExecutor:
             stop = "cpu"
         if stop is not None:
             return ExecutionResult("limit", limit=stop, output=text)
-        if header is None:
-            error = ExecutionError("sandbox", f"the sandbox ended without a result ({exit_code})")
-            return ExecutionResult("error", error=error, output=text)
-        status = header.get("status")
-        if status == "error":
-            err = header.get("error") or {}
-            kind = err.get("kind") if err.get("kind") in ERROR_KINDS else "sandbox"
-            error = ExecutionError(kind, clean_message(str(err.get("message", ""))))
-            return ExecutionResult("error", error=error, output=text)
-        if status == "paused":
-            pending = tuple(
-                PendingCall(p["step"], p["action"], p["request_id"], p["request_digest"])
-                for p in header.get("pending", ())
-            )
-            return ExecutionResult("paused", pending=pending, output=text)
-        if status != "ok":
-            return ExecutionResult(status, output=text)
-        if truncated:
-            value = bytes(result).decode("utf-8", "ignore")  # drops a character cut in half
-            return ExecutionResult("ok", value=value, truncated=True, output=text)
-        return ExecutionResult("ok", value=json.loads(bytes(result) or b"null"), output=text)
+        return outcome(header, bytes(result), truncated, text, exit_code)
+
+
+def _exit_code(msg: bytes) -> int:
+    """The supervisor's report of how the run's process ended (-9 when it is unreadable)."""
+    try:
+        code = json.loads(msg)["exit"]
+    except (ValueError, TypeError, KeyError):
+        return -signal.SIGKILL
+    return code if isinstance(code, int) else -signal.SIGKILL
+
+
+def _sandbox_error(why: str, output: str) -> ExecutionResult:
+    return ExecutionResult("error", error=ExecutionError("sandbox", why), output=output)
+
+
+def outcome(
+    header: bytes | None, body: bytes, truncated: bool, output: str, exit_code: object = None
+) -> ExecutionResult:
+    """The result from what the run's process wrote to its result pipe: one JSON header line,
+    then the value.  Everything in it is the sandbox's, so it is validated, not trusted: an
+    unreadable header, a status outside STATUSES, a malformed error or pending entry or a value
+    that is not JSON is a ``sandbox`` error, never an exception out of ``run``."""
+    if header is None:
+        return _sandbox_error(f"the sandbox ended without a result ({exit_code})", output)
+    try:
+        head = json.loads(header)
+    except ValueError:
+        return _sandbox_error("the sandbox wrote an unreadable result header", output)
+    status = head.get("status") if isinstance(head, dict) else None
+    if status not in STATUSES or status == "limit":  # a limit is the parent's to decide
+        return _sandbox_error("the sandbox wrote an unknown status", output)
+    if status == "error":
+        err = head.get("error")
+        if not isinstance(err, dict):
+            return _sandbox_error("the sandbox wrote a malformed error", output)
+        kind = err.get("kind") if err.get("kind") in ERROR_KINDS else "sandbox"
+        message = err.get("message", "")
+        message = clean_message(message if isinstance(message, str) else "")
+        return ExecutionResult("error", error=ExecutionError(kind, message), output=output)
+    if status == "paused":
+        pending = _pending(head.get("pending"))
+        if not pending:
+            return _sandbox_error("the sandbox wrote a malformed pending call", output)
+        return ExecutionResult("paused", pending=pending, output=output)
+    if status != "ok":
+        return ExecutionResult(status, output=output)
+    if truncated:
+        value = body.decode("utf-8", "ignore")  # drops a character cut in half
+        return ExecutionResult("ok", value=value, truncated=True, output=output)
+    try:
+        value = json.loads(body or b"null")
+    except ValueError:
+        return _sandbox_error("the sandbox wrote a value that is not JSON", output)
+    return ExecutionResult("ok", value=value, output=output)
+
+
+def _pending(entries: object) -> tuple[PendingCall, ...]:
+    """Validated pending calls; empty when any entry is malformed."""
+    if not isinstance(entries, list) or not entries:
+        return ()
+    out = []
+    for p in entries:
+        if not isinstance(p, dict):
+            return ()
+        step, texts = p.get("step"), [p.get(k) for k in ("action", "request_id", "request_digest")]
+        if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+            return ()
+        if not all(isinstance(t, str) and t for t in texts):
+            return ()
+        out.append(PendingCall(step, *(clean_message(t) for t in texts)))
+    return tuple(out)
 
 
 class OpenEgressExecutor(ForkingExecutor):
