@@ -110,11 +110,12 @@ def test_outline_with_an_authored_summary(cat):
     assert out["id"] == "doc:docs/authored.md" and out["path"] == "docs/authored.md"
     assert out["title"] == "Authored" and out["chars"] == len(AUTHORED)
     assert out["digest"] == hashlib.sha256(AUTHORED.encode()).hexdigest()
+    # the sole leading H1 is the document's title, not a segment of its sections' paths
     assert [(h["level"], h["path"], h["slug"]) for h in out["headings"]] == [
         (1, "Authored", "authored"),
-        (2, "Authored/Decision", "decision"),
-        (3, "Authored/Decision/Consequences", "consequences"),
-        (2, "Authored/Alternatives", "alternatives"),
+        (2, "Decision", "decision"),
+        (3, "Decision/Consequences", "consequences"),
+        (2, "Alternatives", "alternatives"),
     ]
     dec = out["headings"][1]
     assert dec["chars"] == len("## Decision\n\nDecided.\n\n### Consequences\n\nSome.\n\n")
@@ -130,16 +131,17 @@ def test_outline_without_a_summary_falls_back_and_ignores_fenced_headings(cat):
     assert "Not a heading" not in titles and "Neither" not in titles
     assert [(h["slug"], h["path"]) for h in out["headings"]] == [
         ("fallback", "Fallback"),
-        ("steps", "Fallback/Steps"),
-        ("verify", "Fallback/Steps/Verify"),
-        ("steps-2", "Fallback/Steps (2)"),
-        ("verify-2", "Fallback/Steps (2)/Verify"),
+        ("steps", "Steps"),
+        ("verify", "Steps/Verify"),
+        ("fallback/steps", "Steps~2"),  # a repeat is qualified by its parent's slug first
+        ("fallback/steps/verify", "Steps~2/Verify"),
     ]
 
 
-def test_outline_of_a_non_markdown_document_has_no_levels(cat):
+def test_outline_of_a_synthesized_node_has_no_headings_and_a_synthesized_summary(cat):
     out = _call(cat, "outline", id_or_path="cap:widget", allowed=["cap:"])
-    assert out["headings"] == [] and (out["summary"], out["summary_source"]) == ("", "none")
+    assert out["headings"] == []
+    assert (out["summary"], out["summary_source"]) == ("a widget capability", "synthesized")
 
 
 def test_a_path_defining_several_records_must_be_named_by_id(cat):
@@ -154,15 +156,16 @@ def test_a_path_defining_several_records_must_be_named_by_id(cat):
 # -- section ----------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["consequences", "Authored/Decision/Consequences"])
+@pytest.mark.parametrize("name", ["consequences", "Decision/Consequences"])
 def test_section_by_exact_slug_or_full_path(cat, name):
     out = _call(cat, "section", id_or_path="doc:docs/authored.md", heading=name, allowed=["doc:"])
     want = "### Consequences\n\nSome.\n\n"
     assert out == {
         "id": "doc:docs/authored.md",
-        "heading": "Authored/Decision/Consequences",
+        "heading": "Decision/Consequences",
         "slug": "consequences",
         "content": want,
+        "offset": 0,
         "chars": len(want),
         "digest": hashlib.sha256(want.encode()).hexdigest(),
     }
@@ -174,7 +177,9 @@ def test_a_section_holds_its_subsections(cat):
     assert "## Alternatives" not in out["content"]
 
 
-@pytest.mark.parametrize("name", ["Consequences", "CONSEQUENCES", "conseq", "Decision", "steps "])
+@pytest.mark.parametrize(
+    "name", ["Consequences", "CONSEQUENCES", "conseq", "Authored/Decision", "decision/", "steps "]
+)
 def test_unknown_heading_is_refused_with_the_slugs_and_never_fuzzy(cat, name):
     with pytest.raises(CatalogError) as exc:
         cat.section("doc:docs/authored.md", name, allowed=["doc:"])
@@ -187,8 +192,8 @@ def test_ambiguous_heading_is_refused_with_the_candidates(cat):
     # "top-x" is the nested heading's slug and the second top-level heading's path
     with pytest.raises(CatalogError) as exc:
         cat.section("doc:docs/ambiguous.md", "top-x", allowed=["doc:"])
-    assert str(exc.value).startswith("ambiguous heading") and "top-x, top-x-2" in str(exc.value)
-    assert cat.section("doc:docs/ambiguous.md", "top-x-2", allowed=["doc:"])["heading"] == "top-x"
+    assert str(exc.value).startswith("ambiguous heading") and "top-x, top-x~2" in str(exc.value)
+    assert cat.section("doc:docs/ambiguous.md", "top-x~2", allowed=["doc:"])["heading"] == "top-x"
     assert cat.section("doc:docs/ambiguous.md", "Top/top-x", allowed=["doc:"])["slug"] == "top-x"
 
 
@@ -302,7 +307,7 @@ def test_context_for_full_detail_adds_content_and_snippet(cat):
 def test_results_are_byte_identical_across_calls_and_catalogs():
     calls = [
         ("outline", {"id_or_path": "docs/fallback.md", "allowed": ["doc:"]}),
-        ("section", {"id_or_path": "doc:docs/fallback.md", "heading": "verify-2", "allowed": ["doc:"]}),
+        ("section", {"id_or_path": "doc:docs/fallback.md", "heading": "fallback/steps/verify", "allowed": ["doc:"]}),
         ("context_for", {"task_text": "page", "allowed": ["doc:"], "detail": "summary"}),
         ("context_for", {"task_text": "page", "allowed": ["doc:"], "detail": "full"}),
     ]  # fmt: skip
@@ -341,3 +346,82 @@ def test_the_example_records_serve_their_authored_summaries(repo):
         ("section", {"id_or_path": "docs/mcp.md", "heading": "tools", "allowed": ["doc:docs/"]}),
     ):
         assert len(repo.call(name, args)) <= MAX_RESULT_CHARS
+
+
+# -- review fixes: stale outlines, paging, nulls, warnings, cleaned text -----------------------
+
+
+def test_section_refuses_a_name_from_a_stale_outline(cat):
+    out = _call(cat, "outline", id_or_path="doc:docs/authored.md", allowed=["doc:"])
+    ok = cat.section(
+        "doc:docs/authored.md", "decision", allowed=["doc:"], outline_digest=out["digest"]
+    )
+    assert ok["slug"] == "decision"
+    with pytest.raises(CatalogError, match="changed since that outline"):
+        cat.section("doc:docs/authored.md", "decision", allowed=["doc:"], outline_digest="0" * 64)
+
+
+def test_section_pages_with_offset_limit_and_next_offset(cat):
+    whole = cat.section("doc:docs/authored.md", "decision", allowed=["doc:"])["content"]
+    got, offset = "", 0
+    while True:
+        part = cat.section(
+            "doc:docs/authored.md", "decision", allowed=["doc:"], offset=offset, limit=7
+        )
+        assert part["offset"] == offset and len(part["content"]) <= 7
+        assert part["chars"] == len(whole)
+        got += part["content"]
+        if "next_offset" not in part:
+            assert "truncated" not in part
+            break
+        assert part["truncated"] is True and part["next_offset"] == offset + 7
+        offset = part["next_offset"]
+    assert got == whole
+    for bad in ({"offset": -1}, {"offset": len(whole) + 1}, {"limit": 0}, {"limit": True}):
+        with pytest.raises(CatalogError):
+            cat.section("doc:docs/authored.md", "decision", allowed=["doc:"], **bad)
+
+
+def test_context_for_null_detail_is_the_default(cat):
+    a = cat.call("context_for", {"task_text": "page", "allowed": ["doc:"], "detail": None})
+    b = cat.call("context_for", {"task_text": "page", "allowed": ["doc:"]})
+    assert a == b and json.loads(a)["detail"] == "summary"
+
+
+def test_context_for_summarises_synthesized_nodes(cat):
+    out = _call(cat, "context_for", task_text="widget", allowed=["cap:"])
+    (hit,) = out["hits"]
+    assert (hit["summary"], hit["summary_source"]) == ("a widget capability", "synthesized")
+
+
+def test_a_legacy_code_raises_no_warning_that_would_signal_existence(repo, recwarn):
+    with pytest.raises(CatalogError, match="no such document in scope"):
+        repo.outline("lesson:LL-001", allowed=["doc:"])  # exists, but out of this scope
+    with pytest.raises(CatalogError, match="no such document in scope"):
+        repo.outline("lesson:LL-999", allowed=["doc:"])
+    assert not [w for w in recwarn if "legacy" in str(w.message).lower()]
+    assert repo.outline("lesson:LL-001", allowed=["lesson:"])["summary_source"] == "authored"
+
+
+def test_titles_and_derived_text_reach_the_model_cleaned():
+    hostile = "# Ti\x1btle\u202e\n\nPro\u200bse\u2028here.\n\n## Sub\x00\n"
+    docs = {"doc:docs/h.md": ("docs/h.md", "Ti\x1btle\u202e", hostile)}
+    c = _catalog(docs=docs)
+    out = _call(c, "outline", id_or_path="docs/h.md", allowed=["doc:"])
+    text = json.dumps(out["headings"]) + out["title"] + out["summary"]
+    for bad in ("\x1b", "\u202e", "\u200b", "\u2028", "\x00"):
+        assert bad not in text and bad not in json.loads(json.dumps(text))
+    # a control character becomes a space, an invisible one is dropped
+    assert out["title"] == "Ti tle" and out["summary"] == "Prose here."
+    hit = _call(c, "context_for", task_text="here", allowed=["doc:"])["hits"][0]
+    assert hit["title"] == "Ti tle"
+
+
+def test_outline_reports_a_parse_cut(monkeypatch):
+    from homelabnext.context import levels
+
+    monkeypatch.setattr(levels, "MAX_PARSE_LINES", 3)
+    levels._MEMO.clear()
+    out = _catalog().outline("doc:docs/authored.md", allowed=["doc:"])
+    assert out["parse_truncated"] is True and out["parsed_chars"] < out["chars"]
+    levels._MEMO.clear()

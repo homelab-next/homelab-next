@@ -36,24 +36,30 @@ filesystem reader has none of this platform's scope rules, profile verification 
 2. **Context is served in three levels** by `hnx mcp serve` (`homelabnext/context/levels.py`,
    `homelabnext/mcp/catalog.py`):
    - **L0, the summary:** a front-matter `summary:` the author wrote and a review covered
-     (`summary_source: authored`), else the document's first paragraph cut to 160 characters
-     (`first-paragraph`), else nothing (`none`). `context_for` returns this level by default
+     (`summary_source: authored`), else the document's first prose paragraph reduced to visible
+     text and cut to 160 characters (`first-paragraph`), or for a node built from attributes its
+     first line (`synthesized`), else nothing (`none`). `context_for` returns this level by default
      (`detail: "summary"`: id, kind, title, path, score, digest, summary; no content);
      `detail: "full"` still returns the content.
    - **L1, the outline:** `outline(id_or_path, allowed)` gives the summary, the size, the digest
      and every ATX heading (level, title, slug, heading path, section size), parsed outside the
-     front-matter and fenced code. Setext headings are not headings.
-   - **L2, one section:** `section(id_or_path, heading, allowed)` gives the section a slug or a
-     full heading path names exactly, with its size and digest. There is no fuzzy match: an
-     unknown or ambiguous name is an error listing the slugs.
+     front-matter, fenced code and raw HTML blocks, lines split on `\n` only. Setext headings
+     are not headings. Slugs and paths are unique and valid only for the outline they came from.
+   - **L2, one section:** `section(id_or_path, heading, allowed, outline_digest, offset, limit)`
+     gives the section a slug or a full heading path names exactly, with its size and digest,
+     paged, and refuses a name from an outline of an earlier content. There is no fuzzy match:
+     an unknown or ambiguous name is an error listing the slugs.
 3. **Every level is scoped like `context_for`.** `allowed` is mandatory and has no wildcard,
    `--scope-from-profile` narrows it to a verified profile's grants, and a document outside the
    scope is refused with exactly the message of a missing one.
-4. **Every level is deterministic and carries digests.** The same checkout gives byte-identical
-   results; `digest` is the sha256 of the whole document or section, so a pack that cites one can
-   be checked against git.
+4. **Every level is deterministic, bounded and carries digests.** The same checkout gives
+   byte-identical results; `digest` is the sha256 of the whole document or section, so a pack
+   that cites one can be checked against git. Parsing is linear and bounded (1 MiB, 100,000
+   lines) and every title, slug, path and derived summary is cleaned of control and invisible
+   format characters before a model sees it.
 5. **A summary is authored, short and reviewed.** `summary:` is accepted on lessons (schema
-   2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control character.
+   2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control or invisible
+   format character.
    It is content, so it is in the record's review digest. `hnx registers summaries` (in
    `make registers`) fails a malformed summary and counts a missing one as a warning; the
    example records carry one.
@@ -66,9 +72,12 @@ filesystem reader has none of this platform's scope rules, profile verification 
   what the author meant. There is no compile step that rewrites a whole corpus after a change,
   and no extra service to run, secure, back up or upgrade. Scoping and digests are the ones the
   platform already proves.
-- **Harder:** someone has to write summaries. Until they do, the first-paragraph fallback
-  serves whatever the page opens with: an ADR's status lines, or a generated page's banner. The
-  lint counts the gap; it does not fail on it yet. A tighter gate needs a later change.
+- **Harder:** someone has to write summaries. Until they do, the first-paragraph fallback serves
+  the first prose it finds (it skips an ADR's status list and a generated page's quoted banner,
+  and prefers an ADR's Context), which is a guess at what the author would have written. The
+  lint counts the gap; it does not fail on it yet. A tighter gate needs a later change. The
+  parser is a deliberate subset of Markdown (no setext headings, raw HTML only as whole blocks),
+  documented with its limits.
 - **What we lose:** semantic search over large unstructured corpora, which is what systems like
   OpenViking are for: finding a passage by meaning in material nobody structured (papers,
   vendor manuals, mail archives). Ranking here stays relation first, then keywords. If a

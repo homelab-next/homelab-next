@@ -146,7 +146,7 @@ def build_server(catalog: Catalog) -> Any:
         paths: list[str] | None = None,
         kinds: list[str] | None = None,
         budget: int = 10,
-        detail: str = "summary",
+        detail: str | None = "summary",
     ) -> str:
         return run(
             "context_for",
@@ -163,8 +163,23 @@ def build_server(catalog: Catalog) -> Any:
         return run("outline", id_or_path=id_or_path, allowed=allowed)
 
     @tool
-    def section(id_or_path: str, heading: str, allowed: list[str]) -> str:
-        return run("section", id_or_path=id_or_path, heading=heading, allowed=allowed)
+    def section(
+        id_or_path: str,
+        heading: str,
+        allowed: list[str],
+        outline_digest: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> str:
+        return run(
+            "section",
+            id_or_path=id_or_path,
+            heading=heading,
+            allowed=allowed,
+            outline_digest=outline_digest,
+            offset=offset,
+            limit=limit,
+        )
 
     @tool
     def lessons_due(today: str | None = None) -> str:

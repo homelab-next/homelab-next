@@ -4,8 +4,9 @@
 A lesson, a runbook or a docs page may carry a front-matter ``summary:`` -- one reviewed line of
 at most 160 characters that ``context_for`` serves instead of the content.  This lint holds
 every summary present to that rule (:func:`homelabnext.context.levels.check_summary`: too long,
-multi-line, a control character, empty) and **fails** on a broken one; a record or page without
-a summary is only **counted, as a warning**, while the practice is new.  The record validation
+multi-line, a control or invisible formatting character, empty) and **fails** on a broken one; a
+record or page without a summary is only **counted, as a warning**, while the practice is new
+(``--missing`` lists them).  The record validation
 (:mod:`.schema`) refuses a malformed summary too, so a broken one cannot reach a render either.
 
 A path is a register directory (one holding ``lessons/`` or ``runbooks/``: their ``*.md``
@@ -40,8 +41,11 @@ class SummaryReport:
     def ok(self) -> bool:
         return not self.problems
 
-    def lines(self) -> list[str]:
+    def lines(self, missing: bool = False) -> list[str]:
+        """One line per problem, ``missing:`` lines when asked, then the counts."""
         out = [f"FAIL {p}" for p in self.problems]
+        if missing:
+            out += [f"missing {p}" for p in self.missing_records + self.missing_pages]
         out.append(
             f"summaries: {self.records} record(s), {len(self.missing_records)} without a summary; "
             f"{self.pages} page(s), {len(self.missing_pages)} without a summary"

@@ -25,6 +25,7 @@ import inspect
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -104,7 +105,9 @@ TOOLS: dict[str, str] = {
     "section": (
         "One section of a Markdown document: the heading named exactly by its slug or full "
         "heading path (from outline), with its subsections, size and digest. No fuzzy match: an "
-        "unknown or ambiguous heading is an error listing the slugs. Scoped like context_for."
+        "unknown or ambiguous heading is an error listing the slugs. Pass the outline's digest "
+        "as outline_digest to refuse a changed document; page with offset/limit (next_offset). "
+        "Scoped like context_for."
     ),
     "terms": (
         "The project's terms and scope (docs/terms.md): what auditing, an audit review, an "
@@ -443,20 +446,22 @@ class Catalog:
         allowed: list[str] | None = None,
         kinds: list[str] | None = None,
         budget: int = 10,
-        detail: str = "summary",
+        detail: str | None = "summary",
     ) -> dict[str, Any]:
         """Ranked hits.  ``detail="summary"`` (the default) gives each hit's level 0 -- id, kind,
         title, path, score, digest and its summary with ``summary_source`` -- and no content: a
         caller opens what it needs with :meth:`outline` and :meth:`section`.  ``"full"`` adds the
         snippet and the content (capped at :data:`MAX_HIT_CONTENT_CHARS`)."""
         from homelabnext.context import MAX_BUDGET, MAX_QUERY_CHARS, ContextError, Query
-        from homelabnext.context.levels import summary_of
+        from homelabnext.context.levels import clean, summary_of
         from homelabnext.graph import seeds_for
 
         req = _items(allowed, "allowed", required=True)
         rel = [relpath(p) for p in _items(paths, "paths")]
         kind_list = _items(kinds, "kinds")
         budget = _int(budget, "budget", 0, MAX_BUDGET)
+        if detail is None:  # an explicit null takes the default
+            detail = "summary"
         if detail not in DETAILS:
             raise CatalogError("detail must be one of: " + ", ".join(DETAILS))
         if not isinstance(task_text, str):
@@ -478,11 +483,11 @@ class Catalog:
             raise CatalogError(str(exc)) from None
         out = []
         for h in hits:
-            summary, source = summary_of(h.content, h.path)
+            summary, source = summary_of(h.content, h.path, h.id)
             item = {
                 "id": h.id,
                 "kind": h.kind,
-                "title": h.title,
+                "title": clean(h.title),
                 "path": h.path,
                 "score": h.score,
                 "digest": h.digest,
@@ -527,8 +532,12 @@ class Catalog:
         from homelabnext.graph import resolve_ids
         from homelabnext.graph.sources import record_aliases
 
-        # a record by uid or by a legacy code (with a deprecation warning), as related takes it
-        (doc_id,) = resolve_ids(self.graph, [id_or_path], record_aliases(self.root))
+        # a record by uid or by a legacy code, as related takes it; the legacy code's deprecation
+        # warning is suppressed here, since a warning only for a code that resolves would say the
+        # record exists before the scope check has run
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            (doc_id,) = resolve_ids(self.graph, [id_or_path], record_aliases(self.root))
         if doc_id not in self.graph.nodes:
             ids = [i for i in self._paths().get(relpath(id_or_path), []) if in_any(i, scope)]
             if len(ids) > 1:  # in-scope ids only: an out-of-scope sibling is never counted
@@ -543,40 +552,65 @@ class Catalog:
 
     def outline(self, id_or_path: str, allowed: list[str] | None = None) -> dict[str, Any]:
         """Level 1 of one document: its summary (level 0) and its heading outline with sizes.
-        A non-Markdown document has no headings and summary_source ``none``."""
-        from homelabnext.context.levels import headings, is_markdown, summary_of
+        A non-Markdown document has no headings.  ``digest`` names this outline: pass it to
+        :meth:`section` as ``outline_digest`` and a later edit is refused, not misread.  A
+        document longer than the parse bounds lists the headings it read (``parse_truncated``,
+        ``parsed_chars``)."""
+        from homelabnext.context.levels import clean, is_markdown, parse, summary_of
 
         h = self._document(id_or_path, allowed)
-        summary, source = summary_of(h.content, h.path)
-        hs = headings(h.content) if is_markdown(h.path) else []
-        return {
+        summary, source = summary_of(h.content, h.path, h.id)
+        out = {
             "id": h.id,
             "path": h.path,
-            "title": h.title,
+            "title": clean(h.title),
             "summary": summary,
             "summary_source": source,
             "chars": len(h.content),
             "digest": h.digest,
-            "headings": [x.as_dict() for x in hs],
+            "headings": [],
         }
+        if is_markdown(h.path):
+            parsed = parse(h.content)
+            out["headings"] = [x.as_dict() for x in parsed.headings]
+            if parsed.truncated:
+                out["parse_truncated"] = True
+                out["parsed_chars"] = parsed.parsed_chars
+        return out
 
     def section(
-        self, id_or_path: str, heading: str, allowed: list[str] | None = None
+        self,
+        id_or_path: str,
+        heading: str,
+        allowed: list[str] | None = None,
+        outline_digest: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> dict[str, Any]:
         """Level 2: the section ``heading`` names exactly (a slug or a full heading path from
         :meth:`outline`), its own heading line through the next heading of the same or a higher
-        level.  ``content`` is capped at :data:`MAX_HIT_CONTENT_CHARS` (``truncated`` then says
-        so; ``chars`` and ``digest`` are always the whole section's).  An unknown or ambiguous
-        heading is refused with the document's slugs, never the text sent."""
+        level.  ``outline_digest`` (the outline's ``digest``) refuses the call when the document
+        has changed since, because a slug is valid only for the outline it came from.  The
+        content is ``offset`` characters in and at most ``limit`` (default and ceiling
+        :data:`MAX_HIT_CONTENT_CHARS`) long; when more follows, ``truncated`` and
+        ``next_offset`` say so.  ``chars`` and ``digest`` are always the whole section's.  An
+        unknown or ambiguous heading is refused with the document's slugs, never the text sent."""
         from homelabnext.context import digest
-        from homelabnext.context.levels import find_section, headings, is_markdown
+        from homelabnext.context.levels import find_section, is_markdown, parse
 
         h = self._document(id_or_path, allowed)
         if not isinstance(heading, str) or not heading or len(heading) > _MAX_ITEM_CHARS:
             raise CatalogError("heading must be a slug or a heading path from outline")
+        if outline_digest is not None and outline_digest != h.digest:
+            raise CatalogError(
+                "the document changed since that outline (outline_digest differs): call "
+                "outline again and use its slugs"
+            )
+        cap = MAX_HIT_CONTENT_CHARS
+        limit = cap if limit is None else _int(limit, "limit", 1, cap)
         if not is_markdown(h.path):
             raise CatalogError("that document is not Markdown; it has no sections")
-        hs = headings(h.content)
+        hs = parse(h.content).headings
         found = find_section(hs, heading)
         if len(found) != 1:
             what = "ambiguous" if found else "unknown"
@@ -590,16 +624,20 @@ class Catalog:
             )
         (sec,) = found
         text = h.content[sec.start : sec.end]
+        offset = _int(offset, "offset", 0, len(text))
+        part = text[offset : offset + limit]
         out = {
             "id": h.id,
             "heading": sec.path,
             "slug": sec.slug,
-            "content": text[:MAX_HIT_CONTENT_CHARS],
+            "content": part,
+            "offset": offset,
             "chars": len(text),
             "digest": digest(text),
         }
-        if len(text) > MAX_HIT_CONTENT_CHARS:
+        if offset + len(part) < len(text):
             out["truncated"] = True
+            out["next_offset"] = offset + len(part)
         return out
 
     def lessons_due(self, today: str | None = None) -> dict[str, Any]:

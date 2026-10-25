@@ -11,10 +11,10 @@ links DIR... [--check]
 review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json]
                      what the lesson review should do (missing reviews, retire, incorporate,
                      supersede, update, keep); warns and exits 0 unless --strict
-summaries PATH... [--json]
+summaries PATH... [--missing] [--json]
                      check every front-matter `summary:` of the records and pages under PATH (one
                      line, <= 160 chars, ADR-0032): a malformed one fails (exit 1), a missing one
-                     is counted as a warning
+                     is counted as a warning (--missing lists them)
 events migrate PATH...
                      move inline reviews/recurrences of a record directory (or a docs/systems
                      directory's reviews) into <record>.events/ files, losslessly
@@ -63,6 +63,7 @@ def main(argv=None) -> int:
     sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
     sm.add_argument("paths", nargs="+")
     sm.add_argument("--json", action="store_true", help="machine-readable output")
+    sm.add_argument("--missing", action="store_true", help="also list what has no summary")
     evp = sub.add_parser("events", help="sidecar events: migrate inline state, add an event")
     esub = evp.add_subparsers(dest="ecmd", required=True)
     em = esub.add_parser("migrate", help="inline reviews/recurrences -> <record>.events/")
@@ -131,7 +132,7 @@ def _summaries(ns) -> int:
     if ns.json:
         print(json.dumps(asdict(rep), indent=2, sort_keys=True))
     else:
-        for line in rep.lines():
+        for line in rep.lines(missing=ns.missing):
             print(f"[registers] {line}")
     return 0 if rep.ok else 1
 

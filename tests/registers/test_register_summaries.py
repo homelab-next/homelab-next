@@ -57,6 +57,10 @@ def test_a_missing_summary_is_a_warning_not_a_failure(src, capsys):
     assert main(["summaries", str(src)]) == 0
     out = capsys.readouterr().out
     assert "1 without a summary" in out and "WARNING" in out and "FAIL" not in out
+    assert "missing" not in out.replace("missing summary", "")  # counts only, by default
+    assert main(["summaries", str(src), "--missing"]) == 0
+    listed = [ln for ln in capsys.readouterr().out.splitlines() if "] missing " in ln]
+    assert len(listed) == 1 and listed[0].endswith(f("LL-001"))
     build_all(src, src.parent / "out")  # optional for the record validation too
 
 
@@ -66,7 +70,8 @@ def test_a_missing_summary_is_a_warning_not_a_failure(src, capsys):
         ("summary: " + "x" * 161, "summary is 161 characters (at most 160)"),
         ("summary: |\n  two\n  lines", "summary must be a single line"),
         ("summary: >\n  folded keeps a newline", "summary must be a single line"),
-        ('summary: "a tab\\there"', "control characters"),
+        ('summary: "a tab\\there"', "control or invisible"),
+        ('summary: "right-to-left \\u202e override"', "control or invisible"),
         ("summary: ''", "non-empty"),
         ("summary: [not, text]", "non-empty"),
     ],
