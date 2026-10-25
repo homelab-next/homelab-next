@@ -31,6 +31,7 @@ WHY = {
     "execution_result.denied-with-a-success-reason": ("calls/0/reason", "should not be valid"),
     "execution_result.replayed-pending-call": ("calls/1", "{'replayed': {'const': True}}"),
     "execution_result.log-line-with-line-separator": ("logs/0", "does not match"),
+    "execution_result.log-line-with-zero-width": ("logs/0", "does not match"),
     "execution_result.duplicate-pending": ("pending", "non-unique"),
     "execution_result.broker-call-without-request-id": ("calls/0", "'request_id' is a required"),
     "execution_result.ok-with-error": ("$", "under {'required': ['error']}"),

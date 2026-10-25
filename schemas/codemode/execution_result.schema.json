@@ -230,9 +230,9 @@
       "maxItems": 100,
       "items": {
         "type": "string",
-        "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]*$",
+        "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff\\ud800-\\udfff]*$",
         "maxLength": 1000,
-        "description": "one line of program output: no line break, control character or bidirectional override"
+        "description": "one line of program output: no line break, control character, zero-width or bidirectional mark, byte-order mark or lone surrogate"
       }
     },
     "limit": {
@@ -259,7 +259,7 @@
         },
         "message": {
           "type": "string",
-          "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]*$",
+          "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff\\ud800-\\udfff]*$",
           "maxLength": 2000,
           "description": "untrusted: the program's own exception text where kind is syntax or runtime"
         }
