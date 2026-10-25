@@ -5,10 +5,11 @@
 #   purpose: Serve the deterministic fake OpenAI-compatible inference API.
 #   owner: conformance
 #   trigger: [compose:lab-in-a-box/inference]
-#   inputs: --host, --port, --model
+#   inputs: --host, --port, --model, --allow-any-host
 #   outputs: the HTTP API; nothing on disk
 #   exit:
 #     "0": stopped cleanly
+#     "2": a host other than loopback without --allow-any-host
 """A fake OpenAI-compatible inference server (stdlib only, deterministic).
 
 Serves ``GET /v1/models``, ``POST /v1/chat/completions`` (optionally streamed),
@@ -36,6 +37,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -44,6 +46,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow fake server binds loopback only
+#: the largest request body the fake reads; a longer (or malformed) Content-Length is refused
+MAX_BODY_BYTES = 4 << 20
 
 
 @dataclass
@@ -281,7 +285,17 @@ class FakeOpenAIServer:
 
             def do_POST(self) -> None:
                 path = self.path.split("?")[0]
-                n = int(self.headers.get("Content-Length") or 0)
+                raw = (self.headers.get("Content-Length") or "0").strip()
+                # str.isdigit() alone accepts "²", which int() refuses
+                if not (raw.isascii() and raw.isdigit()):
+                    self.close_connection = True
+                    self._error(400, "invalid Content-Length", "invalid_request_error")
+                    return
+                n = int(raw)
+                if n > MAX_BODY_BYTES:  # never read it: the connection is closed after the answer
+                    self.close_connection = True
+                    self._error(413, f"request body over {MAX_BODY_BYTES} bytes", "too_large")
+                    return
                 try:
                     req = json.loads(self.rfile.read(n) or b"{}")
                 except ValueError:
@@ -382,13 +396,36 @@ def _usage(prompt: str, completion: str) -> dict[str, int]:
     return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
 
 
+def _loopback(host: str) -> bool:
+    import ipaddress
+
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Run the fake OpenAI-compatible server.")
     ap.add_argument("--host", default=LOOPBACK)
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--model", action="append", default=[])
     ap.add_argument("--latency-ms", type=float, default=0.0)
+    ap.add_argument(
+        "--allow-any-host",
+        action="store_true",
+        help="allow a --host other than loopback (the API has no authentication: a container only)",
+    )
     args = ap.parse_args(argv)
+    if not _loopback(args.host) and not args.allow_any_host:
+        print(
+            f"fake openai server: refusing to listen on {args.host!r}, which is not loopback: the "
+            "fake has no authentication; pass --allow-any-host inside a container only",
+            file=sys.stderr,
+        )
+        return 2
     srv = FakeOpenAIServer(
         models=args.model or None, latency_ms=args.latency_ms, host=args.host, port=args.port
     )

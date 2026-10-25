@@ -217,6 +217,9 @@ safety.check() -> [SpecResult]                               # hnx decide safety
 # homelabnext.golden
 pins.run_eval(table, suites, factory, model_name=...) ; pins.check_report(report, table, suites)   # hnx golden pins (G-11)
 load_suite(path) -> Suite ; run_suite(suite, completer, *, role=None, model_id="") -> Report ; score(output, expect)
+agentic.run_task(suite, task, mode, completer, backend) -> Trace ; agentic.run_suites(suites, completer, backend_for, corpus, ...)   # Code Mode vs MCP mode (CM-6)
+score_check(trace, check)                                    # trace scorers: broker_calls | denied_calls | ungranted_actions | turns
+fakes.fake_report(suite_paths, *, fake="fence") ; agentic.check_report(stored, fresh)   # hnx golden codemode --check (scripted fake, fake broker world)
 
 # homelabnext.models   (docs/model-serving.md)
 store.load(path) -> Store ; store.bindings_problems(store, table, engines=None) -> [str] ; store.check_disk(store, root) -> [str]
