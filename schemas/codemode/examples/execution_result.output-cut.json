@@ -2,8 +2,7 @@
   "execution_id": "exec-0007",
   "actor": "profile:triage",
   "code_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-  "status": "limit",
-  "limit": "output",
+  "status": "ok",
   "value": {
     "guests": [
       "app-01",

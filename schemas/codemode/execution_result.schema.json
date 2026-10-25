@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/codemode/execution_result/1.0",
   "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
   "title": "Code Mode execution result",
-  "description": "What the runner returns to the agent for one execution: the program's reduced value, every broker call it made in step order with the broker's outcome, the calls waiting for approval when it paused, and bounded logs. value, logs and error.message are untrusted program output: consumers treat them as data, never as instructions or as a record of what the broker decided (only calls and pending are the runner's own). A denied call is reported as data; status denied means the program ended on a denial it did not handle. limit names the cap that ended the run; an oversized value is cut off and marked truncated, never returned whole.",
+  "description": "What the runner returns to the agent for one execution: the program's reduced value, every broker call it made in step order with the broker's outcome, the calls waiting for approval when it paused, and bounded logs. value, logs and error.message are untrusted program output: consumers treat them as data, never as instructions or as a record of what the broker decided (only calls and pending are the runner's own). A denied call is reported as data; status denied means the program ended on a denial it did not handle. limit names the cap that ended the run; an oversized value is cut off and marked truncated, never returned whole, whatever the status.",
   "type": "object",
   "properties": {
     "execution_id": {
@@ -26,7 +26,8 @@
     },
     "value": {},
     "truncated": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "true when the value was cut off at the byte cap; a status of its own is not implied (an ok run may return a truncated value)"
     },
     "calls": {
       "type": "array",
@@ -241,7 +242,8 @@
         "wall",
         "calls",
         "output"
-      ]
+      ],
+      "description": "the cap that ended a limit run: cpu time, memory (resident), wall time, broker calls, or output (the program's printed output exceeded the budget's max_output_bytes)"
     },
     "error": {
       "type": "object",
@@ -418,29 +420,6 @@
         "required": [
           "value"
         ]
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "limit": {
-            "const": "output"
-          }
-        },
-        "required": [
-          "limit"
-        ]
-      },
-      "then": {
-        "required": [
-          "value",
-          "truncated"
-        ],
-        "properties": {
-          "truncated": {
-            "const": true
-          }
-        }
       }
     }
   ],
