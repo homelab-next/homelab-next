@@ -366,9 +366,13 @@ def test_journal_records_are_checked_when_read(tmp_path):
 
 
 def test_the_journal_tightens_and_takes_over_what_a_crash_left(tmp_path):
-    (tmp_path / "runner" / "journal").mkdir(parents=True)
-    # traversable by others but not readable: looser than the journal allows
-    os.chmod(tmp_path / "runner" / "journal", 0o711)
+    # a directory someone made under the common umask 022 (0755), looser than the journal allows
+    old = os.umask(0o022)
+    try:
+        (tmp_path / "runner" / "journal").mkdir(parents=True)
+    finally:
+        os.umask(old)
+    assert (tmp_path / "runner" / "journal").stat().st_mode & 0o077, "the setup is not looser"
     j = Journal(tmp_path / "runner")
     assert (j.root.stat().st_mode & 0o777) == 0o700, "an existing directory was not tightened"
     j._dir(AGENT, "exec-0001").mkdir(mode=0o700)  # a crash between mkdir and meta.json
