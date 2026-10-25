@@ -1,7 +1,8 @@
 ---
 title: object-store
 type: capability
-summary: "Buckets of byte objects: put/get/head/delete and ordered, paginated listing."
+summary: 'Buckets of byte objects: put/get/head/delete and ordered, paginated listing.'
+summary_generated: true
 capability: object-store
 protocol: 'conformance.protocols.object_store:ObjectStore'
 generated_by: hnx docs capabilities generate

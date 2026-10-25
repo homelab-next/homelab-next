@@ -1,7 +1,8 @@
 ---
 title: notify
 type: capability
-summary: "Exactly-once delivery of faithful messages; one page per state change, one recovery."
+summary: Exactly-once delivery of faithful messages; one page per state change, one recovery.
+summary_generated: true
 capability: notify
 protocol: 'conformance.protocols.notify:NotifyTarget'
 generated_by: hnx docs capabilities generate

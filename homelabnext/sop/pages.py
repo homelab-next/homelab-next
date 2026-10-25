@@ -195,6 +195,7 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
         "title": s.name,
         "type": "system",
         "summary": system_summary(s),
+        "summary_generated": True,
         "service": s.name,
         "capability": s.capability,
         "impl": s.impl or None,
@@ -337,6 +338,7 @@ def _unfilled(text: str) -> int:
 
 _MACHINE_KEYS = frozenset(_front_blank()) | {
     "summary",
+    "summary_generated",
     "impl",
     "owner",
     "host",

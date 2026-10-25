@@ -2,6 +2,7 @@
 title: lake-query
 type: system
 summary: lake-query provides the lake-query capability (trino), owned by data-team.
+summary_generated: true
 service: lake-query
 capability: lake-query
 impl: trino

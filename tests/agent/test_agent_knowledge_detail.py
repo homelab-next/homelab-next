@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 
 import pytest
 from agent_support import inputs, manifest
@@ -14,7 +15,11 @@ from test_agent_knowledge import RULE, fake_graph, profile_with
 
 from homelabnext.agent import SpecError, assemble_pack, verify_profile
 from homelabnext.agent.digest import sha256_text
-from homelabnext.agent.knowledge import select_knowledge
+from homelabnext.agent.knowledge import explain, select_knowledge
+from homelabnext.context import ContextStore, digest
+from homelabnext.context.repo import documents_from_graph
+from homelabnext.graph import Edge, Graph, Node
+from homelabnext.mcp import Catalog
 
 LESSON = (
     "---\n"
@@ -161,7 +166,8 @@ def test_outline_lists_headings_with_slugs_paths_and_sizes(root):
 
 def test_outline_of_a_non_markdown_node_says_it_has_no_headings(root):
     sel = _sel(root, {**RULE, "detail": "outline"})
-    assert "outline: (no headings: not a Markdown document)" in _text(sel, "check:lake-query/a")
+    # a check is built from attributes: no file, so no headings to list
+    assert "outline: (no headings: built from attributes)" in _text(sel, "check:lake-query/a")
 
 
 def test_outline_of_a_node_with_no_summary_still_says_so(root):
@@ -259,3 +265,181 @@ def test_a_summary_pack_is_byte_identical_for_the_same_inputs(root):
         knowledge=select_knowledge(copy.deepcopy(prof), fake_graph(), root),
     )  # fmt: skip
     assert a[1] == b[1]
+
+
+# ------------------------------------------------------------------ review fixes
+
+
+def _graph_with(*nodes, edges=()):
+    g = fake_graph()
+    allnodes = {**g.nodes, **{n.id: n for n in nodes}}
+    return Graph(allnodes, [*g.edges, *edges])
+
+
+def _doc_node(path, nid=None):
+    return Node(nid or f"doc:{path}", "doc", path, path, {})
+
+
+def _catalog(graph, root):
+    for d in ("homelabnext", "schemas"):  # a Catalog wants a checkout's shape
+        (root / d).mkdir(exist_ok=True)
+    cat = Catalog(root)
+    cat._graph = graph
+    store = ContextStore()
+    store.index(documents_from_graph(graph, root))
+    cat._store = store
+    return cat
+
+
+def _outline_lines(text):
+    rows = []
+    for m in re.finditer(
+        r"^( *)- (#+) (.*?)  slug=(\S+)  path=(.*?)  chars=(\d+)$", text, re.MULTILINE
+    ):
+        rows.append(
+            {
+                "level": len(m[2]),
+                "title": m[3],
+                "slug": m[4],
+                "path": m[5],
+                "chars": int(m[6]),
+            }
+        )
+    return rows
+
+
+def test_the_outline_prints_the_digest_section_accepts_and_round_trips(root):
+    """An agent copies the slug and the digest from the pack into the MCP tools: they must work."""
+    g = fake_graph()
+    sel = select_knowledge(profile_with({**RULE, "detail": "outline"}), g, root)
+    item = _item(sel, "lesson:LL-010")
+    text = item["text"]
+    (bare,) = re.findall(r"^outline_digest: ([0-9a-f]{64})$", text, re.MULTILINE)
+    assert item["digest"] == "sha256:" + bare  # the record keeps its own, prefixed, form
+    cat = _catalog(g, root)
+    out = cat.outline("lesson:LL-010", allowed=["lesson:"])
+    assert out["digest"] == bare
+    pack_summary = re.search(r"^summary: (.*)$", text, re.MULTILINE)[1]
+    assert (pack_summary, item["summary_source"]) == (out["summary"], out["summary_source"])
+    rows = _outline_lines(text)
+    assert rows == [
+        {k: h[k] for k in ("level", "title", "slug", "path", "chars")} for h in out["headings"]
+    ]
+    for row in rows:  # the slug and the path both work, with the pack's digest
+        for name in (row["slug"], row["path"]):
+            sec = cat.section("lesson:LL-010", name, allowed=["lesson:"], outline_digest=bare)
+            assert sec["chars"] == row["chars"]
+    with pytest.raises(Exception, match="document changed"):
+        cat.section("lesson:LL-010", "fix", allowed=["lesson:"], outline_digest=item["digest"])
+
+
+def test_max_chars_comes_only_from_the_rules_at_the_winning_detail(root):
+    narrow_full = {**RULE, "kinds": ["lesson"], "max_chars": 500}
+    roomy_summary = {**RULE, "kinds": ["lesson"], "max_chars": 20000, "detail": "summary"}
+    sel = _sel(root, narrow_full, roomy_summary)
+    i = _item(sel, "lesson:LL-010")
+    assert "detail" not in i and i["max_chars"] == 500  # not widened by the summary rule
+    sel = _sel(root, roomy_summary, narrow_full)  # whichever rule comes first
+    assert _item(sel, "lesson:LL-010")["max_chars"] == 500
+    # equal detail still takes the larger cap; a richer detail replaces the cap, never mixes
+    two = _sel(root, {**roomy_summary, "max_chars": 300}, {**roomy_summary, "max_chars": 900})
+    assert _item(two, "lesson:LL-010")["max_chars"] == 900
+    up = _sel(root, {**roomy_summary, "max_chars": 20000}, {**roomy_summary, "detail": "outline",
+                                                            "max_chars": 700})  # fmt: skip
+    i = _item(up, "lesson:LL-010")
+    assert i["detail"] == "outline" and i["max_chars"] == 700
+
+
+def test_a_shared_path_markdown_node_is_built_from_attributes(root):
+    (root / "docs/shared.md").write_text("---\nsummary: Not mine.\n---\n# S\n\n## One\n")
+    a, b = _doc_node("docs/shared.md", "doc:shared-a"), _doc_node("docs/shared.md", "doc:shared-b")
+    edges = [Edge(n.id, "cap:lake-query", "documents", "fake") for n in (a, b)]
+    g = _graph_with(a, b, edges=edges)
+    sel = select_knowledge(profile_with({**RULE, "kinds": ["doc"], "detail": "outline"}), g, root)
+    for nid in ("doc:shared-a", "doc:shared-b"):
+        i = _item(sel, nid)
+        assert "outline: (no headings: built from attributes)" in i["text"]
+        assert "Not mine" not in i["text"] and i["summary_source"] == "synthesized"
+        assert f"summary: {nid.split(':')[1]}" in i["text"] or "summary: " in i["text"]
+    # the MCP server serves the same view of the same node
+    out = _catalog(g, root).outline("doc:shared-a", allowed=["doc:"])
+    assert out["headings"] == [] and out["summary_source"] == "synthesized"
+
+
+def test_an_authored_but_invalid_summary_falls_back_to_the_first_paragraph(root):
+    (root / "lessons/LL-011.md").write_text(
+        "---\nsummary: " + "long " * 60 + "\n---\n# LL-011\n\nThe real first paragraph.\n"
+    )
+    sel = _sel(root, {**RULE, "kinds": ["lesson"], "detail": "summary"})
+    i = _item(sel, "lesson:LL-011")
+    assert i["summary_source"] == "first-paragraph"
+    assert i["text"].endswith("summary: The real first paragraph.\n")
+
+
+def test_an_outline_is_cut_at_max_chars_with_a_marker_and_costs_no_more(root):
+    many = "---\nsummary: Many headings.\n---\n# Big\n\n" + "".join(
+        f"## Heading number {n}\n\ntext\n\n" for n in range(150)
+    )
+    (root / "docs/lake-query.md").write_text(many)
+    rule = {**RULE, "kinds": ["doc"], "detail": "outline", "max_chars": 800}
+    sel = _sel(root, rule)
+    i = _item(sel, "doc:docs/lake-query.md")
+    assert len(i["text"]) <= 800
+    m = re.search(r"\(outline cut: (\d+) of 151 headings not listed\)", i["text"])
+    assert m and 0 < int(m[1]) < 151
+    listed = len(_outline_lines(i["text"]))
+    assert listed + int(m[1]) == 151 and listed > 0
+    m_ = manifest()
+    m_["budget_chars"] = 20000
+    pack, _ = assemble_pack(m_, inputs(), knowledge=sel)
+    assert not [t for t in pack["truncations"] if t["reason"] == "section-cap"]  # fit already
+    big = _item(_sel(root, {**rule, "max_chars": 20000}), "doc:docs/lake-query.md")
+    assert "outline cut" not in big["text"] and len(_outline_lines(big["text"])) == 151
+
+
+def test_the_pack_reads_files_as_the_context_store_does(root, monkeypatch):
+    """Undecodable bytes are replaced and a file over the store's cap is its attributes: the same
+    text, so the same slugs and digest the MCP server serves."""
+    raw = b"---\nsummary: Caf\xe9 note.\n---\n# T\n\n## S\nx\n"
+    (root / "docs/lake-query.md").write_bytes(raw)
+    g = fake_graph()
+    sel = select_knowledge(profile_with({**RULE, "kinds": ["doc"], "detail": "outline"}), g, root)
+    i = _item(sel, "doc:docs/lake-query.md")
+    store_doc = next(d for d in documents_from_graph(g, root) if d.id == "doc:docs/lake-query.md")
+    assert i["digest"] == "sha256:" + digest(store_doc.content)
+    assert "\ufffd" in store_doc.content and "Caf\ufffd note." in i["text"]
+    out = _catalog(g, root).outline("doc:docs/lake-query.md", allowed=["doc:"])
+    assert _outline_lines(i["text"]) == [
+        {k: h[k] for k in ("level", "title", "slug", "path", "chars")} for h in out["headings"]
+    ]
+    # full still reads strictly, as before: the undecodable file is excluded, not replaced
+    full = _sel(root, {**RULE, "kinds": ["doc"]})
+    assert "doc:docs/lake-query.md" in {e["id"] for e in full.excluded}
+    # over the store's cap: the store indexes the node's attributes, and so does the pack
+    (root / "docs/lake-query.md").write_text("# Big\n\n" + "x" * 500)
+    monkeypatch.setattr("homelabnext.context.repo.MAX_CONTENT_CHARS", 100)
+    sel = select_knowledge(profile_with({**RULE, "kinds": ["doc"], "detail": "outline"}), g, root)
+    i = _item(sel, "doc:docs/lake-query.md")
+    store_doc = next(d for d in documents_from_graph(g, root) if d.id == "doc:docs/lake-query.md")
+    assert "x" * 100 not in store_doc.content
+    assert i["digest"] == "sha256:" + digest(store_doc.content)
+    assert i["summary_source"] == "synthesized"
+    assert "built from attributes" in i["text"]
+
+
+def test_a_full_rule_after_a_leveled_one_carries_the_strictly_read_file(root):
+    sel = _sel(
+        root,
+        {**RULE, "kinds": ["lesson"], "detail": "summary"},
+        {**RULE, "kinds": ["lesson"]},
+    )
+    i = _item(sel, "lesson:LL-010")
+    assert "detail" not in i and i["digest"] == sha256_text(LESSON)
+    assert i["text"].endswith("---\n" + LESSON)
+
+
+def test_explain_shows_each_nodes_detail(root):
+    out = explain(_sel(root, {**RULE, "kinds": ["lesson"], "detail": "outline"}))
+    assert "detail: outline" in out
+    out = explain(_sel(root, {**RULE, "kinds": ["lesson"]}))
+    assert "detail: full" in out

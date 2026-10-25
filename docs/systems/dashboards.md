@@ -2,6 +2,7 @@
 title: dashboards
 type: system
 summary: dashboards provides the dashboards capability (grafana), owned by platform-team.
+summary_generated: true
 service: dashboards
 capability: dashboards
 impl: grafana

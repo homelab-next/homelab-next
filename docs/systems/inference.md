@@ -2,6 +2,7 @@
 title: inference
 type: system
 summary: inference provides the inference capability (vllm), owned by ml-team.
+summary_generated: true
 service: inference
 capability: inference
 impl: vllm

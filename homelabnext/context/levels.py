@@ -4,7 +4,8 @@
 A context document is read in three levels, so a caller pays only for what it opens:
 
 * **L0, the summary.**  The front-matter ``summary:`` an author wrote and a review covered
-  (``summary_source: authored``); without one, a derived line (``first-paragraph``, or
+  (``summary_source: authored``); one a generator derived from source data and marked with
+  ``summary_generated: true`` (``generated``: no person wrote or reviewed it); without one, a derived line (``first-paragraph``, or
   ``synthesized`` for a node whose content the indexer built from its attributes); else nothing
   (``none``).  No model writes a summary: what is served is what git holds.
 * **L1, the outline.**  The ATX headings (``#`` to ``######``) with their level, title, a slug,
@@ -68,6 +69,7 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
+    "GENERATED_KEY",
     "MAX_FRONT_CHARS",
     "MAX_PARSE_CHARS",
     "MAX_PARSE_LINES",
@@ -105,7 +107,10 @@ _RAW_CHARS = 4 * MAX_TITLE_CHARS
 #: a front-matter block longer than this is not parsed (PyYAML is pure Python): no mapping
 MAX_FRONT_CHARS = 64 * 1024
 #: where a served summary came from
-SUMMARY_SOURCES = ("authored", "first-paragraph", "synthesized", "none")
+SUMMARY_SOURCES = ("authored", "generated", "first-paragraph", "synthesized", "none")
+#: the front-matter key a generator sets (to true) on a ``summary:`` it derived from source data:
+#: the summary is then ``generated``, not ``authored`` (written by a person and covered by review)
+GENERATED_KEY = "summary_generated"
 #: Unicode categories no model-facing line may hold: control, format (bidi overrides, zero-width
 #: characters, the byte-order mark), line and paragraph separators, surrogates
 REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
@@ -491,8 +496,8 @@ def is_synthesized(content: str, doc_id: str) -> bool:
 
 
 def summary_of(text: str, path: str, doc_id: str = "") -> tuple[str, str]:
-    """``(summary, summary_source)``: the authored front-matter ``summary`` of a Markdown
-    document; else its first paragraph; for an indexer-built node (``doc_id`` given) its
+    """``(summary, summary_source)``: the front-matter ``summary`` of a Markdown document
+    (``authored``, or ``generated`` when a generator marked it with :data:`GENERATED_KEY`); else its first paragraph; for an indexer-built node (``doc_id`` given) its
     synthesized line; else ``("", "none")``.  An authored summary that breaks
     :func:`check_summary` is not served as authored (the lints report it)."""
     if is_synthesized(text, doc_id):
@@ -503,7 +508,7 @@ def summary_of(text: str, path: str, doc_id: str = "") -> tuple[str, str]:
     front, _ = front_matter(text)
     authored = (front or {}).get("summary")
     if authored is not None and check_summary(authored) is None:
-        return authored, "authored"
+        return authored, ("generated" if front.get(GENERATED_KEY) is True else "authored")
     para = first_paragraph(text)
     return (para, "first-paragraph") if para else ("", "none")
 

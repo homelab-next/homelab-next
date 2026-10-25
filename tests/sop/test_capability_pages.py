@@ -205,7 +205,7 @@ def test_every_page_and_the_index_carry_a_valid_derived_summary(pages):
     for name, text in pages.items():
         fm, _ = front_matter(text)
         assert check_summary(fm["summary"]) is None, name
-        assert summary_of(text, name) == (fm["summary"], "authored")
+        assert summary_of(text, name) == (fm["summary"], "generated")
     for c in CAPABILITIES:
         fm, _ = front_matter(pages[f"{c}.md"])
         assert fm["summary"].endswith(".") and fm["title"] == c
@@ -222,3 +222,19 @@ def test_a_long_purpose_is_cut_to_the_summary_limit(reg):
     s = caps.capability_summary(long)
     assert 0 < len(s) <= MAX_SUMMARY_CHARS
     assert caps.capability_summary(long) == s  # deterministic
+
+
+def test_a_summary_with_noncharacters_still_parses_in_the_front_matter(reg):
+    """U+FFFE and U+FFFF are not valid in a YAML stream: they are escaped, the page keeps its
+    front matter and the summary reads back unchanged."""
+    from dataclasses import replace
+
+    from homelabnext.context.levels import front_matter
+
+    c = next(iter(caps.collect(ROOT, reg)))
+    odd = replace(c, summary="odd ￾ name ￿ here")
+    page = caps.render_page(odd, ROOT)
+    fm, _ = front_matter(page)
+    assert fm is not None and fm["summary"] == caps.capability_summary(odd)
+    assert "￾" in fm["summary"] and fm["summary_generated"] is True
+    assert fm["title"] == c.name  # the rest of the front matter survived

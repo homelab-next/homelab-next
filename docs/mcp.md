@@ -64,7 +64,9 @@ what the task opens, and nothing is stored, summarised or embedded anywhere else
 
 * **The summary** is the front-matter `summary:` an author wrote and a review covered
   (`summary_source: "authored"`; lessons and runbooks, lesson schema 2.1 and runbook 2.2, and
-  any docs page with front-matter). Without one, a Markdown document gets its first prose
+  any docs page with front-matter). The generated capability and system pages carry a summary
+  their generator derived, marked `summary_generated: true`: it is served as `"generated"`
+  (nobody wrote or reviewed it) and `hnx registers summaries` counts those apart. Without one, a Markdown document gets its first prose
   paragraph (`"first-paragraph"`): a block that starts as a quote, a list, a table, HTML or an
   image is skipped; prose before the first `##` heading wins, else the first under `## Context`
   (an ADR's), else the first anywhere; links become their text, wiki-links their label, and

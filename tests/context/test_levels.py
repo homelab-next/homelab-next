@@ -499,3 +499,18 @@ def test_the_memo_is_bounded_by_bytes_as_well_as_entries(monkeypatch):
     parse("## too big to keep\n")
     assert levels._MEMO == {} and levels.memo_bytes() == 0
     levels.clear_memo()
+
+
+def test_a_generator_marked_summary_is_generated_not_authored():
+    from homelabnext.context.levels import GENERATED_KEY, SUMMARY_SOURCES
+
+    assert "generated" in SUMMARY_SOURCES
+    marked = f"---\nsummary: Derived from data.\n{GENERATED_KEY}: true\n---\n# T\n\nProse.\n"
+    assert summary_of(marked, "a.md") == ("Derived from data.", "generated")
+    plain = "---\nsummary: Written by a person.\n---\n# T\n\nProse.\n"
+    assert summary_of(plain, "a.md") == ("Written by a person.", "authored")
+    for bad in ("false", "maybe", '"true"', "1"):  # only a real true marks it
+        text = f"---\nsummary: Words.\n{GENERATED_KEY}: {bad}\n---\n# T\n"
+        assert summary_of(text, "a.md")[1] == "authored", bad
+    broken = f"---\nsummary: {'x' * 200}\n{GENERATED_KEY}: true\n---\n# T\n\nProse.\n"
+    assert summary_of(broken, "a.md") == ("Prose.", "first-paragraph")

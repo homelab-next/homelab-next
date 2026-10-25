@@ -1,7 +1,8 @@
 ---
 title: broker
 type: capability
-summary: "Allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests."
+summary: Allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests.
+summary_generated: true
 capability: broker
 protocol: 'conformance.protocols.broker:Broker'
 generated_by: hnx docs capabilities generate

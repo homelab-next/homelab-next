@@ -287,7 +287,7 @@ def test_every_page_carries_a_valid_derived_summary(reg, tmp_path):
         fm, _ = front_matter(text)
         assert fm["summary"] == system_summary(s)
         assert check_summary(fm["summary"]) is None and s.name in fm["summary"]
-        assert summary_of(text, f"{s.name}.md") == (fm["summary"], "authored")
+        assert summary_of(text, f"{s.name}.md") == (fm["summary"], "generated")
     from homelabnext.registers.summaries import lint_summaries
 
     rep = lint_summaries([tmp_path])

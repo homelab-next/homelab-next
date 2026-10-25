@@ -1,7 +1,8 @@
 ---
 title: orchestration
 type: capability
-summary: "Named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate, and hold capacity only for live work."
+summary: 'Named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate, and hold capacity only for live work.'
+summary_generated: true
 capability: orchestration
 protocol: 'conformance.protocols.orchestration:Orchestrator'
 generated_by: hnx docs capabilities generate

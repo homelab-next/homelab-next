@@ -46,7 +46,7 @@ def test_the_repository_lint_passes_and_only_warns(capsys):
     line = capsys.readouterr().out.strip().splitlines()[-1]
     assert re.fullmatch(
         r"\[registers\] summaries: 8 record\(s\), 0 without a summary; \d+ page\(s\), \d+ without "
-        r"a summary( \(WARNING: a missing summary is not a failure yet\))?",
+        r"a summary, \d+ with a generated one( \(WARNING: a missing summary is not a failure yet\))?",
         line,
     )
 
@@ -120,3 +120,16 @@ def test_the_write_path_keeps_the_summary_in_front_order(src):
     assert head[3] == "title: Certificate expired on the internal reverse proxy"
     assert head[4].startswith("summary: A silent renewal failure")
     assert U["LL-001"] in head[1]
+
+
+def test_generated_summaries_are_counted_apart_from_missing_and_authored(tmp_path):
+    (tmp_path / "gen.md").write_text(
+        "---\nsummary: Derived from data.\nsummary_generated: true\n---\n# G\n"
+    )
+    (tmp_path / "hand.md").write_text("---\nsummary: Written by a person.\n---\n# H\n")
+    (tmp_path / "none.md").write_text("# N\n")
+    (tmp_path / "bad.md").write_text(f"---\nsummary: {'x' * 200}\nsummary_generated: true\n---\n")
+    rep = lint_summaries([tmp_path], tmp_path)
+    assert rep.generated_pages == ["gen.md"]
+    assert rep.missing_pages == ["none.md"] and len(rep.problems) == 1
+    assert "1 with a generated one" in rep.lines()[-1]

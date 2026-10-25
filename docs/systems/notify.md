@@ -2,6 +2,7 @@
 title: notify
 type: system
 summary: notify provides the notify capability (ntfy), owned by platform-team.
+summary_generated: true
 service: notify
 capability: notify
 impl: ntfy

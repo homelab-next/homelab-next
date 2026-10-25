@@ -1,7 +1,8 @@
 ---
 title: fast-classifier
 type: capability
-summary: "Small text classifier: label from the offered set, confidence in [0, 1], deterministic."
+summary: 'Small text classifier: label from the offered set, confidence in [0, 1], deterministic.'
+summary_generated: true
 capability: fast-classifier
 protocol: 'conformance.protocols.classifier:Classifier'
 generated_by: hnx docs capabilities generate

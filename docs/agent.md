@@ -36,7 +36,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.4, additive: `include.detail`),
+All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.3, additive: the review tier `audit` in `include.require_reviews`; 1.4, additive: `include.detail`),
 `agent/report_result` (1.1, additive: `output`),
 `agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
 1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
@@ -403,12 +403,19 @@ include:
   normalised rule, so a profile that does not use `detail` keeps its digest and its packs stay
   byte-identical. `summary` carries level 0 only: the header, then `summary: <text>` (the authored
   front-matter `summary:`, else the first paragraph, else for a node built from attributes the
-  derived line, the same text the MCP `context_for` serves). `outline` adds the heading outline,
+  derived line, the same text the MCP `context_for` serves; `summary_source` is `authored`,
+  `generated` for a page whose generator marked it `summary_generated: true`, `first-paragraph`,
+  `synthesized` or `none`). The file is read as the context store reads it (undecodable bytes
+  replaced; a file over its size cap is the node's attributes), so slugs and digests match what
+  MCP serves. `outline` adds the heading outline,
   one line per heading with its level, title, `slug=`, `path=` and `chars=`, so the agent can open
-  one section with the MCP `section` tool; a node that is not Markdown says it has no headings. A
+  one section with the MCP `section` tool, and an `outline_digest:` line holding the bare digest
+  that tool takes (the header's `content digest:` keeps its `sha256:` prefix); a node that is not
+  Markdown, or is built from attributes, says it has no headings. An outline longer than the
+  rule's `max_chars` stops at the last whole heading that fits and says how many it left out. A
   node with no summary at all keeps its title line, reads `(no summary)` and records
   `summary_source: none`: it never falls back to the full text. A node several rules include is
-  carried at the richest detail any of them asks. Grant filtering, exclusions, ranking and `budget`
+  carried at the richest detail any of them asks, with the `max_chars` of the rules at that detail only. Grant filtering, exclusions, ranking and `budget`
   do not depend on `detail`, and `max_chars` caps what is emitted, so a summary fits where the
   full text would be cut.
 - **Auditable.** The pack's `knowledge` block records the profile and graph digests, the
