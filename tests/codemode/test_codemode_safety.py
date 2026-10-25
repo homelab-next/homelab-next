@@ -568,10 +568,10 @@ def test_the_documented_lane_params_are_what_the_lane_accepts(synthetic):
                 check_({"name": _value(lane, "name"), "content": "text"})
 
 
-def test_an_exec_call_result_is_untyped_and_a_lane_result_is_what_a_write_returns(tmp_path):
+def test_an_exec_result_is_its_declared_schema_and_a_lane_result_is_what_a_write_returns(tmp_path):
     files = render(EXAMPLE / "manifest.yml")
     index = {a["name"]: a for a in json.loads(files["triage/search.json"])["actions"]}
-    assert index["service.status"]["result"] is None
+    assert index["service.status"]["result"]["type"] == "ServiceStatusResult"
     svc = BrokerService.from_manifest(
         EXAMPLE / "manifest.yml", tmp_path / "state", data_root=tmp_path / "d"
     )
@@ -610,3 +610,104 @@ def test_written_files_take_their_mode_from_the_umask(tmp_path, umask, mode):
     for rel in files:
         assert stat.S_IMODE((tmp_path / rel).stat().st_mode) == mode, rel
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+def _with_result(result):
+    manifest = _manifest(
+        [_exec("dns.lookup")],
+        [{"profile": "profile:p", "actions": ["dns.lookup"], "max_tier": "read"}],
+    )
+    doc = _doc("dns.lookup")
+    if result is not None:
+        doc["result_schema"] = result
+    return render_files(build_models(manifest, [doc]))
+
+
+def test_a_declared_result_schema_types_the_result_in_both_languages_and_the_index():
+    result = {
+        "type": "object",
+        "properties": {
+            "addrs": {"type": "array", "items": {"type": "string"}},
+            "ttl": {"type": "integer"},
+        },
+        "required": ["addrs"],
+    }
+    files = _with_result(result)
+    assert "interface DnsLookupResult" in files["p/types.d.ts"]
+    assert "addrs: string[]" in files["p/types.d.ts"]
+    assert "ttl?: number" in files["p/types.d.ts"]
+    assert "): DnsLookupResult;" in files["p/types.d.ts"]
+    assert "class DnsLookupResult(TypedDict" in files["p/stubs.pyi"]
+    assert "-> DnsLookupResult:" in files["p/stubs.pyi"]
+    row = json.loads(files["p/search.json"])["actions"][0]
+    assert row["result"] == {"type": "DnsLookupResult", "schema": result}
+    ast.parse(files["p/stubs.pyi"])
+
+
+def test_a_result_schema_without_properties_is_typed_inline():
+    files = _with_result({"type": "array", "items": {"type": "string"}})
+    assert "): string[];" in files["p/types.d.ts"]
+    assert "-> list[str]:" in files["p/stubs.pyi"]
+
+
+def test_an_absent_result_schema_stays_unknown_and_any():
+    files = _with_result(None)
+    assert "): unknown;" in files["p/types.d.ts"]
+    assert "-> Any:" in files["p/stubs.pyi"]
+    assert json.loads(files["p/search.json"])["actions"][0]["result"] is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"type": "object", "description": "ends */ here"},
+        {"type": "object", "properties": {"a": {"description": 'ends """ here'}}},
+        {"type": "object", "properties": {"a": {"enum": ["x\u202ey"]}}},
+        {"type": "object", "properties": {"a": {"title": "two\nlines"}}},
+        {"type": "object", "properties": {"b\u200bc": {"type": "string"}}},
+    ],
+)
+def test_a_hostile_result_schema_is_refused_by_the_generator(result):
+    with pytest.raises(CodemodeError) as info:
+        _with_result(result)
+    assert any("dns.lookup: result" in p for p in info.value.problems)
+
+
+@pytest.mark.parametrize(
+    "name", ["class", "a-b", "exit-code", "a: string; } declare const pwn: 1; interface Z { b"]
+)
+def test_a_result_property_that_is_not_an_identifier_is_typed_inline(name):
+    files = _with_result(
+        {"type": "object", "properties": {name: {"type": "string"}}, "required": [name]}
+    )
+    ast.parse(files["p/stubs.pyi"])
+    assert "-> dict[str, Any]:" in files["p/stubs.pyi"]
+    assert "DnsLookupResult" not in files["p/types.d.ts"] + files["p/stubs.pyi"]
+    ts = files["p/types.d.ts"]
+    assert (f"{{ {name}: string" if name == "class" else f"{{ {json.dumps(name)}: string") in ts
+    assert "\ninterface " not in ts
+    assert (
+        "\ndeclare const pwn" not in ts
+        and "\nclass " not in files["p/stubs.pyi"].split("namespaces")[0].split("TypedDict")[0]
+    )
+
+
+def test_an_unrenderable_result_schema_degrades_to_untyped_not_a_refusal():
+    result = {
+        "allOf": [{"properties": {"a": {"type": "string"}}}],
+        "type": "object",
+        "required": ["a"],
+    }
+    files = _with_result(result)
+    assert "): unknown;" in files["p/types.d.ts"]
+    assert "-> Any:" in files["p/stubs.pyi"]
+    assert json.loads(files["p/search.json"])["actions"][0]["result"] is None
+
+
+def test_a_deeply_nested_schema_is_reported_not_a_traceback():
+    from homelabnext.broker import validation
+
+    deep: dict = {"type": "string"}
+    for _ in range(5000):
+        deep = {"type": "array", "items": deep}
+    assert validation.schema_problems(deep) == ["nested too deeply"]

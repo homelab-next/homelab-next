@@ -1597,3 +1597,27 @@ def test_a_handler_swapped_for_a_symlink_after_load_is_refused_at_run(tmp_path):
         svc.run(AGENT, rid)
     assert info.value.reason == "handler-path-escape"
     assert svc.audit_documents(reason="handler-path-escape")
+
+
+def test_a_malformed_result_schema_is_refused_with_its_reason(tmp_path):
+    path = _copy_example(tmp_path)
+    doc_path = path.parent / "handlers" / "service-status.handler.json"
+    doc = json.loads(doc_path.read_text())
+    assert validate_manifest(load_yaml(path), path.parent)[1] == []
+    for bad, needle in (
+        ({"type": "nonsense"}, "result_schema"),
+        (["not", "an", "object"], "result_schema"),
+    ):
+        doc["result_schema"] = bad
+        doc_path.write_text(json.dumps(doc))
+        problems = validate_manifest(load_yaml(path), path.parent)[1]
+        assert any(needle in p and "service-status.handler.json" in p for p in problems), problems
+
+
+def test_a_result_schema_is_not_enforced_at_call_time(tmp_path):
+    path = _copy_example(tmp_path)
+    doc_path = path.parent / "handlers" / "service-status.handler.json"
+    doc = json.loads(doc_path.read_text())
+    doc["result_schema"] = {"type": "object", "properties": {"state": {"type": "integer"}}}
+    doc_path.write_text(json.dumps(doc))
+    assert validate_manifest(load_yaml(path), path.parent)[1] == []

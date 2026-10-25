@@ -21,7 +21,7 @@ manifest says `dev_identity: true`.
 | Kind | Declared by | Runs |
 |---|---|---|
 | lane write | `handler: builtin/lane`, `lane: NAME`, tier `write` | the built-in lane writer: one file into the lane |
-| exec | a handler document in `handler_docs` (`schemas/broker/handler` 1.1) | the pinned handler file, digest-checked before every run |
+| exec | a handler document in `handler_docs` (`schemas/broker/handler` 1.2) | the pinned handler file, digest-checked before every run |
 | in-process | `BrokerService.register(command, fn, args)` + `allow(caller, [command])` | a Python function in the embedding program (the capability contract's API) |
 
 Every call goes through `homelabnext.broker.decide` first: the action is listed, the caller has a
@@ -127,6 +127,14 @@ A handler document pins the file and says how to run it:
  "timeout_s": 30, "argv": [], "secrets": ["DEMO_API_TOKEN"], "max_output_bytes": 65536,
  "description": "...", "idempotent": true, "audit": true}
 ```
+
+A handler document (1.2) may also carry `result_schema`: a JSON Schema object describing the
+handler's `output` once decoded as JSON. The broker checks only that it is a valid 2020-12 schema
+when it loads the document (a malformed one refuses the manifest, naming the file); it does **not**
+enforce it at call time, and an output that does not match is returned unchanged. It describes only the success case (exit 0,
+not truncated, stdout valid JSON); text output, truncation and a non-zero exit are the CM-5 runner's
+to define, and the generated type does not cover them yet. Runtime checking
+belongs to the CM-5 runner (`docs/codemode.md`). `hnx codemode gen` types the method's result from it.
 
 The broker validates `params` against `params_schema`, reads the handler once, checks its sha256
 against `handler_digest` (refusing with `handler-digest-mismatch`), and runs exactly those bytes
