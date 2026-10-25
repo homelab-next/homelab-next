@@ -1,5 +1,6 @@
 ---
 summary: One read-only status hub over status sources registered in the registry; views pick from that menu.
+summary_of: outline:sha256:307e554cc253d6af
 ---
 # ADR-0013: One read-only status hub over registered status sources
 

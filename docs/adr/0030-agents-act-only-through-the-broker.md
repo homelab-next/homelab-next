@@ -1,5 +1,6 @@
 ---
 summary: Every agent action goes through the broker; only the broker's own MCP front may hold acting tools, plus per-profile direct exceptions a human reviews.
+summary_of: outline:sha256:587ed88f638e6fbb
 ---
 # ADR-0030: Agents act only through the broker
 

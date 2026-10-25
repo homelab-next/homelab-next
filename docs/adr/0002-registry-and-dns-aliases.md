@@ -1,5 +1,6 @@
 ---
 summary: A service registry plus DNS capability aliases are the only source of addresses; nothing hard-codes a host.
+summary_of: outline:sha256:3f0c77e3a4567c7a
 ---
 # ADR-0002: The service registry and DNS capability aliases are the only source of addresses
 

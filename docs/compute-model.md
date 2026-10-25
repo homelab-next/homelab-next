@@ -1,5 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
+summary_of: outline:sha256:e32910f341976db3
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model

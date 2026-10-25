@@ -1,5 +1,6 @@
 ---
 summary: 'Scripts: what counts as one, the hnx-script header, how triggers are discovered, the checks that keep the catalog true and the reviewed allowlist.'
+summary_of: outline:sha256:d0de77449dc463b3
 ---
 # Scripts: header, catalog and the checks that keep it true
 

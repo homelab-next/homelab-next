@@ -1,5 +1,6 @@
 ---
 summary: Guests name product-neutral defense baselines of controls in six layers; each control binds to a product role in one place.
+summary_of: outline:sha256:45281911bc7f41bd
 ---
 # ADR-0016: Guest baselines and defense layers
 

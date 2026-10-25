@@ -1,5 +1,6 @@
 ---
 summary: 'The LLM gateway where a model role becomes a backend and model id: generated config, the locality rule, lab-in-a-box, conformance and running LiteLLM.'
+summary_of: outline:sha256:57e2025448d5c133
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # LLM gateway

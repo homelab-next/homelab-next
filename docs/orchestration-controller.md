@@ -1,5 +1,6 @@
 ---
 summary: 'The LLM orchestrator measured as the orchestration capability: adapter, holds, result at a pinned commit, live runs, gateway model calls and proposed fields.'
+summary_of: outline:sha256:63fd3a2052758a88
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability

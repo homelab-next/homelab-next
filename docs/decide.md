@@ -1,5 +1,6 @@
 ---
 summary: The decision cascade (floor, small, large, llm, then a human) and the model roles it calls, with the guarantees each rule keeps.
+summary_of: outline:sha256:0e1211da0b293aa8
 ---
 # Decisions and models
 

@@ -1,5 +1,6 @@
 ---
 summary: Each agent job usage is one closed, text-free agent.job.finished event; per-turn records come from the gateway spend-log API.
+summary_of: outline:sha256:81ef3895e136016e
 ---
 # ADR-0025: Record each agent job's usage on the bus and read per-turn records from the gateway
 

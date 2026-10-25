@@ -1,5 +1,6 @@
 ---
 summary: 'The read-only stdio MCP server (hnx mcp serve) over this checkout: its tools, documents served in levels, its security model and the broker''s tool server.'
+summary_of: outline:sha256:563b9ca73a05c094
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # MCP server: the repository as structured answers
@@ -77,8 +78,8 @@ what the task opens, and nothing is stored, summarised or embedded anywhere else
   characters, else at a word with `…`. A node the indexer built from attributes (a capability, a
   service, a check) gets its first line, plus its plain attributes when that line is a bare name
   (`"synthesized"`). Anything else is `""` (`"none"`). A summary is one line of at most 160
-  characters: `hnx registers summaries` fails a malformed one and counts a missing one as a
-  warning (`--missing` lists them; [registers](registers.md), [[registers]]).
+  characters: `hnx registers summaries` fails a malformed or missing one, and an authored page summary
+  whose `summary_of` outline digest is absent or stale ([registers](registers.md), [[registers]]).
 * **Headings** are ATX headings (`#` to `######`) outside the front-matter, fenced code (a
   ```` ``` ```` or `~~~` fence; an unclosed fence runs to the end), HTML comments and raw
   `<pre>`, `<script>`, `<style>` and `<details>` blocks (from the opening tag at a line start to

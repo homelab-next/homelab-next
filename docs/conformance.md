@@ -1,5 +1,6 @@
 ---
 summary: 'The conformance harness: one suite per capability run against any target, how mutants prove a suite can fail, adding a suite, and the X-10 exporter.'
+summary_of: outline:sha256:5819bc2ce0631c58
 ---
 # Conformance harness
 

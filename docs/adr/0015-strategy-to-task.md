@@ -1,5 +1,6 @@
 ---
 summary: A strategy, its objective cascade, measures and requirements are register records measured from what the lab observes.
+summary_of: outline:sha256:acd78af44c1f9d94
 ---
 # ADR-0015: Strategy to task: a strategy, its objectives, measures and requirements as records
 

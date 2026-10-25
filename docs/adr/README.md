@@ -1,5 +1,6 @@
 ---
 summary: 'Index of the architecture decision log: how ADRs are numbered and checked, with a one-line entry per decision.'
+summary_of: outline:sha256:3aed43cc1d6f8123
 ---
 # Architecture decision log
 

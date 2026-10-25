@@ -1,5 +1,6 @@
 ---
 summary: Detections are authored once in Sigma and cited by logical id, not copied per product.
+summary_of: outline:sha256:0b473ec2dc9e7a63
 ---
 # ADR-0006: Detections are authored in Sigma, compiled to the engine, and referenced by logical id
 

@@ -1,4 +1,5 @@
 ---
+# After the first real edit run `python3 -m homelabnext.registers summaries --restamp <this file>`: it adds a `summary_of:` line below `summary:` (this template is skipped by the lint).
 summary: One line, at most 160 characters - what this ADR decides (ADR-0032; the lint fails an ADR without one).
 ---
 # ADR-NNNN: Title in the imperative

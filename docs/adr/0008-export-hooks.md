@@ -1,5 +1,6 @@
 ---
 summary: Every stateful product ships an export hook that a restore drill exercises.
+summary_of: outline:sha256:2fdd5ae7b30885dd
 ---
 # ADR-0008: Every stateful product ships an export hook, exercised by the restore drill
 

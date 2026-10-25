@@ -1,5 +1,6 @@
 ---
 summary: 'The scope guard writer tools call before writing about a target, so throwaway or scratch targets are skipped: policy as data, resolution then decision.'
+summary_of: outline:sha256:a6271f679ee1cd0d
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Scope guard for writer tools

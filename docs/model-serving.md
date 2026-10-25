@@ -1,5 +1,6 @@
 ---
 summary: 'Model serving behind the gateway: one model store, the serving spec, the model_store, vllm_server and open_webui roles, adding a model and GPU notes.'
+summary_of: outline:sha256:f38ae12ce36437d6
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Model serving: one store, few engines
