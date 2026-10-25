@@ -4,7 +4,11 @@ requests bound to the caller that submitted them.
 
 ``submit`` is a call that runs later, so every gate on ``call`` - the allowlist, argument
 validation, redaction - is checked on ``submit`` (and its ``run``) too: a broker that gates only
-the immediate path lets anyone queue anything and then run it as the request's owner."""
+the immediate path lets anyone queue anything and then run it as the request's owner.
+
+Code Mode capability tokens, a feature of the same contract (``codemode-tokens``), have a suite
+of their own, ``broker-tokens`` (:mod:`conformance.suites.broker_tokens`): with them this one
+would pass the 24-check ceiling (``docs/conformance.md``)."""
 
 from __future__ import annotations
 

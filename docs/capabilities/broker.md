@@ -53,6 +53,77 @@ exactly as it was, and the attempt leaves an audit record (outcome `denied`, the
 operation and the request id).  `status` returns the request's state (`pending`, `done`,
 `error`, `cancelled`); `run` executes a pending request once; `cancel` stops a pending one.
 
+Code Mode capability tokens (feature `codemode-tokens`, ADR-0031 decisions 2, 6 and 7;
+`CodemodeTokens`).  `codemode.execute` is a broker action like any other, granted with
+`allow` and admitted by the same checks, whose handler is the *runner*
+(`register_runner(runner, handler)`: `handler` gets the request, `{request_id, actor,
+params}`, where `params` is a `schemas/codemode/execution_request`).  While that handler runs,
+and only then, that runner - no other - may `issue_token(runner, request_id, ...)`: a token
+for that one run of that one execution, whose claims (`schemas/codemode/token`) the broker takes
+from the request itself - its id, its authenticated actor, the execution id and the code digest
+(`code_digest`) - never from the runner.  Execution ids are the actor's own: another
+actor's id neither shows nor blocks.  The broker refuses to issue (`Denied`, each with its
+reason): a run that is not in flight for this runner (`execution-not-in-flight`), an action that
+`decide` would not admit for the actor (`token-action-not-admitted`: the token narrows the
+actor's grants, never widens them), a `codemode.*` action (`token-action-codemode`), more
+calls than the broker's cap or the request's own budget allow (`token-max-calls-exceeded`), a
+lifetime past the run's wall budget plus the broker's margin (`token-ttl-exceeded`), a second
+token for one request (`request-has-token`), a fresh run of an execution id the actor already
+has (`execution-exists`), a resume (`params.resume`) of an execution that is not paused -
+unknown, running, finished (`execution-not-resumable`) - a resume with another program
+(`resume-code-mismatch`) and an actor's token past its live-token cap
+(`too-many-live-tokens`).
+
+**The call cap is per execution**, in total across its runs: a resume's token carries what is
+left of the first run's `max_calls`, never a fresh one.
+
+The sandbox presents the token's `secret` (a high-entropy random value the broker keeps only a
+digest of; it is in no claim, no audit record and no error) to `token_call`, `token_submit`
+and `token_run`.  The actor is the token's, never one the caller names.  In order, the broker
+refuses with `Denied` and an audit record carrying the token and execution ids
+(`TOKEN_REFUSALS`): a secret it does not know (`token-invalid`: one answer for an unknown
+and a wrong secret), a token presented by another sandbox than its own
+(`token-sandbox-mismatch`, when the caller says which), expired (`token-expired`), spent
+(`token-spent`), paused (`token-paused`), an action the token does not list
+(`token-action-not-allowed`) and a call past `max_calls` (`call-cap-reached`).  Every call
+that passes those checks counts one towards the cap - before `decide` runs, so a call `decide`
+then refuses counts too - and the count is the broker's, so a program that resets its client
+gains nothing.  It then takes the ordinary path for the token's actor.  Every answer names the
+request the broker built for it: `{result, request_id, request_digest[, target]}`, and a
+`BrokerError` raised once that request exists carries `request_id` and `request_digest`
+too.
+
+**Pause.** An accepted `token_submit`, and a `token_call` whose action needs approval, store
+the request `pending` and pause the token in one step: the answer is `{state: "pending",
+request_id, request_digest}`, and every later call on the token is refused `token-paused`.
+`spend_token(runner, token_id, outcome)` ends a token with `finished` (the execution never
+resumes) or `paused` (only for a paused token: the execution waits); the end of its
+`codemode.execute` spends a token still live as `finished`.  A resume is another
+`codemode.execute` of the same execution id with `resume: true`, issued a new token only while
+the execution is paused.  Its program then `token_run(token, request_id)`s the request the
+earlier token paused on - only that one (`token-request-not-paused`, not counted), only once
+it may run (`request-not-approved` while it still waits) - and gets `{result, request_id,
+request_digest}`.  Past that binding check every `token_run` counts against the cap, a refused
+one included, so a program polling a request that is not approved yet spends its cap.  The
+refusals before `token_run` runs anything are token refusals: that call built no request, so
+they carry no request id.  A paused request an approver denied is the exception: it was decided,
+so `token_run` refuses it `request-denied` (not a token refusal) with its `request_id` and
+`request_digest`, audited like any decided request.  `token_status(runner, token_id)` is the
+runner's view of its own token, including the state of the request a pause waits on
+(`paused_by_state`: `pending`, `approved`, `expired` (its approval expired unused, so it
+waits for a fresh one), `denied`, `done`, ...).  Another runner's token reads as no token
+(`unknown-token`); an identity that is no runner gets `not-a-codemode-runner`.
+
+A sandbox client that will not send a malformed token (not the prefix, not one printable ASCII
+line of at most 256 bytes) refuses it itself, unsent, as `Denied` with reason `token-invalid`
+- the broker's answer to a secret it does not know (it would answer a line without the prefix
+`request-malformed`, since such a line is read as the body).
+
+Hooks: a target declaring `clock-control` offers `tick(seconds)`, moving the clock that
+`issued_at` and expiry are judged by; one declaring `approval-control` offers
+`decide_request(request_id, verdict)`, an approver's verdict (`denied`) on a pending request.  The feature's checks are the extended suite
+`broker-tokens` (`conformance/suites/broker_tokens.py`), run against the same targets.
+
 ## How to use it
 
 Every operation of the contract. A subject (an adapter's object) implements the Protocols below; methods documented on data types are part of the contract too.
@@ -179,6 +250,166 @@ def audit() -> Sequence[AuditRecord]
 
 **Returns:** `Sequence[AuditRecord]`
 
+### `CodemodeTokens` (Protocol)
+
+Defined in [`conformance.protocols.broker`](../../conformance/protocols/broker.py).
+
+Feature `codemode-tokens`: capability tokens issued, held and enforced by the broker
+(see the module doc).  Every refusal is `Denied` with its `reason`.
+
+#### `CodemodeTokens.register_runner`
+
+```python
+def register_runner(runner: str, handler: Callable[[Mapping[str, Any]], Any]) -> None
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `runner` | `str` | required | positional or keyword |
+| `handler` | `Callable[[Mapping[str, Any]], Any]` | required | positional or keyword |
+
+**Returns:** `None`
+
+`handler` runs `codemode.execute`; `runner` is the identity that issues and
+spends its tokens.
+
+#### `CodemodeTokens.issue_token`
+
+```python
+def issue_token(
+    runner: str,
+    request_id: str,
+    *,
+    sandbox_id: str,
+    actions: Sequence[str],
+    max_calls: int | None = None,
+    ttl_s: int | None = None,
+) -> IssuedToken
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `runner` | `str` | required | positional or keyword |
+| `request_id` | `str` | required | positional or keyword |
+| `sandbox_id` | `str` | required | keyword-only |
+| `actions` | `Sequence[str]` | required | keyword-only |
+| `max_calls` | `int \| None` | `None` | keyword-only |
+| `ttl_s` | `int \| None` | `None` | keyword-only |
+
+**Returns:** `IssuedToken`
+
+A token for the `codemode.execute` request `request_id` while its handler runs;
+absent `max_calls` and `ttl_s` take the request's budget within the broker's caps
+(a resume: what is left of the execution's cap).
+
+#### `CodemodeTokens.token_call`
+
+```python
+def token_call(
+    token: str,
+    command: str,
+    args: Mapping[str, Any],
+    *,
+    target: str | None = None,
+    sandbox_id: str | None = None,
+) -> Mapping[str, Any]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str` | required | positional or keyword |
+| `command` | `str` | required | positional or keyword |
+| `args` | `Mapping[str, Any]` | required | positional or keyword |
+| `target` | `str \| None` | `None` | keyword-only |
+| `sandbox_id` | `str \| None` | `None` | keyword-only |
+
+**Returns:** `Mapping[str, Any]`
+
+`call` as the token's actor, after the token checks; counts towards the cap.
+`{result, request_id, request_digest[, target]}`, or `{state: "pending", ...}` when
+the action needs approval (the token is then paused).
+
+#### `CodemodeTokens.token_submit`
+
+```python
+def token_submit(
+    token: str,
+    command: str,
+    args: Mapping[str, Any],
+    *,
+    target: str | None = None,
+    sandbox_id: str | None = None,
+) -> Mapping[str, Any]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str` | required | positional or keyword |
+| `command` | `str` | required | positional or keyword |
+| `args` | `Mapping[str, Any]` | required | positional or keyword |
+| `target` | `str \| None` | `None` | keyword-only |
+| `sandbox_id` | `str \| None` | `None` | keyword-only |
+
+**Returns:** `Mapping[str, Any]`
+
+`submit` as the token's actor: `{state: "pending", request_id, request_digest}`;
+the token is paused.
+
+#### `CodemodeTokens.token_run`
+
+```python
+def token_run(
+    token: str,
+    request_id: str,
+    *,
+    sandbox_id: str | None = None,
+) -> Mapping[str, Any]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str` | required | positional or keyword |
+| `request_id` | `str` | required | positional or keyword |
+| `sandbox_id` | `str \| None` | `None` | keyword-only |
+
+**Returns:** `Mapping[str, Any]`
+
+Run the request an earlier token of the same execution paused on, once it may run:
+`{result, request_id, request_digest}`; counts towards the cap.
+
+#### `CodemodeTokens.spend_token`
+
+```python
+def spend_token(runner: str, token_id: str, outcome: str = 'finished') -> None
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `runner` | `str` | required | positional or keyword |
+| `token_id` | `str` | required | positional or keyword |
+| `outcome` | `str` | `'finished'` | positional or keyword |
+
+**Returns:** `None`
+
+End the runner's token (`finished` or `paused`): later calls are refused
+`token-spent`.
+
+#### `CodemodeTokens.token_status`
+
+```python
+def token_status(runner: str, token_id: str) -> Mapping[str, Any]
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `runner` | `str` | required | positional or keyword |
+| `token_id` | `str` | required | positional or keyword |
+
+**Returns:** `Mapping[str, Any]`
+
+The runner's view of its token, with `claims`, `state`, `calls`, `outcome` once
+spent, `paused_by` and `paused_by_state` once paused.
+
 ## Data shapes in and out
 
 ### `ArgSpec` (dataclass, frozen)
@@ -204,6 +435,20 @@ Defined in [`conformance.protocols.broker`](../../conformance/protocols/broker.p
 | `operation` | `str` | `'call'` | call \| submit \| status \| run \| cancel |
 | `request_id` | `str \| None` | `None` | set for operations on a deferred request |
 | `reason` | `str` | `''` | why a denial was denied (e.g. not-request-owner); empty otherwise |
+| `token_id` | `str \| None` | `None` | codemode-tokens: the token a call was made with |
+| `execution_id` | `str \| None` | `None` | codemode-tokens: the execution that token belongs to |
+
+### `IssuedToken` (dataclass, frozen)
+
+Defined in [`conformance.protocols.broker`](../../conformance/protocols/broker.py).
+
+A token as the runner receives it: `secret` is what the sandbox presents (the broker
+keeps only its digest), `claims` the token's claims (`schemas/codemode/token`).
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `secret` | `str` | required |  |
+| `claims` | `Mapping[str, Any]` | required |  |
 
 ### `RequestStatus` (dataclass, frozen)
 
@@ -215,6 +460,13 @@ Defined in [`conformance.protocols.broker`](../../conformance/protocols/broker.p
 | `caller` | `str` | required | the owner: the caller that submitted it |
 | `command` | `str` | required |  |
 | `state` | `str` | required | pending \| done \| error \| cancelled |
+
+### Constants
+
+| Name | Value |
+|---|---|
+| `CODEMODE_EXECUTE` | `'codemode.execute'` |
+| `TOKEN_REFUSALS` | `('token-invalid', 'token-sandbox-mismatch', 'token-expired', 'token-spent', 'token-paused', 'token-action-not-allowed', 'call-cap-reached', 'token-request-not-paused', 'request-not-approved')` |
 
 ### Errors
 
@@ -291,7 +543,7 @@ Each is a deliberately broken fake (`hnx conform run broker --target broken:<mut
 
 `FakeBroker` in [`conformance.fakes.command_broker`](../../conformance/fakes/command_broker.py): `hnx conform run broker` (the default target `fake`) runs the suite against it.
 
-> In-memory allowlisted command broker with an audit trail.
+> In-memory allowlisted command broker with an audit trail, and the `codemode-tokens` feature: capability tokens held (as a digest of their secret) and enforced in memory.
 
 ### Real-product adapters
 

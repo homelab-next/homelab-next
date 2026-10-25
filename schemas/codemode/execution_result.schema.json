@@ -69,7 +69,7 @@
                 "approval-required"
               ]
             },
-            "description": "Why a call was denied or failed: the broker's own reason, as its decision and audit records give it (never a success reason), or, for a call refused before it reached the broker, one of token-expired, token-action-not-allowed, call-cap-reached (by the sandbox's broker client), broker-unreachable or rate-limited (the transport refused the peer before reading a request); such a call has no request id or digest."
+            "description": "Why a call was denied or failed: the broker's own reason, as its decision and audit records give it (never a success reason), or, for a call refused before the broker built a request for it, one of the token refusals (token-invalid, token-sandbox-mismatch, token-expired, token-spent, token-paused, token-action-not-allowed, call-cap-reached, token-request-not-paused, request-not-approved: by the sandbox's client or the broker's token check), broker-unreachable or rate-limited (the transport refused the peer before reading a request); such a call has no request id or digest and is never journalled."
           },
           "replayed": {
             "type": "boolean",
@@ -132,9 +132,15 @@
               "properties": {
                 "reason": {
                   "enum": [
+                    "token-invalid",
+                    "token-sandbox-mismatch",
                     "token-expired",
+                    "token-spent",
+                    "token-paused",
                     "token-action-not-allowed",
                     "call-cap-reached",
+                    "token-request-not-paused",
+                    "request-not-approved",
                     "broker-unreachable",
                     "rate-limited"
                   ]

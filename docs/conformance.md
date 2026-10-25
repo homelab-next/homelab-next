@@ -24,12 +24,13 @@ fake, the target-file adapters with their product limits, and the integration st
 
 ```bash
 hnx conform list                      # the seventeen capabilities (also: hnx conform --list)
-hnx conform list --all                # plus the extended suites (backup, dns, edge)
+hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
 hnx conform run object-store --target staging      # a real service, see "Targets" below
-hnx conform mutants                   # prove every suite catches its broken fakes
+hnx conform mutants                   # prove every core suite catches its broken fakes
+hnx conform mutants broker-tokens     # an extended suite's, named ("all" is the core ones)
 hnx conform report --json             # capabilities without a passing test
 python -m pytest -q conformance       # the same checks under pytest, one test per check
 HNX_CONFORM_TARGET=staging python -m pytest conformance/object-store
@@ -76,7 +77,9 @@ def _(store):  # the subject: any implementation of the Protocol
 * **Features.** Optional abilities are a set of names on the subject or in the target file, of
   two kinds.  *Product* features (`streaming`, `embeddings`, `wildcards`, `metadata`) describe
   what the implementation offers: a check with `requires=[...]` is skipped, not failed, when one
-  is absent.  *Test hooks* (`clock-control`, `fault-injection`) only let the suite reach a state:
+  is absent.  *Test hooks* (`clock-control`, `fault-injection`, `approval-control`: an
+  approver's decision on a pending request, `decide_request(request_id, verdict)`) only let the
+  suite reach a state:
   a `must` check that needs an undeclared hook is **`untested`**, which fails the capability like
   a failure, so not declaring a hook is never a way around a MUST.  The product decides first: a
   check that needs both a product feature and a hook skips when the product feature is absent
@@ -180,8 +183,9 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` and `tests/conform/test_conform_mutants.py` assert each mutant is caught
-**by that check**, so a regression in a suite shows up as a named check, not as silence.  The named check
+`hnx conform mutants` (the core suites; name an extended one to run its own) and
+`tests/conform/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
+caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
 `requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
 mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a

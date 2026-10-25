@@ -10,6 +10,9 @@ from homelabnext.conform.registry import load_module
 from homelabnext.conform.runner import mutation_runs
 
 ALL = [*CAPABILITIES, *EXTENDED]
+#: suites whose every mutant fails its named check and no other: a mutant another check also
+#: catches proves less about the check it names (the older suites predate the rule)
+ONLY_ITS_OWN = frozenset({"broker-tokens", "codemode-executor"})
 CASES = [(c, name) for c in ALL for name in load_module(c).MUTANTS]
 
 
@@ -24,6 +27,8 @@ def test_mutant_is_caught_by_the_named_check(cap, name):
     run = run_capability(cap, f"broken:{name}")
     failed = [r.check for r in run.failed_must]
     assert m.fails in failed, f"{cap}/{name}: expected {m.fails!r} to fail, failed {failed}"
+    if cap in ONLY_ITS_OWN:
+        assert failed == [m.fails], f"{cap}/{name}: caught by other checks too: {failed}"
     assert not run.ok
     # the check it names exists and is a MUST (a SHOULD miss would not fail the capability)
     spec = next(s for s in load_module(cap).SUITE.specs if s.id == m.fails)
