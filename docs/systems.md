@@ -1,5 +1,6 @@
 ---
 summary: 'Per-system SOP pages: one operator page per registry service, how a page is built and generated, the check that keeps them current, and reviews.'
+summary_of: outline:sha256:371d8606436dd2e2
 ---
 # Per-system SOP pages
 

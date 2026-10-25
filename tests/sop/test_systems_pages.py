@@ -303,3 +303,13 @@ def test_the_summary_is_machine_owned_and_does_not_disturb_a_review(reg, tmp_pat
     assert generate_pages(reg, tmp_path).updated == ["events.md"]  # regenerated, not kept
     assert "stale" not in p.read_text().split("---")[1]
     assert check_pages(reg, tmp_path).ok()
+
+
+def test_summary_of_is_machine_owned_and_never_changes_a_page_digest():
+    base = "---\ntitle: T\nsummary: Words.\nowner: ops\nnotes: a\n---\n# T\n"
+    stamped = base.replace(
+        "summary: Words.\n", "summary: Words.\nsummary_of: outline:sha256:0123456789abcdef\n"
+    )
+    restamped = stamped.replace("0123456789abcdef", "fedcba9876543210")
+    assert page_digest(stamped) == page_digest(restamped) == page_digest(base)
+    assert page_digest(base.replace("notes: a", "notes: b")) != page_digest(base)  # human key

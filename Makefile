@@ -226,7 +226,7 @@ contracts:
 # generated `## Links` block is current (`hnx registers links <dir>` rewrites them); the lesson
 # review's due list is printed as a warning, never a failure (`... review --strict` fails on it);
 # every front-matter `summary:` of a record or docs page is one line of <= 160 characters
-# (ADR-0032: a broken one fails, a missing one is counted as a warning)
+# (ADR-0032: a broken or missing one fails, as does a stale authored one: summary_of outline digest)
 RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)

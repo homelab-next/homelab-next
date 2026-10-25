@@ -1,5 +1,6 @@
 ---
 summary: 'No context database; agent context stays authored Markdown/YAML in git, served in levels (summary, outline, one section).'
+summary_of: outline:sha256:dcae13acf96324c2
 ---
 # ADR-0032: Agent context is authored Markdown served in levels; no context database
 
@@ -77,8 +78,8 @@ filesystem reader has none of this platform's scope rules, profile verification 
    2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control or invisible
    format character.
    It is content, so it is in the record's review digest. `hnx registers summaries` (in
-   `make registers`) fails a malformed summary and counts a missing one as a warning; the
-   example records carry one.
+   `make registers`) fails a malformed or missing summary, and a stale authored page summary (`summary_of`
+   outline digest, restamped by `--restamp` after a reread); the example records carry one.
 
 ## Consequences
 
@@ -91,7 +92,7 @@ filesystem reader has none of this platform's scope rules, profile verification 
 - **Harder:** someone has to write summaries. Until they do, the first-paragraph fallback serves
   the first prose it finds (it skips an ADR's status list and a generated page's quoted banner,
   and prefers an ADR's Context), which is a guess at what the author would have written. The
-  lint counts the gap; it does not fail on it yet. A tighter gate needs a later change. The
+  lint now fails the gap, and an authored page summary is stamped with its heading outline so it cannot go stale silently. The
   parser is a deliberate subset of Markdown (no setext headings, raw HTML only as whole blocks),
   documented with its limits.
 - **What we lose:** semantic search over large unstructured corpora, which is what systems like

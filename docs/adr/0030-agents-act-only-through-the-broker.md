@@ -1,5 +1,6 @@
 ---
 summary: 'Every agent action goes through the broker; an acting grant is held only as an MCP tool of the broker itself.'
+summary_of: outline:sha256:587ed88f638e6fbb
 ---
 # ADR-0030: Agents act only through the broker
 

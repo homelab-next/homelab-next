@@ -1,5 +1,6 @@
 ---
 summary: 'One shared client library per data seam; a private copy of a client fails CI.'
+summary_of: outline:sha256:a3e774d821dcbdc2
 ---
 # ADR-0003: One shared client library per data seam; private copies are a CI failure
 

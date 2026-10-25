@@ -1,5 +1,6 @@
 ---
 summary: 'The swap kit for replacing a product behind a capability: nine steps, swap record, parity tools, dual-write, registry flip, decommission check and rehearsal.'
+summary_of: outline:sha256:7e897921501b5be6
 ---
 # The swap kit
 

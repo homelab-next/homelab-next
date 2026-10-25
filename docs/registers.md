@@ -1,5 +1,6 @@
 ---
 summary: 'The registers of lessons, runbooks and invariants: uids, one file per record, the record format, links, events, status changes and lessons as backlog.'
+summary_of: outline:sha256:5c3a61233c7a5e2c
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Registers: lessons, runbooks and invariants
@@ -142,8 +143,22 @@ Rules the parser enforces (fatally, all problems at once):
   content ([MCP server](mcp.md), [[mcp]]). Write it for a reader deciding whether to open the
   record; it is content, so it is in the review digest and a review covers it. A malformed one
   fails the validation and `hnx registers summaries` (part of `make registers`); a record or
-  docs page without one is counted as a warning, not a failure yet. A docs page may carry one in
-  its front-matter the same way.
+  docs page **without** one fails the lint too. A docs page carries one in its front-matter the
+  same way.
+* `summary_of:` (docs pages only, machine-owned) is the freshness stamp of an **authored** page
+  summary: `outline:sha256:<first 16 hex of the SHA-256>` of the page's heading outline, one
+  `<level> <cleaned title>` line per heading in order, front matter and body text excluded
+  (`levels.outline_digest`). The lint fails a page whose digest differs from `summary_of`, or that
+  has none, naming the page: reread the summary, then run
+  `python3 -m homelabnext.registers summaries --restamp <path>`. Editing body text without
+  touching a heading never triggers it. `--restamp PATH...` rewrites only that one line (every
+  other byte is kept, the file is re-parsed to prove it) and refuses a page with no authored
+  summary; `--restamp-all PATH...` exists only for a migration. A **generated** summary
+  (`summary_generated: true`) is exempt, because its generator's `--check` keeps it current.
+  **Register records are exempt too**: a record is structured fields, not a heading outline, its
+  summary is part of its review digest, and any change to the record already invalidates its
+  reviews, so a second stamp would add nothing. `summary_of` is a machine key of the system-page
+  review digest (like `summary_generated`), so restamping never invalidates a human review.
 
 Sections: a pitfall has Symptom, Contributing factor, Root cause, Preventive control, Open reason,
 Notes; a practice has Method, Rationale, Retired reason, Notes; a runbook has Purpose and Steps.

@@ -339,6 +339,7 @@ def _unfilled(text: str) -> int:
 _MACHINE_KEYS = frozenset(_front_blank()) | {
     "summary",
     "summary_generated",
+    "summary_of",
     "impl",
     "owner",
     "host",

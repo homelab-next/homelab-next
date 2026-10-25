@@ -1,5 +1,6 @@
 ---
 summary: 'The event seam: the CloudEvents-style envelope, validation, the idempotent publisher, forwarder contract, consumers, seam contract tests, deploy events.'
+summary_of: outline:sha256:faf60060e76d62bb
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Events: envelope, validation and the idempotent publisher

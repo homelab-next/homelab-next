@@ -1,5 +1,6 @@
 ---
 summary: 'Hypervisor, physical network and base storage are a fixed substrate, not a swappable seam; hardware moves are a re-render plus DNS flips.'
+summary_of: outline:sha256:094d6d265d082d7d
 ---
 # ADR-0012: The hypervisor layer is deliberately not a swappable seam
 
