@@ -22,9 +22,11 @@ each granted action answering the task's fixtures for the call's target), the re
 :class:`homelabnext.codemode.runner.Runner` (its search index the generated
 ``examples/codemode/``, so exec results are held to their result schemas) and
 :class:`conformance.fakes.code_executor.ForkingExecutor`, which is **not an isolation boundary**.
-So the backend runs only the programs the scripted model can write (:meth:`ScriptedAgentModel.
-programs`); any other program is refused, never run.  A real model needs a real executor (CM-8)
-and the live backend of CM-9.
+So the world serves only a :class:`ScriptedAgentModel`, and the backend runs only the programs that
+model can write in that task as that task's agent (:meth:`ScriptedAgentModel.programs`); any other
+program is refused, never run.  Suites and scripts are read from the repository's examples only:
+a script's programs are trusted, reviewed code that CI runs.  A real model needs a real executor
+(CM-8) and the live backend of CM-9.
 
 The fakes need a source checkout (``conformance/fakes`` is not in the wheel).
 """
@@ -237,7 +239,9 @@ class ScriptedAgentModel:
         self.mode = mode
         self.calls = 0
         self._turns: dict[tuple[str, str], tuple[str, list[dict]]] = {}
-        self._programs: set[str] = set()
+        #: (profile, suite, task) -> the programs this model may write in that task
+        self._programs: dict[tuple[str, str, str], set[str]] = {}
+        naive = {_naive_program(c.forbidden_tool) for c in corpus.cases if c.forbidden_tool}
         for suite, script in scripted:
             for task in suite.tasks:
                 for m in suite.modes:
@@ -247,20 +251,21 @@ class ScriptedAgentModel:
                         raise ScriptError(f"{suite.name}/{task.id}: two tasks open alike")
                     turns = list(script[task.id][m])
                     self._turns[key] = (m, [dict(t) for t in turns])
+                    mine = self._programs.setdefault(
+                        (str(suite.profile), suite.name, task.id), set(naive)
+                    )
                     for t in turns:
                         if t.get("tool") == EXECUTE:
-                            self._programs.add(str((t.get("arguments") or {}).get("code", "")))
-        for case in corpus.cases:
-            if case.forbidden_tool:
-                self._programs.add(_naive_program(case.forbidden_tool))
+                            mine.add(str((t.get("arguments") or {}).get("code", "")))
 
     @property
     def name(self) -> str:
         return f"fake-scripted-{self.mode}"
 
-    def programs(self) -> frozenset[str]:
-        """Every program this model can write: the only ones the fake backend runs."""
-        return frozenset(self._programs)
+    def programs(self, profile: str, suite: str, task: str) -> frozenset[str]:
+        """The programs this model can write in one task, as one agent (its script's and the
+        naive follows): the only ones the fake backend runs there."""
+        return frozenset(self._programs.get((profile, suite, task), ()))
 
     def __call__(self, messages: list[dict], params: dict) -> str:
         self.calls += 1
@@ -479,8 +484,9 @@ def _reply_outcome(reply: Any) -> tuple[str, str]:
 class FakeBackend:
     """One run's broker world (see the module doc); built by :class:`FakeWorld`."""
 
-    def __init__(self, world: FakeWorld, suite: Suite, mode: str) -> None:
+    def __init__(self, world: FakeWorld, suite: Suite, task: Any, mode: str) -> None:
         self.world = world
+        self.programs = world.model.programs(str(suite.profile), suite.name, task.id)
         self.actor = str(suite.profile)
         self.grant = sorted(suite.grant)
         self.mode = mode
@@ -537,7 +543,7 @@ class FakeBackend:
         return self.index.describe(name)
 
     def execute(self, code: str, language: str) -> tuple[dict[str, Any], list[Attempt]]:
-        if code not in self.world.programs:  # never run a program the fake did not write
+        if code not in self.programs:  # never run a program the fake did not write here
             refused = {
                 "status": "error",
                 "error": {
@@ -583,9 +589,16 @@ class FakeBackend:
 
 class FakeWorld:
     """The backend factory of the fake runs: one forking executor and one scratch directory
-    for every run (removed by :meth:`close`), a fresh broker and runner per run."""
+    for every run (removed by :meth:`close`), a fresh broker and runner per run.  It serves only
+    a :class:`ScriptedAgentModel` (anything else is refused: the executor is not a sandbox), and
+    runs in each task only the programs that model can write there, as that task's agent."""
 
-    def __init__(self, programs: frozenset[str], index_dir: str | Path | None = None) -> None:
+    def __init__(self, model: ScriptedAgentModel, index_dir: str | Path | None = None) -> None:
+        if not isinstance(model, ScriptedAgentModel):
+            raise HarnessError(
+                "the fake world serves the scripted fake model only: its executor is not a "
+                "sandbox, so a real model needs a real executor (CM-8) and a live backend"
+            )
         try:
             from conformance.fakes.code_executor import ForkingExecutor
         except ImportError as exc:  # checkout-only, as the module doc says
@@ -593,7 +606,7 @@ class FakeWorld:
 
         self.index_dir = Path(index_dir) if index_dir is not None else default_index()
         self.index = load_index(self.index_dir)
-        self.programs = frozenset(programs)
+        self.model = model
         self.executor = ForkingExecutor()
         self._root = Path(tempfile.mkdtemp(prefix="hnx-golden-codemode-"))
         self._n = 0
@@ -603,7 +616,7 @@ class FakeWorld:
         return self._root / f"run-{self._n}"
 
     def __call__(self, suite: Suite, task: Any, mode: str) -> FakeBackend:
-        return FakeBackend(self, suite, mode)
+        return FakeBackend(self, suite, task, mode)
 
     def close(self) -> None:
         self.executor.close()
@@ -651,7 +664,15 @@ def fake_report(
     index_dir = Path(index_dir) if index_dir is not None else default_index()
     index = load_index(index_dir)
     loaded = []
+    root = EXAMPLES.resolve()
     for path in suite_paths:
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(root) or not script_of(resolved).resolve().is_relative_to(
+            root
+        ):
+            # a script's programs run in CI on a test executor: they are trusted, reviewed code,
+            # so only the repository's own examples are read
+            raise HarnessError(f"{path}: suites and scripts are read from {EXAMPLES} only")
         suite = load_suite(path)
         if not suite.modes:
             raise HarnessError(f"{path}: not a tool-using suite (no modes)")
@@ -670,7 +691,7 @@ def fake_report(
 
     def one(mode: str) -> dict[str, Any]:
         model = ScriptedAgentModel([(s, sc) for s, sc, _ in loaded], corpus, mode)
-        with FakeWorld(model.programs(), index_dir) as world:
+        with FakeWorld(model, index_dir) as world:
             ctx = served(model) if via_server else contextlib.nullcontext(model)
             with ctx as completer:
                 return run_suites(

@@ -399,8 +399,11 @@ reads everywhere and follows (the canary as its answer, or the forbidden tool tr
 program in Code Mode). The broker world is `FakeWorld`: per run the fake broker with the suite's
 grant answering the fixtures for the call's target, the reference runner (index
 `examples/codemode/`, so results are held to their schemas) and the forking test executor, which
-is not an isolation boundary, so it runs only the programs the scripted model can write and
-refuses any other. The model sits behind the fake inference server and is reached over HTTP
+is not an isolation boundary: so the world serves only the scripted model (any other completer
+is refused), runs in each task only the programs that model can write there as that task's agent
+(not the union across suites), and refuses any other. Suites and scripts are read from
+`homelabnext/golden/examples/codemode/` only (`--suite` elsewhere is refused): a script's
+programs are trusted code that CI runs, reviewed like any other. The model sits behind the fake inference server and is reached over HTTP
 through `ModelClient`. **This proves the harness, the scorers and the report, not that any model
 writes good programs or resists injection.**
 

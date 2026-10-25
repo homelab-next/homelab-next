@@ -109,8 +109,12 @@ def _codemode(args: argparse.Namespace) -> int:
     from .fakes import DEFAULT_SUITES, ScriptError, fake_report
     from .tasks import TaskError
 
-    if args.check and args.fake != "fence":
-        print("golden codemode: --check compares the fence fake's report", file=sys.stderr)
+    if (args.check or args.out) and args.fake != "fence":
+        print(
+            "golden codemode: --check and --out are for the fence fake's report (the committed "
+            "one); run --fake naive alone",
+            file=sys.stderr,
+        )
         return 2
     try:
         rep = fake_report(
