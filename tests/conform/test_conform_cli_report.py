@@ -107,7 +107,7 @@ def test_mutants_command(capsys, monkeypatch):
     # walks two capabilities
     import homelabnext.conform.cli as cli
 
-    monkeypatch.setattr(cli, "CAPABILITIES", ("secrets", "idp"))
+    monkeypatch.setattr(cli, "names", lambda extended=False: ["secrets", "idp"])
     assert main(["mutants"]) == 0
     out = capsys.readouterr().out
     n = len(load_module("secrets").MUTANTS) + len(load_module("idp").MUTANTS)
@@ -115,6 +115,20 @@ def test_mutants_command(capsys, monkeypatch):
     assert main(["mutants", "events", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["mutants"][0]["detected"] is True
+
+
+def test_mutants_all_flag_adds_the_extended_suites(capsys, monkeypatch):
+    # 'all' is the core suites; --all adds the extended ones, as `hnx conform list --all` does
+    import homelabnext.conform.cli as cli
+
+    monkeypatch.setattr(cli, "names", lambda extended=False: ["secrets", *(["dns"] * extended)])
+    assert main(["mutants", "--all", "--json"]) == 0
+    caps = {m["capability"] for m in json.loads(capsys.readouterr().out)["mutants"]}
+    assert caps == {"secrets", "dns"}
+    assert main(["mutants", "--json"]) == 0
+    assert {m["capability"] for m in json.loads(capsys.readouterr().out)["mutants"]} == {"secrets"}
+    assert main(["mutants", "dns", "--all"]) == 2, "--all names every suite; it takes no capability"
+    capsys.readouterr()
 
 
 def test_report_all_green_on_the_fakes(capsys):

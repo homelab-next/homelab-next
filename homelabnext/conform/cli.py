@@ -3,7 +3,7 @@
 
     hnx conform list [--all] [--json]      (also: hnx conform --list)
     hnx conform run CAPABILITY|all [--target NAME] [--check ID ...] [--strict] [--json] [--out FILE]
-    hnx conform mutants [CAPABILITY|all] [--json]
+    hnx conform mutants [CAPABILITY|all] [--all] [--json]   (--all: the extended suites too)
     hnx conform report [--target NAME] [--json] [--out FILE] [--no-mutants]
 
 Exit codes: 0 ok, 1 a check failed, too few checks executed (or a capability has no passing
@@ -108,7 +108,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_mutants(args: argparse.Namespace) -> int:
-    caps = list(CAPABILITIES) if args.capability in (None, "all") else [args.capability]
+    if args.all and args.capability not in (None, "all"):
+        raise ConformError("--all runs every suite; name no capability with it")
+    caps = names(args.all) if args.capability in (None, "all") else [args.capability]
     rows = [m for c in caps for m in mutation_runs(c, args.root)]
     if args.json:
         _print_json(
@@ -167,7 +169,10 @@ def _parser() -> argparse.ArgumentParser:
     rn.add_argument("--out", help="also write the JSON result to this file")
     rn.add_argument("-v", "--verbose", action="store_true", help="show passing checks too")
     mu = sub.add_parser("mutants", help="prove the suites catch their deliberately broken fakes")
-    mu.add_argument("capability", nargs="?", help="a capability name or 'all' (default)")
+    mu.add_argument(
+        "capability", nargs="?", help="a capability name or 'all' (default: the core suites)"
+    )
+    mu.add_argument("--all", action="store_true", help="the extended suites too")
     mu.add_argument("--json", action="store_true")
     rp = sub.add_parser("report", help="capabilities without a passing conformance test")
     rp.add_argument("--target", default="fake")
