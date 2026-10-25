@@ -224,6 +224,11 @@ TOKEN_SWEEP_INTERVAL_S = 60.0
 #: how a runner may end a token (``spend_token``)
 SPEND_OUTCOMES = ("finished", "paused")
 NOT_A_RUNNER = "not-a-codemode-runner"
+#: refused unknown secrets are audited once per transport peer and this many seconds
+INVALID_TOKEN_AUDIT_WINDOW_S = 60.0
+#: token_run of a paused request an approver denied: the request was decided, so the refusal
+#: names it (request_id, request_digest), unlike the token refusals
+REQUEST_DENIED = "request-denied"
 #: the in-process handler kind of ``codemode.execute`` (:meth:`BrokerService.register_runner`)
 RUNNER_HANDLER = "builtin/codemode-runner"
 #: the caller of a token-authenticated call whose secret names no token
@@ -390,7 +395,25 @@ def validate_manifest(
             exec_actions.append(a)
     problems += check_manifest_handlers({"actions": exec_actions}, docs)
     problems += _peer_problems(manifest)
+    problems += _codemode_runner_problems(manifest)
     return docs, problems
+
+
+def _codemode_runner_problems(manifest: Mapping[str, Any]) -> list[str]:
+    """``codemode.execute``'s runner is named exactly: the action's ``runner`` is a listed
+    runner, and with more than one listed the action names one (a run never belongs to whichever
+    runner asks first)."""
+    runners = [r["service"] for r in (manifest.get("codemode") or {}).get("runners", [])]
+    out = []
+    for a in manifest["actions"]:
+        if a.get("runner") and a["action"] != CODEMODE_EXECUTE:
+            out.append(f"{a['action']}: only {CODEMODE_EXECUTE} names a runner")
+        elif a["action"] == CODEMODE_EXECUTE:
+            if a.get("runner") and a["runner"] not in runners:
+                out.append(f"{a['action']}: runner {a['runner']} is not in codemode.runners")
+            elif not a.get("runner") and len(runners) > 1:
+                out.append(f"{a['action']}: codemode.runners lists several; name its runner")
+    return out
 
 
 def _manifest_names(manifest: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -555,6 +578,9 @@ class BrokerService:
             r["service"]: None for r in cm.get("runners", [])
         }
         self._tokens_swept = datetime.min.replace(tzinfo=UTC)
+        #: transport peer -> (window start, refused unknown secrets not audited in it)
+        self._invalid_seen: dict[str, tuple[datetime | None, int]] = {}
+        self._invalid_lock = threading.Lock()
         try:  # a crash's leftovers are settled before anything is issued
             self.sweep_tokens(force=True)
         except OSError:
@@ -1535,12 +1561,16 @@ class BrokerService:
                     )
 
     def _runner_of_execute(self) -> str | None:
-        """The runner ``codemode.execute``'s handler belongs to: the registered one in process,
-        the one manifest runner when there is only one; else None, and the first runner that
-        issues for the run holds it."""
+        """The runner ``codemode.execute``'s handler belongs to, and so the only one its runs
+        issue tokens to: the latest registered in process; else the one the manifest's action
+        names (``runner``); else the manifest's only runner.  None (several, none named, which
+        ``hnx broker validate`` refuses) issues to nobody."""
         registered = [r for r, h in self._runners.items() if h is not None]
         if registered:
             return registered[-1]
+        entry = next((a for a in self.manifest["actions"] if a["action"] == CODEMODE_EXECUTE), {})
+        if entry.get("runner"):
+            return entry["runner"]
         manifest = list(self._runners)
         return manifest[0] if len(manifest) == 1 else None
 
@@ -1634,9 +1664,6 @@ class BrokerService:
         self.sweep_tokens()
         with self.tokens.locked():
             run = self.tokens.inflight(request_id)
-            if run is not None and run.get("runner") is None:
-                run["runner"] = who  # no runner named for it: the first to ask holds it
-                self.tokens.bind_inflight(run)
             if (
                 run is None
                 or run.get("runner") != who  # another runner's run reads as no run at all
@@ -1763,13 +1790,19 @@ class BrokerService:
             return "call-cap-reached"
         return ""
 
-    def _token_refused(self, tok, command, operation, reason, rid=None):
+    def _token_refused(self, tok, command, operation, reason, rid=None, *, request=None):
         claims = tok["claims"] if tok else None
-        ids = (
-            {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
-            if claims
-            else {}
-        )
+        ids = {}
+        if claims:
+            ids = {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
+        if request is not None:
+            ids["request_digest"] = request["digest"]
+        args = None
+        if claims is None:  # a secret that names no token: one record per peer and window
+            coalesced = self._invalid_token_seen()
+            if coalesced is None:
+                raise Denied("the token does not allow this call", reason=reason)
+            args = {"coalesced": coalesced} if coalesced else None
         self._audit(
             claims["actor"] if claims else UNKNOWN_TOKEN_CALLER,
             command,
@@ -1777,9 +1810,26 @@ class BrokerService:
             "denied",
             reason=reason,
             request_id=rid,
+            args=args,
             **ids,
         )
-        raise Denied("the token does not allow this call", reason=reason)
+        err = Denied("the token does not allow this call", reason=reason)
+        raise _carry(err, request) if request is not None else err
+
+    def _invalid_token_seen(self) -> int | None:
+        """Coalesce the records of refused unknown secrets per transport peer: the first of a
+        :data:`INVALID_TOKEN_AUDIT_WINDOW_S` window is audited, carrying how many the previous
+        window suppressed (an int, 0 for none); every other one returns None, and is counted.
+        A garbage-token flood cannot fill the trail."""
+        peer = TRANSPORT_PEER.get() or "in-process"
+        now = self._now()
+        with self._invalid_lock:
+            start, suppressed = self._invalid_seen.get(peer, (None, 0))
+            if start is not None and (now - start).total_seconds() < INVALID_TOKEN_AUDIT_WINDOW_S:
+                self._invalid_seen[peer] = (start, suppressed + 1)
+                return None
+            self._invalid_seen[peer] = (now, 0)
+            return suppressed
 
     def _count(self, tok: dict[str, Any]) -> None:
         tok["calls"] += 1
@@ -1852,11 +1902,13 @@ class BrokerService:
     def token_run(self, token, request_id, *, sandbox_id=None):
         """Run, as the token's actor, the request an earlier token of the same execution paused
         on, once it may run (approved, or needing none): ``{result, request_id,
-        request_digest}``.  It counts against the cap like any call."""
+        request_digest}``.  It counts against the cap like any call.  Everything after the
+        binding check uses the broker's own record of that request id (``paused_by``), never the
+        id the caller sent, which arrived in the same request body as the token's secret."""
         with self.tokens.locked():
             tok = self.tokens.by_secret(token)
             reason = self._token_problem(tok, None, sandbox_id)
-            rec = None
+            rec, rid = None, None
             if not reason:
                 ex = self.tokens.execution(tok["exec_key"]) or {"tokens": []}
                 paused_by = {
@@ -1864,23 +1916,27 @@ class BrokerService:
                     for t in ex["tokens"]
                     if t != tok["claims"]["token_id"]
                 }
-                rec = self.state.get_request(request_id) if request_id in paused_by else None
+                rid = next((r for r in paused_by if r and r == request_id), None)
+                rec = self.state.get_request(rid) if rid is not None else None
                 if rec is None or rec["request"]["actor"] != tok["claims"]["actor"]:
                     reason = "token-request-not-paused"
                 elif rec["request"]["action"] not in tok["claims"]["actions"]:
                     reason = "token-action-not-allowed"
-                elif self._paused_state(request_id, rec) != "approved":
+                elif self._paused_state(rid, rec) == "denied":
+                    reason = REQUEST_DENIED  # decided: named like any decided request
+                elif self._paused_state(rid, rec) != "approved":
                     reason = "request-not-approved"
             if not reason:
                 self._count(tok)
         action = rec["request"]["action"] if rec else ""
         if reason:
-            self._token_refused(tok, action, "run", reason, request_id if rec else None)
+            decided = rec["request"] if reason == REQUEST_DENIED else None
+            self._token_refused(tok, action, "run", reason, rid if rec else None, request=decided)
         req = rec["request"]
-        answer = {"request_id": request_id, "request_digest": req["digest"]}
+        answer = {"request_id": rid, "request_digest": req["digest"]}
         with self._as_token(tok):
             try:
-                return {"result": self.run(req["actor"], request_id), **answer}
+                return {"result": self.run(req["actor"], rid), **answer}
             except BrokerError as exc:
                 raise _carry(exc, req) from None
 

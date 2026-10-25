@@ -34,3 +34,10 @@ def test_the_readme_names_every_token_refusal():
     text = (ROOT / "schemas" / "codemode" / "README.md").read_text(encoding="utf-8")
     missing = [r for r in TOKEN_REFUSALS if f"`{r}`" not in text]
     assert not missing, missing
+
+
+def test_request_denied_names_its_request_and_is_no_token_refusal():
+    assert "request-denied" not in TOKEN_REFUSALS and "request-denied" not in REQUESTLESS
+    from homelabnext.broker.service import REQUEST_DENIED
+
+    assert REQUEST_DENIED == "request-denied"

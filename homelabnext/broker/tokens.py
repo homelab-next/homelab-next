@@ -151,9 +151,6 @@ class TokenStore:
     def inflight(self, request_id: str) -> dict[str, Any] | None:
         return _load(self._path("inflight", request_id)) if is_id(request_id) else None
 
-    def bind_inflight(self, doc: dict[str, Any]) -> None:
-        self._replace(self._path("inflight", doc["request_id"]), doc)
-
     def end(self, request_id: str, now: str, *, outcome: str = "finished") -> list[dict]:
         """The ``codemode.execute`` has returned (or its broker is gone: ``crashed``): forget it,
         spend its token if still live (a token never outlives its run) and settle its

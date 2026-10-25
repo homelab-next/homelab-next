@@ -377,8 +377,10 @@ def test_refusal_order_and_audit(tmp_path):
     for doc in docs:
         assert schema_errors("broker", "audit", doc) == [], doc
     refused = [d for d in docs if d["outcome"] == "denied" and d["operation"] == "call"]
-    assert [d["caller"] for d in refused[:3]] == ["token:unknown"] * 3
-    assert all("token_id" not in d for d in refused[:3]), "an unknown secret named a token"
+    # three unknown secrets in one window: one record (coalesced), naming no token
+    unknown = [d for d in refused if d["caller"] == "token:unknown"]
+    assert len(unknown) == 1 and "token_id" not in unknown[0], unknown
+    assert unknown[0]["reason"] == "token-invalid"
     named = [d for d in docs if d.get("token_id") == tok.claims["token_id"]]
     ops = [(d["operation"], d["outcome"], d["reason"]) for d in named]
     assert ("token-issue", "ok", "") in ops and ("call", "ok", "") in ops
@@ -523,7 +525,7 @@ def test_a_manifest_exec_codemode_execute_is_in_flight_while_its_handler_runs(tm
     (base / "handlers").mkdir(parents=True)
     script = base / "handlers" / "codemode-execute.sh"
     script.write_text('#!/bin/sh\nsleep 1\necho \'{"status": "ok"}\'\n')
-    os.chmod(script, 0o755)
+    os.chmod(script, 0o700)  # an owner-run test handler
     doc = {
         "action": CODEMODE_EXECUTE,
         "handler": "handlers/codemode-execute.sh",
@@ -551,8 +553,19 @@ def test_a_manifest_exec_codemode_execute_is_in_flight_while_its_handler_runs(tm
             }
         ],
         "grants": [{"profile": AGENT, "actions": [CODEMODE_EXECUTE], "max_tier": "write"}],
-        "codemode": {"runners": [{"user": "hnx-codemode", "service": RUNNER}]},
+        "codemode": {
+            "runners": [
+                {"user": "hnx-codemode", "service": RUNNER},
+                {"user": "hnx-codemode-two", "service": "svc:other-runner"},
+            ]
+        },
     }
+    _, problems = validate_manifest(manifest, base)
+    assert problems == [f"{CODEMODE_EXECUTE}: codemode.runners lists several; name its runner"]
+    manifest["actions"][0]["runner"] = "svc:nobody"
+    _, problems = validate_manifest(manifest, base)
+    assert problems == [f"{CODEMODE_EXECUTE}: runner svc:nobody is not in codemode.runners"]
+    manifest["actions"][0]["runner"] = RUNNER
     docs, problems = validate_manifest(manifest, base)
     assert problems == []
     svc = BrokerService(tmp_path / "state", manifest, base_dir=base, handler_docs=docs)
@@ -570,6 +583,9 @@ def test_a_manifest_exec_codemode_execute_is_in_flight_while_its_handler_runs(tm
             threading.Event().wait(0.01)
         assert inflight, "the running codemode.execute is not in flight"
         rid = inflight[0].stem
+        with pytest.raises(Denied) as other:  # the run is RUNNER's: no other runner may ask
+            svc.issue_token("svc:other-runner", rid, sandbox_id="s", actions=["dns.lookup"])
+        assert other.value.reason == "execution-not-in-flight"
         with pytest.raises(Denied) as exc:  # granted nothing but codemode.execute
             svc.issue_token(RUNNER, rid, sandbox_id="sandbox-01", actions=["dns.lookup"])
         assert exc.value.reason == "token-action-not-admitted"
@@ -602,8 +618,9 @@ def _transport_manifest():
     }
 
 
-def _ask(svc, peers, uid, **body):
-    return handle_request(svc, peers, uid, json.dumps(body).encode())
+def _ask(svc, peers, uid, bearer=None, **body):
+    """One socket request; ``bearer`` is a sandbox's token line, never a body field."""
+    return handle_request(svc, peers, uid, json.dumps(body).encode(), bearer=bearer)
 
 
 def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
@@ -624,14 +641,17 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
         )
         assert issued["ok"], issued
         secret = issued["result"]["secret"]
-        call = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"text": "x"}}
+        call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
         bad = {**call, "params": {"nope": 1}}
+        # a body naming a token is refused, whatever it holds (not this run's secret: nothing
+        # secret is ever put in a body)
+        in_body = {"op": "token-call", "token": UNKNOWN, "action": "echo.one", "params": {}}
         return issued["result"], {
-            "pool": _ask(svc, peers, POOL_UID, **call),
-            "bound": _ask(svc, peers, SANDBOX_UID, **call),
-            "invalid": _ask(svc, peers, POOL_UID, **bad),
-            "agent": _ask(svc, peers, AGENT_UID, **call),
-            "runner-call": _ask(svc, peers, RUNNER_UID, **call),
+            "pool": _ask(svc, peers, POOL_UID, bearer=secret, **call),
+            "bound": _ask(svc, peers, SANDBOX_UID, bearer=secret, **call),
+            "invalid": _ask(svc, peers, POOL_UID, bearer=secret, **bad),
+            "agent": _ask(svc, peers, AGENT_UID, bearer=secret, **call),
+            "runner-call": _ask(svc, peers, RUNNER_UID, bearer=secret, **call),
             "sandbox-issue": _ask(
                 svc,
                 peers,
@@ -641,7 +661,9 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
                 sandbox_id="s",
                 actions=["x.y"],
             ),
-            "actor": _ask(svc, peers, POOL_UID, **call, actor="profile:other"),
+            "actor": _ask(svc, peers, POOL_UID, bearer=secret, **call, actor="profile:other"),
+            "in-body": _ask(svc, peers, POOL_UID, **in_body),
+            "no-bearer": _ask(svc, peers, POOL_UID, op="token-call", action="echo.one"),
             "other-runner": _ask(
                 svc,
                 peers,
@@ -654,7 +676,7 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
                 peers,
                 POOL_UID,
                 op="token-submit",
-                token=secret,
+                bearer=secret,
                 action="echo.one",
                 params={"text": "s"},
             ),
@@ -670,6 +692,8 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
     assert got["runner-call"]["error"] == "not-a-sandbox"
     assert got["sandbox-issue"]["error"] == "not-a-codemode-runner"
     assert got["actor"]["error"] == "actor-in-body"
+    assert got["in-body"]["error"] == "request-invalid", "a token in the body was accepted"
+    assert got["no-bearer"]["error"] == "request-invalid", got["no-bearer"]
     assert got["other-runner"]["error"] == "unknown-token", "another runner read the token"
     assert got["submit"]["result"]["state"] == "pending"
     for name, resp in got.items():
@@ -694,16 +718,19 @@ def test_a_dedicated_sandboxs_token_is_its_own(tmp_path):
             sandbox_id="sandbox-01",
             actions=["echo.one"],
         )["result"]["secret"]
-        call = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"text": "x"}}
-        return _ask(svc, peers, POOL_UID, **call), _ask(svc, peers, SANDBOX_UID, **call)
+        call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
+        return (
+            _ask(svc, peers, POOL_UID, bearer=secret, **call),
+            _ask(svc, peers, SANDBOX_UID, bearer=secret, **call),
+        )
 
     from_pool, own = _execute(svc, program)
     assert from_pool["error"] == "token-sandbox-mismatch", "a pool peer used a dedicated token"
     assert own["ok"], own
 
 
-def test_refusal_limits_neither_lock_out_the_runner_nor_a_pool(tmp_path):
-    from homelabnext.broker.server import RefusalLimiter
+def test_one_program_cannot_rate_limit_another_on_a_pool(tmp_path):
+    from homelabnext.broker.server import UNKNOWN_TOKEN_FACTOR, RefusalLimiter
 
     manifest = _transport_manifest()
     manifest["codemode"]["max_calls"] = 200
@@ -712,62 +739,74 @@ def test_refusal_limits_neither_lock_out_the_runner_nor_a_pool(tmp_path):
     peers = PeerMap(svc.manifest)
     limiter = RefusalLimiter(60, 600)
 
-    def ask(uid, **body):
-        return handle_request(svc, peers, uid, json.dumps(body).encode(), limiter=limiter)
+    def ask(uid, bearer=None, **body):
+        raw = json.dumps(body).encode()
+        return handle_request(svc, peers, uid, raw, limiter=limiter, bearer=bearer)
 
-    def noisy(req):
-        secret = ask(
-            RUNNER_UID,
-            op="token-issue",
-            request_id=req["request_id"],
-            sandbox_id="sandbox-pool",
-            actions=["echo.one"],
-        )["result"]["secret"]
-        bad = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"nope": 1}}
-        return [ask(POOL_UID, **bad)["error"] for _ in range(61)]
-
-    errors = _execute(svc, noisy, max_calls=200)
-    assert set(errors) == {"invalid-params"}, "admitted calls' refusals rate-limited the pool"
-    # 61 refused resumes by one actor, asked by the runner, do not lock the runner out
-    for _ in range(61):
-        _reason(
-            lambda: _execute(
-                svc,
-                lambda r: ask(
-                    RUNNER_UID,
-                    op="token-issue",
-                    request_id=r["request_id"],
-                    sandbox_id="s",
-                    actions=["echo.one"],
-                ),
-                eid="exec-nothing",
-                resume=True,
-            )
-        )
-
-    def quiet(req):
+    def issue(req, **kw):
         out = ask(
             RUNNER_UID,
             op="token-issue",
             request_id=req["request_id"],
             sandbox_id="sandbox-pool",
             actions=["echo.one"],
+            **kw,
         )
-        call = {
-            "op": "token-call",
-            "token": out["result"]["secret"],
-            "action": "echo.one",
-            "params": {"text": "x"},
-        }
-        return out, ask(POOL_UID, **call)
+        assert out["ok"], out
+        return out["result"]["secret"]
 
-    issued, call = _execute(svc, quiet, actor="profile:other", eid="exec-quiet")
-    assert issued["ok"], issued
-    assert call["ok"], f"another program on the same pool uid was locked out: {call}"
-    # an unknown token is a pre-admission refusal: it does count
+    call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
+
+    def noisy(req):
+        bearer = issue(req, max_calls=1)
+        first = ask(POOL_UID, bearer=bearer, **call)["ok"]
+        own_cap = [ask(POOL_UID, bearer=bearer, **call)["error"] for _ in range(61)]
+        garbage = [
+            ask(POOL_UID, bearer=f"hnxcmt_garbage{i:036d}", **call)["error"] for i in range(61)
+        ]
+        return first, own_cap, garbage
+
+    first, own_cap, garbage = _execute(svc, noisy, max_calls=200)
+    assert first and own_cap[:60] == ["call-cap-reached"] * 60, own_cap[:3]
+    assert own_cap[60] == "rate-limited", "a program past its limit is limited, itself"
+    assert set(garbage) == {"token-invalid"}, "61 garbage tokens hit the normal limit"
+
+    def admitted_noise(req):
+        bearer = issue(req)
+        bad = {**call, "params": {"nope": 1}}
+        return [ask(POOL_UID, bearer=bearer, **bad)["error"] for _ in range(61)]
+
+    errors = _execute(svc, admitted_noise, actor="profile:other", eid="exec-noise", max_calls=200)
+    assert set(errors) == {"invalid-params"}, "refusals after admission rate-limited the pool"
+    # 61 refused resumes by one actor, asked by the runner, do not lock the runner out
     for _ in range(61):
-        ask(POOL_UID, op="token-call", token=UNKNOWN, action="echo.one")
-    assert ask(POOL_UID, op="token-call", token="x", action="echo.one")["error"] == "rate-limited"
+        refused = _execute(
+            svc,
+            lambda r: ask(
+                RUNNER_UID,
+                op="token-issue",
+                request_id=r["request_id"],
+                sandbox_id="sandbox-pool",
+                actions=["echo.one"],
+            ),
+            eid="exec-nothing",
+            resume=True,
+        )
+        assert refused["error"] == "execution-not-resumable", refused
+
+    def quiet(req):
+        return ask(POOL_UID, bearer=issue(req), **call)
+
+    got = _execute(svc, quiet, actor="profile:other", eid="exec-quiet")
+    assert got["ok"], f"another program on the same pool uid was locked out: {got}"
+    # garbage past the uid's ceiling is limited, and a valid token still is not
+    for i in range(60 * UNKNOWN_TOKEN_FACTOR):
+        ask(POOL_UID, bearer=f"hnxcmt_flood{i:038d}", **call)
+    assert ask(POOL_UID, bearer=UNKNOWN, **call)["error"] == "rate-limited"
+    got = _execute(svc, quiet, actor="profile:other", eid="exec-after")
+    assert got["ok"], f"a garbage flood rate-limited a valid token: {got}"
+    invalid = [d for d in svc.state.audit_records() if d.get("reason") == "token-invalid"]
+    assert len(invalid) <= 2, f"refused unknown secrets were not coalesced: {len(invalid)} records"
 
 
 def test_a_peer_is_listed_once_across_the_four_roles(tmp_path):
@@ -902,3 +941,80 @@ def test_the_store_lock_nests_and_still_excludes_other_threads(tmp_path):
     assert done.wait(10), "a nested entry deadlocked on its own lock"
     assert order == ["inner", "outer", "other"], order
     assert store._fd is None and store._depth == 0
+
+
+def test_a_denied_paused_request_is_refused_by_name(tmp_path):
+    svc = _svc(tmp_path)
+
+    def program(req):
+        tok = _issue(svc, req, ["service.restart"])
+        return svc.token_call(tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue")
+
+    ans = _execute(svc, program)
+    svc.deny(ans["request_id"], "sso:operator-one")
+
+    def resumed(req):
+        tok = _issue(svc, req, ["service.restart"])
+        with pytest.raises(Denied) as exc:
+            svc.token_run(tok.secret, ans["request_id"])
+        return exc.value
+
+    exc = _execute(svc, resumed, resume=True)
+    assert exc.reason == "request-denied"
+    assert (exc.request_id, exc.request_digest) == (ans["request_id"], ans["request_digest"])
+    rec = [d for d in svc.state.audit_records() if d.get("reason") == "request-denied"]
+    assert len(rec) == 1 and rec[0]["request_id"] == ans["request_id"]
+    assert rec[0]["request_digest"] == ans["request_digest"]
+
+
+def test_issue_keeps_the_secret_out_of_everything_but_the_answer(tmp_path, caplog):
+    import logging
+
+    svc = _svc(tmp_path, _transport_manifest())
+    peers = PeerMap(svc.manifest)
+    caplog.set_level(logging.DEBUG)
+
+    def program(req):
+        issued = _ask(
+            svc,
+            peers,
+            RUNNER_UID,
+            op="token-issue",
+            request_id=req["request_id"],
+            sandbox_id="sandbox-pool",
+            actions=["echo.one"],
+        )
+        bearer = issued["result"]["secret"]
+        refusals = [
+            _ask(svc, peers, POOL_UID, bearer=bearer, op="token-call", action="nope.no"),
+            _ask(svc, peers, POOL_UID, bearer=bearer, op="nope"),
+            _ask(svc, peers, RUNNER_UID, op="token-status", token_id="tok-none"),
+        ]
+        return issued["result"], refusals
+
+    result, refusals = _execute(svc, program)
+    bearer = result["secret"]
+    assert set(result) == {"secret", "claims"} and bearer not in json.dumps(result["claims"])
+    assert all(bearer not in json.dumps(r) for r in refusals)
+    assert all(bearer not in json.dumps(d) for d in svc.state.audit_records())
+    assert bearer not in caplog.text, "the secret reached a log line"
+
+
+def test_the_bearer_line_is_read_apart_from_the_body():
+    import socket
+
+    from homelabnext.broker.server import _read_request
+
+    def read(data: bytes, close: bool = True):
+        a, b = socket.socketpair()
+        with a, b:
+            a.sendall(data)
+            if close:
+                a.shutdown(socket.SHUT_WR)
+            return _read_request(b, 1 << 20, 2.0)
+
+    body = b'{"op": "token-call"}'
+    assert read(UNKNOWN.encode() + b"\n" + body + b"\n", close=False) == (body, "", UNKNOWN)
+    assert read(body + b"\n", close=False) == (body, "", None)
+    assert read(body) == (body, "", None)
+    assert read(b"hnxcmt_" + b"x" * 300 + b"\n" + body)[1] == "request-too-large"

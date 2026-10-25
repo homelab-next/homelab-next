@@ -29,8 +29,11 @@ broker's token check (`TOKEN_REFUSALS` of `conformance/protocols/broker.py`: `to
 `token-sandbox-mismatch`, `token-expired`, `token-spent`, `token-paused`,
 `token-action-not-allowed`, `call-cap-reached`, `token-request-not-paused`,
 `request-not-approved`), `broker-unreachable` or `rate-limited` (the transport refused the peer
-before reading a request). Such a call has no request id or digest and is never journalled, so a
-resume calls again with its new token; every other call has both, from the broker's answer.
+before reading a request). `token_run`'s refusals before it runs anything are token refusals too:
+that call built no request. Such a call has no request id or digest and is never journalled, so a
+resume calls again with its new token; every other call has both, from the broker's answer,
+`request-denied` included (`token_run` of a paused request its approver denied: the request was
+decided, so the refusal names it).
 
 **Journal and tokens.** The journal is append-only and the latest record for a step counts: a
 pending record is followed by the settled one once the approved request runs. Request digests are

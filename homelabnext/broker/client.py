@@ -52,10 +52,16 @@ class BrokerClient:
         self.socket_path = os.fspath(socket_path)
         self.timeout_s = timeout_s
 
-    def request(self, op: str, **fields: Any) -> Any:
-        """Send ``{"v": 1, "op": op, **fields}`` (None fields dropped); the result or raise."""
+    def request(self, op: str, *, bearer: str | None = None, **fields: Any) -> Any:
+        """Send ``{"v": 1, "op": op, **fields}`` (None fields dropped); the result or raise.
+        ``bearer`` (a sandbox's Code Mode token) goes as its own line ahead of the body, never
+        inside it."""
         body = {"v": 1, "op": op, **{k: v for k, v in fields.items() if v is not None}}
         data = json.dumps(body, sort_keys=True).encode("utf-8") + b"\n"
+        if bearer is not None:
+            if "\n" in bearer or not bearer.startswith("hnxcmt_"):
+                raise BrokerError("a bearer is one line, a Code Mode token")
+            data = bearer.encode("ascii") + b"\n" + data
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(self.timeout_s)
             try:
@@ -192,8 +198,8 @@ class BrokerClient:
         """A call made with a token (sandbox only), as the token's actor: ``{result, request_id,
         request_digest}``, or ``{state: pending, ...}`` when it needs approval (the token is
         paused)."""
-        fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
-        return self.request("token-call", **fields)
+        fields = {"action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-call", bearer=token, **fields)
 
     def token_submit(
         self,
@@ -204,10 +210,10 @@ class BrokerClient:
         target: str | None = None,
     ) -> dict[str, Any]:
         """``{state: pending, request_id, request_digest}``: the token is paused from here on."""
-        fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
-        return self.request("token-submit", **fields)
+        fields = {"action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-submit", bearer=token, **fields)
 
     def token_run(self, token: str, request_id: str) -> dict[str, Any]:
         """Run the request an earlier token of the execution paused on, once approved
         (sandbox only): ``{result, request_id, request_digest}``."""
-        return self.request("token-run", token=token, request_id=request_id)
+        return self.request("token-run", bearer=token, request_id=request_id)

@@ -275,8 +275,10 @@ params must be an execution request (`schemas/codemode/execution_request`, refus
 `invalid-params` otherwise), and its handler is the runner: a manifest exec action whose handler
 is the runner's client, or in process `BrokerService.register_runner(runner, handler)`. While
 that handler runs, and only then, the request is *in flight* (`<state>/codemode/inflight/`),
-bound to the runner it belongs to (the registered one; the only manifest runner; with several,
-the first that asks for it), and that runner may ask for one token for it:
+bound to the runner it belongs to (the registered one; else the one the manifest's
+`codemode.execute` action names in `runner:`, which `hnx broker validate` requires when
+`codemode.runners` lists several; else the only one), and that runner, no other, may ask for one
+token for it:
 `issue_token(runner, request_id, sandbox_id=, actions=, max_calls=, ttl_s=)`, over the socket
 `token-issue`. A runner is a peer of its own (`codemode.runners`), not an agent's caller and not
 the handler process: the runner is a long-lived service with a warm sandbox pool (decision 5) that
@@ -314,9 +316,12 @@ URL-safe characters); the broker keeps only its sha256, beside the claims, the r
 left of the first run's `max_calls`, never a fresh one, so pausing and resuming cannot reset it.
 
 **Enforcement.** The sandbox presents the secret with every call (`token_call`, `token_submit`,
-`token_run`; over the socket `token-call`, `token-submit`, `token-run`). The actor is the
-token's: the request names none (`actor-in-body`), and the sandbox's peer has no profile of its
-own. In order, a call is refused `Denied` and audited (with `token_id` and `execution_id`) for:
+`token_run`; over the socket `token-call`, `token-submit`, `token-run`). On the socket the
+secret is a **bearer line** of its own, the token alone on the first line and the JSON body on
+the next; it is never a body field (`token` in the body is refused `request-invalid`), so nothing
+the broker parses out of a body, audits or names in a log line ever held it, and the issue
+answer's `claims` are a fresh copy beside it. The actor is the token's: the request names none
+(`actor-in-body`), and the sandbox's peer has no profile of its own. In order, a call is refused `Denied` and audited (with `token_id` and `execution_id`) for:
 
 1. `token-invalid`: no token has that secret. An unknown and a wrong secret get the same answer,
    and the record names no token (its caller is `UNKNOWN_TOKEN_CALLER` of
@@ -330,10 +335,13 @@ own. In order, a call is refused `Denied` and audited (with `token_id` and `exec
 4. `token-action-not-allowed`: an action the token does not list (a `codemode.*` one never is);
 5. `call-cap-reached`: the token's `max_calls` already made;
 6. for `token_run` only: `token-request-not-paused` (the request is not one an earlier token of
-   this execution paused on) and `request-not-approved` (it may not run yet).
+   this execution paused on) and `request-not-approved` (it still waits for its approval).
 
-These reasons are `TOKEN_REFUSALS` of `conformance/protocols/broker.py`; such a refusal has no
-request id (`schemas/codemode` keeps them out of the journal).
+These reasons are `TOKEN_REFUSALS` of `conformance/protocols/broker.py`: refusals before the call
+runs anything, `token_run`'s included, so that call built no request and the refusal has no
+request id (`schemas/codemode` keeps them out of the journal). A paused request an approver denied
+is refused `request-denied` instead: it was decided, so the refusal is audited and carries its
+`request_id` and `request_digest`, like any decided request, and is not a token refusal.
 
 **What counts.** Every call that passes those checks takes one call of the cap, in one step with
 the check, under the token store's lock (`flock` across processes, a re-entrant lock and one
@@ -374,9 +382,23 @@ live index, and the tokens of an execution that ended (finished or crashed) more
 
 **Refusal limits.** The runner is exempt from the per-peer refusal limit, like an approval relay:
 it acts for every agent, and one program's refused resumes must not lock out every other's. A
-sandbox's refusals count only before its token is admitted (an unknown secret above all); a
-refusal after admission is bounded by the token's cap and is one program's business on a pool uid
-shared by others.
+sandbox's refusals count only before its token is admitted; a refusal after admission is bounded
+by the token's cap. Those that count are keyed by the sandbox's uid **and the presented token**
+(its digest), so on a pool uid shared by many programs one program's refusals (its own cap, its own
+paused token) limit only itself. A request that presents no known token (garbage, a wrong secret, a
+malformed request) counts against the uid's own ceiling instead, ten times the limit
+(`UNKNOWN_TOKEN_FACTOR`), and never against a valid token's key, so one program's garbage cannot
+rate-limit another's valid token; the records of refused unknown secrets are coalesced to one per
+peer a minute, the next one carrying how many were not written (`args.coalesced`).
+
+**Throughput: one lock for every token call (known limit).** Every token call holds the token
+store's `flock` for its whole decision: the token checks and the count, `decide()`, the audit
+records, a pause's stored request, each with its fsync. So all Code Mode calls of one broker host
+are serialised, whichever execution they belong to; with a few programs and calls in the tens of
+milliseconds that is not felt, and the handler itself runs outside the lock. The shape of the fix,
+for later: a lock per execution (or per token) for a token's state, count and pause, which is all
+a call changes, and the store-wide lock only for what spans executions (issue, with its live-token
+cap per actor, and the sweep).
 
 **Peers** (manifest 1.7, listed once across `callers`, `approval_relays` and these):
 

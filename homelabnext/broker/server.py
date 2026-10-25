@@ -17,7 +17,10 @@ uid through the manifest (``schemas/broker/manifest`` 1.7):
   sandbox, and only its tokens are accepted from it; a peer without one is a pool, and a token
   bound to a dedicated sandbox is refused from it (both ``token-sandbox-mismatch``).  A refusal
   after a token was admitted is not counted against the peer's refusal limit (the token's cap
-  bounds it), and the runner is exempt from the limit, like a relay.
+  bounds it); one before is counted per presented token, so a program on a shared pool uid limits
+  only itself, and a request with no known token counts against the uid's ceiling,
+  :data:`UNKNOWN_TOKEN_FACTOR` times the limit.  The runner is exempt from the limit, like a
+  relay.
 
 A peer in neither list is refused (``unknown-caller``) before its request is read, and audited;
 the server answers at once and closes without waiting for, or parsing, anything it sent.
@@ -47,11 +50,16 @@ op                        peer    fields
                                   ``ttl_s``: ``{secret, claims}``
 ``token-spend``           runner  ``token_id``, ``outcome`` (``finished`` | ``paused``)
 ``token-status``          runner  ``token_id``
-``token-call`` /          sandbox ``token``, ``action``, ``params``, ``target``: ``{result |
+``token-call`` /          sandbox ``action``, ``params``, ``target``: ``{result |
 ``token-submit``                  state: pending, request_id, request_digest, target?}``
-``token-run``             sandbox ``token``, ``request_id`` (a request an earlier token of the
+``token-run``             sandbox ``request_id`` (a request an earlier token of the
                                   execution paused on): ``{result, request_id, request_digest}``
 ========================  ======  ===========================================================
+
+A sandbox's request carries its token as a **bearer line**: the token (``hnxcmt_...``) alone on
+the first line, the JSON body on the next.  The token is never a body field (``token`` is refused
+``request-invalid`` like any field an operation does not take), so nothing the server parses,
+audits or names in a log line ever held it.
 
 The body never names the actor: a top-level ``actor``, ``caller`` (outside ``audit``), ``as``,
 ``who``, ``profile``, ``identity``, ``uid`` or ``user`` is refused (``actor-in-body``), and so is
@@ -101,7 +109,7 @@ import stat
 import struct
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -139,6 +147,11 @@ MAX_AUDIT_TAIL = 500
 DEFAULT_REFUSAL_LIMIT = 60
 DEFAULT_REFUSAL_WINDOW_S = 60.0
 RATE_LIMITED = "rate-limited"
+#: how much higher a sandbox uid's ceiling for requests with no known token is than the limit
+UNKNOWN_TOKEN_FACTOR = 10
+#: a request whose first line starts so is a sandbox's: that line is its token (the bearer line)
+BEARER_PREFIX = b"hnxcmt_"
+MAX_BEARER_BYTES = 256
 #: failures of the broker itself (its trail, its secret store, its host), never counted as the
 #: peer's refusals: an outage of any of them must not rate-limit a healthy agent
 NOT_REFUSALS = frozenset(
@@ -179,11 +192,13 @@ RUNNER_OPS: dict[str, frozenset[str]] = {
 }
 #: what a sandbox may ask: only calls made with a token (manifest 1.7 ``codemode.sandboxes``)
 SANDBOX_OPS: dict[str, frozenset[str]] = {
-    "token-call": frozenset({"token", "action", "params", "target"}),
-    "token-submit": frozenset({"token", "action", "params", "target"}),
-    "token-run": frozenset({"token", "request_id"}),
+    "token-call": frozenset({"action", "params", "target"}),
+    "token-submit": frozenset({"action", "params", "target"}),
+    "token-run": frozenset({"request_id"}),
 }
 _TABLES = {"caller": CALLER_OPS, "relay": RELAY_OPS, "runner": RUNNER_OPS, "sandbox": SANDBOX_OPS}
+#: every operation name, mapped to itself: what a log line may name (see :func:`_refuse`)
+_OP_NAMES = {name: str(name) for table in _TABLES.values() for name in table}
 #: top-level fields that would name the actor: the transport says who is calling, never the body
 FORBIDDEN_FIELDS = frozenset(
     {"actor", "caller", "as", "who", "profile", "identity", "uid", "user", "approver_uid"}
@@ -209,12 +224,6 @@ def peer_credentials(conn: socket.socket) -> tuple[int, int, int]:
     """``(pid, uid, gid)`` of the process at the other end of ``conn`` (Linux)."""
     raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
     return struct.unpack("3i", raw)
-
-
-def _clean(value: Any, limit: int = 128) -> str:
-    """``value`` as one printable line for a log message: CR, LF and other controls escaped."""
-    text = value if isinstance(value, str) else repr(value)
-    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in text[:limit])
 
 
 # ---------------------------------------------------------------- identity
@@ -298,8 +307,21 @@ class RefusalLimiter:
         self.window_s = window_s
         self.clock = clock
         self._lock = threading.Lock()
-        #: uid -> [window start, refusals, suppressed requests]
-        self._peers: dict[int, list[float]] = {}
+        #: key (a uid; a sandbox's (uid, token digest)) -> [window start, refusals, suppressed]
+        self._peers: dict[Hashable, list[float]] = {}
+        self._unknown: RefusalLimiter | None = None
+
+    @property
+    def unknown_tokens(self) -> RefusalLimiter:
+        """The per-uid ceiling for a sandbox's requests that present no known token (garbage,
+        a wrong secret, a malformed request): :data:`UNKNOWN_TOKEN_FACTOR` times this limit, in
+        the same window, so one program's garbage cannot lock its pool out at the normal limit,
+        and a flood of it still ends."""
+        if self._unknown is None:
+            self._unknown = RefusalLimiter(
+                self.max_refusals * UNKNOWN_TOKEN_FACTOR, self.window_s, clock=self.clock
+            )
+        return self._unknown
 
     @classmethod
     def from_manifest(cls, manifest: Mapping[str, Any], **kw: Any) -> RefusalLimiter:
@@ -310,20 +332,20 @@ class RefusalLimiter:
             **kw,
         )
 
-    def _current(self, uid: int, now: float) -> list[float] | None:
+    def _current(self, uid: Hashable, now: float) -> list[float] | None:
         st = self._peers.get(uid)
         if st is not None and now - st[0] >= self.window_s:
             if st[2]:
                 log.warning(
-                    "uid %d: %d request(s) answered rate-limited in the last window",
-                    uid,
+                    "%s: %d request(s) answered rate-limited in the last window",
+                    _key_name(uid),
                     int(st[2]),
                 )
             del self._peers[uid]
             st = None
         return st
 
-    def check(self, uid: int) -> tuple[bool, bool]:
+    def check(self, uid: Hashable) -> tuple[bool, bool]:
         """(limited, first): whether ``uid`` is over its limit now, and whether this is the first
         request of the window to be refused for it (the one that is audited)."""
         with self._lock:
@@ -333,7 +355,7 @@ class RefusalLimiter:
             st[2] += 1
             return True, st[2] == 1
 
-    def refused(self, uid: int) -> None:
+    def refused(self, uid: Hashable) -> None:
         """Count one refusal for ``uid``."""
         with self._lock:
             now = self.clock()
@@ -341,6 +363,24 @@ class RefusalLimiter:
             if st is None:
                 st = self._peers[uid] = [now, 0, 0]
             st[1] += 1
+
+
+def _key_name(key: Hashable) -> str:
+    """A limiter key for a log line: its uid only (a sandbox's key also names a token)."""
+    uid = key[0] if isinstance(key, tuple) else key
+    return f"uid {uid}" + (" (one token)" if isinstance(key, tuple) else "")
+
+
+def _sandbox_key(
+    svc: BrokerService, uid: int, bearer: str | None, limiter: RefusalLimiter
+) -> tuple[Hashable, RefusalLimiter]:
+    """Where a sandbox's refusals count: per presented token, so a program on a shared pool uid
+    limits only itself; a request with no known token counts against the uid's much higher
+    ceiling (:attr:`RefusalLimiter.unknown_tokens`)."""
+    tok = svc.tokens.by_secret(bearer) if bearer is not None else None
+    if tok is not None:  # keyed by the token's id: nothing of the secret is kept here
+        return (uid, tok["claims"]["token_id"]), limiter
+    return uid, limiter.unknown_tokens
 
 
 # ---------------------------------------------------------------- the protocol
@@ -396,7 +436,9 @@ def _refuse(
         action=action,
         request_id=rid[:128] if isinstance(rid, str) and rid else None,
     )
-    log.warning("refused uid %d op %s: %s", uid, _clean(op), reason)
+    # the operation as one of the protocol's own names, never the text the peer sent: a body can
+    # carry a token's secret beside its op, so nothing read from it is logged
+    log.warning("refused uid %d op %s: %s", uid, _OP_NAMES.get(op, "unknown"), reason)
     return _error(reason, message, "Denied" if outcome == "denied" else "InvalidArguments")
 
 
@@ -414,10 +456,13 @@ def handle_request(
     *,
     problem: str = "",
     limiter: RefusalLimiter | None = None,
+    bearer: str | None = None,
 ) -> dict[str, Any]:
     """The response to one request from the peer ``uid``.
 
-    ``raw`` is the request's bytes, or None with ``problem`` set (``request-too-large``,
+    ``bearer`` is the request's bearer line (a Code Mode token, sent ahead of the body by a
+    sandbox), kept apart from ``raw`` from the socket on.  ``raw`` is the request's bytes, or None
+    with ``problem`` set (``request-too-large``,
     ``request-timeout``) when the transport could not read it.  ``limiter`` rate-limits the
     peer's refusals (none: unlimited).  Pure apart from the service and the limiter: the socket
     server and the tests call it alike.
@@ -428,8 +473,11 @@ def handle_request(
         # relays (a person's decisions) and the Code Mode runner (it acts for every agent: one
         # program's refusals must not lock the others out) are exempt
         limited = limiter if who is None or who.role not in ("relay", "runner") else None
+        key: Hashable = uid
+        if limited is not None and who is not None and who.role == "sandbox":
+            key, limited = _sandbox_key(svc, uid, bearer, limited)
         if limited is not None:
-            over, first = limited.check(uid)
+            over, first = limited.check(key)
             if over:
                 message = "too many refused requests from this peer; try again later"
                 if first:  # coalesced: one audit record per peer and window
@@ -440,7 +488,7 @@ def handle_request(
                 svc, None, uid, None, "denied", "unknown-caller", "this peer is not a broker caller"
             )
         else:
-            response = _handle(svc, who, raw, problem)
+            response = _handle(svc, who, raw, problem, bearer)
         # a sandbox's call refused after its token was admitted is bounded by the token's cap
         # (and is another program's business on a shared pool uid): only refusals before
         # admission, an unknown token above all, count against the peer
@@ -453,13 +501,15 @@ def handle_request(
             and response.get("error") not in NOT_REFUSALS
             and not admitted
         ):
-            limited.refused(uid)
+            limited.refused(key)
         return response
     finally:
         TRANSPORT_PEER.reset(token)
 
 
-def _handle(svc: BrokerService, who: Identity, raw: bytes | None, problem: str) -> dict[str, Any]:
+def _handle(
+    svc: BrokerService, who: Identity, raw: bytes | None, problem: str, bearer: str | None = None
+) -> dict[str, Any]:
     uid = who.uid
     if raw is None:
         return _refuse(svc, who, uid, None, "invalid", problem, problem.replace("-", " "))
@@ -514,6 +564,8 @@ def _handle(svc: BrokerService, who: Identity, raw: bytes | None, problem: str) 
             svc, who, uid, op, "invalid", "request-invalid", f"{op} takes {sorted(table[op])}", body
         )
     try:
+        if bearer is not None and who.role != "sandbox":
+            raise _BadField("only a sandbox sends a bearer line")
         if who.role == "caller":
             result = _caller_op(svc, who, op, body)
         elif who.role == "relay":
@@ -521,7 +573,7 @@ def _handle(svc: BrokerService, who: Identity, raw: bytes | None, problem: str) 
         elif who.role == "runner":
             result = _runner_op(svc, who, op, body)
         else:
-            result = _sandbox_op(svc, who, op, body)
+            result = _sandbox_op(svc, who, op, body, bearer)
     except BrokerError as exc:
         return _from_exception(exc)
     except _BadField as exc:
@@ -591,7 +643,10 @@ def _runner_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, An
             max_calls=body.get("max_calls"),
             ttl_s=body.get("ttl_s"),
         )
-        return {"secret": token.secret, "claims": dict(token.claims)}
+        # the answer is built from the two apart: the claims are a fresh copy, the secret is
+        # added last and appears in nothing else (no log, no audit record, no error)
+        claims = json.loads(json.dumps(dict(token.claims)))
+        return {"claims": claims, "secret": token.secret}
     tid = body.get("token_id")
     if not isinstance(tid, str) or not tid:
         raise _BadField("token_id is a non-empty string")
@@ -604,22 +659,23 @@ def _runner_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, An
     return {"token_id": tid, "state": "spent", "outcome": outcome}
 
 
-def _sandbox_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:
+def _sandbox_op(
+    svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any], bearer: str | None
+) -> Any:
+    """A sandbox's call with a token.  The token is the request's bearer frame, never a body
+    field: nothing parsed out of the body (which is audited and named in logs) ever held it."""
+    if bearer is None:
+        raise _BadField("a token operation is sent with its token as the bearer line")
+    sandbox = who.sandbox_id or ""  # the peer's sandbox: one dedicated sandbox, or "" for a pool
     if op == "token-run":
-        if not isinstance(body.get("token"), str):
-            raise _BadField("token is a string")
-        sandbox = who.sandbox_id or ""
-        return svc.token_run(body["token"], _rid(body), sandbox_id=sandbox)
-    action, params, token = body.get("action"), body.get("params", {}), body.get("token")
+        return svc.token_run(bearer, _rid(body), sandbox_id=sandbox)
+    action, params = body.get("action"), body.get("params", {})
     if not isinstance(action, str) or not action:
         raise _BadField("action is a non-empty string")
-    if not isinstance(token, str):
-        raise _BadField("token is a string")  # the value is never repeated
-    # the peer's sandbox: one dedicated sandbox, or "" for a pool (see the module doc)
-    kw = {"target": body.get("target"), "sandbox_id": who.sandbox_id or ""}
+    kw = {"target": body.get("target"), "sandbox_id": sandbox}
     if op == "token-call":
-        return svc.token_call(token, action, params, **kw)
-    return svc.token_submit(token, action, params, **kw)
+        return svc.token_call(bearer, action, params, **kw)
+    return svc.token_submit(bearer, action, params, **kw)
 
 
 def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:
@@ -659,33 +715,41 @@ def _read_request(
     timeout_s: float,
     *,
     clock: Callable[[], float] = time.monotonic,
-) -> tuple[bytes | None, str]:
-    """(request bytes, "") or (None, problem): one line or everything up to EOF, at most
-    ``limit`` bytes, all of it within ``timeout_s``."""
-    chunks: list[bytes] = []
-    size = 0
+) -> tuple[bytes | None, str, str | None]:
+    """(request bytes, "", bearer) or (None, problem, None): one line or everything up to EOF, at
+    most ``limit`` bytes, all of it within ``timeout_s``.  A first line that starts with
+    :data:`BEARER_PREFIX` is a sandbox's bearer line (its token, at most :data:`MAX_BEARER_BYTES`)
+    and the request is the line after it: the token is never part of the JSON body."""
+    buf = b""
     deadline = clock() + timeout_s
+    eof = False
     try:
         while True:
+            lines = buf.count(b"\n")
+            bearer_first = buf.startswith(BEARER_PREFIX)
+            if lines >= (2 if bearer_first else 1) or eof:
+                break
+            if len(buf) > limit + MAX_BEARER_BYTES + 1:
+                return None, "request-too-large", None
             remaining = deadline - clock()
             if remaining <= 0:
-                return None, "request-timeout"
+                return None, "request-timeout", None
             conn.settimeout(remaining)
             chunk = conn.recv(65536)
-            if not chunk:
-                break
-            nl = chunk.find(b"\n")
-            if nl >= 0:
-                chunk = chunk[:nl]
-            size += len(chunk)
-            if size > limit:
-                return None, "request-too-large"
-            chunks.append(chunk)
-            if nl >= 0:
-                break
+            eof = not chunk
+            buf += chunk
     except TimeoutError:
-        return None, "request-timeout"
-    return b"".join(chunks), ""
+        return None, "request-timeout", None
+    bearer = None
+    if buf.startswith(BEARER_PREFIX):
+        line, _, buf = buf.partition(b"\n")
+        if len(line) > MAX_BEARER_BYTES:
+            return None, "request-too-large", None
+        bearer = line.rstrip(b"\r").decode("ascii", "replace")
+    raw = buf.split(b"\n", 1)[0]
+    if len(raw) > limit:
+        return None, "request-too-large", None
+    return raw, "", bearer
 
 
 def _discard(
@@ -733,10 +797,16 @@ class _Handler(socketserver.BaseRequestHandler):
                 conn.recv(srv.max_request_bytes)
             return
         else:
-            raw, problem = _read_request(conn, srv.max_request_bytes, srv.timeout_s)
+            raw, problem, bearer = _read_request(conn, srv.max_request_bytes, srv.timeout_s)
             try:
                 response = handle_request(
-                    srv.service, srv.peers, uid, raw, problem=problem, limiter=srv.limiter
+                    srv.service,
+                    srv.peers,
+                    uid,
+                    raw,
+                    problem=problem,
+                    limiter=srv.limiter,
+                    bearer=bearer,
                 )
             except Exception:  # a broker bug: the service audited what it could; say so
                 log.exception("broker request from uid %d failed", uid)
