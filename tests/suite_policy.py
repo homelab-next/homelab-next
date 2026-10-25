@@ -36,7 +36,7 @@ in the past fails the test ("quarantine expired"), and a date more than ``quaran
 (default 90) ahead is refused, so a quarantine cannot be parked forever.  ``HNX_TODAY``
 (``YYYY-MM-DD``) overrides today's date for the plugin's own tests.
 
-**Shards.**  ``--shard I/N`` runs every N-th collected test, starting at the I-th, and
+**Shards.**  ``--shard I/N`` runs the I-th of N parts of the collected tests (by node id hash), and
 ``--shard-report FILE`` writes what the shard collected, ran and timed; CI runs the suite as N such
 jobs and ``python -m tests.shard_report`` proves from their reports that together they ran every
 test once and that each suite's summed time is within its budget (``tests/shard_report.py``).
@@ -156,6 +156,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "shard": (index, count),
         "collected": None,
         "selected": [],
+        "ran": [],
     }
     config.pluginmanager.register(_Timer(config), "hnx-suite-timer")
     config.pluginmanager.register(_Shard(config), "hnx-shard")
@@ -264,6 +265,8 @@ class _Timer:
         st = _state(self.config)
         suite = suite_of(Path(str(report.fspath)), self.config.rootpath)
         st["times"][suite] = st["times"].get(suite, 0.0) + float(report.duration or 0.0)
+        if report.when == "setup":
+            st["ran"].append(report.nodeid)
 
 
 class _Shard:
@@ -305,6 +308,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
             count=count,
             collected=st["collected"],
             selected=st["selected"],
+            ran=st["ran"],
             times=st["times"],
             budgets={suite: secs * st["scale"] for suite, secs in st["budgets"].items()},
             default_budget=st["default"] * st["scale"],

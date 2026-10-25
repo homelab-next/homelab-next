@@ -126,14 +126,31 @@ def shard_problems(doc, run: str) -> list[str]:
         out.append("test-ok: must need the test job, so it waits for every shard")
     if ok.get("if") != "always()" or "continue-on-error" in ok:
         out.append("test-ok: must run whatever the shards did (if: always()), and fail with them")
-    runs = [(s.get("run", ""), s.get("env") or {}) for s in ok.get("steps") or []]
-    if not any(
-        "python3 -m tests.shard_report" in r
-        and '[ "$TEST" = success ]' in r
-        and env.get("TEST") == "${{ needs.test.result }}"
-        for r, env in runs
-    ):
-        out.append("test-ok: must merge the shard reports and fail unless every shard passed")
+    versions = sorted(
+        str(p.get("version")) for p in test.get("strategy", {}).get("matrix", {}).get("python", [])
+    )
+    merges = [s for s in ok.get("steps") or [] if "tests.shard_report" in s.get("run", "")]
+    if len(merges) != 1:
+        return [*out, "test-ok: must have one step merging the shard reports"]
+    (merge,) = merges
+    for key in ("if", "continue-on-error", "shell"):
+        if key in merge:
+            out.append(f"test-ok: the merge step's {key}: lets it skip or pass while red")
+    if (merge.get("env") or {}).get("TEST") != "${{ needs.test.result }}":
+        out.append("test-ok: TEST must be ${{ needs.test.result }}")
+    # the default shell stops at the first failing line: the merge, then the shards' own verdict
+    lines = [ln.strip() for ln in merge["run"].splitlines() if ln.strip()]
+    lines = [
+        ln
+        for ln in lines
+        if not ln.startswith("echo ") or any(c in ln for c in ("|", ";", "&", "`", "$("))
+    ]
+    want = [
+        f'python3 -m tests.shard_report --groups {",".join(versions)} "$RUNNER_TEMP/shards"',
+        '[ "$TEST" = success ]',
+    ]
+    if lines != want:
+        out.append(f"test-ok: the merge step must run exactly {want} (any echo aside)")
     return out
 
 
@@ -346,6 +363,24 @@ def _sharded_step(doc):
         lambda d: d["jobs"]["test-ok"].update({"continue-on-error": True}),
         lambda d: d["jobs"]["test-ok"]["steps"][-1].update(run="echo ok"),
         lambda d: d["jobs"]["test-ok"]["steps"][-1]["env"].update(TEST="success"),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update({"continue-on-error": True}),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update({"if": "false"}),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(shell="bash {0}"),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace('/shards"', '/shards" || true')
+        ),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
+            run="set +e\n" + d["jobs"]["test-ok"]["steps"][-1]["run"]
+        ),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("--groups 3.11,3.12", "")
+        ),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"].replace("3.11,3.12", "3.12")
+        ),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(
+            run=d["jobs"]["test-ok"]["steps"][-1]["run"] + "echo $(false) || true\n"
+        ),
     ],
 )
 def test_a_shard_no_job_runs_or_no_merge_counts_is_caught(edit):

@@ -313,13 +313,15 @@ def test_parse_shard_refuses(text):
         shard_report.parse_shard(text)
 
 
-def test_select_spreads_the_tests_over_the_shards():
-    ids = [f"t{k}" for k in range(7)]
-    picks = [shard_report.select(ids, i, 3) for i in (1, 2, 3)]
-    assert [sum(p) for p in picks] == [3, 2, 2]
+def test_select_spreads_the_tests_over_the_shards_whatever_their_order():
+    ids = [f"tests/x/test_{k // 10}.py::test_{k}" for k in range(400)]
+    picks = [shard_report.select(ids, i, 4) for i in (1, 2, 3, 4)]
     assert all(sum(col) == 1 for col in zip(*picks, strict=True))  # each test in exactly one
+    assert all(70 < sum(p) < 130 for p in picks), [sum(p) for p in picks]
+    # by node id, not position: another collection order keeps every test in its shard
+    assert shard_report.select(ids[::-1], 2, 4) == picks[1][::-1]
     assert shard_report.parse_shard("2/3") == (2, 3)
-    assert shard_report.select(ids, 1, 1) == [True] * 7
+    assert shard_report.select(ids, 1, 1) == [True] * 400
 
 
 SHARDED = {
@@ -358,7 +360,7 @@ def test_shards_run_every_test_once_end_to_end(tmp_path):
     assert sorted(n for r in ran for n in r) == sorted(
         f"{s}/test_{s}_{n}.py::test_{k}" for s in "ab" for n in ("one", "two") for k in range(4)
     )  # -k dropped test_4 before the split, and no test ran twice
-    assert [len(r) for r in ran] == [6, 5, 5]
+    assert all(ran), [len(r) for r in ran]
     rc, out = _merge(reports, "--groups", "{}.{}".format(*sys.version_info[:2]))
     assert rc == 0, out
     assert "3 shards" in out and "  a\n" in out
@@ -388,9 +390,12 @@ def test_the_merge_refuses_shards_that_do_not_add_up(tmp_path):
         ({"s3": {"of": 4}}, "disagree on how many"),
         ({"s1": {"collected_sha256": "0" * 64}}, "did not collect the same tests"),
         ({"s1": {"exitstatus": 1}}, "shard 1/3 exited 1"),
+        ({"s1": {"exitstatus": "0"}}, "shard 1/3 exited 0"),
+        ({"s1": {"ran": data[1]["ran"][1:]}}, "shard 1/3 ran"),
         ({"s1": {"collected": None}}, "never finished collecting"),
         ({"s2": {"default_budget": 1.0}}, "different budgets"),
         ({"s1": {"times": {"a": 61.0}}}, "a: 6"),  # over 60s only once the shards are summed
+        ({"s1": {"times": {"a": float("nan")}}}, "a: nan"),
         ({"s1": {"format": 0}}, "format 0"),
     ]
     for changes, problem in cases:
@@ -403,9 +408,25 @@ def test_the_merge_refuses_shards_that_do_not_add_up(tmp_path):
 
 def test_each_shard_keeps_the_budget_on_its_share_and_the_merge_on_the_sum(tmp_path):
     slow = "import time\n\n" + "".join(
-        f"def test_{k}():\n    time.sleep(0.2)\n\n" for k in range(4)
+        f"def test_{k}():\n    time.sleep(0.2)\n\n" for k in range(6)
     )
-    procs, reports = _shards(tmp_path, 2, ini_budgets="slow = 0.6", slow__test_slow=slow)
-    assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]  # 0.4s each
+    procs, reports = _shards(tmp_path, 2, ini_budgets="slow = 0.8", slow__test_slow=slow)
+    assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]  # 3 x 0.2s each
     rc, out = _merge(reports)
-    assert rc == 1 and "slow: 0.8s over all shards > budget 1s" in out, out
+    assert rc == 1 and "over all shards > budget 0.8s" in out, out
+
+
+def test_a_test_dropped_after_the_split_is_not_reported_as_run(tmp_path):
+    # a later trylast hook (a conftest registers after the plugin) drops a kept test
+    late = """
+        import pytest
+
+        @pytest.hookimpl(trylast=True)
+        def pytest_collection_modifyitems(items):
+            items[:] = [i for i in items if not i.nodeid.endswith("test_3")]
+    """
+    tests = "".join(f"def test_{k}():\n    pass\n\n" for k in range(4))
+    procs, reports = _shards(tmp_path, 2, sub__conftest=late, sub__test_sub=tests)
+    assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]
+    rc, out = _merge(reports)
+    assert rc == 1 and "shard 1/2 ran 2 of the 3 tests it kept" in out, out

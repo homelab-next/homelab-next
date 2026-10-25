@@ -47,8 +47,8 @@ jobs:
       - name: test code reads no wall clock or unseeded randomness
         run: python tools/hermetic_lint.py
 
-  # The suite in four shards per Python version: each job runs every fourth collected test
-  # (tests/shard_report.py), and test-ok below proves from their reports that together they ran
+  # The suite in four shards per Python version: each job runs a quarter of the collected tests,
+  # chosen by node id hash (tests/shard_report.py), and test-ok below proves from their reports that together they ran
   # every test exactly once and that each suite's summed time kept its budget.  Run whole, the
   # 3.12 job's pytest took 34.5 min on a runner (2026-10-25).
   test:
@@ -98,8 +98,11 @@ jobs:
           name: shard-${{ matrix.python.version }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/shard.json
           if-no-files-found: error
+          overwrite: true  # re-running a failed shard replaces its report
           retention-days: 3
 
+  # the one stable check name for branch protection (the shard jobs' names carry the matrix):
+  # fails unless every shard passed and together they ran the whole suite once
   test-ok:
     needs: test
     if: always()

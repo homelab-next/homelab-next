@@ -201,11 +201,13 @@ and an entry that no longer excuses anything fails the lint.
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
 - **Shards.** CI runs the suite as four jobs per Python version: `pytest --shard I/4
-  --shard-report FILE` runs every fourth collected test from the I-th and writes what it collected,
-  ran and timed. Each shard holds the budgets on its own share of each suite; the `test-ok` job
+  --shard-report FILE` runs the tests whose node id hashes to the I-th quarter and writes what it
+  collected, ran and timed. Each shard holds the budgets on its own share of each suite; the `test-ok` job
   (`python -m tests.shard_report --groups 3.11,3.12 DIR`) fails unless every shard passed, together
   they ran each collected test exactly once, and each suite's time summed over the shards is
-  within its budget. Locally, `make test` still runs the suite whole.
+  within its budget. A module- or session-scoped fixture runs, and is timed, once per shard that
+  uses it, so the summed time can exceed a whole run's. Branch protection requires `test-ok`, the
+  one stable check name. Locally, `make test` still runs the suite whole.
 
 ## Bug fixes carry a regression test
 

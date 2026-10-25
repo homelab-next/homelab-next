@@ -1,22 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """The test run split across CI jobs, and the proof that the parts add up (checklist Q-02).
 
-``pytest --shard I/N`` (``tests/suite_policy.py``) keeps the collected tests whose position in
-collection order, counted from 0, is ``I-1`` modulo ``N``: every file and every suite is spread
-over all the shards, so they come out about even with no table of timings to keep up to date.
-The cost is that a module- or session-scoped fixture runs once in each shard that needs it.
+``pytest --shard I/N`` (``tests/suite_policy.py``) keeps the collected tests whose node id hashes
+(SHA-256) to ``I-1`` modulo ``N``: every file and every suite is spread over all the shards, so
+they come out about even with no table of timings to keep up to date, and the choice does not
+depend on collection order, which may differ between runners.  The cost is that a module- or
+session-scoped fixture runs once in each shard that needs it -- and its time counts once per
+shard in the summed budget below, so a suite with a heavy shared fixture needs the headroom.
 
 ``--shard-report FILE`` writes what the shard collected (the count and a digest of every node id,
-after ``-m`` and ``--deselect``), the node ids it kept, the time it spent per suite, the budgets
-it applied and its exit status.  A shard still enforces the budgets on its own share of each
+after ``-m`` and ``--deselect``), the node ids it kept and those it actually ran (a setup
+report), the time it spent per suite, the budgets it applied and its exit status.  A shard still enforces the budgets on its own share of each
 suite (a share over the budget means the whole suite is too); only the merge sees the whole::
 
     python -m tests.shard_report [--groups 3.11,3.12] PATH...
 
 reads every ``*.json`` report under the PATHs (files or directories), groups them by the Python
 version that wrote them, and fails (exit 1) unless, in every group: shards 1..N each reported
-once, all collected the same tests, together they ran each of them exactly once, every shard
-exited 0, and each suite's time summed over the shards is within its budget.  ``--groups`` names
+once, all collected the same tests, each ran exactly the tests it kept, together they ran
+each of them exactly once, every shard exited 0, and each suite's time summed over the shards is within its budget.  ``--groups`` names
 the groups that must all be there.  Exit 2: no report, or one that cannot be read.
 
 Standard library only: the CI job that merges installs nothing.
@@ -46,9 +48,14 @@ def parse_shard(text: str) -> tuple[int, int]:
     return i, n
 
 
+def shard_of(nodeid: str, count: int) -> int:
+    """The shard (1..count) that runs ``nodeid``."""
+    return int(hashlib.sha256(nodeid.encode()).hexdigest(), 16) % count + 1
+
+
 def select(nodeids: list[str], index: int, count: int) -> list[bool]:
     """Which of the collected tests shard ``index`` of ``count`` keeps."""
-    return [k % count == index - 1 for k in range(len(nodeids))]
+    return [shard_of(n, count) == index for n in nodeids]
 
 
 def digest(nodeids: Iterable[str]) -> str:
@@ -62,6 +69,7 @@ def report(
     count: int,
     collected: list[str] | None,
     selected: list[str],
+    ran: list[str],
     times: dict[str, float],
     budgets: dict[str, float],
     default_budget: float,
@@ -76,6 +84,7 @@ def report(
         "collected": None if collected is None else len(collected),
         "collected_sha256": None if collected is None else digest(collected),
         "selected": sorted(selected),
+        "ran": sorted(ran),
         "times": dict(sorted(times.items())),
         "budgets": dict(sorted(budgets.items())),
         "default_budget": default_budget,
@@ -95,10 +104,15 @@ def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, 
         twice = sorted({s for s in seen if seen.count(s) > 1})
         problems.append(f"{group}: shards of {n}: missing {missing}, reported twice {twice}")
     for r in reports:
-        if r["exitstatus"] != 0:
+        if r["exitstatus"] != 0 or type(r["exitstatus"]) is not int:
             problems.append(f"{group}: shard {r['shard']}/{n} exited {r['exitstatus']}")
         if r["collected"] is None:
             problems.append(f"{group}: shard {r['shard']}/{n} never finished collecting")
+        elif sorted(r["ran"]) != sorted(r["selected"]):
+            problems.append(
+                f"{group}: shard {r['shard']}/{n} ran {len(r['ran'])} of the "
+                f"{len(r['selected'])} tests it kept"
+            )
     if any(r["collected"] is None for r in reports):
         return problems, {}
     if len({(r["collected"], r["collected_sha256"]) for r in reports}) != 1:
@@ -122,9 +136,9 @@ def _check_group(group: str, reports: list[dict]) -> tuple[list[str], dict[str, 
     budgets, default = reports[0]["budgets"], reports[0]["default_budget"]
     for suite, secs in sorted(totals.items()):
         budget = budgets.get(suite, default)
-        if secs > budget:
+        if not secs <= budget:  # a NaN is over too
             problems.append(
-                f"{group}: {suite}: {secs:.1f}s over all shards > budget {budget:.0f}s "
+                f"{group}: {suite}: {secs:.1f}s over all shards > budget {budget:.1f}s "
                 "(suite_budgets in pyproject.toml)"
             )
     return problems, totals
