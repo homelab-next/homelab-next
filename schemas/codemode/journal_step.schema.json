@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/journal_step/1.0",
+  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "title": "Code Mode step-journal record",
+  "description": "One completed step of an execution, keyed by (execution_id, step). On resume the runner returns the recorded result for a step whose name and request digest match instead of calling the broker again, so an approved write runs once. A step whose digest differs from the recorded one is a different call and is refused, never replayed. result is the broker's redacted result; result_digest is the sha256 of its canonical JSON.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "request_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "denied",
+        "error"
+      ]
+    },
+    "result": {},
+    "result_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "recorded": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "execution_id",
+    "step",
+    "name",
+    "action",
+    "request_id",
+    "request_digest",
+    "outcome",
+    "result_digest",
+    "recorded"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "token_id": "token-0001",
+  "execution_id": "exec-0001",
+  "actor": "profile:triage",
+  "issuer": "svc:codemode-runner",
+  "actions": [
+    "dhcp.lease",
+    "hypervisor.guest"
+  ],
+  "max_calls": 10,
+  "issued": "2026-10-25T02:00:00Z",
+  "expires": "2026-10-25T02:01:00Z"
+}

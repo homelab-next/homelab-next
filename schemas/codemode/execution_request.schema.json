@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/execution_request/1.0",
+  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "title": "Code Mode execution request",
+  "description": "The parameters of the broker action codemode.execute: one program an agent asks the runner to run in the sandbox. The program reaches lab systems only through broker calls made with a capability token scoped to this execution; budget caps what the run may use, and the runner may lower any cap but never raise it. resume_of names a paused execution to continue after its pending approvals land; completed steps replay from the journal instead of running again.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "language": {
+      "enum": [
+        "python",
+        "javascript"
+      ]
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "wall_s": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "max_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 1024
+        }
+      },
+      "additionalProperties": false
+    },
+    "resume_of": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "created": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "execution_id",
+    "actor",
+    "language",
+    "code",
+    "created"
+  ],
+  "additionalProperties": false
+}

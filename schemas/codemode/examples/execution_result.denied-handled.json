@@ -1,0 +1,18 @@
+{
+  "execution_id": "exec-0004",
+  "status": "ok",
+  "value": {
+    "skipped": [
+      "hypervisor.guest-stop"
+    ]
+  },
+  "calls": [
+    {
+      "step": 0,
+      "action": "hypervisor.guest-stop",
+      "outcome": "denied",
+      "reason": "not-allowlisted"
+    }
+  ],
+  "finished": "2026-10-25T02:00:04Z"
+}

@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/execution_result/1.0",
+  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "title": "Code Mode execution result",
+  "description": "What the runner returns to the agent for one execution: the program's reduced value, every broker call it made (one entry per call, in order, with the broker's outcome), the requests waiting for approval when the run paused, and bounded logs. A denied call is reported here as data and never as the runner's own failure; status 'denied' means the program ended on a denial it did not handle. 'limit' names the cap that ended the run, and an oversized value is cut off and marked truncated, never returned whole.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "paused",
+        "denied",
+        "error",
+        "limit"
+      ]
+    },
+    "value": {},
+    "truncated": {
+      "type": "boolean"
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "action": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "request_id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "denied",
+              "pending",
+              "error",
+              "replayed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "required": [
+          "step",
+          "action",
+          "outcome"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "denied",
+                    "error"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "ok",
+                    "pending",
+                    "replayed"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 200
+    },
+    "pending": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "action": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "request_id",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "logs": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "string",
+        "maxLength": 2000
+      }
+    },
+    "limit": {
+      "enum": [
+        "cpu",
+        "memory",
+        "wall",
+        "calls",
+        "output"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "syntax",
+            "runtime",
+            "sandbox",
+            "token"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "finished": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "execution_id",
+    "status",
+    "calls",
+    "finished"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "paused"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": [
+            "pending"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "limit"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "limit"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "limit"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "error"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "value"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

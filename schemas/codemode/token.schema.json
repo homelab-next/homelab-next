@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/token/1.0",
+  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "title": "Code Mode capability token claims",
+  "description": "The claims of the capability token the broker issues for one execution. The broker accepts it only from the sandbox of that execution, only for the listed actions (each still checked against the actor's own grants, so the token can narrow but never widen them), only up to max_calls calls in total and only before expires. The token carries no credential for any lab system; handlers resolve their own secrets.",
+  "type": "object",
+  "properties": {
+    "token_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "issuer": {
+      "const": "svc:broker"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+      },
+      "minItems": 1,
+      "maxItems": 200,
+      "uniqueItems": true
+    },
+    "max_calls": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "issued": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "expires": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "token_id",
+    "execution_id",
+    "actor",
+    "issuer",
+    "actions",
+    "max_calls",
+    "issued",
+    "expires"
+  ],
+  "additionalProperties": false
+}
