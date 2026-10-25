@@ -272,6 +272,24 @@ def test_an_overlong_wiki_link_is_dangling_not_a_crash(tmp_path, repo_copy):
     assert f"file:docs/{long}.md" in dangling
 
 
+def test_an_overlong_markdown_link_is_dangling_not_a_crash(tmp_path, repo_copy):
+    root = _fresh(tmp_path, repo_copy)
+    f = root / "docs/glossary.md"
+    long = "a" * 5000
+    f.write_text(f.read_text(encoding="utf-8") + f"\nSee [x]({long}.md).\n", encoding="utf-8")
+    dangling = {e.dst for e in check(root).integrity.dangling}
+    assert f"file:docs/{long}.md" in dangling
+
+
+def test_a_real_lookup_error_is_not_read_as_a_missing_page(monkeypatch, tmp_path):
+    def denied(self):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "is_file", denied)
+    with pytest.raises(PermissionError):
+        sources._lookup(tmp_path / "docs" / "page.md", Path.is_file)
+
+
 def test_duplicate_id_fails(tmp_path, repo_copy, capsys):
     """Two record files claiming one id never reach the graph: the register loader refuses them
     (a record file is named after its id), and ``hnx graph check`` reports that and fails.  A
