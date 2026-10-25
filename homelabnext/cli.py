@@ -229,7 +229,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
     ),
     "codemode": (
-        "Code Mode (ADR-0031): gen (the per-profile stubs and search index; --check for drift)",
+        "Code Mode (ADR-0031): gen (the per-profile stubs and search index; --check for drift)|"
+        "mcp (the codemode_search and codemode_describe tools)",
         lambda a: importlib.import_module("homelabnext.codemode.cli").main(a),
     ),
     "custom": (
