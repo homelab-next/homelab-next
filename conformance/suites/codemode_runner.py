@@ -24,6 +24,7 @@ from conformance.fakes.codemode_runner import (
     HiddenPauseRunner,
     RawLogsRunner,
     ReferenceRunner,
+    RelayRefusalsHiddenRunner,
     ResendingRunner,
     StepOnlyReplayRunner,
     UnjournalledRefusalRunner,
@@ -448,6 +449,49 @@ def _(r):
     assert len(lab.ran[cmd]) == 2 * len(_languages(r, programs)), lab.ran[cmd]
 
 
+@SUITE.check(
+    "relay-refusals-are-reported",
+    "a request of the program's own that the runner refuses before the broker (an action that is "
+    "no action name, a target that is no svc: id) reaches no broker and is no call, and is listed "
+    "in relay_refusals with the action as sent, how the program was told and why",
+    requires=TOKENS,
+)
+def _(r):
+    lab = _Lab(r)
+    cmd = lab.cmds[0]
+    programs = {
+        "python": (
+            "out = []\n"
+            f"for action, kw in [('delete_mailbox', {{}}), ({cmd!r}, {{'target': 'not-a-target'}})]:\n"
+            "    try:\n"
+            "        broker.call(action, {'name': 'refused'}, **kw)\n"
+            "        out.append('ran')\n"
+            "    except (broker.Denied, broker.Error) as exc:\n"
+            "        out.append(type(exc).__name__)\n"
+            f"out.append(broker.call({cmd!r}, {{'name': 'after'}}))\n"
+            "result = out\n"
+        )
+    }
+    for lang in _languages(r, programs):
+        res, _ = lab.execute(programs[lang], lang)
+        assert _schema("execution_result", res) == [], f"{lang}: {res}"
+        assert res["status"] == "ok", f"{lang}: the run ended {res}"
+        assert [(c["step"], c["action"]) for c in res["calls"]] == [(0, cmd)], (
+            f"{lang}: a request refused before the broker is a call of the result: {res['calls']}"
+        )
+        refused = res.get("relay_refusals") or []
+        told = {"denied": "Denied", "error": "Error"}
+        shape = [(x.get("at_step"), x.get("op"), x.get("action")) for x in refused]
+        assert shape == [(0, "call", "delete_mailbox"), (0, "call", cmd)], (
+            f"{lang}: the requests refused before the broker were reported as {refused}"
+        )
+        assert [told.get(x.get("outcome")) for x in refused] == res["value"][:2], (
+            f"{lang}: the program was told {res['value'][:2]}, the result says {refused}"
+        )
+        assert all(isinstance(x.get("reason"), str) and _REASON.match(x["reason"]) for x in refused)
+    assert lab.ran[cmd] == ["after"] * len(_languages(r, programs)), lab.ran[cmd]
+
+
 def make_fake():
     return ReferenceRunner()
 
@@ -493,6 +537,11 @@ MUTANTS = {
         "denied-pause-is-a-value",
         "a pause whose request was denied reads as still waiting: the resume pauses for ever",
         features=frozenset([*TOKENS, "approval-control"]),
+    ),
+    "relay-refusals-hidden": _m(
+        RelayRefusalsHiddenRunner,
+        "relay-refusals-are-reported",
+        "a request the relay refused before the broker is in no part of the result",
     ),
     "cap-hidden": _m(
         CapHiddenRunner,

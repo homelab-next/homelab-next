@@ -29,7 +29,11 @@ accepted it: it presents the run's token (compared in constant time), names a we
 (``^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$``) and, if any, a ``svc:`` target, and arrives while the
 run has steps left (at most :data:`~.journal.MAX_STEPS`).  Anything else is refused at the relay:
 it takes no step, is not a call of the result and never reaches the broker, so nobody else's line
-can shift a program's steps.  A line without the run's token is answered ``token-invalid`` (past
+can shift a program's steps.  A refused request of the program's own (one presenting the run's
+token) is listed in the result's ``relay_refusals`` instead (the steps taken when it arrived, its
+op, its action as sent, cut to one line, how the program was told and why; the first
+:data:`MAX_RELAY_REFUSALS`, the rest counted), so what a program attempted is in its result even
+when the broker never saw it.  A line without the run's token is answered ``token-invalid`` (past
 :data:`MAX_FOREIGN_LINES`, dropped unanswered) and never counts against the run; the program's
 own malformed calls (``request-malformed``) are bounded by :data:`MAX_LOCAL_REFUSALS`, past which
 it sends nothing more and, unless it paused, ends ``error``; past the step bound a call is
@@ -170,7 +174,9 @@ __all__ = [
     "MAX_CONNECTIONS",
     "MAX_FOREIGN_LINES",
     "MAX_LOCAL_REFUSALS",
+    "MAX_RELAY_REFUSALS",
     "READ_TIMEOUT_S",
+    "RELAY_REASONS",
     "RESULT_SCHEMA",
     "Runner",
     "RunnerError",
@@ -207,6 +213,23 @@ MAX_LOCAL_REFUSALS = 32
 #: lines without the run's token a relay answers (token-invalid) before it drops them
 #: unanswered; they never count against the run
 MAX_FOREIGN_LINES = 64
+#: the program's own requests the relay refused that a result lists (``relay_refusals``); more
+#: are counted (``relay_refusals_omitted``)
+MAX_RELAY_REFUSALS = 64
+#: how much of a refused request's action a result keeps (it is program text)
+MAX_ACTION_CHARS = 128
+#: why the relay refuses a request of the program's own (``relay_refusals[].reason``)
+RELAY_REASONS = frozenset(
+    {
+        "request-malformed",
+        "too-many-refusals",
+        "token-paused",
+        "call-cap-reached",
+        "journal-unavailable",
+        "step-outcome-unknown",
+        "replay-mismatch",
+    }
+)
 #: the run's defaults when its budget names none (the broker's ``codemode.default_wall_s`` is 60)
 DEFAULT_WALL_S = 60
 DEFAULT_CPU_S = 10.0
@@ -363,6 +386,8 @@ class _Run:
     capped: bool = False  # a call was refused call-cap-reached
     local_refusals: int = 0  # the program's own token-bearing requests the relay refused
     foreign: int = 0  # lines without the run's token (dropped past MAX_FOREIGN_LINES)
+    relay_refused: list[dict[str, Any]] = field(default_factory=list)  # the program's own
+    relay_omitted: int = 0  # relay refusals past MAX_RELAY_REFUSALS, counted only
     pending_unjournalled: bool = False  # a pending answer the journal could not record
     fault: bool = False  # the run stopped on a fault of the runner's own (not the journal's)
     closed: bool = False  # the relay has stopped: nothing changes the run any more
@@ -705,6 +730,10 @@ class Runner:
             "calls": calls,
         }
         out.update(status)
+        if run.relay_refused:
+            out["relay_refusals"] = list(run.relay_refused)
+            if run.relay_omitted:
+                out["relay_refusals_omitted"] = run.relay_omitted
         if res is not None:
             logs = self._log_lines(getattr(res, "output", "") or "")
             if logs:
@@ -804,56 +833,87 @@ class Runner:
 
     def serve_call(self, run: _Run, msg: Any) -> dict[str, Any] | None:
         """One wire request: the reply, or None when the relay drops it unanswered (a line
-        without the run's token past :data:`MAX_FOREIGN_LINES`).  See the module doc."""
+        without the run's token past :data:`MAX_FOREIGN_LINES`).  See the module doc.  A request
+        of the program's own (it presents the run's token) that is refused here, so it never
+        reaches the broker and is no call of the result, is listed in the result's
+        ``relay_refusals`` (:meth:`_relay_refused`)."""
         with run.lock:
             if run.closed:
                 return _err("run-ended")
-            token = msg.get("token") if isinstance(msg, Mapping) else None
-            if not (isinstance(token, str) and hmac.compare_digest(token, run.secret)):
-                # not the program's: never counted against the run, never a step
-                run.foreign += 1
-                if run.foreign > MAX_FOREIGN_LINES:
-                    return None
-                return {"ok": False, "denied": True, "reason": "token-invalid"}
-            if run.local_refusals > MAX_LOCAL_REFUSALS:  # nothing more is sent
-                return _err("too-many-refusals")
-            if run.pending:  # the run is paused: nothing after the pause is sent or counted
-                return {"ok": False, "denied": True, "reason": "token-paused"}
-            action, args = msg.get("action"), msg.get("args", {})
-            op, target = msg.get("op", "call"), msg.get("target")
-            if args is None:
-                args = {}
-            if (
-                not (
-                    isinstance(action, str) and len(action) <= 128 and _ACTION_RE.fullmatch(action)
-                )
-                or not isinstance(args, Mapping)
-                or op not in ("call", "submit")
-                or not (target is None or _svc(target))
-            ):
-                return self._local(run, "error", "request-malformed")
-            if run.failed is not None:
-                return _err("journal-unavailable")
-            if run.unknown is not None:
-                return _err("step-outcome-unknown")
-            if run.mismatch is not None:
-                return _err("replay-mismatch")
-            if run.next_step >= MAX_STEPS:  # the step bound: a limit, not a refusal the
-                run.capped = True  # program is blamed for
-                return {"ok": False, "denied": True, "reason": "call-cap-reached"}
-            try:
-                fp = self.store.fingerprint(f"{op}:{action}", target, dict(args))
-            except (TypeError, ValueError):  # args that are not JSON: never sent
-                return self._local(run, "error", "request-malformed")
-            step = run.next_step
-            run.next_step += 1
-            try:
-                entry = run.journal.get(step)
-                if entry is not None:
-                    return self._replay(run, step, entry, op, action, target, fp)
-                return self._send(run, step, op, action, target, dict(args), fp)
-            except Exception as exc:  # after the send nothing may pass silently
-                return self._broke(run, step, action, target, exc)
+            calls, steps = len(run.calls), run.next_step
+            reply = self._serve_locked(run, msg)
+            if reply is not None and len(run.calls) == calls and _is_refusal(reply):
+                token = msg.get("token") if isinstance(msg, Mapping) else None
+                if isinstance(token, str) and run.secret and hmac.compare_digest(token, run.secret):
+                    self._relay_refused(run, steps, msg, reply)
+            return reply
+
+    def _relay_refused(
+        self, run: _Run, steps: int, msg: Mapping[str, Any], reply: Mapping[str, Any]
+    ) -> None:
+        """Record one of the program's requests the relay refused: the steps taken when it
+        arrived, its op and action as sent (one line, cut), how it was told and why; past
+        :data:`MAX_RELAY_REFUSALS` only counted."""
+        if len(run.relay_refused) >= MAX_RELAY_REFUSALS:
+            run.relay_omitted += 1
+            return
+        entry: dict[str, Any] = {"at_step": min(steps, MAX_STEPS)}
+        op, action = msg.get("op", "call"), msg.get("action")
+        if op in ("call", "submit"):
+            entry["op"] = op
+        if isinstance(action, str):
+            entry["action"] = _line(action, MAX_ACTION_CHARS)
+        reason = reply.get("reason")
+        entry["outcome"] = "denied" if reply.get("denied") else "error"
+        entry["reason"] = reason if reason in RELAY_REASONS else "request-malformed"
+        run.relay_refused.append(entry)
+
+    def _serve_locked(self, run: _Run, msg: Any) -> dict[str, Any] | None:
+        """:meth:`serve_call` under the run's lock, the run still open."""
+        token = msg.get("token") if isinstance(msg, Mapping) else None
+        if not (isinstance(token, str) and hmac.compare_digest(token, run.secret)):
+            # not the program's: never counted against the run, never a step
+            run.foreign += 1
+            if run.foreign > MAX_FOREIGN_LINES:
+                return None
+            return {"ok": False, "denied": True, "reason": "token-invalid"}
+        if run.local_refusals > MAX_LOCAL_REFUSALS:  # nothing more is sent
+            return _err("too-many-refusals")
+        if run.pending:  # the run is paused: nothing after the pause is sent or counted
+            return {"ok": False, "denied": True, "reason": "token-paused"}
+        action, args = msg.get("action"), msg.get("args", {})
+        op, target = msg.get("op", "call"), msg.get("target")
+        if args is None:
+            args = {}
+        if (
+            not (isinstance(action, str) and len(action) <= 128 and _ACTION_RE.fullmatch(action))
+            or not isinstance(args, Mapping)
+            or op not in ("call", "submit")
+            or not (target is None or _svc(target))
+        ):
+            return self._local(run, "error", "request-malformed")
+        if run.failed is not None:
+            return _err("journal-unavailable")
+        if run.unknown is not None:
+            return _err("step-outcome-unknown")
+        if run.mismatch is not None:
+            return _err("replay-mismatch")
+        if run.next_step >= MAX_STEPS:  # the step bound: a limit, not a refusal the
+            run.capped = True  # program is blamed for
+            return {"ok": False, "denied": True, "reason": "call-cap-reached"}
+        try:
+            fp = self.store.fingerprint(f"{op}:{action}", target, dict(args))
+        except (TypeError, ValueError):  # args that are not JSON: never sent
+            return self._local(run, "error", "request-malformed")
+        step = run.next_step
+        run.next_step += 1
+        try:
+            entry = run.journal.get(step)
+            if entry is not None:
+                return self._replay(run, step, entry, op, action, target, fp)
+            return self._send(run, step, op, action, target, dict(args), fp)
+        except Exception as exc:  # after the send nothing may pass silently
+            return self._broke(run, step, action, target, exc)
 
     def _broke(self, run: _Run, step: int, action: str, target, exc: BaseException):
         """Anything that went wrong while a step was sent or answered: the call may have run,
@@ -1287,6 +1347,11 @@ class _Relay:
 
 
 # ---------------------------------------------------------------- helpers
+def _is_refusal(reply: Mapping[str, Any]) -> bool:
+    """A reply that refuses the request (denied or an error), not a value or a pause."""
+    return not reply.get("ok") and not reply.get("pending")
+
+
 def _err(reason: str) -> dict[str, Any]:
     return {"ok": False, "error": True, "reason": reason}
 
