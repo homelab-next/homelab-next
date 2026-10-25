@@ -276,11 +276,20 @@ def unwrap(result: Any, kind: str | None = "exec") -> tuple[str, Any]:
     return "ok", result
 
 
-def _read_index(path: Path) -> Any:
-    """``path`` as JSON, read through one descriptor opened without following a symlink, and
-    only when it is a regular file that no other user may write (not group- or world-writable,
-    owned by this user or root): what it says decides what a program's namespaces call."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+_NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _read_index(profile_dir: Path) -> Any:
+    """``<profile_dir>/search.json`` as JSON: the directory opened without following a symlink
+    (``O_DIRECTORY``), the file opened relative to that descriptor (``dir_fd``) without
+    following one either, so nothing is resolved by path twice; and only when it is a regular
+    file that no other user may write (not group- or world-writable, owned by this user or
+    root): what it says decides what a program's namespaces call."""
+    dfd = os.open(profile_dir, _NOFOLLOW | os.O_DIRECTORY)
+    try:
+        fd = os.open("search.json", _NOFOLLOW, dir_fd=dfd)
+    finally:
+        os.close(dfd)
     with os.fdopen(fd, "rb") as fh:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode):
@@ -294,14 +303,13 @@ def _read_index(path: Path) -> Any:
 
 def _indexes(directory: str | os.PathLike[str]) -> list[Any]:
     """Every readable ``<profile>/search.json`` under ``directory`` (see :func:`_read_index`);
-    a directory that is a symlink, or a file refused or malformed, is skipped (logged)."""
+    a profile directory or file that is a symlink, or a file refused or malformed, is skipped
+    (logged)."""
     out = []
     root = Path(directory)
     for path in sorted(root.glob("*/search.json")):
-        if path.parent.is_symlink():
-            continue
         try:
-            out.append(_read_index(path))
+            out.append(_read_index(path.parent))
         except (OSError, ValueError) as exc:
             log.warning("codemode: a search index under %s is refused (%s); skipped", root, exc)
     return out

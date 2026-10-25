@@ -264,3 +264,14 @@ def test_an_index_whose_names_collide_is_refused_like_the_manifest(names, why):
         render_files(build_models(manifest, [_doc(n) for n in names]))
     assert any(why in p for p in info.value.problems), info.value.problems
     prelude_from_index(_index(names[0]))  # either alone is fine
+
+
+def test_the_reserved_names_hold_every_builtin_of_this_python():
+    """RESERVED_NAMESPACES is a fixed list; a Python with a builtin it lacks fails here, so a
+    newer sandbox interpreter's builtins are never silently missed."""
+    import builtins
+
+    from homelabnext.codemode.model import RESERVED_NAMESPACES
+
+    assert set(dir(builtins)) <= RESERVED_NAMESPACES, set(dir(builtins)) - RESERVED_NAMESPACES
+    assert {"broker", "result", "__builtins__"} <= RESERVED_NAMESPACES
