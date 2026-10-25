@@ -49,5 +49,7 @@ def test_an_oversized_or_malformed_body_length_is_refused():
         assert _post(srv, {"Content-Length": big}) == 413
         assert _post(srv, {"Content-Length": "-5"}) == 400
         assert _post(srv, {"Content-Length": "lots"}) == 400
+        # str.isdigit() accepts a superscript two, which int() then refuses
+        assert _post(srv, {"Content-Length": "\u00b2"}) == 400
         ok = b'{"model": "example-model", "messages": [{"role": "user", "content": "hi"}]}'
         assert _post(srv, {"Content-Length": str(len(ok))}, ok) == 200

@@ -286,7 +286,8 @@ class FakeOpenAIServer:
             def do_POST(self) -> None:
                 path = self.path.split("?")[0]
                 raw = (self.headers.get("Content-Length") or "0").strip()
-                if not raw.isdigit():
+                # str.isdigit() alone accepts "²", which int() refuses
+                if not (raw.isascii() and raw.isdigit()):
                     self.close_connection = True
                     self._error(400, "invalid Content-Length", "invalid_request_error")
                     return
