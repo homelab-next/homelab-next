@@ -83,6 +83,7 @@ gates:
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
+	$(PY) -m homelabnext.cli docs index check
 	$(PY) -m homelabnext.cli status catalog check
 	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check
