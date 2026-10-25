@@ -29,7 +29,6 @@ role table, where that role is bound to the backend's ``svc:``.  Two checks:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import ipaddress
 import json
 import sys
@@ -131,8 +130,8 @@ def _home_model(home: Path) -> tuple[Any, str | None]:
         doc = _load(path)
     except OSError as exc:
         return None, f"cannot read {path}: {exc.strerror or exc}"
-    except yaml.YAMLError as exc:
-        return None, f"{path} is not YAML: {exc}"
+    except (yaml.YAMLError, ValueError, RecursionError) as exc:  # ValueError: not UTF-8
+        return None, f"{path} is not YAML text: {exc}"
     model = doc.get("model") if isinstance(doc, Mapping) else None
     if not isinstance(model, Mapping) or not isinstance(model.get("default"), str):
         return None, f"{path} has no model.default"
@@ -150,7 +149,7 @@ def controller_problems(spec: Any) -> list[str]:
     where_cfg = ref.config.as_posix()
     try:
         doc = _load(ref.config)
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, yaml.YAMLError, ValueError, RecursionError) as exc:
         return [f"controller config {where_cfg}: cannot read: {exc}"]
     entries, problems = controller_backends(doc)
     problems = [f"controller config {where_cfg}: {p}" for p in problems]
@@ -207,28 +206,37 @@ def controller_problems(spec: Any) -> list[str]:
 
 
 # ---------------------------------------------------------------------------- homes (A-14)
-_scan_text: Any = None
+class CouldNotMeasure(Exception):
+    """A home's file exists but cannot be read as YAML text (A-14 exits 100: neither a pass
+    nor a finding)."""
 
 
 def _gate_scanner() -> Any:
-    """``scan_text`` of the repository gate ``tools/no_raw_endpoints.py`` (a verified checkout's,
-    see :func:`homelabnext.paths.checkout_tool`), or None outside a checkout."""
-    global _scan_text
-    if _scan_text is None:
-        from homelabnext import paths
+    """``scan_text`` of the repository gate (:mod:`homelabnext.endpoint_gate`), or None outside
+    a checkout, where :func:`ip_literals` uses only its own word scan."""
+    from homelabnext import endpoint_gate
 
-        try:
-            tool = paths.checkout_tool("no_raw_endpoints.py", feature="the agent home check")
-        except paths.NotACheckout:
-            _scan_text = False
+    mod = endpoint_gate.load("the agent home check")
+    return mod.scan_text if mod is not None else None
+
+
+#: what separates the words :func:`ip_literals` reads on its own: whitespace, ``key=value``,
+#: ``user@host``, list and quote punctuation
+_WORD_SEPARATORS = "\t\n\r =@,;'\"()<>"
+
+
+def _words(text: str) -> list[str]:
+    out, cur = [], []
+    for ch in text:
+        if ch in _WORD_SEPARATORS:
+            if cur:
+                out.append("".join(cur))
+                cur = []
         else:
-            spec = importlib.util.spec_from_file_location("hnx_no_raw_endpoints", tool)
-            assert spec and spec.loader
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = mod  # its dataclasses need the module registered
-            spec.loader.exec_module(mod)
-            _scan_text = mod.scan_text
-    return _scan_text or None
+            cur.append(ch)
+    if cur:
+        out.append("".join(cur))
+    return out
 
 
 def _address(token: str) -> str | None:
@@ -254,7 +262,9 @@ def _address(token: str) -> str | None:
 
 def ip_literals(text: str) -> list[str]:
     """Every IP address ``text`` names: the gate's IPv4 rule and the hosts of its URL rules, and
-    each word or URL that :mod:`ipaddress` reads as an address (IPv6 included).  Documentation and
+    each word or URL that :mod:`ipaddress` reads as an address (IPv6 included; words split at
+    whitespace, ``=``, ``@`` and punctuation, so ``host=<addr>`` and ``user@<addr>`` are found
+    with or without the gate).  Documentation and
     loopback addresses count: a home should name no address at all."""
     found: list[str] = []
     scan = _gate_scanner()
@@ -263,7 +273,7 @@ def ip_literals(text: str) -> list[str]:
             addr = f.text if f.rule == "ipv4" else _address(f.text)
             if addr and addr not in found:
                 found.append(addr)
-    for word in text.split():
+    for word in _words(text):
         addr = _address(word)
         if addr and addr not in found:
             found.append(addr)
@@ -285,43 +295,73 @@ def engine_model_ids(table: RoleTable, store: Mapping[str, Any] | None = None) -
     return {i for i in ids if i} - set(table.roles)
 
 
-def _strings(node: Any, path: str = "") -> Iterator[tuple[str, str]]:
-    if isinstance(node, Mapping):
-        for k, v in node.items():
-            sub = f"{path}.{k}" if path else str(k)
-            yield sub, str(k)
-            yield from _strings(v, sub)
-    elif isinstance(node, list):
-        for i, v in enumerate(node):
-            yield from _strings(v, f"{path}[{i}]")
-    elif isinstance(node, str):
-        yield path, node
+def _strings(node: Any) -> Iterator[tuple[str, str, bool]]:
+    """``(where, text, is_key)`` for every string in a YAML document, keys included.  Each
+    container is visited once, so an alias that refers back to its own node (``a: &x [*x]``)
+    ends instead of recursing."""
+    seen: set[int] = set()
+    stack: list[tuple[Any, str]] = [(node, "")]
+    while stack:
+        cur, path = stack.pop()
+        if isinstance(cur, (Mapping, list)):
+            if id(cur) in seen:
+                continue
+            seen.add(id(cur))
+        if isinstance(cur, Mapping):
+            items = list(cur.items())
+            for k, v in reversed(items):
+                sub = f"{path}.{k}" if path else str(k)
+                stack.append((v, sub))
+                stack.append((_Key(str(k)), sub))
+        elif isinstance(cur, list):
+            for i in range(len(cur) - 1, -1, -1):
+                stack.append((cur[i], f"{path}[{i}]"))
+        elif isinstance(cur, _Key):
+            yield path, cur.text, True
+        elif isinstance(cur, str):
+            yield path, cur, False
+
+
+class _Key:
+    __slots__ = ("text",)
+
+    def __init__(self, text: str) -> None:
+        self.text = text
 
 
 def _names_id(value: str, ids: Iterable[str]) -> str | None:
-    """The engine model id ``value`` names: the id itself, or the id behind a provider prefix
-    (``openai/<id>``)."""
-    v = value.strip()
+    """The engine model id ``value`` names, compared without case: the id itself, the id behind a
+    provider prefix (``openai/<id>``), or either with a ``:tag`` or ``@quant`` suffix."""
+    forms = {value.strip().lower()}
+    for sep in (":", "@"):
+        forms |= {f.split(sep, 1)[0] for f in forms if sep in f}
     for i in sorted(ids, key=len, reverse=True):
-        if v == i or v.endswith("/" + i):
+        il = i.lower()
+        if any(f == il or f.endswith("/" + il) for f in forms):
             return i
     return None
 
 
 def home_findings(home: Path, ids: set[str]) -> list[str]:
-    """What ``<home>/config.yaml`` names that it must not (empty = clean)."""
+    """What ``<home>/config.yaml`` names that it must not (empty = clean).  A missing file is a
+    finding (nothing to check never reads as checked); a file that is not UTF-8 or not YAML raises
+    :class:`CouldNotMeasure`."""
     path = home / HOME_FILE
     try:
         doc = _load(path)
+    except UnicodeDecodeError as exc:
+        raise CouldNotMeasure(
+            f"{path}: not UTF-8 text ({exc.reason} at byte {exc.start})"
+        ) from None
     except OSError as exc:
         return [f"{path}: cannot read: {exc.strerror or exc}"]
-    except yaml.YAMLError as exc:
-        return [f"{path}: not YAML: {exc}"]
+    except (yaml.YAMLError, RecursionError) as exc:
+        raise CouldNotMeasure(f"{path}: not readable as YAML: {exc}") from None
     out: list[str] = []
-    for where, value in _strings(doc):
+    for where, value, is_key in _strings(doc):
         for addr in ip_literals(value):
             out.append(f"{path}: {where} names the IP address {addr} (name the gateway instead)")
-        mid = _names_id(value, ids)
+        mid = None if is_key else _names_id(value, ids)  # a key is a field name, not a model
         if mid:
             out.append(
                 f"{path}: {where} names the engine model id {mid!r} (name its role alias; the "
@@ -347,7 +387,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"homes: cannot read the role table or store: {exc}", file=sys.stderr)
         return 2
     ids = engine_model_ids(table, store)
-    findings = [f for h in args.homes for f in home_findings(Path(h), ids)]
+    if _gate_scanner() is None:
+        print(
+            "homes: warning: not a homelabnext checkout, so tools/no_raw_endpoints.py is not "
+            "loaded; addresses are found by the word scan only",
+            file=sys.stderr,
+        )
+    findings: list[str] = []
+    try:
+        for h in args.homes:
+            findings += home_findings(Path(h), ids)
+    except CouldNotMeasure as exc:
+        print(f"homes: could not measure: {exc}", file=sys.stderr)
+        return 100
     for f in findings:
         print(f"homes: {f}", file=sys.stderr)
     if findings:

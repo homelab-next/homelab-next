@@ -197,3 +197,73 @@ def test_engine_model_ids_are_bindings_and_store_names_never_role_aliases():
     assert "example-27b" in ids and "example-4b" not in ids
     assert "example-org/example-27b-fp8" in ids  # a hub repository an engine loads directly
     assert not set(table.roles) & ids
+
+
+# ---------------------------------------------------------------- A-14 on hostile input
+def _home(tmp_path: Path, name: str, body: bytes | str) -> Path:
+    home = tmp_path / name
+    home.mkdir()
+    data = body if isinstance(body, bytes) else body.encode()
+    (home / "config.yaml").write_bytes(data)
+    return home
+
+
+def _roles(tmp_path: Path, model_id: str) -> Path:
+    path = tmp_path / "roles.json"
+    doc = {
+        "roles": {
+            "main-reasoner-a": {
+                "tier": "large",
+                "bindings": [{"backend": "svc:vllm-a", "model_id": model_id}],
+            }
+        }
+    }
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def test_a_mapping_key_spelled_like_a_model_id_is_not_a_finding(tmp_path, capsys):
+    """A binding whose model_id is ``default`` must not flag the key ``model.default``; the value
+    of a key is still checked."""
+    roles = _roles(tmp_path, "default")
+    ok = _home(tmp_path, "ok", "model:\n  default: main-reasoner-a\n")
+    assert hnx(["gen", "gateway", "homes", "--roles", str(roles), str(ok)]) == 0
+    bad = _home(tmp_path, "bad", "model:\n  default: default\n")
+    assert hnx(["gen", "gateway", "homes", "--roles", str(roles), str(bad)]) == 1
+    assert "model.default names the engine model id 'default'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "value", ["Example-27B", "example-27b:q4_k_m", "openai/example-27b@awq", "OpenAI/EXAMPLE-27B"]
+)
+def test_a_model_id_is_found_without_case_and_with_a_tag_or_quant(tmp_path, value):
+    ids = ah.engine_model_ids(RoleTable.load(ROLES))
+    home = _home(tmp_path, "h", f"model:\n  default: {value}\n")
+    (finding,) = ah.home_findings(home, ids)
+    assert "engine model id 'example-27b'" in finding
+
+
+def test_a_home_that_is_not_utf8_or_not_yaml_could_not_be_measured(tmp_path, capsys):
+    for name, body in (("latin1", b"model:\n  default: caf\xe9\n"), ("bad", "model: [\n")):
+        home = _home(tmp_path, name, body)
+        assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 100
+        err = capsys.readouterr().err
+        assert "homes: could not measure:" in err and "Traceback" not in err, err
+
+
+def test_a_self_referential_anchor_is_scanned_once_not_recursed(tmp_path, capsys):
+    home = _home(tmp_path, "loop", f"loop: &x [*x, {V4A}]\nmodel:\n  default: main-reasoner-a\n")
+    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 1
+    err = capsys.readouterr().err
+    assert err.count(f"names the IP address {V4A}") == 1, err
+
+
+def test_outside_a_checkout_the_scan_still_finds_keyed_and_userinfo_addresses(monkeypatch, capsys):
+    monkeypatch.setattr(ah, "_gate_scanner", lambda: None)
+    assert ah.ip_literals(f"host={V4A}") == [V4A]
+    assert ah.ip_literals(f"u@{V4B}") == [V4B]
+    assert ah.ip_literals(f"ssh://u@{V4C}:22/x") == [V4C]
+    assert (
+        hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(EXAMPLE / "homes/vllm-a")]) == 0
+    )
+    assert "not loaded; addresses are found by the word scan only" in capsys.readouterr().err

@@ -221,9 +221,12 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   (`tests/generators/fixtures/controller-backends/fail/`).
 - **Invariant A-14: no agent home names an IP address or an engine model id.**
   `hnx gen gateway homes --roles ROLES [--store STORE] HOME...` fails on any `config.yaml` that
-  names an IPv4 or IPv6 address, documentation ranges included, anywhere in the file. It also
-  fails on an engine model id anywhere in the file, alone or behind a provider prefix
-  (`openai/<id>`). The fast invariants run covers it (`make invariants`, criterion A-14 of
+  names an IPv4 or IPv6 address, documentation ranges included, anywhere in the file, keys
+  included. It also fails on an engine model id in any value (never a key, which is a field
+  name), compared without case, alone or behind a provider prefix (`openai/<id>`) and with or
+  without a `:tag` or `@quant` suffix. A missing `config.yaml` is a failure; one that is not
+  UTF-8 or not YAML is *could not measure* (exit 100), neither a pass nor a finding. The fast
+  invariants run covers it (`make invariants`, criterion A-14 of
   `examples/registers/invariants.yml`), over the example's homes. The pass and fail fixtures are
   in `tests/generators/fixtures/hermes-homes/`.
 
@@ -237,7 +240,10 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   A role alias is never one, even when it is spelled like one, because a home must name a role.
   A store entry's own key is not one either: no engine serves under that name. Addresses are found
   with the repository gate's own detection (`tools/no_raw_endpoints.py`'s IPv4 rule and the hosts
-  of its URL rules) together with `ipaddress`, which also catches IPv6. That gate exempts
+  of its URL rules, loaded once through `homelabnext/endpoint_gate.py`, the loader the
+  customization lint shares) together with `ipaddress` over the file's words (split at
+  whitespace, `=`, `@` and punctuation), which also catches IPv6. Outside a checkout the gate is
+  not there: the word scan still runs, and the command warns that the scan is reduced. That gate exempts
   `0.0.0.0` and version-like dotted numbers, but a home has no reason to name either, so here
   they count.
 

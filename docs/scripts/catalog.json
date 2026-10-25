@@ -796,8 +796,7 @@
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
-        "code:homelabnext/customization/lint.py",
-        "code:homelabnext/generators/agent_homes.py",
+        "code:homelabnext/endpoint_gate.py",
         "make:gates"
       ]
     },
