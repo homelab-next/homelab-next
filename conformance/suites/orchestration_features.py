@@ -237,6 +237,9 @@ def _(o):
     placed = [p.backend for p in o.placements(rid)]
     assert len(placed) == 2, f"two attempts, placements {placed}"
     assert set(placed) <= ok, f"constraints {c} hold on {sorted(ok)}; attempts ran on {placed}"
+    if ok >= {b.name for b in o.backends()}:  # one backend, or all alike: nothing excluded
+        return f"ok (vacuous: every backend meets {c}, so no placement could violate them)"
+    return "ok"
 
 
 @SUITE.check(

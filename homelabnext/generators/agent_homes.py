@@ -77,6 +77,16 @@ def parse_controller(raw: Any, base: Path, problems: list[str]) -> ControllerRef
     if not isinstance(cfg, str) or not cfg:
         problems.append("controller.config: the controller's config file is required")
         return None
+    root = base.resolve()
+
+    def inside(where: str, rel: str) -> Path | None:
+        path = (base / rel).resolve()
+        if not path.is_relative_to(root):
+            problems.append(f"{where}: {rel} leaves the spec's directory")
+            return None
+        return path
+
+    config = inside("controller.config", cfg)
     homes: dict[str, Path] = {}
     raw_homes = raw.get("homes") or {}
     if not isinstance(raw_homes, Mapping):
@@ -86,8 +96,10 @@ def parse_controller(raw: Any, base: Path, problems: list[str]) -> ControllerRef
         if not isinstance(d, str) or not d:
             problems.append(f"controller.homes.{name}: a HERMES_HOME directory")
             continue
-        homes[str(name)] = base / d
-    return ControllerRef(base / cfg, homes)
+        home = inside(f"controller.homes.{name}", d)
+        if home is not None:
+            homes[str(name)] = home
+    return ControllerRef(config, homes) if config is not None else None
 
 
 def _load(path: Path) -> Any:
@@ -370,16 +382,26 @@ def home_findings(home: Path, ids: set[str]) -> list[str]:
     return out
 
 
-def main(argv: Iterable[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        prog="hnx gen gateway homes",
-        description="Fail when an agent home's config.yaml names an IP address or an engine "
-        "model id (invariant A-14)",
-    )
+#: what ``hnx gen gateway homes`` does, for its help
+HOMES_HELP = "fail when a HERMES_HOME config.yaml names an IP address or an engine model id (A-14)"
+
+
+def add_arguments(ap: argparse.ArgumentParser) -> None:
+    """The arguments of ``hnx gen gateway homes`` (a subcommand of :mod:`.llm_gateway`)."""
     ap.add_argument("homes", nargs="+", help="HERMES_HOME directories (each holds config.yaml)")
     ap.add_argument("--roles", required=True, help="the role table (model_roles.json)")
     ap.add_argument("--store", help="a model store manifest, for its served names and repos")
-    args = ap.parse_args(list(argv) if argv is not None else None)
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="hnx gen gateway homes", description=HOMES_HELP)
+    add_arguments(ap)
+    return run(ap.parse_args(list(argv) if argv is not None else None))
+
+
+def run(args: argparse.Namespace) -> int:
+    """``hnx gen gateway homes``: exit 0 clean, 1 a finding, 2 bad arguments, 100 could not
+    measure."""
     try:
         table = RoleTable.load(args.roles)
         store = json.loads(Path(args.store).read_text(encoding="utf-8")) if args.store else None

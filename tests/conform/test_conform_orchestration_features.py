@@ -117,3 +117,49 @@ def test_the_shadow_limit_check_passes_a_target_that_starts_runs_eagerly():
     subject."""
     (res,) = run_checks(suite.SUITE, _Eager, only=["one-unfinished-shadow-run-per-job"])
     assert res.status == "pass", res.evidence
+
+
+def test_the_controller_stand_in_starts_the_lower_priority_number_first(tmp_path):
+    """What the adapter's ``priority`` claim rests on, at the controller's default concurrency 1:
+    with the one slot busy, a priority-9 job and then a priority-1 job are queued; when the slot
+    frees, the priority-1 job starts first (``min(priority, submit order)`` in the job API)."""
+    import threading
+
+    fake = api.FakeController(tmp_path, concurrency=1).start()
+    o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, poll=0.01, wait_floor=5)
+    release, started, order = threading.Event(), threading.Event(), []
+    try:
+
+        def block(p):
+            started.set()
+            release.wait(10)
+            return "done"
+
+        o.define("block", block)
+        o.define("rec", lambda p: order.append(p["tag"]))
+        busy = o.submit("block", {}, idempotency_key="busy")
+        fake.status(busy)  # a client is waiting on it: admittable at once
+        assert started.wait(10), "the blocking job never started"
+        low = o.submit("rec", {"tag": "low"}, idempotency_key="low", priority=9)
+        high = o.submit("rec", {"tag": "high"}, idempotency_key="high", priority=1)
+        for rid in (low, high):
+            assert fake.status(rid)[1]["state"] == "queued"
+        release.set()
+        for rid in (busy, low, high):
+            assert o.wait(rid, timeout=10).state == "succeeded"
+        assert order == ["high", "low"], order
+    finally:
+        release.set()
+        o.close()
+        fake.stop()
+
+
+def test_the_placement_check_says_when_it_is_vacuous():
+    class OneBackend(FakeOrchestrator):
+        def backends(self):
+            return BACKENDS[:1]
+
+    (res,) = run_checks(suite.SUITE, OneBackend, only=["every-attempt-meets-the-constraints"])
+    assert res.status == "pass" and "vacuous" in res.evidence
+    (res,) = run_checks(suite.SUITE, FakeOrchestrator, only=["every-attempt-meets-the-constraints"])
+    assert res.evidence == "ok"

@@ -247,6 +247,10 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   `0.0.0.0` and version-like dotted numbers, but a home has no reason to name either, so here
   they count.
 
+  A-14 does not prove that `model.base_url` *is* the gateway, only that it names no address, and
+  it does not compare `model.context_length` with the role's `max_context_tokens`. Both are
+  follow-ups, not built here.
+
 ## Additive `orchestration` contract features
 
 These are not contract changes. Each one is an optional feature (ADR-0001: evolve additively),
@@ -275,7 +279,11 @@ The `llm_orchestrator` adapter declares `priority` and none of the others. The j
 priority from 1 to 100 and admits the lowest number first, then submit order (`handlers.go:97-111`
 and the scheduler's queue order, as the recorded stand-in models them). The adapter sends the
 number it is given and refuses one outside that range. Its `capacity()` reports no limit, so the
-priority check skips there. The job API reports neither the backend nor the lane an attempt ran
+priority check skips there, and no target file binds `orchestration-features`. The claim is
+proved offline instead: `tests/conform/test_conform_orchestration_features.py` drives the
+recorded stand-in at the controller's default concurrency of 1, queues a priority-9 job and then
+a priority-1 job behind a busy slot, and requires the priority-1 job to start first. Against a
+live controller it is still unmeasured. The job API reports neither the backend nor the lane an attempt ran
 on, so it cannot show `shadow`, `constraints` or `local-only` being honoured, even though the
 controller has shadow lanes and `local_only` profiles. It has no list route for `list-runs`. A
 controller-side route that reports placements is what would let the adapter declare those

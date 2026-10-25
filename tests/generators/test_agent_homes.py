@@ -267,3 +267,33 @@ def test_outside_a_checkout_the_scan_still_finds_keyed_and_userinfo_addresses(mo
         hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(EXAMPLE / "homes/vllm-a")]) == 0
     )
     assert "not loaded; addresses are found by the word scan only" in capsys.readouterr().err
+
+
+def test_the_endpoint_gate_is_loaded_once_and_shared():
+    from homelabnext import endpoint_gate
+
+    mod = endpoint_gate.load("t")
+    assert mod is not None and mod is endpoint_gate.load("other")
+    assert mod.__name__ == endpoint_gate.MODULE and ah._gate_scanner() == mod.scan_text
+
+
+@pytest.mark.parametrize("field", ["config", "home"])
+def test_controller_paths_stay_inside_the_spec_directory(tmp_path, field):
+    d = tmp_path / "s"
+    shutil.copytree(EXAMPLE, d, ignore=shutil.ignore_patterns("gateway"))
+    doc = yaml.safe_load((d / "gateway.yml").read_text(encoding="utf-8"))
+    if field == "config":
+        doc["controller"]["config"] = "../elsewhere/controller.yaml"
+    else:
+        doc["controller"]["homes"]["vllm-a"] = "../../somewhere"
+    (d / "gateway.yml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(d / "gateway.yml")
+    assert any("leaves the spec's directory" in p for p in exc.value.problems), exc.value.problems
+
+
+def test_homes_is_a_real_subcommand_with_its_own_help(capsys):
+    assert hnx(["gen", "gateway", "homes", "--help"]) == 0
+    assert "--roles" in capsys.readouterr().out
+    assert hnx(["gen", "gateway", "homes", str(EXAMPLE / "homes/vllm-a")]) == 2  # --roles needed
+    assert "--roles" in capsys.readouterr().err

@@ -175,7 +175,10 @@ shadow lane only with one unfinished per job, placement constraints (tags, minim
 exclusive), local-only jobs never re-run on cloud, and a run list with each run once in its
 state. Each of its checks requires its own feature, so a target that declares none of them skips
 the suite ([orchestration-controller.md](orchestration-controller.md)). It is a suite of its own
-because the `orchestration` suite would reach the 24-check ceiling with these checks.
+because the `orchestration` suite would reach the 24-check ceiling with these checks. Its priority check is a
+`should` (ordering is observable only while one slot is free), so its defect, a queue served first
+come first served, is pinned by a test (`tests/conform/test_conform_orchestration_features.py`)
+rather than registered as a mutant.
 
 ## Proving the suite can fail: mutants
 

@@ -74,6 +74,7 @@ from homelabnext.models.store import ProblemsError
 from homelabnext.registry.model import secret_env_name
 from homelabnext.registry.models import RoleTable, RoleTableError
 
+from . import agent_homes
 from .agent_homes import ControllerRef, controller_problems, parse_controller
 from .core import MARKER, check_tree, write_tree
 
@@ -1451,11 +1452,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     rd.add_argument("spec")
     rd.add_argument("out_dir")
     rd.add_argument("--check", action="store_true", help="fail on drift or an audit finding")
-    sub.add_parser(
-        "homes",
-        help="fail when a HERMES_HOME config.yaml names an IP address or an engine model id",
-        add_help=False,
-    )
+    hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
+    agent_homes.add_arguments(hm)
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
     pv.add_argument("keys")
     pv.add_argument("--endpoint-env", default="HNX_ENDPOINT_LLM_GATEWAY")
@@ -1469,12 +1467,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         help=f"do not delete this gateway's {MANAGED} keys whose alias the file no longer declares",
     )
     pv.add_argument("--dry-run", action="store_true", help="send no write; print what would change")
-    argv = list(argv) if argv is not None else sys.argv[1:]
-    if argv[:1] == ["homes"]:
-        from .agent_homes import main as homes_main
-
-        return homes_main(argv[1:])
-    args = ap.parse_args(argv)
+    args = ap.parse_args(list(argv) if argv is not None else None)
+    if args.cmd == "homes":
+        return agent_homes.run(args)
     if args.cmd == "provision":
         import os
 
