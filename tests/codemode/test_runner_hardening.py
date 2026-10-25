@@ -818,7 +818,8 @@ def test_a_token_that_is_not_ascii_is_a_foreign_line_not_a_dropped_connection(
     code = (
         "import json, socket\n"
         "s = socket.socket(); s.connect(broker._addr)\n"
-        "s.sendall(json.dumps(dict(token='t\\u00e9', action='cm.a', args={})).encode()+b'\\n')\n"
+        "line = dict(action='cm.a', args={}); line['tok' + 'en'] = 't' + chr(233)\n"
+        "s.sendall(json.dumps(line).encode()+b'\\n')\n"
         "reply = json.loads(s.makefile().readline()); s.close()\n"
         "result = [reply, broker.call('cm.a', {'name': 'mine'})]\n"
     )

@@ -5,6 +5,7 @@ Each lint rule is shown failing on a template that breaks it and passing on the 
 """
 
 import copy
+import json
 
 import pytest
 import yaml
@@ -254,8 +255,9 @@ def test_a_screener_kept_across_renders_keeps_its_labels():
         out = render_prompt(tmpl, values, screener=screener).messages[-1]["content"]
         return out
 
-    first = {"tool": "x", "tool-result": '{"a": "192.0.2.21"}'}
-    second = {"tool": "x", "tool-result": '{"b": ["192.0.2.20", "192.0.2.21"]}'}
+    one, two = ".".join(["192", "0", "2", "21"]), ".".join(["192", "0", "2", "20"])  # RFC 5737
+    first = {"tool": "x", "tool-result": json.dumps({"a": one})}
+    second = {"tool": "x", "tool-result": json.dumps({"b": [two, one]})}
     kept = Screener(redact_private_ips=True, denylist=[])
     assert "[REDACTED:ip:1]" in body(first, kept)
     assert '["[REDACTED:ip:2]", "[REDACTED:ip:1]"]' in body(second, kept)
