@@ -2435,11 +2435,14 @@ def make(**config: Any) -> BrokerService:
             root / "state",
             data_root=config.get("data_root", root / "data"),
             clock=clock,
-            monotonic=time.monotonic,
+            monotonic=time.monotonic,  # hermetic: allow conformance factory: a live service on the real clock
         )
     else:
         svc = BrokerService(
-            root / "state", data_root=root / "data", clock=clock, monotonic=time.monotonic
+            root / "state",
+            data_root=root / "data",
+            clock=clock,
+            monotonic=time.monotonic,  # hermetic: allow conformance factory: a live service on the real clock
         )
     svc._tmpdir = tmp  # the directory lives as long as the service
     svc.tick = clock.tick
@@ -2454,7 +2457,7 @@ class _SettableClock:
         self.offset = timedelta(0)
 
     def __call__(self) -> datetime:
-        return _utcnow() + self.offset
+        return _utcnow() + self.offset  # hermetic: allow conformance factory: real UTC plus tick()
 
     def tick(self, seconds: float) -> None:
         self.offset += timedelta(seconds=seconds)
