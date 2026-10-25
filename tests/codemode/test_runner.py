@@ -239,6 +239,14 @@ def test_an_index_others_may_write_or_a_symlink_is_refused(tmp_path, monkeypatch
     (other / "triage" / "search.json").unlink()
     (other / "triage" / "search.json").symlink_to(root / "triage" / "search.json")
     assert sorted(load_preludes(other)) == ["profile:reader"]
+    # a profile directory that is a symlink is refused too (opened O_DIRECTORY|O_NOFOLLOW)
+    linked = _index_copy(tmp_path / "c")
+    (linked / "triage" / "search.json").unlink()
+    (linked / "triage" / "prelude.py").unlink()
+    (linked / "triage").rmdir()
+    (linked / "triage").symlink_to(root / "triage")
+    assert sorted(load_preludes(linked)) == ["profile:reader"]
+    assert sorted(load_index(linked)) == ["profile:reader"]
     (other / "reader" / "search.json").write_text("{not json")
     assert load_preludes(other) == {}
 
