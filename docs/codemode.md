@@ -72,7 +72,13 @@ declare a `result_schema` (`schemas/broker/handler` 1.2, additive): a JSON Schem
 decoded `output`. The generator renders the stub's return type from it with the mapping the
 parameters use (a named interface/`TypedDict` for an object with properties, else an inline type),
 puts it in `search.json`'s `result`, and holds every string in it to the same checks as a params
-schema. A handler without one keeps `unknown`/`Any`. The broker only validates the schema when it
+schema. A handler without one keeps `unknown`/`Any`. It describes only the success case (exit 0, not truncated, stdout valid JSON); text output, a
+truncated output and a non-zero exit are the CM-5 runner's to define, and the stub type does not
+cover them yet. A schema the generator cannot render faithfully (a `required` name declared only
+inside `allOf`, say) leaves that method's result `unknown`/`Any`; a refused character or `*/` in
+it still fails generation. A `$ref` is local or a shared id and is never dereferenced by the
+generator. An object result whose property names are not plain identifiers (`exit-code`, `class`)
+is typed inline with quoted keys (`dict[str, Any]` in Python). The broker only validates the schema when it
 loads the document; it does **not** check an output against it at call time, so it is a statement of
 intent, not a guarantee. Checking belongs to the CM-5 runner, which may refuse or flag an output
 that does not match.

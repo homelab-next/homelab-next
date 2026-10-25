@@ -131,7 +131,9 @@ A handler document pins the file and says how to run it:
 A handler document (1.2) may also carry `result_schema`: a JSON Schema object describing the
 handler's `output` once decoded as JSON. The broker checks only that it is a valid 2020-12 schema
 when it loads the document (a malformed one refuses the manifest, naming the file); it does **not**
-enforce it at call time, and an output that does not match is returned unchanged. Runtime checking
+enforce it at call time, and an output that does not match is returned unchanged. It describes only the success case (exit 0,
+not truncated, stdout valid JSON); text output, truncation and a non-zero exit are the CM-5 runner's
+to define, and the generated type does not cover them yet. Runtime checking
 belongs to the CM-5 runner (`docs/codemode.md`). `hnx codemode gen` types the method's result from it.
 
 The broker validates `params` against `params_schema`, reads the handler once, checks its sha256

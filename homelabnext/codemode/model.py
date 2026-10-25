@@ -364,7 +364,9 @@ def build_models(
             summary, bad = doc_line(f"{name}: description", text)
             bad += _param_problems(name, params)
             if kind == "exec" and result is not None:
-                bad += _schema_problems(f"{name}: result", result)
+                bad += _text_problems(f"{name}: result", result)
+                if _schema_problems(f"{name}: result", result, texts=False):
+                    result = None  # not renderable faithfully: the method's result is untyped
             problems += bad
             if not bad:
                 methods.append(
