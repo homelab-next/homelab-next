@@ -7,24 +7,6 @@
       "tier": "read"
     },
     {
-      "action": "dns.lookup",
-      "handler": "handlers/dns-lookup.sh",
-      "requires_approval": false,
-      "tier": "read"
-    },
-    {
-      "action": "dhcp.leases",
-      "handler": "handlers/dhcp-leases.sh",
-      "requires_approval": false,
-      "tier": "read"
-    },
-    {
-      "action": "hypervisor.guests",
-      "handler": "handlers/hypervisor-guests.sh",
-      "requires_approval": false,
-      "tier": "read"
-    },
-    {
       "action": "records.annotate",
       "handler": "handlers/records-annotate.sh",
       "requires_approval": false,
@@ -55,10 +37,7 @@
   "grants": [
     {
       "actions": [
-        "service.status",
-        "dns.lookup",
-        "dhcp.leases",
-        "hypervisor.guests"
+        "service.status"
       ],
       "max_tier": "read",
       "profile": "profile:reader"
@@ -66,9 +45,6 @@
     {
       "actions": [
         "service.status",
-        "dns.lookup",
-        "dhcp.leases",
-        "hypervisor.guests",
         "records.annotate",
         "service.restart"
       ],

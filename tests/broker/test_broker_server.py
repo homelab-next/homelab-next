@@ -180,12 +180,7 @@ def test_the_reader_sees_only_its_grant_and_not_others_requests(broker):
     c = BrokerClient(broker.path)
     rid = c.submit("memory.write", {"name": "a.md", "content": "x"})["request_id"]
     broker.as_uid(READER_UID)
-    assert [r["action"] for r in c.actions()["actions"]] == [
-        "dhcp.leases",
-        "dns.lookup",
-        "hypervisor.guests",
-        "service.status",
-    ]
+    assert [r["action"] for r in c.actions()["actions"]] == ["service.status"]
     with pytest.raises(Denied) as exc:
         c.status(rid)
     assert exc.value.reason == "not-request-owner"

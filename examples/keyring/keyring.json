@@ -1,6 +1,6 @@
 {
   "generated_from": {
-    "broker": "sha256:8acda7b4077217ed370ed9e80ba36553d653dfb1a5ac99359905b66983f8dcdb",
+    "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
     "classes": "sha256:f3fd0eb61dd2dbd1d1ecaff8230ddf8fa077c4e088afb52db61d81eb6e0c55b8",
     "profiles": {
       "profile:reader": "sha256:c2a60bc0b12f1c5f9a10218cc6008dca2c4ce03d7d2fc8c12d9d2ac80f2e448c",
@@ -102,24 +102,6 @@
         }
       ],
       "grants": [
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
-          "resource": "action:dhcp.leases"
-        },
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
-          "resource": "action:dns.lookup"
-        },
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
-          "resource": "action:hypervisor.guests"
-        },
         {
           "approval": false,
           "kind": "broker-action",
@@ -241,24 +223,6 @@
           "approval": false,
           "kind": "broker-action",
           "level": "read",
-          "resource": "action:dhcp.leases"
-        },
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
-          "resource": "action:dns.lookup"
-        },
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
-          "resource": "action:hypervisor.guests"
-        },
-        {
-          "approval": false,
-          "kind": "broker-action",
-          "level": "read",
           "resource": "action:service.status"
         },
         {
@@ -288,19 +252,7 @@
       "denials": [
         {
           "reason": "not granted (default deny)",
-          "resource": "action:dhcp.leases"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "action:dns.lookup"
-        },
-        {
-          "reason": "not granted (default deny)",
           "resource": "action:host.reboot"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "action:hypervisor.guests"
         },
         {
           "reason": "not granted (default deny)",

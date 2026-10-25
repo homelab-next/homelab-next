@@ -48,7 +48,9 @@ actions:
   - {action: proposal.file, tier: write, handler: builtin/lane, lane: proposals, requires_approval: false}
   - {action: service.status, tier: read, handler: handlers/service-status.sh, requires_approval: false}
   - {action: service.restart, tier: execute, handler: handlers/service-restart.sh, requires_approval: true}
-  # read actions for a correlation (a name, its lease, the guest holding it): stand-ins only
+  # read actions for a correlation (a name, its lease, the guest holding it): stand-in
+  # handlers answering fixed fictional data, for the walkthrough and the Code Mode goldens only;
+  # granted to profile:triage alone (the production example does not carry them)
   - {action: dns.lookup, tier: read, handler: handlers/dns-lookup.sh, requires_approval: false}
   - {action: dhcp.leases, tier: read, handler: handlers/dhcp-leases.sh, requires_approval: false}
   - {action: hypervisor.guests, tier: read, handler: handlers/hypervisor-guests.sh, requires_approval: false}
@@ -58,5 +60,5 @@ grants:
               dns.lookup, dhcp.leases, hypervisor.guests]
     max_tier: execute
   - profile: profile:reader
-    actions: [service.status, dns.lookup, dhcp.leases, hypervisor.guests]
+    actions: [service.status]
     max_tier: read
