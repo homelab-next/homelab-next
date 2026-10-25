@@ -4,14 +4,17 @@
 Every tool returns a JSON-able dict built from the same code that generates the documentation
 (the capability model of :mod:`homelabnext.sop.capabilities`, the registry loader, the knowledge
 graph, the ``context`` reference store, the lesson review and the invariants results); nothing
-parses generated Markdown.  :meth:`Catalog.dump` serialises a result deterministically (sorted
+parses generated Markdown.  Authored Markdown is served in levels (ADR-0032,
+:mod:`homelabnext.context.levels`): ``context_for`` returns summaries, ``outline`` one
+document's headings with sizes, ``section`` one section.  :meth:`Catalog.dump` serialises a result deterministically (sorted
 keys) and within :data:`MAX_RESULT_CHARS`, dropping trailing list items, and saying so, when a
 result would not fit.
 
 Nothing here writes, executes or reaches the network.  The only files read are the checkout's
 own sources; a caller-supplied path is repo-relative, may not contain ``..`` or pass through a
 symbolic link, and only :meth:`Catalog.get_schema` reads one -- a ``.json`` file under
-``schemas/``.  A refusal is a :class:`CatalogError` whose message never repeats free text the
+``schemas/``; ``outline`` and ``section`` resolve a path to a graph node's indexed content and
+never open the file.  A refusal is a :class:`CatalogError` whose message never repeats free text the
 caller sent.  Sources are loaded once, on first use: restart the server to see later edits.
 """
 
@@ -22,6 +25,7 @@ import inspect
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -29,6 +33,7 @@ from typing import Any
 from .scope import in_any, intersect
 
 __all__ = [
+    "DETAILS",
     "MAX_HIT_CONTENT_CHARS",
     "MAX_ITEMS",
     "MAX_RESULT_CHARS",
@@ -47,14 +52,21 @@ MAX_ITEMS = 64
 MAX_DEPTH = 3
 MAX_RELATED_BUDGET = 200
 _MAX_ITEM_CHARS = 512
+#: ``context_for``'s levels of detail: ``summary`` (level 0, the default) or ``full`` (content)
+DETAILS = ("summary", "full")
+#: ``section``: most slugs an unknown-heading error lists
+_MAX_CANDIDATES = 50
+#: the one refusal for a document that does not exist and one outside the scope
+_NO_DOCUMENT = "no such document in scope"
 
 #: the server's whole tool list: every one reads, none changes anything (a test pins this)
 TOOLS: dict[str, str] = {
     "context_for": (
         "Context for a task: the repository records (pages, lessons, runbooks, capabilities, "
         "services, checks ...) related to the files being edited and the task text, ranked "
-        "relation first, with content and sha256 digest. `allowed` (mandatory) lists the ids "
-        "and namespaces you may see, e.g. ['doc:docs/', 'cap:', 'lesson:']."
+        "relation first, each with its summary and sha256 digest; detail='full' adds the "
+        "content. `allowed` (mandatory) lists the ids and namespaces you may see, e.g. "
+        "['doc:docs/', 'cap:', 'lesson:']. Open a hit with outline, then section."
     ),
     "find_services": (
         "Registry services (name, capability, impl, owner, tags, depends_on, mcp), optionally "
@@ -81,9 +93,22 @@ TOOLS: dict[str, str] = {
         "Every conformance capability: purpose, operation count, MUST/SHOULD check counts and "
         "implementations (fake, adapters, registry services)."
     ),
+    "outline": (
+        "One Markdown document's outline, by id or repo-relative path: title, summary (authored "
+        "front-matter `summary:` or the first paragraph), size, digest and every heading with "
+        "its level, slug, heading path and section size. Scoped by `allowed` like context_for."
+    ),
     "related": (
         "The knowledge graph's ranked neighbourhood of node ids or repo-relative paths: nearest "
         "first, then strongest relation (docs/graph.md)."
+    ),
+    "section": (
+        "One section of a Markdown document: the heading named exactly by its slug or full "
+        "heading path (from outline), with its subsections, size and digest. No fuzzy match: an "
+        "unknown or ambiguous heading is an error listing the slugs. Pass the outline's digest "
+        "as outline_digest to refuse a changed document; page with offset/limit (next_offset). "
+        "content is the raw section text; titles, slugs, paths and summaries are cleaned. "
+        "Scoped like context_for."
     ),
     "terms": (
         "The project's terms and scope (docs/terms.md): what auditing, an audit review, an "
@@ -161,12 +186,13 @@ class Catalog:
     """The tools over the checkout at ``root``.
 
     ``scope`` (from :func:`homelabnext.mcp.scope.load_profile_scope`) bounds every tool that
-    names capabilities, services or register records: ``context_for`` intersects a call's
-    ``allowed`` with it, ``related`` computes the neighbourhood over the in-scope nodes only, and
+    names capabilities, services or register records: ``context_for``, ``outline`` and
+    ``section`` intersect a call's ``allowed`` with it, ``related`` computes the neighbourhood over the in-scope nodes only, and
     ``list_capabilities``, ``get_contract``, ``find_services`` and ``lessons_due`` return only
     in-scope capabilities, services and records (an out-of-scope one reads like an unknown one).
     ``get_schema`` and ``invariants_status`` describe the repository's public contracts and are
-    not scoped.  ``None`` means unscoped (``context_for`` still requires its own ``allowed``)."""
+    not scoped.  ``None`` means unscoped (``context_for``, ``outline`` and ``section`` still
+    require their own ``allowed``)."""
 
     def __init__(
         self,
@@ -189,6 +215,7 @@ class Catalog:
         self._caps: dict[str, Any] | None = None
         self._registry = None
         self._schema_ids: dict[str, str] | None = None
+        self._by_path: dict[str, list[str]] | None = None
 
     # -- lazily loaded sources ----------------------------------------------------------------
     @property
@@ -420,14 +447,24 @@ class Catalog:
         allowed: list[str] | None = None,
         kinds: list[str] | None = None,
         budget: int = 10,
+        detail: str | None = "summary",
     ) -> dict[str, Any]:
+        """Ranked hits.  ``detail="summary"`` (the default) gives each hit's level 0 -- id, kind,
+        title, path, score, digest and its summary with ``summary_source`` -- and no content: a
+        caller opens what it needs with :meth:`outline` and :meth:`section`.  ``"full"`` adds the
+        snippet and the content (capped at :data:`MAX_HIT_CONTENT_CHARS`)."""
         from homelabnext.context import MAX_BUDGET, MAX_QUERY_CHARS, ContextError, Query
+        from homelabnext.context.levels import clean, summary_of
         from homelabnext.graph import seeds_for
 
         req = _items(allowed, "allowed", required=True)
         rel = [relpath(p) for p in _items(paths, "paths")]
         kind_list = _items(kinds, "kinds")
         budget = _int(budget, "budget", 0, MAX_BUDGET)
+        if detail is None:  # an explicit null takes the default
+            detail = "summary"
+        if detail not in DETAILS:
+            raise CatalogError("detail must be one of: " + ", ".join(DETAILS))
         if not isinstance(task_text, str):
             raise CatalogError("task_text must be a string")
         if len(task_text) > MAX_QUERY_CHARS:
@@ -447,26 +484,163 @@ class Catalog:
             raise CatalogError(str(exc)) from None
         out = []
         for h in hits:
+            summary, source = summary_of(h.content, h.path, h.id)
             item = {
                 "id": h.id,
                 "kind": h.kind,
-                "title": h.title,
+                "title": clean(h.title),
                 "path": h.path,
                 "score": h.score,
                 "digest": h.digest,
-                "snippet": h.snippet,
-                "content": h.content[:MAX_HIT_CONTENT_CHARS],
+                "summary": summary,
+                "summary_source": source,
             }
-            if len(h.content) > MAX_HIT_CONTENT_CHARS:
-                item["content_truncated"] = True
-                item["content_chars"] = len(h.content)
+            if detail == "full":
+                item["snippet"] = h.snippet
+                item["content"] = h.content[:MAX_HIT_CONTENT_CHARS]
+                if len(h.content) > MAX_HIT_CONTENT_CHARS:
+                    item["content_truncated"] = True
+                    item["content_chars"] = len(h.content)
             out.append(item)
         return {
+            "detail": detail,
             "scope": sorted(scope),
             "scoped_by": self.scope_source or None,
             "seeds": [s for s in seeds if in_any(s, scope)],
             "hits": out,
         }
+
+    # -- levels: outline (L1) and section (L2) of one document --------------------------------
+    def _paths(self) -> dict[str, list[str]]:
+        """Repo-relative path -> the ids of the graph nodes whose content is that file."""
+        if self._by_path is None:
+            idx: dict[str, list[str]] = {}
+            for n in self.graph.nodes.values():
+                if n.path:
+                    idx.setdefault(n.path, []).append(n.id)
+            self._by_path = {p: sorted(ids) for p, ids in idx.items()}
+        return self._by_path
+
+    def _document(self, id_or_path: Any, allowed: Any):
+        """The document ``id_or_path`` names, as a :class:`~homelabnext.context.Hit`, within the
+        call's ``allowed`` narrowed to the server's scope.  A document outside that scope is
+        refused with exactly the message of one that does not exist."""
+        from homelabnext.context import ContextError, NotFound
+
+        scope = self.effective_scope(_items(allowed, "allowed", required=True))
+        if not isinstance(id_or_path, str) or not id_or_path or len(id_or_path) > _MAX_ITEM_CHARS:
+            raise CatalogError("give a document id (doc:docs/mcp.md) or a repo-relative path")
+        from homelabnext.graph import resolve_ids
+        from homelabnext.graph.sources import record_aliases
+
+        # a record by uid or by a legacy code, as related takes it; the legacy code's deprecation
+        # warning is suppressed here, since a warning only for a code that resolves would say the
+        # record exists before the scope check has run
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            (doc_id,) = resolve_ids(self.graph, [id_or_path], record_aliases(self.root))
+        if doc_id not in self.graph.nodes:
+            ids = [i for i in self._paths().get(relpath(id_or_path), []) if in_any(i, scope)]
+            if len(ids) > 1:  # in-scope ids only: an out-of-scope sibling is never counted
+                raise CatalogError("that path defines several records; name one by id")
+            doc_id = ids[0] if ids else ""
+        try:
+            return self.store.get(doc_id, scope)
+        except NotFound:
+            raise CatalogError(_NO_DOCUMENT) from None
+        except ContextError as exc:  # InvalidQuery: a malformed scope
+            raise CatalogError(str(exc)) from None
+
+    def outline(self, id_or_path: str, allowed: list[str] | None = None) -> dict[str, Any]:
+        """Level 1 of one document: its summary (level 0) and its heading outline with sizes.
+        A non-Markdown document has no headings.  ``digest`` names this outline: pass it to
+        :meth:`section` as ``outline_digest`` and a later edit is refused, not misread.  A
+        document longer than the parse bounds lists the headings it read (``parse_truncated``,
+        ``parsed_chars``)."""
+        from homelabnext.context.levels import clean, is_markdown, parse, summary_of
+
+        h = self._document(id_or_path, allowed)
+        summary, source = summary_of(h.content, h.path, h.id)
+        out = {
+            "id": h.id,
+            "path": h.path,
+            "title": clean(h.title),
+            "summary": summary,
+            "summary_source": source,
+            "chars": len(h.content),
+            "digest": h.digest,
+            "headings": [],
+        }
+        if is_markdown(h.path):
+            parsed = parse(h.content)
+            out["headings"] = [x.as_dict() for x in parsed.headings]
+            if parsed.truncated:
+                out["parse_truncated"] = True
+                out["parsed_chars"] = parsed.parsed_chars
+        return out
+
+    def section(
+        self,
+        id_or_path: str,
+        heading: str,
+        allowed: list[str] | None = None,
+        outline_digest: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Level 2: the section ``heading`` names exactly (a slug or a full heading path from
+        :meth:`outline`), its own heading line through the next heading of the same or a higher
+        level.  ``content`` is the raw section text, as the digest covers it (only titles, slugs,
+        paths and summaries are cleaned).  ``outline_digest`` (the outline's ``digest``) refuses the call when the document
+        has changed since, because a slug is valid only for the outline it came from.  The
+        content is ``offset`` characters in and at most ``limit`` (default and ceiling
+        :data:`MAX_HIT_CONTENT_CHARS`) long; when more follows, ``truncated`` and
+        ``next_offset`` say so.  ``chars`` and ``digest`` are always the whole section's.  An
+        unknown or ambiguous heading is refused with the document's slugs, never the text sent."""
+        from homelabnext.context import digest
+        from homelabnext.context.levels import find_section, is_markdown, parse
+
+        h = self._document(id_or_path, allowed)
+        if not isinstance(heading, str) or not heading or len(heading) > _MAX_ITEM_CHARS:
+            raise CatalogError("heading must be a slug or a heading path from outline")
+        if outline_digest is not None and outline_digest != h.digest:
+            raise CatalogError(
+                "the document changed since that outline (outline_digest differs): call "
+                "outline again and use its slugs"
+            )
+        cap = MAX_HIT_CONTENT_CHARS
+        limit = cap if limit is None else _int(limit, "limit", 1, cap)
+        if not is_markdown(h.path):
+            raise CatalogError("that document is not Markdown; it has no sections")
+        hs = parse(h.content).headings
+        found = find_section(hs, heading)
+        if len(found) != 1:
+            what = "ambiguous" if found else "unknown"
+            pool = found or hs
+            names = [x.slug for x in pool[:_MAX_CANDIDATES]]
+            more = f" (+{len(pool) - _MAX_CANDIDATES} more)" if len(pool) > _MAX_CANDIDATES else ""
+            raise CatalogError(
+                f"{what} heading; name one exactly by slug or heading path. Slugs: "
+                + (", ".join(names) or "(the document has no headings)")
+                + more
+            )
+        (sec,) = found
+        text = h.content[sec.start : sec.end]
+        offset = _int(offset, "offset", 0, len(text))
+        part = text[offset : offset + limit]
+        out = {
+            "id": h.id,
+            "heading": sec.path,
+            "slug": sec.slug,
+            "content": part,
+            "offset": offset,
+            "chars": len(text),
+            "digest": digest(text),
+        }
+        if offset + len(part) < len(text):
+            out["truncated"] = True
+            out["next_offset"] = offset + len(part)
+        return out
 
     def lessons_due(self, today: str | None = None) -> dict[str, Any]:
         from homelabnext.registers.due import review
@@ -572,6 +746,7 @@ class Catalog:
 #: the list a result may drop items from to fit the size cap
 _LIST_KEY = {
     "context_for": "hits",
+    "outline": "headings",
     "find_services": "services",
     "invariants_status": "criteria",
     "list_capabilities": "capabilities",
