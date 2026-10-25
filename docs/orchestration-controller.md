@@ -165,7 +165,7 @@ gateway's config.
 | `model.base_url` = engine URL | `model.base_url` = `https://llm-gateway.example.internal/v1` | the registry (`llm-gateway` capability) |
 | `model.api_key` (a placeholder today) | the agent's virtual key (for `profile:reader`: key `agent-reader`, secret `secret:llm-gateway/key-reader`) | the gateway's `keys.json`, one key per profile |
 | `model.context_length` | the role's `max_context_tokens` | the role table |
-| backend `max_context` (admission, `min_context` affinity) | must equal the bound role's `max_context_tokens` | proposed check below |
+| backend `max_context` (admission, `min_context` affinity) | must equal the bound role's `max_context_tokens` | `hnx gen gateway render --check` with a `controller:` block (Checks, below) |
 | backend `base_url` (passthrough target, and the socket peer that progress-liveness matches, `internal/hermesagent/policy.go:262-265`) | the gateway URL, because the `hermes` sockets now go to the gateway. The passthrough path is then removed: non-agent callers go to the gateway directly. | controller config |
 | backend `load_probe_urls`, `health_url` | **unchanged: they stay on the engine.** Admission must see engine KV load, and a gateway hides which engine is busy. | controller config |
 | `hermes_cloud_home` (re-runs the whole session on Anthropic) | a cloud home whose `model.default` is a **cloud-allowed role**. The gateway holds the provider key. | role table, gateway spec `locality: cloud` |
@@ -193,12 +193,51 @@ backend. **[verify]** whether hermes resolves `model.api_key` from the environme
 first step is a backend-level key (one per home) with the same role limits, and per-agent keys
 follow.
 
-### Proposed checks (not built)
+### Checks
 
-- `gen gateway --check` could also read the controller's backend list. It would fail when a
-  backend `name` is not a `svc:` of the spec, when a home's `model.default` is not a role bound to
-  that backend, or when `max_context` differs from the role's `max_context_tokens`.
-- An invariant: no `HERMES_HOME/config.yaml` names an IP address or an engine model id.
+Both are built. The worked example is `examples/llm-orchestrator-gateway/` (fictional, like every
+example): a gateway spec with two engines, `svc:vllm-a` and `svc:vllm-b`; a role table with one
+role per engine, `main-reasoner-a` and `main-reasoner-b`; an excerpt of the controller's config
+(`controller.yaml`); one `HERMES_HOME` per local backend (`homes/vllm-a`, `homes/vllm-b`); and the
+gateway config generated from them (`gateway/`). The repository had no controller config or home
+of its own to read, so this example is the input. `make gateway-check` runs the check on it.
+
+- **`hnx gen gateway render SPEC OUT --check` reads the controller's backend list** when the spec
+  has a `controller:` block (`config:` names the controller's config file, and `homes:` maps each
+  backend name to its `HERMES_HOME`). The backends are the `local` and `local_fallback`
+  entries under `backends` and every entry of its `additional` list. Its `cloud` entry is not
+  read: it is the session-level cloud re-run, which reaches the gateway through a cloud home's
+  role, not as a gateway backend. The check fails when:
+  - a backend `name` is not a `svc:` of the spec;
+  - the backend's home `model.default` is not a role of the role table, or is a role that is not
+    bound to that backend;
+  - the backend's `max_context` is missing or differs from that role's `max_context_tokens`;
+  - a backend has no home, a home names no backend, or a backend is declared twice.
+
+  `homelabnext/generators/agent_homes.py` (`controller_problems`) holds the rules. The tests are
+  `tests/generators/test_agent_homes.py`, with a failing fixture that breaks each rule once
+  (`tests/generators/fixtures/controller-backends/fail/`).
+- **Invariant A-14: no agent home names an IP address or an engine model id.**
+  `hnx gen gateway homes --roles ROLES [--store STORE] HOME...` fails on any `config.yaml` that
+  names an IPv4 or IPv6 address, documentation ranges included, anywhere in the file. It also
+  fails on an engine model id anywhere in the file, alone or behind a provider prefix
+  (`openai/<id>`). The fast invariants run covers it (`make invariants`, criterion A-14 of
+  `examples/registers/invariants.yml`), over the example's homes. The pass and fail fixtures are
+  in `tests/generators/fixtures/hermes-homes/`.
+
+  *Engine model id* means an id the engine itself answers to:
+  - each binding's `model_id` in the role table. It is the engine's `--served-model-name` and
+    the id the gateway sends upstream ([model-serving.md](model-serving.md)), so a home that
+    names it reaches the engine past the role table.
+  - with `--store`, each store entry's `served_model_name` and its hub repository
+    (`source.repo`), which an engine loads directly.
+
+  A role alias is never one, even when it is spelled like one, because a home must name a role.
+  A store entry's own key is not one either: no engine serves under that name. Addresses are found
+  with the repository gate's own detection (`tools/no_raw_endpoints.py`'s IPv4 rule and the hosts
+  of its URL rules) together with `ipaddress`, which also catches IPv6. That gate exempts
+  `0.0.0.0` and version-like dotted numbers, but a home has no reason to name either, so here
+  they count.
 
 ## Additive `orchestration` contract features
 

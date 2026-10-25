@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "roles": {
+    "main-reasoner-a": {
+      "tier": "large",
+      "bindings": [{"backend": "svc:vllm-a", "model_id": "example-27b"}],
+      "max_context_tokens": 131072
+    },
+    "main-reasoner-b": {
+      "tier": "large",
+      "bindings": [{"backend": "svc:vllm-b", "model_id": "example-27b"}],
+      "max_context_tokens": 65536
+    },
+    "main-reasoner-d": {
+      "tier": "large",
+      "bindings": [{"backend": "svc:vllm-d", "model_id": "example-4b"}],
+      "max_context_tokens": 32768
+    }
+  }
+}

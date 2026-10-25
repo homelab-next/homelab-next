@@ -797,6 +797,7 @@
       "trigger": [
         "ci:ci/schemas",
         "code:homelabnext/customization/lint.py",
+        "code:homelabnext/generators/agent_homes.py",
         "make:gates"
       ]
     },

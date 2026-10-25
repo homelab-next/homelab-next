@@ -43,7 +43,13 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
 :func:`audit` re-checks the *rendered* files (``hnx gen gateway --check`` runs it on what is on
 disk), so a hand edit that adds a cloud fallback to a local-only role fails the check even though
 the generator would never write it; it also fails a key in ``keys.json`` without the
-``hnx-managed`` tag or with a duplicate alias, since provisioning prunes by that tag.
+``hnx-managed`` tag or with a duplicate alias, since provisioning prunes by that tag.  With a
+``controller:`` block (the orchestration controller's config and the ``HERMES_HOME`` of each of
+its backends) ``--check`` also holds the controller's backend list to the spec and the role table
+(:func:`homelabnext.generators.agent_homes.controller_problems`): every backend ``name`` is a
+``svc:`` of the spec, its home's ``model.default`` is a role bound to it, and its ``max_context``
+is that role's ``max_context_tokens``.  ``hnx gen gateway homes`` checks that a home names no IP
+address and no engine model id (invariant A-14).
 """
 
 from __future__ import annotations
@@ -68,6 +74,7 @@ from homelabnext.models.store import ProblemsError
 from homelabnext.registry.model import secret_env_name
 from homelabnext.registry.models import RoleTable, RoleTableError
 
+from .agent_homes import ControllerRef, controller_problems, parse_controller
 from .core import MARKER, check_tree, write_tree
 
 __all__ = [
@@ -173,6 +180,9 @@ class Spec:
     #: this gateway's identity: the value of every key's ``metadata["hnx-managed"]`` tag, which
     #: provisioning prunes by (unnamed: keys are tagged ``true`` and never pruned)
     name: str = ""
+    #: the orchestration controller whose backends sit behind this gateway (``--check`` holds its
+    #: backend list and homes to the spec); None when the spec has no ``controller:`` block
+    controller: ControllerRef | None = None
 
 
 def internal_host(spec: Spec, host: str) -> bool:
@@ -314,7 +324,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     _one_line("spec", dict(doc), problems)
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
-        "backends", "local_only", "keys", "bifrost", "serving", "name",
+        "backends", "local_only", "keys", "bifrost", "serving", "name", "controller",
     }  # fmt: skip
     spec_name = doc.get("name", "")
     if spec_name != "" and not (isinstance(spec_name, str) and SLUG_RE.match(spec_name)):
@@ -535,6 +545,9 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
 
     master_key = _secret("master_key", doc.get("master_key"), problems)
     database_url = _secret("database_url", doc.get("database_url"), problems)
+    controller = None
+    if doc.get("controller") is not None:
+        controller = parse_controller(doc["controller"], base, problems)
     problems += _secret_collisions(
         keys, master_key, database_url, backends, {"bifrost.admin_password": admin_password}
     )
@@ -554,6 +567,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         bifrost_admin_password=admin_password,
         service_domain=service_domain,
         registry_hosts=frozenset(registry_hosts),
+        controller=controller,
     )
     if not problems:
         problems += locality_problems(spec)
@@ -1437,6 +1451,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     rd.add_argument("spec")
     rd.add_argument("out_dir")
     rd.add_argument("--check", action="store_true", help="fail on drift or an audit finding")
+    sub.add_parser(
+        "homes",
+        help="fail when a HERMES_HOME config.yaml names an IP address or an engine model id",
+        add_help=False,
+    )
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
     pv.add_argument("keys")
     pv.add_argument("--endpoint-env", default="HNX_ENDPOINT_LLM_GATEWAY")
@@ -1450,7 +1469,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         help=f"do not delete this gateway's {MANAGED} keys whose alias the file no longer declares",
     )
     pv.add_argument("--dry-run", action="store_true", help="send no write; print what would change")
-    args = ap.parse_args(list(argv) if argv is not None else None)
+    argv = list(argv) if argv is not None else sys.argv[1:]
+    if argv[:1] == ["homes"]:
+        from .agent_homes import main as homes_main
+
+        return homes_main(argv[1:])
+    args = ap.parse_args(argv)
     if args.cmd == "provision":
         import os
 
@@ -1490,11 +1514,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             rel: (out / rel).read_text(encoding="utf-8") for rel in files if (out / rel).is_file()
         }
         problems += audit(on_disk, spec)
+        problems += controller_problems(spec)
         for p in problems:
             print(f"gateway: {p}", file=sys.stderr)
         if problems:
             return 1
-        print(f"gateway: {len(files)} files match {args.spec} and pass the locality audit")
+        also = " and the controller's backends agree with it" if spec.controller else ""
+        print(f"gateway: {len(files)} files match {args.spec} and pass the locality audit{also}")
         return 0
     res = write_tree(out, files)
     print(f"gateway: wrote {len(res.written)}, unchanged {len(res.unchanged)} in {out}")

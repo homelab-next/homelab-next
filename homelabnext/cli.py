@@ -89,6 +89,7 @@ GEN_USAGE = """usage: hnx gen {registry,check,fleet-units,gateway,list} ...
   fleet-units SPEC OUT_DIR                  render systemd units from a fleet_units spec
   gateway render SPEC OUT_DIR [--check]     LiteLLM + Bifrost config from the model-role table
   gateway provision KEYS_JSON               create LiteLLM virtual keys on a running proxy
+  gateway homes --roles ROLES HOME...       no HERMES_HOME names an IP or an engine model id
   list                                      list generator names
 """
 

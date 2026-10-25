@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# fails A-14: an engine model id behind a provider prefix, in an auxiliary model
+model:
+  default: main-reasoner-a
+  base_url: https://llm-gateway.example.internal/v1
+auxiliary:
+  vision:
+    model: openai/example-27b

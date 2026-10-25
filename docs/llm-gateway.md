@@ -29,7 +29,14 @@ inputs:
 hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and bifrost/ under OUT_DIR
 hnx gen gateway render SPEC OUT_DIR --check    # drift check and locality audit (make gateway-check)
 hnx gen gateway provision OUT_DIR/litellm/keys.json   # create LiteLLM keys on a running proxy
+hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or an engine model id (A-14)
 ```
+
+A spec may also name the orchestration controller in front of it (`controller:`, its config and
+one `HERMES_HOME` per local backend). `--check` then also fails when a controller backend is not
+a `svc:` of the spec, its home's `model.default` is not a role bound to it, or its `max_context`
+is not that role's `max_context_tokens`
+([orchestration-controller.md](orchestration-controller.md), "Checks").
 
 It writes:
 

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration controller's backend list, as its config file has it (an excerpt; fictional,
+# like every example).  Each local backend is an engine behind the gateway: `name` is the engine's
+# svc: in gateway.yml, and `max_context` (admission and min_context affinity) must equal the
+# max_context_tokens of the role its home names.  `hnx gen gateway render gateway.yml gateway
+# --check` holds the three together (docs/orchestration-controller.md).
+backends:
+  local:
+    name: vllm-a
+    max_context: 131072
+    needs_interlock: false
+  local_fallback:
+    name: vllm-b
+    max_context: 65536
+  # the whole-session cloud re-run: not a gateway backend, so the check does not read it
+  cloud:
+    name: cloud-fallback
+hermes_agent_timeout_seconds: 600

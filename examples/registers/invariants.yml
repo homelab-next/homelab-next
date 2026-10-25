@@ -1159,6 +1159,25 @@ criteria:
   remediation: >-
     Fix the store, serving plan or role the failing test names; a served model whose bytes are
     not verified before every start can be swapped on disk unseen.
+- id: A-14
+  statement: No agent home names an IP address or an engine model id.
+  evidence: auto
+  observable: >-
+    python3 -c 'import yaml' 2>/dev/null || exit 100;
+    python3 -m homelabnext.cli gen gateway homes
+    --roles examples/llm-orchestrator-gateway/model_roles.json
+    examples/llm-orchestrator-gateway/homes/*/
+  expected: >-
+    exit 0: each HERMES_HOME of the example controller names the gateway by name and its role
+    alias, and no IP address or engine model id (a binding's model_id; with --store, an entry's
+    served name or hub repository); exit 1 naming the home, the key and what it names, and also
+    when the glob matches no home (nothing to check never reads as checked)
+  expect_regex: 'homes: [1-9]\d* home\(s\) name no IP address and no engine model id'
+  remediation: >-
+    Point model.base_url at the gateway's name and set model.default to the role bound to that
+    home's backend (docs/orchestration-controller.md, "Mapping"); a home that names an engine
+    address or model id bypasses the gateway's keys, limits and locality rule, and a model swap
+    then means editing every home instead of one role binding.
 - id: G-01
   statement: Untrusted content is delimited.
   evidence: auto

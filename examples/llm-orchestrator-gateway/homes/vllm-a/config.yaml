@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# HERMES_HOME of the controller backend vllm-a: the gateway URL and a role alias, never an engine
+# address or an engine model id (ADR-0007; invariant A-14).
+model:
+  default: main-reasoner-a
+  base_url: https://llm-gateway.example.internal/v1
+  # api_key: the home's gateway key, key-home-vllm-a in gateway.yml (delivery: see
+  # "Per-agent keys" in docs/orchestration-controller.md)
+  context_length: 131072
