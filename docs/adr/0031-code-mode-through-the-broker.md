@@ -1,3 +1,7 @@
+---
+summary: Agents may compose broker actions as short programs in a credential-free sandbox that reaches only the broker.
+summary_of: outline:sha256:5146fc805abce2f1
+---
 # ADR-0031: Agents may compose broker actions as sandboxed programs (Code Mode)
 
 - **Status:** proposed

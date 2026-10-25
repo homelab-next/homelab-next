@@ -1,3 +1,7 @@
+---
+summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
+summary_of: outline:sha256:3674cb724285c094
+---
 # Site / network model
 
 One document, `site.yml`, describes the network of a site in vendor-neutral terms: zones (VLANs and

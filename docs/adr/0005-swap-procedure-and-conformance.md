@@ -1,3 +1,7 @@
+---
+summary: Every swap of a product follows one procedure, and every capability has a passing swap conformance test.
+summary_of: outline:sha256:816dedca4a8d0f2c
+---
 # ADR-0005: Every product swap follows one procedure and every capability has a passing swap test
 
 - **Status:** proposed

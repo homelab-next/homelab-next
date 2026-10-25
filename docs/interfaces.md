@@ -1,3 +1,7 @@
+---
+summary: 'The interface index: ownership map, package layout and signatures, command line, library surfaces, registry naming, logical ids, schemas and version policy.'
+summary_of: outline:sha256:4b75245702ae5a49
+---
 # Interface index
 
 This page fixes the names every task writes against, so parallel work never edits another task's

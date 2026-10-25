@@ -1,3 +1,7 @@
+---
+summary: 'The Code Mode build plan for ADR-0031: phase 1 read-only steps CM-1 to CM-6, phase 2 hardening, later phases, open questions, and which steps are built.'
+summary_of: outline:sha256:2af7333178923f4b
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Code Mode build plan
 

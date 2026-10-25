@@ -1,3 +1,7 @@
+---
+summary: Agent profiles compiled under a policy ceiling, schemas, the context-pack assembler, session access block, include rules, keyring, memory and broker contracts.
+summary_of: outline:sha256:ca0a11d4adcc627e
+---
 # Agent profiles, context packs and the broker contracts
 
 Vendor-neutral building blocks for running agents under least privilege. Everything here is

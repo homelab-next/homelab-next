@@ -1,3 +1,7 @@
+---
+summary: 'The broker service: named actions decided allow, deny or needs-approval, lanes, exec handlers, approvals, state, Code Mode tokens, running it and its MCP tools.'
+summary_of: outline:sha256:e6b2fa713f21b880
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Broker service
 

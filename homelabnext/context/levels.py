@@ -76,6 +76,8 @@ __all__ = [
     "MAX_PARSE_LINES",
     "MAX_SUMMARY_CHARS",
     "MAX_TITLE_CHARS",
+    "OUTLINE_KEY",
+    "OUTLINE_PREFIX",
     "REFUSED_CATEGORIES",
     "SUMMARY_SOURCES",
     "Heading",
@@ -87,9 +89,11 @@ __all__ = [
     "find_section",
     "first_paragraph",
     "front_matter",
+    "generated_summary_lines",
     "headings",
     "is_markdown",
     "memo_bytes",
+    "outline_digest",
     "parse",
     "summary_of",
     "visible",
@@ -112,6 +116,11 @@ SUMMARY_SOURCES = ("authored", "generated", "first-paragraph", "synthesized", "n
 #: the front-matter key a generator sets (to true) on a ``summary:`` it derived from source data:
 #: the summary is then ``generated``, not ``authored`` (written by a person and covered by review)
 GENERATED_KEY = "summary_generated"
+#: the front-matter key that records which heading outline an authored ``summary:`` was last
+#: reread against, and the prefix of its value (``outline:sha256:<first 16 hex>``, see
+#: :func:`outline_digest`).  Machine-owned: ``hnx registers summaries --restamp`` writes it.
+OUTLINE_KEY = "summary_of"
+OUTLINE_PREFIX = "outline:sha256:"
 #: Unicode categories no model-facing line may hold: control, format (bidi overrides, zero-width
 #: characters, the byte-order mark), line and paragraph separators, surrogates
 REFUSED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs"})
@@ -405,6 +414,16 @@ def clear_memo() -> None:
     _memo_bytes = 0
 
 
+def outline_digest(text: str) -> str:
+    """``outline:sha256:<first 16 hex>`` of the heading outline of ``text``: one ``<level> <title>``
+    line per named heading (the cleaned visible title, as :func:`parse` reads it, so headings
+    inside code fences or HTML comments do not count), in document order, joined by ``\n``.
+    The front matter and all body text are outside it, so only adding, removing, renaming,
+    re-levelling or reordering a heading changes it.  Deterministic, no clock or path."""
+    canon = "\n".join(f"{h.level} {h.title}" for h in parse(text).headings)
+    return OUTLINE_PREFIX + hashlib.sha256(canon.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
 def headings(text: str) -> list[Heading]:
     """Every named ATX heading of ``text`` in document order (:func:`parse`)."""
     return list(parse(text).headings)
@@ -513,6 +532,25 @@ def summary_of(text: str, path: str, doc_id: str = "") -> tuple[str, str]:
         return authored, ("generated" if front.get(GENERATED_KEY) is True else "authored")
     para = first_paragraph(text)
     return (para, "first-paragraph") if para else ("", "none")
+
+
+def generated_summary_lines(summary: str) -> str:
+    """The ``summary:`` and ``summary_generated: true`` front-matter lines a generator writes for a
+    summary it derived (no trailing newline).  Written by the YAML emitter, so every character is
+    escaped as YAML needs and parses back unchanged.  The text must pass :func:`check_summary`."""
+    problem = check_summary(summary)
+    if problem:
+        raise ValueError(problem)
+    import yaml
+
+    body = yaml.safe_dump(
+        {"summary": summary, GENERATED_KEY: True},
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+        width=1 << 30,
+    )
+    return body.rstrip("\n")
 
 
 def check_summary(value: Any) -> str | None:

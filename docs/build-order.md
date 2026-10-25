@@ -1,3 +1,7 @@
+---
+summary: 'The build order: public phases P0-P9 provable in CI with fakes, server phases S1-S10 needing a real deployment, and how to read status.'
+summary_of: outline:sha256:1fe171f1ec54f338
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Build order
 

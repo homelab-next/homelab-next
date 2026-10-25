@@ -11,10 +11,14 @@ links DIR... [--check]
 review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json]
                      what the lesson review should do (missing reviews, retire, incorporate,
                      supersede, update, keep); warns and exits 0 unless --strict
-summaries PATH... [--missing] [--json]
+summaries PATH... [--json]
                      check every front-matter `summary:` of the records and pages under PATH (one
-                     line, <= 160 chars, ADR-0032): a malformed one fails (exit 1), a missing one
-                     is counted as a warning (--missing lists them)
+                     line, <= 160 chars, ADR-0032): a missing or malformed one fails (exit 1), and
+                     so does an authored page whose `summary_of` outline digest is absent or stale
+summaries --restamp PATH...
+                     after rereading each named page's summary, rewrite only its `summary_of`
+                     line (refuses a page with no authored summary); --restamp-all PATH... does
+                     the same for every authored page under PATH (only for a migration)
 events migrate PATH...
                      move inline reviews/recurrences of a record directory (or a docs/systems
                      directory's reviews) into <record>.events/ files, losslessly
@@ -30,6 +34,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+from pathlib import Path
 
 from . import RegisterError, build_all, join_register, split_register, stale_links
 
@@ -61,9 +66,18 @@ def main(argv=None) -> int:
     rv.add_argument("--results", help="invariants results JSON (default SRC/...results.json)")
     rv.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
     sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
-    sm.add_argument("paths", nargs="+")
+    sm.add_argument("paths", nargs="*")
     sm.add_argument("--json", action="store_true", help="machine-readable output")
-    sm.add_argument("--missing", action="store_true", help="also list what has no summary")
+    sm.add_argument(
+        "--restamp",
+        action="store_true",
+        help="after rereading the summary, set summary_of of each named page (explicit paths)",
+    )
+    sm.add_argument(
+        "--restamp-all",
+        action="store_true",
+        help="restamp every authored page under PATH; only for a migration",
+    )
     evp = sub.add_parser("events", help="sidecar events: migrate inline state, add an event")
     esub = evp.add_subparsers(dest="ecmd", required=True)
     em = esub.add_parser("migrate", help="inline reviews/recurrences -> <record>.events/")
@@ -128,13 +142,55 @@ def _summaries(ns) -> int:
 
     from .summaries import lint_summaries
 
+    if not ns.paths:
+        print("[registers] FATAL: summaries needs at least one PATH", file=sys.stderr)
+        return 1
+    if ns.restamp or ns.restamp_all:
+        return _restamp(ns)
     rep = lint_summaries(ns.paths)
     if ns.json:
         print(json.dumps(asdict(rep), indent=2, sort_keys=True))
     else:
-        for line in rep.lines(missing=ns.missing):
+        for line in rep.lines():
             print(f"[registers] {line}")
     return 0 if rep.ok else 1
+
+
+def _restamp(ns) -> int:
+    from homelabnext.context.levels import GENERATED_KEY, front_matter
+
+    from .summaries import RestampError, _files, restamp_many
+
+    targets: list[Path] = []
+    if ns.restamp_all:
+        for raw in ns.paths:
+            for f, is_record in _files(Path(raw)):
+                front, _ = front_matter(f.read_text(encoding="utf-8", errors="replace"))
+                if (
+                    not is_record
+                    and front
+                    and "summary" in front
+                    and front.get(GENERATED_KEY) is not True
+                ):
+                    targets.append(f)
+    else:
+        for raw in ns.paths:
+            if Path(raw).is_dir():
+                print(
+                    f"[registers] FATAL: {raw}: --restamp takes pages, not a directory "
+                    "(--restamp-all is for a migration only)",
+                    file=sys.stderr,
+                )
+                return 1
+            targets.append(Path(raw))
+    try:
+        done = restamp_many(targets)  # every target is validated before the first is written
+    except RestampError as ex:
+        print(f"[registers] FATAL: {ex}", file=sys.stderr)
+        return 1
+    for t, changed in done:
+        print(f"[registers] {'restamped' if changed else 'unchanged'} {t}")
+    return 0
 
 
 def _events(ns) -> int:
