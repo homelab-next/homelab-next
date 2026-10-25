@@ -62,6 +62,7 @@ NEWER_THAN_1_0 = {
     "agent.job.failed.auto-retried.json": "events/agent.job.failed 1.1: auto_retry_scheduled",
     "mcp_server.broker.yml": "platform/mcp_server 1.1: acts_via",
     "mcp_server.direct.yml": "platform/mcp_server 1.1: acts_via, direct_reason",
+    "mcp_server.codemode.yml": "platform/mcp_server 1.2: class codemode",
 }
 
 

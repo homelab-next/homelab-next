@@ -1775,7 +1775,8 @@
                   "cap:mcp-catalog",
                   "cap:records",
                   "cap:orchestration",
-                  "cap:codemode-executor"
+                  "cap:codemode-executor",
+                  "cap:codemode-runner"
                 ]
               }
             }

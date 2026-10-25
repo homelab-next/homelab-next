@@ -75,8 +75,10 @@ g. *The broker's answers reach the program as the broker gave them.*  A denial r
    token is the broker's, checked by the runner contract.
 
 **The program's view (language `python`).**  The program is module source.  It sees one name
-of its own, `broker`: `broker.call(action, args=None)` sends one request to the broker and
-returns the reply's value.  Calls are synchronous (no `await`).  Its value is the module
+of its own, `broker`: `broker.call(action, args=None, *, target=None)` sends one request to
+the broker and returns the reply's value, and `broker.submit(action, args=None, *, target=None)`
+submits one for approval (the reply is pending, so the run pauses; CM-5b).  Calls are
+synchronous (no `await`).  Its value is the module
 global `result` when it ends (`None` when unset).  Printed text (stdout and stderr together)
 is returned as `output`.  Language names are those of schemas/codemode: `python` and
 `typescript`.
@@ -84,7 +86,8 @@ is returned as `output`.  Language names are those of schemas/codemode: `python`
 **The broker wire.**  The executor owns the transport between the sandbox and the broker: it
 may connect from inside the sandbox to the endpoint, or relay over a unix socket or vsock.  At
 the endpoint, one TCP connection per call carries one JSON line `{"token": ..., "action": ...,
-"args": {...}}` and one JSON line back, one of `REPLIES`: `{"ok": true, "value": ...}`,
+"args": {...}}` (plus `"op": "submit"` for a submit and `"target"` when the call names one;
+absent, the op is `call`) and one JSON line back, one of `REPLIES`: `{"ok": true, "value": ...}`,
 `{"ok": false, "denied": true, "reason": ...}`, `{"ok": false, "pending": true,
 "request_id": ..., "request_digest": ...}` or `{"ok": false, "error": true, "reason": ...}`.
 The runner contract (CM-5) owns what the broker does with a call.  The suite serves a

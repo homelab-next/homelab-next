@@ -132,9 +132,12 @@ A handler document (1.2) may also carry `result_schema`: a JSON Schema object de
 handler's `output` once decoded as JSON. The broker checks only that it is a valid 2020-12 schema
 when it loads the document (a malformed one refuses the manifest, naming the file); it does **not**
 enforce it at call time, and an output that does not match is returned unchanged. It describes only the success case (exit 0,
-not truncated, stdout valid JSON); text output, truncation and a non-zero exit are the CM-5 runner's
-to define, and the generated type does not cover them yet. Runtime checking
-belongs to the CM-5 runner (`docs/codemode.md`). `hnx codemode gen` types the method's result from it.
+not truncated, stdout valid JSON); text output, truncation and a non-zero exit are defined by the
+CM-5b runner ([the runner](codemode.md#cm-5b-the-runner): text is the value, a truncated output and
+a non-zero exit are `broker.Error` to the program), and the generated type does not cover them.
+The runner checks an output against the schema from the search index, and a mismatch reaches the
+program as `broker.Error` (`result-schema-mismatch`), data, never a failure. `hnx codemode gen`
+types the method's result from it.
 
 The broker validates `params` against `params_schema`, reads the handler once, checks its sha256
 against `handler_digest` (refusing with `handler-digest-mismatch`), and runs exactly those bytes
@@ -268,7 +271,9 @@ that holds no credentials, and every broker call the program makes is an ordinar
 agent's (decision 2). What the broker adds for it (CM-5a) is the **capability token** of
 decision 6: issued by the broker, held by the broker and enforced by the broker on every call,
 so a program that resets its client, or reaches the socket some other way, gains nothing. The
-runner itself is CM-5b.
+runner, `codemode.execute`'s handler, is CM-5b ([the runner](codemode.md#cm-5b-the-runner)): it
+holds the token, relays each program call as `token_call`, `token_submit` or `token_run` (over
+the socket as a runner peer and a sandbox peer), journals it, and waits on `token_status`.
 
 **Issue.** `codemode.execute` is an action like any other: granted, decided and audited. Its
 params must be an execution request (`schemas/codemode/execution_request`, refused

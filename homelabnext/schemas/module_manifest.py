@@ -60,6 +60,7 @@ NEVER_SHARED = (
     "cap:records",
     "cap:orchestration",
     "cap:codemode-executor",  # a merged key could widen the sandbox's egress or environment
+    "cap:codemode-runner",  # a merged key could widen a token's actions or the relay's endpoint
 )
 #: interchange formats a dataset or a stateful slot exports in (a draft list; additive)
 NEUTRAL_FORMATS = (

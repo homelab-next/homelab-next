@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx codemode gen [--manifest FILE] [--out DIR] [--check]``: the Code Mode namespaces.
+"""``hnx codemode gen [--manifest FILE] [--out DIR] [--check]``: the Code Mode namespaces;
+``hnx codemode mcp --index DIR --socket PATH``: the search and describe tools (stdio).
 
 Renders, for every profile the broker manifest grants actions to, ``<out>/<profile>/types.d.ts``,
 ``stubs.pyi`` and ``search.json`` (:mod:`homelabnext.codemode.render`).  The defaults are the
@@ -7,6 +8,9 @@ public example and its committed goldens, ``examples/broker/manifest.yml`` into
 ``examples/codemode/``, relative to the working directory (the checkout, as ``make gates`` and CI
 run it).  ``--check`` writes nothing and fails on any drift: a hand edit, a manifest or handler
 document change that was not regenerated, or a profile directory no longer rendered.
+
+``mcp`` serves ``codemode_search`` and ``codemode_describe`` (:mod:`homelabnext.codemode.mcp_tools`)
+over the index ``gen`` wrote, for the profile the broker socket maps this process to.
 
 Exit (``docs/interfaces.md``): 0 written or clean; 1 drift; 2 bad input (an unreadable or
 invalid manifest, one that cannot be rendered, an output directory that cannot be written or
@@ -17,6 +21,7 @@ directory (it could not measure).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
@@ -39,7 +44,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--out", default=DEFAULT_OUT, help="output directory, one subdirectory per profile"
     )
     gen.add_argument("--check", action="store_true", help="write nothing; fail on drift")
+    m = sub.add_parser("mcp", help="codemode_search and codemode_describe over stdio (MCP)")
+    m.add_argument("--index", default=DEFAULT_OUT, help="the directory gen wrote")
+    m.add_argument("--socket", default=os.environ.get("HNX_BROKER_SOCKET"), help="broker socket")
     args = ap.parse_args(list(argv) if argv is not None else None)
+    if args.cmd == "mcp":
+        return _mcp(args)
     from homelabnext.broker.service import ManifestError
 
     try:
@@ -71,6 +81,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"codemode: wrote {len(written)}, unchanged {len(unchanged)}, removed {len(removed)} "
         f"in {args.out}"
     )
+    return 0
+
+
+def _mcp(args) -> int:
+    from homelabnext.broker.client import BrokerClient
+    from homelabnext.mcp.server import sdk_missing
+
+    from .mcp_tools import serve
+
+    if not args.socket:
+        print("hnx codemode mcp: --socket (or HNX_BROKER_SOCKET) is required", file=sys.stderr)
+        return 2
+    if sdk_missing():
+        print(
+            "hnx codemode mcp: the MCP SDK is not installed (pip install 'homelabnext[mcp]')",
+            file=sys.stderr,
+        )
+        return 2
+    serve(args.index, BrokerClient(args.socket))
     return 0
 
 

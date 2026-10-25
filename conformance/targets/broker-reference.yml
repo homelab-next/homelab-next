@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # The reference broker service (homelabnext.broker.service), over a private temporary state
-# directory per check.  broker-tokens is the Code Mode token suite over the same service.
+# directory per check.  broker-tokens is the Code Mode token suite over the same service, and
+# codemode-runner the reference runner (and the test-only forking executor) over it.
 #   hnx conform run broker --target broker-reference
 #   hnx conform run broker-tokens --target broker-reference
+#   hnx conform run codemode-runner --target broker-reference
 name: broker-reference
 capabilities:
   broker:
     adapter: homelabnext.broker.service:make
   broker-tokens:
     adapter: homelabnext.broker.service:make
+  codemode-runner:
+    adapter: conformance.fakes.codemode_runner:make
+    config:
+      broker: reference

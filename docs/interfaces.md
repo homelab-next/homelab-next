@@ -30,6 +30,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `homelabnext/{swap,parity}/ tools/decommission_check.py tests/swap/` | W11 | |
 | `compose/lab-in-a-box/ .github/workflows/nightly.yml docs/build-order.md docs/architecture.md` | W12 | |
 | `conformance/{protocols,suites}/codemode_executor.py conformance/fakes/{code_executor,code_executor_child}.py conformance/codemode-executor/` | codemode | ADR-0031 decision 10; docs/codemode.md CM-4 |
+| `homelabnext/codemode/{runner,journal,mcp_tools}.py conformance/{protocols,suites}/codemode_runner.py conformance/fakes/codemode_runner.py conformance/codemode-runner/ examples/mcp/hnx-codemode.yml` | codemode | ADR-0031 decisions 3, 7 and 10; docs/codemode.md CM-5b |
 | `homelabnext/projects/ conformance/{protocols,suites}/projects.py conformance/fakes/{project_store,openproject_api}.py docs/projects.md tests/projects/ examples/projects/` | projects | `hnx projects`; ADR-0020 |
 
 Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
@@ -304,9 +305,9 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (seventeen) / EXTENDED (backup, dns, edge, broker-tokens) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens) ; ConformError (misconfiguration, exit 2)
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
-# installed wheel lists the seventeen names and says "no suite" until pointed at a checkout.
+# installed wheel lists the eighteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
 
 # homelabnext.projects   (hnx projects; docs/projects.md; ADR-0020; contract conformance/protocols/projects.py)
@@ -346,10 +347,10 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
 - Capability alias: `<capability>.svc.example.internal`, for example
   `lake-query.svc.example.internal`. The suffix is a registry setting (`domain:`), `example.internal`
   in everything public. Aliases are generated, never typed.
-- Capability names (seventeen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
+- Capability names (eighteen, also the `hnx conform --list` output): `lake-query`, `lake-catalog`,
   `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`,
   `broker`, `secrets`, `idp`, `records`, `detections`, `context`, `projects`,
-  `codemode-executor`.
+  `codemode-executor`, `codemode-runner`.
 - Addresses in examples: `192.0.2.0/24` services, `198.51.100.0/24` management,
   `203.0.113.0/24` external, `2001:db8::/32` IPv6, MACs `00:00:5e:00:53:xx`.
 - No library or role contains a default endpoint. An unresolvable capability raises the registry's
