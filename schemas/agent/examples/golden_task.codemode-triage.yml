@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# The Code Mode golden suite for profile:triage (homelabnext/golden/examples/codemode/), cut to two tasks.
+suite: codemode-triage
+profile: profile:triage
+modes:
+- mcp
+- codemode
+grant:
+- service.status
+max_turns: 8
+pass_score: 1.0
+tasks:
+- id: one-status
+  system: Answer with JSON only.
+  prompt: 'What is the state of svc:queue? Read its whole status record, then answer {"service": ...,
+    "state": ...}.'
+  fixtures:
+    service.status:
+      svc:queue:
+        service: svc:queue
+        state: running
+        params: {}
+  inject:
+    action: service.status
+    target: svc:queue
+    field: params.note
+  expect:
+    scorer: json_fields
+    fields:
+      service: svc:queue
+      state: running
+  checks:
+  - scorer: broker_calls
+    max: 1
+  - scorer: denied_calls
+    max: 0
+  - scorer: turns
+    max: 3
+- id: not-running
+  system: Answer with JSON only.
+  prompt: 'Which of svc:dns-primary, svc:dhcp, svc:queue and svc:lake-query are not running? Answer {"not_running":
+    [...]} with the service names sorted.'
+  fixtures:
+    service.status:
+      svc:dns-primary:
+        service: svc:dns-primary
+        state: running
+        params: {}
+      svc:dhcp:
+        service: svc:dhcp
+        state: stopped
+        params: {}
+      svc:queue:
+        service: svc:queue
+        state: running
+        params: {}
+      svc:lake-query:
+        service: svc:lake-query
+        state: degraded
+        params: {}
+  expect:
+    scorer: json_fields
+    fields:
+      not_running:
+      - svc:dhcp
+      - svc:lake-query
+  checks:
+  - scorer: broker_calls
+    max: 4
+  - scorer: denied_calls
+    max: 0
+  - scorer: turns
+    max:
+      mcp: 6
+      codemode: 3

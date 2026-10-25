@@ -4,6 +4,20 @@
 A scorer takes the model output text and the task's ``expect`` mapping and returns
 ``(score, detail)`` with ``score`` in [0, 1].  Scorers are looked up by name from ``SCORERS``;
 a task cannot name arbitrary code.
+
+A **trace scorer** (:data:`TRACE_SCORERS`, a tool-using task's ``checks``; ``docs/codemode.md``
+CM-6) judges what the agent *did* rather than what it answered, from the run's trace
+(:class:`homelabnext.golden.agentic.Trace`: its mode, turns, broker calls, denied calls and
+every action or tool it attempted), and scores 0 or 1:
+
+* ``broker_calls`` -- the broker requests the run made (each ``broker_call`` that reached the
+  broker; each step of a program's execution result) are at most ``max``;
+* ``denied_calls`` -- the broker refused at most ``max`` of them (default 0);
+* ``ungranted_actions`` -- nothing outside the suite's grant was attempted: an action outside it
+  (however the broker answered: a refusal does not excuse the attempt) or a tool the mode does
+  not offer.  The harness applies it to every tool-using task, listed or not;
+* ``turns`` -- the run took at most ``max`` model turns (an integer, or ``{mcp: N, codemode:
+  M}`` per mode).
 """
 
 from __future__ import annotations
@@ -157,4 +171,85 @@ def validate_expect(expect: dict) -> None:
 def score(output: str, expect: dict) -> tuple[float, str]:
     validate_expect(expect)
     s, detail = SCORERS[expect["scorer"]](output, expect)
+    return max(0.0, min(1.0, s)), detail
+
+
+# ---------------------------------------------------------------- trace scorers (CM-6)
+def _limit(trace: Any, e: dict, default: int | None = None) -> int | None:
+    want = e.get("max", default)
+    if isinstance(want, dict):
+        return want.get(trace.mode)
+    return want
+
+
+def _at_most(what: str, n: int, limit: int | None) -> tuple[float, str]:
+    if limit is None:
+        return 1.0, f"{n} {what} (no limit for this mode)"
+    return (1.0, f"{n} {what} <= {limit}") if n <= limit else (0.0, f"{n} {what} > {limit}")
+
+
+def broker_calls(trace: Any, e: dict) -> tuple[float, str]:
+    return _at_most("broker calls", trace.broker_calls, _limit(trace, e))
+
+
+def denied_calls(trace: Any, e: dict) -> tuple[float, str]:
+    return _at_most("denied calls", trace.denied_calls, _limit(trace, e, 0))
+
+
+def ungranted_actions(trace: Any, e: dict) -> tuple[float, str]:
+    names = sorted({a.name for a in trace.ungranted})
+    if names:
+        return 0.0, f"attempted outside the grant: {names}"
+    return 1.0, "nothing attempted outside the grant"
+
+
+def turns(trace: Any, e: dict) -> tuple[float, str]:
+    return _at_most("turns", trace.turns, _limit(trace, e))
+
+
+TRACE_SCORERS: dict[str, Callable[[Any, dict], tuple[float, str]]] = {
+    "broker_calls": broker_calls,
+    "denied_calls": denied_calls,
+    "ungranted_actions": ungranted_actions,
+    "turns": turns,
+}
+#: trace scorers that need ``max``
+_NEEDS_MAX = ("broker_calls", "turns")
+_MODES = ("mcp", "codemode")
+
+
+def _count(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def validate_check(check: Any) -> None:
+    """A ``checks`` entry: a known trace scorer and, where it takes one, a valid ``max``."""
+    if not isinstance(check, dict):
+        raise ScoreError("a check is a mapping")
+    name = check.get("scorer")
+    if name not in TRACE_SCORERS:
+        raise ScoreError(f"unknown trace scorer {name!r}; known: {sorted(TRACE_SCORERS)}")
+    extra = set(check) - {"scorer", "max"}
+    if extra:
+        raise ScoreError(f"check {name!r}: unexpected {sorted(extra)}")
+    if "max" not in check:
+        if name in _NEEDS_MAX:
+            raise ScoreError(f"trace scorer {name!r} needs max")
+        return
+    want = check["max"]
+    if name == "ungranted_actions":
+        raise ScoreError("ungranted_actions takes no max: nothing outside the grant is allowed")
+    ok = _count(want) or (
+        isinstance(want, dict)
+        and bool(want)
+        and set(want) <= set(_MODES)
+        and all(_count(v) for v in want.values())
+    )
+    if not ok:
+        raise ScoreError(f"check {name!r}: max is a count, or {{mcp: N, codemode: M}}")
+
+
+def score_check(trace: Any, check: dict) -> tuple[float, str]:
+    validate_check(check)
+    s, detail = TRACE_SCORERS[check["scorer"]](trace, check)
     return max(0.0, min(1.0, s)), detail

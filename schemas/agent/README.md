@@ -9,7 +9,7 @@ Contracts for the agent layer (library: `homelabnext.agent`, guide: `docs/agent.
 | `pregate_output` | the verdict of a mandatory pre-run check (`ok`, `degraded`, `stale`, `failed`) |
 | `report_result` | what an agent hands back: `pack_id`, cites, unknowns, memory updates; `output` (1.1: the structured result an actor may act on) |
 | `handoff` | a reader -> actor handoff: the reader, the actor, the schema the reader's `output` must satisfy, and the broker actions the actor may take with params bound to constrained output fields (G-04) |
-| `golden_task` | the existing `homelabnext.golden` suite file format, described unchanged (the loader and this schema reject the same negatives) |
+| `golden_task` | the `homelabnext.golden` suite file format (the loader and this schema reject the same negatives); 1.1 adds the tool-using suites of the Code Mode golden harness: `modes`, `grant`, `max_turns`, a task's `fixtures`, `inject` and `checks` (`docs/codemode.md`, CM-6) |
 | `prompt_template` | a prompt: trusted `system`/`instructions` text plus slots, each declaring `trust: trusted\|untrusted`; untrusted slots render only fenced (G-01) |
 | `injection_corpus` | the versioned prompt-injection corpus: per case a payload, a canary and/or forbidden tool, and the fake model's markers (G-02) |
 

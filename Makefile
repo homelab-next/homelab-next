@@ -15,6 +15,7 @@ REGISTERS_OUT := build/registers
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "Code Mode golden suites (CM-6; checked in gates): codemode-golden-report"
 	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
@@ -70,7 +71,11 @@ schemas:
 # (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
 # source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
 # has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md; the Code
-# Mode stubs and search index (examples/codemode/) match the example broker manifest (ADR-0031)
+# Mode stubs and search index (examples/codemode/) match the example broker manifest (ADR-0031); the
+# Code Mode golden suites (CM-6) run every task in classic MCP mode and in Code Mode, the G-02
+# corpus inside tool results, against the scripted fake model behind the fake inference server,
+# and the committed report is current (it proves the harness, not a model: docs/codemode.md)
+CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -83,6 +88,13 @@ gates:
 	$(PY) -m homelabnext.cli graph check
 	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
 	$(PY) -m homelabnext.cli codemode gen --check
+	$(PY) -m homelabnext.cli golden codemode --check $(CODEMODE_GOLDEN)
+
+# after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
+# harness: regenerate the report and commit it
+.PHONY: codemode-golden-report
+codemode-golden-report:
+	$(PY) -m homelabnext.cli golden codemode --out $(CODEMODE_GOLDEN)
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:

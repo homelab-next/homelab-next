@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.1",
   "title": "Golden task suite",
-  "description": "Describes the existing homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite), unchanged. One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile.",
+  "description": "Describes the homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite). One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile. 1.1 (additive) adds the tool-using suites of the Code Mode golden harness (docs/codemode.md, CM-6): modes, grant and max_turns on the suite, fixtures, inject and checks on a task; the loader also requires profile and grant once modes is set, and each fixture to match the action's result schema in the generated search index.",
   "type": "object",
   "properties": {
     "suite": {
@@ -22,6 +22,35 @@
     "min_version": {
       "type": "integer",
       "minimum": 1
+    },
+    "modes": {
+      "description": "Tool-using suite: every task is posed once per mode, mcp (one broker action per model turn through broker_call) and codemode (one program through codemode.execute, with codemode_search and codemode_describe).",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "mcp",
+          "codemode"
+        ]
+      }
+    },
+    "grant": {
+      "description": "The broker actions the suite's agent is granted in both modes: a subset of what the manifest grants the profile (the generated search index).",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+        "maxLength": 128
+      }
+    },
+    "max_turns": {
+      "description": "Model turns a tool-using task may take before it fails (default 8).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32
     },
     "tasks": {
       "type": "array",
@@ -52,6 +81,96 @@
               "type": "string"
             },
             "uniqueItems": true
+          },
+          "fixtures": {
+            "description": "What the fake broker's actions answer: action -> target -> the action's result (held to the action's result schema).",
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+              "maxLength": 128
+            },
+            "additionalProperties": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                "maxLength": 128
+              },
+              "additionalProperties": {
+                "type": "object"
+              }
+            }
+          },
+          "inject": {
+            "description": "Where the G-02 injection pass places each corpus case: the named string field of one fixture result (created if absent), read by the agent in both modes.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+                "maxLength": 128
+              },
+              "target": {
+                "type": "string",
+                "pattern": "^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                "maxLength": 128
+              },
+              "field": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "action",
+              "target",
+              "field"
+            ],
+            "additionalProperties": false
+          },
+          "checks": {
+            "description": "Trace scorers, each scored 0 or 1; a task passes only when its answer passes and every check scores 1. ungranted_actions is applied to every tool-using task whether listed or not.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "scorer": {
+                  "enum": [
+                    "broker_calls",
+                    "denied_calls",
+                    "ungranted_actions",
+                    "turns"
+                  ]
+                },
+                "max": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "object",
+                      "minProperties": 1,
+                      "properties": {
+                        "mcp": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "codemode": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "scorer"
+              ],
+              "additionalProperties": false
+            }
           },
           "expect": {
             "type": "object",

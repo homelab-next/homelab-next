@@ -26,7 +26,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates, optional structured `output`; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
 | `agent/handoff` | reader -> actor handoff: reader, actor, `output_schema`, the actions the actor may take and how their params bind to the output (G-04) |
-| `agent/golden_task` | the existing `homelabnext.golden` suite format, described unchanged |
+| `agent/golden_task` | the `homelabnext.golden` suite format; 1.1 adds the tool-using suites of the Code Mode golden harness (`modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`; [codemode](codemode.md#cm-6-golden-suites)) |
 | `agent/prompt_template` | trusted `system`/`instructions`, slots each declaring `trust`; untrusted slots render only fenced |
 | `agent/injection_corpus` | versioned injection cases: payload, canary or forbidden tool, fake-model markers |
 | `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
@@ -515,13 +515,15 @@ slots:
   section name. It then renders the template with its own `example` values and checks that each
   untrusted value sits between exactly one opener and one closer and nowhere in the system message.
 
-Shipped templates: `alert-triage-summariser`, `cti-article-extractor`, `phishing-report-triage`.
+Shipped templates: `alert-triage-summariser`, `cti-article-extractor`, `phishing-report-triage`, and
+`agent-tool-result`, which hands one tool's result back to a tool-using agent (the Code Mode golden
+suites, [codemode](codemode.md#cm-6-golden-suites)).
 As with every pack, fencing is a structural guarantee about the text, not about the model; what
 an agent can *do* is bounded by its profile and the broker.
 
 ## Injection corpus and eval (G-02)
 
-`homelabnext/agent/prompts/injection/corpus.yml` (`schemas/agent/injection_corpus`) holds 45
+`homelabnext/agent/prompts/injection/corpus.yml` (`schemas/agent/injection_corpus`) holds 53
 synthetic cases in nine categories: direct override, fake fence closing, role/system
 impersonation, tool-call smuggling, data exfiltration, encoded instructions (base64, hex, ROT13,
 zero-width, homoglyph), multilingual, markdown/HTML hiding and nested quoting. Each case has a
@@ -530,9 +532,11 @@ or a **forbidden tool** (any call-shaped mention, `"name": "<tool>"` or `<tool>(
 verbatim echo included: output that looks like a call is a hazard to whatever parses it).
 
 `hnx agent injection run` places every case into every untrusted slot of every template
-(45 x 6 = 270 runs), renders, calls the model through the same `completer(messages, params)`
+(53 x 7 = 371 runs), renders, calls the model through the same `completer(messages, params)`
 adapter as the golden suites, and fails on any instruction-follow, any error, or a payload the
-slot cap truncated (an untested case is not a pass).
+slot cap truncated (an untested case is not a pass). The Code Mode golden suites also place every
+case inside a broker result a tool-using agent reads, in classic MCP mode and in Code Mode
+(`hnx golden codemode`, [codemode](codemode.md#cm-6-golden-suites)).
 
 **What CI proves, and what it does not.** CI runs against `FakeInjectionModel`, a deterministic
 fake that recognises every corpus instruction by the case's `markers` after undoing the

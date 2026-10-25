@@ -86,6 +86,7 @@ homelabnext = [
   "decide/examples/*.yml",
   "decide/safety_specs/*.yml",
   "golden/examples/*.yml",
+  "golden/examples/codemode/*.yml",
   "agent/*.yml",
   "agent/terms.md",
   "agent/prompts/templates/*.yml",

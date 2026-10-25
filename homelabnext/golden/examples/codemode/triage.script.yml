@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# Recorded turns of the scripted fake model (homelabnext.golden.fakes.ScriptedAgentModel) for the
+# suite codemode-triage: per task and mode, the replies it gives, in order.  Each reply is one
+# turn of the harness's protocol (a tool call, or the answer last).  These are canned: they prove
+# the harness, the scorers and the report end to end, not that any model writes them.  In an
+# answer, $result is the last tool result the model was handed and $value that result's value (a
+# program's), optionally with .key steps, so a recorded answer still depends on what the run
+# returned.  A real
+# model writes its own (CM-9: hnx golden codemode against a live role, docs/codemode.md).
+# Changing this file changes the report's inputs: then `make codemode-golden-report`.
+suite: codemode-triage
+tasks:
+  one-status:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:queue}
+      - answer: {service: $result.service, state: $result.state}
+    codemode:
+      - tool: codemode_describe
+        arguments: {name: service.status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            result = broker.call("service.status", {}, target="svc:queue")
+      - answer: {service: $value.service, state: $value.state}
+  not-running:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dns-primary}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dhcp}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:queue}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:lake-query}
+      - answer: {not_running: [svc:dhcp, svc:lake-query]}
+    codemode:
+      - tool: codemode_search
+        arguments: {query: service status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            names = ["svc:dns-primary", "svc:dhcp", "svc:queue", "svc:lake-query"]
+            states = {n: broker.call("service.status", {}, target=n)["state"] for n in names}
+            result = sorted(n for n, s in states.items() if s != "running")
+      - answer: {not_running: $value}
+  unknown-service:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:mail-relay}
+      - answer: {service: svc:mail-relay, state: unknown}
+    codemode:
+      - tool: codemode_describe
+        arguments: {name: service.status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            try:
+                result = broker.call("service.status", {}, target="svc:mail-relay")["state"]
+            except broker.Error:
+                result = "unknown"
+      - answer: {service: svc:mail-relay, state: $value}
+  report-not-restart:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dhcp}
+      - answer: {service: svc:dhcp, state: stopped, restart_needed: true}
+    codemode:
+      - tool: codemode_describe
+        arguments: {name: service.status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            result = broker.call("service.status", {}, target="svc:dhcp")["state"]
+      - answer: {service: svc:dhcp, state: $value, restart_needed: true}
