@@ -461,9 +461,9 @@ def test_the_fake_world_runs_its_scripted_model_and_its_programs_only(corpus):
     with fakes.FakeWorld(model) as w:
         backend = w(suite, task, "codemode")
         backend.seed(task.fixtures)
-        assert backend.execute("result = 1\n", "python")[0]["status"] == "ok"
-        refused, attempts = backend.execute("result = 2\n", "python")
-        assert refused["status"] == "error" and attempts == []
+        assert backend.execute("result = 1\n", "python")["status"] == "ok"
+        refused = backend.execute("result = 2\n", "python")
+        assert refused["status"] == "error" and agentic.execution_attempts(refused) == []
         assert "recorded programs only" in refused["error"]["message"]
     # per task and agent: another task of the same model may not run this one's program
     assert model.programs("profile:triage", suite.name, task.id) >= {"result = 1\n"}
@@ -639,7 +639,7 @@ class _Stub:
         raise ValueError(name)
 
     def execute(self, code, language):
-        return self.result, []
+        return self.result
 
 
 def _scripted(replies):
@@ -681,7 +681,22 @@ def test_the_backend_contract_helpers():
         agentic.Attempt("action", "a.b", "pending"),
         agentic.Attempt("action", "a.c", "ok"),
     ]
-    for bad in (None, {"calls": "x"}, {"calls": [{"action": "a.b", "outcome": "fine"}]}):
+    refused = {
+        "calls": [],
+        "relay_refusals": [{"outcome": "error"}, {"action": "x", "outcome": "denied"}],
+    }
+    assert agentic.execution_attempts(refused) == [
+        agentic.Attempt("action", "", "error"),
+        agentic.Attempt("action", "x", "denied"),
+    ]
+    for bad in (
+        None,
+        {"calls": "x"},
+        {"calls": [{"action": "a.b", "outcome": "fine"}]},
+        {"calls": [], "relay_refusals": {}},
+        {"calls": [], "relay_refusals": [{"action": 3, "outcome": "error"}]},
+        {"calls": [], "relay_refusals": [{"action": "x", "outcome": "pending"}]},
+    ):
         with pytest.raises(agentic.HarnessError):
             agentic.execution_attempts(bad)
     # an InvalidArguments refusal in MCP mode is a denied call
@@ -696,7 +711,7 @@ def test_the_backend_contract_helpers():
     assert trace.denied_calls == 1 and trace.attempts[-1].outcome == "denied"
 
 
-def test_the_fake_tap_reports_only_what_the_relay_refused(corpus):
+def test_the_result_lists_only_what_the_relay_refused(corpus):
     code = (
         "try:\n    broker.call('delete_mailbox', {})\nexcept broker.Error:\n    pass\n"
         "result = broker.call('service.status', {}, target='svc:queue')\n"
@@ -707,9 +722,16 @@ def test_the_fake_tap_reports_only_what_the_relay_refused(corpus):
     with fakes.FakeWorld(fakes.ScriptedAgentModel([(suite, script)], corpus)) as w:
         backend = w(suite, task, "codemode")
         backend.seed(task.fixtures)
-        result, refused = backend.execute(code, "python")
-    assert [(a.name, a.outcome) for a in refused] == [("delete_mailbox", "error")]
+        result = backend.execute(code, "python")
+    assert [(r["action"], r["outcome"], r["reason"]) for r in result["relay_refusals"]] == [
+        ("delete_mailbox", "error", "request-malformed")
+    ]
     assert [c["action"] for c in result["calls"]] == ["service.status"]
+    attempts = agentic.execution_attempts(result)
+    assert [(a.name, a.outcome) for a in attempts] == [
+        ("service.status", "ok"),
+        ("delete_mailbox", "error"),
+    ]
 
 
 @pytest.mark.parametrize(

@@ -96,12 +96,12 @@ def test_the_suite_passes_on_both_brokers():
     for target in ("fake", "broker-reference"):
         run = run_capability("codemode-runner", target, ROOT)
         assert run.error is None and run.too_few is None, run.error
-        assert [r.status for r in run.results] == ["pass"] * 8, [r.evidence for r in run.results]
+        assert [r.status for r in run.results] == ["pass"] * 9, [r.evidence for r in run.results]
 
 
 def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
-    assert len(runs) == 8
+    assert len(runs) == 9
     for m in runs:
         assert m.detected and m.failed == [m.expected], (m.name, m.failed, m.reason)
 

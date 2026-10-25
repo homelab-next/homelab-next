@@ -27,6 +27,7 @@ __all__ = [
     "HiddenPauseRunner",
     "RawLogsRunner",
     "ReferenceRunner",
+    "RelayRefusalsHiddenRunner",
     "ResendingRunner",
     "StepOnlyReplayRunner",
     "UnjournalledRefusalRunner",
@@ -167,3 +168,11 @@ class DeniedWaitsRunner(ReferenceRunner):
     def _paused_state(self, status):
         state = super()._paused_state(status)
         return "pending" if state == "denied" else state
+
+
+class RelayRefusalsHiddenRunner(ReferenceRunner):
+    """Mutant: a request the relay refuses before the broker is answered as before, but listed
+    nowhere in the result (the runner before CM-11): live, the attempt leaves no trace."""
+
+    def _relay_refused(self, run, steps, msg, reply):
+        return None

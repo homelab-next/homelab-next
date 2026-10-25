@@ -43,6 +43,12 @@ WHY = {
     "execution_result.pending-with-free-text": ("pending/0", "'summary' was unexpected"),
     "execution_result.pending-without-digest": ("pending/0", "'request_digest' is a required"),
     "execution_result.truncated-without-value": ("$", "'value' is a dependency of 'truncated'"),
+    "execution_result.relay-refusal-with-a-request-id": ("relay_refusals/0", "'request_id' was"),
+    "execution_result.relay-refusal-action-on-two-lines": ("relay_refusals/0/action", "does not"),
+    "execution_result.relay-refusals-omitted-before-the-list-is-full": (
+        "relay_refusals",
+        "is too short",
+    ),
     "token.issuer-not-broker": ("issuer", "'svc:broker' was expected"),
     "token.no-actions": ("actions", "should be non-empty"),
     "token.no-expiry": ("$", "'expires_at' is a required property"),

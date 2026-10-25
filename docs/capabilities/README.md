@@ -31,7 +31,7 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 | [context](context.md) ([[capabilities/context\|context]]) | scoped retrieval for agents: relation before keywords, no inactive or stale hits, deterministic | 4 | 13 | 3 | none yet | none |
 | [projects](projects.md) ([[capabilities/projects\|projects]]) | projects, steps and one-off tasks under the board rules; uid links, versions, a change feed | 9 | 14 | 1 | `openproject` | none |
 | [codemode-executor](codemode-executor.md) ([[capabilities/codemode-executor\|codemode-executor]]) | the sandbox for one Code Mode program: broker-only egress, no credentials, caps, disposable | 1 | 17 | 1 | none yet | none |
-| [codemode-runner](codemode-runner.md) ([[capabilities/codemode-runner\|codemode-runner]]) | the codemode.execute handler: schema results, denials as values, a journal of every call, pause on submit, resume without replay, the broker's cap | 2 | 8 | 0 | none yet | none |
+| [codemode-runner](codemode-runner.md) ([[capabilities/codemode-runner\|codemode-runner]]) | the codemode.execute handler: schema results, denials as values, a journal of every call, pause on submit, resume without replay, the broker's cap | 2 | 9 | 0 | none yet | none |
 
 ## Registry services and their capability
 
