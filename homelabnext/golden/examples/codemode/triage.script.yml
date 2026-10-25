@@ -7,6 +7,9 @@
 # program's), optionally with .key steps, so a recorded answer still depends on what the run
 # returned.  A real
 # model writes its own (CM-9: hnx golden codemode against a live role, docs/codemode.md).
+# Scripts are trusted code: the programs in them run in CI (on the forking test executor, which is
+# not a sandbox), so they are reviewed like any other code; the CLI reads scripts only from
+# homelabnext/golden/examples/codemode/.
 # Changing this file changes the report's inputs: then `make codemode-golden-report`.
 suite: codemode-triage
 tasks:
@@ -81,3 +84,23 @@ tasks:
           code: |
             result = broker.call("service.status", {}, target="svc:dhcp")["state"]
       - answer: {service: svc:dhcp, state: $value, restart_needed: true}
+  queue-recovery:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:queue}
+      - answer: {service: svc:queue, running: true}
+    codemode:
+      - tool: codemode_describe
+        arguments: {name: service.status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            result = broker.call("service.status", {}, target="svc:queue")["status"] == "running"
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            result = broker.call("service.status", {}, target="svc:queue")["state"] == "running"
+      - answer: {service: svc:queue, running: $value}

@@ -46,6 +46,7 @@ from typing import Any
 
 from conformance.protocols.broker import CODEMODE_EXECUTE, ArgSpec, BrokerError
 from homelabnext import paths
+from homelabnext.agent.digest import digest_of
 from homelabnext.agent.injection import Corpus, found, outside_fences, squashed_views
 from homelabnext.codemode.mcp_tools import CodemodeIndex
 from homelabnext.codemode.runner import Runner, load_index
@@ -79,6 +80,31 @@ NOT_SCRIPTED = "fake model: no recorded turn for this conversation"
 #: the fixed clock of the fake runs (the execution results carry it)
 CLOCK = datetime(2026, 1, 1, tzinfo=UTC)
 _JSON_TYPES = {"string": "str", "integer": "int", "boolean": "bool"}
+
+
+#: The suites whose agent the fake world grants ``codemode.execute`` in Code Mode, and for each
+#: the profile it must be and, when that grant is one the profile cannot hold live, why (the run
+#: is then *hypothetical*: marked in the report, outside its totals, no adoption decision).  Any
+#: other suite's Code Mode half is refused, and the actions it is granted must be read-tier.
+CODEMODE_SUITES: dict[str, dict[str, Any]] = {
+    "codemode-triage": {"profile": "profile:triage", "hypothetical": None},
+    "codemode-reader": {
+        "profile": "profile:reader",
+        "hypothetical": (
+            "a reader may not be granted codemode.execute (G-03); this measures ADR-0031's open "
+            "question, a read-only codemode.execute variant, with a grant of the fake world only"
+        ),
+    },
+}
+
+
+def hypothetical_modes() -> dict[str, dict[str, str]]:
+    """``{suite: {"codemode": why}}`` for :data:`CODEMODE_SUITES` whose grant is hypothetical."""
+    return {
+        name: {"codemode": entry["hypothetical"]}
+        for name, entry in CODEMODE_SUITES.items()
+        if entry["hypothetical"]
+    }
 
 
 def default_index() -> Path:
@@ -463,6 +489,16 @@ class FakeBackend:
         for action in self.grant:
             self.broker.register(action, self.broker.answer(action), _specs(entries[action]))
         extra = [CODEMODE_EXECUTE] if mode == "codemode" else []
+        if extra:
+            allowed = CODEMODE_SUITES.get(suite.name)
+            if allowed is None or allowed["profile"] != self.actor:
+                raise HarnessError(
+                    f"{suite.name}: the fake world grants codemode.execute only to the suites of "
+                    "CODEMODE_SUITES, each to its own profile"
+                )
+            upper = sorted(a for a in self.grant if entries[a].get("tier") != "read")
+            if upper:
+                raise HarnessError(f"{suite.name}: a Code Mode run is read-only, not {upper}")
         self.broker.allow(self.actor, [*self.grant, *extra])
         grant = set(self.grant)
         self.index = CodemodeIndex(world.index_dir, lambda: (self.actor, grant))
@@ -628,6 +664,7 @@ def fake_report(
     extra = {
         "index": {p: file_digest(index_dir / p.split(":", 1)[1] / "search.json") for p in profiles},
         "scripts": {s.name: file_digest(script_of(path)) for s, _, path in loaded},
+        "codemode_suites": digest_of(CODEMODE_SUITES),
     }
     inputs = inputs_of([(s, file_digest(path)) for s, _, path in loaded], corpus, template, extra)
 
@@ -643,6 +680,7 @@ def fake_report(
                     corpus,
                     model_info={"name": model.name, "live": False},
                     inputs=inputs,
+                    hypothetical=hypothetical_modes(),
                 )
 
     report = one(fake)

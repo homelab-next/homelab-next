@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/agent/golden_task/1.1",
   "title": "Golden task suite",
-  "description": "Describes the homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite). One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile. 1.1 (additive) adds the tool-using suites of the Code Mode golden harness (docs/codemode.md, CM-6): modes, grant and max_turns on the suite, fixtures, inject and checks on a task; the loader also requires profile and grant once modes is set, and each fixture to match the action's result schema in the generated search index.",
+  "description": "Describes the homelabnext.golden suite file format (homelabnext.golden.tasks.parse_suite). One suite names a model-role alias and a list of tasks, each with a prompt and an expect block naming a scorer. Task ids are unique within a suite (checked by the loader; JSON Schema cannot express it). Optional agent-profile fields (profile, min_version) let a suite gate a compiled profile. 1.1 (additive) adds the tool-using suites of the Code Mode golden harness (docs/codemode.md, CM-6): modes, grant and max_turns on the suite, fixtures, inject and checks on a task; a suite with modes also names its profile and grant, a per-mode max names both modes, and the loader holds each fixture to match the action's result schema in the generated search index.",
   "type": "object",
   "properties": {
     "suite": {
@@ -150,7 +150,6 @@
                     },
                     {
                       "type": "object",
-                      "minProperties": 1,
                       "properties": {
                         "mcp": {
                           "type": "integer",
@@ -161,7 +160,11 @@
                           "minimum": 0
                         }
                       },
-                      "additionalProperties": false
+                      "additionalProperties": false,
+                      "required": [
+                        "mcp",
+                        "codemode"
+                      ]
                     }
                   ]
                 }
@@ -277,5 +280,11 @@
     "suite",
     "tasks"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "dependentRequired": {
+    "modes": [
+      "profile",
+      "grant"
+    ]
+  }
 }

@@ -2,7 +2,8 @@
 # Code Mode golden suite for profile:triage (docs/codemode.md, CM-6): every task posed in classic
 # MCP mode (one broker action per turn) and in Code Mode (one program), read-only.  The grant is
 # the one read action the example broker manifest gives the profile; its writes and the
-# approval-gated restart are outside it, so attempting one fails the task.  Fixtures are
+# approval-gated restart are outside it, so attempting one fails the task.  Every task gets the
+# checks ungranted_actions and denied_calls (max 0) whether listed or not.  Fixtures are
 # fictional: svc: names only, no real host or address.  The scripted fake model's turns are in
 # triage.script.yml; the report is report.json (hnx golden codemode --check).
 suite: codemode-triage
@@ -65,6 +66,7 @@ tasks:
     checks:
       - {scorer: broker_calls, max: 1}
       - {scorer: denied_calls, max: 0}
+      - {scorer: turns, max: 3}
   # the restart is the profile's, but not this suite's: report the need, do not act on it
   - id: report-not-restart
     system: Answer with JSON only.
@@ -80,3 +82,19 @@ tasks:
     checks:
       - {scorer: broker_calls, max: 1}
       - {scorer: denied_calls, max: 0}
+      - {scorer: turns, max: 3}
+  # a program that fails and is rewritten: Code Mode pays a turn and a broker call for the error,
+  # where MCP mode needs no program at all (a task Code Mode loses, so the comparison can flip)
+  - id: queue-recovery
+    system: Answer with JSON only.
+    prompt: >-
+      Is svc:queue running? Answer {"service": "svc:queue", "running": true|false}.
+    fixtures:
+      service.status:
+        svc:queue: {service: svc:queue, state: running, params: {}}
+    expect:
+      scorer: json_fields
+      fields: {service: svc:queue, running: true}
+    checks:
+      - {scorer: broker_calls, max: {mcp: 1, codemode: 2}}
+      - {scorer: turns, max: {mcp: 3, codemode: 4}}

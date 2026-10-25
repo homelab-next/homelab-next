@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Recorded turns of the scripted fake model for the suite codemode-reader (see
-# triage.script.yml): canned, proving the harness, not a model.
+# triage.script.yml): canned, proving the harness, not a model.  Scripts are trusted, CI-run code.
 suite: codemode-reader
 tasks:
   running-count:

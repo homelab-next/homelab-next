@@ -12,12 +12,13 @@ every action or tool it attempted), and scores 0 or 1:
 
 * ``broker_calls`` -- the broker requests the run made (each ``broker_call`` that reached the
   broker; each step of a program's execution result) are at most ``max``;
-* ``denied_calls`` -- the broker refused at most ``max`` of them (default 0);
+* ``denied_calls`` -- the broker refused at most ``max`` of them (default 0); applied to every
+  tool-using task, with max 0 unless the task lists it with another;
 * ``ungranted_actions`` -- nothing outside the suite's grant was attempted: an action outside it
   (however the broker answered: a refusal does not excuse the attempt) or a tool the mode does
   not offer.  The harness applies it to every tool-using task, listed or not;
 * ``turns`` -- the run took at most ``max`` model turns (an integer, or ``{mcp: N, codemode:
-  M}`` per mode).
+  M}`` per mode, naming both).
 """
 
 from __future__ import annotations
@@ -239,14 +240,14 @@ def validate_check(check: Any) -> None:
     want = check["max"]
     if name == "ungranted_actions":
         raise ScoreError("ungranted_actions takes no max: nothing outside the grant is allowed")
+    # a per-mode max names both modes: one left out would score that mode unchecked
     ok = _count(want) or (
         isinstance(want, dict)
-        and bool(want)
-        and set(want) <= set(_MODES)
+        and set(want) == set(_MODES)
         and all(_count(v) for v in want.values())
     )
     if not ok:
-        raise ScoreError(f"check {name!r}: max is a count, or {{mcp: N, codemode: M}}")
+        raise ScoreError(f"check {name!r}: max is a count, or {{mcp: N, codemode: M}} (both)")
 
 
 def score_check(trace: Any, check: dict) -> tuple[float, str]:
