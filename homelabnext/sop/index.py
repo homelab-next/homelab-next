@@ -10,8 +10,13 @@ written on one line::
 
 ``generate`` rewrites only the text between each marker pair, from the target page's summary
 (path relative to the index file's directory); everything outside a span is left byte for byte.
-``check`` exits 1 when a span is stale or its target is missing or has no usable summary.
-Markers render as nothing on GitHub and in Obsidian.
+``check`` exits 1 when a span is stale or its target is missing or has no usable summary, when any
+``hnx:gen`` marker is malformed or unmatched (no space before ``-->``, an open marker with no
+close on its line, a stray close), when a list entry that starts ``- [`` and links a page has no
+span or a span for a different page, and when a top-level page of the directory is not listed.
+Text after a closing marker (a status note such as "proposed (ADR-0031)") is authored and kept.
+Line endings are preserved and the file is replaced atomically.  Markers render as nothing on
+GitHub and in Obsidian.
 """
 
 from __future__ import annotations
@@ -19,7 +24,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from homelabnext.registers.summaries import atomic_write_text, read_text_exact
+
 __all__ = ["SPAN", "check", "generate", "refresh"]
+
+_LIST_LINK = re.compile(r"- \[[^\]]*\]\((?P<target>[^)\s#]+\.md)(?:#[^)\s]*)?\)")
+_ANY_MARKER = re.compile(r"hnx:gen")
 
 SPAN = re.compile(
     r"(?P<open><!-- hnx:gen:summary:(?P<path>[^\s>]+) -->)(?P<body>[^\n]*?)(?P<close><!-- /hnx:gen -->)"
@@ -66,18 +76,46 @@ def refresh(text: str, base: Path) -> tuple[str, list[str], list[str]]:
 
 def generate(index: Path) -> tuple[bool, list[str]]:
     """Rewrite the spans of ``index``.  ``(changed, problems)``; with a problem nothing is written."""
-    text = index.read_text(encoding="utf-8")
+    text = read_text_exact(index)
     new, _, problems = refresh(text, index.parent)
     if problems or new == text:
         return False, problems
-    index.write_text(new, encoding="utf-8")
+    atomic_write_text(index, new)
     return True, problems
+
+
+def _marker_problems(text: str, index: Path) -> list[str]:
+    """Malformed or unmatched markers, and list entries without (or with the wrong) span."""
+    out: list[str] = []
+    listed = set()
+    for n, line in enumerate(text.split("\n"), 1):
+        line = line.rstrip("\r")
+        spans = list(SPAN.finditer(line))
+        listed.update(m["path"] for m in spans)
+        rest = SPAN.sub("", line)
+        if _ANY_MARKER.search(rest):
+            out.append(
+                f"{index.name}:{n}: malformed or unmatched hnx:gen marker (expected "
+                "`<!-- hnx:gen:summary:PATH -->text<!-- /hnx:gen -->` on one line)"
+            )
+        if m := _LIST_LINK.match(line):
+            if not spans:
+                out.append(f"{index.name}:{n}: entry links {m['target']} but has no summary span")
+            elif spans[0]["path"] != m["target"]:
+                out.append(
+                    f"{index.name}:{n}: entry links {m['target']} but its span is for "
+                    f"{spans[0]['path']}"
+                )
+    for page in sorted(index.parent.glob("*.md")):
+        if page.name != index.name and not page.name.startswith("_") and page.name not in listed:
+            out.append(f"{page.name}: page is not listed in {index.name}")
+    return out
 
 
 def check(index: Path) -> list[str]:
     """One line per stale span or unusable target of ``index``; empty when it is current."""
-    text = index.read_text(encoding="utf-8")
+    text = read_text_exact(index)
     _, stale, problems = refresh(text, index.parent)
     if not SPAN.search(text):
         problems.append(f"{index.name}: no generated summary span at all")
-    return [f"stale: {p}" for p in stale] + problems
+    return [f"stale: {p}" for p in stale] + problems + _marker_problems(text, index)

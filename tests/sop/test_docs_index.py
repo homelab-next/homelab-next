@@ -62,3 +62,65 @@ def test_the_real_index_is_current():
     from pathlib import Path
 
     assert index.check(Path(__file__).resolve().parents[2] / "docs" / "README.md") == []
+
+
+def test_generate_keeps_crlf_and_replaces_the_file_atomically(docs):
+    path = docs / "README.md"
+    path.write_bytes(INDEX.replace("\n", "\r\n").encode())
+    assert main(["docs", "index", "generate", str(path)]) == 0
+    data = path.read_bytes()
+    assert data == INDEX.replace(">old<", ">Words a.<").replace("\n", "\r\n").encode()
+    assert b"\n" not in data.replace(b"\r\n", b"")
+    assert index.check(path) == []
+    assert sorted(p.name for p in docs.iterdir()) == ["README.md", "a.md", "sub"]  # no temp file
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- [A](a.md): <!-- hnx:gen:summary:a.md-->Words a.<!-- /hnx:gen -->",  # no space before -->
+        "- [A](a.md): <!-- hnx:gen:summary:a.md -->Words a.",  # open marker, no close
+        "- [A](a.md): <!-- hnx:gen:summary:a.md -->Words a.\n<!-- /hnx:gen -->",  # close elsewhere
+        "- [A](a.md): Words a.<!-- /hnx:gen -->",  # stray close
+        "- [A](a.md): <!-- hnx:gen:summary: a.md -->Words a.<!-- /hnx:gen -->",  # space in path
+    ],
+)
+def test_a_malformed_or_unmatched_marker_fails(docs, line):
+    path = docs / "README.md"
+    path.write_text(
+        INDEX.replace(
+            "- [A](a.md) ([[a]]): <!-- hnx:gen:summary:a.md -->old<!-- /hnx:gen -->", line
+        )
+    )
+    problems = index.check(path)
+    assert any("malformed or unmatched" in p or "no summary span" in p for p in problems), problems
+
+
+def test_a_list_entry_without_a_span_or_with_the_wrong_one_fails(docs):
+    path = docs / "README.md"
+    path.write_text(INDEX + "- [A again](a.md) ([[a]]): hand-written.\n")
+    assert any("a.md but has no summary span" in p for p in index.check(path))
+    path.write_text(
+        INDEX + "- [C](a.md): <!-- hnx:gen:summary:sub/b.md -->Words b.<!-- /hnx:gen -->\n"
+    )
+    assert any("links a.md but its span is for sub/b.md" in p for p in index.check(path))
+    path.write_text(
+        INDEX.replace(">old<", ">Words a.<") + "Prose may link [A](a.md) freely.\n"
+    )  # not a list entry
+    assert index.check(path) == []
+
+
+def test_a_top_level_page_missing_from_the_index_fails(docs):
+    (docs / "README.md").write_text(INDEX.replace(">old<", ">Words a.<"))
+    (docs / "new.md").write_text("---\nsummary: New.\n---\n# New\n")
+    (docs / "_template.md").write_text("# template\n")
+    assert index.check(docs / "README.md") == ["new.md: page is not listed in README.md"]
+
+
+def test_text_after_the_closing_marker_is_authored_and_kept(docs):
+    path = docs / "README.md"
+    path.write_text(
+        INDEX.replace("old<!-- /hnx:gen -->", "old<!-- /hnx:gen --> Proposed (ADR-0031).")
+    )
+    assert main(["docs", "index", "generate", str(path)]) == 0
+    assert "Words a.<!-- /hnx:gen --> Proposed (ADR-0031)." in path.read_text()
