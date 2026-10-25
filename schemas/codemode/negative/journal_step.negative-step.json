@@ -1,0 +1,16 @@
+{
+  "execution_id": "exec-0003",
+  "actor": "profile:triage",
+  "code_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "step": -1,
+  "action": "dns.record-set",
+  "target": "svc:dns",
+  "request_id": "req-0011",
+  "request_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "outcome": "ok",
+  "result": {
+    "changed": true
+  },
+  "result_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "recorded_at": "2026-10-25T02:05:00Z"
+}
