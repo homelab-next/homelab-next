@@ -35,6 +35,7 @@ relate.
   [model serving](model-serving.md) ([[model-serving]]),
   [LLM orchestrator](orchestration-controller.md) ([[orchestration-controller]]),
   [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]),
+  [Code Mode build plan](codemode.md) ([[codemode]]), proposed (ADR-0031),
   [agent profiles](agent.md) ([[agent]]), [broker service](broker.md) ([[broker]]),
   [scope guard](scope.md) ([[scope]]),
   [customization](customization.md) ([[customization]]),
