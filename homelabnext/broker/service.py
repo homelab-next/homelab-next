@@ -102,6 +102,7 @@ from conformance.protocols.broker import (
     arg_problems,
 )
 from homelabnext.agent.schemas import schema_errors
+from homelabnext.generators.safe import CONTROL_RE
 
 from . import (
     DEFAULT_APPROVAL_TTL_S,
@@ -262,6 +263,7 @@ def validate_manifest(
     problems = [f"manifest: {e}" for e in schema_errors("broker", "manifest", manifest)]
     if problems:
         return [], problems
+    problems += _control_problems("manifest", _manifest_names(manifest))
     docs: list[dict[str, Any]] = []
     for rel in manifest.get("handler_docs", []):
         p = _inside(base, rel)
@@ -274,6 +276,9 @@ def validate_manifest(
             problems.append(f"{rel}: cannot be read ({type(exc).__name__})")
             continue
         errs = schema_errors("broker", "handler", doc)
+        errs += _control_problems(
+            "handler", [("action", doc.get("action")), ("handler", doc.get("handler"))]
+        )
         if errs:
             problems += [f"{rel}: {e}" for e in errs]
             continue
@@ -316,6 +321,36 @@ def validate_manifest(
     problems += check_manifest_handlers({"actions": exec_actions}, docs)
     problems += _peer_problems(manifest)
     return docs, problems
+
+
+def _manifest_names(manifest: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """(where, value) of every name the manifest matches on: ids, actions, profiles, peers."""
+    out: list[tuple[str, Any]] = [("manifest_id", manifest.get("manifest_id"))]
+    fields = {
+        "actions": ("action", "handler", "lane"),
+        "grants": ("profile",),
+        "lanes": ("name", "root"),
+        "approvers": ("issuer", "subject"),
+        "callers": ("user", "profile"),
+        "approval_relays": ("user", "issuer"),
+    }
+    for key, names in fields.items():
+        for i, entry in enumerate(manifest.get(key, [])):
+            out += [(f"{key}[{i}].{n}", entry.get(n)) for n in names]
+    for i, grant in enumerate(manifest.get("grants", [])):
+        out += [(f"grants[{i}].actions", a) for a in grant["actions"]]
+    return out
+
+
+def _control_problems(what: str, names: Sequence[tuple[str, Any]]) -> list[str]:
+    """A name holding a control character: a schema pattern's ``$`` matches before a trailing
+    newline, so ``profile:triage\\n`` passes the schema; it is refused here (the value is not
+    repeated)."""
+    return [
+        f"{what}: {where} holds a control character"
+        for where, value in names
+        if isinstance(value, str) and CONTROL_RE.search(value)
+    ]
 
 
 def _overlapping_lanes(lanes: Sequence[_lanes.Lane]) -> list[str]:

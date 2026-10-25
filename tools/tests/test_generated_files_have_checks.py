@@ -49,6 +49,7 @@ DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/terms.md", "test:tests/agent/test_agent_terms.py"),
     ("detections/det_map.yml", "ci:homelabnext.detections map --check"),
     ("examples/keyring/keyring.json", "ci:agent keyring check"),
+    ("examples/codemode/*/*", "ci:codemode gen --check"),
     ("examples/mcp/clients/*/*", "ci:make mcp-check"),
     (
         "compose/lab-in-a-box/config/llm-gateway/litellm/*",
