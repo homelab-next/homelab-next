@@ -65,6 +65,7 @@ capabilities:
   cap:orchestration: [exec]
   cap:codemode-executor: [exec]
   cap:broker: [exec]
+  cap:broker-tokens: [exec]  # the broker's codemode token surface (runner and sandbox roles); broker-only like cap:broker
   cap:hypervisor: [exec]
   cap:secrets: [credential]
   cap:idp: [credential]
