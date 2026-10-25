@@ -37,6 +37,7 @@
     ],
     "type": "object"
   },
+  "target": "required",
   "tier": "read",
   "timeout_s": 10
 }

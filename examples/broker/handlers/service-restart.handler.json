@@ -44,6 +44,7 @@
   "secrets": [
     "DEMO_API_TOKEN"
   ],
+  "target": "required",
   "tier": "execute",
   "timeout_s": 30
 }

@@ -96,7 +96,12 @@ def test_an_action_without_a_handler_or_in_no_grant_is_not_emitted():
         [{"profile": "profile:reader", "actions": ["dns.lookup", "dns.zone"], "max_tier": "read"}],
     )
     files = _files(manifest, [_doc(a["action"]) for a in manifest["actions"]])
-    assert sorted(files) == ["reader/search.json", "reader/stubs.pyi", "reader/types.d.ts"]
+    assert sorted(files) == [
+        "reader/prelude.py",
+        "reader/search.json",
+        "reader/stubs.pyi",
+        "reader/types.d.ts",
+    ]
     text = _profile_text(files, "reader")
     assert "zone" not in text and "dhcp" not in text and "lease" not in text
 
@@ -284,7 +289,7 @@ def lab(tmp_path):
 def test_check_passes_when_clean(lab, capsys):
     _, args = lab
     assert main([*args, "--check"]) == 0
-    assert "6 files" in capsys.readouterr().out
+    assert "8 files" in capsys.readouterr().out
 
 
 def test_check_fails_on_a_hand_edit(lab, capsys):
@@ -429,8 +434,10 @@ def test_the_index_carries_what_codemode_describe_needs():
     assert restart["kind"] == "exec" and restart["params"] == handler["params_schema"]
     assert restart["result"]["schema"] == handler["result_schema"]
     assert restart["signatures"] == {
-        "python": "service.restart(*, grace_s: int) -> ServiceRestartResult",
-        "typescript": "service.restart(args: { grace_s: number }): ServiceRestartResult",
+        "python": "service.restart(*, target: str, grace_s: int) -> ServiceRestartResult",
+        "typescript": (
+            "service.restart(args: { grace_s: number; target: string }): ServiceRestartResult"
+        ),
     }
     memory = index["memory.write"]
     assert memory["kind"] == "lane" and memory["result"]["type"] == "LaneWrite"
@@ -449,7 +456,7 @@ def test_calls_are_synchronous_in_both_languages():
         assert not any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
         assert any(isinstance(n, ast.FunctionDef) for n in ast.walk(tree))
     assert (
-        "function restart(args: { grace_s: number }): ServiceRestartResult;"
+        "function restart(args: { grace_s: number; target: string }): ServiceRestartResult;"
         in files["triage/types.d.ts"]
     )
     assert "the run pauses until it is decided" in files["triage/types.d.ts"]

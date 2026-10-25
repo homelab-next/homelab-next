@@ -25,13 +25,20 @@ handler's ``output`` once decoded as JSON, rendered with the same type mapping a
 held to the same text checks.  Without one its result is untyped: the runner hands a program the
 handler's ``output``.
 
+An exec handler may declare ``target`` (handler document 1.3): ``required`` or ``optional``, whether
+a request for the action names the ``svc:`` target it is about (the broker hands it to the handler
+as ``HNX_BROKER_TARGET``).  The method then takes a ``target`` beside its parameters (keyword-only
+in Python, a property of the argument object in TypeScript), which the runtime prelude passes as
+the request's target, never as a parameter.  Without it the method takes none; a lane action never
+does (a lane writes for the caller, about no target).
+
 Names: a segment that cannot be an identifier in both stub languages, or would shadow a Python
 builtin the stub's annotations use (a keyword, ``delete``, ``class``, ``list``, ``str``), gets a
 trailing ``_``.  Refused (:class:`CodemodeError`) rather than renamed, since a renamed parameter
 would not be the one the broker checks: two actions that land on one method; a parameter name that
-is not an identifier, is a keyword, is ``self``, or is ``params`` while the spec admits more
-parameters (``**params``); a ``required`` name the spec does not declare; a property key that is
-not a string.  Every name the outputs carry is matched whole (a schema pattern's ``$`` also matches
+is not an identifier, is a keyword, is ``self``, is ``params`` while the spec admits more
+parameters (``**params``), or is ``target`` on an action that takes a target; a ``required``
+name the spec does not declare; a property key that is not a string.  Every name the outputs carry is matched whole (a schema pattern's ``$`` also matches
 before a trailing newline), and every text a stub comment carries is one line with no control,
 format (bidi, zero-width) or separator character and nothing that would end the comment.
 """
@@ -116,6 +123,7 @@ class Method:
     summary: str
     params: Mapping[str, Any]  # a JSON Schema object
     result: Mapping[str, Any] | None = None  # None: the action declares no result schema
+    target: str | None = None  # required | optional: the call names a svc: target; None: none
 
 
 @dataclass(frozen=True)
@@ -288,7 +296,7 @@ def _schema_problems(where: str, schema: Any, *, texts: bool = True) -> list[str
     return out
 
 
-def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
+def _param_problems(action: str, schema: Mapping[str, Any], target: str | None = None) -> list[str]:
     problems = _schema_problems(f"{action}: params", schema)
     if problems:
         return problems
@@ -299,7 +307,7 @@ def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
             problems.append(
                 f"{action}: parameter {name!r} is not an identifier (the stubs take it by name)"
             )
-        elif name == "self" or (name == "params" and open_):
+        elif name == "self" or (name == "params" and open_) or (name == "target" and target):
             problems.append(f"{action}: parameter {name!r} clashes with the stub's own {name}")
     return problems
 
@@ -350,6 +358,7 @@ def build_models(
                 problems.append(f"{name} and {seen[ns, meth]} are both {ns}.{meth}")
                 continue
             seen[ns, meth] = name
+            target = None
             if entry.get("lane"):
                 lane = lanes[entry["lane"]]
                 kind, params, result = "lane", _lane_params(lane), LANE_RESULT
@@ -360,9 +369,9 @@ def build_models(
                     problems.append(f"{name}: no handler document declares its params_schema")
                     continue
                 kind, params, result = "exec", doc["params_schema"], doc.get("result_schema")
-                text = doc["description"]
+                text, target = doc["description"], doc.get("target")
             summary, bad = doc_line(f"{name}: description", text)
-            bad += _param_problems(name, params)
+            bad += _param_problems(name, params, target)
             if kind == "exec" and result is not None:
                 bad += _text_problems(f"{name}: result", result)
                 if _schema_problems(f"{name}: result", result, texts=False):
@@ -370,7 +379,9 @@ def build_models(
             problems += bad
             if not bad:
                 methods.append(
-                    Method(name, ns, meth, entry["tier"], needs, kind, summary, params, result)
+                    Method(
+                        name, ns, meth, entry["tier"], needs, kind, summary, params, result, target
+                    )
                 )
         models.append(ProfileModel(profile, manifest["manifest_id"], tuple(methods)))
     if problems:

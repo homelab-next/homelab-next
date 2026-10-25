@@ -21,7 +21,7 @@ tasks:
           language: python
           code: |
             names = ["svc:dns-primary", "svc:dhcp", "svc:queue"]
-            rows = [broker.call("service.status", {}, target=n) for n in names]
+            rows = [service.status(target=n) for n in names]
             result = {"running": sum(r["state"] == "running" for r in rows), "total": len(rows)}
       - answer: $value
   same-state:
@@ -42,6 +42,6 @@ tasks:
           language: python
           code: |
             names = ["svc:dns-primary", "svc:dns-secondary"]
-            states = {n: broker.call("service.status", {}, target=n)["state"] for n in names}
+            states = {n: service.status(target=n)["state"] for n in names}
             result = {"same": len(set(states.values())) == 1, "states": states}
       - answer: $value

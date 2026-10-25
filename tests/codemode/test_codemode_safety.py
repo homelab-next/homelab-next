@@ -357,6 +357,7 @@ def test_a_write_leaves_no_temporary_file_and_replaces_in_place(lab):
     stub.write_text("# hand edit\n")
     assert main(args) == 0
     assert sorted(p.name for p in (out / "triage").iterdir()) == [
+        "prelude.py",
         "search.json",
         "stubs.pyi",
         "types.d.ts",
