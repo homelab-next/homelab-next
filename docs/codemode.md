@@ -2,9 +2,12 @@
 # Code Mode build plan
 
 The order in which [ADR-0031](adr/0031-code-mode-through-the-broker.md) (proposed) is built.
-CM-1, CM-2, CM-3, CM-4, CM-5a, CM-5b and CM-6 have landed (described below); nothing else here is built yet. Steps
+CM-1, CM-2, CM-3, CM-4, CM-5a, CM-5b and CM-6 have landed (described below), and of phase 2
+([hardening](#phase-2-hardening)) CM-10, CM-11 and CM-12; nothing else here is built yet. Steps
 tagged **PUBLIC-NOW** are provable in CI with fakes, like the [build order](build-order.md)'s P
-phases; steps tagged **SERVER** need the lab and are documented, not run, here.
+phases; steps tagged **SERVER** need the lab and are documented, not run, here; steps that also
+say **needs operator authorization** wait for the operator to authorize their probes before any
+is written.
 
 The rule from the build order holds: **contracts before services.** The executor and runner
 contracts, with their reference fakes and mutants, land before any real sandbox does, and the
@@ -14,6 +17,12 @@ real executor goes live only when the same suite passes against it.
 CM-1 ADR + plan --> CM-2 schemas --> CM-3 generator --+--> CM-5a tokens --> CM-5b runner --> CM-6 golden suites
                                   \-> CM-4 executor contract -/                                |
 CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role live (SERVER)
+                                 ^        |                          |
+Phase 2:                         |        v                          v
+CM-10 stubs, CM-11 relay         |   CM-15 adversarial suite    CM-16 live injection corpus,
+refusals, CM-12 read actions     |   (SERVER, operator)         CM-17 evals on a timer (SERVER)
+(landed)                         |
+CM-13, CM-14 probes (operator) --+
 ```
 
 ## Phase 1: read-only, one PR per step
@@ -28,7 +37,7 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 | CM-5b | PUBLIC-NOW, **landed** | The runner, `codemode.execute`'s handler ([below](#cm-5b-the-runner); `homelabnext/codemode/runner.py`): the execution request checked, the run's token from `issue_token` as the bound runner (the actor's granted actions, never `codemode.*`, the cap and lifetime from the budget), the program, the token and the run's endpoint (the CM-4 wire, served by the runner's relay) handed to a `CodeExecutor`, and an `execution_result` back (status, calls, logs, pending, value and `truncated`, held to the schema); every program call a broker request with the token (`call` is `token_call`, `submit` is `token_submit`, the paused step on a resume `token_run`), over the socket as the runner and sandbox peers with the bearer line; an exec action's envelope (by the index's `kind`) unwrapped to `output` (JSON or text) and the cases that are not that success defined (`output-truncated`, `handler-failed`, `result-schema-mismatch` against the index's result schema, `result-too-large`, each data, the call record marked `delivered_as`); a broker refusal a denied call the program catches as `broker.Denied`, with the request ids once the broker built the request; the step journal (`journal_step`, local, append-only, `0700`, an intent before every call and its answer after, refusals included, a keyed fingerprint per call, bounded, retention 7 days finished and 30 otherwise; a step of unknown outcome never re-sent, a journal failure ending the run unresumable, a crashed run `interrupted`); steps only for calls the relay accepted (the run's token, a well-formed action and target, at most 200), its own refusals bounded, connections served concurrently with a short read timeout, an optional peer-uid check; a submit or a call needing approval pausing the run (`pending`); a resume reading `token_status`'s `paused_by_state` (never polling `token_run`), pausing again unissued while it waits, else answering journalled steps from the journal (`replayed`), `token_run` of the paused request and only the later calls new, a different call refused `replay-mismatch`, a resume claimed atomically; the broker's `call-cap-reached` ending the run `limit` (`calls`). The tool class `codemode` (read-only, reader-forbidden, not broker-only), `platform/mcp_server` 1.2, the record `hnx-codemode` (`codemode_search`, `codemode_describe` over the generator's index, narrowed to the broker's grant; execute stays `broker_call` of `codemode.execute` on `hnx-broker`), `cap:codemode-runner` classed `exec`. The `codemode-runner` capability, the eighteenth | the eight MUST checks pass on the fake broker and the reference service; each of the eight mutants is caught by its own check only; G-13 and `make mcp-check` green |
 | CM-6 | PUBLIC-NOW, **landed** | The golden suites `codemode-triage` and `codemode-reader` ([below](#cm-6-golden-suites); `homelabnext/golden/agentic.py`, `homelabnext/golden/examples/codemode/`): every task posed in classic MCP mode (`broker_actions`, `broker_call`, one broker action per turn) and in Code Mode (`codemode_search`, `codemode_describe`, `codemode_execute`, one program through the CM-5b runner) to the same model against the same broker world, read-only (the grant is `service.status`, the example manifest's read action, and since CM-12 the triage suite's adds `dns.lookup`, `dhcp.leases` and `hypervisor.guests`; the reader's Code Mode half is hypothetical, a grant of the fake world only, outside the totals); a plain-text turn protocol (one JSON object a turn) and every tool result fenced as untrusted data by the new template `agent-tool-result`; `schemas/agent/golden_task` 1.1 (additive: `modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`); trace scorers in the golden registry (`broker_calls`, `denied_calls`, `ungranted_actions` (always applied: an attempt outside the grant fails the task even when the broker refused it; the attempts are derived from the execution result's `calls` and, since CM-11, its `relay_refusals`), `turns`) beside the answer scorers; the G-02 pass, each corpus case placed in a fixture result a program reads, a follow (a canary, a call-shaped or quoted-literal forbidden tool in a reply, program code included, or that tool attempted) a failure; a scripted, recorded fake model (`homelabnext/golden/fakes.py`) behind the fake inference server, `fence` and a deliberately `naive` control the report proves caught in both modes; the report `homelabnext/golden/examples/codemode/report.json` (`hnx golden codemode --check`, in `make gates` and CI) | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
 | CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; the stubs are synchronous, so a TypeScript executor must offer a blocking host call to the broker (`Atomics.wait` on a worker, or a sync bridge): check it before choosing | a short decision note picks the executor and records the numbers |
-| CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite, after the egress-probe fixes from phase 2, passes against the real executor on staging |
+| CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite, after the egress-probe fixes of [CM-13](#phase-2-hardening), passes against the real executor on staging |
 | CM-9 | SERVER | One role enabled in the private overlay with read actions only (DNS and DHCP lookups, hypervisor nodes and guests, network clients and devices, one lake query) | the correlation task passes on the lab; the live golden run beats MCP mode for that role, or the role stays on MCP mode and the result is recorded |
 
 CM-4 as landed: the contract is `conformance/protocols/codemode_executor.py`, in the vocabulary of
@@ -525,35 +534,26 @@ manifest has the DNS, DHCP and hypervisor reads the CM-9 join needs (CM-12), joi
 `guest-of-a-name`. What remains for CM-9 is the lab's own versions of those actions, with
 handlers that read the lab and fixtures `seed` can place, in the private overlay.
 
+## Phase 2: hardening
+
+| Step | Tag | What lands | Done when |
+|---|---|---|---|
+| CM-10 | PUBLIC-NOW, **landed** | Programs call the generated stubs ([CM-3](#cm-3-the-generator)): a handler document declares `target` (`schemas/broker/handler` 1.3), the stubs and the index take it (keyword-only in Python, a property in TypeScript), `hnx codemode gen` writes each profile's runtime prelude `prelude.py`; CM-4 rule h (`run(..., prelude=)`) and the MUST check `stubs-reach-the-broker` (mutant `prelude-dropped`); the runner hands each actor's prelude to the executor (`load_preludes`); the CM-6 scripts call `service.status(target=...)` | `gen --check` holds the preludes; the check passes on the forking fake and its mutant is caught by it only; the CM-6 report's numbers are unchanged |
+| CM-11 | PUBLIC-NOW, **landed** | The runner lists the requests its relay refused ([the relay](#cm-5b-the-runner)): `relay_refusals` in the execution result (draft schema, an example and three negatives), the `codemode-runner` rule i and MUST check `relay-refusals-are-reported` (mutant `relay-refusals-hidden`); the CM-6 harness derives every attempt from the result, and the fake's tap is gone | the check passes on the fake broker and the reference service and its mutant is caught by it only; the naive control is still caught in Code Mode, through the result |
+| CM-12 | PUBLIC-NOW, **landed** | Read actions for the CM-9 join in the example manifests: `dns.lookup`, `dhcp.leases`, `hypervisor.guests` (read tier, about a required target, stand-in handlers with result schemas, fictional data), granted to `profile:triage` and `profile:reader`, the keyring rebuilt; the CM-6 task `guest-of-a-name` in both modes | the task passes in both modes and the report's comparison counts it ([CM-6](#cm-6-golden-suites)) |
+| CM-13 | PUBLIC-NOW, **needs operator authorization** | The egress-probe fixes deferred from the CM-4 review, needed before CM-8 because today's probes can pass a sandbox that has egress: the name-lookup probe looks up a random name and counts any resolver answer as reached (it resolves `localhost` today, which `/etc/hosts` answers without a resolver); the UDP probe is judged by what the decoy received (by a successful `sendto` today); more families and destinations (IPv6, `AF_UNIX`, ICMP, addresses other than the harness's); and a capped program reaches no broker after `run` returns | the operator has authorized the probes; each probe fails a mutant that has that egress, caught by its own check only, and the forking fake still passes |
+| CM-14 | PUBLIC-NOW, **needs operator authorization** | The isolation probes deferred from the CM-4 review: a tamper check (a program resetting its client's state or calling the broker directly cannot pass the cap or a pause: the broker's refusal on the token is the enforcement, landed with CM-5a; the sandbox-side probe remains); an environment allowlist and canaries set before the executor is constructed, the canary absent from the output as well as the environment; well-known credential paths in the sandbox's filesystem; the harness's own `/proc` environment unreadable and a pid namespace of the sandbox's own; non-root, no capabilities, no-new-privileges, a read-only root, process-count and scratch-size limits; the output cap on stderr as well as stdout; the token absent beyond the environment; more disposable locations. An extended suite (as `broker-tokens` extends `broker`) where the executor suite's 18 checks would pass the 24-check ceiling | the operator has authorized the probes; every probe is a MUST check with a mutant caught by it only; the forking fake, which is not a boundary, declares the probes it cannot meet instead of passing them; the real executor meets them all (CM-8) |
+| CM-15 | SERVER, **needs operator authorization** | The adversarial sandbox suite against the real executor on staging: escape attempts and resource exhaustion (processes, memory, scratch space, descriptors, connections), beside the CM-13 and CM-14 probes | every attempt is contained and reported as its check states; the results are recorded with CM-8's decision note |
+| CM-16 | SERVER | The G-02 corpus placed in tool results, against the lab's real models in both modes: the CM-6 harness with the live completer and backend of CM-9 | a recorded report per role with no follow and the naive control caught |
+| CM-17 | SERVER | The live golden and injection evals on a timer in the private overlay, each run checked against the last accepted report, with a page on regression (accuracy down, mean turns up past a bound, any follow) | the timer runs; a seeded regression pages once (state-diffed) and a standing one does not page again |
+
+Phase 2 is done when CM-13 to CM-15 have passed against the real executor and CM-17's timer has
+run a week without an unexplained page.
+
 ## Later phases
 
 Each is planned as steps like the ones above when phase 1 closes.
 
-2. **Hardening.** An adversarial sandbox suite (escape attempts, egress probes, resource
-   exhaustion); the injection-in-results corpus against real models; the live golden and
-   injection evals on a timer with a page on regression. The isolation checks deferred from the
-   CM-4 review, pending operator authorization:
-   - *before CM-8*, because today's egress probes can pass a sandbox that has egress: the
-     name-lookup probe resolves `localhost`, which is answered from `/etc/hosts` without a
-     resolver (it should look up a random name and treat any resolver answer as reached), and
-     the UDP probe trusts a successful `sendto` (it should be judged by what the decoy
-     received);
-   - post-cap calls: a capped program must not reach the broker after `run` returns;
-   - a tamper check: a program resetting its client state or calling the broker directly
-     cannot exceed the cap or continue past a pause (the broker's refusal on the token is the
-     enforcement, landed with CM-5a and proved at the broker's API; the sandbox-side probe
-     remains);
-   - an environment allowlist and canaries set before the executor is constructed, and the
-     canary absent from the output as well as the environment;
-   - well-known credential paths in the sandbox's filesystem;
-   - more egress families and destinations: IPv6, `AF_UNIX`, ICMP, and addresses other than
-     the harness's;
-   - the harness's own `/proc` environment unreadable, and a pid namespace of the sandbox's own;
-   - non-root, no capabilities, no-new-privileges, a read-only root, and process-count and
-     scratch-size limits;
-   - the output cap applied to stderr as well as stdout;
-   - the token's absence beyond the environment;
-   - more disposable locations.
 3. **Rule approvals.** `rule` as an approver kind in the broker's approval check; a standing-rule
    schema, lint and register in the overlay; checks that a call outside a rule's shape escalates,
    a top tier is never rule-approved, an expired rule approves nothing and rule approvals are
