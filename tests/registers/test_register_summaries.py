@@ -314,3 +314,121 @@ def test_restamp_all_only_stamps_authored_pages(tmp_path):
     assert main(["summaries", "--restamp-all", str(tmp_path)]) == 0
     assert outline_digest(BODY) in a.read_text() and g.read_text() == before
     assert lint_summaries([tmp_path], tmp_path).ok
+
+
+# ---- hardening of --restamp (review findings) ------------------------------------------------
+
+
+def test_restamp_refuses_symlinks_dotdot_and_records(tmp_path, monkeypatch, src, capsys):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    outside = out / "x.md"
+    outside.write_text("---\nsummary: Words.\n---\n# X\n")
+    secret = out / "secret.txt"
+    secret.write_text("---\nsummary: Words.\n---\n# S\n")
+    (docs / "link.md").symlink_to(outside)
+    (docs / "secret.md").symlink_to(secret)
+    (docs / "lessons").symlink_to(src / "lessons")
+    monkeypatch.chdir(tmp_path)
+    before = {p: p.read_bytes() for p in (outside, secret, *(src / "lessons").glob("*.md"))}
+    for bad, needle in [
+        ("docs/link.md", "symbolic link"),
+        ("docs/secret.md", "symbolic link"),
+        ("docs/lessons/" + f("LL-001"), "symbolic link"),
+        ("docs/../out/x.md", "`..`"),
+        ("out/secret.txt", "not a regular Markdown page"),
+    ]:
+        with pytest.raises(RestampError, match=needle):
+            restamp(bad)
+        assert main(["summaries", "--restamp", bad]) == 1
+    capsys.readouterr()
+    assert {p: p.read_bytes() for p in before} == before
+    pages = tmp_path / "pages"
+    pages.mkdir()
+    (pages / "link.md").symlink_to(outside)
+    assert main(["summaries", "--restamp-all", "pages"]) == 1  # restamp-all refuses it too
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_restamp_refuses_a_real_record_path(src):
+    rec = src / "runbooks" / f("RB-001")
+    before = rec.read_bytes()
+    with pytest.raises(RestampError, match="exempt"):
+        restamp(rec)
+    assert rec.read_bytes() == before
+
+
+def test_restamp_keeps_crlf_for_a_one_line_front_matter(tmp_path):
+    page = tmp_path / "p.md"
+    original = b"---\r\nsummary: Words.\r\n---\r\n# H\r\n\r\nbody\r\n"
+    page.write_bytes(original)
+    assert restamp(page) is True
+    stamp = b"summary_of: " + outline_digest("# H\n").encode() + b"\r\n"
+    assert page.read_bytes() == original.replace(
+        b"summary: Words.\r\n", b"summary: Words.\r\n" + stamp
+    )
+
+
+def test_restamp_keeps_comments_and_blank_lines_after_the_entries(tmp_path):
+    page = tmp_path / "p.md"
+    old = "outline:sha256:0000000000000000"
+    page.write_text(
+        f"---\nsummary: Words.\n# about the stamp\n\nsummary_of: {old}\n# trailing comment\nz: 1\n---\n# H\n"
+    )
+    assert restamp(page) is True
+    text = page.read_text()
+    assert (
+        "# about the stamp\n\nsummary_of: "
+        + outline_digest("# H\n")
+        + "\n# trailing comment\nz: 1\n"
+        in text
+    )
+    page.write_text("---\nsummary: Words.\n# c1\n\nz: 1\n---\n# H\n")
+    assert restamp(page) is True
+    assert page.read_text().startswith(
+        "---\nsummary: Words.\nsummary_of: " + outline_digest("# H\n") + "\n# c1\n\nz: 1\n"
+    )
+
+
+def test_restamp_with_several_paths_writes_all_or_none(tmp_path, capsys):
+    good = _docs(tmp_path, "---\nsummary: Words.\n---\n# G\n", "good.md")
+    bad = _docs(tmp_path, "# no summary\n", "bad.md")
+    before = good.read_bytes()
+    assert main(["summaries", "--restamp", str(good), str(bad)]) == 1
+    assert good.read_bytes() == before
+    capsys.readouterr()
+
+
+def test_restamp_writes_atomically_and_keeps_the_mode(tmp_path):
+    page = _docs(tmp_path, "---\nsummary: Words.\n---\n# G\n")
+    page.chmod(0o640)
+    assert restamp(page) is True
+    assert (page.stat().st_mode & 0o777) == 0o640
+    assert [p.name for p in tmp_path.iterdir()] == ["p.md"]  # no temp file left behind
+
+
+def test_a_duplicate_key_is_reported_as_invalid_yaml_not_a_missing_summary(tmp_path):
+    page = _docs(tmp_path, "---\nsummary: Words.\nsummary: Other.\n---\n# D\n")
+    (msg,) = lint_summaries([page], tmp_path).problems
+    assert "not valid YAML" in msg and "duplicate" in msg.lower() and "no front-matter" not in msg
+    with pytest.raises(RestampError, match="not valid YAML"):
+        restamp(page)
+    dup_of = _docs(tmp_path, "---\nsummary: W.\nsummary_of: a\nsummary_of: b\n---\n# D\n", "d.md")
+    with pytest.raises(RestampError, match="not valid YAML"):
+        restamp(dup_of)
+
+
+def test_a_quoted_summary_key_can_be_restamped(tmp_path):
+    page = _docs(tmp_path, '---\n"summary": Words.\ntitle: T\n---\n# Q\n')
+    assert "has no summary_of" in lint_summaries([page], tmp_path).problems[0]
+    assert restamp(page) is True
+    assert lint_summaries([page], tmp_path).ok
+    assert restamp(page) is False
+
+
+def test_the_missing_flag_is_gone(capsys):
+    with pytest.raises(SystemExit):
+        main(["summaries", "docs", "--missing"])
+    capsys.readouterr()

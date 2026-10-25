@@ -68,7 +68,6 @@ def main(argv=None) -> int:
     sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
     sm.add_argument("paths", nargs="*")
     sm.add_argument("--json", action="store_true", help="machine-readable output")
-    sm.add_argument("--missing", action="store_true", help="kept for old callers (now a FAIL line)")
     sm.add_argument(
         "--restamp",
         action="store_true",
@@ -152,7 +151,7 @@ def _summaries(ns) -> int:
     if ns.json:
         print(json.dumps(asdict(rep), indent=2, sort_keys=True))
     else:
-        for line in rep.lines(missing=ns.missing):
+        for line in rep.lines():
             print(f"[registers] {line}")
     return 0 if rep.ok else 1
 
@@ -160,7 +159,7 @@ def _summaries(ns) -> int:
 def _restamp(ns) -> int:
     from homelabnext.context.levels import GENERATED_KEY, front_matter
 
-    from .summaries import RestampError, _files, restamp
+    from .summaries import RestampError, _files, restamp_many
 
     targets: list[Path] = []
     if ns.restamp_all:
@@ -184,10 +183,8 @@ def _restamp(ns) -> int:
                 )
                 return 1
             targets.append(Path(raw))
-    done: list[tuple[Path, bool]] = []
     try:
-        for t in targets:
-            done.append((t, restamp(t)))
+        done = restamp_many(targets)  # every target is validated before the first is written
     except RestampError as ex:
         print(f"[registers] FATAL: {ex}", file=sys.stderr)
         return 1

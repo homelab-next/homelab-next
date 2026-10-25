@@ -23,7 +23,7 @@ examples/review-policy.yml     which reviews each artefact needs (shared with do
 hnx registers build examples/registers build/registers   # validate (fatal) and render HTML + JSON
 hnx registers links examples/registers/lessons [--check]  # regenerate / check the Links blocks
 hnx registers review examples/registers [--today D] [--strict] [--json]   # what the review owes
-hnx registers summaries examples/registers docs [--missing] [--json]   # summary lint (ADR-0032)
+hnx registers summaries examples/registers docs [--json]   # summary lint (ADR-0032)
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
 hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review must carry
 hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event
@@ -157,7 +157,14 @@ Rules the parser enforces (fatally, all problems at once):
   (`summary_generated: true`) is exempt, because its generator's `--check` keeps it current.
   **Register records are exempt too**: a record is structured fields, not a heading outline, its
   summary is part of its review digest, and any change to the record already invalidates its
-  reviews, so a second stamp would add nothing. `summary_of` is a machine key of the system-page
+  reviews, so a second stamp would add nothing.
+  **Limits of the digest:** it sees headings only. A page with no headings always matches (its
+  digest never changes), and headings past the parse bound (1 MiB or 100,000 lines of body, as
+  `levels.parse` reads) are not seen, so a rename there does not make the summary stale. Headings
+  inside code fences, HTML comments and raw `<pre>`/`<details>` blocks do not count. A quoted
+  `"summary":` key is handled by `--restamp`; a symbolic link, a path with `..`, a register
+  record or a front matter that does not parse (a duplicate key) is refused, and `--restamp`
+  with several paths writes all of them or none. `summary_of` is a machine key of the system-page
   review digest (like `summary_generated`), so restamping never invalidates a human review.
 
 Sections: a pitfall has Symptom, Contributing factor, Root cause, Preventive control, Open reason,
