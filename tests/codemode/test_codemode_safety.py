@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from homelabnext.broker import lanes
+from homelabnext.broker.execute import file_digest
 from homelabnext.broker.service import BrokerService, load_manifest
 from homelabnext.codemode import CodemodeError, build_models, render, render_files
 from homelabnext.codemode import cli as codemode_cli
@@ -220,20 +221,38 @@ def test_a_backslash_is_fine_and_a_pattern_is_surfaced():
 
 
 def test_astral_characters_in_a_literal_are_kept_whole():
-    spec = {"type": "object", "properties": {"k": {"enum": ["\U0001f600", 'q"\\', "\u202e"]}}}
+    spec = {"type": "object", "properties": {"k": {"enum": ["\U0001f600", 'q"\\', "\u00e9"]}}}
     files = _one(spec)
     py = files["p/stubs.pyi"]
-    assert "\U0001f600" in py and "\\ud83d" not in py
-    assert "\u202e" not in py  # a format character is escaped, never written raw
+    assert "\U0001f600" in py and "\\ud83d" not in py and "\u00e9" in py
     ann = next(
         a
         for n in ast.walk(ast.parse(py))
         if isinstance(n, ast.FunctionDef)
         for a in n.args.kwonlyargs
     )
-    literal = ann.annotation.slice
-    assert [e.value for e in literal.elts] == ["\U0001f600", 'q"\\', "\u202e"]
-    assert "\u202e" not in files["p/search.json"] and "\u202e" not in files["p/types.d.ts"]
+    assert [e.value for e in ann.annotation.slice.elts] == ["\U0001f600", 'q"\\', "\u00e9"]
+    assert files["p/search.json"].isascii()
+
+
+def test_a_format_character_anywhere_in_the_params_schema_is_refused():
+    """The index carries the whole schema: a nested title, default, enum value or key is held to
+    the same characters as a description."""
+    deep = {"type": "object", "properties": {"x": {"type": "string"}}}
+    cases = [
+        {"title": "Lookup\u202e"},
+        {"properties": {"q": {"type": "object", "properties": {"r": {"description": "a\u200bb"}}}}},
+        {"properties": {"q": {"type": "string", "default": "x\ny"}}},
+        {"properties": {"q": {"enum": ["ok", "evil */ end"]}}},
+        {"properties": {"q": {"type": "object", "title": 'ends """ here'}}},
+        {"properties": {"q": {"type": "array", "items": {"title": "\ufeffbom"}}}},
+        {"$defs": {"k\u2066": {"type": "string"}}},
+    ]
+    for extra in cases:
+        spec = {**deep, **extra}
+        with pytest.raises(CodemodeError, match="holds"):
+            _one(spec)
+    assert _one({**deep, "title": r"plain \d title"})  # a backslash is fine
 
 
 @pytest.mark.parametrize(
@@ -380,50 +399,172 @@ def test_a_non_utf8_golden_is_drift_not_a_crash(lab):
 
 
 # ------------------------------------------------------- held to the broker
-@pytest.mark.parametrize("profile", ["profile:triage", "profile:reader"])
-def test_the_granted_set_is_the_brokers_own(tmp_path, profile):
-    svc = BrokerService.from_manifest(EXAMPLE / "manifest.yml", tmp_path / "state")
-    broker = {a["action"]: a["needs_approval"] for a in svc.actions_for(profile)}
-    manifest, docs = load_manifest(EXAMPLE / "manifest.yml")
+def _synthetic(root: Path) -> Path:
+    """A small manifest whose grants exercise what ``decide`` decides: a grant whose tier is below
+    an action's, two grants for one profile where the first naming an action wins, an action that
+    needs approval at tier write, a json-format lane, a shared text lane and a records inbox."""
+    (root / "h").mkdir(parents=True)
+    docs = []
+    for action, tier, approval in (
+        ("svc.read", "read", False),
+        ("svc.tune", "write", True),
+        ("svc.restart", "execute", True),
+    ):
+        script = root / "h" / f"{action}.sh"
+        script.write_text("#!/bin/sh\necho '{}'\n")
+        doc = {
+            "action": action,
+            "handler": f"h/{action}.sh",
+            "handler_digest": file_digest(script),
+            "tier": tier,
+            "description": f"Stand-in {action} for the equivalence test.",
+            "params_schema": {"type": "object", "additionalProperties": False},
+            "timeout_s": 5,
+            "idempotent": True,
+            "requires_approval": approval,
+            "audit": True,
+        }
+        (root / "h" / f"{action}.json").write_text(json.dumps(doc))
+        docs.append(doc)
+    manifest = {
+        "manifest_id": "synthetic",
+        "default": "deny",
+        "mode": "enforce",
+        "dev_identity": True,
+        "handler_docs": [f"h/{d['action']}.json" for d in docs],
+        "lanes": [
+            {"name": "data", "kind": "files", "root": "data", "per_actor": True,
+             "filename_pattern": "^[a-z]+\\.json$", "max_bytes": 4096, "format": "json"},
+            {"name": "board", "kind": "files", "root": "board", "per_actor": False,
+             "max_bytes": 4096, "format": "text"},
+            {"name": "inbox", "kind": "records-inbox", "root": "records", "per_actor": False,
+             "max_bytes": 65536, "note_types": ["proposal"]},
+        ],
+        "actions": [
+            *({"action": d["action"], "tier": d["tier"], "handler": d["handler"],
+               "requires_approval": d["requires_approval"]} for d in docs),
+            {"action": "data.put", "tier": "write", "handler": "builtin/lane", "lane": "data",
+             "requires_approval": False},
+            {"action": "board.post", "tier": "write", "handler": "builtin/lane", "lane": "board",
+             "requires_approval": False},
+            {"action": "note.file", "tier": "write", "handler": "builtin/lane", "lane": "inbox",
+             "requires_approval": False},
+        ],
+        "grants": [
+            # the first grant naming svc.restart caps it at read: restart is refused for ops,
+            # however the second grant reads
+            {"profile": "profile:ops", "actions": ["svc.read", "svc.restart"], "max_tier": "read"},
+            {"profile": "profile:ops",
+             "actions": ["svc.restart", "svc.tune", "data.put", "board.post", "note.file"],
+             "max_tier": "execute"},
+            {"profile": "profile:pager", "actions": ["svc.restart", "svc.tune"], "max_tier": "execute"},
+            {"profile": "profile:low", "actions": ["svc.tune", "svc.read"], "max_tier": "read"},
+        ],
+    }  # fmt: skip
+    path = root / "manifest.yml"
+    path.write_text(yaml.safe_dump(manifest))
+    return path
+
+
+@pytest.fixture(scope="module")
+def synthetic(tmp_path_factory):
+    return _synthetic(tmp_path_factory.mktemp("synthetic"))
+
+
+CASES = [
+    ("example", "profile:triage"),
+    ("example", "profile:reader"),
+    ("synthetic", "profile:ops"),
+    ("synthetic", "profile:pager"),
+    ("synthetic", "profile:low"),
+]
+
+
+def _path(which, synthetic):
+    return EXAMPLE / "manifest.yml" if which == "example" else synthetic
+
+
+@pytest.mark.parametrize(("which", "profile"), CASES)
+def test_the_granted_set_is_the_brokers_own(tmp_path, synthetic, which, profile):
+    path = _path(which, synthetic)
+    svc = BrokerService.from_manifest(path, tmp_path / "state")
+    broker = {a["action"]: (a["tier"], a["needs_approval"]) for a in svc.actions_for(profile)}
+    manifest, docs = load_manifest(path)
     model = next(m for m in build_models(manifest, docs) if m.profile == profile)
-    assert {m.action: m.needs_approval for m in model.methods} == broker
-    tiers = {a["action"]: a["tier"] for a in svc.actions_for(profile)}
-    assert {m.action: m.tier for m in model.methods} == tiers
+    assert {m.action: (m.tier, m.needs_approval) for m in model.methods} == broker
 
 
-def _lane_cases():
-    manifest, docs = load_manifest(EXAMPLE / "manifest.yml")
-    triage = next(m for m in build_models(manifest, docs) if m.profile == "profile:triage")
-    lane_of = {a["action"]: a["lane"] for a in manifest["actions"] if "lane" in a}
-    by_name = {ld["name"]: lanes.Lane.from_doc(ld) for ld in manifest["lanes"]}
-    return [(m, by_name[lane_of[m.action]]) for m in triage.methods if m.kind == "lane"]
+def test_the_synthetic_grants_decide_as_intended(synthetic):
+    manifest, docs = load_manifest(synthetic)
+    got = {
+        m.profile: {x.action: x.needs_approval for x in m.methods}
+        for m in build_models(manifest, docs)
+    }
+    assert got == {
+        # svc.restart: the first grant (max_tier read) wins over the second
+        "profile:ops": {
+            "board.post": False,
+            "data.put": False,
+            "note.file": False,
+            "svc.read": False,
+            "svc.tune": True,
+        },
+        "profile:pager": {"svc.restart": True, "svc.tune": True},
+        # svc.tune is tier write, above the grant's read
+        "profile:low": {"svc.read": False},
+    }
+
+
+def _lane_cases(synthetic):
+    out = []
+    for which, profile in (("example", "profile:triage"), ("synthetic", "profile:ops")):
+        manifest, docs = load_manifest(_path(which, synthetic))
+        model = next(m for m in build_models(manifest, docs) if m.profile == profile)
+        lane_of = {a["action"]: a["lane"] for a in manifest["actions"] if "lane" in a}
+        by_name = {ld["name"]: lanes.Lane.from_doc(ld) for ld in manifest["lanes"]}
+        out += [(profile, m, by_name[lane_of[m.action]]) for m in model.methods if m.kind == "lane"]
+    return out
 
 
 VALUES = {
-    "name": {"memory": "notes.md", "findings": "2026-01-15-queue.md"},
-    "content": "Seen twice.",
+    "name": {"memory": "notes.md", "findings": "2026-01-15-queue.md", "data": "facts.json",
+             "board": "status.md"},
+    "content": {"text": "Seen twice.", "json": {"seen": 2}},
     "note": NOTE,
     "body": "Seen twice.",
     "slug": "drain",
-}
+}  # fmt: skip
 
 
 def _value(lane, name):
-    v = VALUES[name]
-    return v[lane.name] if isinstance(v, dict) and name == "name" else v
+    if name == "name":
+        return VALUES["name"][lane.name]
+    if name == "content":
+        return VALUES["content"][lane.format]
+    return VALUES[name]
 
 
-@pytest.mark.parametrize(("method", "lane"), _lane_cases(), ids=lambda x: getattr(x, "action", ""))
-def test_the_documented_lane_params_are_what_the_lane_accepts(method, lane):
-    props, required = method.params["properties"], method.params["required"]
-    check_ = lambda params: lanes.check_params(lane, "profile:triage", params, NOW, key=b"k")  # noqa: E731
-    check_({n: _value(lane, n) for n in required})  # the required ones alone
-    check_({n: _value(lane, n) for n in props})  # every documented one
-    for missing in required:
+def test_the_documented_lane_params_are_what_the_lane_accepts(synthetic):
+    cases = _lane_cases(synthetic)
+    assert {lane.format for _, _, lane in cases} == {"text", "json"}
+    assert {lane.kind for _, _, lane in cases} == {"files", "records-inbox"}
+    for profile, method, lane in cases:
+        props, required = method.params["properties"], method.params["required"]
+
+        def check_(params, lane=lane, profile=profile):
+            lanes.check_params(lane, profile, params, NOW, key=b"k")
+
+        check_({n: _value(lane, n) for n in required})  # the required ones alone
+        check_({n: _value(lane, n) for n in props})  # every documented one
+        for missing in required:
+            with pytest.raises(lanes.LaneError):
+                check_({n: _value(lane, n) for n in props if n != missing})
         with pytest.raises(lanes.LaneError):
-            check_({n: _value(lane, n) for n in props if n != missing})
-    with pytest.raises(lanes.LaneError):
-        check_({**{n: _value(lane, n) for n in props}, "undocumented": "x"})
+            check_({**{n: _value(lane, n) for n in props}, "undocumented": "x"})
+        if lane.format == "json":  # the documented type: a JSON object or list, not a string
+            assert props["content"]["type"] == ["object", "array"]
+            with pytest.raises(lanes.LaneError):
+                check_({"name": _value(lane, "name"), "content": "text"})
 
 
 def test_an_exec_call_result_is_untyped_and_a_lane_result_is_what_a_write_returns(tmp_path):

@@ -237,11 +237,31 @@ def doc_line(where: str, text: str) -> tuple[str, list[str]]:
     return line, []
 
 
-def _schema_problems(where: str, schema: Any) -> list[str]:
-    """Shape problems of a (nested) schema the renderers would trip on or render wrongly."""
+def _text_problems(where: str, value: Any) -> list[str]:
+    """:func:`doc_line` over every string key and value anywhere in ``value``: the index carries
+    the whole schema (a nested ``title``, a ``default``, an ``enum`` value, a key), and any of it
+    may reach a stub comment or a reader of ``codemode_describe``."""
+    if isinstance(value, str):
+        return doc_line(where, value)[1]
+    out = []
+    if isinstance(value, Mapping):
+        for k, v in value.items():
+            bad = doc_line(f"{where}: a key", k)[1] if isinstance(k, str) else []
+            out += bad
+            here = f"{where}.{k}" if isinstance(k, str) and not bad else f"{where}.<key>"
+            out += _text_problems(here, v)
+    elif isinstance(value, list | tuple):
+        for i, v in enumerate(value):
+            out += _text_problems(f"{where}[{i}]", v)
+    return out
+
+
+def _schema_problems(where: str, schema: Any, *, texts: bool = True) -> list[str]:
+    """Shape problems of a (nested) schema the renderers would trip on or render wrongly, and
+    (``texts``, at the root) a refused character in any string it holds."""
     if not isinstance(schema, Mapping):
         return []
-    out = []
+    out = _text_problems(where, schema) if texts else []
     props = schema.get("properties", {})
     if not isinstance(props, Mapping):
         return [f"{where}: properties is not an object"]
@@ -257,12 +277,12 @@ def _schema_problems(where: str, schema: Any) -> list[str]:
             if r not in keys
         ]
     for k in keys:
-        out += _schema_problems(f"{where}.{k}", props[k])
+        out += _schema_problems(f"{where}.{k}", props[k], texts=False)
     for key in ("items", "additionalProperties"):
-        out += _schema_problems(f"{where}[{key}]", schema.get(key))
+        out += _schema_problems(f"{where}[{key}]", schema.get(key), texts=False)
     for key in ("oneOf", "anyOf"):
         for i, alt in enumerate(schema.get(key) or []):
-            out += _schema_problems(f"{where}[{key}][{i}]", alt)
+            out += _schema_problems(f"{where}[{key}][{i}]", alt, texts=False)
     return out
 
 
@@ -272,17 +292,13 @@ def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
         return problems
     props = schema.get("properties", {})
     open_ = schema.get("additionalProperties", True) is not False
-    for name, spec in props.items():
+    for name in props:
         if not _IDENT.fullmatch(name) or keyword.iskeyword(name):
             problems.append(
                 f"{action}: parameter {name!r} is not an identifier (the stubs take it by name)"
             )
         elif name == "self" or (name == "params" and open_):
             problems.append(f"{action}: parameter {name!r} clashes with the stub's own {name}")
-        if isinstance(spec, Mapping):
-            for key in ("description", "pattern"):
-                if isinstance(spec.get(key), str):
-                    problems += doc_line(f"{action}: parameter {name} {key}", spec[key])[1]
     return problems
 
 
