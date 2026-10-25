@@ -47,6 +47,17 @@ def test_adr_has_five_headings_and_status(path: Path):
         assert len(body.strip()) > 40, f"{name} is empty"
 
 
+def test_every_adr_and_the_template_carry_an_l0_summary():
+    """ADR-0032: an ADR opens with front-matter whose summary passes the lint, before its title;
+    the template shows it, so a new ADR starts with one."""
+    from homelabnext.context.levels import check_summary
+
+    for path in [*ADRS, ADR_DIR / "_template.md"]:
+        fm, body = front_matter(path.read_text())
+        assert fm and check_summary(fm.get("summary")) is None, path.name
+        assert path.read_text()[body:].startswith("# ADR-"), path.name
+
+
 def test_negative_missing_heading_is_detected():
     broken = "# ADR-0099: x\n\n- **Status:** proposed\n\n## Context\n\nhello\n"
     assert re.findall(r"^## (.+)$", broken, re.M) != HEADINGS[1:]

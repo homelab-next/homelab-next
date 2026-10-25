@@ -1,5 +1,5 @@
 ---
-summary: 'Veritas is every authored file a generator or gate reads as the standard or a copy source; accepted name and its two rules.'
+summary: 'Veritas names the single source of truth: authored files a generator or gate reads as the standard or copy source; every other copy is generated or checked.'
 summary_of: outline:sha256:2d17b354386bbaa7
 ---
 # ADR-0028: Veritas: the single source of truth

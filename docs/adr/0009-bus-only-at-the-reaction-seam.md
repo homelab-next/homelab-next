@@ -1,5 +1,5 @@
 ---
-summary: 'A message bus only at the reaction seam; telemetry stays direct and control stays typed RPC.'
+summary: A message bus only at the reaction seam; telemetry stays direct and control stays typed RPC.
 summary_of: outline:sha256:16a943a11ecd382a
 ---
 # ADR-0009: A bus only at the reaction seam; telemetry stays direct and control stays typed RPC

@@ -1,5 +1,5 @@
 ---
-summary: 'A slot, lease or token/KV reservation exists only while its worker is alive and is released on every exit; TTL is a backstop.'
+summary: A slot, lease or token/KV reservation exists only while its worker is alive and is released on every exit; TTL is a backstop.
 summary_of: outline:sha256:b9cd98bfba3b2350
 ---
 # ADR-0029: Holds are released by liveness; a TTL is only a backstop

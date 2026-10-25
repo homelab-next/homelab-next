@@ -1,5 +1,5 @@
 ---
-summary: 'Records get UUIDv7 uids; the number shown with a record is computed from type, parent and order, never stored.'
+summary: Records get UUIDv7 uids; the number shown with a record is computed from type, parent and order, never stored.
 summary_of: outline:sha256:62e0a78d78d6c7e0
 ---
 # ADR-0019: Records are identified by UUIDs; numbers are computed

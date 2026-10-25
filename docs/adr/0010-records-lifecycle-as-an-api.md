@@ -1,5 +1,5 @@
 ---
-summary: 'The records lifecycle and register edits go through an API, not by moving or editing files by hand.'
+summary: The records lifecycle (propose, find, complete) is written only through the records library, not by moving files; broker handlers come later.
 summary_of: outline:sha256:5cbd1fe67bd124f3
 ---
 # ADR-0010: The records lifecycle and register edits are an API, not file moves

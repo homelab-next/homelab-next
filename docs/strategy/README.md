@@ -1,5 +1,5 @@
 ---
-summary: 'Generated index of the strategy records: priorities of work, the objective cascade, requirements and RFIs, each shown by its computed number.'
+summary: 'Generated index of the example strategy records: priorities of work, the objective cascade, requirements and RFIs, each shown by its computed number.'
 summary_generated: true
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->

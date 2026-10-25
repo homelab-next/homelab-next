@@ -23,6 +23,9 @@ from homelabnext.context.levels import generated_summary_lines
 TERMS_SECTION = "terms"
 SOURCE = Path(__file__).with_name("terms.md")
 DOC = Path("docs") / "terms.md"
+#: written here, not in docs/terms.md: text in that page becomes the context pack's `terms`
+#: section, and this line is only the page's L0 summary (marked generated, since this module
+#: writes the page)
 SUMMARY = (
     "What the project's words mean and its scope: our activity and how we use threat "
     "vocabulary, shared by every agent and reader."

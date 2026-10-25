@@ -1,3 +1,7 @@
+---
+summary: One line, at most 160 characters - what this ADR decides (ADR-0032; the lint fails an ADR without one).
+# summary_of: added by `python3 -m homelabnext.registers summaries --restamp <this file>` once the ADR is a real page (templates, `_`-files, are not linted)
+---
 # ADR-NNNN: Title in the imperative
 
 - **Status:** proposed | accepted | superseded by ADR-NNNN | rejected
