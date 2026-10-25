@@ -100,10 +100,10 @@ class DenialAsErrorRunner(ReferenceRunner):
 class UnjournalledRefusalRunner(ReferenceRunner):
     """Mutant: a refusal the broker answered with a request id is not journalled."""
 
-    def _journal(self, run, rec, fp, *, settle=False):
+    def _journal(self, run, rec, fp, *, settle=False, delivered=None):
         if rec["outcome"] in ("denied", "error"):
             return True
-        return super()._journal(run, rec, fp, settle=settle)
+        return super()._journal(run, rec, fp, settle=settle, delivered=delivered)
 
 
 class HiddenPauseRunner(ReferenceRunner):

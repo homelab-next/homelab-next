@@ -136,11 +136,17 @@ state directory. One run:
    paused for `paused_by_state`: `pending` or `expired` ends the run `paused` again at once, with
    no token issued and nothing sent (a resumed run that ended unpaused would finish the execution,
    and `token_run` counts against the cap, [broker](broker.md#code-mode-capability-tokens));
-   `approved` and `denied` run, and the execution is then **claimed** (its journal state moves
-   `paused` to `running` as one check-and-set under the journal's lock), so of two resumes at
-   once one runs and the other is refused `execution-not-resumable`. An `expired` approval waits
-   as the broker does, for a fresh approval or a denial; nothing in the runner ends it, and an
-   execution that nobody decides is dropped with its journal after 30 days;
+   `approved` and `denied` run, and the execution is then **claimed**: its journal state moves
+   `paused` to `running` as one check-and-set under the journal's lock, bound to the version of
+   `meta.json` read with the journal and the token status (every change of it counts one), so of
+   two resumes at once one runs, and a resume whose reads another resume overtook (it ran, and
+   paused again, meanwhile) backs off `execution-not-resumable` without changing anything. An
+   `expired` approval waits as the broker does, for a fresh approval or a denial; nothing in the
+   runner ends it, and an execution that nobody decides is dropped with its journal after 30
+   days. An approval that expires between the runner's `token_status` and its `token_run` (a
+   narrow window) gets `request-not-approved` from the broker: the program sees that denial, the
+   run ends unpaused, so its execution finishes and the request stays pending at the broker for
+   its owner to run or cancel (journalled as the step's settled refusal);
 3. `issue_token` as the bound runner, listing the actor's granted actions (from the search index,
    or a callable the embedder passes; never `codemode.*`): the broker narrows them, and the call
    cap and lifetime come from the request's budget. A resume that gets no token goes back to
@@ -158,16 +164,33 @@ state directory. One run:
 **The relay.** A request takes a **step**, and reaches the broker, only once the relay has
 accepted it: it presents the run's token (compared in constant time), names a well-formed action
 and, if any, a `svc:` target (both matched whole), and the run has steps left (at most 200, the
-schema's bound on `calls`). Anything else is refused at the relay (`token-invalid`,
-`request-malformed`, `call-cap-reached`): it takes no step, is no call of the result and never
-reaches the broker, so another process's line cannot shift a program's steps; past 32 such
-refusals the run sends nothing more and ends `error` (`token`). The relay serves connections
-concurrently (at most 8 at once, each with a read timeout of 5 s or the run's wall budget when
-shorter), so an idle connection blocks nothing, and decides calls one at a time. With
-`relay_uids` it accepts only connections from those local users (the peer's uid from
-`/proc/net/tcp`): the token is the boundary and the uid a second one, for a sandbox host where
-other users share the loopback. It stops accepting, and waits for the calls in flight, before the
-result is built.
+schema's bound on `calls`). Anything else is refused at the relay and takes no step, is no call of
+the result and never reaches the broker, so another process's line cannot shift a program's
+steps:
+
+- a line **without the run's token** (or that is not JSON) is answered `token-invalid`, and
+  past 64 of them dropped unanswered; it never counts against the run, so nobody without the
+  token can end it;
+- the program's own (token-bearing) malformed calls are `request-malformed`; past 32 of them the
+  run sends nothing more and, unless it paused, ends `error` (`token`);
+- past 200 steps a call is `call-cap-reached` and the run ends `limit` (`calls`);
+- once the run has paused nothing is sent or counted (`token-paused`): nothing a line does after
+  the pause changes the run's outcome.
+
+The relay serves connections concurrently, at most 8 at once, each with a **deadline for its
+whole request** (5 s, or the run's wall budget when shorter), however slowly it drips; when every
+slot is taken a newcomer cuts off the oldest connection still reading its request, so a peer that
+drips bytes can delay a program's call but not lock it out, and at the run's end every connection
+still reading is cut off at once. Calls are decided one at a time. With `relay_uids` it accepts
+only connections from those local users, checked before a slot is taken: the peer's uid comes
+from an ESTABLISHED row of `/proc/net/tcp` for the accepted connection's own address (IPv4 on a
+little-endian host only; anything else reads as no uid and is refused), so the token is the
+boundary and the uid a second one, for a sandbox host where other users share the loopback.
+**What remains**, on a host where other local users can reach the relay and `relay_uids` is not
+set: such a user, without the token, can slow a run's calls down (by holding connections until
+their deadlines, or by flooding the listener's backlog) and nothing more; bind the
+executor's `broker_bind` to loopback and set `relay_uids` on a shared host. The relay stops
+accepting, and waits for the calls in flight, before the result is built.
 
 **Calls.** Every call is a broker request with the run's token, so `call` is `token_call`,
 `submit` is `token_submit`, and on a resume the step that paused is `token_run` of its request.
@@ -182,6 +205,7 @@ so in a deployment the relay's connection comes from the sandbox user its tokens
 | an exec envelope with `truncated` | `ok`, `delivered_as: output-truncated` | `broker.Error`, reason `output-truncated` (a prefix is never handed over as if whole) |
 | an output not matching the action's `result` schema in the index | `ok`, `delivered_as: result-schema-mismatch` | `broker.Error`, reason `result-schema-mismatch` |
 | a result over the journal's bounds (256 KiB, 8 MiB an execution) | `ok` (journalled as `result: null` and the real digest), `delivered_as: result-too-large` | `broker.Error`, reason `result-too-large` |
+| a result that is not JSON (a non-finite number such as `NaN`, or a value JSON has no form for) | `ok` (journalled as `result: null`), `delivered_as: result-not-json` | `broker.Error`, reason `result-not-json` |
 | a non-zero exit | the broker refuses it, `handler-failed`: `error`, request ids | `broker.Error`, reason `handler-failed` |
 | `{state: pending}` (a submit, or a call needing approval) | `pending` | the pause: the run ends `paused`, `pending` names the call |
 | `Denied`, or `InvalidArguments` (`invalid-params`) | `denied`, the broker's reason, request ids when the broker built the request | `broker.Denied` with that reason: a value it can catch and go on |
@@ -213,9 +237,9 @@ intent before `token_run` and a settled record after. The fingerprint is an HMAC
 runner's `journal.key` of `{op:action, target, args}`, since the request digest is the broker's
 and cannot be computed for a call not yet sent; the key sits beside the records, so it guards
 against offline guessing by someone who copies the journal, not against the runner's own user,
-who can rewrite records and key alike. Records are checked when read (the schema, and the actor,
-id and code digest of `meta.json`); a malformed or foreign record is a journal error, an `error`
-result.
+who can rewrite records and key alike. Entries are checked when read: a record against the schema and the actor, id and code digest of
+`meta.json`, an intent, a refusal and `meta.json` itself for their shape; a malformed or foreign
+one is a journal error, an `error` result for that execution only (the sweep skips it).
 
 - **Replay.** A resume serves a step only when its op, action, target and fingerprint match;
   a different call is refused `replay-mismatch`, every later call too, and the run ends `error`:
@@ -229,11 +253,17 @@ result.
 - **Journal failures.** An intent that cannot be written is never sent. An answer that cannot
   be written means the call happened: the run stops relaying at once (`journal-unavailable`),
   the call is still reported, and the run ends `error` with its token spent `finished`, so the
-  execution never resumes and nothing is re-sent. A pending call of such a run is reported as an
-  `error` call (`run-stopped`), as in any run stopped before its pause could stand; its request stays pending at the broker for its owner to
-  cancel.
-- **Crashes.** A runner that dies leaves its journal `running` with an owner that is gone; the
-  broker's sweep spends that run's token `crashed`. The runner marks such an execution
+  execution never resumes and nothing is re-sent (the ok call is marked `delivered_as:
+  journal-unavailable`). Any other failure in the runner after a call was sent is handled the
+  same way: the call is reported, the run stops and ends `error`. A pending call of a run that
+  cannot stand paused keeps the broker's outcome, `pending`, and says why with `delivered_as`
+  (`journal-unavailable`, or `run-stopped` for any other stop): its request is still pending at
+  the broker, for its owner to cancel.
+- **Crashes.** A runner that dies leaves its journal `running` with an owner that is gone: each
+  runner process holds a lock file of its own under `journal/live/` for as long as it lives, and
+  the owner names it, so any runner of the same state directory, in any pid namespace, can tell
+  (an owner from before the lock was recorded is judged by its process identity). The broker's
+  sweep spends that run's token `crashed`. The runner marks such an execution
   `interrupted` (at its sweep, at most once a minute, or when a resume finds it), and an
   interrupted execution never resumes (`execution-interrupted`): the steps it sent are in its
   journal, for an operator to reconcile against the broker's audit trail.

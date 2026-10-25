@@ -55,15 +55,35 @@ def test_a_bad_token_line_takes_no_step_and_a_resume_sends_nothing_twice(tmp_pat
     assert ran["cm.a"] == ["side-effect"], f"step 0 was sent again: {ran['cm.a']}"
 
 
-def test_a_flood_of_bad_lines_ends_the_run_and_sends_nothing(tmp_path, executor):
-    """Probe H1 (flood): free refusals at the relay are bounded."""
+def test_lines_without_the_token_never_count_against_the_run(tmp_path, executor):
+    """Probe H1 (flood), round 3: lines without the run's token are answered token-invalid,
+    then dropped unanswered, and never count: the program's own call still runs."""
+    ran, cmds = _counted("cm.a")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    code = (
+        "import json, socket\n"
+        "replies = []\n"
+        f"for i in range({MAX_LOCAL_REFUSALS + 70}):\n"
+        "    s = socket.socket(); s.connect(broker._addr)\n"
+        "    s.sendall(json.dumps(dict(token='bad', action='cm.a', args={})).encode()+b'\\n')\n"
+        "    replies.append(s.makefile().readline()); s.close()\n"
+        "result = [broker.call('cm.a', {'name': 'mine'}), sum(1 for r in replies if r)]\n"
+    )
+    res = _run(b, code)
+    assert res["status"] == "ok" and res["value"] == ["mine", 64], res
+    assert ran["cm.a"] == ["mine"] and len(res["calls"]) == 1
+
+
+def test_a_flood_of_the_programs_own_malformed_calls_ends_the_run(tmp_path, executor):
+    """The program's own refusals (with its token) are bounded: past them nothing is sent."""
     ran, cmds = _counted("cm.a")
     b, runner = _fake(tmp_path, executor, cmds)
     code = (
         "import json, socket\n"
         f"for i in range({MAX_LOCAL_REFUSALS + 5}):\n"
         "    s = socket.socket(); s.connect(broker._addr)\n"
-        "    s.sendall(json.dumps(dict(token='bad', action='cm.a', args={})).encode()+b'\\n')\n"
+        "    line = dict(token=broker._token, action='NOT AN ACTION', args={})\n"
+        "    s.sendall(json.dumps(line).encode()+b'\\n')\n"
         "    s.makefile().readline(); s.close()\n"
         "try:\n"
         "    broker.call('cm.a', {'name': 'side-effect'})\n"
@@ -74,6 +94,31 @@ def test_a_flood_of_bad_lines_ends_the_run_and_sends_nothing(tmp_path, executor)
     assert res["status"] == "error" and res["error"]["kind"] == "token", res
     assert res["calls"] == [] and ran["cm.a"] == [], "a call was sent after the flood"
     assert runner.journal(AGENT, "exec-0001") == []
+
+
+def test_refusals_after_a_pause_never_change_its_outcome(tmp_path, executor):
+    """Probe pause-flood: 33 bad lines after a legitimate submit used to turn the paused run
+    into an error and orphan its request."""
+    ran, cmds = _counted("cm.a", "cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    orig = runner.serve_call
+
+    def serve(run, msg):
+        got = orig(run, msg)
+        if got and got.get("pending"):
+            for _ in range(MAX_LOCAL_REFUSALS + 1):
+                orig(run, {"token": "bad", "action": "cm.a"})
+                orig(run, {"token": run.secret, "action": "NOT AN ACTION"})
+        return got
+
+    runner.serve_call = serve
+    code = "broker.call('cm.a', {'name': 'a'})\nbroker.submit('cm.b', {'name': 'b'})\n"
+    first = _run(b, code)
+    assert first["status"] == "paused", first
+    assert runner.store.execution(AGENT, "exec-0001")["state"] == "paused"
+    runner.serve_call = orig
+    res = _run(b, code, resume=True)
+    assert res["status"] == "ok" and ran == {"cm.a": ["a"], "cm.b": ["b"]}, res
 
 
 @pytest.mark.parametrize(
@@ -314,7 +359,7 @@ def test_relay_replies_are_json_lines(tmp_path, executor):
         "result = json.loads(s.makefile().readline())\n"
     )
     res = _run(b, code)
-    assert res["value"] == {"ok": False, "error": True, "reason": "request-malformed"}
+    assert res["value"] == {"ok": False, "denied": True, "reason": "token-invalid"}
     assert json.dumps(res["calls"]) == "[]"
 
 
@@ -334,4 +379,181 @@ def test_a_pause_the_journal_cannot_record_is_reported_stopped(tmp_path, executo
     res = _run(b, "broker.submit('cm.b', {'name': 'held'})\n")
     assert res["status"] == "error" and "pending" not in res, res
     (call,) = res["calls"]
-    assert (call["outcome"], call["reason"]) == ("error", "run-stopped") and call["request_id"]
+    assert (call["outcome"], call.get("delivered_as")) == ("pending", "journal-unavailable")
+    assert call["request_id"] and b.status(AGENT, call["request_id"]).state == "pending"
+
+
+# -- round 3: the verifier's probes ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("odd", [float("nan"), float("inf"), {1, 2}])
+def test_a_result_that_is_not_json_is_a_defined_answer(tmp_path, executor, odd):
+    """Probe nan: a NaN result made canonical() raise after the broker ran the call; the call
+    vanished from calls, the run paused, and its resume was unrecoverable."""
+    ran, cmds = _counted("cm.a", "cm.b")
+    cmds["cm.a"] = lambda **kw: ran["cm.a"].append(kw["name"]) or odd
+    b, _runner = _fake(tmp_path, executor, cmds)
+    code = (
+        "try:\n"
+        "    broker.call('cm.a', {'name': 'a'})\n"
+        "    seen = 'value'\n"
+        "except broker.Error as exc:\n"
+        "    seen = exc.reason\n"
+        "broker.submit('cm.b', {'name': 'b'})\n"
+        "result = seen\n"
+    )
+    first = _run(b, code)
+    assert first["status"] == "paused", first
+    call = first["calls"][0]
+    assert (call["outcome"], call.get("delivered_as")) == ("ok", "result-not-json"), call
+    res = _run(b, code, resume=True)
+    assert (res["status"], res["value"]) == ("ok", "result-not-json"), res
+    assert res["calls"][0].get("replayed") and ran == {"cm.a": ["a"], "cm.b": ["b"]}
+
+
+def test_any_failure_after_the_send_stops_the_run(tmp_path, executor, monkeypatch):
+    """Must-fix 1: whatever raises once the broker has answered, the call is reported, the run
+    ends error and its token is spent finished; nothing is swallowed by the relay."""
+    ran, cmds = _counted("cm.a", "cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+
+    def boom(*a, **kw):
+        raise RuntimeError("an unexpected bug after the broker answered")
+
+    monkeypatch.setattr(runner, "_answered", boom)
+    code = (
+        "try:\n"
+        "    broker.call('cm.a', {'name': 'a'})\n"
+        "except broker.Error:\n"
+        "    pass\n"
+        "broker.submit('cm.b', {'name': 'b'})\n"
+    )
+    res = _run(b, code)
+    assert res["status"] == "error" and res["error"]["kind"] == "broker", res
+    assert [c["step"] for c in res["calls"]] == [0] and ran == {"cm.a": ["a"], "cm.b": []}
+    again = _run(b, code, resume=True)
+    assert again["status"] == "error" and ran["cm.a"] == ["a"], "the execution resumed"
+
+
+def test_a_resume_that_read_before_another_ran_backs_off(tmp_path, executor):
+    """Probe stale: resume B ran (and paused again) inside resume A's window; A claimed with
+    its stale journal and ended the execution, orphaning B's request."""
+    ran, cmds = _counted("cm.b", "cm.c")
+    b, runner = _fake(tmp_path, executor, cmds)
+    code = "broker.submit('cm.b', {'name': 'b'})\nbroker.submit('cm.c', {'name': 'c'})\n"
+    assert _run(b, code)["status"] == "paused"
+    orig, inner = b.token_status, {}
+
+    def token_status(runner_id, token_id):
+        got = orig(runner_id, token_id)
+        if not inner:
+            inner["started"] = True
+            inner["b"] = _run(b, code, resume=True)  # B, entirely inside A's window
+        return got
+
+    b.token_status = token_status
+    res = _run(b, code, resume=True)
+    assert inner["b"]["status"] == "paused", inner["b"]
+    assert res["error"] == {"kind": "token", "message": "execution-not-resumable"}, res
+    meta = runner.store.execution(AGENT, "exec-0001")
+    assert meta["state"] == "paused", "the stale resume changed the execution"
+    b.token_status = orig
+    last = _run(b, code, resume=True)
+    assert last["status"] == "ok" and ran == {"cm.b": ["b"], "cm.c": ["c"]}, last
+
+
+def test_dripping_connections_do_not_lock_the_program_out(tmp_path, executor):
+    """Probe drip: eight connections dripping a byte at a time held every slot; the program got
+    busy and the run's end waited for them."""
+    import socket as _socket
+    import time
+
+    _ran, cmds = _counted("cm.a")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    orig, socks = executor.run, []
+
+    def run(code, *, broker, **kw):
+        for _ in range(8):
+            s = _socket.create_connection((broker.host, broker.port))
+            s.sendall(b" ")
+            socks.append(s)
+        return orig(code, broker=broker, **kw)
+
+    executor.run = run
+    try:
+        code = "result = broker.call('cm.a', {'name': 'mine'})\n"
+        start = time.monotonic()  # hermetic: allow measuring the run's end, not a date
+        res = _run(b, code, wall_s=30)
+        took = time.monotonic() - start  # hermetic: allow measuring the run's end, not a date
+    finally:
+        executor.run = orig
+        for s in socks:
+            s.close()
+    assert res["status"] == "ok" and res["value"] == "mine", res
+    assert took < 3.0, f"the run's end waited {took:.1f}s for connections that never sent"
+
+
+def test_the_peer_uid_is_read_from_the_connection_and_only_established(tmp_path):
+    """Probe uid: the listener's address broke a 0.0.0.0 bind, and closing rows read as uid 0."""
+    import socket as _socket
+
+    from homelabnext.codemode.runner import _tcp_peer_uid
+
+    lst = _socket.socket()
+    lst.bind(("0.0.0.0", 0))
+    lst.listen(2)
+    port = lst.getsockname()[1]
+    cli = _socket.create_connection(("127.0.0.1", port))  # no-raw-endpoint: allow loopback, the test's own listener
+    conn, addr = lst.accept()
+    try:
+        assert _tcp_peer_uid(addr, conn.getsockname()[:2]) == os.getuid()
+        assert _tcp_peer_uid(addr, ("0.0.0.0", port)) is None, "the listener address matched"
+        cli.close()
+        assert _tcp_peer_uid(addr, conn.getsockname()[:2]) is None, "a closing row was trusted"
+        assert _tcp_peer_uid(("::1", 1), ("::1", 2)) is None, "IPv6 is not read"
+    finally:
+        conn.close()
+        lst.close()
+
+
+def test_malformed_journal_entries_are_errors_never_crashes(tmp_path, executor):
+    """LOW: a refusal, an intent or a meta.json that is `{}` used to pass and raise KeyError
+    later; now each is a JournalError, a result for the run, and the sweep goes on."""
+    _ran, cmds = _counted("cm.a", "cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    code = "broker.submit('cm.b', {'name': 'x'})\n"
+    assert _run(b, code)["status"] == "paused"
+    d = runner.store._dir(AGENT, "exec-0001")
+    (d / "000000-i.json").write_text('{"call": "hmac-sha256:00"}')  # an intent with no intent
+    res = _run(b, code, resume=True)
+    assert res["status"] == "error" and res["error"]["kind"] == "broker", res
+    (d / "meta.json").write_text("{}")
+    res = _run(b, code, resume=True)
+    assert res["status"] == "error", res
+    assert _run(b, "result = 1\n", eid="exec-0002")["status"] == "ok", "one bad journal broke runs"
+    runner.sweep(force=True)
+
+
+def test_an_existing_execution_directory_is_tightened(tmp_path, executor):
+    _ran, cmds = _counted("cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    d = runner.store._dir(AGENT, "exec-0001")
+    old = os.umask(0o022)
+    try:
+        d.mkdir()  # left loose by someone else's umask, the way it would arrive in practice
+    finally:
+        os.umask(old)
+    assert d.stat().st_mode & 0o077, "the setup is not looser"
+    assert _run(b, "broker.submit('cm.b', {'name': 'x'})\n")["status"] == "paused"
+    assert (d.stat().st_mode & 0o777) == 0o700
+
+
+def test_an_interrupted_run_is_found_by_its_instance_in_any_namespace(tmp_path, executor):
+    """LOW: the owner check keys on the runner instance's lock in the state directory, so a
+    runner restarted in another pid namespace still marks a crashed run interrupted."""
+    _ran, cmds = _counted("cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    assert _run(b, "broker.submit('cm.b', {'name': 'x'})\n")["status"] == "paused"
+    other = {"instance": "run-0123456789abcdef", "pid": 1, "pid_ns": "elsewhere", "host": "x"}
+    runner.store.update(AGENT, "exec-0001", runner.clock(), state="running", owner=other)
+    assert runner.sweep(force=True)["interrupted"] == 1

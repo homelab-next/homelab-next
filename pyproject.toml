@@ -149,7 +149,10 @@ suite_budgets = [
   # about 110s there, against 90.3s for main on CI; 140 since the codemode-runner suite (eight
   # checks running real programs through a broker, eight mutants, and the executor suite's
   # sixteenth check): A/B on one local 4-core box, two runs each, main 119.1s and 116.2s, this
-  # branch 128.1s and 128.2s (+10.5s); 130 would leave under 2s over the branch's own measurement
+  # branch 128.1s and 128.2s (+10.5s). Of that, the runner suite's runs are about 2s; the rest is
+  # its eight mutants, each a whole-suite run (about 0.6s each), the report and X-10 runs that
+  # now include it, the broker-reference target, and the executor suite's new check and mutant
+  # in every run of that suite; 130 would leave under 2s over the branch's own measurement
   "tests/conform = 140",
 ]
 skip_reasons = [

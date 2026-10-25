@@ -102,7 +102,7 @@ def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
     assert len(runs) == 8
     for m in runs:
-        assert m.detected and m.failed == [m.expected], (m.mutant, m.failed, m.reason)
+        assert m.detected and m.failed == [m.expected], (m.name, m.failed, m.reason)
 
 
 # -- exec actions, approval and resume against the reference broker ------------------------------
@@ -339,10 +339,13 @@ def test_the_journal_is_append_only_bounded_and_private(tmp_path):
         j.settle(AGENT, "exec-0001", 0, call=fp, record=ok)
     with pytest.raises(JournalError):
         j.intend(AGENT, "exec-0001", 200, op="call", action="cm.a", target=None, call=fp)
-    kept, digest, whole = j.kept_result({"big": "x" * 100})
-    assert kept is None and not whole and digest.startswith("sha256:")
-    kept, _, whole = j.kept_result({"a": 1}, used=j.max_execution_bytes)
-    assert kept is None and not whole, "the execution's total bound is not held"
+    kept, digest, why = j.kept_result({"big": "x" * 100})
+    assert (kept, why) == (None, "result-too-large") and digest.startswith("sha256:")
+    kept, _, why = j.kept_result({"a": 1}, used=j.max_execution_bytes)
+    assert (kept, why) == (None, "result-too-large"), "the execution's total bound is not held"
+    for odd in (float("nan"), float("inf"), {1, 2}):
+        kept, digest, why = j.kept_result(odd)
+        assert (kept, why) == (None, "result-not-json") and digest.startswith("sha256:")
     assert (j.root.stat().st_mode & 0o777) == 0o700
     key = j.root / "journal.key"
     assert (key.stat().st_mode & 0o777) == 0o600 and len(key.read_bytes()) == 32
@@ -360,7 +363,7 @@ def test_journal_records_are_checked_when_read(tmp_path):
     with pytest.raises(JournalError, match="another execution"):
         j.steps(AGENT, "exec-0001")
     path = next(j._dir(AGENT, "exec-0001").glob("000000-0.json"))
-    path.write_text('{"record": {"step": "zero"}}')
+    path.write_text('{"record": {"step": "zero"}, "call": "hmac-sha256:00"}')
     with pytest.raises(JournalError, match="malformed"):
         j.records(AGENT, "exec-0001")
 

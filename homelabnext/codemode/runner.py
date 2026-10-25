@@ -26,16 +26,22 @@ with ``params`` a ``schemas/codemode/execution_request``, while that request is 
 **The relay.**  A request reaches the broker, and takes a **step**, only once the relay has
 accepted it: it presents the run's token (compared in constant time), names a well-formed action
 (``^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$``) and, if any, a ``svc:`` target, and arrives while the
-run has steps left (at most :data:`~.journal.MAX_STEPS`).  Anything else is refused at the relay
-(``token-invalid``, ``request-malformed``, ``call-cap-reached``): it takes no step, is not a
-call of the result and never reaches the broker, so nobody else's line can shift a program's
-steps; a program that sends more than :data:`MAX_LOCAL_REFUSALS` of them ends ``error``.  The
-relay serves connections concurrently, at most :data:`MAX_CONNECTIONS` at once, each with a short
-read timeout (:data:`READ_TIMEOUT_S`, or the run's own wall budget when shorter), and calls are
-decided one at a time.  With ``relay_uids`` it also accepts only connections from those local
-users (the peer's uid read from ``/proc/net/tcp``): the run's token is the boundary, the uid
-check a second one.  The relay stops accepting before the result is built, and waits for the
-calls in flight, so nothing changes the run after its result.
+run has steps left (at most :data:`~.journal.MAX_STEPS`).  Anything else is refused at the relay:
+it takes no step, is not a call of the result and never reaches the broker, so nobody else's line
+can shift a program's steps.  A line without the run's token is answered ``token-invalid`` (past
+:data:`MAX_FOREIGN_LINES`, dropped unanswered) and never counts against the run; the program's
+own malformed calls (``request-malformed``) are bounded by :data:`MAX_LOCAL_REFUSALS`, past which
+it sends nothing more and, unless it paused, ends ``error``; past the step bound a call is
+``call-cap-reached`` and the run ends ``limit``; after a pause nothing is sent or counted, so
+nothing changes a paused run's outcome.  The relay serves connections concurrently, at most
+:data:`MAX_CONNECTIONS` at once, each with a deadline for its whole request
+(:data:`READ_TIMEOUT_S`, or the run's own wall budget when shorter); with every slot taken a
+newcomer cuts off the oldest connection still reading, so dripping peers can delay a call but not
+lock the program out.  With ``relay_uids`` it also accepts only connections from those local
+users, before they take a slot (the peer's uid from an ESTABLISHED row of ``/proc/net/tcp`` for
+the accepted connection's own address; IPv4 only): the run's token is the boundary, the uid check
+a second one.  The relay stops accepting before the result is built, cuts off connections still
+reading, and waits for the calls in flight, so nothing changes the run after its result.
 
 **Answers to the program.**  A broker answer becomes a CM-4 reply:
 
@@ -80,10 +86,12 @@ left of it.
 answered.  When the intent cannot be written the call is not sent; when the answer cannot be,
 the call has happened: the run stops relaying at once (every later call is refused
 ``journal-unavailable``), the call is still reported in ``calls``, and the run ends ``error`` with
-its token spent ``finished``, so the execution never resumes and nothing is re-sent.  A pending
-call of such a run (or of any run stopped before its pause could stand) is reported as an
-``error`` call (``run-stopped``): its request stays
-pending at the broker, for its owner to cancel.  A crash leaves the journal ``running`` with an
+its token spent ``finished``, so the execution never resumes and nothing is re-sent; any other
+failure after a call was sent is handled the same way (:meth:`Runner._broke`).  A pending call of
+such a run (or of any run stopped before its pause could stand) keeps its outcome ``pending`` and
+says why in ``delivered_as`` (``journal-unavailable``, ``run-stopped``): its request is still
+pending at the broker, for its owner to cancel.  A result that is not JSON (a non-finite number,
+a value with no JSON form) is answered ``result-not-json``, journalled as ``null``.  A crash leaves the journal ``running`` with an
 owner that is gone; the runner marks it ``interrupted`` (at its sweep, or when a resume finds
 it), and an interrupted execution never resumes, as the broker's own sweep spends the crashed
 run's token.
@@ -115,7 +123,9 @@ import logging
 import os
 import re
 import socket
+import sys
 import threading
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -157,6 +167,7 @@ __all__ = [
     "ENVELOPE_KEYS",
     "ID_LESS_REASONS",
     "MAX_CONNECTIONS",
+    "MAX_FOREIGN_LINES",
     "MAX_LOCAL_REFUSALS",
     "READ_TIMEOUT_S",
     "RESULT_SCHEMA",
@@ -188,9 +199,12 @@ MAX_LINE_BYTES = 1 << 20
 MAX_CONNECTIONS = 8
 #: how long the relay waits for one request line (the run's wall budget when shorter)
 READ_TIMEOUT_S = 5.0
-#: requests a run's relay refuses itself (wrong token, malformed, past the step bound) before
-#: it ends the run
+#: the program's own requests (with the run's token) a run's relay refuses itself, malformed,
+#: before it sends nothing more and ends the run
 MAX_LOCAL_REFUSALS = 32
+#: lines without the run's token a relay answers (token-invalid) before it drops them
+#: unanswered; they never count against the run
+MAX_FOREIGN_LINES = 64
 #: the run's defaults when its budget names none (the broker's ``codemode.default_wall_s`` is 60)
 DEFAULT_WALL_S = 60
 DEFAULT_CPU_S = 10.0
@@ -309,7 +323,6 @@ class _Run:
     code_digest: str
     secret: str = field(default="", repr=False)
     token_id: str = ""
-    max_calls: int = 1  # the calls the run's token may make
     wall_s: float = float(DEFAULT_WALL_S)
     owns_journal: bool = False  # this run created or claimed the journal: it settles its state
     journal: dict[int, dict[str, Any]] = field(default_factory=dict)  # step -> its entries
@@ -320,7 +333,9 @@ class _Run:
     unknown: int | None = None  # a step whose outcome the journal does not hold
     failed: int | None = None  # the step whose answer the journal could not record
     capped: bool = False  # a call was refused call-cap-reached
-    local_refusals: int = 0  # requests the relay refused itself
+    local_refusals: int = 0  # the program's own token-bearing requests the relay refused
+    foreign: int = 0  # lines without the run's token (dropped past MAX_FOREIGN_LINES)
+    pending_unjournalled: bool = False  # a pending answer the journal could not record
     closed: bool = False  # the relay has stopped: nothing changes the run any more
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -352,6 +367,7 @@ class Runner:
         sandbox_id: str = DEFAULT_SANDBOX_ID,
         relay_uids: Iterable[int] | None = None,
         clock: Callable[[], datetime] = _utcnow,
+        monotonic: Callable[[], float] = time.monotonic,
         default_wall_s: int = DEFAULT_WALL_S,
         cpu_s: float = DEFAULT_CPU_S,
         default_memory_mb: int = DEFAULT_MEMORY_MB,
@@ -372,6 +388,7 @@ class Runner:
         self.sandbox_id = sandbox_id
         self.relay_uids = None if relay_uids is None else frozenset(int(u) for u in relay_uids)
         self.clock = clock
+        self.monotonic = monotonic
         self.default_wall_s = int(default_wall_s)
         self.cpu_s = float(cpu_s)
         self.default_memory_mb = int(default_memory_mb)
@@ -400,15 +417,23 @@ class Runner:
         return self.store.records(actor, execution_id)
 
     def _owner(self, run: _Run) -> dict[str, Any]:
-        return {**self._identity, "request_id": run.request_id}
+        return {
+            **self._identity,
+            "instance": self.store.instance_id(),
+            "request_id": run.request_id,
+        }
 
     def _owner_alive(self, owner: Mapping[str, Any]) -> bool:
         """Whether the run that wrote ``owner`` may still be running: one of this process's
-        own runs only while it is active here, another process's by its identity."""
-        same = all(owner.get(k) == v for k, v in self._identity.items())
-        if same:
+        own runs only while it is active here; another's while its runner instance holds its
+        lock in this state directory (any pid namespace); an owner from before the instance
+        was recorded, by its process identity."""
+        mine = self.store.instance_id()
+        if owner.get("instance") == mine:
             with self._active_lock:
                 return owner.get("request_id") in self._active
+        if "instance" in owner:
+            return self.store.instance_alive(owner.get("instance"))
         return _alive(dict(owner))
 
     def sweep(self, *, force: bool = False) -> dict[str, int]:
@@ -516,15 +541,19 @@ class Runner:
             return self._finish(run, None, waited=True)
         if state not in ("approved", "denied"):
             return self._error(run, "token", f"paused-request-{_reason(state, 'unknown')}"[:64])
+        # the claim binds to everything read above: the state and the version of meta.json (every
+        # change of it counts one), so a resume that ran, and paused again, since is never
+        # overtaken by this one's stale journal and token status
         claimed = self.store.update(
             run.actor,
             run.execution_id,
             self.clock(),
             expect="paused",
+            expect_version=meta.get("version", 0),
             state="running",
             owner=self._owner(run),
         )
-        if not claimed:  # another resume took it first
+        if not claimed:  # another resume took it first, or changed it since: back off untouched
             run.journal = {}
             return self._error(run, "token", "execution-not-resumable")
         run.owns_journal = True
@@ -554,7 +583,6 @@ class Runner:
             self._unclaim(run, resume)
             return self._error(run, "token", _reason_of(exc, "broker-error"))
         run.secret, run.token_id = issued.secret, str(issued.claims["token_id"])
-        run.max_calls = int(issued.claims.get("max_calls", 1))
         now = self.clock()
         if resume:
             self.store.update(run.actor, run.execution_id, now, token=run.token_id)
@@ -626,10 +654,10 @@ class Runner:
             run.closed = True
         status = self._status(run, res, error)
         calls = sorted(run.calls, key=lambda c: c["step"])[:MAX_STEPS]
-        if status["status"] != "paused":  # a run that is not paused reports no pending call
-            for c in calls:
+        if status["status"] != "paused":  # a pending call of a run that is not paused: the
+            for c in calls:  # broker's outcome stands, and the call says the run stopped on it
                 if c["outcome"] == "pending":
-                    c.update(outcome="error", reason="run-stopped")
+                    c.setdefault("delivered_as", "run-stopped")
         out: dict[str, Any] = {
             "execution_id": run.execution_id,
             "actor": run.actor,
@@ -676,11 +704,11 @@ class Runner:
                 f"step {run.unknown}: its outcome is unknown (step-outcome-unknown); not sent again"
             )
             return {"status": "error", "error": {"kind": "broker", "message": msg}}
-        if run.local_refusals > MAX_LOCAL_REFUSALS:
-            msg = f"the relay refused {run.local_refusals} requests (too-many-refusals)"
-            return {"status": "error", "error": {"kind": "token", "message": msg}}
-        if run.pending:
+        if run.pending:  # a pause stands: nothing the relay refused after it changes that
             return {"status": "paused", "pending": list(run.pending)}
+        if run.local_refusals > MAX_LOCAL_REFUSALS:
+            msg = f"the relay refused {run.local_refusals} of the program's requests"
+            return {"status": "error", "error": {"kind": "token", "message": msg}}
         if error is not None:
             return {"status": "error", "error": {"kind": error[0], "message": error[1]}}
         status = getattr(res, "status", "error")
@@ -721,8 +749,10 @@ class Runner:
         )
 
     def _local(self, run: _Run, outcome: str, reason: str) -> dict[str, Any]:
-        """A request the relay refuses itself: no step, no call, never sent (see the module
-        doc); the run ends ``error`` past :data:`MAX_LOCAL_REFUSALS` of them."""
+        """A request of the program's own (it presents the run's token) that the relay refuses
+        itself: no step, no call, never sent (see the module doc); past
+        :data:`MAX_LOCAL_REFUSALS` of them the run sends nothing more and, unless it paused,
+        ends ``error``."""
         run.local_refusals += 1
         if run.local_refusals > MAX_LOCAL_REFUSALS:
             return _err("too-many-refusals")
@@ -730,18 +760,23 @@ class Runner:
             return {"ok": False, "denied": True, "reason": reason}
         return _err(reason)
 
-    def serve_call(self, run: _Run, msg: Any) -> dict[str, Any]:
-        """One wire request from the program: the reply (see the module doc)."""
+    def serve_call(self, run: _Run, msg: Any) -> dict[str, Any] | None:
+        """One wire request: the reply, or None when the relay drops it unanswered (a line
+        without the run's token past :data:`MAX_FOREIGN_LINES`).  See the module doc."""
         with run.lock:
             if run.closed:
                 return _err("run-ended")
-            if run.local_refusals > MAX_LOCAL_REFUSALS:  # the run is ending: nothing more is sent
-                return _err("too-many-refusals")
-            if not isinstance(msg, Mapping):
-                return self._local(run, "error", "request-malformed")
-            token = msg.get("token")
+            token = msg.get("token") if isinstance(msg, Mapping) else None
             if not (isinstance(token, str) and hmac.compare_digest(token, run.secret)):
-                return self._local(run, "denied", "token-invalid")
+                # not the program's: never counted against the run, never a step
+                run.foreign += 1
+                if run.foreign > MAX_FOREIGN_LINES:
+                    return None
+                return {"ok": False, "denied": True, "reason": "token-invalid"}
+            if run.local_refusals > MAX_LOCAL_REFUSALS:  # nothing more is sent
+                return _err("too-many-refusals")
+            if run.pending:  # the run is paused: nothing after the pause is sent or counted
+                return {"ok": False, "denied": True, "reason": "token-paused"}
             action, args = msg.get("action"), msg.get("args", {})
             op, target = msg.get("op", "call"), msg.get("target")
             if args is None:
@@ -761,25 +796,42 @@ class Runner:
                 return _err("step-outcome-unknown")
             if run.mismatch is not None:
                 return _err("replay-mismatch")
-            if run.next_step >= MAX_STEPS:
-                run.capped = True
-                return self._local(run, "denied", "call-cap-reached")
-            step = run.next_step
-            run.next_step += 1
+            if run.next_step >= MAX_STEPS:  # the step bound: a limit, not a refusal the
+                run.capped = True  # program is blamed for
+                return {"ok": False, "denied": True, "reason": "call-cap-reached"}
             try:
                 fp = self.store.fingerprint(f"{op}:{action}", target, dict(args))
             except (TypeError, ValueError):  # args that are not JSON: never sent
-                run.next_step -= 1
                 return self._local(run, "error", "request-malformed")
-            entry = run.journal.get(step)
-            if entry is not None:
-                return self._replay(run, step, entry, op, action, target, fp)
-            return self._send(run, step, op, action, target, dict(args), fp)
+            step = run.next_step
+            run.next_step += 1
+            try:
+                entry = run.journal.get(step)
+                if entry is not None:
+                    return self._replay(run, step, entry, op, action, target, fp)
+                return self._send(run, step, op, action, target, dict(args), fp)
+            except Exception as exc:  # after the send nothing may pass silently
+                return self._broke(run, step, action, target, exc)
+
+    def _broke(self, run: _Run, step: int, action: str, target, exc: BaseException):
+        """Anything that went wrong while a step was sent or answered: the call may have run,
+        so the run stops (``run.failed``), the call is reported, and the run ends ``error``."""
+        log.error("codemode: step %d failed in the runner (%s)", step, type(exc).__name__)
+        run.failed = step
+        if not any(c["step"] == step for c in run.calls):
+            call = {"step": step, "action": action, "outcome": "error"}
+            if target is not None:
+                call["target"] = target
+            call["reason"] = "broker-unreachable"  # as far as the record can tell
+            run.calls.append(call)
+        return _err("journal-unavailable")
 
     # -- replay
     def _replayed_call(self, run, step, entry) -> dict[str, Any]:
         answer = entry["answer"]
-        rec = (entry.get("settled") or {}).get("record") or answer.get("record")
+        settled = entry.get("settled") or {}
+        doc = settled if settled.get("record") is not None else answer
+        rec = doc.get("record")
         if rec is None:
             intent = entry["intent"]["intent"]
             refusal = answer["refusal"]
@@ -790,7 +842,7 @@ class Runner:
             return call
         call = _call_of(rec, replayed=True)
         if rec["outcome"] == "ok":
-            _reply, delivered = self._reply_ok(run, rec["action"], rec.get("result"), rec)
+            _reply, delivered = self._reply_ok(run, rec["action"], rec.get("result"), rec, doc)
             if delivered:
                 call["delivered_as"] = delivered
         return call
@@ -823,9 +875,11 @@ class Runner:
         run.calls.append(call)
         if call.get("reason") == "call-cap-reached":
             run.capped = True
-        rec = (entry.get("settled") or {}).get("record") or answer.get("record")
+        settled = entry.get("settled") or {}
+        doc = settled if settled.get("record") is not None else answer
+        rec = doc.get("record")
         if rec is not None and rec["outcome"] == "ok":
-            return self._reply_ok(run, action, rec.get("result"), rec)[0]
+            return self._reply_ok(run, action, rec.get("result"), rec, doc)[0]
         if call["outcome"] == "denied":
             return {"ok": False, "denied": True, "reason": call["reason"]}
         return _err(call["reason"])
@@ -878,24 +932,27 @@ class Runner:
         rec["recorded_at"] = _stamp(self.clock())
         return rec
 
-    def _journal(self, run, rec: dict[str, Any], fp: str, *, settle: bool = False) -> bool:
+    def _journal(self, run, rec, fp, *, settle=False, delivered=None) -> bool:
         """Journal a broker-decided record (the answer, or a pending step's settled record),
-        and keep it for this run; False (the run stopped) when it cannot be written."""
+        with what the program was told instead of an ok result (``delivered``), and keep it for
+        this run; False (the run stopped) when it cannot be written."""
 
         def write() -> None:
             problems = validation.named_errors(JOURNAL_RECORD, rec)
             if problems:
                 raise RunnerError(f"the runner built an invalid journal record: {problems[0]}")
-            step = rec["step"]
-            if settle:
-                self.store.settle(run.actor, run.execution_id, step, call=fp, record=rec)
-            else:
-                self.store.answer(run.actor, run.execution_id, step, call=fp, record=rec)
+            write_entry = self.store.settle if settle else self.store.answer
+            write_entry(
+                run.actor, run.execution_id, rec["step"], call=fp, record=rec, delivered=delivered
+            )
 
         ok = self._commit(run, rec["step"], write)
         if ok:
             entry = run.journal.setdefault(rec["step"], {})
-            entry["settled" if settle else "answer"] = {"record": rec, "call": fp}
+            doc = {"record": rec, "call": fp}
+            if delivered is not None:
+                doc["delivered"] = delivered
+            entry["settled" if settle else "answer"] = doc
         return ok
 
     def _answered(self, run, step, action, target, answer, fp, *, settle=False) -> dict[str, Any]:
@@ -904,26 +961,36 @@ class Runner:
             return self._refused(run, step, action, target, "error", "", fp, settle=settle)
         if answer.get("state") == "pending" and not settle:
             rec = self._record(run, step, action, target, "pending", **ids)
-            if not self._journal(run, rec, fp):
-                run.calls.append(_call_of(rec))  # reported as an error call by _finish
+            if not self._journal(run, rec, fp):  # the pause cannot stand: the run stops on it
+                run.calls.append({**_call_of(rec), "delivered_as": "journal-unavailable"})
                 return _err("journal-unavailable")
             self._pending(run, step, rec)
             return {"ok": False, "pending": True, **ids}
         result = answer.get("result")
         used = self.store.used_bytes(run.actor, run.execution_id)
-        kept, digest, _whole = self.store.kept_result(result, used=used)
+        kept, digest, why = self.store.kept_result(result, used=used)
         rec = self._record(run, step, action, target, "ok", **ids)
         rec.update(result=kept, result_digest=digest)
-        journalled = self._journal(run, rec, fp, settle=settle)
-        reply, delivered = self._reply_ok(run, action, kept, rec)
+        doc = {"delivered": why} if why else {}
+        reply, delivered = self._reply_ok(run, action, kept, rec, doc)
+        journalled = self._journal(run, rec, fp, settle=settle, delivered=delivered)
         call = _call_of(rec)
+        if not journalled:
+            call["delivered_as"] = "journal-unavailable"
+            run.calls.append(call)
+            return _err("journal-unavailable")
         if delivered:
             call["delivered_as"] = delivered
         run.calls.append(call)
-        return reply if journalled else _err("journal-unavailable")
+        return reply
 
-    def _reply_ok(self, run, action, result, rec) -> tuple[dict[str, Any], str | None]:
-        """(the reply, the reason the program got instead of the value, or None)."""
+    def _reply_ok(self, run, action, result, rec, doc) -> tuple[dict[str, Any], str | None]:
+        """(the reply, the reason the program got instead of the value, or None).  ``doc`` is
+        the journal entry (or what will be): its ``delivered`` reason, set when the result was
+        not kept whole, is answered as it was the first time."""
+        why = doc.get("delivered") if isinstance(doc, Mapping) else None
+        if why in ("result-not-json", "result-too-large"):
+            return _err(why), why
         if digest_of(result) != rec.get("result_digest"):
             return _err("result-too-large"), "result-too-large"
         entry = self.index.get(run.actor, {}).get(action) or {}
@@ -969,8 +1036,9 @@ class Runner:
         self, run, step, action, target, outcome, reason, fp, *, settle=False
     ) -> dict[str, Any]:
         """A call the broker refused before it built a request: recorded without ids and
-        journalled as the runner's own entry, so a resume answers it the same way.  A reason
-        that is not one of those is a transport failure as far as the record can tell
+        journalled as the runner's own entry (for a pending step's run, as its settled entry:
+        the request stays pending at the broker), so a resume answers it the same way.  A
+        reason that is not one of those is a transport failure as far as the record can tell
         (``broker-unreachable``)."""
         if reason not in ID_LESS_REASONS:
             outcome, reason = "error", "broker-unreachable"
@@ -980,17 +1048,18 @@ class Runner:
         if target is not None:
             call["target"] = target
         run.calls.append(call)
-        if not settle:  # a pending step's run refused this way stays pending in the journal
-            refusal = {"outcome": outcome, "reason": reason}
-            if not self._commit(
-                run,
-                step,
-                lambda: self.store.answer(
-                    run.actor, run.execution_id, step, call=fp, refusal=refusal
-                ),
-            ):
-                return _err("journal-unavailable")
-            run.journal.setdefault(step, {})["answer"] = {"refusal": refusal, "call": fp}
+        refusal = {"outcome": outcome, "reason": reason}
+        write_entry = self.store.settle if settle else self.store.answer
+        if not self._commit(
+            run,
+            step,
+            lambda: write_entry(run.actor, run.execution_id, step, call=fp, refusal=refusal),
+        ):
+            return _err("journal-unavailable")
+        run.journal.setdefault(step, {})["settled" if settle else "answer"] = {
+            "refusal": refusal,
+            "call": fp,
+        }
         if outcome == "denied":
             return {"ok": False, "denied": True, "reason": reason}
         return _err(reason)
@@ -998,21 +1067,24 @@ class Runner:
 
 # ---------------------------------------------------------------- the relay
 def _tcp_peer_uid(peer: tuple[str, int], local: tuple[str, int]) -> int | None:
-    """The uid owning the IPv4 socket at ``peer`` connected to ``local``, from
-    ``/proc/net/tcp`` (None when it cannot be told)."""
+    """The uid owning the IPv4 socket at ``peer`` connected to ``local`` (the accepted
+    connection's own address, ``conn.getsockname()``, never the listener's, which may be
+    ``0.0.0.0``), from an ESTABLISHED row of ``/proc/net/tcp``; None when it cannot be told: no
+    such row, a closing or orphaned one (which reads as uid 0), an IPv6 address, or no ``/proc``.
+    IPv4 on a little-endian host only, as ``/proc/net/tcp`` writes addresses in host order."""
 
     def hexaddr(addr: tuple[str, int]) -> str:
         packed = socket.inet_aton(addr[0])
-        return f"{int.from_bytes(packed, 'little'):08X}:{addr[1]:04X}"
+        return f"{int.from_bytes(packed, sys.byteorder):08X}:{addr[1]:04X}"
 
-    want_local, want_remote = hexaddr(peer), hexaddr(local)
     try:
+        want_local, want_remote = hexaddr(peer), hexaddr(local)
         lines = Path("/proc/net/tcp").read_text().splitlines()[1:]
-    except OSError:
+    except (OSError, ValueError, IndexError):
         return None
     for row in lines:
         cols = row.split()
-        if len(cols) > 7 and cols[1] == want_local and cols[2] == want_remote:
+        if len(cols) > 7 and cols[1] == want_local and cols[2] == want_remote and cols[3] == "01":
             with contextlib.suppress(ValueError):
                 return int(cols[7])
     return None
@@ -1021,9 +1093,10 @@ def _tcp_peer_uid(peer: tuple[str, int], local: tuple[str, int]) -> int | None:
 class _Relay:
     """The run's broker endpoint: the CM-4 wire (one JSON line per connection, one reply line),
     a fresh listener per run on the executor's ``broker_bind`` (port 0: an ephemeral port).
-    Connections are served concurrently, at most :data:`MAX_CONNECTIONS`, each with a short read
-    timeout; the calls themselves are decided one at a time (``run.lock``), and the step is the
-    order the runner received them in."""
+    Connections are served concurrently, at most :data:`MAX_CONNECTIONS`, each with a deadline
+    for its whole request (``self.timeout``, however slowly it drips); a peer the uid check
+    refuses is closed before it takes a slot.  The calls themselves are decided one at a time
+    (``run.lock``), and the step is the order the runner received them in."""
 
     def __init__(self, runner: Runner, run: _Run, bind: tuple[str, int]) -> None:
         self.runner, self.run = runner, run
@@ -1035,7 +1108,9 @@ class _Relay:
         self.timeout = max(0.5, min(READ_TIMEOUT_S, run.wall_s))
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self._stop = threading.Event()
-        self._workers: list[threading.Thread] = []
+        #: (thread, connection, whether it is still reading its request) of each connection
+        self._workers: list[tuple[threading.Thread, socket.socket, list[bool]]] = []
+        self._guard = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="codemode-relay", daemon=True)
 
     def __enter__(self) -> _Relay:
@@ -1043,17 +1118,31 @@ class _Relay:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        """Stop accepting, then wait for every connection in flight: nothing changes the run
-        once the result is being built."""
+        """Stop accepting, cut off every connection still reading its request (the program has
+        ended), give the others until the request deadline, then close what is left; a call
+        already with the broker is waited for, under ``run.lock``: nothing changes the run once
+        its result is built."""
         self._stop.set()
         with contextlib.suppress(OSError):
             self.sock.shutdown(socket.SHUT_RDWR)
         self.sock.close()
         self._thread.join()
-        for t in list(self._workers):
-            t.join()
+        with self._guard:
+            workers = list(self._workers)
+        for t, conn, reading in workers:  # the program has ended: a request still being read
+            if reading[0] and t.is_alive():  # is nobody's, and is cut off now
+                with contextlib.suppress(OSError):
+                    conn.shutdown(socket.SHUT_RDWR)
+        for t, _conn, _reading in workers:
+            t.join(timeout=self.timeout)
+        for t, conn, _reading in workers:
+            if t.is_alive():
+                with contextlib.suppress(OSError):
+                    conn.shutdown(socket.SHUT_RDWR)
         with self.run.lock:
             self.run.closed = True
+        for t, _conn, _reading in workers:
+            t.join(timeout=self.timeout)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -1064,52 +1153,77 @@ class _Relay:
             if self._stop.is_set():
                 conn.close()
                 return
-            if not self._slots.acquire(blocking=False):
+            if self.runner.relay_uids is not None:
+                uid = _tcp_peer_uid(addr, conn.getsockname()[:2])
+                if uid not in self.runner.relay_uids:
+                    conn.close()  # not a peer the relay serves: closed unanswered, no slot
+                    continue
+            if not self._slots.acquire(blocking=False) and not self._evict():
                 with contextlib.suppress(OSError):
                     conn.sendall(json.dumps(_err("busy")).encode() + b"\n")
                 conn.close()
                 continue
-            t = threading.Thread(target=self._worker, args=(conn, addr), daemon=True)
-            self._workers = [w for w in self._workers if w.is_alive()] + [t]
+            reading = [True]
+            t = threading.Thread(target=self._worker, args=(conn, reading), daemon=True)
+            with self._guard:
+                self._workers = [w for w in self._workers if w[0].is_alive()] + [(t, conn, reading)]
             t.start()
 
-    def _worker(self, conn: socket.socket, addr: tuple[str, int]) -> None:
+    def _evict(self) -> bool:
+        """Every slot is taken: cut off the oldest connection still reading its request (one
+        that dripped instead of sending its line), so a newcomer, the program's next call, is
+        served; True once a slot is free."""
+        with self._guard:
+            oldest = next((c for _t, c, reading in self._workers if reading[0]), None)
+        if oldest is None:
+            return False
+        with contextlib.suppress(OSError):
+            oldest.shutdown(socket.SHUT_RDWR)
+        return self._slots.acquire(timeout=self.timeout)
+
+    def _worker(self, conn: socket.socket, reading: list[bool]) -> None:
         try:
             with conn:
-                if self.runner.relay_uids is not None:
-                    uid = _tcp_peer_uid(addr, (self.host, self.port))
-                    if uid not in self.runner.relay_uids:
-                        return  # not a peer the relay serves: closed unanswered, no step
                 try:
-                    self._serve(conn)
+                    self._serve(conn, reading)
                 except Exception:  # one bad connection never ends the relay
                     log.error("codemode: a relayed call failed")
         finally:
             self._slots.release()
 
-    def _serve(self, conn: socket.socket) -> None:
-        conn.settimeout(self.timeout)
+    def _serve(self, conn: socket.socket, reading: list[bool]) -> None:
+        deadline = self.runner.monotonic() + self.timeout
         buf = b""
         try:
             while b"\n" not in buf and len(buf) <= MAX_LINE_BYTES:
+                left = deadline - self.runner.monotonic()
+                if left <= 0:
+                    return  # the request's deadline passed: closed, whatever has dripped in
+                conn.settimeout(left)
                 chunk = conn.recv(65536)
                 if not chunk:
                     break
                 buf += chunk
-        except OSError:  # a peer that sends nothing in time holds no slot past the timeout
+        except OSError:  # a peer that sends nothing in time holds no slot past the deadline
             return
+        reading[0] = False  # its request is in: no newcomer evicts it any more
         line = buf.split(b"\n", 1)[0]
         if len(line) > MAX_LINE_BYTES:
-            reply = _err("request-too-large")
+            reply: dict[str, Any] | None = _err("request-too-large")
         else:
             try:
                 msg = json.loads(line.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
                 msg = None
             reply = self.runner.serve_call(self.run, msg)
-        data = json.dumps(reply, ensure_ascii=False, default=repr).encode("utf-8") + b"\n"
+        if reply is None:  # dropped unanswered
+            return
+        try:
+            data = json.dumps(reply, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError):
+            data = json.dumps(_err("result-not-json")).encode("utf-8")
         with contextlib.suppress(OSError):
-            conn.sendall(data)
+            conn.sendall(data + b"\n")
 
 
 # ---------------------------------------------------------------- helpers

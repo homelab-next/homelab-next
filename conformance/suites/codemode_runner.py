@@ -258,6 +258,7 @@ def _(r):
         "python": (
             f"one = broker.call({first!r}, {{'name': 'one'}})\n"
             f"broker.submit({held!r}, {{'name': 'approve-me'}})\n"
+            "print('went on past the pause')\n"
             f"broker.call({after!r}, {{'name': 'after'}})\n"
             "result = 'went on'\n"
         )
@@ -284,6 +285,9 @@ def _(r):
         state = lab.b.status(lab.agent, calls[1]["request_id"]).state
         assert state == "pending", f"{lang}: the submitted request is {state}, not pending"
         assert "value" not in res, f"{lang}: a paused run returned a value"
+        assert not any("went on" in line for line in res.get("logs", [])), (
+            f"{lang}: the program ran on past its pause: {res.get('logs')}"
+        )
     assert lab.ran[held] == [] and lab.ran[after] == [], (
         f"after the submit, {held} ran {lab.ran[held]} and {after} ran {lab.ran[after]}"
     )

@@ -76,9 +76,15 @@
             "description": "true when the step was served from the journal on resume instead of calling the broker again (never on a pending call, which a resume runs); the outcome and reason are the recorded ones"
           },
           "delivered_as": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,63}$",
-            "description": "On an ok call only: the reason the program was answered with broker.Error instead of this result (output-truncated, result-schema-mismatch, result-too-large). The outcome stays the broker's; this says what the program saw."
+            "enum": [
+              "output-truncated",
+              "result-schema-mismatch",
+              "result-too-large",
+              "result-not-json",
+              "journal-unavailable",
+              "run-stopped"
+            ],
+            "description": "What the program got instead of what the broker answered, the broker's outcome kept: on an ok call, the reason of the broker.Error it was told (output-truncated, result-schema-mismatch, result-too-large, result-not-json: a result with a non-finite number or no JSON form) or journal-unavailable (the answer could not be journalled, so the run stopped); on a pending call of a run that is not paused, why the pause could not stand (journal-unavailable, run-stopped): the request is still pending at the broker, for its owner to cancel."
           }
         },
         "required": [
@@ -208,7 +214,10 @@
             "then": {
               "properties": {
                 "outcome": {
-                  "const": "ok"
+                  "enum": [
+                    "ok",
+                    "pending"
+                  ]
                 }
               }
             }
@@ -337,7 +346,12 @@
               },
               "required": [
                 "outcome"
-              ]
+              ],
+              "not": {
+                "required": [
+                  "delivered_as"
+                ]
+              }
             }
           }
         }
@@ -359,7 +373,12 @@
                 },
                 "required": [
                   "outcome"
-                ]
+                ],
+                "not": {
+                  "required": [
+                    "delivered_as"
+                  ]
+                }
               }
             }
           }
