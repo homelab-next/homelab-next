@@ -1,3 +1,6 @@
+---
+summary: 'Index of the architecture decision log: how ADRs are numbered and checked, with a one-line entry per decision.'
+---
 # Architecture decision log
 
 One file per decision, numbered from 0001, with a stable slug. Every ADR carries exactly the

@@ -1,3 +1,6 @@
+---
+summary: 'The records lifecycle and register edits go through an API, not by moving or editing files by hand.'
+---
 # ADR-0010: The records lifecycle and register edits are an API, not file moves
 
 - **Status:** proposed
