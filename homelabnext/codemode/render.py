@@ -62,7 +62,16 @@ from typing import Any
 from conformance.protocols.codemode_executor import MAX_PROGRAM_CHARS
 from homelabnext.generators.core import MARKER
 
-from .model import SLUG_RE, CodemodeError, Method, ProfileModel, build_models, doc_line
+from .model import (
+    SLUG_RE,
+    CodemodeError,
+    Method,
+    ProfileModel,
+    build_models,
+    class_name,
+    doc_line,
+    name_collisions,
+)
 
 __all__ = [
     "DEFAULT_MANIFEST",
@@ -311,7 +320,7 @@ def py_type(schema: Any, used: set[str]) -> str:
 
 
 def _class_name(*parts: str) -> str:
-    return "".join(p.capitalize() for part in parts for p in part.split("_") if p)
+    return class_name(*parts)
 
 
 def _plain_name(name: Any) -> bool:
@@ -588,6 +597,9 @@ def prelude_from_index(doc: Mapping[str, Any]) -> str:
             continue
         props = (entry.get("params") or {}).get("properties") or {}
         methods.append((ns, method, name, target, isinstance(props, Mapping) and "target" in props))
+    # the generator's own collision check: an index naming two actions that render as one
+    # method, or two namespaces as one class, would let one stub stand for another action
+    problems += name_collisions(profile, [m[2] for m in methods])
     if problems:
         raise CodemodeError(problems)
     return prelude_source(profile, marker, methods)
@@ -636,14 +648,7 @@ def render_index(model: ProfileModel) -> str:
 def _check_names(model: ProfileModel) -> None:
     """Two namespaces whose classes would share a name, or two result shapes one type name, are
     refused."""
-    owners: dict[str, str] = {}
-    problems = []
-    for ns in model.namespaces:
-        cls = "_" + _class_name(ns)
-        if owners.setdefault(cls, ns) != ns:
-            problems.append(
-                f"{model.profile}: namespaces {ns} and {owners[cls]} both render as {cls}"
-            )
+    problems = name_collisions(model.profile, [m.action for m in model.methods])
     if problems:
         raise CodemodeError(problems)
     _result_types(model)

@@ -70,8 +70,10 @@ __all__ = [
     "Method",
     "ProfileModel",
     "build_models",
+    "class_name",
     "doc_line",
     "identifier",
+    "name_collisions",
     "split_action",
 ]
 
@@ -173,6 +175,31 @@ def identifier(name: str) -> str:
     if keyword.iskeyword(out) or out in TS_RESERVED or out in PY_SHADOWED:
         out += "_"
     return out
+
+
+def class_name(*parts: str) -> str:
+    """The class a namespace renders as in ``stubs.pyi`` and the prelude (``a_b`` gives
+    ``AB``; ``a--b`` gives ``AB`` too, which :func:`name_collisions` refuses)."""
+    return "".join(p.capitalize() for part in parts for p in part.split("_") if p)
+
+
+def name_collisions(profile: str, actions: Sequence[str]) -> list[str]:
+    """Why ``actions`` cannot share one profile's outputs: two that land on one
+    ``namespace.method`` (``q.b-c`` and ``q.b.c`` are both ``q.b_c``), or two namespaces whose
+    classes share a name (``a-b`` and ``a--b`` are both ``_AB``).  Either would let one stub
+    stand for another action.  The generator and the runner's rebuild of a prelude from an index
+    both ask this, so they cannot drift apart."""
+    problems: list[str] = []
+    methods: dict[tuple[str, str], str] = {}
+    classes: dict[str, str] = {}
+    for name in actions:
+        ns, meth = _split(name)
+        if methods.setdefault((ns, meth), name) != name:
+            problems.append(f"{name} and {methods[ns, meth]} are both {ns}.{meth}")
+        cls = "_" + class_name(ns)
+        if classes.setdefault(cls, ns) != ns:
+            problems.append(f"{profile}: namespaces {ns} and {classes[cls]} both render as {cls}")
+    return list(dict.fromkeys(problems))
 
 
 def split_action(action: str) -> tuple[str, str]:
@@ -365,7 +392,7 @@ def build_models(
             problems += bad_names
             continue
         methods: list[Method] = []
-        seen: dict[tuple[str, str], str] = {}
+        problems += name_collisions(profile, [n for n, _ in granted])
         for name, needs in granted:
             entry = entries[name]
             ns, meth = _split(name)
@@ -375,10 +402,6 @@ def build_models(
                     "(broker, result and Python's builtins are reserved)"
                 )
                 continue
-            if (ns, meth) in seen:
-                problems.append(f"{name} and {seen[ns, meth]} are both {ns}.{meth}")
-                continue
-            seen[ns, meth] = name
             target = None
             if entry.get("lane"):
                 lane = lanes[entry["lane"]]
