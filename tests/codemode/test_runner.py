@@ -145,6 +145,28 @@ def test_a_program_calls_the_generated_stubs_through_the_prelude(tmp_path, execu
     assert (res["status"], res["error"]["kind"], res["calls"]) == ("error", "runtime", [])
 
 
+def test_the_correlation_read_actions_run_through_their_stubs_and_schemas(tmp_path, executor):
+    """CM-12: dns.lookup, dhcp.leases and hypervisor.guests on the reference broker, their real
+    stand-in handlers, through the prelude; each output is held to its result schema."""
+    svc, _runner, _ = _example(tmp_path, executor, preludes=load_preludes(INDEX))
+    res = _run(
+        svc,
+        "a = dns.lookup(target='svc:files')\n"
+        "b = dhcp.leases(target='svc:dhcp')\n"
+        "c = hypervisor.guests(target='svc:hv-one')\n"
+        "mac = next(x['mac'] for x in b['leases'] if x['address'] in a['addresses'])\n"
+        "result = [a['name'], [g['vmid'] for g in c['guests'] if g['mac'] == mac]]\n",
+    )
+    assert res["status"] == "ok", res
+    assert res["value"] == ["files.lab.example", [100]]
+    calls = [(c["action"], c["target"], c["outcome"], c.get("delivered_as")) for c in res["calls"]]
+    assert calls == [
+        ("dns.lookup", "svc:files", "ok", None),
+        ("dhcp.leases", "svc:dhcp", "ok", None),
+        ("hypervisor.guests", "svc:hv-one", "ok", None),
+    ]
+
+
 def test_a_prelude_is_taken_only_beside_an_index_of_the_same_model(tmp_path):
     preludes = load_preludes(INDEX)
     assert sorted(preludes) == ["profile:reader", "profile:triage"]

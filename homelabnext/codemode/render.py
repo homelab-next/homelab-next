@@ -498,6 +498,7 @@ def render_prelude(model: ProfileModel) -> str:
     head = [
         f"# {_marker(model)}",
         f"# {SPDX}",
+        "# @generated: `hnx codemode gen --check` holds this file; regenerate it, never edit it",
         f'"""The Code Mode runtime prelude of {model.profile} (ADR-0031): binds the namespaces of',
         "stubs.pyi to the run's broker.  The executor runs it in the program's own namespace, in the",
         "sandbox, before the program; each method is broker.call of its action, with the action's",

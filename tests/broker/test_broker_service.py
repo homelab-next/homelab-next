@@ -86,7 +86,13 @@ def test_factory_gives_each_check_a_private_state_dir():
 
 def test_example_manifest_validates():
     manifest, docs = load_manifest(EXAMPLE)
-    assert {d["action"] for d in docs} == {"service.status", "service.restart"}
+    assert {d["action"] for d in docs} == {
+        "service.status",
+        "service.restart",
+        "dns.lookup",
+        "dhcp.leases",
+        "hypervisor.guests",
+    }
     assert schema_errors("broker", "manifest", manifest) == []
 
 

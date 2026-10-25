@@ -960,7 +960,8 @@ mapping is the same as for a local agent. Restrict that user's SSH key to the fo
 ## Walkthrough
 
 From a checkout, with the example manifest (`examples/broker/`: one agent profile `triage`, three
-lanes, a read-only `service.status` and an approval-gated `service.restart` stand-in). It sets
+lanes, a read-only `service.status`, an approval-gated `service.restart` and the read-only
+`dns.lookup`, `dhcp.leases` and `hypervisor.guests` stand-ins, all about a `--target`). It sets
 `dev_identity: true`, so the CLI's asserted `--as` drives it directly:
 
 ```sh
