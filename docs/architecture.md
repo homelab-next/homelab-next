@@ -1,3 +1,6 @@
+---
+summary: Thirteen capability layers, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Architecture: layers, seams and the spine
 

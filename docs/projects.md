@@ -1,3 +1,6 @@
+---
+summary: 'Projects as the sixteenth capability: the model and board rules, the Markdown reference, hub page, events, links to strategy records, the OpenProject adapter.'
+---
 # Projects: project management as a capability
 
 `projects` is the sixteenth capability (ADR-0020): projects, their ordered steps and one-off

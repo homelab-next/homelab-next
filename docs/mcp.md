@@ -1,3 +1,6 @@
+---
+summary: 'The read-only stdio MCP server (hnx mcp serve) over this checkout: its tools, documents served in levels, its security model and the broker''s tool server.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # MCP server: the repository as structured answers
 

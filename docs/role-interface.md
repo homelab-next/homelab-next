@@ -1,3 +1,6 @@
+---
+summary: 'Role interface version 1: argument specs, entry-point hooks, defaults, registry service names, inventory groups, compose_app, linter rules, timers, scaffolds.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Role interface (version 1)
 

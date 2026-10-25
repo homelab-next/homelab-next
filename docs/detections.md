@@ -1,3 +1,6 @@
+---
+summary: 'Detections authored in a Sigma subset: layout, ATT&CK coverage counted only from tested rules, ATT&CK-id validation, known-id snapshots and writing tests.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Detections
 

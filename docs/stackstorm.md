@@ -1,3 +1,6 @@
+---
+summary: 'StackStorm decides when workflow packs run: ownership, pack mapping, automations, approved requests, redeliveries, coalescing, shadow mode, secrets, install.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # StackStorm: when workflow packs run
 

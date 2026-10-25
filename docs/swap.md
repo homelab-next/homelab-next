@@ -1,3 +1,6 @@
+---
+summary: 'The swap kit for replacing a product behind a capability: nine steps, swap record, parity tools, dual-write, registry flip, decommission check and rehearsal.'
+---
 # The swap kit
 
 Replacing a product behind a capability is a procedure, not an event ([ADR-0005](adr/0005-swap-procedure-and-conformance.md)).

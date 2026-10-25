@@ -1,3 +1,6 @@
+---
+summary: 'The completeness checklist: continuously true properties with runnable observables, grouped F, C, T, S, D, O, P, R, Q and M, each PUBLIC-NOW or SERVER.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Checklist: what "complete" looks like
 

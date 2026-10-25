@@ -1,3 +1,6 @@
+---
+summary: 'The knowledge graph of everything in the repo that names something else: commands, querying, node kinds, edge types and what is not in the graph yet.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Knowledge graph
 

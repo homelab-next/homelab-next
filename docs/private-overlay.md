@@ -1,3 +1,6 @@
+---
+summary: 'The public repo and the private overlay: what lives where, how hnx finds private data, encryption, bootstrapping a server, the runner, reviews and deploys.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
 

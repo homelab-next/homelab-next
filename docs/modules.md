@@ -1,3 +1,6 @@
+---
+summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
 

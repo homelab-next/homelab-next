@@ -1,3 +1,6 @@
+---
+summary: 'Documentation home: the map of the docs, grouped by choosing a tool, running the systems, and decisions, status and scripts, plus use as an Obsidian vault.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Documentation home
 

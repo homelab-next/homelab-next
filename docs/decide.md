@@ -1,3 +1,6 @@
+---
+summary: The decision cascade (floor, small, large, llm, then a human) and the model roles it calls, with the guarantees each rule keeps.
+---
 # Decisions and models
 
 How the decision cascade (`homelabnext.decide`) and the model roles it calls

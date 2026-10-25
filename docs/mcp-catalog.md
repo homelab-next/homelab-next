@@ -1,3 +1,6 @@
+---
+summary: 'The MCP catalog, one record per MCP server: the record, fatal rules, adding a server, instances, rendering client configs, importing a lab and reviews.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The MCP catalog: one list of MCP servers
 
