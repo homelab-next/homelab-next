@@ -31,6 +31,7 @@ hnx conform run secrets --target broken            # a defective fake: must FAIL
 hnx conform run object-store --target staging      # a real service, see "Targets" below
 hnx conform mutants                   # prove every core suite catches its broken fakes
 hnx conform mutants broker-tokens     # an extended suite's, named ("all" is the core ones)
+hnx conform mutants --all             # every suite's mutants, the extended ones too
 hnx conform report --json             # capabilities without a passing test
 python -m pytest -q conformance       # the same checks under pytest, one test per check
 HNX_CONFORM_TARGET=staging python -m pytest conformance/object-store
@@ -184,7 +185,8 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` (the core suites; name an extended one to run its own) and
+`hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all` for
+every suite) and
 `tests/conform/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
 caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it

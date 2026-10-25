@@ -3,7 +3,7 @@
 
     hnx conform list [--all] [--json]      (also: hnx conform --list)
     hnx conform run CAPABILITY|all [--target NAME] [--check ID ...] [--strict] [--json] [--out FILE]
-    hnx conform mutants [CAPABILITY|all] [--json]
+    hnx conform mutants [CAPABILITY|all] [--all] [--json]   (--all: the extended suites too)
     hnx conform report [--target NAME] [--json] [--out FILE] [--no-mutants]
 
 Exit codes: 0 ok, 1 a check failed, too few checks executed (or a capability has no passing
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .registry import CAPABILITIES, ConformError, load_suite, names
+from .registry import CAPABILITIES, EXTENDED, ConformError, load_suite, names
 from .report import build_report, render_human
 from .runner import CapabilityRun, mutation_runs, run_capability
 
@@ -108,7 +108,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_mutants(args: argparse.Namespace) -> int:
-    caps = list(CAPABILITIES) if args.capability in (None, "all") else [args.capability]
+    if args.all and args.capability not in (None, "all"):
+        raise ConformError("--all runs every suite; name no capability with it")
+    if args.capability in (None, "all"):
+        caps = [*CAPABILITIES, *(EXTENDED if args.all else ())]
+    else:
+        caps = [args.capability]
     rows = [m for c in caps for m in mutation_runs(c, args.root)]
     if args.json:
         _print_json(
@@ -168,6 +173,7 @@ def _parser() -> argparse.ArgumentParser:
     rn.add_argument("-v", "--verbose", action="store_true", help="show passing checks too")
     mu = sub.add_parser("mutants", help="prove the suites catch their deliberately broken fakes")
     mu.add_argument("capability", nargs="?", help="a capability name or 'all' (default)")
+    mu.add_argument("--all", action="store_true", help="the extended suites too")
     mu.add_argument("--json", action="store_true")
     rp = sub.add_parser("report", help="capabilities without a passing conformance test")
     rp.add_argument("--target", default="fake")
