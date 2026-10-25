@@ -162,7 +162,7 @@ Caught before deploy.
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
 | Q-01 | Every repo's tests run on every change | CI runs unit and contract tests on push and merge request (`tools/tests/test_ci_runs_tests.py`); main is green (the forge's latest run: `gh run list --branch main --workflow ci --limit 1`) | PUBLIC-NOW |
-| Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date (`tests/suite_policy.py`: per-suite budgets, registered skip reasons, `quarantine` marker with owner and expiry) | PUBLIC-NOW |
+| Q-02 | Test suites are trustworthy | Each suite within its time budget; 0 silent skips; quarantined tests have owner and unexpired date (`tests/suite_policy.py`: per-suite budgets, registered skip reasons, `quarantine` marker with owner and expiry; in CI's shards, budgets on the sum over the shards, `tests/shard_report.py`) | PUBLIC-NOW |
 | Q-03 | Live-dependent tests are marked | Tests needing real systems carry the `live` marker and CI skips them; an unmarked test that reaches a non-loopback address fails (`tests/network_guard.py`) | PUBLIC-NOW |
 | Q-04 | Every component ships tests | CI fails a component directory with no tests (`tools/component_tests.py`, reviewed allowlist) | PUBLIC-NOW |
 | Q-05 | Every seam has a contract test | Each event type and shared table has a schema plus publisher and consumer tests (`tools/contract_coverage.py`) | PUBLIC-NOW |

@@ -35,18 +35,27 @@ non-strict ``xfail``) for a bounded time.  The owner, the date and the reason ar
 in the past fails the test ("quarantine expired"), and a date more than ``quarantine_max_days``
 (default 90) ahead is refused, so a quarantine cannot be parked forever.  ``HNX_TODAY``
 (``YYYY-MM-DD``) overrides today's date for the plugin's own tests.
+
+**Shards.**  ``--shard I/N`` runs the I-th of N parts of the collected tests (by node id hash), and
+``--shard-report FILE`` writes what the shard collected, ran and timed; CI runs the suite as N such
+jobs and ``python -m tests.shard_report`` proves from their reports that together they ran every
+test once and that each suite's summed time is within its budget (``tests/shard_report.py``).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import sys
 from collections.abc import Callable, Iterable
 from datetime import date
 from pathlib import Path
 
 import pytest
+
+from tests import shard_report
 
 QUARANTINE = "quarantine"
 _STATE = pytest.StashKey[dict]()
@@ -62,6 +71,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--suite-times", action="store_true", help="print the per-suite time against its budget"
     )
+    parser.addoption("--shard", metavar="I/N", help="run every N-th collected test from the I-th")
+    parser.addoption("--shard-report", metavar="FILE", help="write this shard's report (JSON)")
 
 
 def _today() -> date:
@@ -126,6 +137,11 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{QUARANTINE}(owner, until, reason): known-flaky test, runs as non-strict xfail until "
         "the date (tests/suite_policy.py)",
     )
+    shard = config.getoption("shard")
+    try:
+        index, count = shard_report.parse_shard(shard) if shard else (1, 1)
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
     default = float(config.getini("suite_budget_default"))
     scale = float(os.environ.get("HNX_SUITE_BUDGET_SCALE", "1") or "1")
     config.stash[_STATE] = {
@@ -137,8 +153,13 @@ def pytest_configure(config: pytest.Config) -> None:
         "times": {},
         "over": [],
         "quarantined": [],
+        "shard": (index, count),
+        "collected": None,
+        "selected": [],
+        "ran": [],
     }
     config.pluginmanager.register(_Timer(config), "hnx-suite-timer")
+    config.pluginmanager.register(_Shard(config), "hnx-shard")
 
 
 def _state(config: pytest.Config) -> dict:
@@ -244,6 +265,28 @@ class _Timer:
         st = _state(self.config)
         suite = suite_of(Path(str(report.fspath)), self.config.rootpath)
         st["times"][suite] = st["times"].get(suite, 0.0) + float(report.duration or 0.0)
+        if report.when == "setup":
+            st["ran"].append(report.nodeid)
+
+
+class _Shard:
+    """Keeps this shard's tests (a plugin object, so it can run after the other collection hooks)."""
+
+    def __init__(self, config: pytest.Config):
+        self.config = config
+
+    @pytest.hookimpl(trylast=True)  # after -m, -k and --deselect have dropped theirs
+    def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
+        st = _state(self.config)
+        index, count = st["shard"]
+        nodeids = [item.nodeid for item in items]
+        keep = shard_report.select(nodeids, index, count)
+        st["collected"] = nodeids
+        st["selected"] = [n for n, k in zip(nodeids, keep, strict=True) if k]
+        dropped = [item for item, k in zip(items, keep, strict=True) if not k]
+        if dropped:
+            self.config.hook.pytest_deselected(items=dropped)
+            items[:] = [item for item, k in zip(items, keep, strict=True) if k]
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -256,6 +299,22 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
     ]
     if st["over"] and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    out = session.config.getoption("shard_report")
+    if out:
+        index, count = st["shard"]
+        data = shard_report.report(
+            group="{}.{}".format(*sys.version_info[:2]),
+            index=index,
+            count=count,
+            collected=st["collected"],
+            selected=st["selected"],
+            ran=st["ran"],
+            times=st["times"],
+            budgets={suite: secs * st["scale"] for suite, secs in st["budgets"].items()},
+            default_budget=st["default"] * st["scale"],
+            exitstatus=int(session.exitstatus),
+        )
+        Path(out).write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config: pytest.Config) -> None:
