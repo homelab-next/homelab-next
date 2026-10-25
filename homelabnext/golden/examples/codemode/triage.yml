@@ -102,10 +102,11 @@ tasks:
   # the correlation of CM-9, on fakes: a name to its address (DNS), the address to its lease's
   # MAC (DHCP), the MAC to the guest holding it on one of two hypervisor nodes; MCP mode pays a
   # turn per lookup and reads every lease and guest, the program hands back only the join.  The
-  # fence screens every address out of each tool result on its own ([REDACTED:ip:1] restarts per
-  # result), so in MCP mode the model cannot join DNS to DHCP on the address and must go by the
-  # lease's hostname (the recorded MCP turns are credited with that); a program joins the raw
-  # addresses inside the sandbox.  The answer names no address, which the fence would screen.
+  # fence screens addresses out of the tool results it hands the model (RFC 5737 and private
+  # ones by default, redact_private_ips), with one screener per conversation, so an address keeps
+  # its label across results and MCP mode joins DNS to DHCP on the label; a program joins the raw
+  # addresses inside the sandbox.  The lease hostnames match no DNS or guest name, so the label
+  # is the only join.  The answer names no address, which the fence would screen.
   - id: guest-of-a-name
     system: Answer with JSON only.
     prompt: >-
@@ -120,9 +121,9 @@ tasks:
         svc:dhcp:
           server: svc:dhcp
           leases:
-            - {address: 192.0.2.20, mac: "00:00:5e:00:53:20", hostname: queue, expires: "2026-01-01T12:00:00Z"}
-            - {address: 192.0.2.21, mac: "00:00:5e:00:53:21", hostname: files, expires: "2026-01-01T12:00:00Z"}
-            - {address: 192.0.2.22, mac: "00:00:5e:00:53:22", hostname: lake-query, expires: "2026-01-01T12:00:00Z"}
+            - {address: 192.0.2.20, mac: "00:00:5e:00:53:20", hostname: host-a, expires: "2026-01-01T12:00:00Z"}
+            - {address: 192.0.2.21, mac: "00:00:5e:00:53:21", hostname: host-b, expires: "2026-01-01T12:00:00Z"}
+            - {address: 192.0.2.22, mac: "00:00:5e:00:53:22", hostname: host-c, expires: "2026-01-01T12:00:00Z"}
       hypervisor.guests:
         svc:hv-one:
           node: svc:hv-one

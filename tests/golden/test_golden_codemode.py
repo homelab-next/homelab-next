@@ -875,3 +875,22 @@ def test_denied_calls_apply_to_every_task_unless_set(corpus):
     allowed = _suite(tasks=[{**_TASK, "checks": [{"scorer": "denied_calls", "max": 1}]}])
     _, row = _run(corpus, allowed, [_program(code), {"answer": "$value"}], "codemode")
     assert row["passed"]
+
+
+def test_a_redacted_address_keeps_its_label_across_one_conversations_results(corpus):
+    """Review: the fence's screener promises one label per value within a screener, but each
+    render built a new one, so [REDACTED:ip:1] restarted per result and an MCP-mode model could
+    not join DNS to DHCP on the address.  One screener per conversation keeps the label."""
+    suite = load_suite(TRIAGE)
+    task = next(t for t in suite.tasks if t.id == "guest-of-a-name")
+    script = fakes.load_script(fakes.script_of(TRIAGE), suite)
+    model = fakes.ScriptedAgentModel([(suite, script)], corpus)
+    with fakes.FakeWorld(model) as w:
+        trace = agentic.run_task(suite, task, "mcp", model, w(suite, task, "mcp"))
+    dns = next(m for m in trace.visible if "files.lab.example" in m)
+    leases = next(m for m in trace.visible if "host-b" in m)
+    assert '"addresses": ["[REDACTED:ip:1]"]' in dns
+    # the lease of that address carries the same label; the other two get labels of their own
+    assert '{"address": "[REDACTED:ip:1]", "expires"' in leases
+    assert "[REDACTED:ip:2]" in leases and "[REDACTED:ip:3]" in leases
+    assert "192.0.2." not in "\n".join(trace.visible)

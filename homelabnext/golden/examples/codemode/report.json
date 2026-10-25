@@ -59,9 +59,9 @@
       "digest": "sha256:2914084cb8a3dddecfe2232809c9a1a34058453744a67fef8415c27c37ffb122",
       "version": 2
     },
-    "digest": "sha256:e23798f43dd2b7338b3eacb6c9f5627f6db09c74fec12d11d441fd28e624eb1f",
+    "digest": "sha256:93e9b29f89a6b7cd2009a58b6830df3f33253779210bae30d461f772e47d73f0",
     "fence_rules": "sha256:86251fd3aef3fd098f86fcb34ae91841a347bcd26eac7b4d051975cf99962013",
-    "harness": 5,
+    "harness": 6,
     "index": {
       "profile:reader": "sha256:cbf7fa4f9514a88530d805ba4c796f18a607da28bac4b74ebc59ded25316191d",
       "profile:triage": "sha256:11af857dd1e09b4068e3b9396ae6100a01c17839d82e68c36ab83c06e14a3469"
@@ -77,7 +77,7 @@
     },
     "suites": {
       "codemode-reader": "sha256:5c20fb102d7c851b01e07dc9eda56944b4e825b282ea228ffc5b81d1ea75230f",
-      "codemode-triage": "sha256:588c70849fea76c80fd593fc32932b921b44ac5f631b55fa77f8317d5f06026f"
+      "codemode-triage": "sha256:273b1c1eda3775986c648e502e9ad47af8b9f57dcdaecca7d9a0f4fd154b9bc1"
     },
     "template": {
       "agent-tool-result": "sha256:c59b694e081af8751bac0f71e4c3562ef55fad3fa47bcb5bff2e5459055cacd4"

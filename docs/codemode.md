@@ -427,23 +427,24 @@ with every tool result, in both modes alike: a token cost per tool call that CM-
 **Fairness of the baseline.** MCP mode is held to **one tool call per turn**; clients that issue
 parallel tool calls in one turn would close some of the turn gap on the correlation tasks, so the
 turn counts here favour Code Mode on those tasks by construction. And the MCP baseline is a
-fenced, hardened MCP (every result fenced as untrusted data, a grant narrowed to one read
-action), not a typical one, so injection results compare two hardened setups. Not every task
+fenced, hardened MCP (every result fenced as untrusted data, a grant narrowed to read
+actions), not a typical one, so injection results compare two hardened setups. Not every task
 favours Code Mode: `codemode-triage`'s `queue-recovery` program fails (it reads a field the
 result does not have) and is rewritten, so Code Mode takes 4 turns and 2 broker calls to MCP
 mode's 3 and 1; the comparison counts the tasks Code Mode wins, ties and loses, and
 `codemode_adoptable` turns false when it is less accurate or not fewer turns on average (a test
 shows it flip). The DNS, lease and guest join (`guest-of-a-name`, CM-12) is the clearest case of
 the one-call-per-turn bias: MCP mode's 6 turns are 4 lookups that a parallel-calling client could
-issue in fewer turns (the two hypervisor reads at least). It also shows a cost of the fence that
-falls on MCP mode only: the template's screener redacts every IP address in a tool result, and
-numbers its labels per result (`[REDACTED:ip:1]` restarts in each), so an MCP-mode model cannot
-join a DNS answer to a lease on the address and has to go by the lease's hostname, which the
-fixture provides and the recorded MCP turns are credited with; a program joins the raw addresses
-inside the sandbox and returns only the reduced answer (which names no address, since the
-screener would redact it in either mode). A live model may not find the hostname route; CM-9
-measures that, and a lab whose hostnames do not match its DNS names would make the MCP half
-fail outright.
+issue in fewer turns (the two hypervisor reads at least). The fence screens IP addresses out of
+the tool results it hands the model (by default every one, documentation ranges such as RFC 5737
+included and private ones per the template's `redact_private_ips`), so an MCP-mode model joins on labels, not
+values. The harness keeps **one screener per conversation** (`render_prompt(..., screener=)`),
+so an address has the same `[REDACTED:ip:N]` label in every result of a run, as the screener's
+own contract says; a screener per render would restart the numbering in each result and make
+an address join impossible in MCP mode alone. The task's lease hostnames match no DNS or guest
+name, so MCP mode's recorded turns join on the label; a program joins the raw addresses inside
+the sandbox and returns only the reduced answer (which names no address, since the screener
+would redact it in either mode). Whether a model makes the label join is for CM-9 to measure.
 
 **Scorers.** The answer is scored by the suite's answer scorer (`json_fields` here), and the
 trace by the trace scorers of the golden registry (`homelabnext/golden/scorers.py`
@@ -594,3 +595,6 @@ Each is planned as steps like the ones above when phase 1 closes.
   exist for reader profiles.
 - N for rule proposals, and how long a standing rule lives.
 - Whether to pin `@cloudflare/codemode` or take only its ideas and the type generation.
+- Whether the live agent path (outside the golden harness) should also keep one screener per
+  conversation for fenced tool results, so redacted values stay joinable across turns there; it
+  builds one per pack today.
