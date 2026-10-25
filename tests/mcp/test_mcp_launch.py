@@ -186,10 +186,17 @@ def test_every_hnx_entry_is_a_subcommand_that_serves_mcp_with_those_flags(capsys
     from homelabnext.broker.cli import _parser
     from homelabnext.mcp import cli as mcp_cli
 
-    assert sorted(servers.HNX_ENTRIES) == ["broker-mcp", "mcp-serve"]
+    assert sorted(servers.HNX_ENTRIES) == ["broker-mcp", "codemode-mcp", "mcp-serve"]
     words, flags = servers.HNX_ENTRIES["broker-mcp"]
     sub = next(a for a in _parser()._actions if a.dest == "cmd").choices[words[1]]
     assert words[0] == "broker" and flags <= set(sub._option_string_actions)
+    from homelabnext.codemode import cli as codemode_cli
+
+    words, flags = servers.HNX_ENTRIES["codemode-mcp"]
+    with pytest.raises(SystemExit):
+        codemode_cli.main([words[1], "--help"])
+    help_text = capsys.readouterr().out
+    assert words == ("codemode", "mcp") and all(f in help_text for f in flags)
     words, flags = servers.HNX_ENTRIES["mcp-serve"]
     assert mcp_cli.main(["--help"]) == 0
     help_text = capsys.readouterr().out

@@ -35,8 +35,19 @@ classes:
   egress: sends data to a destination outside the platform (web fetch, search, browser, mail, chat, notifications, tunnels)
   send: sends a message or a request that changes something elsewhere (mail, chat, a notification, an HTTP request); an effect, so it goes through the broker (its notify actions)
   credential: reads or issues credentials (secret stores, identity providers)
+  codemode: searches and describes the broker actions a profile may compose into a Code Mode program (ADR-0031); no effect of its own, since running a program is the broker action codemode.execute (exec, through the broker's front)
 
-reader_forbidden: [exec, file-write, egress, send, credential]
+reader_forbidden: [exec, file-write, egress, send, credential, codemode]
+
+# codemode (ADR-0031, CM-5b) is reader-forbidden but NOT broker-only.  Its tools (codemode_search,
+# codemode_describe on hnx-codemode) only read the generator's index of the caller's own granted
+# actions, so holding them needs no broker front.  What runs code is exec: the broker action
+# codemode.execute, reached with broker_call on hnx-broker (broker-only), whose handler is the
+# runner, and every call a program makes is a broker request with the run's token.  So composing
+# a program never bypasses the broker, and making codemode broker-only would only forbid the
+# reads.  Readers may not hold it: a reader can never be granted codemode.execute (an acting
+# action), so the class gives it nothing, and untrusted content steering what a program composes
+# is the injection path ADR-0031 item 9 measures.
 
 broker_only: [exec, file-write, send, credential]
 
@@ -66,6 +77,7 @@ capabilities:
   cap:codemode-executor: [exec]
   cap:broker: [exec]
   cap:broker-tokens: [exec]  # the broker's codemode token surface (runner and sandbox roles); broker-only like cap:broker
+  cap:codemode-runner: [exec]  # runs agents' programs as codemode.execute's handler: reached only as that broker action
   cap:hypervisor: [exec]
   cap:secrets: [credential]
   cap:idp: [credential]

@@ -8,7 +8,7 @@ change until the ADR is accepted.
 | Schema | What it is |
 |---|---|
 | `execution_request` | the params of the broker action `codemode.execute`: execution id, language (`python` or `typescript`), program and a capped `budget`; `resume: true` continues the paused execution of the same id. No `actor` or time: those are the enclosing broker request's |
-| `execution_result` | what the runner returns: `status` (`ok`, `paused`, `denied`, `error`, `limit`), the actor and code digest, the value (required for `ok`; `truncated` only with a value), every broker call in step order with its request id and digest, the broker's outcome and a reason as the broker gives it (`replayed` marks a step served from the journal), `pending` calls by step, request id and digest exactly when paused (and a paused run has a pending call; `ok` has none; `denied` has a denied call), the cap that ended a `limit` run (`output` is the printed output exceeding its budget; a value cut at the byte cap is `truncated` whatever the status), the error of an `error` run, and logs as single lines |
+| `execution_result` | what the runner returns: `status` (`ok`, `paused`, `denied`, `error`, `limit`), the actor and code digest, the value (required for `ok`; `truncated` only with a value), every broker call in step order with its request id and digest, the broker's outcome and a reason as the broker gives it (`replayed` marks a step served from the journal; `delivered_as`, on an ok call the reason the program got as `broker.Error` instead of the result, on a pending call of a run that is not paused why the pause could not stand (the request is still pending at the broker)), `pending` calls by step, request id and digest exactly when paused (and a paused run has a pending call; `ok` has none; `denied` has a denied call), the cap that ended a `limit` run (`output` is the printed output exceeding its budget; a value cut at the byte cap is `truncated` whatever the status), the error of an `error` run, and logs as single lines |
 | `token` | the claims of the capability token the broker issues for one execution, bound to the `codemode.execute` request, the code digest and the sandbox instance; issuer and audience `svc:broker`; the actions it reaches (narrowing the actor's grants, never `codemode.*`, no wildcards), a call cap and an expiry; no credential |
 | `journal_step` | one step, keyed by execution id and step and bound to the actor and the code digest: action, target, request id and digest, outcome (with a reason when denied or failed), the redacted result and its digest when ok; a `pending` step records the request waiting for approval, which a resume then runs by its id |
 
@@ -29,7 +29,8 @@ broker's token check (`TOKEN_REFUSALS` of `conformance/protocols/broker.py`: `to
 `token-sandbox-mismatch`, `token-expired`, `token-spent`, `token-paused`,
 `token-action-not-allowed`, `call-cap-reached`, `token-request-not-paused`,
 `request-not-approved`), `broker-unreachable` or `rate-limited` (the transport refused the peer
-before reading a request). `token_run`'s refusals before it runs anything are token refusals too:
+before reading a request), or `runner-fault` (the runner itself failed after sending the call, so
+its request ids are lost; the run stops). `token_run`'s refusals before it runs anything are token refusals too:
 that call built no request. Such a call has no request id or digest and is never journalled, so a
 resume calls again with its new token; every other call has both, from the broker's answer,
 `request-denied` included (`token_run` of a paused request its approver denied: the request was
@@ -44,7 +45,7 @@ execution's, in total across its runs: a resume's token carries what is left of 
 execution resumes; a finished one never does (`docs/broker.md`, "Code Mode capability tokens").
 
 **Runtime rules** the schemas cannot express, for the runner and the broker to enforce and the
-`codemode-runner` contract (CM-5) to check:
+`codemode-runner` contract (CM-5b, `conformance/suites/codemode_runner.py`) to check:
 
 - a request without `resume` whose execution id already exists is refused, so two runs never
   share a journal; a resume needs a paused execution of the same actor and code digest;

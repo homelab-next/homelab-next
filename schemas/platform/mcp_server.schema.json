@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.2",
   "title": "MCP catalog record",
   "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`).",
   "type": "object",
@@ -671,6 +671,7 @@
         },
         "classes": {
           "type": "array",
+          "description": "The tool's classes, from the vocabulary of homelabnext/agent/tool_classes.yml (1.1 adds send, ADR-0030; 1.2 adds codemode, the Code Mode search and describe tools, ADR-0031).",
           "minItems": 1,
           "uniqueItems": true,
           "items": {
@@ -681,7 +682,8 @@
               "file-write",
               "egress",
               "send",
-              "credential"
+              "credential",
+              "codemode"
             ]
           }
         },

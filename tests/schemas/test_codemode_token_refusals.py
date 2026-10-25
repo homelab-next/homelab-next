@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The reasons a Code Mode call carries without a request id are the broker contract's token
-refusals plus the transport's two, in schemas/codemode and in the contract alike."""
+refusals plus the transport's two and the runner's own fault (runner-fault), in schemas/codemode
+and in the contract alike."""
 
 import json
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from conformance.protocols.broker import TOKEN_REFUSALS
 
 ROOT = Path(__file__).resolve().parents[2]
-REQUESTLESS = [*TOKEN_REFUSALS, "broker-unreachable", "rate-limited"]
+REQUESTLESS = [*TOKEN_REFUSALS, "broker-unreachable", "rate-limited", "runner-fault"]
 
 
 def _enums(doc):

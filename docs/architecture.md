@@ -52,12 +52,12 @@ The "example tenants" are illustrations only: the reference environment in
 | 8 | Case management and DFIR | Case round trip (create, dedup, comment, close) | a case system (fake*) | `cases` suite |
 | 9 | Threat intelligence | Typed indicators and reports in the lake | a TIP, feeds | schema validation plus replay |
 | 10 | Internal assessment, detection and code security | Authorized internal assessment plans and findings as typed records (own environment only; [terms](terms.md)) | auditing tools | detection fixtures and coverage map |
-| 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval; Code Mode programs in a broker-only sandbox (ADR-0031) | an inference server (fake*), a context store, a sandbox host | `inference`, `context` and `codemode-executor` suites, golden tasks |
+| 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval; Code Mode programs in a broker-only sandbox (ADR-0031) | an inference server (fake*), a context store, a sandbox host | `inference`, `context`, `codemode-executor` and `codemode-runner` suites, golden tasks |
 | 12 | Observability, alerting, backup, power | OpenMetrics, state-diffed paging, export hooks (ADR-0008) | a metrics stack, ntfy* | `notify` suite; restore drill |
 | 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest; projects and work items linked to strategy records by uid (ADR-0020) | a broker, the records library, a project tool (OpenProject) | lifecycle and fixture runs, `projects` suite |
 
-Seventeen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
-`context`, `projects` and `codemode-executor`); the list is authoritative in [interfaces.md](interfaces.md).
+Eighteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
+`context`, `projects`, `codemode-executor` and `codemode-runner`); the list is authoritative in [interfaces.md](interfaces.md).
 
 ## The spine
 

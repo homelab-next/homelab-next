@@ -90,6 +90,7 @@ class _Broker:
         self._timeout = float(cfg["wall_s"])
         self._max_calls = cfg.get("max_calls")  # None: the no-call-cap mutant
         self._sticky = cfg.get("pause") != "catchable"
+        self._bare = cfg.get("wire") == "bare"  # the bare-wire mutant: op and target dropped
         self.Paused = Paused if self._sticky else _CatchablePaused
         self.sent = 0
         self.pending: dict | None = None
@@ -97,14 +98,26 @@ class _Broker:
     def __repr__(self) -> str:
         return "<broker>"
 
-    def call(self, action, args=None):
+    def call(self, action, args=None, *, target=None):
+        return self._send("call", action, args, target)
+
+    def submit(self, action, args=None, *, target=None):
+        """Submit the action for approval: the broker stores the request and the run pauses."""
+        return self._send("submit", action, args, target)
+
+    def _send(self, op, action, args, target):
         if self.pending is not None and self._sticky:
             raise self.Paused(self.pending["action"])
         if self._max_calls is not None and self.sent >= self._max_calls:
             raise Denied(action, "call-cap-reached")  # refused here, never sent
         step = self.sent
         self.sent += 1
-        line = json.dumps({"token": self._token, "action": action, "args": args or {}})
+        msg = {"token": self._token, "action": action, "args": args or {}}
+        if op != "call" and not self._bare:
+            msg["op"] = op
+        if target is not None and not self._bare:
+            msg["target"] = target
+        line = json.dumps(msg)
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:

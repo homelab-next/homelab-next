@@ -23,7 +23,7 @@ SCHEMA = "homelabnext.conform.report/1"
 
 
 def declared_capabilities(root: Path) -> list[str]:
-    """Capabilities the tree declares (``capabilities.yml``), else the seventeen."""
+    """Capabilities the tree declares (``capabilities.yml``), else the eighteen."""
     for cand in ("capabilities.yml", "registry/capabilities.yml"):
         p = root / cand
         if p.is_file():

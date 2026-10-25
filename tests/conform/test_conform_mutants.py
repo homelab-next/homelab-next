@@ -12,7 +12,7 @@ from homelabnext.conform.runner import mutation_runs
 ALL = [*CAPABILITIES, *EXTENDED]
 #: suites whose every mutant fails its named check and no other: a mutant another check also
 #: catches proves less about the check it names (the older suites predate the rule)
-ONLY_ITS_OWN = frozenset({"broker-tokens", "codemode-executor"})
+ONLY_ITS_OWN = frozenset({"broker-tokens", "codemode-executor", "codemode-runner"})
 CASES = [(c, name) for c in ALL for name in load_module(c).MUTANTS]
 
 

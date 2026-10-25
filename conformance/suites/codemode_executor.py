@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from conformance.fakes.code_executor import (
+    BareWireExecutor,
     CatchablePauseExecutor,
     ForkingExecutor,
     LeakyEnvExecutor,
@@ -80,6 +81,7 @@ class _Broker:
     def __init__(self, bind: tuple[str, int]) -> None:
         self.token = secrets.token_hex(16)
         self.calls: list[tuple[str, str, Any]] = []
+        self.wire: list[dict[str, Any]] = []  # each call's op and target, as the wire carried them
         self.pending: list[tuple[str, str]] = []  # (request_id, request_digest) given out
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -113,6 +115,7 @@ class _Broker:
                     req = json.loads(buf)
                     action, args = req.get("action"), req.get("args")
                     self.calls.append((req.get("token"), action, args))
+                    self.wire.append({"op": req.get("op", "call"), "target": req.get("target")})
                     conn.sendall(json.dumps(self._answer(req, buf)).encode() + b"\n")
                 except (OSError, ValueError, AttributeError):
                     continue
@@ -230,6 +233,25 @@ def _(ex):
             res = _run(ex, programs[lang], b, language=lang)
             assert _ok(res, "three echo calls") == {"sum": 3, "nested": {"x": [1, "y"]}}, res.value
             assert [(t, a) for t, a, _ in b.calls] == [(b.token, "echo")] * 3, b.calls
+
+
+@SUITE.check(
+    "submit-and-target-relayed",
+    "a program's broker.submit reaches the broker as op submit and a call's target as its target "
+    "(the CM-4 wire's optional fields, which the runner relays as token_submit and target)",
+)
+def _(ex):
+    programs = {
+        "python": "broker.call('echo', {'n': 1}, target='svc:queue')\n"
+        "broker.submit('hold', {'n': 2})\n",
+    }
+    for lang in _languages(ex, programs):
+        with _broker(ex) as b:
+            _run(ex, programs[lang], b, language=lang)  # how the run ends: other checks
+            assert b.wire == [
+                {"op": "call", "target": "svc:queue"},
+                {"op": "submit", "target": None},
+            ], f"{lang}: the wire carried {b.wire}"
 
 
 @SUITE.check(
@@ -717,6 +739,11 @@ MUTANTS = {
         CatchablePauseExecutor,
         "pending-pauses-the-run",
         "a pending reply is an ordinary exception: except Exception swallows the pause",
+    ),
+    "bare-wire": Mutant(
+        BareWireExecutor,
+        "submit-and-target-relayed",
+        "the broker client drops a call's op and target: a submit goes out as a call",
     ),
     "unbounded-result": Mutant(
         UnboundedResultExecutor,

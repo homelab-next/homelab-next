@@ -26,7 +26,7 @@ c. *Limits are enforced.*  A program that exceeds a cap in :class:`Limits` (CPU 
    ends a run on the cap; this contract does not).  The client-side cap is behaviour, not
    enforcement: the client runs inside the sandbox, within the program's reach.  Enforcing a
    capped token is the broker's (token claims, ADR-0031 decision 6), proved by the runner
-   contract (CM-5).
+   contract (CM-5b).
 d. *Disposable.*  Every run starts from nothing: no file, environment variable or interpreter
    state that an earlier run wrote is visible to a later one.  A writable scratch directory
    (the working directory, ``TMPDIR`` and ``HOME``) exists for the run and goes with it.
@@ -51,13 +51,15 @@ g. *The broker's answers reach the program as the broker gave them.*  A denial r
    with error kind ``broker``.  A pending reply (the call needs approval) pauses the whole run:
    it raises ``broker.Paused``, a ``BaseException`` that ``except Exception`` does not catch,
    every later call raises it again, and the run ends with status ``paused`` and the call in
-   ``pending`` however the program handled it.  Resuming is the runner's (CM-5).  Like the
+   ``pending`` however the program handled it.  Resuming is the runner's (CM-5b).  Like the
    call cap, the client-side pause is behaviour, not enforcement: refusing calls on a paused
    token is the broker's, checked by the runner contract.
 
 **The program's view (language ``python``).**  The program is module source.  It sees one name
-of its own, ``broker``: ``broker.call(action, args=None)`` sends one request to the broker and
-returns the reply's value.  Calls are synchronous (no ``await``).  Its value is the module
+of its own, ``broker``: ``broker.call(action, args=None, *, target=None)`` sends one request to
+the broker and returns the reply's value, and ``broker.submit(action, args=None, *, target=None)``
+submits one for approval (the reply is pending, so the run pauses; CM-5b).  Calls are
+synchronous (no ``await``).  Its value is the module
 global ``result`` when it ends (``None`` when unset).  Printed text (stdout and stderr together)
 is returned as ``output``.  Language names are those of schemas/codemode: ``python`` and
 ``typescript``.
@@ -65,10 +67,11 @@ is returned as ``output``.  Language names are those of schemas/codemode: ``pyth
 **The broker wire.**  The executor owns the transport between the sandbox and the broker: it
 may connect from inside the sandbox to the endpoint, or relay over a unix socket or vsock.  At
 the endpoint, one TCP connection per call carries one JSON line ``{"token": ..., "action": ...,
-"args": {...}}`` and one JSON line back, one of :data:`REPLIES`: ``{"ok": true, "value": ...}``,
+"args": {...}}`` (plus ``"op": "submit"`` for a submit and ``"target"`` when the call names one;
+absent, the op is ``call``) and one JSON line back, one of :data:`REPLIES`: ``{"ok": true, "value": ...}``,
 ``{"ok": false, "denied": true, "reason": ...}``, ``{"ok": false, "pending": true,
 "request_id": ..., "request_digest": ...}`` or ``{"ok": false, "error": true, "reason": ...}``.
-The runner contract (CM-5) owns what the broker does with a call.  The suite serves a
+The runner contract (CM-5b) owns what the broker does with a call.  The suite serves a
 stand-in broker (and its decoys) at the address the executor declares as ``broker_bind``
 (``(host, port)``; loopback and an ephemeral port by default), so a sandbox behind a static
 firewall rule can reach it.

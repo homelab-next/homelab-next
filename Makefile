@@ -264,7 +264,7 @@ ids-check:
 conform:
 	$(PY) -m homelabnext.cli conform run all --target $(or $(TARGET),fake)
 
-# `hnx conform list` and `hnx conform report --json`; fails if any of the 17 capabilities lacks a passing test
+# `hnx conform list` and `hnx conform report --json`; fails if any of the 18 capabilities lacks a passing test
 conform-check:
 	$(PY) tools/conform_coverage.py
 

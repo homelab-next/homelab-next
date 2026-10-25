@@ -287,6 +287,26 @@ def _instance_held(path: Path) -> bool | None:
     return False
 
 
+def hold_instance_lock(live: Path, prefix: str) -> tuple[str, int]:
+    """A new instance's lock file ``live/<id>``, held under an exclusive ``flock`` on the
+    returned descriptor for as long as the process keeps it open (the kernel drops it however
+    the process dies): ``(id, fd)``.  It is locked under a hidden name a sweep never touches,
+    then renamed into place, so a sweep can never see ``live/<id>`` unlocked and remove it.  The
+    broker's instances and the Code Mode runner's share it."""
+    iid = new_id(prefix)
+    tmp = live / f".new-{iid}"
+    fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.rename(tmp, live / iid)
+    except BaseException:
+        os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
+    return iid, fd
+
+
 def _is_decision(record: dict[str, Any]) -> bool:
     return (record.get("operation"), record.get("outcome")) in DECISION_KINDS
 
@@ -420,20 +440,7 @@ class StateDir:
                 live = self._dir("live")
                 live.mkdir(mode=0o700, exist_ok=True)
                 self._sweep_live(live)
-                iid = new_id("brk")
-                # locked under a hidden name the sweep never touches, then renamed into place: a
-                # sweep by another broker can never see live/<id> unlocked and unlink it
-                tmp = live / f".new-{iid}"
-                fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
-                    os.rename(tmp, live / iid)
-                except BaseException:
-                    os.close(fd)
-                    with contextlib.suppress(FileNotFoundError):
-                        tmp.unlink()
-                    raise
-                self._instance = (iid, fd)
+                self._instance = hold_instance_lock(live, "brk")
             return self._instance[0]
 
     @staticmethod

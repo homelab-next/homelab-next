@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
+# like every example: the package, image and hash values name nothing real.
+# Code Mode's search and describe tools (ADR-0031 decision 3). Running a program is not a tool
+# here: it is the broker action codemode.execute, called with broker_call on hnx-broker.
+id: hnx-codemode
+description: 'Search and describe the broker actions the calling profile may compose into a Code Mode program, from the
+  generated index (hnx codemode mcp, docs/codemode.md); run the program with broker_call codemode.execute on hnx-broker.'
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/codemode/mcp_tools.py
+transport:
+  type: stdio
+  bin: hnx
+  entry: codemode-mcp
+  args: [--index, /etc/hnx/codemode, --socket, /run/hnx-broker/broker.sock]
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: codemode_describe, classes: [read, codemode], approval: false}
+- {name: codemode_search, classes: [read, codemode], approval: false}
+author: agent:example-builder
+reviews:
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-25', verdict: pass, digest: 'sha256:9d5d84a628c7'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-25', verdict: pass, digest: 'sha256:9d5d84a628c7'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-25', verdict: pass, digest: 'sha256:9d5d84a628c7'}

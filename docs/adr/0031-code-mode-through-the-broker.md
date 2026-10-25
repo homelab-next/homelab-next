@@ -50,10 +50,15 @@ OpenShell could not be measured there.
    `read` tools on the runner's MCP server, in a new `codemode` tool class, and list only the
    actions the calling profile is granted. Execution is the broker action `codemode.execute`,
    reached through the broker's own MCP front like every other action (ADR-0030), whose handler
-   is the runner. No new direct acting grant exists.
+   is the runner. No new direct acting grant exists. As built (CM-5b) the two read tools live on
+   a server of their own, `hnx-codemode` (`hnx codemode mcp`, catalog record
+   `examples/mcp/hnx-codemode.yml`), separate from the runner service, and read the generator's
+   index for the profile the broker socket maps the caller to; the `codemode` class is
+   reader-forbidden and not broker-only, since its tools only read.
 4. **The namespaces are generated** (ADR-0028) from the MCP catalog and the broker manifest, one
    set per agent profile, from each action's argument spec and result schema (the generator reads
-   the manifest first, CM-3; the catalog record and handler result schemas arrive with CM-5). `hnx
+   the manifest first, CM-3; handler result schemas landed with CM-3 and the catalog record with
+   CM-5b). `hnx
    codemode gen --check` fails on drift in CI. Nothing is hand-written, and no raw API is ingested: the
    connectors are the curated broker actions.
 5. **The sandbox holds nothing and reaches nothing but the broker.** It has no credentials in its

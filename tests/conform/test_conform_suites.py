@@ -28,7 +28,7 @@ def test_capability_list_is_the_one_in_interfaces_md():
     text = (ROOT / "docs" / "interfaces.md").read_text(encoding="utf-8")
     para = re.search(r"^- Capability names.*?(?=^- )", text, re.S | re.M).group(0)
     names = tuple(re.findall(r"`([a-z-]+)`", para.split(":", 1)[1]))
-    assert names == CAPABILITIES and len(names) == 17
+    assert names == CAPABILITIES and len(names) == 18
 
 
 def test_capabilities_yml_matches_the_core_list():
