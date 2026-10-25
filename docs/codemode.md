@@ -587,24 +587,34 @@ the operator or in a session the operator runs. The groundwork is in place, and 
 settled:
 
 - **Where they go.** An extended suite, `codemode-executor-isolation`, beside the executor suite
-  (18 of the 24-check maximum), registered in `EXTENDED` (`homelabnext/conform/registry.py`) and
-  in `ONLY_ITS_OWN` (`tests/conform/test_conform_mutants.py`), with its own
-  `conformance/codemode-executor-isolation/` test folder. A suite needs at least six checks
-  (`MIN_CHECKS`), so it lands with its first six probes, not empty.
+  (which is near the 24-check maximum, `MAX_CHECKS` in `tests/conform/test_conform_suites.py`),
+  registered in `EXTENDED` (`homelabnext/conform/registry.py`) and in `ONLY_ITS_OWN`
+  (`tests/conform/test_conform_mutants.py`), with its own `conformance/codemode-executor-isolation/`
+  test folder. A suite needs at least six checks (`MIN_CHECKS`), so it lands with its first six
+  probes, not empty.
 - **How they are proved.** `hnx conform mutants --all` runs the extended suites' mutants as well
-  as the core ones (`mutants all` is the core suites only); each probe's mutant is an executor
-  that has exactly the access the probe forbids, caught by that probe alone.
+  as the core ones (`mutants all` is the core suites only), and `tests/conform/test_conform_mutants.py`
+  runs them under `make test`; each probe's mutant is an executor that has exactly the access the
+  probe forbids, caught by that probe alone.
 - **What a probe is judged by.** What the harness's own listeners received, never what the
   program reports: a decoy UDP or TCP listener on loopback records each datagram or connection
-  with a per-run nonce, and the probe fails on any receipt. A name lookup is judged by whether the
-  sandbox can resolve at all: a random label under `.invalid` (RFC 6761) must not resolve, and
-  any answer counts as reached; no lookup may leave the machine, since the libc resolver cannot be
-  pointed at a harness decoy. Every destination is the harness's own listener, loopback, or a
-  documentation range (RFC 5737, RFC 3849).
-- **What cannot be decided.** A probe that cannot be decided unprivileged (ICMP on a CI runner,
-  IPv6 on a host without it) reports the check as untested with its reason: the suite's existing
-  untested result, never a pass. The forking fake, which is not a boundary, is listed as failing
-  the CM-14 probes it cannot meet.
+  with a per-run nonce, and the probe fails on any receipt. Every destination is the harness's own
+  listener, loopback, or a documentation range (RFC 5737, RFC 3849).
+- **Name lookups.** A lookup's answer cannot show egress (a `.invalid` name fails to resolve with
+  or without a network), and the harness cannot see a query that leaves the machine. So the
+  lookup probe needs the harness to own the resolver: the executor gives the sandbox the harness's
+  decoy resolver (on loopback) as its only resolver, and the probe fails when the decoy receives a
+  query for the run's random label. An executor that cannot be given a resolver does not declare
+  the probe's feature (below), and DNS egress is then checked only at the socket level (a datagram
+  or connection to the decoy's port).
+- **What cannot be decided.** A probe that needs something a target may not offer (a resolver the
+  harness can set, ICMP on an unprivileged runner, IPv6 on a host without it) `requires` a product
+  feature (`resolver-control`, `icmp`, `ipv6`). A target that does not declare it reports the
+  probe `skip`, shown as such in the report and never counted as a pass; the probe's mutant
+  declares the feature, so it is always run against its mutant. (`untested` is not the right
+  result: in this harness it is reserved for a MUST check missing a test hook, and fails the
+  suite.) The forking fake, which is not a boundary, is listed as failing the CM-14 probes it
+  cannot meet.
 
 Follow-up, not a step: `tests/conform` has had its budget raised three times as suites grew,
 mostly by the mutant sweeps (each mutant a whole-suite run); splitting the sweeps into a suite of

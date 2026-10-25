@@ -185,8 +185,8 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all` for
-every suite) and
+`hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all`
+for every suite) and
 `tests/conform/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
 caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
