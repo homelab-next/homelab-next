@@ -22,7 +22,7 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 |---|---|---|---|
 | CM-1 | PUBLIC-NOW | ADR-0031 (proposed) and this plan | the ADR log and doc-fact tests pass |
 | CM-2 | PUBLIC-NOW | **Landed.** Schemas under `schemas/codemode/` (drafts): execution request and result (`status` ok, paused, denied, error, limit), capability token claims, step-journal record; examples and negatives (drafts, frozen when the ADR is accepted) | `make schemas` passes; every negative is refused for its stated reason |
-| CM-3 | PUBLIC-NOW | **Landed.** `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the broker manifest (its grants, actions and handler documents) and writes, per agent profile, synchronous typed stubs and the search index, from each action's argument spec; generated marker; goldens from `examples/` in `examples/codemode/<profile>/`. The MCP catalog and exec result schemas (a `result_schema` in the handler document) arrive with CM-5 | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
+| CM-3 | PUBLIC-NOW | **Landed.** `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the broker manifest (its grants, actions and handler documents) and writes, per agent profile, synchronous typed stubs and the search index, from each action's argument spec; generated marker; goldens from `examples/` in `examples/codemode/<profile>/`. Exec result types come from the handler document's optional `result_schema`; the MCP catalog arrives with CM-5 | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
 | CM-4 | PUBLIC-NOW, **landed** | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
 | CM-5a | PUBLIC-NOW, **landed** | Capability tokens issued, held and enforced by the broker ([broker](broker.md#code-mode-capability-tokens)): `codemode.execute`'s params checked as an execution request and the request in flight, bound to its runner, while its handler runs; `issue_token` for that runner only, claims from the request, actions narrowed to what `decide()` admits for the actor, lifetime and live tokens capped by the manifest's `codemode` block, the call cap per execution (a resume inherits what is left); execution ids per actor; the secret kept as a digest; every token call checked in order (invalid, sandbox both ways, expired, spent, paused, action, cap) and counted broker-side before `decide()`; answers and post-admission refusals naming the request; a call needing approval, or a submit, stores the request and pauses the token in one step; spend with an outcome (`finished`, `paused`), resume of a paused execution only, `token_run` of the paused request; a crash sweep and retention; audit 1.3 `token_id`/`execution_id` and `token-pause`/`token-spend`; the `runner` and `sandbox` socket peers, the runner exempt from the refusal limit. The `broker` contract's feature `codemode-tokens`, proved by the extended suite `broker-tokens` | the twelve MUST checks pass on the fake and the reference broker; each of the thirteen mutants is caught by its own check only |
 | CM-5b | PUBLIC-NOW | The runner and the `codemode-runner` capability: the runner as `codemode.execute`'s handler; the `codemode` tool class and catalog record for search and describe; the step journal; pause on `submit`, resume without replay; denied calls as values. Suite with the five MUST checks and mutants | suite green against the fake broker (`conformance/fakes/`); G-13 stays green with the new action and record; mutants caught |
@@ -90,10 +90,21 @@ docstring of `homelabnext/codemode/render.py` lists it; the index keeps the exac
 
 **An exec call returns the handler's `output`.** The broker answers an exec call with an envelope
 (`{exit_code, output, truncated, stderr_bytes}`); the runner (CM-5) unwraps it, so a program gets
-`output`, the handler's stdout parsed as JSON when it is JSON, else its text. A handler declares no
-result schema yet, so the stub's return type is `unknown`/`Any`. **Follow-up, owned by CM-5:** add
-an optional `result_schema` to the handler document (`schemas/broker/handler`, additive) and type
-exec results from it.
+`output`, the handler's stdout parsed as JSON when it is JSON, else its text. A handler document may
+declare a `result_schema` (`schemas/broker/handler` 1.2, additive): a JSON Schema object for that
+decoded `output`. The generator renders the stub's return type from it with the mapping the
+parameters use (a named interface/`TypedDict` for an object with properties, else an inline type),
+puts it in `search.json`'s `result`, and holds every string in it to the same checks as a params
+schema. A handler without one keeps `unknown`/`Any`. It describes only the success case (exit 0, not truncated, stdout valid JSON); text output, a
+truncated output and a non-zero exit are the CM-5 runner's to define, and the stub type does not
+cover them yet. A schema the generator cannot render faithfully (a `required` name declared only
+inside `allOf`, say) leaves that method's result `unknown`/`Any`; a refused character or `*/` in
+it still fails generation. A `$ref` is local or a shared id and is never dereferenced by the
+generator. An object result whose property names are not plain identifiers (`exit-code`, `class`)
+is typed inline with quoted keys (`dict[str, Any]` in Python). The broker only validates the schema when it
+loads the document; it does **not** check an output against it at call time, so it is a statement of
+intent, not a guarantee. Checking belongs to the CM-5 runner, which may refuse or flag an output
+that does not match.
 
 Names and inputs are refused rather than guessed: a keyword or a name that would shadow a builtin
 the stub's annotations use gets a trailing `_` (`list` becomes `list_`); two actions landing on one

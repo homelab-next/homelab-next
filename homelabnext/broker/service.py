@@ -354,6 +354,11 @@ def validate_manifest(
         problems += [
             f"{rel}: params_schema {e}" for e in validation.schema_problems(doc["params_schema"])
         ]
+        if "result_schema" in doc:
+            problems += [
+                f"{rel}: result_schema {e}"
+                for e in validation.schema_problems(doc["result_schema"])
+            ]
         target = _inside(base, doc["handler"])
         if target is None or not target.is_file():
             problems.append(f"{rel}: handler {doc['handler']} is missing or outside {base}")
