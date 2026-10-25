@@ -63,6 +63,7 @@ capabilities:
   cap:notify: [egress, send]
   cap:edge: [egress]
   cap:orchestration: [exec]
+  cap:codemode-executor: [exec]
   cap:broker: [exec]
   cap:hypervisor: [exec]
   cap:secrets: [credential]

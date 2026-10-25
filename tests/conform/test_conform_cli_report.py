@@ -16,16 +16,16 @@ from homelabnext.conform.registry import load_module
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_list_shows_the_sixteen(capsys):
+def test_list_shows_the_seventeen(capsys):
     assert main(["list"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert [ln.split()[0] for ln in out] == list(CAPABILITIES)
-    assert len(out) == 16
+    assert len(out) == 17
 
 
 def test_dash_dash_list_spelling_from_the_docs(capsys):
     assert main(["--list"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 16
+    assert len(capsys.readouterr().out.splitlines()) == 17
 
 
 def test_list_json_and_all(capsys):

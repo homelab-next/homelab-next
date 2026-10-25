@@ -1,0 +1,11 @@
+{
+  "execution_id": "exec-0001",
+  "language": "python",
+  "code": "lease = dhcp.lease(hostname='app-01')\nguest = hypervisor.guest(address=lease['address'])\nreturn {'guest': guest['name'], 'state': guest['state']}\n",
+  "budget": {
+    "wall_s": 3600,
+    "max_calls": 10,
+    "max_output_bytes": 8192,
+    "memory_mb": 128
+  }
+}
