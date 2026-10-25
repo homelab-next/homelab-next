@@ -148,6 +148,8 @@ def test_text_output_cancel_and_deny(broker, tmp_path):
         "service.restart",
         "--as",
         "profile:triage",
+        "--target",
+        "svc:queue",
         "--params",
         '{"grace_s": 1}',
         as_json=False,

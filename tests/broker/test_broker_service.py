@@ -250,7 +250,7 @@ def test_handler_tampered_after_load_is_refused_at_run_time(tmp_path):
     h = path.parent / "handlers" / "service-status.sh"
     h.write_text(h.read_text() + "echo tampered\n")
     with pytest.raises(Denied) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-digest-mismatch"
     assert _audit_ok(svc)[-1]["reason"] == "handler-digest-mismatch"
 
@@ -267,14 +267,14 @@ def test_failing_and_slow_handlers_are_contained(tmp_path):
     doc_path.write_text(json.dumps(doc))
     svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
     with pytest.raises(BrokerError) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-failed" and "internal-detail" not in str(info.value)
     h.write_text("#!/bin/sh\nsleep 30\n")
     doc["handler_digest"], doc["timeout_s"] = file_digest(h), 1
     doc_path.write_text(json.dumps(doc))
     svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
     with pytest.raises(BrokerError) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-timeout"
 
 
@@ -289,7 +289,7 @@ def test_approval_flow_end_to_end(tmp_path):
     clock = Clock()
     svc = _svc(tmp_path, clock)
     with pytest.raises(Denied) as info:  # needs approval: call refuses, submit is the way
-        svc.call(AGENT, "service.restart", {"grace_s": 30})
+        svc.call(AGENT, "service.restart", {"grace_s": 30}, target="svc:queue")
     assert info.value.reason == "approval-required"
     rid = _restart(svc)
     assert svc.status(AGENT, rid).state == "pending"
@@ -1109,7 +1109,9 @@ def test_recent_decisions_read_the_decisions_index_not_the_trail(tmp_path, monke
     """The hub's recent approve/deny query walked the whole audit trail newest first until it
     found its rows, so a trail an agent filled with refusals made the Approvals page time out."""
     svc = _svc(tmp_path)
-    rids = [svc.submit(AGENT, "service.restart", {"grace_s": 5}) for _ in range(3)]
+    rids = [
+        svc.submit(AGENT, "service.restart", {"grace_s": 5}, target="svc:queue") for _ in range(3)
+    ]
     svc.approve(rids[0], "sso:operator-one")
     svc.deny(rids[1], "sso:operator-one")
     for i in range(30):  # the noise: refusals far outnumber decisions
@@ -1627,3 +1629,24 @@ def test_a_result_schema_is_not_enforced_at_call_time(tmp_path):
     doc["result_schema"] = {"type": "object", "properties": {"state": {"type": "integer"}}}
     doc_path.write_text(json.dumps(doc))
     assert validate_manifest(load_yaml(path), path.parent)[1] == []
+
+
+def test_a_required_target_is_enforced_and_audited(tmp_path):
+    """Handler 1.3: an action whose handler declares target: required is refused, and audited,
+    without one (it fails closed: the handler would report on no target)."""
+    svc = BrokerService.from_manifest(_copy_example(tmp_path), tmp_path / "state", clock=Clock())
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {})
+    assert info.value.reason == "target-required"
+    assert svc.audit_documents(reason="target-required")
+    assert svc.call("profile:reader", "service.status", {}, target="svc:queue")
+    # a lane takes no target, so none is required of it
+    svc.call(AGENT, "memory.write", {"name": "t.md", "content": "x"})
+
+
+@pytest.mark.parametrize("target", ["svc:dns\n", "svc:dns\r\n", " svc:dns", "svc:DNS"])
+def test_a_target_is_matched_whole(tmp_path, target):
+    svc = BrokerService.from_manifest(_copy_example(tmp_path), tmp_path / "state", clock=Clock())
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {}, target=target)
+    assert info.value.reason == "invalid-target"

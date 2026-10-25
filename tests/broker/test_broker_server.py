@@ -162,7 +162,7 @@ def test_every_operation_round_trips(broker, tmp_path):
     assert c.status(rid)["state"] == "done"
 
     # deny
-    rid2 = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid2 = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     assert c.deny(rid2, "sso", "operator-one")["decision"] == "denied"
     broker.as_uid(None)
@@ -221,7 +221,7 @@ def test_the_body_may_not_name_the_actor(broker):
 
 def test_an_agent_cannot_approve_and_a_relay_cannot_act(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     with pytest.raises(Denied) as exc:  # the agent itself, claiming a human
         c.approve(rid, "sso", "operator-one")
     assert exc.value.reason == "not-an-approval-relay"
@@ -235,7 +235,7 @@ def test_an_agent_cannot_approve_and_a_relay_cannot_act(broker):
 
 def test_relay_approvals_obey_the_approver_rules(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     cases = [
         (("sso", "someone-else"), "approval-approver-not-allowed"),
@@ -338,7 +338,7 @@ def test_a_full_server_answers_busy(tmp_path):
 
 def test_concurrent_runs_of_one_approved_request_run_it_once(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 2})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 2}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     c.approve(rid, "sso", "operator-one")
     broker.as_uid(None)
@@ -559,7 +559,7 @@ def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
     svc = _service(tmp_path)
     peers = PeerMap(svc.manifest)
     limiter = RefusalLimiter(3, 60, clock=_Clock())
-    rid = svc.submit("profile:triage", "service.status", {})
+    rid = svc.submit("profile:triage", "service.status", {}, target="svc:queue")
     svc.cancel("profile:triage", rid)
     before = len(svc.audit_documents())
     errors = [
@@ -658,7 +658,16 @@ def test_cli_over_the_socket(broker, cli, tmp_path):
     s = str(broker.path)
     note = '{"name":"cli.md","content":"x"}'
     assert cli("call", "memory.write", "--socket", s, "--params", note)["result"]["bytes"] == 1
-    rid = cli("submit", "service.restart", "--socket", s, "--params", '{"grace_s": 1}')
+    rid = cli(
+        "submit",
+        "service.restart",
+        "--socket",
+        s,
+        "--target",
+        "svc:queue",
+        "--params",
+        '{"grace_s": 1}',
+    )
     rid = rid["request_id"]
     assert cli("pending", "--mine", "--socket", s)[0]["request_id"] == rid
     assert cli("actions", "--socket", s)["caller"] == "profile:triage"

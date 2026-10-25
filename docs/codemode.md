@@ -94,9 +94,10 @@ Per profile the manifest grants actions to, `<out>/<profile>/` gets four files f
 **Actions about a target.** A request may name the `svc:` target it is about (the broker hands it
 to an exec handler as `HNX_BROKER_TARGET`), and nothing in a manifest said which actions read one,
 so a handler document now declares it: `target: required` or `optional` (`schemas/broker/handler`
-1.3, additive; absent, the action takes none; a lane action never does). The broker does not
-enforce it (a request naming a target for an action that ignores it is still allowed, as before);
-it is the generator's statement of what the handler reads. The method then takes a `target`
+1.3, additive; absent, the action takes none; a lane action never does). The broker enforces
+`required`: a request without a target for such an action is refused `target-required`
+([broker](broker.md)); a target on an action that takes none is still admitted there, and the
+prelude refuses it in the sandbox instead (below). The method then takes a `target`
 beside its params: keyword-only in Python (`service.status(*, target: str, verbose: bool = ...)`,
 a required target first), a property of the argument object in TypeScript (`status(args: {
 target: string; verbose?: boolean })`), noted as the request's target and never a param. A
