@@ -104,3 +104,32 @@ tasks:
           code: |
             result = service.status(target="svc:queue")["state"] == "running"
       - answer: {service: svc:queue, running: $value}
+  guest-of-a-name:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: dns.lookup, params: {}, target: svc:files}
+      - tool: broker_call
+        arguments: {action: dhcp.leases, params: {}, target: svc:dhcp}
+      - tool: broker_call
+        arguments: {action: hypervisor.guests, params: {}, target: svc:hv-one}
+      - tool: broker_call
+        arguments: {action: hypervisor.guests, params: {}, target: svc:hv-two}
+      - answer: {service: svc:files, node: $result.node, vmid: 121, state: stopped}
+    codemode:
+      - tool: codemode_search
+        arguments: {query: dns dhcp lease hypervisor guest}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            address = dns.lookup(target="svc:files")["addresses"][0]
+            leases = dhcp.leases(target="svc:dhcp")["leases"]
+            mac = next(x["mac"] for x in leases if x["address"] == address)
+            found = {}
+            for node in ["svc:hv-one", "svc:hv-two"]:
+                for guest in hypervisor.guests(target=node)["guests"]:
+                    if guest["mac"] == mac:
+                        found = {"node": node, "vmid": guest["vmid"], "state": guest["state"]}
+            result = {"service": "svc:files", **found}
+      - answer: $value

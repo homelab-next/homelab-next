@@ -133,8 +133,8 @@ def test_the_report_shows_accuracy_and_turns_per_mode(report):
         assert m["accuracy"] == 1.0 and m["passed"] == m["tasks"]
     # the reader's Code Mode half is hypothetical: run and gated, but outside the totals
     assert (modes["mcp"]["tasks"], modes["codemode"]["tasks"], hypo["codemode"]["tasks"]) == (
-        7,
-        5,
+        8,
+        6,
         2,
     )
     assert modes["mcp"]["injection"] == _inj(106, 106)
@@ -147,7 +147,7 @@ def test_the_report_shows_accuracy_and_turns_per_mode(report):
         triage["comparison"]["tasks_codemode_fewer_turns"],
         triage["comparison"]["tasks_tied"],
         triage["comparison"]["tasks_codemode_more_turns"],
-    ) == (1, 3, 1)
+    ) == (2, 3, 1)
     reader = report["suites"]["codemode-reader"]
     assert reader["comparison"]["codemode_adoptable"] is None
     assert "G-03" in reader["modes"]["codemode"]["hypothetical"]
@@ -162,6 +162,12 @@ def test_the_report_shows_accuracy_and_turns_per_mode(report):
         and rows["queue-recovery", "codemode"]["turns"] == 4
     )
     assert rows["queue-recovery", "codemode"]["broker_calls"] == 2
+    # the DNS, lease and guest join (CM-12): four lookups either way, one program for them
+    join = (rows["guest-of-a-name", "mcp"], rows["guest-of-a-name", "codemode"])
+    assert [(r["turns"], r["broker_calls"], r["passed"]) for r in join] == [
+        (6, 4, True),
+        (3, 4, True),
+    ]
     text = agentic.render_report(report)
     assert (
         "codemode-reader codemode [hypothetical]" in text and "adoptable=n/a (hypothetical)" in text
@@ -287,7 +293,7 @@ def test_cli_check_and_out(tmp_path, capsys, monkeypatch):
     assert cli.main(["golden", "codemode", "--fake", "naive", "--check", str(REPORT)]) == 2
     assert cli.main(["golden", "codemode", "--fake", "naive", "--out", str(out)]) == 2
     text = capsys.readouterr().out
-    assert "codemode-triage codemode: passed=5/5" in text and "caught=True" in text
+    assert "codemode-triage codemode: passed=6/6" in text and "caught=True" in text
 
 
 # ---------------------------------------------------------------- the scorers, against mutants
@@ -552,7 +558,15 @@ def test_the_suites_and_the_schema_example_validate():
         doc = sc.load_instance(path)
         assert sc.errors_for(schema, doc, registry) == [], path
         suite = parse_suite(doc)
-        assert suite.modes == ("mcp", "codemode") and suite.grant == ("service.status",)
+        assert suite.modes == ("mcp", "codemode") and "service.status" in suite.grant
+    # the triage suite holds the correlation's read actions too (CM-12); the reader only status
+    assert parse_suite(sc.load_instance(TRIAGE)).grant == (
+        "service.status",
+        "dns.lookup",
+        "dhcp.leases",
+        "hypervisor.guests",
+    )
+    assert parse_suite(sc.load_instance(READER)).grant == ("service.status",)
 
 
 @pytest.mark.parametrize(

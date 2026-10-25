@@ -24,6 +24,57 @@
       "exit": {
         "0": "reported"
       },
+      "id": "broker-example-dhcp-leases",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/dhcp-leases.sh",
+      "purpose": "Example read-only broker handler for dhcp.leases; reports one stand-in lease of the target DHCP server.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-dns-lookup",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/dns-lookup.sh",
+      "purpose": "Example read-only broker handler for dns.lookup; reports a stand-in name and address for the target.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-hypervisor-guests",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/hypervisor-guests.sh",
+      "purpose": "Example read-only broker handler for hypervisor.guests; reports one stand-in guest of the target node.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
       "id": "broker-example-service-restart",
       "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET; the DEMO_API_TOKEN secret",
       "kind": "tool",

@@ -5,11 +5,14 @@
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-49 scripts: 22 check, 11 job, 2 service, 14 tool.
+52 scripts: 22 check, 11 job, 2 service, 17 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
 | `aide-scan` | [`ansible/roles/aide/templates/scan.sh.j2`](../../ansible/roles/aide/templates/scan.sh.j2) | job | platform | Run one scheduled AIDE file integrity check and record its exit status for the role's health hook. | `timer:aide/scan`; `role:aide` | - | 0 the run finished (the scanner's own status is in last-run) |
+| `broker-example-dhcp-leases` | [`examples/broker/handlers/dhcp-leases.sh`](../../examples/broker/handlers/dhcp-leases.sh) | tool | broker | Example read-only broker handler for dhcp.leases; reports one stand-in lease of the target DHCP server. | `manual` | - | 0 reported |
+| `broker-example-dns-lookup` | [`examples/broker/handlers/dns-lookup.sh`](../../examples/broker/handlers/dns-lookup.sh) | tool | broker | Example read-only broker handler for dns.lookup; reports a stand-in name and address for the target. | `manual` | - | 0 reported |
+| `broker-example-hypervisor-guests` | [`examples/broker/handlers/hypervisor-guests.sh`](../../examples/broker/handlers/hypervisor-guests.sh) | tool | broker | Example read-only broker handler for hypervisor.guests; reports one stand-in guest of the target node. | `manual` | - | 0 reported |
 | `broker-example-service-restart` | [`examples/broker/handlers/service-restart.sh`](../../examples/broker/handlers/service-restart.sh) | tool | broker | Example approval-gated broker handler for service.restart; a stand-in that reports what it would restart. | `manual` | - | 0 reported |
 | `broker-example-service-status` | [`examples/broker/handlers/service-status.sh`](../../examples/broker/handlers/service-status.sh) | tool | broker | Example read-only broker handler for service.status; reports a stand-in state for the target. | `manual` | - | 0 reported |
 | `caddy-lint` | [`tools/caddy_lint.py`](../../tools/caddy_lint.py) | check | maintainers | Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2. | `ci:ci/schemas`; `make:caddy-lint` | F-23 | 0 clean; 1 a finding (strip, reset, dial, parse, coverage, generate, semantic, pin or allowlist); 2 usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set) |
