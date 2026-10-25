@@ -25,6 +25,7 @@ import yaml
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.modules import rules as mr
 from homelabnext.modules import scope as ms
+from homelabnext.schemas.module_manifest import NEVER_SHARED
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
@@ -220,6 +221,21 @@ def test_each_negative_fails_where_its_name_says(name):
     errors = sc.errors_for(SCHEMA, sc.load_instance(path), REG)
     assert errors, f"{name} was accepted"
     assert any(e.split(": ", 1)[0] == NEGATIVES[name] for e in errors), errors
+
+
+@pytest.mark.parametrize("target", NEVER_SHARED)
+def test_no_module_merges_config_into_a_never_shared_component(target):
+    """Every never-shared component, the Code Mode sandbox among them (a merged key could widen
+    its egress or environment), is refused as a shared_config target."""
+    path = ROOT / "schemas/platform/negative/module.shared-config-into-a-trust-root.yml"
+    doc = sc.load_instance(path)
+    doc["contributes"]["shared_config"][0]["target"] = target
+    errors = sc.errors_for(SCHEMA, doc, REG)
+    assert any(e.startswith("contributes/shared_config/0/target: ") for e in errors), errors
+
+
+def test_the_code_mode_sandbox_is_never_shared():
+    assert "cap:codemode-executor" in NEVER_SHARED
 
 
 def test_every_negative_file_is_listed():

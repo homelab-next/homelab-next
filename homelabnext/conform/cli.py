@@ -53,7 +53,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
         for row in rows:
             c = row.get("checks")
             n = f"{c['must']}+{c['should']} checks" if c else "no suite"
-            print(f"{row['capability']:<16} {n:<14} {row.get('summary', row.get('error', ''))}")
+            print(f"{row['capability']:<18} {n:<14} {row.get('summary', row.get('error', ''))}")
     return 0
 
 

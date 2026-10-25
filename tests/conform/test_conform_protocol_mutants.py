@@ -106,6 +106,8 @@ REVIEWED = {
         "keys-case-folded",
         "dotted-flat-keyspace",
     },
+    # the CM-4 design review (PR #66): clauses added to match schemas/codemode
+    "codemode-executor": {"no-call-cap", "pause-catchable"},
 }
 
 

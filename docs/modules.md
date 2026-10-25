@@ -324,7 +324,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | agents | an agent's profile | the overlay's `CeilingPolicy` (CODEOWNERS); compiled **only** with a policy | policy owner |
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
-| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration; edge or idp only with `grants.shared_config` | overlay owner |
+| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor; edge or idp only with `grants.shared_config` | overlay owner |
 | egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
