@@ -1,3 +1,6 @@
+---
+summary: 'Strategy to task: the record model, enforced link rules, registers machinery, doctrine policy, measures, RFIs from gaps, graph and hub, real strategy location.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Strategy to task
 

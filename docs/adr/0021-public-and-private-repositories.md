@@ -1,3 +1,6 @@
+---
+summary: A real lab lives in a private overlay read through existing lookups; credentials only in OpenBao; deploys are dispatched by hand.
+---
 # ADR-0021: Public and private repositories
 
 - **Status:** proposed

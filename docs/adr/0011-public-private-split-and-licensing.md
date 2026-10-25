@@ -1,3 +1,6 @@
+---
+summary: Public repo is greenfield with fictional example data and a three-layer leak defence; real inventory, detections and credentials stay private.
+---
 # ADR-0011: What is public, what stays private, and the licence rule
 
 - **Status:** proposed

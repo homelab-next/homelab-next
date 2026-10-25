@@ -1,3 +1,6 @@
+---
+summary: Records get UUIDv7 uids; the number shown with a record is computed from type, parent and order, never stored.
+---
 # ADR-0019: Records are identified by UUIDs; numbers are computed
 
 - **Status:** proposed

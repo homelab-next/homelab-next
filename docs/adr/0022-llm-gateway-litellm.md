@@ -1,3 +1,6 @@
+---
+summary: LiteLLM, run the supported way, is the LLM gateway; its config is generated from the role table and profiles.
+---
 # ADR-0022: Run LiteLLM, the supported way, as the LLM gateway; keep Bifrost as the tested alternate
 
 - **Status:** proposed

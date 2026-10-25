@@ -1,3 +1,6 @@
+---
+summary: Glossary of the project's terms, such as capability, seam, contract, fake and conformance, each defined in a short entry.
+---
 # Glossary
 
 **Capability.** A job the platform needs done, named independently of the product that does it

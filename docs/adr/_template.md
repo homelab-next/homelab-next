@@ -1,3 +1,6 @@
+---
+summary: One line, at most 160 characters - what this ADR decides (ADR-0032; the lint fails an ADR without one).
+---
 # ADR-NNNN: Title in the imperative
 
 - **Status:** proposed | accepted | superseded by ADR-NNNN | rejected

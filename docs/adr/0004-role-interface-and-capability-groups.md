@@ -1,3 +1,6 @@
+---
+summary: Service roles ship argument specs and five tagged task sets; inventory capability groups are what playbooks target, never host names.
+---
 # ADR-0004: Roles declare an interface and inventory groups are capabilities
 
 - **Status:** proposed

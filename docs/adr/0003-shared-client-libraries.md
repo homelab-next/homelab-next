@@ -1,3 +1,6 @@
+---
+summary: One shared client library per data seam; a private copy of a client fails CI.
+---
 # ADR-0003: One shared client library per data seam; private copies are a CI failure
 
 - **Status:** proposed

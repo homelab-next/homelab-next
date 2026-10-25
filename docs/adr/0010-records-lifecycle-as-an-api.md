@@ -1,3 +1,6 @@
+---
+summary: The records lifecycle (propose, find, complete) is written only through the records library, not by moving files; broker handlers come later.
+---
 # ADR-0010: The records lifecycle and register edits are an API, not file moves
 
 - **Status:** proposed

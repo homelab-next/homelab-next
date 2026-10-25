@@ -1,3 +1,6 @@
+---
+summary: 'The registers of lessons, runbooks and invariants: uids, one file per record, the record format, links, events, status changes and lessons as backlog.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Registers: lessons, runbooks and invariants
 

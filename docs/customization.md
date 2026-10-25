@@ -1,3 +1,6 @@
+---
+summary: 'Customizations: first-class records of lab or vendor deviations with an owner, reason and review date, their file, links, conflicts, lifecycle and upstreaming.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Customizations
 

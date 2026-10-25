@@ -1,3 +1,6 @@
+---
+summary: Consumers name model roles; only the LLM gateway maps a role to a backend model.
+---
 # ADR-0007: Consumers name model roles; only the gateway maps roles to backends and model ids
 
 - **Status:** proposed

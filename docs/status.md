@@ -1,3 +1,6 @@
+---
+summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
 

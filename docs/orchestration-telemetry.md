@@ -1,3 +1,6 @@
+---
+summary: 'Orchestration telemetry: the agent job finished event contract, the names-and-numbers privacy rule, data flow, turn sources, hub page, export, recommendations.'
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Orchestration telemetry
 

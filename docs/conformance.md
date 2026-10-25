@@ -1,3 +1,6 @@
+---
+summary: 'The conformance harness: one suite per capability run against any target, how mutants prove a suite can fail, adding a suite, and the X-10 exporter.'
+---
 # Conformance harness
 
 A capability is *replaceable* when a stranger can prove a replacement honours the same contract
