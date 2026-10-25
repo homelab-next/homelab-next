@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The capability list and suite discovery.
 
-The sixteen names are the contract in ``docs/interfaces.md`` section 3 (``hnx conform list``
+The seventeen names are the contract in ``docs/interfaces.md`` section 3 (``hnx conform list``
 prints exactly these).  Suites live in ``conformance/suites/<name_with_underscores>.py`` of a
 source checkout; the harness core in this package works without them and says so clearly when
 they are missing.
@@ -45,8 +45,9 @@ CAPABILITIES: tuple[str, ...] = (
     "detections",
     "context",
     "projects",
+    "codemode-executor",
 )
-#: additional suites that ship with the harness but are not among the sixteen
+#: additional suites that ship with the harness but are not among the seventeen
 EXTENDED: tuple[str, ...] = ("backup", "dns", "edge")
 
 

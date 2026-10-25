@@ -16,3 +16,4 @@ capabilities:
   - detections
   - context
   - projects
+  - codemode-executor
