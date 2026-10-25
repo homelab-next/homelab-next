@@ -74,4 +74,6 @@ def schema_problems(schema: Any) -> list[str]:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
         return [exc.message[:200]]
+    except RecursionError:
+        return ["nested too deeply"]
     return []

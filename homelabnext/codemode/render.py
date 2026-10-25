@@ -24,6 +24,10 @@ A result with properties is a named type (``LaneWrite`` for every lane action, e
 schema returns ``unknown``/``Any``.  Where a stub is wider than the schema, it is so on
 purpose, and the index's ``params`` keeps the exact schema:
 
+* a named result type (an interface and a ``TypedDict``) ignores ``additionalProperties``, and a
+  result object with a property name that is not a plain ASCII identifier (``exit-code``,
+  ``class``) is an inline type instead: quoted keys in TypeScript, ``dict[str, Any]`` in Python;
+* ``$ref`` is local or a shared id only and is never dereferenced: it renders ``unknown``/``Any``;
 * a nested object with ``properties`` is an inline object type in TypeScript but
   ``dict[str, Any]`` in Python (no nested ``TypedDict``);
 * an object with both ``properties`` and a typed ``additionalProperties`` gets an ``unknown``
@@ -46,7 +50,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import keyword
 import os
+import re
 import secrets
 import stat
 from collections.abc import Iterable, Mapping
@@ -283,11 +289,22 @@ def _class_name(*parts: str) -> str:
     return "".join(p.capitalize() for part in parts for p in part.split("_") if p)
 
 
+def _plain_name(name: Any) -> bool:
+    """A property name safe to emit bare in a named type: an ASCII identifier, not a keyword."""
+    return (
+        isinstance(name, str)
+        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+        and not keyword.iskeyword(name)
+    )
+
+
 def _result_name(m: Method) -> str | None:
     """The named type of an action's result: ``LaneWrite`` for every lane action (one shape), else
     ``<Namespace><Method>Result`` for a result object with properties, else ``None``."""
     if not (m.result and m.result.get("type") == "object" and m.result.get("properties")):
         return None
+    if not all(_plain_name(n) for n in m.result["properties"]):
+        return None  # a key that is not a plain identifier: an inline type with quoted keys
     return "LaneWrite" if m.kind == "lane" else _class_name(m.namespace, m.method) + "Result"
 
 

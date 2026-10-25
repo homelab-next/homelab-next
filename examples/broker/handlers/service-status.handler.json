@@ -16,6 +16,27 @@
     "type": "object"
   },
   "requires_approval": false,
+  "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "params": {
+        "type": "object"
+      },
+      "service": {
+        "description": "the target the status is for",
+        "type": "string"
+      },
+      "state": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "service",
+      "state",
+      "params"
+    ],
+    "type": "object"
+  },
   "tier": "read",
   "timeout_s": 10
 }
