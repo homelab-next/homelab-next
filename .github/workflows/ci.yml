@@ -289,6 +289,8 @@ jobs:
         run: python -m homelabnext.cli docs capabilities check
       - name: knowledge graph current, no dangling edge or duplicate id (L-05)
         run: python -m homelabnext.cli graph check
+      - name: Code Mode stubs and search index match the example broker manifest (ADR-0031, CM-3)
+        run: python -m homelabnext.cli codemode gen --check
       - name: hnx entry point
         run: |
           hnx --help
