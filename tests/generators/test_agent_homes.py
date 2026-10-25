@@ -40,7 +40,7 @@ def test_the_example_controller_agrees_with_its_gateway_spec(capsys):
 
 def test_the_fail_fixture_breaks_each_rule_once():
     problems = ah.controller_problems(gw.load_spec(FAIL / "gateway.yml"))
-    assert len(problems) == 5, problems
+    assert len(problems) == 7, problems
     by = {p.split(" (", 1)[0].removeprefix("controller backend "): p for p in problems}
     assert (
         "max_context 32768 differs from mdl:main-reasoner-a's max_context_tokens 131072"
@@ -56,6 +56,16 @@ def test_the_fail_fixture_breaks_each_rule_once():
         "mdl:main-reasoner-e is not bound to svc:vllm-e alone (bound to svc:vllm-a, svc:vllm-e)"
         in (by["vllm-e"])
     )
+    engine = "https://vllm-f.svc.example.internal:8000/v1"  # no-raw-endpoint: allow the fixture's engine under test
+    assert (
+        f"model.base_url '{engine}' is not the gateway's "
+        "'https://llm-gateway.example.internal/v1'" in by["vllm-f"]
+    )
+    # vllm-g's base_url is the gateway's spelled with case, :443 and a trailing slash: no finding
+    assert (
+        "context_length 131072 is not a whole number of tokens up to mdl:main-reasoner-g's"
+        in (by["vllm-g"])
+    )
 
 
 def test_check_fails_on_the_controller_alone(tmp_path, capsys):
@@ -66,7 +76,7 @@ def test_check_fails_on_the_controller_alone(tmp_path, capsys):
     capsys.readouterr()
     assert hnx(["gen", "gateway", "render", str(spec), str(tmp_path / "out"), "--check"]) == 1
     err = capsys.readouterr().err
-    assert err.count("gateway: controller backend ") == 5, err
+    assert err.count("gateway: controller backend ") == 7, err
 
 
 def _with(tmp_path: Path, controller: dict, homes: dict[str, str] | None = None) -> gw.Spec:
@@ -108,6 +118,81 @@ def test_a_missing_max_context_and_a_missing_home_file_are_refused(tmp_path):
 def test_the_cloud_entry_is_not_a_gateway_backend_and_no_local_one_is_refused(tmp_path):
     spec = _with(tmp_path, {"backends": {"cloud": {"name": "cloud-fallback"}}})
     assert ah.controller_problems(spec)[0].endswith("declares no local backend")
+
+
+def _set_model(spec: gw.Spec, name: str, **model) -> None:
+    path = spec.controller.homes[name] / "config.yaml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["model"].update(model)
+    doc["model"] = {k: v for k, v in doc["model"].items() if v is not None}
+    path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+
+OTHER_PORT = "https://llm-gateway.example.internal:8443/v1"  # no-raw-endpoint: allow under test
+
+EXAMPLE_CTL = {
+    "backends": {
+        "local": {"name": "vllm-a", "max_context": 131072},
+        "local_fallback": {"name": "vllm-b", "max_context": 65536},
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "words"),
+    [
+        ({"base_url": None}, "model.base_url None is not the gateway's"),
+        ({"base_url": "http://llm-gateway.example.internal/v1"}, "model.base_url 'http://"),
+        ({"base_url": "https://llm-gateway.example.internal/v2"}, "is not the gateway's"),
+        ({"base_url": OTHER_PORT}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/v1?x=1"}, "is not the gateway's"),
+        ({"base_url": ["https://llm-gateway.example.internal/v1"]}, "is not the gateway's"),
+        ({"context_length": 131073}, "context_length 131073 is not a whole number"),
+        ({"context_length": 0}, "context_length 0 is not"),
+        ({"context_length": True}, "context_length True is not"),
+        ({"context_length": "131072"}, "context_length '131072' is not"),
+    ],
+)
+def test_a_home_off_the_gateway_or_past_its_role_s_context_is_refused(tmp_path, model, words):
+    spec = _with(tmp_path, EXAMPLE_CTL)
+    _set_model(spec, "vllm-a", **model)
+    problems = ah.controller_problems(spec)
+    assert len(problems) == 1 and words in problems[0], problems
+    assert problems[0].startswith("controller backend vllm-a ")
+
+
+def test_a_shorter_context_and_the_gateway_url_spelled_differently_pass(tmp_path):
+    spec = _with(tmp_path, EXAMPLE_CTL)
+    _set_model(spec, "vllm-a", base_url="HTTPS://llm-gateway.EXAMPLE.internal:443/v1/")
+    _set_model(spec, "vllm-b", context_length=32768)  # compacts sooner: allowed
+    assert ah.controller_problems(spec) == []
+    _set_model(spec, "vllm-b", context_length=None)  # unset: the agent asks the endpoint
+    assert ah.controller_problems(spec) == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        None,
+        "",
+        "http://llm-gateway.example.internal/v1",
+        "https:///v1",
+        "https://192.0.2.10/v1",  # no-raw-endpoint: allow documentation address under test
+        "https://[2001:db8::1]/v1",
+        "https://user:pw@llm-gateway.example.internal/v1",
+        "https://llm-gateway.example.internal/v1?x=1",
+        "https://llm-gateway.example.internal:port/v1",
+    ],
+)
+def test_the_controller_block_names_the_gateway_by_https_host_name(tmp_path, url):
+    d = tmp_path / "s"
+    shutil.copytree(EXAMPLE, d, ignore=shutil.ignore_patterns("gateway"))
+    doc = yaml.safe_load((d / "gateway.yml").read_text(encoding="utf-8"))
+    doc["controller"]["base_url"] = url
+    (d / "gateway.yml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(d / "gateway.yml")
+    assert any(p.startswith("controller.base_url: ") for p in exc.value.problems), exc.value
 
 
 @pytest.mark.parametrize(

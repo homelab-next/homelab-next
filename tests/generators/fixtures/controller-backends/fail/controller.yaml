@@ -13,3 +13,7 @@ backends:
       max_context: 32768
     - name: vllm-e              # its home's role is bound to svc:vllm-a as well
       max_context: 131072
+    - name: vllm-f              # its home's base_url is the engine, not the gateway
+      max_context: 65536
+    - name: vllm-g              # its home's context_length is past its role's 32768
+      max_context: 32768

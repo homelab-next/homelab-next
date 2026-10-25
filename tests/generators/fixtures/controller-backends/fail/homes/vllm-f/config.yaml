@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+model:
+  default: main-reasoner-f
+  base_url: https://vllm-f.svc.example.internal:8000/v1

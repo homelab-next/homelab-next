@@ -44,6 +44,26 @@
         }
       ],
       "max_context_tokens": 131072
+    },
+    "main-reasoner-f": {
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:vllm-f",
+          "model_id": "example-27b"
+        }
+      ],
+      "max_context_tokens": 65536
+    },
+    "main-reasoner-g": {
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:vllm-g",
+          "model_id": "example-4b"
+        }
+      ],
+      "max_context_tokens": 32768
     }
   }
 }

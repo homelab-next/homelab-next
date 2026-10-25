@@ -166,9 +166,9 @@ gateway's config.
 |---|---|---|
 | backend `name` (`vllm-a`) | `svc:vllm-a`, a backend in the gateway spec (`locality: local`, `port`), bound by one or more roles | the gateway spec, and `bindings[].backend` in the role table |
 | `HERMES_HOME/config.yaml` `model.default` = engine model id | `model.default` = the role alias (`main-reasoner`) | the role's `bindings[].model_id` holds the engine id |
-| `model.base_url` = engine URL | `model.base_url` = `https://llm-gateway.example.internal/v1` | the registry (`llm-gateway` capability) |
+| `model.base_url` = engine URL | `model.base_url` = `https://llm-gateway.example.internal/v1` | the gateway spec's `controller.base_url`, held by `--check` (Checks, below) |
 | `model.api_key` (a placeholder today) | the agent's virtual key (for `profile:reader`: key `agent-reader`, secret `secret:llm-gateway/key-reader`) | the gateway's `keys.json`, one key per profile |
-| `model.context_length` | the role's `max_context_tokens` | the role table |
+| `model.context_length` | the role's `max_context_tokens`, or less (the agent then compacts sooner) | the role table, held by `--check` |
 | backend `max_context` (admission, `min_context` affinity) | must equal the bound role's `max_context_tokens` | `hnx gen gateway render --check` with a `controller:` block (Checks, below) |
 | backend `base_url` (passthrough target, and the socket peer that progress-liveness matches, `internal/hermesagent/policy.go:262-265`) | the gateway URL, because the `hermes` sockets now go to the gateway. The passthrough path is then removed: non-agent callers go to the gateway directly. | controller config |
 | backend `load_probe_urls`, `health_url` | **unchanged: they stay on the engine.** Admission must see engine KV load, and a gateway hides which engine is busy. | controller config |
@@ -208,8 +208,10 @@ gateway config generated from them (`gateway/`). The repository had no controlle
 of its own to read, so this example is the input. `make gateway-check` runs the check on it.
 
 - **`hnx gen gateway render SPEC OUT --check` reads the controller's backend list** when the spec
-  has a `controller:` block (`config:` names the controller's config file, and `homes:` maps each
-  backend name to its `HERMES_HOME`). The backends are the `local` and `local_fallback`
+  has a `controller:` block (`config:` names the controller's config file, `base_url:` the
+  gateway's URL as the homes name it, and `homes:` maps each backend name to its `HERMES_HOME`).
+  `base_url` is required: an `https` URL with a host name, never an IP address, with no
+  credentials, query or fragment. The backends are the `local` and `local_fallback`
   entries under `backends` and every entry of its `additional` list. Its `cloud` entry is not
   read: it is the session-level cloud re-run, which reaches the gateway through a cloud home's
   role, not as a gateway backend. The check fails when:
@@ -218,6 +220,12 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
     bound to that backend's `svc:` alone (a role bound to two engines would let the gateway move
     a session between them; see the paragraph after the mapping table);
   - the backend's `max_context` is missing or differs from that role's `max_context_tokens`;
+  - the home's `model.base_url` is not the block's `base_url` (scheme and host compared without
+    case, the default port and a trailing `/` ignored), so the home's calls would skip the
+    gateway's keys, limits and locality rule;
+  - the home's `model.context_length` is set and is not a whole number of tokens up to that
+    role's `max_context_tokens`. Less is allowed, since the agent only compacts sooner; more
+    would fill a context the engine does not serve;
   - a backend has no home, a home names no backend, or a backend is declared twice.
 
   `homelabnext/generators/agent_homes.py` (`controller_problems`) holds the rules. The tests are
@@ -251,9 +259,9 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   `0.0.0.0` and version-like dotted numbers, but a home has no reason to name either, so here
   they count.
 
-  A-14 does not prove that `model.base_url` *is* the gateway, only that it names no address, and
-  it does not compare `model.context_length` with the role's `max_context_tokens`. Both are
-  follow-ups, not built here.
+  A-14 itself proves only that a home names no address; that each controller home's
+  `model.base_url` *is* the gateway, and that its `model.context_length` fits its role, is the
+  `--check` above (`make gateway-check`).
 
 ## Additive `orchestration` contract features
 
