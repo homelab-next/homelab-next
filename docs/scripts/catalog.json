@@ -296,10 +296,11 @@
     },
     {
       "exit": {
-        "0": "stopped cleanly"
+        "0": "stopped cleanly",
+        "2": "a host other than loopback without --allow-any-host"
       },
       "id": "fake-openai-server",
-      "inputs": "--host, --port, --model",
+      "inputs": "--host, --port, --model, --allow-any-host",
       "kind": "service",
       "language": "python",
       "outputs": "the HTTP API; nothing on disk",
