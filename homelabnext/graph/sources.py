@@ -14,6 +14,7 @@ the storage format can change in one place.
 from __future__ import annotations
 
 import ast
+import errno
 import json
 import re
 import subprocess
@@ -1318,14 +1319,22 @@ def read_docs(b: Builder) -> None:
                 b.path_ref(src, t, "links", rel)
 
 
+#: errors that mean "this text names no path the system can look up", never "the page is missing"
+_UNLOOKUPABLE = {errno.ENAMETOOLONG, errno.ELOOP, errno.EINVAL}
+
+
 def _lookup(p: Path, test: Callable[[Path], bool]) -> bool:
     """``test(p)`` (``Path.exists``, ``Path.is_file``), false for a path the system cannot even
     look up (a name over the length limit, or one holding a NUL): a link's target is document
     text, never a trusted path, and one bad link must not take the whole build down."""
     try:
         return test(p)
-    except (OSError, ValueError):
+    except ValueError:  # a NUL (older pathlib raises instead of answering False)
         return False
+    except OSError as e:
+        if e.errno in _UNLOOKUPABLE:
+            return False
+        raise  # a real I/O problem (a permission error) must not read as a missing page
 
 
 def _norm(p: PurePosixPath) -> str:
