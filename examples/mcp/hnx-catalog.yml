@@ -3,7 +3,7 @@
 # like every example: the package, image and hash values name nothing real.
 id: hnx-catalog
 description: 'Read-only structured answers from this repository: capability contracts, schemas, the registry, the
-  knowledge graph, context, lessons due, terms, invariants (hnx mcp serve, docs/mcp.md).'
+  knowledge graph, context in levels (summaries, outlines, sections), lessons due, terms, invariants (hnx mcp serve, docs/mcp.md).'
 owner: platform-team
 status: active
 origin:
@@ -26,10 +26,12 @@ tools:
 - {name: invariants_status, classes: [read], approval: false}
 - {name: lessons_due, classes: [read], approval: false}
 - {name: list_capabilities, classes: [read], approval: false}
+- {name: outline, classes: [read], approval: false}
 - {name: related, classes: [read], approval: false}
+- {name: section, classes: [read], approval: false}
 - {name: terms, classes: [read], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:a767e35fbe67'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:a767e35fbe67'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:a767e35fbe67'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-25', verdict: pass, digest: 'sha256:9153bf7fdb9b'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-25', verdict: pass, digest: 'sha256:9153bf7fdb9b'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-25', verdict: pass, digest: 'sha256:9153bf7fdb9b'}

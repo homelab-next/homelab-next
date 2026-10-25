@@ -11,6 +11,10 @@ links DIR... [--check]
 review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json]
                      what the lesson review should do (missing reviews, retire, incorporate,
                      supersede, update, keep); warns and exits 0 unless --strict
+summaries PATH... [--missing] [--json]
+                     check every front-matter `summary:` of the records and pages under PATH (one
+                     line, <= 160 chars, ADR-0032): a malformed one fails (exit 1), a missing one
+                     is counted as a warning (--missing lists them)
 events migrate PATH...
                      move inline reviews/recurrences of a record directory (or a docs/systems
                      directory's reviews) into <record>.events/ files, losslessly
@@ -56,6 +60,10 @@ def main(argv=None) -> int:
     rv.add_argument("--json", action="store_true", help="machine-readable output")
     rv.add_argument("--results", help="invariants results JSON (default SRC/...results.json)")
     rv.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
+    sm.add_argument("paths", nargs="+")
+    sm.add_argument("--json", action="store_true", help="machine-readable output")
+    sm.add_argument("--missing", action="store_true", help="also list what has no summary")
     evp = sub.add_parser("events", help="sidecar events: migrate inline state, add an event")
     esub = evp.add_subparsers(dest="ecmd", required=True)
     em = esub.add_parser("migrate", help="inline reviews/recurrences -> <record>.events/")
@@ -77,6 +85,8 @@ def main(argv=None) -> int:
             return _events(ns)
         if ns.cmd == "decide":
             return _decide(ns)
+        if ns.cmd == "summaries":
+            return _summaries(ns)
         if ns.cmd == "build":
             for p in build_all(ns.src, ns.out, ns.results, ns.policy):
                 print(p)
@@ -111,6 +121,20 @@ def main(argv=None) -> int:
         print(f"[registers] FATAL: {ex}", file=sys.stderr)
         return 1
     return 0
+
+
+def _summaries(ns) -> int:
+    from dataclasses import asdict
+
+    from .summaries import lint_summaries
+
+    rep = lint_summaries(ns.paths)
+    if ns.json:
+        print(json.dumps(asdict(rep), indent=2, sort_keys=True))
+    else:
+        for line in rep.lines(missing=ns.missing):
+            print(f"[registers] {line}")
+    return 0 if rep.ok else 1
 
 
 def _events(ns) -> int:
