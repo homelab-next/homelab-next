@@ -11,7 +11,7 @@ import os
 import threading
 
 import pytest
-from test_runner import AGENT, _example, _fake, _run
+from test_runner import AGENT, T0, _example, _fake, _run
 
 from conformance.protocols.broker import CODEMODE_EXECUTE
 from homelabnext.codemode.journal import JournalError
@@ -494,16 +494,19 @@ def test_dripping_connections_do_not_lock_the_program_out(tmp_path, executor):
 
 
 def test_the_peer_uid_is_read_from_the_connection_and_only_established(tmp_path):
-    """Probe uid: the listener's address broke a 0.0.0.0 bind, and closing rows read as uid 0."""
+    """Probe uid: the lookup used the listener's address (which broke a wildcard bind), and
+    closing rows read as uid 0.  The listener here is bound to loopback only; the connection's own
+    address (conn.getsockname()) is what the lookup must use, and the wildcard address, which a
+    listener bound to all interfaces would report, must not match."""
     import socket as _socket
 
     from homelabnext.codemode.runner import _tcp_peer_uid
 
+    loopback = "127.0.0.1"  # no-raw-endpoint: allow loopback, the test's own listener
     lst = _socket.socket()
-    lst.bind(("0.0.0.0", 0))
+    lst.bind((loopback, 0))
     lst.listen(2)
     port = lst.getsockname()[1]
-    loopback = "127.0.0.1"  # no-raw-endpoint: allow loopback, the test's own listener
     cli = _socket.create_connection((loopback, port))
     conn, addr = lst.accept()
     try:
@@ -558,3 +561,180 @@ def test_an_interrupted_run_is_found_by_its_instance_in_any_namespace(tmp_path, 
     other = {"instance": "run-0123456789abcdef", "pid": 1, "pid_ns": "elsewhere", "host": "x"}
     runner.store.update(AGENT, "exec-0001", runner.clock(), state="running", owner=other)
     assert runner.sweep(force=True)["interrupted"] == 1
+
+
+# -- round 4 ---------------------------------------------------------------------------------------
+
+
+def test_a_settled_refusal_of_the_pending_step_is_what_resumes_replay(tmp_path, executor):
+    """Probe settled-refusal: a token_run refused without ids was journalled as the step's
+    settled entry, but replay fell back to the answer's pending record: the next resume replayed
+    a pending call, failed its schema and orphaned the request it had paused on."""
+    from conformance.protocols.broker import BrokerError
+
+    ran, cmds = _counted("cm.a", "cm.b")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    code = (
+        "try:\n"
+        "    broker.submit('cm.a', {'name': 'a'})\n"
+        "except broker.Error as exc:\n"
+        "    print('refused', exc.reason)\n"
+        "broker.submit('cm.b', {'name': 'b'})\n"
+    )
+    assert _run(b, code)["status"] == "paused"
+    orig, once = b.token_run, []
+
+    def token_run(*a, **kw):
+        if not once:
+            once.append(1)
+            err = BrokerError("rate limited")
+            err.reason = "rate-limited"
+            raise err
+        return orig(*a, **kw)
+
+    b.token_run = token_run
+    second = _run(b, code, resume=True)
+    assert second["status"] == "paused", second
+    assert [(c["step"], c["outcome"], c.get("reason")) for c in second["calls"]] == [
+        (0, "error", "rate-limited"),
+        (1, "pending", None),
+    ]
+    third = _run(b, code, resume=True)
+    assert third["status"] == "ok", third
+    assert [(c["step"], c["outcome"], c.get("replayed", False)) for c in third["calls"]] == [
+        (0, "error", True),
+        (1, "ok", False),
+    ]
+    assert ran == {"cm.a": [], "cm.b": ["b"]}
+
+
+def _flooded(executor, flooders):
+    """Wrap ``executor.run`` so ``flooders`` threads keep opening (and holding) connections to
+    the run's relay while the program runs."""
+    import socket as _socket
+    import threading
+    import time
+
+    orig, stop = executor.run, threading.Event()
+
+    def flood(host, port):
+        held = []
+        while not stop.is_set():
+            try:
+                held.append(_socket.create_connection((host, port)))
+                if len(held) > 8:
+                    held.pop(0).close()
+            except OSError:
+                time.sleep(0.001)
+        for s in held:
+            s.close()
+
+    def run(code, *, broker, **kw):
+        threads = [
+            threading.Thread(target=flood, args=(broker.host, broker.port), daemon=True)
+            for _ in range(flooders)
+        ]
+        for t in threads:
+            t.start()
+        time.sleep(0.3)
+        try:
+            return orig(code, broker=broker, **kw)
+        finally:
+            stop.set()
+
+    executor.run = run
+    return orig
+
+
+@pytest.mark.parametrize("slow", [False, True])
+def test_an_evicted_connection_is_never_served(tmp_path, executor, monkeypatch, slow):
+    """Probe evict: eviction cut off a connection whose line was already in, the worker still
+    ran serve_call, and the program got broker-unreachable for a call that ran (a retry would
+    have been a second side effect).  Now "evict" and "start serving" are one check-and-set: a
+    call the program was told failed never ran, and every call that ran is one it got back."""
+    import time
+
+    import homelabnext.codemode.runner as R
+
+    if slow:  # widen the window between reading the line and serving it
+        serve = R._Relay._serve
+
+        def slowly(self, conn, state):
+            time.sleep(0.2)
+            return serve(self, conn, state)
+
+        monkeypatch.setattr(R._Relay, "_serve", slowly)
+    ran, cmds = _counted("cm.a")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    orig = _flooded(executor, 12)
+    n = 8 if slow else 40
+    code = (
+        "out = []\n"
+        f"for i in range({n}):\n"
+        "    try:\n"
+        "        out.append(broker.call('cm.a', {'name': str(i)}))\n"
+        "    except broker.Error as exc:\n"
+        "        out.append('ERR:' + exc.reason)\n"
+        "result = out\n"
+    )
+    try:
+        res = _run(b, code, wall_s=60)
+    finally:
+        executor.run = orig
+    value = res.get("value") or []
+    told_failed = [str(i) for i, v in enumerate(value) if str(v).startswith("ERR")]
+    assert not set(told_failed) & set(ran["cm.a"]), (
+        f"calls {sorted(set(told_failed) & set(ran['cm.a']))} ran while the program was told "
+        "they failed"
+    )
+    got = [v for v in value if not str(v).startswith("ERR")]
+    assert got == ran["cm.a"], "a call ran that the program never got back"
+    assert len([c for c in res["calls"] if c["outcome"] == "ok"]) == len(ran["cm.a"])
+
+
+def test_the_sweep_prunes_the_locks_of_instances_gone(tmp_path):
+    from homelabnext.codemode.journal import Journal
+
+    j = Journal(tmp_path / "runner")
+    mine = j.instance_id()
+    gone = j.root / "live" / "run-00000000deadbeef"
+    gone.write_bytes(b"")  # an instance file nobody holds: its process is gone
+    assert j.sweep(T0)["instances"] == 1
+    assert not gone.exists() and (j.root / "live" / mine).exists() and j.instance_alive(mine)
+
+
+def test_a_refusal_with_a_malformed_reason_is_a_journal_error(tmp_path, executor):
+    _ran, cmds = _counted("cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    b.register("cm.other", lambda **kw: 1, {})
+    b.allow("profile:admin", ["cm.other"])
+    code = (
+        "try:\n"
+        "    broker.call('cm.other', {})\n"
+        "except broker.Denied:\n"
+        "    pass\n"
+        "broker.submit('cm.b', {'name': 'x'})\n"
+    )
+    assert _run(b, code)["status"] == "paused"
+    entry = runner.store._dir(AGENT, "exec-0001") / "000000-0.json"
+    doc = json.loads(entry.read_text())
+    assert doc["refusal"]["reason"] == "token-action-not-allowed"
+    doc["refusal"]["reason"] = "Not A Reason!"
+    entry.write_text(json.dumps(doc))
+    with pytest.raises(JournalError, match="neither record nor refusal"):
+        runner.store.steps(AGENT, "exec-0001")
+    res = _run(b, code, resume=True)
+    assert res["status"] == "error" and res["error"]["kind"] == "broker", res
+
+
+def test_a_fault_of_the_runner_is_named_as_one(tmp_path, executor, monkeypatch):
+    _ran, cmds = _counted("cm.a")
+    b, runner = _fake(tmp_path, executor, cmds)
+    monkeypatch.setattr(runner, "_answered", lambda *a, **kw: {}["boom"])
+    res = _run(
+        b, "try:\n    broker.call('cm.a', {'name': 'a'})\nexcept broker.Error as e:\n    pass\n"
+    )
+    assert res["calls"] == [
+        {"step": 0, "action": "cm.a", "outcome": "error", "reason": "runner-fault"}
+    ]
+    assert "runner-fault" in res["error"]["message"]

@@ -127,7 +127,8 @@
               "token-request-not-paused",
               "request-not-approved",
               "broker-unreachable",
-              "rate-limited"
+              "rate-limited",
+              "runner-fault"
             ]
           }
         }

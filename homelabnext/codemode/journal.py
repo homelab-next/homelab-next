@@ -77,6 +77,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import threading
@@ -86,7 +87,12 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.broker import validation
-from homelabnext.broker.state import _instance_held, new_id, write_exclusive, write_temp
+from homelabnext.broker.state import (
+    _instance_held,
+    hold_instance_lock,
+    write_exclusive,
+    write_temp,
+)
 from homelabnext.broker.tokens import execution_key
 
 __all__ = [
@@ -128,6 +134,7 @@ DELIVERED = frozenset(
         "run-stopped",
     }
 )
+_REASON_RE = re.compile(r"[a-z][a-z0-9-]{0,63}")
 #: the entry files of one step, by suffix
 _KINDS = ("i", "0", "r", "1")
 
@@ -237,14 +244,7 @@ class Journal:
             if self._instance is None:
                 live = self.root / "live"
                 _real_dir(live)
-                iid = new_id("run")
-                fd = os.open(live / iid, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
-                except BaseException:
-                    os.close(fd)
-                    raise
-                self._instance = (iid, fd)
+                self._instance = hold_instance_lock(live, "run")
             return self._instance[0]
 
     def instance_alive(self, instance: Any) -> bool:
@@ -442,6 +442,7 @@ class Journal:
                         isinstance(refusal, dict)
                         and refusal.get("outcome") in ("denied", "error")
                         and isinstance(refusal.get("reason"), str)
+                        and _REASON_RE.fullmatch(refusal["reason"])
                     ):
                         raise JournalError(
                             f"step {step}: an answer with neither record nor refusal"
@@ -545,8 +546,17 @@ class Journal:
         (see the module doc)."""
         finished_before = _stamp(now - timedelta(days=self.retention_days))
         paused_before = _stamp(now - timedelta(days=self.paused_retention_days))
-        counts = {"interrupted": 0, "removed": 0}
+        counts = {"interrupted": 0, "removed": 0, "instances": 0}
         with self._lock:
+            live = self.root / "live"
+            if live.is_dir() and not live.is_symlink():  # the lock files of instances gone
+                for f in sorted(live.iterdir()):
+                    if f.name.startswith(".") or f.is_symlink() or not f.is_file():
+                        continue  # one being created (locked, then renamed), or not ours
+                    if not self.instance_alive(f.name):
+                        with contextlib.suppress(FileNotFoundError):
+                            f.unlink()
+                            counts["instances"] += 1
             for d in sorted(self.root.iterdir()):
                 if d.is_symlink() or not d.is_dir() or d.name == "live":
                     continue

@@ -188,7 +188,7 @@ RESULT_SCHEMA = "codemode/execution_result"
 #: handlers"; ``BrokerService._run_exec``): what :func:`unwrap` takes apart for an exec action
 ENVELOPE_KEYS = frozenset({"exit_code", "output", "truncated", "stderr_bytes"})
 #: reasons of a call the broker refused before it built a request: no request ids
-ID_LESS_REASONS = frozenset({*TOKEN_REFUSALS, "broker-unreachable", "rate-limited"})
+ID_LESS_REASONS = frozenset({*TOKEN_REFUSALS, "broker-unreachable", "rate-limited", "runner-fault"})
 #: the broker's success reasons, never a denied call's (``schemas/codemode``)
 _SUCCESS = frozenset({"allowed", "approved", "approval-required"})
 _REASON_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -336,6 +336,7 @@ class _Run:
     local_refusals: int = 0  # the program's own token-bearing requests the relay refused
     foreign: int = 0  # lines without the run's token (dropped past MAX_FOREIGN_LINES)
     pending_unjournalled: bool = False  # a pending answer the journal could not record
+    fault: bool = False  # the run stopped on a fault of the runner's own (not the journal's)
     closed: bool = False  # the relay has stopped: nothing changes the run any more
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -694,10 +695,12 @@ class Runner:
 
     def _status(self, run: _Run, res: Any, error: tuple[str, str] | None) -> dict[str, Any]:
         if run.failed is not None:
-            msg = (
-                f"step {run.failed}: the step journal could not record it; the run was stopped "
-                "and the execution does not resume"
+            why = (
+                "the runner failed after sending it (runner-fault)"
+                if run.fault
+                else "the step journal could not record it"
             )
+            msg = f"step {run.failed}: {why}; the run was stopped and the execution does not resume"
             return {"status": "error", "error": {"kind": "broker", "message": msg}}
         if run.unknown is not None:
             msg = (
@@ -818,23 +821,28 @@ class Runner:
         so the run stops (``run.failed``), the call is reported, and the run ends ``error``."""
         log.error("codemode: step %d failed in the runner (%s)", step, type(exc).__name__)
         run.failed = step
+        run.fault = True
         if not any(c["step"] == step for c in run.calls):
             call = {"step": step, "action": action, "outcome": "error"}
             if target is not None:
                 call["target"] = target
-            call["reason"] = "broker-unreachable"  # as far as the record can tell
+            call["reason"] = "runner-fault"  # the runner's own failure; ids, if any, are lost
             run.calls.append(call)
-        return _err("journal-unavailable")
+        return _err("runner-fault")
 
     # -- replay
+    @staticmethod
+    def _latest(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+        """The entry of a step that counts: its settled one whenever there is one (a record, or
+        the refusal of the pending request's run), else its answer."""
+        return entry.get("settled") or entry["answer"]
+
     def _replayed_call(self, run, step, entry) -> dict[str, Any]:
-        answer = entry["answer"]
-        settled = entry.get("settled") or {}
-        doc = settled if settled.get("record") is not None else answer
+        doc = self._latest(entry)
         rec = doc.get("record")
         if rec is None:
             intent = entry["intent"]["intent"]
-            refusal = answer["refusal"]
+            refusal = doc["refusal"]
             call = {"step": step, "action": intent["action"]}
             if intent.get("target") is not None:
                 call["target"] = intent["target"]
@@ -875,8 +883,7 @@ class Runner:
         run.calls.append(call)
         if call.get("reason") == "call-cap-reached":
             run.capped = True
-        settled = entry.get("settled") or {}
-        doc = settled if settled.get("record") is not None else answer
+        doc = self._latest(entry)
         rec = doc.get("record")
         if rec is not None and rec["outcome"] == "ok":
             return self._reply_ok(run, action, rec.get("result"), rec, doc)[0]
@@ -1108,8 +1115,10 @@ class _Relay:
         self.timeout = max(0.5, min(READ_TIMEOUT_S, run.wall_s))
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self._stop = threading.Event()
-        #: (thread, connection, whether it is still reading its request) of each connection
-        self._workers: list[tuple[threading.Thread, socket.socket, list[bool]]] = []
+        #: (thread, connection, its state) of each connection: ``reading`` its request,
+        #: ``serving`` it (never cut off by a newcomer), or ``evicted`` (never served); a state
+        #: changes only under ``_guard``, so "start serving" and "evict" are one check-and-set
+        self._workers: list[tuple[threading.Thread, socket.socket, list[str]]] = []
         self._guard = threading.Lock()
         self._thread = threading.Thread(target=self._loop, name="codemode-relay", daemon=True)
 
@@ -1129,10 +1138,14 @@ class _Relay:
         self._thread.join()
         with self._guard:
             workers = list(self._workers)
-        for t, conn, reading in workers:  # the program has ended: a request still being read
-            if reading[0] and t.is_alive():  # is nobody's, and is cut off now
-                with contextlib.suppress(OSError):
-                    conn.shutdown(socket.SHUT_RDWR)
+            cut = []
+            for _t, conn, state in workers:  # the program has ended: a request still being read
+                if state[0] == "reading":  # is nobody's: it is never served, and cut off now
+                    state[0] = "evicted"
+                    cut.append(conn)
+        for conn in cut:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
         for t, _conn, _reading in workers:
             t.join(timeout=self.timeout)
         for t, conn, _reading in workers:
@@ -1163,35 +1176,40 @@ class _Relay:
                     conn.sendall(json.dumps(_err("busy")).encode() + b"\n")
                 conn.close()
                 continue
-            reading = [True]
-            t = threading.Thread(target=self._worker, args=(conn, reading), daemon=True)
+            state = ["reading"]
+            t = threading.Thread(target=self._worker, args=(conn, state), daemon=True)
             with self._guard:
-                self._workers = [w for w in self._workers if w[0].is_alive()] + [(t, conn, reading)]
+                self._workers = [w for w in self._workers if w[0].is_alive()] + [(t, conn, state)]
             t.start()
 
     def _evict(self) -> bool:
         """Every slot is taken: cut off the oldest connection still reading its request (one
         that dripped instead of sending its line), so a newcomer, the program's next call, is
         served; True once a slot is free."""
-        with self._guard:
-            oldest = next((c for _t, c, reading in self._workers if reading[0]), None)
+        with self._guard:  # chosen and marked in one step with the worker's own "start serving"
+            oldest = None
+            for _t, c, state in self._workers:
+                if state[0] == "reading":
+                    state[0] = "evicted"  # it will never call serve_call
+                    oldest = c
+                    break
         if oldest is None:
             return False
         with contextlib.suppress(OSError):
             oldest.shutdown(socket.SHUT_RDWR)
         return self._slots.acquire(timeout=self.timeout)
 
-    def _worker(self, conn: socket.socket, reading: list[bool]) -> None:
+    def _worker(self, conn: socket.socket, state: list[str]) -> None:
         try:
             with conn:
                 try:
-                    self._serve(conn, reading)
+                    self._serve(conn, state)
                 except Exception:  # one bad connection never ends the relay
                     log.error("codemode: a relayed call failed")
         finally:
             self._slots.release()
 
-    def _serve(self, conn: socket.socket, reading: list[bool]) -> None:
+    def _serve(self, conn: socket.socket, state: list[str]) -> None:
         deadline = self.runner.monotonic() + self.timeout
         buf = b""
         try:
@@ -1206,7 +1224,10 @@ class _Relay:
                 buf += chunk
         except OSError:  # a peer that sends nothing in time holds no slot past the deadline
             return
-        reading[0] = False  # its request is in: no newcomer evicts it any more
+        with self._guard:  # its request is in: serve it, unless it was evicted meanwhile
+            if state[0] != "reading":
+                return  # evicted: never served, so nothing ran that the program was not told
+            state[0] = "serving"  # from here no newcomer evicts it
         line = buf.split(b"\n", 1)[0]
         if len(line) > MAX_LINE_BYTES:
             reply: dict[str, Any] | None = _err("request-too-large")

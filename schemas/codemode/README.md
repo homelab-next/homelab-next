@@ -29,7 +29,8 @@ broker's token check (`TOKEN_REFUSALS` of `conformance/protocols/broker.py`: `to
 `token-sandbox-mismatch`, `token-expired`, `token-spent`, `token-paused`,
 `token-action-not-allowed`, `call-cap-reached`, `token-request-not-paused`,
 `request-not-approved`), `broker-unreachable` or `rate-limited` (the transport refused the peer
-before reading a request). `token_run`'s refusals before it runs anything are token refusals too:
+before reading a request), or `runner-fault` (the runner itself failed after sending the call, so
+its request ids are lost; the run stops). `token_run`'s refusals before it runs anything are token refusals too:
 that call built no request. Such a call has no request id or digest and is never journalled, so a
 resume calls again with its new token; every other call has both, from the broker's answer,
 `request-denied` included (`token_run` of a paused request its approver denied: the request was

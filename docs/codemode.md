@@ -181,7 +181,10 @@ The relay serves connections concurrently, at most 8 at once, each with a **dead
 whole request** (5 s, or the run's wall budget when shorter), however slowly it drips; when every
 slot is taken a newcomer cuts off the oldest connection still reading its request, so a peer that
 drips bytes can delay a program's call but not lock it out, and at the run's end every connection
-still reading is cut off at once. Calls are decided one at a time. With `relay_uids` it accepts
+still reading is cut off at once. Cutting a connection off and starting to serve it are one
+check-and-set: a connection cut off is never served (its call is never sent, even when its line
+had arrived), and one being served is never cut off, so the program is never told a call failed
+that ran. Calls are decided one at a time. With `relay_uids` it accepts
 only connections from those local users, checked before a slot is taken: the peer's uid comes
 from an ESTABLISHED row of `/proc/net/tcp` for the accepted connection's own address (IPv4 on a
 little-endian host only; anything else reads as no uid and is refused), so the token is the
@@ -247,7 +250,9 @@ one is a journal error, an `error` result for that execution only (the sweep ski
 - **The crash window.** A step with an intent and no answer was sent, or may have been, and
   its outcome is unknown: it is **never sent again**. A resume that meets one ends `error`
   (`broker`, `step-outcome-unknown`). For the paused step, whose request has ids, the runner asks
-  the broker instead: if a run of it was sent and its answer lost, `paused_by_state` still
+  the broker instead (a run of it that the broker refused without naming a request is journalled
+  as the step's settled refusal, and every later resume replays that refusal, never the pending
+  record): if a run of it was sent and its answer lost, `paused_by_state` still
   `pending`, `expired`, `approved` or `denied` says it never ran, and the resume goes on; any
   other state ends the resume `step-outcome-unknown`.
 - **Journal failures.** An intent that cannot be written is never sent. An answer that cannot
@@ -255,14 +260,16 @@ one is a journal error, an `error` result for that execution only (the sweep ski
   the call is still reported, and the run ends `error` with its token spent `finished`, so the
   execution never resumes and nothing is re-sent (the ok call is marked `delivered_as:
   journal-unavailable`). Any other failure in the runner after a call was sent is handled the
-  same way: the call is reported, the run stops and ends `error`. A pending call of a run that
+  same way: the call is reported (reason `runner-fault` when the runner itself failed, its
+  request ids lost), the run stops and ends `error`. A pending call of a run that
   cannot stand paused keeps the broker's outcome, `pending`, and says why with `delivered_as`
   (`journal-unavailable`, or `run-stopped` for any other stop): its request is still pending at
   the broker, for its owner to cancel.
 - **Crashes.** A runner that dies leaves its journal `running` with an owner that is gone: each
   runner process holds a lock file of its own under `journal/live/` for as long as it lives, and
   the owner names it, so any runner of the same state directory, in any pid namespace, can tell
-  (an owner from before the lock was recorded is judged by its process identity). The broker's
+  (an owner from before the lock was recorded is judged by its process identity); the sweep
+  removes the lock files of instances gone. The broker's
   sweep spends that run's token `crashed`. The runner marks such an execution
   `interrupted` (at its sweep, at most once a minute, or when a resume finds it), and an
   interrupted execution never resumes (`execution-interrupted`): the steps it sent are in its
