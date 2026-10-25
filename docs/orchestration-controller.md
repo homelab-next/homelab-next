@@ -172,7 +172,8 @@ gateway's config.
 
 Each local backend keeps its own home, so the controller still decides which backend a session
 lands on. A home names the role that is bound only to that backend's `svc:` (one role per engine,
-for example `main-reasoner-a` and `main-reasoner-b`). If two engines sat behind one role, the
+for example `main-reasoner-a` and `main-reasoner-b`), and `--check` refuses any other (Checks,
+below). If two engines sat behind one role, the
 gateway would pick per request, and a session could move between engines turn by turn. That
 undoes the controller's admission, exclusive leases and context escalation.
 
@@ -210,7 +211,8 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   role, not as a gateway backend. The check fails when:
   - a backend `name` is not a `svc:` of the spec;
   - the backend's home `model.default` is not a role of the role table, or is a role that is not
-    bound to that backend;
+    bound to that backend's `svc:` alone (a role bound to two engines would let the gateway move
+    a session between them; see the paragraph after the mapping table);
   - the backend's `max_context` is missing or differs from that role's `max_context_tokens`;
   - a backend has no home, a home names no backend, or a backend is declared twice.
 

@@ -40,15 +40,22 @@ def test_the_example_controller_agrees_with_its_gateway_spec(capsys):
 
 def test_the_fail_fixture_breaks_each_rule_once():
     problems = ah.controller_problems(gw.load_spec(FAIL / "gateway.yml"))
-    assert len(problems) == 4, problems
+    assert len(problems) == 5, problems
     by = {p.split(" (", 1)[0].removeprefix("controller backend "): p for p in problems}
     assert (
         "max_context 32768 differs from mdl:main-reasoner-a's max_context_tokens 131072"
         in (by["vllm-a"])
     )
-    assert "mdl:main-reasoner-a is not bound to svc:vllm-b (bound to svc:vllm-a)" in by["vllm-b"]
+    assert (
+        "mdl:main-reasoner-a is not bound to svc:vllm-b alone (bound to svc:vllm-a)" in by["vllm-b"]
+    )
     assert "svc:vllm-c is not a backend of the gateway spec" in by["vllm-c"]
     assert "model.default 'example-4b' is not a role" in by["vllm-d"]
+    # bound to its own backend, but to another one too: the gateway would choose per request
+    assert (
+        "mdl:main-reasoner-e is not bound to svc:vllm-e alone (bound to svc:vllm-a, svc:vllm-e)"
+        in (by["vllm-e"])
+    )
 
 
 def test_check_fails_on_the_controller_alone(tmp_path, capsys):
@@ -59,7 +66,7 @@ def test_check_fails_on_the_controller_alone(tmp_path, capsys):
     capsys.readouterr()
     assert hnx(["gen", "gateway", "render", str(spec), str(tmp_path / "out"), "--check"]) == 1
     err = capsys.readouterr().err
-    assert err.count("gateway: controller backend ") == 4, err
+    assert err.count("gateway: controller backend ") == 5, err
 
 
 def _with(tmp_path: Path, controller: dict, homes: dict[str, str] | None = None) -> gw.Spec:

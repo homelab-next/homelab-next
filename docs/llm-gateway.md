@@ -34,7 +34,7 @@ hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or a
 
 A spec may also name the orchestration controller in front of it (`controller:`, its config and
 one `HERMES_HOME` per local backend). `--check` then also fails when a controller backend is not
-a `svc:` of the spec, its home's `model.default` is not a role bound to it, or its `max_context`
+a `svc:` of the spec, its home's `model.default` is not a role bound to it alone, or its `max_context`
 is not that role's `max_context_tokens`
 ([orchestration-controller.md](orchestration-controller.md), "Checks").
 

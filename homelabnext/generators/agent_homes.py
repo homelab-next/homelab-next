@@ -11,7 +11,7 @@ role table, where that role is bound to the backend's ``svc:``.  Two checks:
 
 * :func:`controller_problems` (``hnx gen gateway render SPEC OUT --check``, when the spec has a
   ``controller:`` block): every controller backend ``name`` is a ``svc:`` of the gateway spec, its
-  home's ``model.default`` is a role bound to that backend, and its ``max_context`` equals the
+  home's ``model.default`` is a role bound to that backend and to no other, and its ``max_context`` equals the
   role's ``max_context_tokens``.  The controller config is read as the controller reads it; which
   home belongs to which backend is the spec's ``controller.homes`` (one home per local backend,
   so the controller still decides where a session lands).
@@ -182,10 +182,16 @@ def controller_problems(spec: Any) -> list[str]:
             )
             continue
         bound = sorted({b.backend for b in role.bindings})
-        if name not in bound:
+        if bound != [name]:
+            why = (
+                "so its sessions would run elsewhere"
+                if name not in bound
+                else "so the gateway would pick the engine per request and move a session "
+                "between engines turn by turn"
+            )
             problems.append(
-                f"{head}: its home's role mdl:{default} is not bound to svc:{name} (bound to "
-                f"{', '.join('svc:' + b for b in bound)}), so its sessions would run elsewhere"
+                f"{head}: its home's role mdl:{default} is not bound to svc:{name} alone (bound "
+                f"to {', '.join('svc:' + b for b in bound)}), {why}"
             )
             continue
         ctx, want = e.get("max_context"), role.max_context_tokens

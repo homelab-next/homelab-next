@@ -11,3 +11,5 @@ backends:
       max_context: 65536
     - name: vllm-d              # its home names the engine model id, not a role
       max_context: 32768
+    - name: vllm-e              # its home's role is bound to svc:vllm-a as well
+      max_context: 131072
