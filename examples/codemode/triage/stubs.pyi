@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Code Mode namespaces of profile:triage (ADR-0031): one per broker action prefix,
 holding only the actions the broker admits for this profile.  Each method is one broker
-request for the action it names, its keyword arguments the request's params.
+request for the action it names, its keyword arguments the request's params; it returns the
+result, and one that needs a person's approval pauses the run until it is decided.
 """
 
 from typing import Any, TypedDict
@@ -13,24 +14,24 @@ class LaneWrite(TypedDict):
     path: str
 
 class _Finding:
-    async def write(self, *, content: str, name: str) -> LaneWrite:
-        """Write a text file into your own findings lane. Tier write.
+    def write(self, *, content: str, name: str) -> LaneWrite:
+        r"""Write a text file into your own findings lane. Tier write.
 
         content: text, at most 262144 bytes; an existing file is never replaced
-        name: the file name
+        name: the file name; matching ^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,60}\.md$
         """
 
 class _Memory:
-    async def write(self, *, content: str, name: str) -> LaneWrite:
-        """Write a text file into your own memory lane. Tier write.
+    def write(self, *, content: str, name: str) -> LaneWrite:
+        r"""Write a text file into your own memory lane. Tier write.
 
         content: text, at most 65536 bytes; an existing file is never replaced
-        name: the file name
+        name: the file name; matching ^[a-z0-9][a-z0-9-]{0,62}\.md$
         """
 
 class _Proposal:
-    async def file(self, *, note: dict[str, Any], body: str = ..., slug: str = ...) -> LaneWrite:
-        """File a proposal note into the records inbox (lane proposals). Tier write.
+    def file(self, *, note: dict[str, Any], body: str = ..., slug: str = ...) -> LaneWrite:
+        r"""File a proposal note into the records inbox (lane proposals). Tier write.
 
         body: the note's Markdown body
         note: records note frontmatter: title, risk, rollback, ...; type one of proposal; requesting_agent is bound to the caller
@@ -38,14 +39,14 @@ class _Proposal:
         """
 
 class _Service:
-    async def restart(self, *, grace_s: int) -> Any:
-        """Restart one service after a drain period (stand-in that reports only). Tier execute. Needs a person's approval: the run pauses until it is approved.
+    def restart(self, *, grace_s: int) -> Any:
+        r"""Restart one service after a drain period (stand-in that reports only). Tier execute. Needs a person's approval: the run pauses until it is decided.
 
         grace_s: >= 0, <= 600
         """
 
-    async def status(self, *, verbose: bool = ...) -> Any:
-        """Report one service's state (read only, stand-in). Tier read."""
+    def status(self, *, verbose: bool = ...) -> Any:
+        r"""Report one service's state (read only, stand-in). Tier read."""
 
 finding: _Finding
 memory: _Memory

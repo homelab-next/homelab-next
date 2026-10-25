@@ -52,8 +52,9 @@ OpenShell could not be measured there.
    reached through the broker's own MCP front like every other action (ADR-0030), whose handler
    is the runner. No new direct acting grant exists.
 4. **The namespaces are generated** (ADR-0028) from the MCP catalog and the broker manifest, one
-   set per agent profile, from each action's argument spec and result schema. `hnx codemode gen
-   --check` fails on drift in CI. Nothing is hand-written, and no raw API is ingested: the
+   set per agent profile, from each action's argument spec and result schema (the generator reads
+   the manifest first, CM-3; the catalog record and handler result schemas arrive with CM-5). `hnx
+   codemode gen --check` fails on drift in CI. Nothing is hand-written, and no raw API is ingested: the
    connectors are the curated broker actions.
 5. **The sandbox holds nothing and reaches nothing but the broker.** It has no credentials in its
    environment or image, a read-only root with tmpfs only, a non-root user with all capabilities

@@ -6,7 +6,8 @@ are is asked of :func:`homelabnext.broker.decide` itself, one shadow-mode probe 
 grant names (as :meth:`homelabnext.broker.service.BrokerService.actions_for` does), so the
 namespaces cannot disagree with what a call gets: an action no grant of the profile names, one
 above the grant's ``max_tier`` or one without a handler is never in the model, and an action
-whose verdict is ``needs-approval`` is marked ``needs_approval``.
+whose verdict is ``needs-approval`` is marked ``needs_approval``.  ``codemode.*`` actions are
+never in it either: a program cannot start a program (the capability token's claims refuse them).
 
 Each action becomes one :class:`Method`: its prefix (``dns`` of ``dns.lookup``) is the namespace,
 the rest (``lookup``; ``a.b-c.d`` gives ``b_c_d``) the method, and its parameters are a JSON
@@ -19,17 +20,25 @@ Schema object:
   or a JSON object or list for a ``json`` lane), ``{note, body?, slug?}`` for a records inbox.
   Its result is the lane write's ``{path, bytes, digest}``.
 
-An exec handler declares no result schema yet, so its result is untyped.  A name that cannot be
-an identifier in both stub languages (a keyword, ``delete``, ``class``) gets a trailing ``_``; two
-actions that land on the same method, or a parameter name that is not an identifier, are refused
-(:class:`CodemodeError`) rather than renamed, since a renamed parameter would not be the one the
-broker checks.
+An exec handler declares no result schema yet (CM-5 adds one), so its result is untyped: the
+runner hands a program the handler's ``output``.
+
+Names: a segment that cannot be an identifier in both stub languages, or would shadow a Python
+builtin the stub's annotations use (a keyword, ``delete``, ``class``, ``list``, ``str``), gets a
+trailing ``_``.  Refused (:class:`CodemodeError`) rather than renamed, since a renamed parameter
+would not be the one the broker checks: two actions that land on one method; a parameter name that
+is not an identifier, is a keyword, is ``self``, or is ``params`` while the spec admits more
+parameters (``**params``); a ``required`` name the spec does not declare; a property key that is
+not a string.  Every name the outputs carry is matched whole (a schema pattern's ``$`` also matches
+before a trailing newline), and every text a stub comment carries is one line with no control,
+format (bidi, zero-width) or separator character and nothing that would end the comment.
 """
 
 from __future__ import annotations
 
 import keyword
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -40,7 +49,9 @@ from homelabnext.broker import lanes as _lanes
 from homelabnext.generators.safe import UnsafeValueError, checked
 
 __all__ = [
+    "EXCLUDED_PREFIXES",
     "LANE_RESULT",
+    "SLUG_RE",
     "CodemodeError",
     "Method",
     "ProfileModel",
@@ -60,9 +71,14 @@ LANE_RESULT: dict[str, Any] = {
     "required": ["bytes", "digest", "path"],
     "additionalProperties": False,
 }
+#: action prefixes a program never sees (a program cannot start a program)
+EXCLUDED_PREFIXES = frozenset({"codemode"})
+#: a profile slug (the directory of its files), matched whole
+SLUG_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+_ACTION_RE = re.compile(r"[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+")
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: the probe's fixed decision time: no approval is probed, so it only fills ``decided_at``
 _PROBE_NOW = "1970-01-01T00:00:00Z"
-_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #: TypeScript's reserved and strict-mode words, which a namespace or function may not be named
 _TS_WORDS = (
     "arguments await break case catch class const continue debugger default delete do else enum "
@@ -71,6 +87,12 @@ _TS_WORDS = (
     "typeof var void while with yield"
 )
 TS_RESERVED = frozenset(_TS_WORDS.split())
+#: the builtins a stub's annotations use: a namespace or method of that name would shadow it in
+#: the stub (``list: _List`` at module level, a method ``str`` in a class body)
+PY_SHADOWED = frozenset({"bool", "dict", "float", "int", "list", "str"})
+#: Unicode categories refused in comment text: format (bidi, zero-width, BOM), line and
+#: paragraph separators, surrogates
+_BAD_CATEGORIES = frozenset({"Cf", "Zl", "Zp", "Cs"})
 
 
 class CodemodeError(ValueError):
@@ -126,9 +148,9 @@ class ProfileModel:
 
 
 def identifier(name: str) -> str:
-    """``name`` (a slug segment) as an identifier both stub languages accept."""
+    """``name`` (a slug segment) as an identifier both stub languages accept, shadowing nothing."""
     out = name.replace("-", "_")
-    if keyword.iskeyword(out) or out in TS_RESERVED:
+    if keyword.iskeyword(out) or out in TS_RESERVED or out in PY_SHADOWED:
         out += "_"
     return out
 
@@ -190,6 +212,8 @@ def _granted(manifest: Mapping[str, Any], profile: str) -> list[tuple[str, bool]
     names = sorted({a for g in manifest["grants"] if g["profile"] == profile for a in g["actions"]})
     out = []
     for name in names:
+        if name.split(".", 1)[0] in EXCLUDED_PREFIXES:
+            continue
         probe = {"request_id": "req-probe", "action": name, "actor": profile, "params": {}}
         verdict = decide(view, probe, None, now=_PROBE_NOW, store=store)["verdict"]
         if verdict in ("allow", "needs-approval"):
@@ -197,27 +221,88 @@ def _granted(manifest: Mapping[str, Any], profile: str) -> list[tuple[str, bool]
     return out
 
 
-def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
+def doc_line(where: str, text: str) -> tuple[str, list[str]]:
+    """``text`` as one line of a stub comment or docstring, or a problem.  A backslash is fine
+    (the Python docstrings are raw); ``*/`` and ``\"\"\"`` would end the comment."""
+    try:
+        line = checked(text, where)
+    except UnsafeValueError:
+        return "", [f"{where}: holds a control character; it must be one line"]
+    odd = next((c for c in line if unicodedata.category(c) in _BAD_CATEGORIES), None)
+    if odd is not None:
+        return "", [f"{where}: holds U+{ord(odd):04X} ({unicodedata.category(odd)})"]
+    bad = [s for s in ("*/", '"""') if s in line]
+    if bad:
+        return "", [f"{where}: holds {bad[0]!r}, which would end a stub comment"]
+    return line, []
+
+
+def _schema_problems(where: str, schema: Any) -> list[str]:
+    """Shape problems of a (nested) schema the renderers would trip on or render wrongly."""
+    if not isinstance(schema, Mapping):
+        return []
+    out = []
     props = schema.get("properties", {})
     if not isinstance(props, Mapping):
-        return [f"{action}: params_schema properties is not an object"]
-    return [
-        f"{action}: parameter {name!r} is not an identifier (the stubs take it by name)"
-        for name in props
-        if not _IDENT.match(str(name)) or keyword.iskeyword(str(name))
+        return [f"{where}: properties is not an object"]
+    keys = [k for k in props if isinstance(k, str)]
+    out += [f"{where}: a property key is not a string" for k in props if not isinstance(k, str)]
+    required = schema.get("required", [])
+    if not isinstance(required, list) or not all(isinstance(r, str) for r in required):
+        out.append(f"{where}: required is not a list of names")
+    else:
+        out += [
+            f"{where}: required names {r!r}, which it does not declare"
+            for r in required
+            if r not in keys
+        ]
+    for k in keys:
+        out += _schema_problems(f"{where}.{k}", props[k])
+    for key in ("items", "additionalProperties"):
+        out += _schema_problems(f"{where}[{key}]", schema.get(key))
+    for key in ("oneOf", "anyOf"):
+        for i, alt in enumerate(schema.get(key) or []):
+            out += _schema_problems(f"{where}[{key}][{i}]", alt)
+    return out
+
+
+def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
+    problems = _schema_problems(f"{action}: params", schema)
+    if problems:
+        return problems
+    props = schema.get("properties", {})
+    open_ = schema.get("additionalProperties", True) is not False
+    for name, spec in props.items():
+        if not _IDENT.fullmatch(name) or keyword.iskeyword(name):
+            problems.append(
+                f"{action}: parameter {name!r} is not an identifier (the stubs take it by name)"
+            )
+        elif name == "self" or (name == "params" and open_):
+            problems.append(f"{action}: parameter {name!r} clashes with the stub's own {name}")
+        if isinstance(spec, Mapping):
+            for key in ("description", "pattern"):
+                if isinstance(spec.get(key), str):
+                    problems += doc_line(f"{action}: parameter {name} {key}", spec[key])[1]
+    return problems
+
+
+def _name_problems(manifest: Mapping[str, Any], profile: str, names: Sequence[str]) -> list[str]:
+    """Every name the outputs carry, matched whole: a schema pattern's ``$`` lets a trailing
+    newline through, and these names reach paths and stub source."""
+    out = []
+    if not isinstance(manifest.get("manifest_id"), str) or not SLUG_RE.fullmatch(
+        manifest["manifest_id"]
+    ):
+        out.append("manifest_id: not a slug")
+    slug = profile.split(":", 1)[1] if profile.startswith("profile:") else ""
+    if not SLUG_RE.fullmatch(slug):
+        out.append(f"grants: profile {profile!r} is not profile:<slug>")
+    out += [
+        f"grants of {profile}: {n!r} is not an action name"
+        for n in names
+        if not _ACTION_RE.fullmatch(n)
     ]
-
-
-def doc_line(action: str, text: str) -> tuple[str, list[str]]:
-    """``text`` as one line of a comment or docstring, or a problem."""
-    try:
-        line = checked(text, f"{action}: description")
-    except UnsafeValueError as exc:
-        return "", [str(exc)]
-    bad = [s for s in ("*/", '"""', "\\") if s in line]
-    if bad:
-        return "", [f"{action}: description holds {bad[0]!r}, which would end a stub comment"]
-    return line, []
+    return out
 
 
 def build_models(
@@ -233,9 +318,14 @@ def build_models(
     problems: list[str] = []
     models = []
     for profile in sorted({g["profile"] for g in manifest["grants"]}):
+        granted = _granted(manifest, profile)
+        bad_names = _name_problems(manifest, profile, [n for n, _ in granted])
+        if bad_names:
+            problems += bad_names
+            continue
         methods: list[Method] = []
         seen: dict[tuple[str, str], str] = {}
-        for name, needs in _granted(manifest, profile):
+        for name, needs in granted:
             entry = entries[name]
             ns, meth = _split(name)
             if (ns, meth) in seen:
@@ -253,7 +343,7 @@ def build_models(
                     continue
                 kind, params, result = "exec", doc["params_schema"], None
                 text = doc["description"]
-            summary, bad = doc_line(name, text)
+            summary, bad = doc_line(f"{name}: description", text)
             bad += _param_problems(name, params)
             problems += bad
             if not bad:

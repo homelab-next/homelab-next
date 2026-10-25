@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Code Mode namespaces of profile:reader (ADR-0031): one per broker action prefix,
 holding only the actions the broker admits for this profile.  Each method is one broker
-request for the action it names, its keyword arguments the request's params.
+request for the action it names, its keyword arguments the request's params; it returns the
+result, and one that needs a person's approval pauses the run until it is decided.
 """
 
 from typing import Any
 
 class _Service:
-    async def status(self, *, verbose: bool = ...) -> Any:
-        """Report one service's state (read only, stand-in). Tier read."""
+    def status(self, *, verbose: bool = ...) -> Any:
+        r"""Report one service's state (read only, stand-in). Tier read."""
 
 service: _Service

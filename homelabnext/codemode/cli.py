@@ -8,8 +8,10 @@ public example and its committed goldens, ``examples/broker/manifest.yml`` into
 run it).  ``--check`` writes nothing and fails on any drift: a hand edit, a manifest or handler
 document change that was not regenerated, or a profile directory no longer rendered.
 
-Exit: 0 written or clean, 1 drift, 2 an unreadable or invalid manifest, or one that cannot be
-rendered.
+Exit (``docs/interfaces.md``): 0 written or clean; 1 drift; 2 bad input (an unreadable or
+invalid manifest, one that cannot be rendered, an output directory that cannot be written or
+holds a symlinked profile directory or file); 100 ``--check`` could not read the output
+directory (it could not measure).
 """
 
 from __future__ import annotations
@@ -20,6 +22,9 @@ from collections.abc import Sequence
 
 from .model import CodemodeError
 from .render import DEFAULT_MANIFEST, DEFAULT_OUT, check, render, write
+
+#: ``--check`` could not read what it compares (docs/interfaces.md: >= 100)
+COULD_NOT_MEASURE = 100
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -43,14 +48,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     if args.check:
-        problems = check(args.out, files)
+        try:
+            problems = check(args.out, files)
+        except OSError as exc:
+            print(f"codemode: cannot read {args.out}: {exc.strerror or exc}", file=sys.stderr)
+            return COULD_NOT_MEASURE
         for p in problems:
             print(f"codemode: {p} (run `hnx codemode gen` and commit)", file=sys.stderr)
         if problems:
             return 1
         print(f"codemode: {len(files)} files in {args.out} match {args.manifest}")
         return 0
-    written, unchanged, removed = write(args.out, files)
+    try:
+        written, unchanged, removed = write(args.out, files)
+    except CodemodeError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"codemode: cannot write {args.out}: {exc.strerror or exc}", file=sys.stderr)
+        return 2
     print(
         f"codemode: wrote {len(written)}, unchanged {len(unchanged)}, removed {len(removed)} "
         f"in {args.out}"

@@ -136,11 +136,11 @@ def test_parameters_are_typed_from_the_argument_spec():
     assert (
         'function lookup(args: { count?: number; kind: "A" | "AAAA" | "PTR"; '
         'mode?: "fast"; name: string; tags?: string[]; ttl?: number | null; verbose?: boolean; '
-        "weight?: number }): Promise<unknown>;"
+        "weight?: number }): unknown;"
     ) in ts
     # required first, then optional (with a default), all keyword-only
     assert (
-        "    async def lookup(\n"
+        "    def lookup(\n"
         '        self,\n        *,\n        kind: Literal["A", "AAAA", "PTR"],\n        name: str,\n'
         "        count: int = ...,\n"
         '        mode: Literal["fast"] = ...,\n'
@@ -161,10 +161,10 @@ def test_an_open_or_empty_spec():
     docs = [_doc("svc.ping"), _doc("svc.any", {"type": "object"})]
     files = _files(manifest, docs)
     ts, py = files["reader/types.d.ts"], files["reader/stubs.pyi"]
-    assert "function ping(): Promise<unknown>;" in ts
-    assert "function any(args?: Record<string, unknown>): Promise<unknown>;" in ts
-    assert "async def ping(self) -> Any:" in py
-    assert "async def any(self, **params: Any) -> Any:" in py
+    assert "function ping(): unknown;" in ts
+    assert "function any(args?: Record<string, unknown>): unknown;" in ts
+    assert "def ping(self) -> Any:" in py
+    assert "def any(self, **params: Any) -> Any:" in py
 
 
 @pytest.mark.parametrize(
@@ -198,9 +198,9 @@ def test_schema_types(schema, ts, py):
 def test_lane_actions_are_typed_from_the_lane():
     files = render(EXAMPLE / "manifest.yml")
     ts, py = files["triage/types.d.ts"], files["triage/stubs.pyi"]
-    assert "function write(args: { content: string; name: string }): Promise<LaneWrite>;" in ts
+    assert "function write(args: { content: string; name: string }): LaneWrite;" in ts
     assert "interface LaneWrite {" in ts and ts.count("interface LaneWrite") == 1
-    assert "async def write(self, *, content: str, name: str) -> LaneWrite:" in py
+    assert "def write(self, *, content: str, name: str) -> LaneWrite:" in py
     assert "body?: string; note: Record<string, unknown>; slug?: string" in ts
     assert "class LaneWrite(TypedDict):" in py
 
@@ -372,8 +372,8 @@ def test_a_reserved_word_gets_a_trailing_underscore():
     )
     files = _files(manifest, [_doc("import.class"), _doc("svc.delete")])
     assert "declare namespace import_ {" in files["p/types.d.ts"]
-    assert "function class_(): Promise<unknown>;" in files["p/types.d.ts"]
-    assert "function delete_(): Promise<unknown>;" in files["p/types.d.ts"]
+    assert "function class_(): unknown;" in files["p/types.d.ts"]
+    assert "function delete_(): unknown;" in files["p/types.d.ts"]
     assert "import_: _Import" in files["p/stubs.pyi"]
     assert json.loads(files["p/search.json"])["actions"][0]["call"] == "import_.class_"
     ast.parse(files["p/stubs.pyi"])
@@ -418,3 +418,35 @@ def test_an_exec_action_without_a_handler_document_is_refused():
 def test_hnx_codemode_is_registered():
     assert "codemode" in cli.COMMANDS
     assert cli.main(["codemode", "gen", "--help"]) == 0
+
+
+# ------------------------------------------------------- describe, synchronous
+def test_the_index_carries_what_codemode_describe_needs():
+    files = render(EXAMPLE / "manifest.yml")
+    index = {a["name"]: a for a in json.loads(files["triage/search.json"])["actions"]}
+    handler = json.loads((EXAMPLE / "handlers" / "service-restart.handler.json").read_text())
+    restart = index["service.restart"]
+    assert restart["kind"] == "exec" and restart["params"] == handler["params_schema"]
+    assert restart["result"] is None
+    assert restart["signatures"] == {
+        "python": "service.restart(*, grace_s: int) -> Any",
+        "typescript": "service.restart(args: { grace_s: number }): unknown",
+    }
+    memory = index["memory.write"]
+    assert memory["kind"] == "lane" and memory["result"]["type"] == "LaneWrite"
+    assert memory["params"]["properties"]["name"]["pattern"] == r"^[a-z0-9][a-z0-9-]{0,62}\.md$"
+    assert memory["signatures"]["typescript"] == (
+        "memory.write(args: { content: string; name: string }): LaneWrite"
+    )
+    assert files["triage/search.json"].isascii()
+
+
+def test_calls_are_synchronous_in_both_languages():
+    files = render(EXAMPLE / "manifest.yml")
+    for slug in ("reader", "triage"):
+        assert "Promise" not in files[f"{slug}/types.d.ts"]
+        tree = ast.parse(files[f"{slug}/stubs.pyi"])
+        assert not any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
+        assert any(isinstance(n, ast.FunctionDef) for n in ast.walk(tree))
+    assert "function restart(args: { grace_s: number }): unknown;" in files["triage/types.d.ts"]
+    assert "the run pauses until it is decided" in files["triage/types.d.ts"]
