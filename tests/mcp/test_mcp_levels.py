@@ -421,7 +421,22 @@ def test_outline_reports_a_parse_cut(monkeypatch):
     from homelabnext.context import levels
 
     monkeypatch.setattr(levels, "MAX_PARSE_LINES", 3)
-    levels._MEMO.clear()
+    levels.clear_memo()
     out = _catalog().outline("doc:docs/authored.md", allowed=["doc:"])
     assert out["parse_truncated"] is True and out["parsed_chars"] < out["chars"]
-    levels._MEMO.clear()
+    levels.clear_memo()
+
+
+def test_section_content_is_the_raw_text_and_says_so():
+    """Content is the document, byte for byte what its digest covers; only names and summaries
+    are cleaned, and the tool description and docs say so instead of implying otherwise."""
+    from homelabnext.mcp import TOOLS
+
+    raw = "## Sub\x1b[31m‮\n\nBody \x1b[0m​ text.\n"
+    c = _catalog(docs={"doc:docs/r.md": ("docs/r.md", "R", raw)})
+    out = c.section("docs/r.md", "sub-31m", allowed=["doc:"])
+    assert out["content"] == raw and out["digest"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert out["heading"] == "Sub [31m" and "\x1b" not in out["slug"] + out["heading"]
+    assert "content is the raw section text" in TOOLS["section"]
+    docs = (ROOT / "docs" / "mcp.md").read_text(encoding="utf-8")
+    assert "**Content is not cleaned:**" in docs and "`outline_digest` is how to\n  pin it" in docs

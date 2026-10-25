@@ -56,7 +56,8 @@ filesystem reader has none of this platform's scope rules, profile verification 
    byte-identical results; `digest` is the sha256 of the whole document or section, so a pack
    that cites one can be checked against git. Parsing is linear and bounded (1 MiB, 100,000
    lines) and every title, slug, path and derived summary is cleaned of control and invisible
-   format characters before a model sees it.
+   format characters before a model sees it; content stays the raw document text its digest
+   covers, and is untrusted data.
 5. **A summary is authored, short and reviewed.** `summary:` is accepted on lessons (schema
    2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control or invisible
    format character.

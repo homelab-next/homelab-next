@@ -118,7 +118,7 @@ def test_a_recursion_error_inside_the_yaml_parser_is_no_front_matter(monkeypatch
         raise RecursionError("maximum recursion depth exceeded")
 
     monkeypatch.setattr(yaml, "load", deep)
-    levels._MEMO.clear()
+    levels.clear_memo()
     text = "---\na: [[[\n---\n# T\n\nProse.\n"
     assert front_matter(text) == (None, len("---\na: [[[\n---\n"))
     assert summary_of(text, "a.md") == ("Prose.", "first-paragraph")
@@ -406,21 +406,21 @@ def test_fifty_thousand_headings_parse_in_linear_time():
 def test_parsing_stops_at_the_bounds_and_says_so(monkeypatch):
     big = "## A\n" + "x\n" * 10 + "## B\n"
     monkeypatch.setattr(levels, "MAX_PARSE_LINES", 5)
-    levels._MEMO.clear()
+    levels.clear_memo()
     p = parse(big)
     assert p.truncated and [h.title for h in p.headings] == ["A"]
     assert p.headings[0].end == p.parsed_chars < len(big)
     monkeypatch.setattr(levels, "MAX_PARSE_LINES", MAX_PARSE_LINES)
     monkeypatch.setattr(levels, "MAX_PARSE_CHARS", 12)
-    levels._MEMO.clear()
+    levels.clear_memo()
     p = parse(big)
     assert p.truncated and p.parsed_chars <= 12 and [h.title for h in p.headings] == ["A"]
-    levels._MEMO.clear()
+    levels.clear_memo()
     assert MAX_PARSE_CHARS == 1 << 20
 
 
 def test_parse_is_memoised_per_content():
-    levels._MEMO.clear()
+    levels.clear_memo()
     a = parse(DOC)
     assert parse(DOC) is a and parse(DOC + "\n") is not a
 
@@ -454,3 +454,48 @@ def test_parse_is_memoised_per_content():
 def test_check_summary(value, problem):
     got = check_summary(value)
     assert (got is None) if problem is None else (problem in got)
+
+
+# -- the memo holds parses, not documents -----------------------------------------------------
+
+
+def test_the_memo_keeps_headings_and_the_summary_but_not_the_lines():
+    """Regression: every memoised parse kept each line of its document (about 15 MB for a 1 MiB
+    page of short lines; 128 of them in a long-lived server).  It now keeps what outline and the
+    summary need, and tracemalloc sees a fraction of the text retained."""
+    import gc
+    import tracemalloc
+
+    doc = "# Title\n\nFirst prose.\n\n" + "a line of prose\n" * 60_000  # ~1 MB, ~60k lines
+    levels.clear_memo()
+    gc.collect()
+    tracemalloc.start()
+    try:
+        before = tracemalloc.take_snapshot()
+        parsed = parse(doc)
+        gc.collect()
+        after = tracemalloc.take_snapshot()
+    finally:
+        tracemalloc.stop()
+    retained = sum(s.size_diff for s in after.compare_to(before, "filename"))
+    assert retained < 200_000, retained  # the lines alone were over 5 MB
+    assert not hasattr(parsed, "lines") and parsed.first_paragraph == "First prose."
+    assert levels.memo_bytes() == parsed.size < 10_000
+    levels.clear_memo()
+
+
+def test_the_memo_is_bounded_by_bytes_as_well_as_entries(monkeypatch):
+    levels.clear_memo()
+    one = parse("".join(f"## Heading number {i}\n" for i in range(200)))
+    monkeypatch.setattr(levels, "_MEMO_BYTES", one.size * 3)
+    levels.clear_memo()
+    for i in range(10):
+        parse("".join(f"## Heading number {i}-{j}\n" for j in range(200)))
+        assert levels.memo_bytes() <= one.size * 3 + 1000
+    assert len(levels._MEMO) <= 3
+    assert levels.memo_bytes() == sum(p.size for p in levels._MEMO.values())
+    monkeypatch.setattr(levels, "_MEMO_BYTES", 10)  # a parse over the whole bound is not kept
+    levels.clear_memo()
+    parse("## too big to keep\n")
+    assert levels._MEMO == {} and levels.memo_bytes() == 0
+    levels.clear_memo()

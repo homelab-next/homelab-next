@@ -107,6 +107,7 @@ TOOLS: dict[str, str] = {
         "heading path (from outline), with its subsections, size and digest. No fuzzy match: an "
         "unknown or ambiguous heading is an error listing the slugs. Pass the outline's digest "
         "as outline_digest to refuse a changed document; page with offset/limit (next_offset). "
+        "content is the raw section text; titles, slugs, paths and summaries are cleaned. "
         "Scoped like context_for."
     ),
     "terms": (
@@ -589,7 +590,8 @@ class Catalog:
     ) -> dict[str, Any]:
         """Level 2: the section ``heading`` names exactly (a slug or a full heading path from
         :meth:`outline`), its own heading line through the next heading of the same or a higher
-        level.  ``outline_digest`` (the outline's ``digest``) refuses the call when the document
+        level.  ``content`` is the raw section text, as the digest covers it (only titles, slugs,
+        paths and summaries are cleaned).  ``outline_digest`` (the outline's ``digest``) refuses the call when the document
         has changed since, because a slug is valid only for the outline it came from.  The
         content is ``offset`` characters in and at most ``limit`` (default and ceiling
         :data:`MAX_HIT_CONTENT_CHARS`) long; when more follows, ``truncated`` and

@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -78,12 +79,14 @@ __all__ = [
     "Parsed",
     "check_summary",
     "clean",
+    "clear_memo",
     "cut",
     "find_section",
     "first_paragraph",
     "front_matter",
     "headings",
     "is_markdown",
+    "memo_bytes",
     "parse",
     "summary_of",
     "visible",
@@ -120,8 +123,12 @@ _EMPHASIS = re.compile(r"\*+|~~|(?<!\w)_+|_+(?!\w)")
 _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 #: a derived summary skips blocks that are not prose: quotes, lists, tables, HTML, images
 _NOT_PROSE = (">", "- ", "* ", "+ ", "|", "<", "!")
-_MEMO: OrderedDict[str, Parsed] = OrderedDict()
+#: the parse memo: at most this many documents and about this many bytes of parses.  It keeps
+#: headings and the derived paragraph, never the document's lines or text.
 _MEMO_SIZE = 128
+_MEMO_BYTES = 64 << 20
+_MEMO: OrderedDict[str, Parsed] = OrderedDict()
+_memo_bytes = 0
 
 
 @dataclass(frozen=True)
@@ -157,7 +164,16 @@ class Parsed:
     body: int  # offset after the BOM and front-matter
     parsed_chars: int  # offset where parsing stopped (len(text) unless truncated)
     truncated: bool  # MAX_PARSE_CHARS or MAX_PARSE_LINES cut the parse
-    lines: tuple[tuple[int, str, bool], ...]  # (offset, line, hidden) of every parsed body line
+    first_paragraph: str  # the derived summary (first_paragraph), already cut
+
+    @property
+    def size(self) -> int:
+        """Approximate bytes this parse holds (what the memo bound counts)."""
+        n = sys.getsizeof(self) + sys.getsizeof(self.headings) + sys.getsizeof(self.first_paragraph)
+        for h in self.headings:
+            n += sys.getsizeof(h) + sum(sys.getsizeof(x) for x in (h.title, h.slug, h.path))
+            n += 3 * 32  # level, start, end
+        return n
 
 
 # --------------------------------------------------------------------------- text helpers
@@ -352,11 +368,35 @@ def parse(text: str) -> Parsed:
         # the sole leading H1 is the document's title: it names no segment of the paths below
         stack.append((level, None if i == doc_title else segment, slug))  # type: ignore[arg-type]
         out.append(Heading(level, title, slug, path, pos, ends[i]))
-    parsed = Parsed(tuple(out), body, parsed_end, truncated, tuple(lines))
-    _MEMO[key] = parsed
-    if len(_MEMO) > _MEMO_SIZE:
-        _MEMO.popitem(last=False)
+    parsed = Parsed(tuple(out), body, parsed_end, truncated, _first_paragraph(lines))
+    _remember(key, parsed)
     return parsed
+
+
+def _remember(key: str, parsed: Parsed) -> None:
+    """Memoise ``parsed`` within :data:`_MEMO_SIZE` entries and :data:`_MEMO_BYTES` bytes, oldest
+    out first; a parse larger than the whole bound is not kept at all."""
+    global _memo_bytes
+    size = parsed.size
+    if size > _MEMO_BYTES:
+        return
+    _MEMO[key] = parsed
+    _memo_bytes += size
+    while len(_MEMO) > _MEMO_SIZE or _memo_bytes > _MEMO_BYTES:
+        _, old = _MEMO.popitem(last=False)
+        _memo_bytes -= old.size
+
+
+def memo_bytes() -> int:
+    """Approximate bytes the parse memo holds now."""
+    return _memo_bytes
+
+
+def clear_memo() -> None:
+    """Empty the parse memo (tests; a server never needs to)."""
+    global _memo_bytes
+    _MEMO.clear()
+    _memo_bytes = 0
 
 
 def headings(text: str) -> list[Heading]:
@@ -378,14 +418,19 @@ def first_paragraph(text: str) -> str:
     """A derived summary: the first prose paragraph before the first H2 (a block that starts as
     a quote, a list, a table, HTML or an image is not prose); else the first after a
     ``## Context`` heading (an ADR's); else the first anywhere.  Reduced to visible text, made one
-    line and :func:`cut`; ``""`` when the document has no prose."""
-    lines = parse(text).lines
+    line and :func:`cut`; ``""`` when the document has no prose.  Computed with the parse."""
+    return parse(text).first_paragraph
+
+
+def _first_paragraph(lines: list[tuple[int, str, bool]]) -> str:
     blocks: list[tuple[bool, bool, list[str]]] = []  # (before any H2, under Context, lines)
     h2_seen = context = False
     current: list[str] = []
 
     def flush():
-        if current and not current[0].lstrip(" ").startswith(_NOT_PROSE):
+        prose = current and not current[0].lstrip(" ").startswith(_NOT_PROSE)
+        # only candidates are kept: the first block, and the first under Context
+        if prose and (not blocks or (context and not any(b[1] for b in blocks))):
             blocks.append((not h2_seen, context, list(current)))
         current.clear()
 

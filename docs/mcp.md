@@ -91,8 +91,9 @@ what the task opens, and nothing is stored, summarised or embedded anywhere else
   titles from the top down joined by `/` (`/`, `~` and `\` in a title escaped with `\`); a
   document's sole leading H1 is its title and not a segment (`Context`, not
   `ADR-0032: .../Context`); a repeated path gets `~2`, `~3` ... on its last segment.
-  **A slug or path is valid only for the outline it came from**: pass that outline's `digest` as
-  `section`'s `outline_digest` and a document edited since is refused instead of served wrong.
+  **A slug or path is valid only for the outline it came from, and `outline_digest` is how to
+  pin it**: pass that outline's `digest` as `section`'s `outline_digest` and a document edited
+  since is refused instead of served wrong.
 * **A section is named exactly**, by its slug or its full heading path: no case folding, no
   prefix and no fuzzy match. An unknown name, or one that is one heading's slug and another's
   path, is a tool error listing the document's slugs (never repeating the name sent).
@@ -104,13 +105,18 @@ what the task opens, and nothing is stored, summarised or embedded anywhere else
   follows, `truncated: true` and `next_offset` say where to continue.
 * **Bounds.** The parser reads at most 1 MiB and 100,000 lines of a document, a heading title
   from at most 2,048 characters of its line, and a front-matter block of at most 64 KiB; it is
-  linear in what it reads, and results are memoised per content digest. Past the bound an
+  linear in what it reads, and parses are memoised per content digest (at most 128 documents
+  and about 64 MiB; the memo keeps headings and the derived summary, never the text). Past the bound an
   outline lists the headings it read with `parse_truncated: true` and `parsed_chars`.
-* **Clean text.** Every title, slug, path and derived summary has control and line-separator
-  characters (Unicode Cc, Zl, Zp) turned into spaces and invisible format characters (Cf: bidi
-  overrides, zero-width characters, the BOM; Cs) removed, so a document cannot hide escape codes
-  or reordered text in what a model reads. An authored summary holding one is refused by the lint
-  and the record validation, and is not served as authored.
+* **Clean text, raw content.** Every title, slug, path and derived summary has control and
+  line-separator characters (Unicode Cc, Zl, Zp) turned into spaces and invisible format
+  characters (Cf: bidi overrides, zero-width characters, the BOM; Cs) removed, so a document
+  cannot hide escape codes or reordered text in the names and summaries a model reads. An
+  authored summary holding one is refused by the lint and the record validation, and is not
+  served as authored. **Content is not cleaned:** a section's `content` (and `context_for`'s
+  full `content`) is the raw document text, byte for byte what `digest` covers, so an escape
+  sequence, a bidi override or a zero-width character in the document is in it too. Treat
+  content as untrusted data, as for every tool here.
 * **Scope.** `outline` and `section` take the same mandatory `allowed` as `context_for`, narrowed
   the same way by `--scope-from-profile`. A document is named by its id (`doc:docs/graph.md`,
   `lesson:<uid>`, a bare uid or a legacy code, without the legacy code's deprecation warning,
