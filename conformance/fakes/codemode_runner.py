@@ -24,6 +24,7 @@ __all__ = [
     "CapHiddenRunner",
     "DenialAsErrorRunner",
     "DeniedWaitsRunner",
+    "ForeignListedRunner",
     "HiddenPauseRunner",
     "RawLogsRunner",
     "ReferenceRunner",
@@ -176,3 +177,16 @@ class RelayRefusalsHiddenRunner(ReferenceRunner):
 
     def _relay_refused(self, run, steps, msg, reply):
         return None
+
+
+class ForeignListedRunner(ReferenceRunner):
+    """Mutant: a line without the run's token is listed as if the program had sent it, so anyone
+    on the loopback could put attempts into another agent's result."""
+
+    def serve_call(self, run, msg):
+        steps = run.next_step
+        reply = super().serve_call(run, msg)
+        token = msg.get("token") if isinstance(msg, dict) else None
+        if reply is not None and token != run.secret and reply.get("reason") == "token-invalid":
+            self._relay_refused(run, steps, msg, {**reply, "reason": "request-malformed"})
+        return reply

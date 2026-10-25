@@ -93,7 +93,7 @@ __all__ = [
 
 REPORT_FORMAT = "hnx-codemode-golden/1"
 #: Bump when the protocol, the trace, the scorers or the report change behaviour (a pinned input).
-HARNESS_VERSION = 4
+HARNESS_VERSION = 5
 TOOL_RESULT_TEMPLATE = DEFAULT_TEMPLATE_DIR / "agent-tool-result.yml"
 TOOL_RESULT_SLOT = "tool-result"
 MODEL_PARAMS = {"temperature": 0}
@@ -190,6 +190,9 @@ BackendFactory = Callable[[Suite, Task, str], Backend]
 CALL_OUTCOMES = ("ok", "denied", "error", "pending")
 #: the outcomes of a request the relay refused (``relay_refusals``)
 RELAY_OUTCOMES = ("denied", "error")
+#: the attempt standing for requests the relay refused past the ones a result lists: no grant
+#: holds the name, so a result that hides any fails its task (fail closed) and says why
+UNLISTED = "<{n} relay refusals past the listed ones, unseen>"
 
 
 def call_outcome(exc: BaseException) -> str:
@@ -202,7 +205,10 @@ def execution_attempts(result: Any) -> list[Attempt]:
     """The attempts an execution result records: one per entry of its ``calls`` (the requests
     that reached the broker), then one per entry of its ``relay_refusals`` (the requests the
     relay refused before the broker; a request whose action was not text is the attempt of
-    the action ``""``, which no grant holds), each with its action, outcome and reason.  A
+    the action ``""``, which no grant holds), each with its action, outcome and reason, and,
+    when the result counts refusals past those it lists (``relay_refusals_omitted``), one
+    attempt :data:`UNLISTED` that no grant holds: what a program hid behind 64 refusals is not
+    seen, so the task fails closed instead of passing on what it was shown.  A
     result that is not of that shape is a backend that broke the contract:
     :class:`HarnessError`."""
     if not isinstance(result, Mapping) or not isinstance(result.get("calls", []), list):
@@ -227,6 +233,11 @@ def execution_attempts(result: Any) -> list[Attempt]:
         ):
             raise HarnessError("an execution result's relay refusal has a bad action or outcome")
         out.append(_attempt(entry.get("action", ""), entry["outcome"], entry.get("reason")))
+    omitted = result.get("relay_refusals_omitted", 0)
+    if isinstance(omitted, bool) or not isinstance(omitted, int) or omitted < 0:
+        raise HarnessError("an execution result's relay_refusals_omitted is not a count")
+    if omitted:  # requests past the listed ones are unseen: fail closed, as an ungranted attempt
+        out.append(Attempt("action", UNLISTED.format(n=omitted), "error", "relay-refusals-omitted"))
     return out
 
 

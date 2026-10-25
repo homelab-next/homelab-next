@@ -311,7 +311,7 @@
     "relay_refusals": {
       "type": "array",
       "maxItems": 64,
-      "description": "The program's own requests (presenting the run's token) that the runner's relay refused before they reached the broker: they took no step, are not in calls and the broker never saw them (an action that is not an action name, a target that is not a svc: id, a call after the run paused or stopped, past the step bound, a replay mismatch), in the order they arrived, the first 64 only. A line without the run's token is not the program's and is never listed. action is what the program sent (untrusted program text, one line, cut to 128 characters), so a consumer reads it as an attempt, never as a decision of the broker's.",
+      "description": "The program's own requests (presenting the run's token) that the runner's relay refused before they reached the broker: each is no entry of calls and the broker never saw it (an action that is not an action name, a target that is not a svc: id, a call after the run paused or stopped, past the step bound, a replay mismatch; runner-fault for a refusal the runner does not name), in the order they arrived, the first 64 only. A line without the run's token is not the program's and is never listed. action is what the program sent (untrusted program text, one line, cut to 128 characters), so a consumer reads it as an attempt, never as a decision of the broker's.",
       "items": {
         "type": "object",
         "properties": {
@@ -347,7 +347,8 @@
               "call-cap-reached",
               "journal-unavailable",
               "step-outcome-unknown",
-              "replay-mismatch"
+              "replay-mismatch",
+              "runner-fault"
             ]
           }
         },

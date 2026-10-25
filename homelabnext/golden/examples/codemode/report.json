@@ -59,9 +59,9 @@
       "digest": "sha256:2914084cb8a3dddecfe2232809c9a1a34058453744a67fef8415c27c37ffb122",
       "version": 2
     },
-    "digest": "sha256:e522c9120a60d62e11967be3c45486197de56a90d9bf1186af1f70899e085e4c",
+    "digest": "sha256:5503c739d3ebb1d5ca2ba1b40ced9b345231901d6a8769ddafcbc2b0f753bd79",
     "fence_rules": "sha256:86251fd3aef3fd098f86fcb34ae91841a347bcd26eac7b4d051975cf99962013",
-    "harness": 4,
+    "harness": 5,
     "index": {
       "profile:reader": "sha256:318adf1c81447701854a6bfb985ff94d21dfb0cb6804a8c06a81a7a3621f29d2",
       "profile:triage": "sha256:11af857dd1e09b4068e3b9396ae6100a01c17839d82e68c36ab83c06e14a3469"

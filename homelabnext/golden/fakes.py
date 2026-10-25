@@ -524,10 +524,11 @@ class FakeBackend:
         }
         try:
             result = self.broker.call(self.actor, CODEMODE_EXECUTE, params)
-        except BrokerError as exc:  # the execute itself refused: an attempt of codemode.execute
+        except BrokerError as exc:  # the execute itself refused: an attempt of codemode.execute,
+            # never a call of a program (nothing ran), so broker and denied calls stay as they were
             reason = str(getattr(exc, "reason", "") or type(exc).__name__)[:64]
-            call = {"step": 0, "action": CODEMODE_EXECUTE, "outcome": "denied", "reason": reason}
-            return {"status": "error", "refused": reason, "calls": [call]}
+            refused = {"action": CODEMODE_EXECUTE, "outcome": "denied", "reason": reason}
+            return {"status": "error", "refused": reason, "calls": [], "relay_refusals": [refused]}
         return dict(result)
 
     def _runner_for(self) -> Runner:

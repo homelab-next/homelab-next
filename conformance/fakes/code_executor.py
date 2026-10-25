@@ -193,6 +193,7 @@ class ForkingExecutor:
     _pause = "sticky"  # a pending reply pauses the run whatever the program catches
     _wire = "full"  # the wire carries a call's op and target
     _keep_prelude = True  # the prelude runs before the program (rule h)
+    _prelude_failure = "error"  # a prelude that fails ends the run, a sandbox error (rule h)
 
     def __init__(self) -> None:
         self._dirs: list[str] = []
@@ -277,6 +278,7 @@ class ForkingExecutor:
             "cpu_backstop_s": math.ceil(limits.cpu_s) + 1,
             "wall_s": limits.wall_s,
             "egress": self._egress,
+            "prelude_failure": self._prelude_failure,
         }
         started = time.monotonic()
         chan = _Zygote.get().spawn(cfg, program, prelude)
@@ -506,6 +508,13 @@ class PreludeDroppedExecutor(ForkingExecutor):
     calling a generated namespace fails on a name it was promised."""
 
     _keep_prelude = False
+
+
+class PreludeFailureSwallowedExecutor(ForkingExecutor):
+    """Mutant: a prelude that fails is ignored and the program runs anyway, without the names
+    the prelude was to bind (an executor that wraps the prelude in a bare ``except``)."""
+
+    _prelude_failure = "swallow"
 
 
 class BareWireExecutor(ForkingExecutor):

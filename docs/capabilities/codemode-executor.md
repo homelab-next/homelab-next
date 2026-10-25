@@ -88,8 +88,9 @@ h. *The prelude runs first, in the program's namespace.*  `run` takes an optiona
    not a trust boundary: it runs with the program's rights and nothing more.
 
 **The program's view (language `python`).**  The program is module source.  It sees one name
-of its own, `broker`, and the names the prelude defines: `broker.call(action, args=None, *, target=None)` sends one request to
-the broker and returns the reply's value, and `broker.submit(action, args=None, *, target=None)`
+of its own, `broker`, and the names the prelude defines:
+`broker.call(action, args=None, *, target=None)` sends one request to the broker and returns
+the reply's value, and `broker.submit(action, args=None, *, target=None)`
 submits one for approval (the reply is pending, so the run pauses; CM-5b).  Calls are
 synchronous (no `await`).  Its value is the module
 global `result` when it ends (`None` when unset).  Printed text (stdout and stderr together)
@@ -258,7 +259,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 |---|---|---|---|
 | `broker-call-roundtrip` | MUST | a program's broker calls reach the broker with the run's token and their values come back |  |
 | `submit-and-target-relayed` | MUST | a program's broker.submit reaches the broker as op submit and a call's target as its target (the CM-4 wire's optional fields, which the runner relays as token_submit and target) |  |
-| `stubs-reach-the-broker` | MUST | with the prelude the runner hands over (the generated namespaces), a program calling a stub reaches the broker with that stub's action, its keywords as the params and its target as the call's target, exactly as the broker.call it stands for; broker.call works beside it |  |
+| `stubs-reach-the-broker` | MUST | with the prelude the runner hands over (the generated namespaces), run before the program, a program calling a stub reaches the broker with that stub's action, its keywords as the params and its target as the call's target, exactly as the broker.call it stands for; broker.call works beside it; a prelude that fails is a sandbox error and the program never runs |  |
 | `no-network-but-broker` | MUST | a program cannot connect or send to anything but the broker, nor resolve a name |  |
 | `no-credentials` | MUST | the sandbox environment and readable files hold none of the caller's secrets, nor the token |  |
 | `limits-enforced` | MUST | CPU, memory, wall-clock and output caps end the run with status limit naming the cap |  |
@@ -292,6 +293,7 @@ Each is a deliberately broken fake (`hnx conform run codemode-executor --target 
 | `open-egress` | `no-network-but-broker` | the sandbox's network is on: a program reaches any address, not only the broker |
 | `pause-catchable` | `pending-pauses-the-run` | a pending reply is an ordinary exception: except Exception swallows the pause |
 | `prelude-dropped` | `stubs-reach-the-broker` | the prelude is never run: a program sees only broker, not the generated namespaces |
+| `prelude-failure-swallowed` | `stubs-reach-the-broker` | a prelude that fails is ignored and the program runs without the names it binds |
 | `reused-state` | `disposable` | one scratch directory for every run, never cleaned |
 | `unbounded-result` | `result-bounded` | an oversized value is returned whole |
 
