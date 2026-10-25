@@ -157,7 +157,7 @@ fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions
 
-29 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
+30 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
 line for each. The first twelve cover schemas in git, registry and DNS aliases, shared libraries,
 role interface, swap procedure, detections as code, model roles, export hooks, bus placement,
 records lifecycle, the public/private split, and the deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
