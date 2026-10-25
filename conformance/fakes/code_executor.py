@@ -6,13 +6,14 @@ rejects in-process and plain-subprocess execution as a sandbox; this fake exists
 ``codemode-executor`` suite has a subject whose checks observe something real in CI without
 root, Docker or gVisor.  It has the shape decision 5 asks of the real one -- a long-lived
 process that forks a fresh child per run -- and none of its hardening.  Per run
-(``conformance/protocols/codemode_executor.py``, rules a-g):
+(``conformance/protocols/codemode_executor.py``, rules a-h):
 
 * a fork of the zygote (``code_executor_child.py``: a ``python -I -S -B`` started once, with an
   empty environment, that never runs a program itself) in its own session, with an environment
   built from nothing (``HOME``, ``TMPDIR`` and a locale; not one variable of the caller's) and a
-  fresh scratch directory as its working directory, removed when the run ends; the program
-  reaches it as an unlinked file, so its size is bound only by ``MAX_PROGRAM_CHARS``;
+  fresh scratch directory as its working directory, removed when the run ends; the program (and
+  the prelude, run first in the program's namespace, rule h) reaches it as an unlinked file, so
+  its size is bound only by ``MAX_PROGRAM_CHARS``;
 * inside it a broker client that counts calls (``max_calls``) and turns each reply into a
   value, ``broker.Denied``, ``broker.Error`` or a sticky ``broker.Paused``; an address-space cap
   (a backstop well above the memory cap) and an audit hook that refuses connections to anything
@@ -151,13 +152,15 @@ class _Zygote:
                 atexit.register(cls._current.close)
             return cls._current
 
-    def spawn(self, cfg: dict, program: str) -> socket.socket:
+    def spawn(self, cfg: dict, program: str, prelude: str = "") -> socket.socket:
         """Ask for one run; returns the run's channel (its pid and pipes, then its exit).  The
-        program goes as an unlinked file, so its size is not bound by a socket message."""
+        prelude and the program go as one unlinked file (the prelude's length in bytes on its
+        first line, then the two), so their size is not bound by a socket message."""
         ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         try:
             with tempfile.TemporaryFile() as code:
-                code.write(program.encode("utf-8"))
+                head = prelude.encode("utf-8")
+                code.write(b"%d\n" % len(head) + head + program.encode("utf-8"))
                 code.flush()
                 code.seek(0)
                 with self._lock:
@@ -189,6 +192,8 @@ class ForkingExecutor:
     _egress = "broker-only"  # what the child's hook lets the program connect to
     _pause = "sticky"  # a pending reply pauses the run whatever the program catches
     _wire = "full"  # the wire carries a call's op and target
+    _keep_prelude = True  # the prelude runs before the program (rule h)
+    _prelude_failure = "error"  # a prelude that fails ends the run, a sandbox error (rule h)
 
     def __init__(self) -> None:
         self._dirs: list[str] = []
@@ -227,26 +232,37 @@ class ForkingExecutor:
 
     # ------------------------------------------------------------ contract
     def run(
-        self, program: str, *, language: str, broker: BrokerEndpoint, limits: Limits
+        self,
+        program: str,
+        *,
+        language: str,
+        broker: BrokerEndpoint,
+        limits: Limits,
+        prelude: str = "",
     ) -> ExecutionResult:
         if language not in self.languages:
             raise UnsupportedLanguage(
                 f"this executor runs {sorted(self.languages)}, not {language!r}"
             )
-        if len(program) > MAX_PROGRAM_CHARS:
-            raise ProgramTooLarge(f"{len(program)} characters, over {MAX_PROGRAM_CHARS}")
-        try:
-            program.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise UnencodableProgram(f"not UTF-8 text at character {exc.start}") from None
+        for what, text in (("program", program), ("prelude", prelude)):
+            if len(text) > MAX_PROGRAM_CHARS:
+                raise ProgramTooLarge(f"{what}: {len(text)} characters, over {MAX_PROGRAM_CHARS}")
+            try:
+                text.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise UnencodableProgram(
+                    f"{what}: not UTF-8 text at character {exc.start}"
+                ) from None
         workdir = self._workdir()
         try:
-            return self._run(program, broker, limits, workdir)
+            return self._run(
+                program, prelude if self._keep_prelude else "", broker, limits, workdir
+            )
         finally:
             self._release(workdir)
 
     def _run(
-        self, program: str, broker: BrokerEndpoint, limits: Limits, workdir: str
+        self, program: str, prelude: str, broker: BrokerEndpoint, limits: Limits, workdir: str
     ) -> ExecutionResult:
         cfg = {
             "host": broker.host,
@@ -262,9 +278,10 @@ class ForkingExecutor:
             "cpu_backstop_s": math.ceil(limits.cpu_s) + 1,
             "wall_s": limits.wall_s,
             "egress": self._egress,
+            "prelude_failure": self._prelude_failure,
         }
         started = time.monotonic()
-        chan = _Zygote.get().spawn(cfg, program)
+        chan = _Zygote.get().spawn(cfg, program, prelude)
         fds: list[int] = []  # the run's output and result pipes while they are open
         pid = None
         exit_code: list[int] = []  # the run's exit status once its supervisor has reported it
@@ -484,6 +501,20 @@ class UnboundedResultExecutor(ForkingExecutor):
 
     def _result_budget(self, limits):
         return None
+
+
+class PreludeDroppedExecutor(ForkingExecutor):
+    """Mutant: the prelude is never run (an executor that binds only ``broker``), so a program
+    calling a generated namespace fails on a name it was promised."""
+
+    _keep_prelude = False
+
+
+class PreludeFailureSwallowedExecutor(ForkingExecutor):
+    """Mutant: a prelude that fails is ignored and the program runs anyway, without the names
+    the prelude was to bind (an executor that wraps the prelude in a bare ``except``)."""
+
+    _prelude_failure = "swallow"
 
 
 class BareWireExecutor(ForkingExecutor):

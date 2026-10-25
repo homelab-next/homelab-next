@@ -2,9 +2,11 @@
 # Code Mode build plan
 
 The order in which [ADR-0031](adr/0031-code-mode-through-the-broker.md) (proposed) is built.
-CM-1, CM-2, CM-3, CM-4, CM-5a, CM-5b and CM-6 have landed (described below); nothing else here is built yet. Steps
+CM-1, CM-2, CM-3, CM-4, CM-5a, CM-5b and CM-6 have landed (described below), and of phase 2
+([hardening](#phase-2-hardening)) CM-10, CM-11 and CM-12; nothing else here is built yet. Steps
 tagged **PUBLIC-NOW** are provable in CI with fakes, like the [build order](build-order.md)'s P
-phases; steps tagged **SERVER** need the lab and are documented, not run, here.
+phases; steps tagged **SERVER** need the lab and are documented, not run, here; steps that also
+say **operator-gated** wait for the operator to authorize their probes before any is written.
 
 The rule from the build order holds: **contracts before services.** The executor and runner
 contracts, with their reference fakes and mutants, land before any real sandbox does, and the
@@ -14,6 +16,12 @@ real executor goes live only when the same suite passes against it.
 CM-1 ADR + plan --> CM-2 schemas --> CM-3 generator --+--> CM-5a tokens --> CM-5b runner --> CM-6 golden suites
                                   \-> CM-4 executor contract -/                                |
 CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role live (SERVER)
+                                 ^        |                          |
+Phase 2:                         |        v                          v
+CM-10 stubs, CM-11 relay         |   CM-15 adversarial suite    CM-16 live injection corpus,
+refusals, CM-12 read actions     |   (SERVER, op.-gated)        CM-17 evals on a timer (SERVER)
+(landed)                         |
+CM-13, CM-14 (operator-gated) ---+
 ```
 
 ## Phase 1: read-only, one PR per step
@@ -26,9 +34,9 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 | CM-4 | PUBLIC-NOW, **landed** | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
 | CM-5a | PUBLIC-NOW, **landed** | Capability tokens issued, held and enforced by the broker ([broker](broker.md#code-mode-capability-tokens)): `codemode.execute`'s params checked as an execution request and the request in flight, bound to its runner (the registered one, else the one the manifest action names in `runner:`, required with several runners), while its handler runs; `issue_token` for that runner only, claims from the request, actions narrowed to what `decide()` admits for the actor, lifetime and live tokens capped by the manifest's `codemode` block, the call cap per execution (a resume inherits what is left); execution ids per actor; the secret kept as a digest; every token call checked in order (invalid, sandbox both ways, expired, spent, paused, action, cap) and counted broker-side before `decide()`; answers and post-admission refusals naming the request; a call needing approval, or a submit, stores the request and pauses the token in one step; spend with an outcome (`finished`, `paused`), resume of a paused execution only, `token_run` of the paused request; a crash sweep and retention; audit 1.3 `token_id`/`execution_id` and `token-pause`/`token-spend`; the `runner` and `sandbox` socket peers, the runner exempt from the refusal limit. The `broker` contract's feature `codemode-tokens`, proved by the extended suite `broker-tokens` | the thirteen MUST checks pass on the fake and the reference broker; each of the fourteen mutants is caught by its own check only |
 | CM-5b | PUBLIC-NOW, **landed** | The runner, `codemode.execute`'s handler ([below](#cm-5b-the-runner); `homelabnext/codemode/runner.py`): the execution request checked, the run's token from `issue_token` as the bound runner (the actor's granted actions, never `codemode.*`, the cap and lifetime from the budget), the program, the token and the run's endpoint (the CM-4 wire, served by the runner's relay) handed to a `CodeExecutor`, and an `execution_result` back (status, calls, logs, pending, value and `truncated`, held to the schema); every program call a broker request with the token (`call` is `token_call`, `submit` is `token_submit`, the paused step on a resume `token_run`), over the socket as the runner and sandbox peers with the bearer line; an exec action's envelope (by the index's `kind`) unwrapped to `output` (JSON or text) and the cases that are not that success defined (`output-truncated`, `handler-failed`, `result-schema-mismatch` against the index's result schema, `result-too-large`, each data, the call record marked `delivered_as`); a broker refusal a denied call the program catches as `broker.Denied`, with the request ids once the broker built the request; the step journal (`journal_step`, local, append-only, `0700`, an intent before every call and its answer after, refusals included, a keyed fingerprint per call, bounded, retention 7 days finished and 30 otherwise; a step of unknown outcome never re-sent, a journal failure ending the run unresumable, a crashed run `interrupted`); steps only for calls the relay accepted (the run's token, a well-formed action and target, at most 200), its own refusals bounded, connections served concurrently with a short read timeout, an optional peer-uid check; a submit or a call needing approval pausing the run (`pending`); a resume reading `token_status`'s `paused_by_state` (never polling `token_run`), pausing again unissued while it waits, else answering journalled steps from the journal (`replayed`), `token_run` of the paused request and only the later calls new, a different call refused `replay-mismatch`, a resume claimed atomically; the broker's `call-cap-reached` ending the run `limit` (`calls`). The tool class `codemode` (read-only, reader-forbidden, not broker-only), `platform/mcp_server` 1.2, the record `hnx-codemode` (`codemode_search`, `codemode_describe` over the generator's index, narrowed to the broker's grant; execute stays `broker_call` of `codemode.execute` on `hnx-broker`), `cap:codemode-runner` classed `exec`. The `codemode-runner` capability, the eighteenth | the eight MUST checks pass on the fake broker and the reference service; each of the eight mutants is caught by its own check only; G-13 and `make mcp-check` green |
-| CM-6 | PUBLIC-NOW, **landed** | The golden suites `codemode-triage` and `codemode-reader` ([below](#cm-6-golden-suites); `homelabnext/golden/agentic.py`, `homelabnext/golden/examples/codemode/`): every task posed in classic MCP mode (`broker_actions`, `broker_call`, one broker action per turn) and in Code Mode (`codemode_search`, `codemode_describe`, `codemode_execute`, one program through the CM-5b runner) to the same model against the same broker world, read-only (the grant is `service.status`, the example manifest's read action; the reader's Code Mode half is hypothetical, a grant of the fake world only, outside the totals); a plain-text turn protocol (one JSON object a turn) and every tool result fenced as untrusted data by the new template `agent-tool-result`; `schemas/agent/golden_task` 1.1 (additive: `modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`); trace scorers in the golden registry (`broker_calls`, `denied_calls`, `ungranted_actions` (always applied: an attempt outside the grant fails the task even when the broker refused it; the attempts are derived from the execution result's `calls`, and a program's request the relay refused before the broker is seen only through the fake's tap: live, it needs the runner to list relay-refused requests in its result), `turns`) beside the answer scorers; the G-02 pass, each corpus case placed in a fixture result a program reads, a follow (a canary, a call-shaped or quoted-literal forbidden tool in a reply, program code included, or that tool attempted) a failure; a scripted, recorded fake model (`homelabnext/golden/fakes.py`) behind the fake inference server, `fence` and a deliberately `naive` control the report proves caught in both modes; the report `homelabnext/golden/examples/codemode/report.json` (`hnx golden codemode --check`, in `make gates` and CI) | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
-| CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; the stubs are synchronous, so a TypeScript executor must offer a blocking host call to the broker (`Atomics.wait` on a worker, or a sync bridge): check it before choosing | a short decision note picks the executor and records the numbers |
-| CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite, after the egress-probe fixes from phase 2, passes against the real executor on staging |
+| CM-6 | PUBLIC-NOW, **landed** | The golden suites `codemode-triage` and `codemode-reader` ([below](#cm-6-golden-suites); `homelabnext/golden/agentic.py`, `homelabnext/golden/examples/codemode/`): every task posed in classic MCP mode (`broker_actions`, `broker_call`, one broker action per turn) and in Code Mode (`codemode_search`, `codemode_describe`, `codemode_execute`, one program through the CM-5b runner) to the same model against the same broker world, read-only (the grant is `service.status`, the example manifest's read action, and since CM-12 the triage suite's adds `dns.lookup`, `dhcp.leases` and `hypervisor.guests`; the reader's Code Mode half is hypothetical, a grant of the fake world only, outside the totals); a plain-text turn protocol (one JSON object a turn) and every tool result fenced as untrusted data by the new template `agent-tool-result`; `schemas/agent/golden_task` 1.1 (additive: `modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`); trace scorers in the golden registry (`broker_calls`, `denied_calls`, `ungranted_actions` (always applied: an attempt outside the grant fails the task even when the broker refused it; the attempts are derived from the execution result's `calls` and, since CM-11, its `relay_refusals`), `turns`) beside the answer scorers; the G-02 pass, each corpus case placed in a fixture result a program reads, a follow (a canary, a call-shaped or quoted-literal forbidden tool in a reply, program code included, or that tool attempted) a failure; a scripted, recorded fake model (`homelabnext/golden/fakes.py`) behind the fake inference server, `fence` and a deliberately `naive` control the report proves caught in both modes; the report `homelabnext/golden/examples/codemode/report.json` (`hnx golden codemode --check`, in `make gates` and CI) | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
+| CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; the stubs are synchronous, so a TypeScript executor must offer a blocking host call to the broker (`Atomics.wait` on a worker, or a sync bridge): check it before choosing; a TypeScript executor also needs a TypeScript runtime prelude generated for it (CM-10 generates the Python one) | a short decision note picks the executor and records the numbers |
+| CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials; for a TypeScript executor, the generated TypeScript prelude | the CM-4 suite, with the probes of [CM-13 and CM-14](#phase-2-hardening), passes against the real executor on staging |
 | CM-9 | SERVER | One role enabled in the private overlay with read actions only (DNS and DHCP lookups, hypervisor nodes and guests, network clients and devices, one lake query) | the correlation task passes on the lab; the live golden run beats MCP mode for that role, or the role stays on MCP mode and the result is recorded |
 
 CM-4 as landed: the contract is `conformance/protocols/codemode_executor.py`, in the vocabulary of
@@ -38,15 +46,20 @@ a run, a value cut to a `truncated` prefix of its pinned JSON, the printed outpu
 call of a paused run. The broker is an endpoint the harness serves where the executor declares
 (`broker_bind`) and a token scoped to the run, never an environment variable; the executor owns
 the transport, and its broker client caps calls (`max_calls`, refused as `call-cap-reached`).
-The suite `conformance/suites/codemode_executor.py` has sixteen MUST checks: the five above plus
+The suite `conformance/suites/codemode_executor.py` has seventeen MUST checks: the five above plus
 a broker round trip, errors, denials, a denial's reason, a pause the program cannot swallow,
-broker errors, the call cap, oversized, unencodable and unknown-language programs refused, and
-(with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`.
+broker errors, the call cap, oversized, unencodable and unknown-language programs refused,
+(with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`, and (phase 2,
+CM-10) `stubs-reach-the-broker`: with the generated prelude `run(..., prelude=...)` takes (rule h),
+a program calling a stub reaches the broker with its action, its keywords as params and its
+target, on the wire exactly as the `broker.call` it stands for, and a prelude that fails is a
+`sandbox` error before the program runs.
 The client-side pause and call cap are behaviour, not enforcement: the broker's refusal on a
 paused or over-cap token is, and has landed with CM-5a (the `broker-tokens` checks
 `paused-token-refused` and `call-cap-enforced-by-the-broker`, at the broker's API). Its mutants are
 `open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap`,
-`pause-catchable` and `bare-wire`, and the reference page is
+`pause-catchable`, `bare-wire`, `prelude-dropped` and `prelude-failure-swallowed`, and the
+reference page is
 [capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
 programs per language, and a declared language a check has no program for fails it as
 untested. The reference fake forks each program from a warm Python process that never runs one
@@ -65,15 +78,60 @@ hnx codemode gen --check    # writes nothing; exit 1 on drift (make gates, CI)
 hnx codemode gen --manifest path/to/manifest.yml --out build/codemode   # another manifest
 ```
 
-Per profile the manifest grants actions to, `<out>/<profile>/` gets three files from one model
+Per profile the manifest grants actions to, `<out>/<profile>/` gets four files from one model
 (`homelabnext/codemode/model.py`):
 
 - `types.d.ts`: a `declare namespace` per action prefix, one function per action taking the
   params as one object;
 - `stubs.pyi`: a class per namespace bound to a module-level name, keyword-only parameters;
+- `prelude.py`: the **runtime prelude**, which binds those namespaces in the sandbox (below);
 - `search.json`, for `codemode_search` and `codemode_describe`: per action `name`, `call` (what a
   program writes), `summary`, `tier`, `needs_approval`, `kind` (exec or lane), `params` (the exact
-  JSON Schema), `result` (type name and schema, or null) and `signatures` (one line per language).
+  JSON Schema), `target` (`required`, `optional` or null), `result` (type name and schema, or
+  null) and `signatures` (one line per language).
+
+**Actions about a target.** A request may name the `svc:` target it is about (the broker hands it
+to an exec handler as `HNX_BROKER_TARGET`), and nothing in a manifest said which actions read one,
+so a handler document now declares it: `target: required` or `optional` (`schemas/broker/handler`
+1.3, additive; absent, the action takes none; a lane action never does). The broker enforces
+`required`: a request without a target for such an action is refused `target-required`
+([broker](broker.md)); a target on an action that takes none is still admitted there, and the
+prelude refuses it in the sandbox instead (below). The method then takes a `target`
+beside its params: keyword-only in Python (`service.status(*, target: str, verbose: bool = ...)`,
+a required target first), a property of the argument object in TypeScript (`status(args: {
+target: string; verbose?: boolean })`), noted as the request's target and never a param. A
+parameter named `target` on such an action is refused (exit 2), since it would shadow the
+request's. Both example handlers read the target, so `service.status` and `service.restart`
+declare it `required`.
+
+**The runtime prelude.** `prelude.py` is Python source the executor runs in the program's own
+namespace, inside the sandbox and before the program, with `broker` already bound (CM-4 rule h,
+the check `stubs-reach-the-broker`). It defines each namespace as an object whose methods are
+`broker.call` of their action, bound when the prelude runs: `service.status(target="svc:queue",
+verbose=True)` is exactly `broker.call("service.status", {"verbose": True}, target="svc:queue")`,
+the same request with the same token, so the broker checks it the same way, and a program that
+rebinds `broker` does not redirect the stubs. It passes every other keyword through as a param
+(the broker validates params, so a misspelt one is `invalid-params`, a denied call), holds no
+state or secret, and `broker.call` keeps working beside it. Two mistakes are refused in the
+sandbox before anything is sent, as a `TypeError` the program can catch (no step, no call): a
+missing required `target`, and a `target=` given to an action that takes none (an open params
+schema would otherwise have taken it as a param). A namespace that would rebind one of the
+program's own globals (`broker`, `result`, `__builtins__` or a Python builtin such as `print` or
+`type`) is refused by the generator (exit 2).
+
+**The runner never reads `prelude.py`.** It rebuilds each profile's prelude from that profile's
+search index when it loads the index (`homelabnext.codemode.runner.load_preludes`, through
+`homelabnext.codemode.render.prelude_from_index`) and hands that text to the executor with each
+program; `prelude.py` is the same text, committed so a reviewer sees what runs and held by `gen
+--check`. A tampered copy of the file therefore changes nothing, and the rebuild takes each
+method's namespace and name from its action's own name (an index's `call` is ignored), so no
+edit of the index makes `service.status` send `service.restart`. An index is read through one
+descriptor opened without following a symlink, and refused when it is not a regular file, is
+group- or world-writable, or belongs to another user than the runner's (or root); a profile whose
+index is refused or cannot be rebuilt from runs with `broker` alone. A call that needs approval
+goes through `broker.call` too, which pauses the run like a submit. The prelude is Python only: a
+TypeScript executor (CM-7, CM-8) needs a TypeScript prelude generated for it, and the `.d.ts`
+already types the same calls.
 
 **Calls are synchronous** in both languages (`def method(...)`, `function method(args): R`, no
 `Promise`): a call returns its result, and a call that needs approval pauses the whole run until
@@ -116,7 +174,8 @@ the generator (exit 2). The MCP catalog is not read yet; the `codemode` tool cla
 record (`hnx-codemode`) arrived with the runner ([CM-5b](#cm-5b-the-runner)), reading this index.
 
 `--check` fails (exit 1) on a file that differs (a hand edit; a manifest or handler change), one
-that is missing or a symlink, and a marked `<slug>/<file>` no profile renders any more; it exits
+that is missing or a symlink, a marked `<slug>/<file>` no profile renders any more, and any other
+file in a rendered profile's directory (`unexpected`); it exits
 100 when it cannot read the output directory. `gen` writes each file through a temporary file and
 `os.replace`, refuses a symlinked profile directory or file, and deletes only those stale marked
 files, checked again just before each unlink.
@@ -153,9 +212,10 @@ state directory. One run:
    `paused`;
 4. the runner serves the run's endpoint (the CM-4 wire, one JSON line per call, a fresh listener
    per run on an ephemeral port of the executor's `broker_bind`) and the executor runs the
-   program with it and the token. The program's view is CM-4's plus `broker.submit(action,
-   args)` and a `target=` keyword (the wire's optional `op` and `target`, which the executor
-   contract's `submit-and-target-relayed` check holds an executor to);
+   program with it, the token and the actor's runtime prelude ([CM-3](#cm-3-the-generator)).
+   The program's view is CM-4's plus `broker.submit(action, args)`, a `target=` keyword (the
+   wire's optional `op` and `target`, which the executor contract's `submit-and-target-relayed`
+   check holds an executor to) and the generated namespaces (`service.status(target=...)`);
 5. the token is spent `paused` when the run ended on a pause, else `finished`, and the result is
    held to `schemas/codemode/execution_result` before it is returned (a result that fails is a
    runner bug, `RunnerError`, which the broker reports `handler-failed`). A journal failure
@@ -176,6 +236,25 @@ steps:
 - past 200 steps a call is `call-cap-reached` and the run ends `limit` (`calls`);
 - once the run has paused nothing is sent or counted (`token-paused`): nothing a line does after
   the pause changes the run's outcome.
+
+Every request **of the program's own** (it presents the run's token) that the relay refuses is
+listed in the result's `relay_refusals` (CM-11): `at_step` (the steps the run had taken when it
+arrived), `op`, `action` as the program sent it (untrusted text, one line, cut to 128
+characters; absent when it was not text), `outcome` (`denied` or `error`, how the program was
+told) and `reason` (`request-malformed`, `too-many-refusals`, `token-paused`,
+`call-cap-reached`, `journal-unavailable`, `step-outcome-unknown`, `replay-mismatch`, and
+`runner-fault`, logged, for a refusal the runner does not name), the first 64 in arrival order
+and the rest counted in `relay_refusals_omitted`, which the CM-6 harness treats as an ungranted
+attempt (it fails closed on what it cannot see). A line without the token is
+not the program's and is never listed (anyone on the loopback could write one). They are a list of
+their own, not entries of `calls`, because a call record is a step (`calls` is step-ordered with
+unique steps, bounded by the 200-step bound, and counted as broker calls) holding a well-formed
+action and the broker's own outcome, and a relay refusal is none of those: it is no answer of
+the broker's (a replay mismatch even used a step number the result then skips), its action is
+often not an action name (`delete_mailbox`), and the broker never saw it. So a program's
+attempt is in its result even when it never reached the broker, which is what the CM-6 harness
+reads, and the contract check `relay-refusals-are-reported` (mutant `relay-refusals-hidden`)
+holds a runner to it.
 
 The relay serves connections concurrently, at most 8 at once, each with a **deadline for its
 whole request** (5 s, or the run's wall budget when shorter), however slowly it drips; when every
@@ -218,7 +297,11 @@ so in a deployment the relay's connection comes from the sandbox user its tokens
 The call record and the journal always keep the broker's own outcome; the reply is what the
 program may use, and `delivered_as` says when the two differ. `calls`, `pending` and the journal
 are the runner's; `value`, `logs` (the printed output as single lines, unsafe characters
-replaced, at most 100 of 1000 characters) and `error.message` are program output.
+replaced, at most 100 of 1000 characters) and `error.message` are program output. **Known:** they
+are not scrubbed of the run's token. The program can read the token its client holds and put it
+in its value or its output, which the result then carries to the agent; the token is bound to
+that one execution and its sandbox, capped and short-lived, and it is spent when the run ends, so
+a copy of it in a result reaches nothing (a spent token is refused, `token-spent`).
 
 **Status.** A run whose journal failed, or that met a step of unknown outcome, is `error`
 (`broker`); a run past the relay's refusal bound is `error` (`token`); a run with a pending call
@@ -293,13 +376,16 @@ tools only read, and what runs code is the broker action, already `exec` and bro
 
 **The contract.** `codemode-runner` (`conformance/protocols/codemode_runner.py`, the eighteenth
 capability): the suite (`conformance/suites/codemode_runner.py`) asks the broker, as an agent, to
-run real programs and judges the result, the broker's state and the journal, with eight MUST
+run real programs and judges the result, the broker's state and the journal, with nine MUST
 checks, `result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-journalled`,
 `submit-pauses-the-run`, `resume-without-replay`, `resume-refuses-a-different-call`,
-`denied-pause-is-a-value` (with the `approval-control` hook) and `call-cap-ends-the-run`, and one
-mutant each (`raw-logs-unchecked-result`, `denial-as-error`, `refusals-unjournalled`,
-`pause-hidden`, `resume-resends`, `replay-by-step-only`, `denied-pause-waits`, `cap-hidden`),
-caught by its own check only. The subject is the reference runner over the fake broker (`fake`)
+`denied-pause-is-a-value` (with the `approval-control` hook), `call-cap-ends-the-run` and (CM-11)
+`relay-refusals-are-reported`, and one mutant each (`raw-logs-unchecked-result`,
+`denial-as-error`, `refusals-unjournalled`, `pause-hidden`, `resume-resends`,
+`replay-by-step-only`, `denied-pause-waits`, `cap-hidden`, `relay-refusals-hidden`), caught by its
+own check only, and a second for the last check, `foreign-lines-listed` (a line without the run's
+token listed as the program's; the check sends one from inside the sandbox where the executor's
+client exposes its endpoint, as the reference one does, and also holds `relay_refusals_omitted`). The subject is the reference runner over the fake broker (`fake`)
 or the reference service (`hnx conform run codemode-runner --target broker-reference`), with the
 forking test executor (`conformance/fakes/codemode_runner.py`). A call needing approval cannot be
 reached through the contract's API (an in-process command never needs one), so that path,
@@ -344,13 +430,24 @@ with every tool result, in both modes alike: a token cost per tool call that CM-
 **Fairness of the baseline.** MCP mode is held to **one tool call per turn**; clients that issue
 parallel tool calls in one turn would close some of the turn gap on the correlation tasks, so the
 turn counts here favour Code Mode on those tasks by construction. And the MCP baseline is a
-fenced, hardened MCP (every result fenced as untrusted data, a grant narrowed to one read
-action), not a typical one, so injection results compare two hardened setups. Not every task
+fenced, hardened MCP (every result fenced as untrusted data, a grant narrowed to read
+actions), not a typical one, so injection results compare two hardened setups. Not every task
 favours Code Mode: `codemode-triage`'s `queue-recovery` program fails (it reads a field the
 result does not have) and is rewritten, so Code Mode takes 4 turns and 2 broker calls to MCP
 mode's 3 and 1; the comparison counts the tasks Code Mode wins, ties and loses, and
 `codemode_adoptable` turns false when it is less accurate or not fewer turns on average (a test
-shows it flip).
+shows it flip). The DNS, lease and guest join (`guest-of-a-name`, CM-12) is the clearest case of
+the one-call-per-turn bias: MCP mode's 6 turns are 4 lookups that a parallel-calling client could
+issue in fewer turns (the two hypervisor reads at least). The fence screens IP addresses out of
+the tool results it hands the model (by default every one, documentation ranges such as RFC 5737
+included and private ones per the template's `redact_private_ips`), so an MCP-mode model joins on labels, not
+values. The harness keeps **one screener per conversation** (`render_prompt(..., screener=)`),
+so an address has the same `[REDACTED:ip:N]` label in every result of a run, as the screener's
+own contract says; a screener per render would restart the numbering in each result and make
+an address join impossible in MCP mode alone. The task's lease hostnames match no DNS or guest
+name, so MCP mode's recorded turns join on the label; a program joins the raw addresses inside
+the sandbox and returns only the reduced answer (which names no address, since the screener
+would redact it in either mode). Whether a model makes the label join is for CM-9 to measure.
 
 **Scorers.** The answer is scored by the suite's answer scorer (`json_fields` here), and the
 trace by the trace scorers of the golden registry (`homelabnext/golden/scorers.py`
@@ -361,11 +458,12 @@ max `{mcp: N, codemode: M}` must name both modes, which the schema and the loade
 otherwise) and `ungranted_actions`, which the harness applies to every task: an action outside the suite's grant, or a tool the mode does not
 offer, fails the task **whatever the broker answered** (the refusal is the enforcement, the
 attempt is the finding). In Code Mode the harness derives the attempts from the execution
-result's `calls` itself (every request that reached the broker), not from the backend's account;
-a request the relay refused before the broker saw it (`delete_mailbox`, not an action name) is not
-in `calls`, and is seen **only through the fake's tap** on the relay. Live, the reference runner
-does not list relay-refused requests in its result, so such a call is invisible until it does
-(the reply checks below still see the program's text).
+result itself, never from the backend's account: its `calls` (every request that reached the
+broker, the only ones counted as broker calls) and its `relay_refusals` (every request of the
+program's the relay refused before the broker saw it, `delete_mailbox` say, which is no action
+name), so the same derivation holds live as on the fakes. A result that only counts some
+refusals (`relay_refusals_omitted`) fails its task closed: the count is an ungranted attempt,
+since what hides behind it is unseen.
 A task passes when its answer passes and every check scores 1. Every task of the two suites has
 a `broker_calls` and a `turns` check.
 
@@ -417,13 +515,15 @@ naive model's runs, reached, follows and unfollowed per mode and per suite. The 
 harness version, the text the harness shows the model (`model_text`: each mode's tools, the
 system message, the protocol replies), the fence rules, the template, the corpus, each suite,
 script and profile index), and `--check` fails unless it is current, passing, and reproduced exactly by a fresh run.
-As committed: MCP mode 7/7 tasks at accuracy 1.0 in 27 turns (mean 3.86), 13 broker calls;
-Code Mode (`codemode-triage` only) 5/5 at 1.0 in 16 turns (mean 3.2), 9 broker calls; the
+As committed: MCP mode 8/8 tasks at accuracy 1.0 in 33 turns (mean 4.12), 17 broker calls;
+Code Mode (`codemode-triage` only) 6/6 at 1.0 in 19 turns (mean 3.17), 13 broker calls; the
 hypothetical reader Code Mode 2/2 in 6 turns (mean 3.0); nothing denied or ungranted; 0 follows,
 with the payload reached in 106 of 106 injected MCP runs, 53 of 53 Code Mode runs and 0 of 53
-hypothetical ones. `codemode-triage`: Code Mode wins 1 task, ties 3 and loses 1, adoptable on
-these fakes. The naive control followed every run it was reached in: 106/106 in MCP mode, 53/53
-in Code Mode (53 not reached, all in `codemode-reader`).
+hypothetical ones. `codemode-triage`: Code Mode wins 2 tasks (`not-running`, and CM-12's
+`guest-of-a-name`, 3 turns to 6 for the same 4 lookups), ties 3 and loses 1 (`queue-recovery`),
+adoptable on these fakes. The naive control followed every run it was reached in: 106/106 in MCP
+mode, 53/53 in Code Mode (53 not reached, all in `codemode-reader`), the Code Mode follows seen
+through the results' `relay_refusals` since CM-11.
 
 **`codemode-reader`'s Code Mode half is hypothetical.** A reader may not be granted
 `codemode.execute` (G-03: it is an acting action), and a test shows the reader rule still
@@ -447,50 +547,46 @@ them (or refuses, and there is no live G-02 pass); `actions` and `call` are
 `InvalidArguments` count as denied); `search` and `describe` the `hnx-codemode` index
 (`describe` raises `ValueError` for an action it does not list); `execute` is
 `call('codemode.execute', ...)` on the real runner with the real executor (CM-8), returning the
-execution result, whose `calls` the harness reads, and the relay-refused requests, `[]` until the
-runner lists them. Two gaps are live-only and not handled: a call needing approval ends the run
+execution result, whose `calls` and `relay_refusals` the harness reads. Two gaps are live-only and not handled: a call needing approval ends the run
 `paused` (recorded `pending`; the harness neither approves nor resumes), and per-run setup and
 teardown of real state (the fake builds a fresh broker per run; a live backend resets what
 `seed` placed). A live suite's expectations are written for the lab in the private overlay. Never point a real model at
 `FakeWorld`: the forking executor is not a sandbox, which is why it refuses programs it did not
 record. The live report is kept with the role's adoption decision.
 
-**What remains.** The executor binds only `broker`, so programs write `broker.call(action,
-params, target=...)`; the generated namespaces (`service.status(...)`) are the model's types,
-not yet bound in the sandbox, and the stubs have no `target` parameter although `service.status`
-takes one: both are for CM-7/CM-8 to settle. The example manifest has one read action, so the
-correlation tasks join lookups of one action; the DNS, lease and guest join of CM-9 needs those
-actions in a manifest.
+**What CM-10 to CM-12 settled.** Programs call the generated namespaces
+(`service.status(target="svc:queue")`, bound by the runtime prelude, CM-10), and the stubs take
+the `target` a per-target action needs; the execution result lists the requests the relay refused
+(CM-11), so the harness reads every attempt from the result, live as on the fakes; and the example
+manifest has the DNS, DHCP and hypervisor reads the CM-9 join needs (CM-12), joined by the task
+`guest-of-a-name`. What remains for CM-9 is the lab's own versions of those actions, with
+handlers that read the lab and fixtures `seed` can place, in the private overlay.
+
+## Phase 2: hardening
+
+A step tagged **operator-gated** has a precondition: the operator authorizes its probes before
+any of them is written; its done-when is what holds once they exist.
+
+| Step | Tag | Precondition | What lands | Done when |
+|---|---|---|---|---|
+| CM-10 | PUBLIC-NOW, **landed** | - | Programs call the generated stubs ([CM-3](#cm-3-the-generator)): a handler document declares `target` (`schemas/broker/handler` 1.3; the broker enforces `required`), the stubs and the index take it (keyword-only in Python, a property in TypeScript), `hnx codemode gen` writes each profile's runtime prelude `prelude.py`, which the runner rebuilds from the index rather than reads; reserved namespaces refused; CM-4 rule h (`run(..., prelude=)`) held by the MUST check `stubs-reach-the-broker` (mutants `prelude-dropped`, `prelude-failure-swallowed`); the CM-6 scripts call `service.status(target=...)` | `gen --check` holds the preludes; the check passes on the forking fake and both mutants are caught by it only; a tampered `prelude.py` is never what runs (a test) |
+| CM-11 | PUBLIC-NOW, **landed** | - | The runner lists the requests its relay refused ([the relay](#cm-5b-the-runner)): `relay_refusals` and `relay_refusals_omitted` in the execution result (draft schema, an example and three negatives), `codemode-runner` rule i and the MUST check `relay-refusals-are-reported` (mutants `relay-refusals-hidden`, `foreign-lines-listed`); the CM-6 harness derives every attempt from the result and fails a task closed on refusals it cannot see | the check passes on the fake broker and the reference service and both mutants are caught by it only; the naive control is caught in Code Mode through the result; an ungranted call hidden past 64 refusals fails its task (a test) |
+| CM-12 | PUBLIC-NOW, **landed** | - | Read actions for the CM-9 join in the example manifest: `dns.lookup`, `dhcp.leases`, `hypervisor.guests` (read tier, about a required target, stand-in handlers with result schemas, fictional data), granted to `profile:triage` only and absent from the production example (the names stay nouns read as lists, rather than a `noun.list-x` rename the lab's own actions may still choose); one screener per conversation in the CM-6 harness; the task `guest-of-a-name` in both modes | the task passes in both modes, MCP mode joining on the redacted label, and the report's comparison counts it ([CM-6](#cm-6-golden-suites)) |
+| CM-13 | PUBLIC-NOW, **operator-gated** | the operator's authorization of the egress probes | The egress-probe fixes deferred from the CM-4 review, needed before CM-8 because today's probes can pass a sandbox that has egress: the name-lookup probe looks up a random name and counts any resolver answer as reached (it resolves `localhost` today, which `/etc/hosts` answers without a resolver); the UDP probe is judged by what the decoy received (by a successful `sendto` today); more families and destinations (IPv6, `AF_UNIX`, ICMP, addresses other than the harness's); and a capped program reaches no broker after `run` returns | each probe fails a mutant that has that egress, caught by its own check only; the forking fake passes every probe; `hnx conform mutants all` is green |
+| CM-14 | PUBLIC-NOW, **operator-gated** | the operator's authorization of the isolation probes | The isolation probes deferred from the CM-4 review: a tamper check (a program resetting its client's state or calling the broker directly cannot pass the cap or a pause: the broker's refusal on the token is the enforcement, landed with CM-5a; the sandbox-side probe remains); an environment allowlist and canaries set before the executor is constructed, the canary absent from the output as well as the environment; well-known credential paths in the sandbox's filesystem; the harness's own `/proc` environment unreadable and a pid namespace of the sandbox's own; non-root, no capabilities, no-new-privileges, a read-only root, process-count and scratch-size limits; the output cap on stderr as well as stdout; the token absent beyond the environment; more disposable locations. The executor suite has 18 checks of the 24-check maximum, so these go in an extended suite (as `broker-tokens` extends `broker`) where they would not fit | every probe is a MUST check with a mutant caught by it only; the forking fake, which is not a boundary, is listed as failing the probes it cannot meet (none passes by being skipped); `hnx conform mutants all` is green |
+| CM-15 | SERVER, **operator-gated** | the operator's authorization of the attempts, and CM-8 on staging | The adversarial sandbox suite against the real executor on staging: escape attempts and resource exhaustion (processes, memory, scratch space, descriptors, connections), beside the CM-13 and CM-14 probes | every attempt ends contained, as its check states, in a run recorded with CM-8's decision note |
+| CM-16 | SERVER | CM-9 (a live completer and backend) | The G-02 corpus placed in tool results, against the lab's real models in both modes | a recorded report per role with 0 follows and the naive control caught |
+| CM-17 | SERVER | CM-9 | The live golden and injection evals on a timer in the private overlay, each run checked against the last accepted report, with a page on regression (accuracy down, mean turns up past a bound, any follow) | the timer has run; a seeded regression paged once (state-diffed) and the same standing regression did not page again |
+
+Phase 2 is done when CM-13 to CM-15 have passed against the real executor, CM-16's report is
+recorded for the CM-9 role, and CM-17's timer has run a week without an unexplained page.
+
+Follow-up, not a step: `tests/conform` has had its budget raised three times as suites grew,
+mostly by the mutant sweeps (each mutant a whole-suite run); splitting the sweeps into a suite of
+their own, with their own budget, would stop the raises.
 
 ## Later phases
 
-Each is planned as steps like the ones above when phase 1 closes.
-
-2. **Hardening.** An adversarial sandbox suite (escape attempts, egress probes, resource
-   exhaustion); the injection-in-results corpus against real models; the live golden and
-   injection evals on a timer with a page on regression. The isolation checks deferred from the
-   CM-4 review, pending operator authorization:
-   - *before CM-8*, because today's egress probes can pass a sandbox that has egress: the
-     name-lookup probe resolves `localhost`, which is answered from `/etc/hosts` without a
-     resolver (it should look up a random name and treat any resolver answer as reached), and
-     the UDP probe trusts a successful `sendto` (it should be judged by what the decoy
-     received);
-   - post-cap calls: a capped program must not reach the broker after `run` returns;
-   - a tamper check: a program resetting its client state or calling the broker directly
-     cannot exceed the cap or continue past a pause (the broker's refusal on the token is the
-     enforcement, landed with CM-5a and proved at the broker's API; the sandbox-side probe
-     remains);
-   - an environment allowlist and canaries set before the executor is constructed, and the
-     canary absent from the output as well as the environment;
-   - well-known credential paths in the sandbox's filesystem;
-   - more egress families and destinations: IPv6, `AF_UNIX`, ICMP, and addresses other than
-     the harness's;
-   - the harness's own `/proc` environment unreadable, and a pid namespace of the sandbox's own;
-   - non-root, no capabilities, no-new-privileges, a read-only root, and process-count and
-     scratch-size limits;
-   - the output cap applied to stderr as well as stdout;
-   - the token's absence beyond the environment;
-   - more disposable locations.
 3. **Rule approvals.** `rule` as an approver kind in the broker's approval check; a standing-rule
    schema, lint and register in the overlay; checks that a call outside a rule's shape escalates,
    a top tier is never rule-approved, an expired rule approves nothing and rule approvals are
@@ -503,8 +599,12 @@ Each is planned as steps like the ones above when phase 1 closes.
 ## Open questions
 
 - OpenShell or gVisor (the CM-7 spike), and so the language inside the sandbox (Python or TypeScript; the
-  stubs are generated for both from the same argument specs, synchronous in both).
+  stub types are generated for both from the same argument specs, synchronous in both, and the
+  runtime prelude for Python only so far: a TypeScript one comes with its executor).
 - Whether a read-only `codemode.execute` variant, whose token reaches only read actions, should
   exist for reader profiles.
 - N for rule proposals, and how long a standing rule lives.
 - Whether to pin `@cloudflare/codemode` or take only its ideas and the type generation.
+- Whether the live agent path (outside the golden harness) should also keep one screener per
+  conversation for fenced tool results, so redacted values stay joinable across turns there; it
+  builds one per pack today.

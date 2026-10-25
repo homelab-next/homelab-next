@@ -21,7 +21,7 @@ manifest says `dev_identity: true`.
 | Kind | Declared by | Runs |
 |---|---|---|
 | lane write | `handler: builtin/lane`, `lane: NAME`, tier `write` | the built-in lane writer: one file into the lane |
-| exec | a handler document in `handler_docs` (`schemas/broker/handler` 1.2) | the pinned handler file, digest-checked before every run |
+| exec | a handler document in `handler_docs` (`schemas/broker/handler` 1.3) | the pinned handler file, digest-checked before every run |
 | in-process | `BrokerService.register(command, fn, args)` + `allow(caller, [command])` | a Python function in the embedding program (the capability contract's API) |
 
 Every call goes through `homelabnext.broker.decide` first: the action is listed, the caller has a
@@ -138,6 +138,14 @@ a non-zero exit are `broker.Error` to the program), and the generated type does 
 The runner checks an output against the schema from the search index, and a mismatch reaches the
 program as `broker.Error` (`result-schema-mismatch`), data, never a failure. `hnx codemode gen`
 types the method's result from it.
+
+A handler document (1.3) may also carry `target`: `required` or `optional`, whether a request for
+the action names the `svc:` target it is about (handed to the handler as `HNX_BROKER_TARGET`);
+absent, the action takes none. The broker refuses a request for a `required` action that names
+no target (`target-required`, an `invalid` outcome, audited, after the params are checked), since
+its handler would report on nothing; it still admits a target on an action that takes none. A
+target is matched whole (`svc:dns` followed by a newline is `invalid-target`). `hnx codemode gen`
+gives the action's method a `target` parameter from it ([CM-3](codemode.md#cm-3-the-generator)).
 
 The broker validates `params` against `params_schema`, reads the handler once, checks its sha256
 against `handler_digest` (refusing with `handler-digest-mismatch`), and runs exactly those bytes
@@ -954,7 +962,8 @@ mapping is the same as for a local agent. Restrict that user's SSH key to the fo
 ## Walkthrough
 
 From a checkout, with the example manifest (`examples/broker/`: one agent profile `triage`, three
-lanes, a read-only `service.status` and an approval-gated `service.restart` stand-in). It sets
+lanes, a read-only `service.status`, an approval-gated `service.restart` and the read-only
+`dns.lookup`, `dhcp.leases` and `hypervisor.guests` stand-ins, all about a `--target`). It sets
 `dev_identity: true`, so the CLI's asserted `--as` drives it directly:
 
 ```sh

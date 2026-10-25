@@ -59,18 +59,32 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from conformance.protocols.codemode_executor import MAX_PROGRAM_CHARS
 from homelabnext.generators.core import MARKER
 
-from .model import SLUG_RE, CodemodeError, Method, ProfileModel, build_models
+from .model import (
+    SLUG_RE,
+    CodemodeError,
+    Method,
+    ProfileModel,
+    build_models,
+    class_name,
+    doc_line,
+    name_collisions,
+)
 
 __all__ = [
     "DEFAULT_MANIFEST",
     "DEFAULT_OUT",
     "FILES",
+    "PRELUDE_FILE",
     "check",
+    "prelude_from_index",
+    "prelude_source",
     "py_type",
     "render",
     "render_files",
+    "render_prelude",
     "ts_type",
     "write",
 ]
@@ -78,7 +92,9 @@ __all__ = [
 #: the public example the committed goldens are generated from, and where they live
 DEFAULT_MANIFEST = "examples/broker/manifest.yml"
 DEFAULT_OUT = "examples/codemode"
-FILES = ("search.json", "stubs.pyi", "types.d.ts")
+FILES = ("prelude.py", "search.json", "stubs.pyi", "types.d.ts")
+#: the runtime prelude of a profile (Python; a TypeScript one comes with its executor, CM-7/8)
+PRELUDE_FILE = "prelude.py"
 GENERATOR = f"{MARKER} codemode gen"
 SPDX = "SPDX-License-Identifier: Apache-2.0"
 #: the repository's ruff line length, which the committed stubs are linted at
@@ -180,12 +196,28 @@ def _ts_result_types(model: ProfileModel) -> list[str]:
     return out
 
 
+#: what a target is, in a method's notes
+TARGET_NOTE = "the svc:<name> the call is about (the request's target, not a parameter)"
+
+
+def _with_target(m: Method) -> dict[str, Any]:
+    """The method's argument object in TypeScript: its params, plus ``target`` (a string,
+    required when the action's target is) for an action that takes one."""
+    schema = dict(m.params, type="object")
+    if m.target:
+        schema["properties"] = {**(m.params.get("properties") or {}), "target": {"type": "string"}}
+        if m.target == "required":
+            schema["required"] = [*m.params.get("required", []), "target"]
+    return schema
+
+
 def _ts_args(m: Method) -> str:
-    props = m.params.get("properties") or {}
-    if not props and _open_value(m.params) is False:
+    schema = _with_target(m)
+    props = schema.get("properties") or {}
+    if not props and _open_value(schema) is False:
         return ""
-    optional = not set(m.params.get("required", []))
-    return f"args{'?' if optional else ''}: {_ts_object(dict(m.params, type='object'))}"
+    optional = not set(schema.get("required", []))
+    return f"args{'?' if optional else ''}: {_ts_object(schema)}"
 
 
 def _ts_returns(m: Method) -> str:
@@ -208,8 +240,10 @@ def render_ts(model: ProfileModel) -> str:
         f"// {SPDX}",
         f"// The Code Mode namespaces of {model.profile} (ADR-0031): one per broker action prefix,",
         "// holding only the actions the broker admits for this profile.  Each function is one",
-        "// broker request for the action it names, its argument the request's params; it returns",
+        "// broker request for the action it names, its argument the request's params (and, for an",
+        "// action about a target, `target`: the request's svc: target, not a param); it returns",
         "// the result, and one that needs a person's approval pauses the run until it is decided.",
+        "// The binding of these namespaces in a TypeScript sandbox comes with its executor (CM-8).",
         "",
         *_ts_result_types(model),
     ]
@@ -286,7 +320,7 @@ def py_type(schema: Any, used: set[str]) -> str:
 
 
 def _class_name(*parts: str) -> str:
-    return "".join(p.capitalize() for part in parts for p in part.split("_") if p)
+    return class_name(*parts)
 
 
 def _plain_name(name: Any) -> bool:
@@ -324,9 +358,12 @@ def _doc_lines(m: Method, param_prefix: str) -> list[str]:
     if m.needs_approval:
         head += " Needs a person's approval: the run pauses until it is decided."
     props = m.params.get("properties") or {}
+    notes = {name: _param_note(props[name]) for name in props}
+    if m.target:
+        notes["target"] = TARGET_NOTE + ("" if m.target == "required" else "; optional")
     params = []
-    for name in sorted(props):
-        note = _param_note(props[name])
+    for name in sorted(notes):
+        note = notes[name]
         if note:
             params.append(f"{param_prefix}{name} {note}" if param_prefix else f"{name}: {note}")
     return [head, "", *params] if params else [head]
@@ -360,12 +397,15 @@ def _py_args(m: Method, used: set[str]) -> list[str]:
     props = m.params.get("properties") or {}
     required = set(m.params.get("required", []))
     args = []
-    if props:
+    if props or m.target:
         args.append("*")
-        args += [
-            f"{n}: {py_type(props[n], used)}{'' if n in required else ' = ...'}"
-            for n in sorted(props, key=lambda n: (n not in required, n))
-        ]
+        if m.target == "required":
+            args.append("target: str")
+        ordered = sorted(props, key=lambda n: (n not in required, n))
+        args += [f"{n}: {py_type(props[n], used)}" for n in ordered if n in required]
+        if m.target == "optional":
+            args.append("target: str | None = None")
+        args += [f"{n}: {py_type(props[n], used)} = ..." for n in ordered if n not in required]
     ap = _open_value(m.params)
     if ap is not False:
         args.append(f"**params: {py_type(ap if isinstance(ap, Mapping) else True, used)}")
@@ -431,8 +471,10 @@ def render_py(model: ProfileModel) -> str:
         f"# {SPDX}",
         f'"""The Code Mode namespaces of {model.profile} (ADR-0031): one per broker action prefix,',
         "holding only the actions the broker admits for this profile.  Each method is one broker",
-        "request for the action it names, its keyword arguments the request's params; it returns the",
-        "result, and one that needs a person's approval pauses the run until it is decided.",
+        "request for the action it names, its keyword arguments the request's params (and, for an",
+        "action about a target, target: the request's svc: target, not a param); it returns the",
+        "result, and one that needs a person's approval pauses the run until it is decided.  The",
+        "runtime prelude (prelude.py) binds these names in the sandbox; broker.call works too.",
         '"""',
         "",
     ]
@@ -442,6 +484,125 @@ def render_py(model: ProfileModel) -> str:
         return "\n".join(head)
     body = "\n\n".join("\n".join(b) for b in blocks)
     return "\n".join(head) + "\n" + body + "\n\n" + "\n".join(bindings) + "\n"
+
+
+# ----------------------------------------------------------- the runtime prelude
+#: one method of a prelude: (namespace, method, action, target, whether a param is named target)
+PreludeMethod = tuple[str, str, str, "str | None", bool]
+
+
+def _prelude_method(pm: PreludeMethod) -> list[str]:
+    """One method of the prelude: ``broker.call`` of its action, the target (when the action
+    takes one) as the request's target and every other keyword as its params.  A ``target=``
+    given to an action that takes none is refused here, a ``TypeError`` before anything is
+    sent, rather than passed on as a param an open schema would accept."""
+    _ns, method, action, target, own = pm
+    name = json.dumps(action)
+    if target:
+        default = "" if target == "required" else "=None"
+        sig, call = f"self, *, target{default}, **params", f"call({name}, params, target=target)"
+        return [f"        def {method}({sig}):", f"            return {call}"]
+    lines = [f"        def {method}(self, **params):"]
+    if not own:
+        msg = json.dumps(f"{action} takes no target")
+        lines += ['            if "target" in params:', f"                raise TypeError({msg})"]
+    return [*lines, f"            return call({name}, params)"]
+
+
+def _model_methods(model: ProfileModel) -> list[PreludeMethod]:
+    return [
+        (m.namespace, m.method, m.action, m.target, "target" in (m.params.get("properties") or {}))
+        for m in model.methods
+    ]
+
+
+def prelude_source(profile: str, marker: str, methods: Iterable[PreludeMethod]) -> str:
+    """The prelude text of ``profile`` binding ``methods`` (each namespace in order of first
+    appearance), under the marker line ``marker``.  :func:`render_prelude` (the committed file)
+    and :func:`prelude_from_index` (what the runner hands an executor) both build it here."""
+    head = [
+        f"# {marker}",
+        f"# {SPDX}",
+        "# @generated: `hnx codemode gen --check` holds this file; regenerate it, never edit it",
+        f'"""The Code Mode runtime prelude of {profile} (ADR-0031): binds the namespaces of',
+        "stubs.pyi to the run's broker.  The executor runs it in the program's own namespace, in the",
+        "sandbox, before the program; each method is broker.call of its action, with the action's",
+        "target as the request's target, so the broker checks a stub call as it checks broker.call.",
+        '"""',
+    ]
+    spaces: dict[str, list[PreludeMethod]] = {}
+    for pm in methods:
+        spaces.setdefault(pm[0], []).append(pm)
+    if not spaces:
+        return "\n".join(head) + "\n"
+    body = ["", "", "def _bind(call):"]
+    for i, (ns, group) in enumerate(spaces.items()):
+        if i:
+            body.append("")
+        body += [f"    class _{_class_name(ns)}:", "        __slots__ = ()"]
+        for pm in group:
+            body += ["", *_prelude_method(pm)]
+    body += ["", "    return {"]
+    body += [f'        "{ns}": _{_class_name(ns)}(),' for ns in spaces]
+    body += ["    }", "", ""]
+    body.append("_namespaces = _bind(broker.call)  # noqa: F821 - the executor binds broker first")
+    body += [f'{ns} = _namespaces["{ns}"]' for ns in spaces]
+    body.append("del _bind, _namespaces")
+    text = "\n".join(head + body) + "\n"
+    if len(text) > MAX_PROGRAM_CHARS:
+        raise CodemodeError(
+            [f"{profile}: the prelude is {len(text)} characters, over {MAX_PROGRAM_CHARS}"]
+        )
+    return text
+
+
+def render_prelude(model: ProfileModel) -> str:
+    """The Python runtime prelude: the executor runs it in the program's own namespace, inside
+    the sandbox and before the program, with ``broker`` bound (CM-4), so the namespaces of
+    ``stubs.pyi`` are real objects.  Each method is ``broker.call`` of its action, bound when the
+    prelude runs (a program that rebinds ``broker`` does not redirect them), so a stub call is
+    exactly the broker request ``broker.call`` would send and is checked by the broker the same
+    way.  It holds no state and no secret; ``broker.call`` keeps working beside it."""
+    return prelude_source(model.profile, _marker(model), _model_methods(model))
+
+
+def prelude_from_index(doc: Mapping[str, Any]) -> str:
+    """The prelude rebuilt from a profile's search index (``search.json``), the text
+    :func:`render_prelude` writes for the same model.  Nothing in the index decides which action
+    a method calls: the namespace and method are derived from each action's own name (its
+    ``call`` is ignored), so an edited index can rename nothing into another action; the target
+    must be ``required``, ``optional`` or null and the namespace must not be reserved.  Raises
+    :class:`CodemodeError` for an index it cannot rebuild from."""
+    from .model import _ACTION_RE, RESERVED_NAMESPACES, split_action
+
+    problems: list[str] = []
+    profile, marker = doc.get("profile"), doc.get("_generated")
+    if not isinstance(profile, str) or not isinstance(marker, str) or "\n" in marker:
+        raise CodemodeError(["the index names no profile or marker"])
+    if not marker.startswith(GENERATOR) or doc_line("marker", marker)[1]:
+        raise CodemodeError(["the index's marker is not this generator's"])
+    methods: list[PreludeMethod] = []
+    for entry in doc.get("actions") or []:
+        name = entry.get("name") if isinstance(entry, Mapping) else None
+        target = entry.get("target") if isinstance(entry, Mapping) else None
+        if not isinstance(name, str) or not _ACTION_RE.fullmatch(name):
+            problems.append(f"an action name {name!r} is not an action name")
+            continue
+        if target not in (None, "required", "optional"):
+            problems.append(f"{name}: target {target!r}")
+            continue
+        ns, method = split_action(name)
+        if ns in RESERVED_NAMESPACES:
+            problems.append(f"{name}: namespace {ns!r} is reserved")
+            continue
+        props = (entry.get("params") or {}).get("properties") or {}
+        methods.append((ns, method, name, target, isinstance(props, Mapping) and "target" in props))
+    # the generator's own collision check: an index naming two actions that render as one
+    # method, or two namespaces as one class, would let one stub stand for another action
+    problems += name_collisions(profile, [m[2] for m in methods])
+    if problems:
+        raise CodemodeError(problems)
+    return prelude_source(profile, marker, methods)
 
 
 # ------------------------------------------------------------------ the index
@@ -468,6 +629,7 @@ def render_index(model: ProfileModel) -> str:
                 "needs_approval": m.needs_approval,
                 "kind": m.kind,
                 "params": m.params,
+                "target": m.target,
                 "result": (
                     {"type": _result_name(m) or ts_type(m.result), "schema": m.result}
                     if m.result
@@ -486,14 +648,7 @@ def render_index(model: ProfileModel) -> str:
 def _check_names(model: ProfileModel) -> None:
     """Two namespaces whose classes would share a name, or two result shapes one type name, are
     refused."""
-    owners: dict[str, str] = {}
-    problems = []
-    for ns in model.namespaces:
-        cls = "_" + _class_name(ns)
-        if owners.setdefault(cls, ns) != ns:
-            problems.append(
-                f"{model.profile}: namespaces {ns} and {owners[cls]} both render as {cls}"
-            )
+    problems = name_collisions(model.profile, [m.action for m in model.methods])
     if problems:
         raise CodemodeError(problems)
     _result_types(model)
@@ -504,6 +659,7 @@ def render_files(models: Iterable[ProfileModel]) -> dict[str, str]:
     out: dict[str, str] = {}
     for model in models:
         _check_names(model)
+        out[f"{model.slug}/{PRELUDE_FILE}"] = render_prelude(model)
         out[f"{model.slug}/search.json"] = render_index(model)
         out[f"{model.slug}/stubs.pyi"] = render_py(model)
         out[f"{model.slug}/types.d.ts"] = render_ts(model)
@@ -548,7 +704,8 @@ def _marked(out: Path) -> list[str]:
 
 def check(out: str | Path, files: Mapping[str, str]) -> list[str]:
     """Drift between ``files`` and ``out`` (empty = clean): missing, differing, symlinked and
-    stale files.  An unreadable file raises ``OSError`` (the check could not measure)."""
+    stale files, and any other file in a profile's directory (``unexpected``: nothing but the
+    generator's files belongs there, and an extra ``.py`` would ride along unreviewed).  An unreadable file raises ``OSError`` (the check could not measure)."""
     out = Path(out)
     problems = []
     for rel, text in files.items():
@@ -560,6 +717,12 @@ def check(out: str | Path, files: Mapping[str, str]) -> list[str]:
         elif p.read_bytes() != text.encode("utf-8"):
             problems.append(f"differs: {rel}")
     problems += [f"stale: {rel}" for rel in _marked(out) if rel not in files]
+    for slug in sorted({rel.split("/", 1)[0] for rel in files}):
+        d = out / slug
+        if d.is_dir() and not d.is_symlink():  # anything else in a profile's directory
+            problems += [
+                f"unexpected: {slug}/{p.name}" for p in sorted(d.iterdir()) if p.name not in FILES
+            ]
     return problems
 
 

@@ -25,6 +25,7 @@ from homelabnext.codemode.runner import (
     SocketRunnerBroker,
     SocketSandboxBroker,
     load_index,
+    load_preludes,
     unwrap,
 )
 from homelabnext.conform.runner import mutation_runs, run_capability
@@ -95,12 +96,12 @@ def test_the_suite_passes_on_both_brokers():
     for target in ("fake", "broker-reference"):
         run = run_capability("codemode-runner", target, ROOT)
         assert run.error is None and run.too_few is None, run.error
-        assert [r.status for r in run.results] == ["pass"] * 8, [r.evidence for r in run.results]
+        assert [r.status for r in run.results] == ["pass"] * 9, [r.evidence for r in run.results]
 
 
 def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
-    assert len(runs) == 8
+    assert len(runs) == 10
     for m in runs:
         assert m.detected and m.failed == [m.expected], (m.name, m.failed, m.reason)
 
@@ -122,6 +123,132 @@ def test_an_exec_result_is_unwrapped_to_its_output(tmp_path, executor):
         "svc:queue",
         "ok",
     )
+
+
+def test_a_program_calls_the_generated_stubs_through_the_prelude(tmp_path, executor):
+    svc, _runner, _ = _example(tmp_path, executor, preludes=load_preludes(INDEX))
+    res = _run(
+        svc,
+        "a = service.status(target='svc:queue', verbose=True)\n"
+        "b = broker.call('service.status', {'verbose': True}, target='svc:queue')\n"
+        "result = [a, a == b]\n",
+    )
+    assert res["status"] == "ok", res
+    want = {"service": "svc:queue", "state": "running", "params": {"verbose": True}}
+    assert res["value"] == [want, True]
+    assert [(c["action"], c.get("target"), c["outcome"]) for c in res["calls"]] == [
+        ("service.status", "svc:queue", "ok")
+    ] * 2
+    # without the prelude a program has broker alone, as before
+    svc, _runner, _ = _example(tmp_path / "bare", executor)
+    res = _run(svc, "result = service.status(target='svc:queue')\n")
+    assert (res["status"], res["error"]["kind"], res["calls"]) == ("error", "runtime", [])
+
+
+def test_the_correlation_read_actions_run_through_their_stubs_and_schemas(tmp_path, executor):
+    """CM-12: dns.lookup, dhcp.leases and hypervisor.guests on the reference broker, their real
+    stand-in handlers, through the prelude; each output is held to its result schema."""
+    svc, _runner, _ = _example(tmp_path, executor, preludes=load_preludes(INDEX))
+    res = _run(
+        svc,
+        "a = dns.lookup(target='svc:files')\n"
+        "b = dhcp.leases(target='svc:dhcp')\n"
+        "c = hypervisor.guests(target='svc:hv-one')\n"
+        "mac = next(x['mac'] for x in b['leases'] if x['address'] in a['addresses'])\n"
+        "result = [a['name'], [g['vmid'] for g in c['guests'] if g['mac'] == mac]]\n",
+    )
+    assert res["status"] == "ok", res
+    assert res["value"] == ["files.lab.example", [100]]
+    calls = [(c["action"], c["target"], c["outcome"], c.get("delivered_as")) for c in res["calls"]]
+    assert calls == [
+        ("dns.lookup", "svc:files", "ok", None),
+        ("dhcp.leases", "svc:dhcp", "ok", None),
+        ("hypervisor.guests", "svc:hv-one", "ok", None),
+    ]
+
+
+def _index_copy(tmp_path):
+    for slug in ("reader", "triage"):
+        (tmp_path / slug).mkdir(parents=True)
+        for name in ("prelude.py", "search.json"):
+            (tmp_path / slug / name).write_bytes((INDEX / slug / name).read_bytes())
+    return tmp_path
+
+
+def test_the_prelude_is_rebuilt_from_the_index_and_equals_the_committed_one():
+    preludes = load_preludes(INDEX)
+    assert sorted(preludes) == ["profile:reader", "profile:triage"]
+    for slug in ("reader", "triage"):
+        assert preludes[f"profile:{slug}"]["python"] == (INDEX / slug / "prelude.py").read_text()
+
+
+def test_a_tampered_prelude_file_is_never_what_runs(tmp_path, executor):
+    """The review's probe: a prelude.py edited so that service.status sends service.restart
+    (a restart a person would be asked to approve that nobody asked for) is not read at all."""
+    root = _index_copy(tmp_path / "index")
+    evil = root / "triage" / "prelude.py"
+    evil.write_text(evil.read_text().replace('call("service.status"', 'call("service.restart"'))
+    assert 'call("service.restart", params, target=target)' in evil.read_text()
+    preludes = load_preludes(root)
+    assert preludes == load_preludes(INDEX)
+    svc, _runner, _ = _example(tmp_path, executor, preludes=preludes)
+    res = _run(svc, "result = service.status(target='svc:queue')['state']\n")
+    assert (res["status"], res["value"]) == ("ok", "running"), res
+    assert [c["action"] for c in res["calls"]] == ["service.status"]
+
+
+def test_an_edited_index_cannot_point_a_method_at_another_action(tmp_path):
+    root = _index_copy(tmp_path)
+    path = root / "triage" / "search.json"
+    doc = json.loads(path.read_text())
+    for entry in doc["actions"]:  # the method is the action's own name; `call` is ignored
+        if entry["name"] == "service.restart":
+            entry["call"] = "service.status"
+    path.write_text(json.dumps(doc))
+    source = load_preludes(root)["profile:triage"]["python"]
+    assert source == load_preludes(INDEX)["profile:triage"]["python"]
+    # a reserved namespace or an odd target is refused, never rebuilt
+    for bad in ({"name": "broker.call", "target": None}, {"name": "dns.lookup", "target": "x"}):
+        doc["actions"] = [bad]
+        path.write_text(json.dumps(doc))
+        assert sorted(load_preludes(root)) == ["profile:reader"]
+
+
+def test_an_index_others_may_write_or_a_symlink_is_refused(tmp_path, monkeypatch):
+    import stat as stat_mod
+
+    from homelabnext.codemode import runner as runner_mod
+
+    root = _index_copy(tmp_path / "a")
+    real_fstat = os.fstat
+    writable = (root / "triage" / "search.json").stat().st_ino
+
+    class Odd:  # the stat of a group-writable file, without making one
+        def __init__(self, st):
+            self.st_mode, self.st_uid = st.st_mode | stat_mod.S_IWGRP, st.st_uid
+
+    def fstat(fd):
+        st = real_fstat(fd)
+        return Odd(st) if st.st_ino == writable else st
+
+    monkeypatch.setattr(runner_mod.os, "fstat", fstat)
+    assert sorted(load_preludes(root)) == ["profile:reader"]
+    assert sorted(load_index(root)) == ["profile:reader"]
+    monkeypatch.undo()
+    other = _index_copy(tmp_path / "b")
+    (other / "triage" / "search.json").unlink()
+    (other / "triage" / "search.json").symlink_to(root / "triage" / "search.json")
+    assert sorted(load_preludes(other)) == ["profile:reader"]
+    # a profile directory that is a symlink is refused too (opened O_DIRECTORY|O_NOFOLLOW)
+    linked = _index_copy(tmp_path / "c")
+    (linked / "triage" / "search.json").unlink()
+    (linked / "triage" / "prelude.py").unlink()
+    (linked / "triage").rmdir()
+    (linked / "triage").symlink_to(root / "triage")
+    assert sorted(load_preludes(linked)) == ["profile:reader"]
+    assert sorted(load_index(linked)) == ["profile:reader"]
+    (other / "reader" / "search.json").write_text("{not json")
+    assert load_preludes(other) == {}
 
 
 def test_a_call_needing_approval_pauses_and_waits_without_a_token(tmp_path, executor):

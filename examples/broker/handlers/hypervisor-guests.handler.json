@@ -1,0 +1,66 @@
+{
+  "action": "hypervisor.guests",
+  "audit": true,
+  "description": "List the guests on one hypervisor node, with their MAC and state (read only, stand-in).",
+  "handler": "handlers/hypervisor-guests.sh",
+  "handler_digest": "sha256:3809e08d2d1a552e360309ba3126dba921664709666d825eef868ce5d610a8f5",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "requires_approval": false,
+  "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "guests": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "mac": {
+              "description": "the network MAC, lower case",
+              "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "running",
+                "stopped",
+                "paused"
+              ]
+            },
+            "vmid": {
+              "minimum": 100,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "vmid",
+            "name",
+            "mac",
+            "state"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "node": {
+        "description": "the target hypervisor node",
+        "type": "string"
+      }
+    },
+    "required": [
+      "node",
+      "guests"
+    ],
+    "type": "object"
+  },
+  "target": "required",
+  "tier": "read",
+  "timeout_s": 10
+}

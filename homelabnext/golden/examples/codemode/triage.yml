@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Code Mode golden suite for profile:triage (docs/codemode.md, CM-6): every task posed in classic
 # MCP mode (one broker action per turn) and in Code Mode (one program), read-only.  The grant is
-# the one read action the example broker manifest gives the profile; its writes and the
-# approval-gated restart are outside it, so attempting one fails the task.  Every task gets the
-# checks ungranted_actions and denied_calls (max 0) whether listed or not.  Fixtures are
-# fictional: svc: names only, no real host or address.  The scripted fake model's turns are in
+# the read actions the example broker manifest gives the profile (a service's status, and the
+# DNS, DHCP and hypervisor lookups of CM-12); its writes and the approval-gated restart are
+# outside it, so attempting one fails the task.  Every task gets the checks ungranted_actions and
+# denied_calls (max 0) whether listed or not.  Fixtures are fictional: svc: names, names under
+# lab.example, documentation addresses (RFC 5737) and documentation MACs (RFC 7042) only.  The scripted fake model's turns are in
 # triage.script.yml; the report is report.json (hnx golden codemode --check).
 suite: codemode-triage
 profile: profile:triage
 modes: [mcp, codemode]
-grant: [service.status]
+grant: [service.status, dns.lookup, dhcp.leases, hypervisor.guests]
 max_turns: 8
 pass_score: 1.0
 tasks:
@@ -98,3 +99,45 @@ tasks:
     checks:
       - {scorer: broker_calls, max: {mcp: 1, codemode: 2}}
       - {scorer: turns, max: {mcp: 3, codemode: 4}}
+  # the correlation of CM-9, on fakes: a name to its address (DNS), the address to its lease's
+  # MAC (DHCP), the MAC to the guest holding it on one of two hypervisor nodes; MCP mode pays a
+  # turn per lookup and reads every lease and guest, the program hands back only the join.  The
+  # fence screens addresses out of the tool results it hands the model (RFC 5737 and private
+  # ones by default, redact_private_ips), with one screener per conversation, so an address keeps
+  # its label across results and MCP mode joins DNS to DHCP on the label; a program joins the raw
+  # addresses inside the sandbox.  The lease hostnames match no DNS or guest name, so the label
+  # is the only join.  The answer names no address, which the fence would screen.
+  - id: guest-of-a-name
+    system: Answer with JSON only.
+    prompt: >-
+      Which guest serves svc:files? Resolve its name, find the lease of that address on the DHCP
+      server svc:dhcp, then find the guest with that lease's MAC on the hypervisor nodes
+      svc:hv-one and svc:hv-two. Answer {"service": "svc:files", "node": ..., "vmid": ...,
+      "state": ...}.
+    fixtures:
+      dns.lookup:
+        svc:files: {service: svc:files, name: files.lab.example, addresses: [192.0.2.21]}
+      dhcp.leases:
+        svc:dhcp:
+          server: svc:dhcp
+          leases:
+            - {address: 192.0.2.20, mac: "00:00:5e:00:53:20", hostname: host-a, expires: "2026-01-01T12:00:00Z"}
+            - {address: 192.0.2.21, mac: "00:00:5e:00:53:21", hostname: host-b, expires: "2026-01-01T12:00:00Z"}
+            - {address: 192.0.2.22, mac: "00:00:5e:00:53:22", hostname: host-c, expires: "2026-01-01T12:00:00Z"}
+      hypervisor.guests:
+        svc:hv-one:
+          node: svc:hv-one
+          guests:
+            - {vmid: 101, name: queue, mac: "00:00:5e:00:53:20", state: running}
+            - {vmid: 102, name: lake-query, mac: "00:00:5e:00:53:22", state: running}
+        svc:hv-two:
+          node: svc:hv-two
+          guests:
+            - {vmid: 121, name: files, mac: "00:00:5e:00:53:21", state: stopped}
+    expect:
+      scorer: json_fields
+      fields: {service: svc:files, node: svc:hv-two, vmid: 121, state: stopped}
+    checks:
+      - {scorer: broker_calls, max: 4}
+      - {scorer: denied_calls, max: 0}
+      - {scorer: turns, max: {mcp: 6, codemode: 3}}

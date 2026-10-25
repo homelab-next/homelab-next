@@ -35,12 +35,10 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import hmac
 import json
 import re
 import shutil
 import tempfile
-import threading
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,13 +49,12 @@ from homelabnext import paths
 from homelabnext.agent.digest import digest_of
 from homelabnext.agent.injection import Corpus, found, outside_fences, squashed_views
 from homelabnext.codemode.mcp_tools import CodemodeIndex
-from homelabnext.codemode.runner import Runner, load_index
+from homelabnext.codemode.runner import Runner, load_index, load_preludes
 
 from .agentic import (
     EXECUTE,
     LANGUAGE,
     MODE_TOOLS,
-    Attempt,
     HarnessError,
     inject,
     opening,
@@ -446,41 +443,6 @@ def _fixture_broker() -> Any:
     return FixtureBroker()
 
 
-class _TappedRunner(Runner):
-    """The reference runner, recording the requests the program sent with its token that the
-    relay refused itself, so they took no step and reached no broker (the result's ``calls`` hold
-    the others; :func:`~homelabnext.golden.agentic.execution_attempts` reads those)."""
-
-    def __init__(self, *args: Any, tap: list[Attempt], **kw: Any) -> None:
-        super().__init__(*args, **kw)
-        self.tap = tap
-        self._tap_lock = threading.Lock()
-
-    def serve_call(self, run, msg):
-        before = run.next_step
-        reply = super().serve_call(run, msg)
-        if run.next_step != before:  # it took a step: it is one of the result's calls
-            return reply
-        token = msg.get("token") if isinstance(msg, Mapping) else None
-        if isinstance(token, str) and run.secret and hmac.compare_digest(token, run.secret):
-            action = msg.get("action")
-            name = action[:128] if isinstance(action, str) else repr(action)[:128]
-            with self._tap_lock:
-                self.tap.append(Attempt("action", name, *_reply_outcome(reply)))
-        return reply
-
-
-def _reply_outcome(reply: Any) -> tuple[str, str]:
-    if not isinstance(reply, Mapping):
-        return "error", "dropped"
-    if reply.get("ok"):
-        return "ok", ""
-    if reply.get("pending"):
-        return "pending", ""
-    reason = str(reply.get("reason", ""))[:64]
-    return ("denied" if reply.get("denied") else "error"), reason
-
-
 class FakeBackend:
     """One run's broker world (see the module doc); built by :class:`FakeWorld`."""
 
@@ -509,8 +471,7 @@ class FakeBackend:
         grant = set(self.grant)
         self.index = CodemodeIndex(world.index_dir, lambda: (self.actor, grant))
         self._entries = entries
-        self._runner: _TappedRunner | None = None
-        self._tap: list[Attempt] = []
+        self._runner: Runner | None = None
         self._executions = 0
 
     def seed(self, fixtures: Mapping[str, Any]) -> None:
@@ -542,7 +503,7 @@ class FakeBackend:
     def describe(self, name: str) -> dict[str, Any]:
         return self.index.describe(name)
 
-    def execute(self, code: str, language: str) -> tuple[dict[str, Any], list[Attempt]]:
+    def execute(self, code: str, language: str) -> dict[str, Any]:
         if code not in self.programs:  # never run a program the fake did not write here
             refused = {
                 "status": "error",
@@ -552,7 +513,7 @@ class FakeBackend:
                 },
                 "calls": [],
             }
-            return refused, []
+            return refused
         self._runner_for()
         self._executions += 1
         params = {
@@ -561,25 +522,24 @@ class FakeBackend:
             "code": code,
             "budget": {"wall_s": 30, "max_calls": 50},
         }
-        start = len(self._tap)
         try:
             result = self.broker.call(self.actor, CODEMODE_EXECUTE, params)
-        except BrokerError as exc:
-            reason = getattr(exc, "reason", "") or type(exc).__name__
-            return {"status": "error", "refused": reason, "calls": []}, [
-                Attempt("action", CODEMODE_EXECUTE, "denied", str(reason)[:64])
-            ]
-        return dict(result), list(self._tap[start:])
+        except BrokerError as exc:  # the execute itself refused: an attempt of codemode.execute,
+            # never a call of a program (nothing ran), so broker and denied calls stay as they were
+            reason = str(getattr(exc, "reason", "") or type(exc).__name__)[:64]
+            refused = {"action": CODEMODE_EXECUTE, "outcome": "denied", "reason": reason}
+            return {"status": "error", "refused": reason, "calls": [], "relay_refusals": [refused]}
+        return dict(result)
 
-    def _runner_for(self) -> _TappedRunner:
+    def _runner_for(self) -> Runner:
         if self._runner is None:
             state = self.world.state_dir()
-            self._runner = _TappedRunner(
+            self._runner = Runner(
                 self.broker,
                 self.world.executor,
                 state,
-                tap=self._tap,
                 index=self.world.index,
+                preludes=self.world.preludes,
                 actions_for=lambda actor: list(self.grant),
                 clock=lambda: CLOCK,
             )
@@ -606,6 +566,7 @@ class FakeWorld:
 
         self.index_dir = Path(index_dir) if index_dir is not None else default_index()
         self.index = load_index(self.index_dir)
+        self.preludes = load_preludes(self.index_dir)
         self.model = model
         self.executor = ForkingExecutor()
         self._root = Path(tempfile.mkdtemp(prefix="hnx-golden-codemode-"))
@@ -684,6 +645,9 @@ def fake_report(
     profiles = sorted({str(s.profile) for s, _, _ in loaded})
     extra = {
         "index": {p: file_digest(index_dir / p.split(":", 1)[1] / "search.json") for p in profiles},
+        "preludes": {
+            p: file_digest(index_dir / p.split(":", 1)[1] / "prelude.py") for p in profiles
+        },
         "scripts": {s.name: file_digest(script_of(path)) for s, _, path in loaded},
         "codemode_suites": digest_of(CODEMODE_SUITES),
     }

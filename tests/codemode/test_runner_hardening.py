@@ -15,7 +15,7 @@ from test_runner import AGENT, T0, _example, _fake, _run
 
 from conformance.protocols.broker import CODEMODE_EXECUTE
 from homelabnext.codemode.journal import JournalError
-from homelabnext.codemode.runner import MAX_LOCAL_REFUSALS, Runner
+from homelabnext.codemode.runner import MAX_LOCAL_REFUSALS, MAX_RELAY_REFUSALS, Runner
 
 
 def _counted(*names):
@@ -72,6 +72,7 @@ def test_lines_without_the_token_never_count_against_the_run(tmp_path, executor)
     res = _run(b, code)
     assert res["status"] == "ok" and res["value"] == ["mine", 64], res
     assert ran["cm.a"] == ["mine"] and len(res["calls"]) == 1
+    assert "relay_refusals" not in res, "a line without the token was listed as the program's"
 
 
 def test_a_flood_of_the_programs_own_malformed_calls_ends_the_run(tmp_path, executor):
@@ -94,6 +95,12 @@ def test_a_flood_of_the_programs_own_malformed_calls_ends_the_run(tmp_path, exec
     assert res["status"] == "error" and res["error"]["kind"] == "token", res
     assert res["calls"] == [] and ran["cm.a"] == [], "a call was sent after the flood"
     assert runner.journal(AGENT, "exec-0001") == []
+    # every one of them is in the result, never sent: the malformed ones, then the bound's
+    refused = [(r["action"], r["outcome"], r["reason"]) for r in res["relay_refusals"]]
+    assert refused == [("NOT AN ACTION", "error", "request-malformed")] * MAX_LOCAL_REFUSALS + [
+        ("NOT AN ACTION", "error", "too-many-refusals")
+    ] * 5 + [("cm.a", "error", "too-many-refusals")]
+    assert {r["at_step"] for r in res["relay_refusals"]} == {0}
 
 
 def test_refusals_after_a_pause_never_change_its_outcome(tmp_path, executor):
@@ -116,9 +123,36 @@ def test_refusals_after_a_pause_never_change_its_outcome(tmp_path, executor):
     first = _run(b, code)
     assert first["status"] == "paused", first
     assert runner.store.execution(AGENT, "exec-0001")["state"] == "paused"
+    after = [
+        (r["at_step"], r["action"], r["outcome"], r["reason"]) for r in first["relay_refusals"]
+    ]
+    assert after == [(2, "NOT AN ACTION", "denied", "token-paused")] * (MAX_LOCAL_REFUSALS + 1)
     runner.serve_call = orig
     res = _run(b, code, resume=True)
     assert res["status"] == "ok" and ran == {"cm.a": ["a"], "cm.b": ["b"]}, res
+
+
+def test_relay_refusals_are_bounded_and_the_rest_counted(tmp_path, executor):
+    """A result lists the first MAX_RELAY_REFUSALS of the program's requests the relay refused,
+    each action cut to one line, and counts the rest."""
+    _ran, cmds = _counted("cm.a", "cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    orig = runner.serve_call
+
+    def serve(run, msg):
+        got = orig(run, msg)
+        if got and got.get("pending"):
+            for i in range(MAX_RELAY_REFUSALS + 6):
+                orig(run, {"token": run.secret, "op": "submit", "action": f"cm.a\n{i}" + "x" * 200})
+        return got
+
+    runner.serve_call = serve
+    res = _run(b, "broker.submit('cm.b', {'name': 'b'})\n")
+    assert res["status"] == "paused", res
+    assert len(res["relay_refusals"]) == MAX_RELAY_REFUSALS
+    assert res["relay_refusals_omitted"] == 6
+    first = res["relay_refusals"][0]
+    assert first["op"] == "submit" and first["action"] == "cm.a 0" + "x" * 122, first
 
 
 @pytest.mark.parametrize(
@@ -135,6 +169,15 @@ def test_an_invalid_target_is_refused_before_the_broker(tmp_path, executor, targ
     )
     res = _run(svc, code)
     assert (res["status"], res["value"], res["calls"]) == ("ok", "request-malformed", [])
+    assert res["relay_refusals"] == [
+        {
+            "at_step": 0,
+            "op": "call",
+            "action": "service.status",
+            "outcome": "error",
+            "reason": "request-malformed",
+        }
+    ]
     sent = [a for a in svc.state.audit_records() if a.get("action") == "service.status"]
     assert sent == [], "an invalid target reached the broker"
 
@@ -160,6 +203,9 @@ def test_steps_are_bounded_and_refused_before_sending(tmp_path, executor):
     res = _run(b, code, max_calls=50)
     assert (res["status"], res.get("limit")) == ("limit", "calls"), res["status"]
     assert len(res["calls"]) == 200
+    past = [(r["at_step"], r["action"], r["reason"]) for r in res["relay_refusals"]]
+    # the one the executor's client sends past the bound (its own cap is one more), listed
+    assert past == [(200, "cm.other", "call-cap-reached")]
     audited = [r for r in b.audit() if r.command == "cm.other"]
     assert len(audited) == 200, f"{len(audited)} calls reached the broker"
 
@@ -738,3 +784,48 @@ def test_a_fault_of_the_runner_is_named_as_one(tmp_path, executor, monkeypatch):
         {"step": 0, "action": "cm.a", "outcome": "error", "reason": "runner-fault"}
     ]
     assert "runner-fault" in res["error"]["message"]
+
+
+def test_a_relay_reason_the_runner_does_not_name_is_a_logged_runner_fault(
+    tmp_path, executor, caplog
+):
+    """A refusal reason outside RELAY_REASONS is the runner's own bug: it is listed as
+    runner-fault and logged, never silently filed as the program's malformed request."""
+    _ran, cmds = _counted("cm.a")
+    b, runner = _fake(tmp_path, executor, cmds)
+    orig = runner._serve_locked
+
+    def serve(run, msg):
+        if msg.get("action") == "cm.odd":
+            return {"ok": False, "error": True, "reason": "made-up"}
+        return orig(run, msg)
+
+    runner._serve_locked = serve
+    code = "try:\n    broker.call('cm.odd', {})\nexcept broker.Error:\n    pass\nresult = 1\n"
+    with caplog.at_level("WARNING", logger="homelabnext.codemode.runner"):
+        res = _run(b, code)
+    assert [r["reason"] for r in res["relay_refusals"]] == ["runner-fault"]
+    assert any("does not list" in r.getMessage() for r in caplog.records)
+
+
+def test_a_token_that_is_not_ascii_is_a_foreign_line_not_a_dropped_connection(
+    tmp_path, executor, caplog
+):
+    """hmac.compare_digest raises TypeError on a non-ASCII str: the connection used to drop
+    uncounted, logged at ERROR.  Now it is a line without the run's token like any other."""
+    ran, cmds = _counted("cm.a")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    code = (
+        "import json, socket\n"
+        "s = socket.socket(); s.connect(broker._addr)\n"
+        "line = dict(action='cm.a', args={}); line['tok' + 'en'] = 't' + chr(233)\n"
+        "s.sendall(json.dumps(line).encode()+b'\\n')\n"
+        "reply = json.loads(s.makefile().readline()); s.close()\n"
+        "result = [reply, broker.call('cm.a', {'name': 'mine'})]\n"
+    )
+    with caplog.at_level("ERROR"):
+        res = _run(b, code)
+    assert res["status"] == "ok", res
+    assert res["value"][0] == {"ok": False, "denied": True, "reason": "token-invalid"}
+    assert ran["cm.a"] == ["mine"] and "relay_refusals" not in res
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]

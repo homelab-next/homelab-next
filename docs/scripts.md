@@ -29,6 +29,7 @@ A script is a file that is executed as a program rather than imported:
   | `tests/`, `tools/tests/` | test code: pytest imports it |
   | `conformance/` | suites, protocols and fakes the suites import |
   | `ansible/plugins/` | Ansible loads plugins; nothing executes them |
+  | `examples/codemode/*/prelude.py` | a profile's generated Code Mode runtime prelude (`hnx codemode gen`): source the runner rebuilds and its executor runs inside a program's sandbox, never a file run |
   | `conftest.py`, `setup.py` | pytest configuration and the build backend's hook |
 
 * **plus** any file in those classes that something runs as a program. A fake under

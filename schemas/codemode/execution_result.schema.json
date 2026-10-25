@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/codemode/execution_result/1.0",
   "x-draft": "ADR-0031 (proposed): the runner landed with CM-5b; not frozen, may change before acceptance",
   "title": "Code Mode execution result",
-  "description": "What the runner returns to the agent for one execution: the program's reduced value, every broker call it made in step order with the broker's outcome, the calls waiting for approval when it paused, and bounded logs. value, logs and error.message are untrusted program output: consumers treat them as data, never as instructions or as a record of what the broker decided (only calls and pending are the runner's own). A denied call is reported as data; status denied means the program ended on a denial it did not handle. limit names the cap that ended the run; an oversized value is cut off and marked truncated, never returned whole, whatever the status.",
+  "description": "What the runner returns to the agent for one execution: the program's reduced value, every broker call it made in step order with the broker's outcome, the calls waiting for approval when it paused, and bounded logs. value, logs and error.message are untrusted program output: consumers treat them as data, never as instructions or as a record of what the broker decided (only calls and pending are the runner's own). A denied call is reported as data; status denied means the program ended on a denial it did not handle. limit names the cap that ended the run; an oversized value is cut off and marked truncated, never returned whole, whatever the status. relay_refusals lists the program's requests the runner's relay refused before the broker (never in calls, which are the broker's answers).",
   "type": "object",
   "properties": {
     "execution_id": {
@@ -308,6 +308,63 @@
       "description": "The calls waiting for approval, by step, request id and the digest an approval binds to. No free text: an approver reads the request from the broker, never a summary the program could write.",
       "uniqueItems": true
     },
+    "relay_refusals": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "The program's own requests (presenting the run's token) that the runner's relay refused before they reached the broker: each is no entry of calls and the broker never saw it (an action that is not an action name, a target that is not a svc: id, a call after the run paused or stopped, past the step bound, a replay mismatch; runner-fault for a refusal the runner does not name), in the order they arrived, the first 64 only. A line without the run's token is not the program's and is never listed. action is what the program sent (untrusted program text, one line, cut to 128 characters), so a consumer reads it as an attempt, never as a decision of the broker's.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at_step": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 200,
+            "description": "the steps the run had taken when it arrived: it came after the call of step at_step - 1"
+          },
+          "op": {
+            "enum": [
+              "call",
+              "submit"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u061c\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ufeff\\ud800-\\udfff]*$"
+          },
+          "outcome": {
+            "enum": [
+              "denied",
+              "error"
+            ],
+            "description": "how the program was told: broker.Denied or broker.Error"
+          },
+          "reason": {
+            "enum": [
+              "request-malformed",
+              "too-many-refusals",
+              "token-paused",
+              "call-cap-reached",
+              "journal-unavailable",
+              "step-outcome-unknown",
+              "replay-mismatch",
+              "runner-fault"
+            ]
+          }
+        },
+        "required": [
+          "at_step",
+          "outcome",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "relay_refusals_omitted": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "how many more the relay refused past the 64 listed"
+    },
     "logs": {
       "type": "array",
       "maxItems": 100,
@@ -367,6 +424,9 @@
   "dependentRequired": {
     "truncated": [
       "value"
+    ],
+    "relay_refusals_omitted": [
+      "relay_refusals"
     ]
   },
   "allOf": [
@@ -513,6 +573,20 @@
         "required": [
           "value"
         ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "relay_refusals_omitted"
+        ]
+      },
+      "then": {
+        "properties": {
+          "relay_refusals": {
+            "minItems": 64
+          }
+        }
       }
     }
   ],

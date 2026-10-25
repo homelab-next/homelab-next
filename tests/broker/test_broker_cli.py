@@ -18,7 +18,7 @@ EXAMPLE = ROOT / "examples" / "broker" / "manifest.yml"
 
 def test_validate_passes_on_the_example_and_fails_on_a_tampered_copy(tmp_path, capsys):
     assert hnx(["broker", "validate", str(EXAMPLE)]) == 0
-    assert "ok (5 actions, 3 lanes)" in capsys.readouterr().out
+    assert "ok (8 actions, 3 lanes)" in capsys.readouterr().out
     shutil.copytree(EXAMPLE.parent, tmp_path / "ex")
     h = tmp_path / "ex" / "handlers" / "service-restart.sh"
     h.write_text(h.read_text() + "\n# edited\n")
@@ -148,6 +148,8 @@ def test_text_output_cancel_and_deny(broker, tmp_path):
         "service.restart",
         "--as",
         "profile:triage",
+        "--target",
+        "svc:queue",
         "--params",
         '{"grace_s": 1}',
         as_json=False,

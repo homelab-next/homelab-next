@@ -25,15 +25,25 @@ handler's ``output`` once decoded as JSON, rendered with the same type mapping a
 held to the same text checks.  Without one its result is untyped: the runner hands a program the
 handler's ``output``.
 
+An exec handler may declare ``target`` (handler document 1.3): ``required`` or ``optional``, whether
+a request for the action names the ``svc:`` target it is about (the broker hands it to the handler
+as ``HNX_BROKER_TARGET``).  The method then takes a ``target`` beside its parameters (keyword-only
+in Python, a property of the argument object in TypeScript), which the runtime prelude passes as
+the request's target, never as a parameter.  Without it the method takes none; a lane action never
+does (a lane writes for the caller, about no target).
+
 Names: a segment that cannot be an identifier in both stub languages, or would shadow a Python
 builtin the stub's annotations use (a keyword, ``delete``, ``class``, ``list``, ``str``), gets a
 trailing ``_``.  Refused (:class:`CodemodeError`) rather than renamed, since a renamed parameter
 would not be the one the broker checks: two actions that land on one method; a parameter name that
-is not an identifier, is a keyword, is ``self``, or is ``params`` while the spec admits more
-parameters (``**params``); a ``required`` name the spec does not declare; a property key that is
-not a string.  Every name the outputs carry is matched whole (a schema pattern's ``$`` also matches
-before a trailing newline), and every text a stub comment carries is one line with no control,
-format (bidi, zero-width) or separator character and nothing that would end the comment.
+is not an identifier, is a keyword, is ``self``, is ``params`` while the spec admits more
+parameters (``**params``), or is ``target`` on an action that takes a target; a ``required``
+name the spec does not declare; a property key that is not a string; a namespace in
+:data:`RESERVED_NAMESPACES` (``broker``, ``result``, a builtin), which the prelude would bind
+over the program's own.  Every name the outputs carry is matched whole (a schema pattern's ``$``
+also matches before a trailing newline), and every text a stub comment carries is one line with
+no control, format (bidi, zero-width) or separator character and nothing that would end the
+comment.
 """
 
 from __future__ import annotations
@@ -53,13 +63,17 @@ from homelabnext.generators.safe import UnsafeValueError, checked
 __all__ = [
     "EXCLUDED_PREFIXES",
     "LANE_RESULT",
+    "RESERVED_NAMESPACES",
     "SLUG_RE",
     "CodemodeError",
     "Method",
     "ProfileModel",
     "build_models",
+    "class_name",
     "doc_line",
     "identifier",
+    "name_collisions",
+    "split_action",
 ]
 
 #: what a lane write returns (:func:`homelabnext.broker.lanes.write`)
@@ -92,6 +106,178 @@ TS_RESERVED = frozenset(_TS_WORDS.split())
 #: the builtins a stub's annotations use: a namespace or method of that name would shadow it in
 #: the stub (``list: _List`` at module level, a method ``str`` in a class body)
 PY_SHADOWED = frozenset({"bool", "dict", "float", "int", "list", "str"})
+#: names a namespace may not take: the runtime prelude binds every namespace as a global of the
+#: program, so ``broker``, ``result`` (the program's value), ``__builtins__`` or a builtin
+#: (``print``, ``open``, ``type``) as a namespace would rebind what the program relies on.  A
+#: fixed list (the builtins of CPython 3.11 to 3.13, with and without ``site``), not this
+#: interpreter's ``dir(builtins)``: the sandbox's Python may be another, and a test fails when the
+#: running one has a builtin the list lacks, so a newer one is never silently missed
+RESERVED_NAMESPACES = frozenset(
+    (
+        "ArithmeticError",
+        "AssertionError",
+        "AttributeError",
+        "BaseException",
+        "BaseExceptionGroup",
+        "BlockingIOError",
+        "BrokenPipeError",
+        "BufferError",
+        "BytesWarning",
+        "ChildProcessError",
+        "ConnectionAbortedError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "DeprecationWarning",
+        "EOFError",
+        "Ellipsis",
+        "EncodingWarning",
+        "EnvironmentError",
+        "Exception",
+        "ExceptionGroup",
+        "False",
+        "FileExistsError",
+        "FileNotFoundError",
+        "FloatingPointError",
+        "FutureWarning",
+        "GeneratorExit",
+        "IOError",
+        "ImportError",
+        "ImportWarning",
+        "IndentationError",
+        "IndexError",
+        "InterruptedError",
+        "IsADirectoryError",
+        "KeyError",
+        "KeyboardInterrupt",
+        "LookupError",
+        "MemoryError",
+        "ModuleNotFoundError",
+        "NameError",
+        "None",
+        "NotADirectoryError",
+        "NotImplemented",
+        "NotImplementedError",
+        "OSError",
+        "OverflowError",
+        "PendingDeprecationWarning",
+        "PermissionError",
+        "ProcessLookupError",
+        "PythonFinalizationError",
+        "RecursionError",
+        "ReferenceError",
+        "ResourceWarning",
+        "RuntimeError",
+        "RuntimeWarning",
+        "StopAsyncIteration",
+        "StopIteration",
+        "SyntaxError",
+        "SyntaxWarning",
+        "SystemError",
+        "SystemExit",
+        "TabError",
+        "TimeoutError",
+        "True",
+        "TypeError",
+        "UnboundLocalError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "UnicodeError",
+        "UnicodeTranslateError",
+        "UnicodeWarning",
+        "UserWarning",
+        "ValueError",
+        "Warning",
+        "ZeroDivisionError",
+        "_IncompleteInputError",
+        "__build_class__",
+        "__builtins__",
+        "__debug__",
+        "__doc__",
+        "__import__",
+        "__loader__",
+        "__name__",
+        "__package__",
+        "__spec__",
+        "abs",
+        "aiter",
+        "all",
+        "anext",
+        "any",
+        "ascii",
+        "bin",
+        "bool",
+        "breakpoint",
+        "broker",
+        "bytearray",
+        "bytes",
+        "callable",
+        "chr",
+        "classmethod",
+        "compile",
+        "complex",
+        "copyright",
+        "credits",
+        "delattr",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "eval",
+        "exec",
+        "exit",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "getattr",
+        "globals",
+        "hasattr",
+        "hash",
+        "help",
+        "hex",
+        "id",
+        "input",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "license",
+        "list",
+        "locals",
+        "map",
+        "max",
+        "memoryview",
+        "min",
+        "next",
+        "object",
+        "oct",
+        "open",
+        "ord",
+        "pow",
+        "print",
+        "property",
+        "quit",
+        "range",
+        "repr",
+        "result",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "staticmethod",
+        "str",
+        "sum",
+        "super",
+        "tuple",
+        "type",
+        "vars",
+        "zip",
+    )
+)
 #: Unicode categories refused in comment text: format (bidi, zero-width, BOM), line and
 #: paragraph separators, surrogates
 _BAD_CATEGORIES = frozenset({"Cf", "Zl", "Zp", "Cs"})
@@ -116,6 +302,7 @@ class Method:
     summary: str
     params: Mapping[str, Any]  # a JSON Schema object
     result: Mapping[str, Any] | None = None  # None: the action declares no result schema
+    target: str | None = None  # required | optional: the call names a svc: target; None: none
 
 
 @dataclass(frozen=True)
@@ -155,6 +342,36 @@ def identifier(name: str) -> str:
     if keyword.iskeyword(out) or out in TS_RESERVED or out in PY_SHADOWED:
         out += "_"
     return out
+
+
+def class_name(*parts: str) -> str:
+    """The class a namespace renders as in ``stubs.pyi`` and the prelude (``a_b`` gives
+    ``AB``; ``a--b`` gives ``AB`` too, which :func:`name_collisions` refuses)."""
+    return "".join(p.capitalize() for part in parts for p in part.split("_") if p)
+
+
+def name_collisions(profile: str, actions: Sequence[str]) -> list[str]:
+    """Why ``actions`` cannot share one profile's outputs: two that land on one
+    ``namespace.method`` (``q.b-c`` and ``q.b.c`` are both ``q.b_c``), or two namespaces whose
+    classes share a name (``a-b`` and ``a--b`` are both ``_AB``).  Either would let one stub
+    stand for another action.  The generator and the runner's rebuild of a prelude from an index
+    both ask this, so they cannot drift apart."""
+    problems: list[str] = []
+    methods: dict[tuple[str, str], str] = {}
+    classes: dict[str, str] = {}
+    for name in actions:
+        ns, meth = _split(name)
+        if methods.setdefault((ns, meth), name) != name:
+            problems.append(f"{name} and {methods[ns, meth]} are both {ns}.{meth}")
+        cls = "_" + class_name(ns)
+        if classes.setdefault(cls, ns) != ns:
+            problems.append(f"{profile}: namespaces {ns} and {classes[cls]} both render as {cls}")
+    return list(dict.fromkeys(problems))
+
+
+def split_action(action: str) -> tuple[str, str]:
+    """(namespace, method) of an action name, as every output names it."""
+    return _split(action)
 
 
 def _split(action: str) -> tuple[str, str]:
@@ -288,7 +505,7 @@ def _schema_problems(where: str, schema: Any, *, texts: bool = True) -> list[str
     return out
 
 
-def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
+def _param_problems(action: str, schema: Mapping[str, Any], target: str | None = None) -> list[str]:
     problems = _schema_problems(f"{action}: params", schema)
     if problems:
         return problems
@@ -299,7 +516,7 @@ def _param_problems(action: str, schema: Mapping[str, Any]) -> list[str]:
             problems.append(
                 f"{action}: parameter {name!r} is not an identifier (the stubs take it by name)"
             )
-        elif name == "self" or (name == "params" and open_):
+        elif name == "self" or (name == "params" and open_) or (name == "target" and target):
             problems.append(f"{action}: parameter {name!r} clashes with the stub's own {name}")
     return problems
 
@@ -342,14 +559,17 @@ def build_models(
             problems += bad_names
             continue
         methods: list[Method] = []
-        seen: dict[tuple[str, str], str] = {}
+        problems += name_collisions(profile, [n for n, _ in granted])
         for name, needs in granted:
             entry = entries[name]
             ns, meth = _split(name)
-            if (ns, meth) in seen:
-                problems.append(f"{name} and {seen[ns, meth]} are both {ns}.{meth}")
+            if ns in RESERVED_NAMESPACES:
+                problems.append(
+                    f"{name}: its namespace {ns!r} would rebind the program's own {ns} "
+                    "(broker, result and Python's builtins are reserved)"
+                )
                 continue
-            seen[ns, meth] = name
+            target = None
             if entry.get("lane"):
                 lane = lanes[entry["lane"]]
                 kind, params, result = "lane", _lane_params(lane), LANE_RESULT
@@ -360,9 +580,9 @@ def build_models(
                     problems.append(f"{name}: no handler document declares its params_schema")
                     continue
                 kind, params, result = "exec", doc["params_schema"], doc.get("result_schema")
-                text = doc["description"]
+                text, target = doc["description"], doc.get("target")
             summary, bad = doc_line(f"{name}: description", text)
-            bad += _param_problems(name, params)
+            bad += _param_problems(name, params, target)
             if kind == "exec" and result is not None:
                 bad += _text_problems(f"{name}: result", result)
                 if _schema_problems(f"{name}: result", result, texts=False):
@@ -370,7 +590,9 @@ def build_models(
             problems += bad
             if not bad:
                 methods.append(
-                    Method(name, ns, meth, entry["tier"], needs, kind, summary, params, result)
+                    Method(
+                        name, ns, meth, entry["tier"], needs, kind, summary, params, result, target
+                    )
                 )
         models.append(ProfileModel(profile, manifest["manifest_id"], tuple(methods)))
     if problems:

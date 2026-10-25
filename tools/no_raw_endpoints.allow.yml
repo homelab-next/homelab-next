@@ -5,6 +5,8 @@ allow:
     reason: synthetic example lab and registry data (documentation address ranges only)
   - path: "tests/**/golden/**"
     reason: golden outputs rendered from the synthetic example lab
+  - path: "homelabnext/golden/examples/codemode/*.yml"
+    reason: the Code Mode golden suites' fixtures, fictional broker results a correlation joins (documentation addresses only, RFC 5737)
   - path: "tests/**/fixtures/**"
     reason: negative fixtures that deliberately contain literals
   - path: "schemas/**/examples/**"

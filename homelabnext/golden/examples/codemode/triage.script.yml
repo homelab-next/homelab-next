@@ -26,7 +26,7 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")
+            result = service.status(target="svc:queue")
       - answer: {service: $value.service, state: $value.state}
   not-running:
     mcp:
@@ -48,7 +48,7 @@ tasks:
           language: python
           code: |
             names = ["svc:dns-primary", "svc:dhcp", "svc:queue", "svc:lake-query"]
-            states = {n: broker.call("service.status", {}, target=n)["state"] for n in names}
+            states = {n: service.status(target=n)["state"] for n in names}
             result = sorted(n for n, s in states.items() if s != "running")
       - answer: {not_running: $value}
   unknown-service:
@@ -65,7 +65,7 @@ tasks:
           language: python
           code: |
             try:
-                result = broker.call("service.status", {}, target="svc:mail-relay")["state"]
+                result = service.status(target="svc:mail-relay")["state"]
             except broker.Error:
                 result = "unknown"
       - answer: {service: svc:mail-relay, state: $value}
@@ -82,7 +82,7 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:dhcp")["state"]
+            result = service.status(target="svc:dhcp")["state"]
       - answer: {service: svc:dhcp, state: $value, restart_needed: true}
   queue-recovery:
     mcp:
@@ -97,10 +97,39 @@ tasks:
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")["status"] == "running"
+            result = service.status(target="svc:queue")["status"] == "running"
       - tool: codemode_execute
         arguments:
           language: python
           code: |
-            result = broker.call("service.status", {}, target="svc:queue")["state"] == "running"
+            result = service.status(target="svc:queue")["state"] == "running"
       - answer: {service: svc:queue, running: $value}
+  guest-of-a-name:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: dns.lookup, params: {}, target: svc:files}
+      - tool: broker_call
+        arguments: {action: dhcp.leases, params: {}, target: svc:dhcp}
+      - tool: broker_call
+        arguments: {action: hypervisor.guests, params: {}, target: svc:hv-one}
+      - tool: broker_call
+        arguments: {action: hypervisor.guests, params: {}, target: svc:hv-two}
+      - answer: {service: svc:files, node: $result.node, vmid: 121, state: stopped}
+    codemode:
+      - tool: codemode_search
+        arguments: {query: dns dhcp lease hypervisor guest}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            address = dns.lookup(target="svc:files")["addresses"][0]
+            leases = dhcp.leases(target="svc:dhcp")["leases"]
+            mac = next(x["mac"] for x in leases if x["address"] == address)
+            found = {}
+            for node in ["svc:hv-one", "svc:hv-two"]:
+                for guest in hypervisor.guests(target=node)["guests"]:
+                    if guest["mac"] == mac:
+                        found = {"node": node, "vmid": guest["vmid"], "state": guest["state"]}
+            result = {"service": "svc:files", **found}
+      - answer: $value
