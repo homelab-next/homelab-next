@@ -712,3 +712,12 @@ def test_a_deeply_nested_schema_is_reported_not_a_traceback():
     for _ in range(5000):
         deep = {"type": "array", "items": deep}
     assert validation.schema_problems(deep) == ["nested too deeply"]
+
+
+def test_check_flags_a_file_the_generator_does_not_write(lab):
+    _, out, args = lab
+    assert main([*args, "--check"]) == 0
+    (out / "triage" / "helper.py").write_text("x = 1\n")
+    assert main([*args, "--check"]) == 1
+    (out / "triage" / "helper.py").unlink()
+    assert main([*args, "--check"]) == 0

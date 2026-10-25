@@ -128,6 +128,7 @@ import logging
 import os
 import re
 import socket
+import stat
 import sys
 import threading
 import time
@@ -274,21 +275,48 @@ def unwrap(result: Any, kind: str | None = "exec") -> tuple[str, Any]:
     return "ok", result
 
 
-def load_index(directory: str | os.PathLike[str]) -> dict[str, dict[str, dict[str, Any]]]:
-    """The generator's search indexes under ``directory`` (``<profile>/search.json``, ``hnx
-    codemode gen``): ``{profile id: {action name: entry}}``.  An unreadable or malformed file is
-    skipped (logged): the runner then knows less, never more."""
-    out: dict[str, dict[str, dict[str, Any]]] = {}
+def _read_index(path: Path) -> Any:
+    """``path`` as JSON, read through one descriptor opened without following a symlink, and
+    only when it is a regular file that no other user may write (not group- or world-writable,
+    owned by this user or root): what it says decides what a program's namespaces call."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("not a regular file")
+        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("group- or world-writable")
+        if st.st_uid not in (os.geteuid(), 0):
+            raise ValueError("owned by another user")
+        return json.loads(fh.read().decode("utf-8"))
+
+
+def _indexes(directory: str | os.PathLike[str]) -> list[Any]:
+    """Every readable ``<profile>/search.json`` under ``directory`` (see :func:`_read_index`);
+    a directory that is a symlink, or a file refused or malformed, is skipped (logged)."""
+    out = []
     root = Path(directory)
     for path in sorted(root.glob("*/search.json")):
-        if path.is_symlink() or path.parent.is_symlink():
+        if path.parent.is_symlink():
             continue
         try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
+            out.append(_read_index(path))
+        except (OSError, ValueError) as exc:
+            log.warning("codemode: a search index under %s is refused (%s); skipped", root, exc)
+    return out
+
+
+def load_index(directory: str | os.PathLike[str]) -> dict[str, dict[str, dict[str, Any]]]:
+    """The generator's search indexes under ``directory`` (``<profile>/search.json``, ``hnx
+    codemode gen``): ``{profile id: {action name: entry}}``.  An unreadable, malformed or
+    writable-by-others file is skipped (logged): the runner then knows less, never more."""
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for doc in _indexes(directory):
+        try:
             profile = doc["profile"]
             entries = {a["name"]: dict(a) for a in doc["actions"]}
-        except (OSError, ValueError, KeyError, TypeError):
-            log.warning("codemode: a search index under %s is malformed; skipped", root)
+        except (KeyError, TypeError):
+            log.warning("codemode: a search index under %s is malformed; skipped", directory)
             continue
         if isinstance(profile, str):
             out[profile] = entries
@@ -296,26 +324,23 @@ def load_index(directory: str | os.PathLike[str]) -> dict[str, dict[str, dict[st
 
 
 def load_preludes(directory: str | os.PathLike[str]) -> dict[str, dict[str, str]]:
-    """The generator's runtime preludes under ``directory`` (``<profile>/prelude.py``, ``hnx
-    codemode gen``): ``{profile id: {language: source}}``.  A prelude is taken only beside a
-    readable search index of the same model (the digest both markers carry), so the namespaces
-    it binds are the ones ``codemode_describe`` shows; anything else is skipped (logged), and a
-    profile without one runs its programs with ``broker`` alone."""
+    """The runtime preludes of the profiles indexed under ``directory``: ``{profile id:
+    {language: source}}``, each **rebuilt from the profile's search index**
+    (:func:`homelabnext.codemode.render.prelude_from_index`), never read from ``prelude.py``.
+    The committed file is the same text, held by ``gen --check`` for review; a tampered copy of
+    it changes nothing here, and the rebuilt methods call the action whose name they carry, so
+    no edit of the index makes ``service.status`` send another action.  An index the prelude
+    cannot be rebuilt from is skipped (logged): that profile's programs run with ``broker``
+    alone."""
+    from .render import CodemodeError, prelude_from_index
+
     out: dict[str, dict[str, str]] = {}
-    root = Path(directory)
-    for path in sorted(root.glob("*/prelude.py")):
-        index = path.parent / "search.json"
-        if path.is_symlink() or path.parent.is_symlink() or index.is_symlink():
-            continue
+    for doc in _indexes(directory):
         try:
-            source = path.read_text(encoding="utf-8")
-            doc = json.loads(index.read_text(encoding="utf-8"))
-            profile, marker = doc["profile"], doc["_generated"]
-            same = source.split("\n", 1)[0].rsplit(" ", 1)[1] == marker.rsplit(" ", 1)[1]
-        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
-            same = False
-        if not same or not isinstance(profile, str):
-            log.warning("codemode: a prelude under %s does not match its index; skipped", root)
+            profile = doc["profile"]
+            source = prelude_from_index(doc)
+        except (KeyError, TypeError, AttributeError, CodemodeError):
+            log.warning("codemode: no prelude from an index under %s; skipped", directory)
             continue
         out[profile] = {"python": source}
     return out

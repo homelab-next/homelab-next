@@ -128,6 +128,48 @@ def test_a_parameter_named_target_on_an_action_about_a_target_is_refused():
     build_models(manifest, [_doc("dns.lookup", params), _doc("dns.zone")])
 
 
+@pytest.mark.parametrize("prefix", ["broker", "result", "print", "open", "type"])
+def test_a_namespace_that_would_rebind_a_program_global_is_refused(prefix):
+    """The review's probe: a prefix of broker or result (or a builtin) rebound the program's own
+    name through the prelude's ``{ns} = _namespaces[...]`` and broke broker.call."""
+    manifest = _manifest(
+        [_exec(f"{prefix}.call"), _exec("dns.lookup")],
+        [
+            {
+                "profile": "profile:reader",
+                "actions": [f"{prefix}.call", "dns.lookup"],
+                "max_tier": "read",
+            }
+        ],
+    )
+    with pytest.raises(CodemodeError) as info:
+        build_models(manifest, [_doc(f"{prefix}.call"), _doc("dns.lookup")])
+    assert any(f"namespace {prefix!r} would rebind" in p for p in info.value.problems)
+
+
+def test_a_target_given_to_an_action_that_takes_none_is_refused_before_sending():
+    open_params = {"type": "object"}  # an open schema would have taken target as a param
+    manifest = _manifest(
+        [_exec("host.uptime"), _exec("host.load")],
+        [
+            {
+                "profile": "profile:reader",
+                "actions": ["host.uptime", "host.load"],
+                "max_tier": "read",
+            }
+        ],
+    )
+    target_param = {"type": "object", "properties": {"target": {"type": "string"}}}
+    model = build_models(
+        manifest, [_doc("host.uptime", open_params), _doc("host.load", target_param)]
+    )
+    rec, glb = _run_prelude(render_prelude(model[0]), "")
+    with pytest.raises(TypeError, match=r"host\.uptime takes no target"):
+        exec("host.uptime(target='svc:x')", glb)
+    exec("host.load(target='a param of its own')", glb)  # a param named target passes through
+    assert rec.sent == [("host.load", {"target": "a param of its own"}, None)]
+
+
 def test_a_stub_call_is_the_broker_call_it_stands_for():
     text = render_prelude(_models()[0])
     rec, glb = _run_prelude(

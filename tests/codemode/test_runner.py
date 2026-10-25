@@ -167,21 +167,80 @@ def test_the_correlation_read_actions_run_through_their_stubs_and_schemas(tmp_pa
     ]
 
 
-def test_a_prelude_is_taken_only_beside_an_index_of_the_same_model(tmp_path):
-    preludes = load_preludes(INDEX)
-    assert sorted(preludes) == ["profile:reader", "profile:triage"]
-    assert "service = _namespaces" in preludes[AGENT]["python"]
+def _index_copy(tmp_path):
     for slug in ("reader", "triage"):
-        (tmp_path / slug).mkdir()
+        (tmp_path / slug).mkdir(parents=True)
         for name in ("prelude.py", "search.json"):
             (tmp_path / slug / name).write_bytes((INDEX / slug / name).read_bytes())
-    stale = tmp_path / "triage" / "prelude.py"
-    lines = stale.read_text().split("\n")
-    lines[0] = lines[0].rsplit(" ", 1)[0] + " sha256:" + "0" * 64
-    stale.write_text("\n".join(lines))
-    assert sorted(load_preludes(tmp_path)) == ["profile:reader"]
-    (tmp_path / "reader" / "search.json").write_text("{not json")
-    assert load_preludes(tmp_path) == {}
+    return tmp_path
+
+
+def test_the_prelude_is_rebuilt_from_the_index_and_equals_the_committed_one():
+    preludes = load_preludes(INDEX)
+    assert sorted(preludes) == ["profile:reader", "profile:triage"]
+    for slug in ("reader", "triage"):
+        assert preludes[f"profile:{slug}"]["python"] == (INDEX / slug / "prelude.py").read_text()
+
+
+def test_a_tampered_prelude_file_is_never_what_runs(tmp_path, executor):
+    """The review's probe: a prelude.py edited so that service.status sends service.restart
+    (a restart a person would be asked to approve that nobody asked for) is not read at all."""
+    root = _index_copy(tmp_path / "index")
+    evil = root / "triage" / "prelude.py"
+    evil.write_text(evil.read_text().replace('call("service.status"', 'call("service.restart"'))
+    assert 'call("service.restart", params, target=target)' in evil.read_text()
+    preludes = load_preludes(root)
+    assert preludes == load_preludes(INDEX)
+    svc, _runner, _ = _example(tmp_path, executor, preludes=preludes)
+    res = _run(svc, "result = service.status(target='svc:queue')['state']\n")
+    assert (res["status"], res["value"]) == ("ok", "running"), res
+    assert [c["action"] for c in res["calls"]] == ["service.status"]
+
+
+def test_an_edited_index_cannot_point_a_method_at_another_action(tmp_path):
+    root = _index_copy(tmp_path)
+    path = root / "triage" / "search.json"
+    doc = json.loads(path.read_text())
+    for entry in doc["actions"]:  # the method is the action's own name; `call` is ignored
+        if entry["name"] == "service.restart":
+            entry["call"] = "service.status"
+    path.write_text(json.dumps(doc))
+    source = load_preludes(root)["profile:triage"]["python"]
+    assert source == load_preludes(INDEX)["profile:triage"]["python"]
+    # a reserved namespace or an odd target is refused, never rebuilt
+    for bad in ({"name": "broker.call", "target": None}, {"name": "dns.lookup", "target": "x"}):
+        doc["actions"] = [bad]
+        path.write_text(json.dumps(doc))
+        assert sorted(load_preludes(root)) == ["profile:reader"]
+
+
+def test_an_index_others_may_write_or_a_symlink_is_refused(tmp_path, monkeypatch):
+    import stat as stat_mod
+
+    from homelabnext.codemode import runner as runner_mod
+
+    root = _index_copy(tmp_path / "a")
+    real_fstat = os.fstat
+    writable = (root / "triage" / "search.json").stat().st_ino
+
+    class Odd:  # the stat of a group-writable file, without making one
+        def __init__(self, st):
+            self.st_mode, self.st_uid = st.st_mode | stat_mod.S_IWGRP, st.st_uid
+
+    def fstat(fd):
+        st = real_fstat(fd)
+        return Odd(st) if st.st_ino == writable else st
+
+    monkeypatch.setattr(runner_mod.os, "fstat", fstat)
+    assert sorted(load_preludes(root)) == ["profile:reader"]
+    assert sorted(load_index(root)) == ["profile:reader"]
+    monkeypatch.undo()
+    other = _index_copy(tmp_path / "b")
+    (other / "triage" / "search.json").unlink()
+    (other / "triage" / "search.json").symlink_to(root / "triage" / "search.json")
+    assert sorted(load_preludes(other)) == ["profile:reader"]
+    (other / "reader" / "search.json").write_text("{not json")
+    assert load_preludes(other) == {}
 
 
 def test_a_call_needing_approval_pauses_and_waits_without_a_token(tmp_path, executor):

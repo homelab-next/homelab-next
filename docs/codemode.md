@@ -110,12 +110,26 @@ verbose=True)` is exactly `broker.call("service.status", {"verbose": True}, targ
 the same request with the same token, so the broker checks it the same way, and a program that
 rebinds `broker` does not redirect the stubs. It passes every other keyword through as a param
 (the broker validates params, so a misspelt one is `invalid-params`, a denied call), holds no
-state, secret or check of its own, and `broker.call` keeps working beside it. The runner hands it
-to the executor with each program (`homelabnext.codemode.runner.load_preludes`, taken only beside
-a search index carrying the same model digest); a profile without one runs with `broker` alone. A
-call that needs approval goes through `broker.call` too, which pauses the run like a submit. The
-prelude is Python only: a TypeScript executor (CM-7, CM-8) needs one generated for it, and the
-`.d.ts` already types the same calls.
+state or secret, and `broker.call` keeps working beside it. Two mistakes are refused in the
+sandbox before anything is sent, as a `TypeError` the program can catch (no step, no call): a
+missing required `target`, and a `target=` given to an action that takes none (an open params
+schema would otherwise have taken it as a param). A namespace that would rebind one of the
+program's own globals (`broker`, `result`, `__builtins__` or a Python builtin such as `print` or
+`type`) is refused by the generator (exit 2).
+
+**The runner never reads `prelude.py`.** It rebuilds each profile's prelude from that profile's
+search index when it loads the index (`homelabnext.codemode.runner.load_preludes`, through
+`homelabnext.codemode.render.prelude_from_index`) and hands that text to the executor with each
+program; `prelude.py` is the same text, committed so a reviewer sees what runs and held by `gen
+--check`. A tampered copy of the file therefore changes nothing, and the rebuild takes each
+method's namespace and name from its action's own name (an index's `call` is ignored), so no
+edit of the index makes `service.status` send `service.restart`. An index is read through one
+descriptor opened without following a symlink, and refused when it is not a regular file, is
+group- or world-writable, or belongs to another user than the runner's (or root); a profile whose
+index is refused or cannot be rebuilt from runs with `broker` alone. A call that needs approval
+goes through `broker.call` too, which pauses the run like a submit. The prelude is Python only: a
+TypeScript executor (CM-7, CM-8) needs a TypeScript prelude generated for it, and the `.d.ts`
+already types the same calls.
 
 **Calls are synchronous** in both languages (`def method(...)`, `function method(args): R`, no
 `Promise`): a call returns its result, and a call that needs approval pauses the whole run until
@@ -158,7 +172,8 @@ the generator (exit 2). The MCP catalog is not read yet; the `codemode` tool cla
 record (`hnx-codemode`) arrived with the runner ([CM-5b](#cm-5b-the-runner)), reading this index.
 
 `--check` fails (exit 1) on a file that differs (a hand edit; a manifest or handler change), one
-that is missing or a symlink, and a marked `<slug>/<file>` no profile renders any more; it exits
+that is missing or a symlink, a marked `<slug>/<file>` no profile renders any more, and any other
+file in a rendered profile's directory (`unexpected`); it exits
 100 when it cannot read the output directory. `gen` writes each file through a temporary file and
 `os.replace`, refuses a symlinked profile directory or file, and deletes only those stale marked
 files, checked again just before each unlink.

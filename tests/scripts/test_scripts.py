@@ -514,3 +514,18 @@ def test_the_register_runs_m01_m02_m04_on_the_repository():
     assert {i: r["status"] for i, r in res.items()} == dict.fromkeys(
         ["M-01", "M-02", "M-04"], "pass"
     ), res
+
+
+def test_only_the_generated_prelude_is_excluded_under_examples_codemode(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "examples/codemode/triage/prelude.py": "service = None\n",
+            "examples/codemode/triage/helper.py": "x = 1\n",
+            "examples/codemode/triage/deeper/prelude.py": "x = 1\n",
+        },
+    )
+    assert sorted(p.split(":")[0] for p in build(root).problems) == [
+        "examples/codemode/triage/deeper/prelude.py",
+        "examples/codemode/triage/helper.py",
+    ]

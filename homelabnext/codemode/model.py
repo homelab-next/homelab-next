@@ -38,13 +38,17 @@ trailing ``_``.  Refused (:class:`CodemodeError`) rather than renamed, since a r
 would not be the one the broker checks: two actions that land on one method; a parameter name that
 is not an identifier, is a keyword, is ``self``, is ``params`` while the spec admits more
 parameters (``**params``), or is ``target`` on an action that takes a target; a ``required``
-name the spec does not declare; a property key that is not a string.  Every name the outputs carry is matched whole (a schema pattern's ``$`` also matches
-before a trailing newline), and every text a stub comment carries is one line with no control,
-format (bidi, zero-width) or separator character and nothing that would end the comment.
+name the spec does not declare; a property key that is not a string; a namespace in
+:data:`RESERVED_NAMESPACES` (``broker``, ``result``, a builtin), which the prelude would bind
+over the program's own.  Every name the outputs carry is matched whole (a schema pattern's ``$``
+also matches before a trailing newline), and every text a stub comment carries is one line with
+no control, format (bidi, zero-width) or separator character and nothing that would end the
+comment.
 """
 
 from __future__ import annotations
 
+import builtins
 import keyword
 import re
 import unicodedata
@@ -60,6 +64,7 @@ from homelabnext.generators.safe import UnsafeValueError, checked
 __all__ = [
     "EXCLUDED_PREFIXES",
     "LANE_RESULT",
+    "RESERVED_NAMESPACES",
     "SLUG_RE",
     "CodemodeError",
     "Method",
@@ -67,6 +72,7 @@ __all__ = [
     "build_models",
     "doc_line",
     "identifier",
+    "split_action",
 ]
 
 #: what a lane write returns (:func:`homelabnext.broker.lanes.write`)
@@ -99,6 +105,10 @@ TS_RESERVED = frozenset(_TS_WORDS.split())
 #: the builtins a stub's annotations use: a namespace or method of that name would shadow it in
 #: the stub (``list: _List`` at module level, a method ``str`` in a class body)
 PY_SHADOWED = frozenset({"bool", "dict", "float", "int", "list", "str"})
+#: names a namespace may not take: the runtime prelude binds every namespace as a global of the
+#: program, so ``broker``, ``result`` (the program's value), ``__builtins__`` or a builtin
+#: (``print``, ``open``, ``type``) as a namespace would rebind what the program relies on
+RESERVED_NAMESPACES = frozenset({"broker", "result", "__builtins__", *dir(builtins)})
 #: Unicode categories refused in comment text: format (bidi, zero-width, BOM), line and
 #: paragraph separators, surrogates
 _BAD_CATEGORIES = frozenset({"Cf", "Zl", "Zp", "Cs"})
@@ -163,6 +173,11 @@ def identifier(name: str) -> str:
     if keyword.iskeyword(out) or out in TS_RESERVED or out in PY_SHADOWED:
         out += "_"
     return out
+
+
+def split_action(action: str) -> tuple[str, str]:
+    """(namespace, method) of an action name, as every output names it."""
+    return _split(action)
 
 
 def _split(action: str) -> tuple[str, str]:
@@ -354,6 +369,12 @@ def build_models(
         for name, needs in granted:
             entry = entries[name]
             ns, meth = _split(name)
+            if ns in RESERVED_NAMESPACES:
+                problems.append(
+                    f"{name}: its namespace {ns!r} would rebind the program's own {ns} "
+                    "(broker, result and Python's builtins are reserved)"
+                )
+                continue
             if (ns, meth) in seen:
                 problems.append(f"{name} and {seen[ns, meth]} are both {ns}.{meth}")
                 continue
