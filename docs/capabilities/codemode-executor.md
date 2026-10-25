@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **The sandbox for one Code Mode program: broker-only egress, no credentials, caps, disposable.**
 
 - Contract: [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py) (`conformance.protocols.codemode_executor:CodeExecutor`)
-- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (16 checks: 15 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (17 checks: 16 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -47,7 +47,7 @@ c. *Limits are enforced.*  A program that exceeds a cap in `Limits` (CPU seconds
    ends a run on the cap; this contract does not).  The client-side cap is behaviour, not
    enforcement: the client runs inside the sandbox, within the program's reach.  Enforcing a
    capped token is the broker's (token claims, ADR-0031 decision 6), proved by the runner
-   contract (CM-5).
+   contract (CM-5b).
 d. *Disposable.*  Every run starts from nothing: no file, environment variable or interpreter
    state that an earlier run wrote is visible to a later one.  A writable scratch directory
    (the working directory, `TMPDIR` and `HOME`) exists for the run and goes with it.
@@ -72,7 +72,7 @@ g. *The broker's answers reach the program as the broker gave them.*  A denial r
    with error kind `broker`.  A pending reply (the call needs approval) pauses the whole run:
    it raises `broker.Paused`, a `BaseException` that `except Exception` does not catch,
    every later call raises it again, and the run ends with status `paused` and the call in
-   `pending` however the program handled it.  Resuming is the runner's (CM-5).  Like the
+   `pending` however the program handled it.  Resuming is the runner's (CM-5b).  Like the
    call cap, the client-side pause is behaviour, not enforcement: refusing calls on a paused
    token is the broker's, checked by the runner contract.
 
@@ -92,7 +92,7 @@ the endpoint, one TCP connection per call carries one JSON line `{"token": ..., 
 absent, the op is `call`) and one JSON line back, one of `REPLIES`: `{"ok": true, "value": ...}`,
 `{"ok": false, "denied": true, "reason": ...}`, `{"ok": false, "pending": true,
 "request_id": ..., "request_digest": ...}` or `{"ok": false, "error": true, "reason": ...}`.
-The runner contract (CM-5) owns what the broker does with a call.  The suite serves a
+The runner contract (CM-5b) owns what the broker does with a call.  The suite serves a
 stand-in broker (and its decoys) at the address the executor declares as `broker_bind`
 (`(host, port)`; loopback and an ephemeral port by default), so a sandbox behind a static
 firewall rule can reach it.
@@ -244,6 +244,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | Check | Level | Asserts | Requires |
 |---|---|---|---|
 | `broker-call-roundtrip` | MUST | a program's broker calls reach the broker with the run's token and their values come back |  |
+| `submit-and-target-relayed` | MUST | a program's broker.submit reaches the broker as op submit and a call's target as its target (the CM-4 wire's optional fields, which the runner relays as token_submit and target) |  |
 | `no-network-but-broker` | MUST | a program cannot connect or send to anything but the broker, nor resolve a name |  |
 | `no-credentials` | MUST | the sandbox environment and readable files hold none of the caller's secrets, nor the token |  |
 | `limits-enforced` | MUST | CPU, memory, wall-clock and output caps end the run with status limit naming the cap |  |
@@ -270,6 +271,7 @@ Each is a deliberately broken fake (`hnx conform run codemode-executor --target 
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `bare-wire` | `submit-and-target-relayed` | the broker client drops a call's op and target: a submit goes out as a call |
 | `env-leak` | `no-credentials` | the sandbox inherits the caller's environment variables |
 | `no-call-cap` | `call-cap-enforced` | the broker client never counts calls; a loop calls the broker without end |
 | `no-timeout` | `limits-enforced` | no wall-clock cap: a program that sleeps runs as long as it likes |
@@ -331,4 +333,4 @@ No service in `examples/services.yml` declares `capability: codemode-executor`.
    hnx conform run codemode-executor --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (16) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

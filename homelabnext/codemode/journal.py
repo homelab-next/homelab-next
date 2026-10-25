@@ -1,46 +1,71 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Code Mode step journal: the runner's durable record of every broker call (CM-5b).
 
-One record per broker call of an execution (``schemas/codemode/journal_step``), keyed by the
-execution and the step, bound to the actor and the program's code digest.  A resume serves a
-settled step from here instead of calling the broker again, and runs a pending one by its request
-id (ADR-0031 decision 7).  Layout, under ``<state>/journal/``, following the broker's state-dir
-conventions (``docs/broker.md``, "State"; ADR-0014): one file per fact, created exclusively, the
-directory and every file the runner's own (``0700``/``0600``), no symlink followed:
+Every call the runner sends to the broker for a program is a **step** of its execution, in the
+order the runner sent them, and the journal holds what the runner knew of it: the intent written
+before the call was sent, and the answer written after.  A resume answers a step the journal
+settled instead of calling the broker again, runs a pending one by its request id, and never
+sends a step whose answer it does not know (ADR-0031 decision 7).  Layout, under
+``<state>/journal/``, following the broker's state-dir conventions (``docs/broker.md``, "State";
+ADR-0014): one file per fact, created exclusively and fsynced, the directories ``0700`` and the
+files ``0600`` (an existing directory is tightened to it), no symlink followed:
 
-``journal.key``                     32 random bytes: the key of each step's call fingerprint
+``journal.key``                     32 random bytes: the key of each call's fingerprint
 ``<key>/meta.json``                 the execution: actor, execution id, code digest, ``state``
-                                    (``running``, ``paused``, ``finished``), its tokens in order,
-                                    when it was created and last changed (replaced atomically)
-``<key>/<step>-<seq>.json``         one record of one step (``seq`` 0, then 1 once a pending step
-                                    settles), wrapping the ``journal_step`` record with the call's
-                                    fingerprint; never rewritten (append-only)
+                                    (``running``, ``paused``, ``finished``, ``interrupted``), its
+                                    tokens in order, the process running it (``owner``), when it
+                                    was created and last changed (replaced atomically, changed
+                                    under ``<key>/meta.lock``)
+``<key>/<step>-i.json``             the intent: the op, action, target and fingerprint of the call
+                                    about to be sent, written **before** it is sent
+``<key>/<step>-0.json``             the answer: a ``journal_step`` record (``record``) when the
+                                    broker named a request, else the refusal (``refusal``: outcome
+                                    and reason of a call refused before the broker built a request,
+                                    a token refusal or a transport failure)
+``<key>/<step>-r.json``             for a pending step: the intent to run it (``token_run``),
+                                    written before the run is sent
+``<key>/<step>-1.json``             the settled ``journal_step`` record of a pending step
 
 ``<key>`` is :func:`homelabnext.broker.tokens.execution_key` of the actor and the execution id,
-so one actor's ids neither show nor block another's, as in the broker.  The latest record of a
-step counts, and a step's only transition is pending to settled: nothing is appended after an
-``ok``, ``denied`` or ``error`` record.
+so one actor's ids neither show nor block another's, as in the broker.  The latest answer of a
+step counts, and a step's only transition is pending to settled: nothing is appended after a
+settled answer.  :meth:`Journal.records` lists the ``journal_step`` records, the schema's view;
+the intents and the refusals are the runner's own bookkeeping.
+
+**Unknown steps.**  A step with an intent and no answer was sent (or may have been) and its
+outcome is not known: the runner crashed, or the answer could not be written.  It is never sent
+again.  A run whose answer cannot be written stops at once and ends ``error``, spending its token
+``finished``, so its execution never resumes; a crashed run's token is spent ``crashed`` by the
+broker's sweep, and its journal reads ``running`` with an owner that is gone, which the runner
+marks ``interrupted``: an interrupted execution never resumes either.  The steps it sent are in
+its journal for an operator to reconcile against the broker's audit trail.
 
 **The fingerprint.**  The schema's ``request_digest`` is the broker's (secret arguments enter it
 keyed with the broker's digest key), so the runner cannot compute it for a call it has not sent.
-To tell a replayed call from a different one, each record also keeps ``call``: an HMAC-SHA256,
-under ``journal.key``, of the canonical JSON of ``{action, target, args}``, so a short secret
-argument is not recoverable from it offline.  A resumed call is served from the journal only when
-its action and fingerprint match the step's (with the actor and code digest, which the execution
-key and ``meta.json`` bind); anything else is a different call, refused and never replayed.
+To tell a replayed call from a different one, every entry keeps ``call``: an HMAC-SHA256, under
+``journal.key``, of the canonical JSON of ``{action, target, args}`` (the action prefixed with its
+op), so a short secret argument is not recoverable from it offline.  The key sits beside the
+records with the same owner and mode: it is a fingerprint against **offline guessing** by someone
+who copies the journal, not tamper protection against the runner's own user, who can rewrite
+records and key alike (as the broker's own user can rewrite its state).
 
-**Bounds.**  An execution has at most ``max_calls`` steps (the broker's cap, at most 200) and two
-records each; a result is kept whole only up to ``max_result_bytes`` of canonical JSON (default
-256 KiB; above it the record keeps ``result: null`` and the real result's digest, and the program
-is told ``result-too-large`` both times).  :meth:`Journal.sweep` drops a finished execution
-``retention_days`` after it last changed (default 7, the broker's token retention) and a paused
-or running one after ``paused_retention_days`` (default 30): a resume of a swept execution is
-refused like an unknown one.
+**What is kept.**  An ``ok`` record keeps the broker's result (already redacted by the broker:
+secrets a handler printed are ``<redacted>``), so the journal holds the agent's tool results for
+as long as it is retained, and is as sensitive as the program's output: the directory is the
+runner's only.  A result is kept whole up to ``max_result_bytes`` of canonical JSON (default 256
+KiB) and while the execution's entries stay under ``max_execution_bytes`` (default 8 MiB); past
+either, the record keeps ``result: null`` and the real digest, and the program is told
+``result-too-large`` both times.  An execution has at most :data:`MAX_STEPS` steps.
+:meth:`Journal.sweep` drops an ended execution (``finished``, ``interrupted``) ``retention_days``
+after it last changed (default 7, the broker's token retention) and any other after
+``paused_retention_days`` (default 30): a resume of a swept execution is refused like an unknown
+one.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import hmac
 import json
@@ -53,14 +78,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from homelabnext.broker import validation
 from homelabnext.broker.state import write_exclusive, write_temp
 from homelabnext.broker.tokens import execution_key
 
 __all__ = [
+    "DEFAULT_MAX_EXECUTION_BYTES",
     "DEFAULT_MAX_RESULT_BYTES",
     "DEFAULT_PAUSED_RETENTION_DAYS",
     "DEFAULT_RETENTION_DAYS",
+    "ENDED",
     "JOURNAL_RECORD",
+    "MAX_STEPS",
     "Journal",
     "JournalError",
     "canonical",
@@ -70,16 +99,20 @@ __all__ = [
 #: the journal record's schema (``schemas/codemode/journal_step``)
 JOURNAL_RECORD = "codemode/journal_step"
 DEFAULT_MAX_RESULT_BYTES = 256 * 1024
+DEFAULT_MAX_EXECUTION_BYTES = 8 * 1024 * 1024
 DEFAULT_RETENTION_DAYS = 7.0
 DEFAULT_PAUSED_RETENTION_DAYS = 30.0
-#: the most steps one execution may hold (schemas/codemode max_calls)
+#: the most steps one execution may hold (schemas/codemode max_calls and calls maxItems)
 MAX_STEPS = 200
 #: execution states after which nothing runs again
-ENDED = frozenset({"finished"})
+ENDED = frozenset({"finished", "interrupted"})
+#: the entry files of one step, by suffix
+_KINDS = ("i", "0", "r", "1")
 
 
 class JournalError(RuntimeError):
-    """The journal cannot hold what it is asked to (a bug or a corrupted state directory)."""
+    """The journal cannot hold or read what it is asked to (a full disk, a removed directory, a
+    malformed or foreign record)."""
 
 
 def canonical(value: Any) -> bytes:
@@ -110,20 +143,24 @@ def _dumps(doc: Any) -> bytes:
 
 
 def _real_dir(path: Path) -> None:
+    """A directory of the runner's only: created ``0700``, an existing one tightened to it."""
     if path.is_symlink():
         raise JournalError(f"{path} is a symlink; journal directories must be real")
     path.mkdir(mode=0o700, exist_ok=True)
+    if path.stat().st_mode & 0o077:
+        os.chmod(path, 0o700)
 
 
 class Journal:
-    """The step journal of one runner (see the module doc).  Thread-safe within a process; one
-    runner service per state directory, as one broker per broker state directory."""
+    """The step journal of one runner (see the module doc).  Thread-safe within a process, and
+    a state change of an execution is atomic across processes (``meta.lock``)."""
 
     def __init__(
         self,
         state_dir: str | os.PathLike[str],
         *,
         max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES,
+        max_execution_bytes: int = DEFAULT_MAX_EXECUTION_BYTES,
         retention_days: float = DEFAULT_RETENTION_DAYS,
         paused_retention_days: float = DEFAULT_PAUSED_RETENTION_DAYS,
     ) -> None:
@@ -131,9 +168,12 @@ class Journal:
         if root.is_symlink():
             raise JournalError(f"{root} is a symlink; the runner's state directory must be real")
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if root.stat().st_mode & 0o077:
+            os.chmod(root, 0o700)
         self.root = root / "journal"
         _real_dir(self.root)
         self.max_result_bytes = int(max_result_bytes)
+        self.max_execution_bytes = int(max_execution_bytes)
         self.retention_days = float(retention_days)
         self.paused_retention_days = float(paused_retention_days)
         self._lock = threading.RLock()
@@ -173,38 +213,78 @@ class Journal:
             return None
         return meta
 
+    @contextlib.contextmanager
+    def _meta_lock(self, d: Path) -> Iterator[None]:
+        with self._lock:
+            fd = os.open(
+                d / "meta.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+            )
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(fd)
+
     def begin(
-        self, actor: str, execution_id: str, code_digest: str, token_id: str, now: datetime
+        self,
+        actor: str,
+        execution_id: str,
+        code_digest: str,
+        token_id: str,
+        now: datetime,
+        *,
+        owner: Mapping[str, Any] | None = None,
     ) -> bool:
         """Start a fresh execution's journal; False when one exists (a fresh run never shares
-        a journal with an earlier one)."""
+        a journal with an earlier one).  A directory left without ``meta.json`` by a crash
+        between its creation and its meta (and holding nothing else) is taken over."""
         with self._lock:
             d = self._dir(actor, execution_id)
-            if d.exists() or d.is_symlink():
+            if d.is_symlink():
                 return False
-            d.mkdir(mode=0o700)
+            try:
+                d.mkdir(mode=0o700)
+            except FileExistsError:
+                leftovers = {p.name for p in d.iterdir()} - {"meta.lock"}
+                if leftovers:
+                    return False
             meta = {
                 "actor": actor,
                 "execution_id": execution_id,
                 "code_digest": code_digest,
                 "state": "running",
                 "tokens": [token_id],
+                "owner": dict(owner or {}),
                 "created": _stamp(now),
                 "updated": _stamp(now),
             }
             return write_exclusive(d / "meta.json", _dumps(meta))
 
-    def update(self, actor: str, execution_id: str, now: datetime, **fields: Any) -> None:
-        """Change an execution's ``state`` or append to its ``tokens`` (``token=``)."""
-        with self._lock:
+    def update(
+        self,
+        actor: str,
+        execution_id: str,
+        now: datetime,
+        *,
+        expect: str | None = None,
+        **fields: Any,
+    ) -> bool:
+        """Change an execution's ``state`` (and ``owner``), or append to its ``tokens``
+        (``token=``), atomically: with ``expect``, only while its state is that one (False
+        otherwise, nothing changed)."""
+        d = self._dir(actor, execution_id)
+        if d.is_symlink() or not d.is_dir():
+            raise JournalError(f"no journal for execution {execution_id!r}")
+        with self._meta_lock(d):
             meta = self.execution(actor, execution_id)
             if meta is None:
                 raise JournalError(f"no journal for execution {execution_id!r}")
+            if expect is not None and meta.get("state") != expect:
+                return False
             token = fields.pop("token", None)
             if token is not None:
                 meta["tokens"] = [*meta["tokens"], token]
             meta.update(fields, updated=_stamp(now))
-            d = self._dir(actor, execution_id)
             dir_fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 tmp = write_temp("meta.json", _dumps(meta), dir_fd=dir_fd)
@@ -213,64 +293,138 @@ class Journal:
                     os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
+        return True
 
     # ---------------------------------------------------------------- steps
-    def _entries(self, actor: str, execution_id: str) -> Iterator[tuple[int, int, dict]]:
+    def _entries(self, actor: str, execution_id: str) -> Iterator[tuple[int, str, dict]]:
         d = self._dir(actor, execution_id)
         if d.is_symlink() or not d.is_dir():
             return
         for p in d.glob("*-*.json"):
-            step, _, seq = p.stem.partition("-")
-            if not (step.isdigit() and seq.isdigit()) or p.is_symlink():
+            step, _, kind = p.stem.partition("-")
+            if not step.isdigit() or kind not in _KINDS or p.is_symlink():
                 continue
             doc = _load(p)
-            if isinstance(doc, dict) and isinstance(doc.get("record"), dict):
-                yield int(step), int(seq), doc
-
-    def records(self, actor: str, execution_id: str) -> list[dict[str, Any]]:
-        """Every record of the execution, in append order (step, then seq)."""
-        rows = sorted(self._entries(actor, execution_id), key=lambda r: (r[0], r[1]))
-        return [doc["record"] for _, _, doc in rows]
+            if not isinstance(doc, dict):
+                raise JournalError(f"step {int(step)}: entry {kind} is not a JSON object")
+            yield int(step), kind, doc
 
     def steps(self, actor: str, execution_id: str) -> dict[int, dict[str, Any]]:
-        """The latest entry of each step (``{record, call}``): the one that counts."""
-        out: dict[int, tuple[int, dict]] = {}
-        for step, seq, doc in self._entries(actor, execution_id):
-            if step not in out or seq > out[step][0]:
-                out[step] = (seq, doc)
-        return {step: doc for step, (_, doc) in sorted(out.items())}
+        """Every step's entries, ``{intent, answer, run, settled}`` (each a dict or absent),
+        checked: a record is a ``journal_step`` of this execution (its actor, id and code digest
+        are the execution's), and an answer has its intent.  A malformed entry is a
+        :class:`JournalError`, never a ``KeyError`` further on."""
+        meta = self.execution(actor, execution_id)
+        out: dict[int, dict[str, Any]] = {}
+        names = {"i": "intent", "0": "answer", "r": "run", "1": "settled"}
+        for step, kind, doc in self._entries(actor, execution_id):
+            out.setdefault(step, {})[names[kind]] = doc
+        for step, entry in out.items():
+            for name in ("answer", "settled"):
+                doc = entry.get(name)
+                if doc is None:
+                    continue
+                rec = doc.get("record")
+                if rec is not None:
+                    problems = validation.named_errors(JOURNAL_RECORD, rec)
+                    if problems:
+                        raise JournalError(f"step {step}: a malformed record: {problems[0]}")
+                    bound = (rec["actor"], rec["execution_id"], rec["code_digest"], rec["step"])
+                    want = (actor, execution_id, (meta or {}).get("code_digest"), step)
+                    if bound != want:
+                        raise JournalError(f"step {step}: a record of another execution")
+                elif not isinstance(doc.get("refusal"), dict) or name == "settled":
+                    raise JournalError(f"step {step}: an answer with neither record nor refusal")
+            if "answer" in entry and "intent" not in entry:
+                raise JournalError(f"step {step}: an answer without its intent")
+            if "settled" in entry and "run" not in entry:
+                raise JournalError(f"step {step}: a settled record without its run intent")
+        return dict(sorted(out.items()))
 
-    def append(self, record: Mapping[str, Any], call: str) -> None:
-        """Append one validated record (the caller validates it against :data:`JOURNAL_RECORD`):
-        refused when the step's latest record is settled, or past :data:`MAX_STEPS`."""
-        actor, eid, step = record["actor"], record["execution_id"], int(record["step"])
+    def records(self, actor: str, execution_id: str) -> list[dict[str, Any]]:
+        """Every ``journal_step`` record of the execution, in append order (step, then the
+        pending record before the settled one)."""
+        out = []
+        for _step, entry in self.steps(actor, execution_id).items():
+            for name in ("answer", "settled"):
+                rec = (entry.get(name) or {}).get("record")
+                if rec is not None:
+                    out.append(rec)
+        return out
+
+    def _write(self, actor: str, execution_id: str, step: int, kind: str, doc: Mapping) -> None:
         if not 0 <= step < MAX_STEPS:
             raise JournalError(f"step {step} is outside 0..{MAX_STEPS - 1}")
-        with self._lock:
-            latest = self.steps(actor, eid).get(step)
-            if latest is not None and latest["record"]["outcome"] != "pending":
-                raise JournalError(f"step {step} is settled; a journal is append-only")
-            if latest is not None and record["outcome"] == "pending":
-                raise JournalError(f"step {step} is already pending")
-            seq = 0 if latest is None else 1
-            path = self._dir(actor, eid) / f"{step:06d}-{seq}.json"
-            if not write_exclusive(path, _dumps({"record": dict(record), "call": call})):
-                raise JournalError(f"step {step} record {seq} exists")
+        d = self._dir(actor, execution_id)
+        if d.is_symlink() or not (d / "meta.json").is_file():
+            raise JournalError(f"no journal for execution {execution_id!r}")
+        try:
+            done = write_exclusive(d / f"{step:06d}-{kind}.json", _dumps(dict(doc)))
+        except OSError as exc:
+            raise JournalError(f"step {step}: {exc.strerror or exc}") from None
+        if not done:
+            raise JournalError(f"step {step}: entry {kind} exists; a journal is append-only")
 
-    def kept_result(self, result: Any) -> tuple[Any, str, bool]:
-        """(what the record keeps, the result's digest, whether it is kept whole)."""
+    def intend(self, actor, execution_id, step, *, op, action, target, call) -> None:
+        """Record that step ``step`` is about to be sent (before it is)."""
+        with self._lock:
+            self._write(
+                actor,
+                execution_id,
+                step,
+                "i",
+                {"intent": {"op": op, "action": action, "target": target}, "call": call},
+            )
+
+    def answer(self, actor, execution_id, step, *, call, record=None, refusal=None) -> None:
+        """Record the broker's answer to step ``step``: a validated ``journal_step`` record, or
+        the refusal of a call the broker built no request for."""
+        with self._lock:
+            self._write(
+                actor,
+                execution_id,
+                step,
+                "0",
+                {"record": record, "refusal": refusal, "call": call},
+            )
+
+    def intend_run(self, actor, execution_id, step, *, call) -> None:
+        """Record that the pending step ``step`` is about to be run by its request id."""
+        with self._lock:
+            self._write(actor, execution_id, step, "r", {"call": call})
+
+    def settle(self, actor, execution_id, step, *, call, record) -> None:
+        """Record how a pending step ended once run."""
+        with self._lock:
+            self._write(actor, execution_id, step, "1", {"record": record, "call": call})
+
+    def used_bytes(self, actor: str, execution_id: str) -> int:
+        d = self._dir(actor, execution_id)
+        total = 0
+        with contextlib.suppress(OSError):
+            for p in d.iterdir():
+                with contextlib.suppress(OSError):
+                    total += p.lstat().st_size
+        return total
+
+    def kept_result(self, result: Any, *, used: int = 0) -> tuple[Any, str, bool]:
+        """(what the record keeps, the result's digest, whether it is kept whole): whole only
+        under ``max_result_bytes`` and while ``used`` plus it stays under
+        ``max_execution_bytes``."""
         raw = canonical(result)
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
-        if len(raw) > self.max_result_bytes:
+        if len(raw) > self.max_result_bytes or used + len(raw) > self.max_execution_bytes:
             return None, digest, False
         return result, digest, True
 
     # ---------------------------------------------------------------- retention
-    def sweep(self, now: datetime) -> int:
-        """Remove executions past their retention (see the module doc); returns how many."""
+    def sweep(self, now: datetime, *, alive=None) -> dict[str, int]:
+        """Mark a ``running`` execution whose owner is gone ``interrupted`` (``alive(owner)``
+        decides; none given, nothing is marked) and remove executions past their retention
+        (see the module doc)."""
         finished_before = _stamp(now - timedelta(days=self.retention_days))
         paused_before = _stamp(now - timedelta(days=self.paused_retention_days))
-        removed = 0
+        counts = {"interrupted": 0, "removed": 0}
         with self._lock:
             for d in sorted(self.root.iterdir()):
                 if d.is_symlink() or not d.is_dir():
@@ -278,8 +432,19 @@ class Journal:
                 meta = _load(d / "meta.json")
                 if not isinstance(meta, dict):
                     continue
+                stale = alive is not None and meta.get("state") == "running"
+                if stale and not alive(meta.get("owner") or {}):
+                    changed = self.update(
+                        meta["actor"],
+                        meta["execution_id"],
+                        now,
+                        expect="running",
+                        state="interrupted",
+                    )
+                    counts["interrupted"] += int(changed)
+                    meta = _load(d / "meta.json") or meta
                 before = finished_before if meta.get("state") in ENDED else paused_before
                 if str(meta.get("updated", "")) < before:
                     shutil.rmtree(d)
-                    removed += 1
-        return removed
+                    counts["removed"] += 1
+        return counts

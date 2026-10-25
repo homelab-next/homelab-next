@@ -25,7 +25,7 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 | CM-3 | PUBLIC-NOW | **Landed.** `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the broker manifest (its grants, actions and handler documents) and writes, per agent profile, synchronous typed stubs and the search index, from each action's argument spec; generated marker; goldens from `examples/` in `examples/codemode/<profile>/`. Exec result types come from the handler document's optional `result_schema`; the MCP catalog arrives with CM-5 | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
 | CM-4 | PUBLIC-NOW, **landed** | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
 | CM-5a | PUBLIC-NOW, **landed** | Capability tokens issued, held and enforced by the broker ([broker](broker.md#code-mode-capability-tokens)): `codemode.execute`'s params checked as an execution request and the request in flight, bound to its runner (the registered one, else the one the manifest action names in `runner:`, required with several runners), while its handler runs; `issue_token` for that runner only, claims from the request, actions narrowed to what `decide()` admits for the actor, lifetime and live tokens capped by the manifest's `codemode` block, the call cap per execution (a resume inherits what is left); execution ids per actor; the secret kept as a digest; every token call checked in order (invalid, sandbox both ways, expired, spent, paused, action, cap) and counted broker-side before `decide()`; answers and post-admission refusals naming the request; a call needing approval, or a submit, stores the request and pauses the token in one step; spend with an outcome (`finished`, `paused`), resume of a paused execution only, `token_run` of the paused request; a crash sweep and retention; audit 1.3 `token_id`/`execution_id` and `token-pause`/`token-spend`; the `runner` and `sandbox` socket peers, the runner exempt from the refusal limit. The `broker` contract's feature `codemode-tokens`, proved by the extended suite `broker-tokens` | the thirteen MUST checks pass on the fake and the reference broker; each of the fourteen mutants is caught by its own check only |
-| CM-5b | PUBLIC-NOW, **landed** | The runner, `codemode.execute`'s handler ([below](#cm-5b-the-runner); `homelabnext/codemode/runner.py`): the execution request checked, the run's token from `issue_token` as the bound runner (the actor's granted actions, never `codemode.*`, the cap and lifetime from the budget), the program, the token and the run's endpoint (the CM-4 wire, served by the runner's relay) handed to a `CodeExecutor`, and an `execution_result` back (status, calls, logs, pending, value and `truncated`, held to the schema); every program call a broker request with the token (`call` is `token_call`, `submit` is `token_submit`, the paused step on a resume `token_run`), over the socket as the runner and sandbox peers with the bearer line; an exec envelope unwrapped to `output` (JSON or text) and the cases that are not that success defined (`output-truncated`, `handler-failed`, `result-schema-mismatch` against the index's result schema, `result-too-large`, each data); a broker refusal a denied call the program catches as `broker.Denied`, with the request ids once the broker built the request; the step journal (`journal_step`, local, append-only, `0700`, one file per record, a keyed fingerprint per call, retention 7 days finished and 30 paused); a submit or a call needing approval pausing the run (`pending`); a resume reading `token_status`'s `paused_by_state` (never polling `token_run`), pausing again unissued while it waits, else answering journalled steps from the journal (`replayed`), `token_run` of the paused request and only the later calls new, a different call refused `replay-mismatch`; the broker's `call-cap-reached` ending the run `limit` (`calls`). The tool class `codemode` (read-only, reader-forbidden, not broker-only), `platform/mcp_server` 1.2, the record `hnx-codemode` (`codemode_search`, `codemode_describe` over the generator's index, narrowed to the broker's grant; execute stays `broker_call` of `codemode.execute` on `hnx-broker`), `cap:codemode-runner` classed `exec`. The `codemode-runner` capability, the eighteenth | the six MUST checks pass on the fake broker and the reference service; each of the six mutants is caught by its own check only; G-13 and `make mcp-check` green |
+| CM-5b | PUBLIC-NOW, **landed** | The runner, `codemode.execute`'s handler ([below](#cm-5b-the-runner); `homelabnext/codemode/runner.py`): the execution request checked, the run's token from `issue_token` as the bound runner (the actor's granted actions, never `codemode.*`, the cap and lifetime from the budget), the program, the token and the run's endpoint (the CM-4 wire, served by the runner's relay) handed to a `CodeExecutor`, and an `execution_result` back (status, calls, logs, pending, value and `truncated`, held to the schema); every program call a broker request with the token (`call` is `token_call`, `submit` is `token_submit`, the paused step on a resume `token_run`), over the socket as the runner and sandbox peers with the bearer line; an exec action's envelope (by the index's `kind`) unwrapped to `output` (JSON or text) and the cases that are not that success defined (`output-truncated`, `handler-failed`, `result-schema-mismatch` against the index's result schema, `result-too-large`, each data, the call record marked `delivered_as`); a broker refusal a denied call the program catches as `broker.Denied`, with the request ids once the broker built the request; the step journal (`journal_step`, local, append-only, `0700`, an intent before every call and its answer after, refusals included, a keyed fingerprint per call, bounded, retention 7 days finished and 30 otherwise; a step of unknown outcome never re-sent, a journal failure ending the run unresumable, a crashed run `interrupted`); steps only for calls the relay accepted (the run's token, a well-formed action and target, at most 200), its own refusals bounded, connections served concurrently with a short read timeout, an optional peer-uid check; a submit or a call needing approval pausing the run (`pending`); a resume reading `token_status`'s `paused_by_state` (never polling `token_run`), pausing again unissued while it waits, else answering journalled steps from the journal (`replayed`), `token_run` of the paused request and only the later calls new, a different call refused `replay-mismatch`, a resume claimed atomically; the broker's `call-cap-reached` ending the run `limit` (`calls`). The tool class `codemode` (read-only, reader-forbidden, not broker-only), `platform/mcp_server` 1.2, the record `hnx-codemode` (`codemode_search`, `codemode_describe` over the generator's index, narrowed to the broker's grant; execute stays `broker_call` of `codemode.execute` on `hnx-broker`), `cap:codemode-runner` classed `exec`. The `codemode-runner` capability, the eighteenth | the eight MUST checks pass on the fake broker and the reference service; each of the eight mutants is caught by its own check only; G-13 and `make mcp-check` green |
 | CM-6 | PUBLIC-NOW | Golden suites `codemode-<role>` against the fakes, with the same tasks in classic MCP mode as the baseline; scorers for the answer, the broker call count, denied calls and ungranted actions; the G-02 corpus placed inside tool results a program reads | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
 | CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; the stubs are synchronous, so a TypeScript executor must offer a blocking host call to the broker (`Atomics.wait` on a worker, or a sync bridge): check it before choosing | a short decision note picks the executor and records the numbers |
 | CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite, after the egress-probe fixes from phase 2, passes against the real executor on staging |
@@ -38,14 +38,15 @@ a run, a value cut to a `truncated` prefix of its pinned JSON, the printed outpu
 call of a paused run. The broker is an endpoint the harness serves where the executor declares
 (`broker_bind`) and a token scoped to the run, never an environment variable; the executor owns
 the transport, and its broker client caps calls (`max_calls`, refused as `call-cap-reached`).
-The suite `conformance/suites/codemode_executor.py` has fifteen MUST checks: the five above plus
+The suite `conformance/suites/codemode_executor.py` has sixteen MUST checks: the five above plus
 a broker round trip, errors, denials, a denial's reason, a pause the program cannot swallow,
-broker errors, the call cap, and oversized, unencodable and unknown-language programs refused.
+broker errors, the call cap, oversized, unencodable and unknown-language programs refused, and
+(with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`.
 The client-side pause and call cap are behaviour, not enforcement: the broker's refusal on a
 paused or over-cap token is, and has landed with CM-5a (the `broker-tokens` checks
 `paused-token-refused` and `call-cap-enforced-by-the-broker`, at the broker's API). Its mutants are
-`open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap` and
-`pause-catchable`, and the reference page is
+`open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap`,
+`pause-catchable` and `bare-wire`, and the reference page is
 [capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
 programs per language, and a declared language a check has no program for fails it as
 untested. The reference fake forks each program from a warm Python process that never runs one
@@ -124,70 +125,124 @@ files, checked again just before each unlink.
 
 `homelabnext.codemode.runner.Runner(broker, executor, state_dir, ...)` is `codemode.execute`'s
 handler: `broker.register_runner(runner.runner_id, runner.handle)` in process; over the socket
-the manifest's `codemode.execute` handler is the runner's client (CM-8). One run:
+the manifest's `codemode.execute` handler is the runner's client (CM-8). One runner service per
+state directory. One run:
 
 1. the params are an execution request (`schemas/codemode/execution_request`); a language the
    executor does not run is an `error` result (`sandbox`), never a crash;
 2. a resume (`resume: true`) needs the runner's journal of a **paused** execution of the same
    actor and code digest (else `error`, kind `token`: `execution-not-resumable`,
-   `resume-code-mismatch`), and reads `token_status` of the run that paused for
-   `paused_by_state`: `pending` or `expired` ends the run `paused` again at once, with no token
-   issued and nothing sent (a resumed run that ended unpaused would finish the execution, and
-   `token_run` counts against the cap, [broker](broker.md#code-mode-capability-tokens));
-   `approved` and `denied` run;
+   `resume-code-mismatch`, `execution-interrupted`), and reads `token_status` of the run that
+   paused for `paused_by_state`: `pending` or `expired` ends the run `paused` again at once, with
+   no token issued and nothing sent (a resumed run that ended unpaused would finish the execution,
+   and `token_run` counts against the cap, [broker](broker.md#code-mode-capability-tokens));
+   `approved` and `denied` run, and the execution is then **claimed** (its journal state moves
+   `paused` to `running` as one check-and-set under the journal's lock), so of two resumes at
+   once one runs and the other is refused `execution-not-resumable`. An `expired` approval waits
+   as the broker does, for a fresh approval or a denial; nothing in the runner ends it, and an
+   execution that nobody decides is dropped with its journal after 30 days;
 3. `issue_token` as the bound runner, listing the actor's granted actions (from the search index,
    or a callable the embedder passes; never `codemode.*`): the broker narrows them, and the call
-   cap and lifetime come from the request's budget;
-4. the runner serves the run's endpoint (the CM-4 wire, one JSON line per call, at the executor's
-   `broker_bind`) and the executor runs the program with it and the token. The program's view is
-   CM-4's plus `broker.submit(action, args)` and a `target=` keyword (the wire's optional `op`
-   and `target`);
+   cap and lifetime come from the request's budget. A resume that gets no token goes back to
+   `paused`;
+4. the runner serves the run's endpoint (the CM-4 wire, one JSON line per call, a fresh listener
+   per run on an ephemeral port of the executor's `broker_bind`) and the executor runs the
+   program with it and the token. The program's view is CM-4's plus `broker.submit(action,
+   args)` and a `target=` keyword (the wire's optional `op` and `target`, which the executor
+   contract's `submit-and-target-relayed` check holds an executor to);
 5. the token is spent `paused` when the run ended on a pause, else `finished`, and the result is
    held to `schemas/codemode/execution_result` before it is returned (a result that fails is a
-   runner bug, `RunnerError`, which the broker reports `handler-failed`).
+   runner bug, `RunnerError`, which the broker reports `handler-failed`). A journal failure
+   anywhere in the run is an `error` result with the token spent, never a crash.
 
-**Calls.** Every call is a broker request with the run's token, so `call` is `token_call`, `submit`
-is `token_submit`, and on a resume the step that paused is `token_run` of its request. Over the
-socket the runner speaks as its `codemode.runners` peer (`SocketRunnerBroker`) and its relay as a
-`codemode.sandboxes` peer (`SocketSandboxBroker`: `BrokerClient`'s bearer-line path), so in a
-deployment the relay's connection comes from the sandbox user its tokens are bound to. A call
-with another token than the run's is refused at the relay (`token-invalid`) and never forwarded.
+**The relay.** A request takes a **step**, and reaches the broker, only once the relay has
+accepted it: it presents the run's token (compared in constant time), names a well-formed action
+and, if any, a `svc:` target (both matched whole), and the run has steps left (at most 200, the
+schema's bound on `calls`). Anything else is refused at the relay (`token-invalid`,
+`request-malformed`, `call-cap-reached`): it takes no step, is no call of the result and never
+reaches the broker, so another process's line cannot shift a program's steps; past 32 such
+refusals the run sends nothing more and ends `error` (`token`). The relay serves connections
+concurrently (at most 8 at once, each with a read timeout of 5 s or the run's wall budget when
+shorter), so an idle connection blocks nothing, and decides calls one at a time. With
+`relay_uids` it accepts only connections from those local users (the peer's uid from
+`/proc/net/tcp`): the token is the boundary and the uid a second one, for a sandbox host where
+other users share the loopback. It stops accepting, and waits for the calls in flight, before the
+result is built.
+
+**Calls.** Every call is a broker request with the run's token, so `call` is `token_call`,
+`submit` is `token_submit`, and on a resume the step that paused is `token_run` of its request.
+Over the socket the runner speaks as its `codemode.runners` peer (`SocketRunnerBroker`) and its
+relay as a `codemode.sandboxes` peer (`SocketSandboxBroker`: `BrokerClient`'s bearer-line path),
+so in a deployment the relay's connection comes from the sandbox user its tokens are bound to.
 
 | The broker answers | The call record | The program gets |
 |---|---|---|
-| `{result}`, not an exec envelope | `ok`, request ids | the result |
-| `{result}`, an exec envelope (`{exit_code, output, truncated, stderr_bytes}` exactly) | `ok` | `output`: JSON decoded when it was JSON, else the text |
-| an envelope with `truncated` | `ok` | `broker.Error`, reason `output-truncated` (a prefix is never handed over as if whole) |
-| an output not matching the action's `result` schema in the index | `ok` | `broker.Error`, reason `result-schema-mismatch` |
-| a result over the journal's `max_result_bytes` (256 KiB) | `ok` (journalled as `result: null` and the real digest) | `broker.Error`, reason `result-too-large` |
+| `{result}` of an action the index does not call `exec` | `ok`, request ids | the result |
+| `{result}` of an `exec` action (`{exit_code, output, truncated, stderr_bytes}`) | `ok` | `output`: JSON decoded when it was JSON, else the text |
+| an exec envelope with `truncated` | `ok`, `delivered_as: output-truncated` | `broker.Error`, reason `output-truncated` (a prefix is never handed over as if whole) |
+| an output not matching the action's `result` schema in the index | `ok`, `delivered_as: result-schema-mismatch` | `broker.Error`, reason `result-schema-mismatch` |
+| a result over the journal's bounds (256 KiB, 8 MiB an execution) | `ok` (journalled as `result: null` and the real digest), `delivered_as: result-too-large` | `broker.Error`, reason `result-too-large` |
 | a non-zero exit | the broker refuses it, `handler-failed`: `error`, request ids | `broker.Error`, reason `handler-failed` |
 | `{state: pending}` (a submit, or a call needing approval) | `pending` | the pause: the run ends `paused`, `pending` names the call |
 | `Denied`, or `InvalidArguments` (`invalid-params`) | `denied`, the broker's reason, request ids when the broker built the request | `broker.Denied` with that reason: a value it can catch and go on |
-| a token refusal (`TOKEN_REFUSALS`) | `denied`, no request ids, not journalled | `broker.Denied` |
-| any other `BrokerError`; a transport failure | `error` (`broker-unreachable` for the transport) | `broker.Error` |
+| a token refusal (`TOKEN_REFUSALS`) | `denied`, no request ids | `broker.Denied` |
+| any other `BrokerError`; a transport failure or an adapter fault | `error` (`broker-unreachable` for the transport) | `broker.Error` |
 
 The call record and the journal always keep the broker's own outcome; the reply is what the
-program may use. `calls`, `pending` and the journal are the runner's; `value`, `logs` (the printed
-output as single lines, unsafe characters replaced, at most 100 of 1000 characters) and
-`error.message` are program output.
+program may use, and `delivered_as` says when the two differ. `calls`, `pending` and the journal
+are the runner's; `value`, `logs` (the printed output as single lines, unsafe characters
+replaced, at most 100 of 1000 characters) and `error.message` are program output.
 
-**Status.** A run with a pending call is `paused`, whatever the program did after; a cap the
-executor reports is `limit`; a replay mismatch is `error` (`runtime`); a call refused
-`call-cap-reached` ends the run `limit` with `limit: calls` (the broker's count is the
-enforcement, so the executor's client is given one call more than the token's cap); otherwise the
-executor's status stands.
+**Status.** A run whose journal failed, or that met a step of unknown outcome, is `error`
+(`broker`); a run past the relay's refusal bound is `error` (`token`); a run with a pending call
+is `paused`, whatever the program did after; a cap the executor reports is `limit`; a replay
+mismatch is `error` (`runtime`); a call refused `call-cap-reached` (by the broker, or at the relay
+past the step bound) ends the run `limit` with `limit: calls` (the broker's count and the step
+bound are the enforcement, so the executor's client is given one call more than the step bound);
+otherwise the executor's status stands.
 
 **The journal** (`homelabnext/codemode/journal.py`), under `<state>/journal/`, by the broker's
-state-dir conventions: one directory per execution (`execution_key` of the actor and the id,
-so ids are each actor's own), `meta.json` (actor, id, code digest, state, the run's tokens),
-and one file per record (`<step>-<seq>.json`, created exclusively, `0600`; `seq` 1 only for a
-pending step that settles), each a `journal_step` record and the call's fingerprint: an
-HMAC-SHA256 under the runner's `journal.key` of `{op:action, target, args}`, since the request
-digest is the broker's and cannot be computed for a call not yet sent. A resume serves a step
-only when its action and fingerprint match; a different call is refused `replay-mismatch`, every
-later call too, and the run ends `error`: the journal is never replayed into another program. At
-most 200 steps, two records each; executions are swept 7 days after they finished and 30 after
-they paused or stopped running (a resume of a swept one is refused like an unknown one).
+state-dir conventions: one directory per execution (`execution_key` of the actor and the id, so
+ids are each actor's own), `meta.json` (actor, id, code digest, state, the run's tokens, the
+process running it) and one exclusively created `0600` file per entry, in `0700` directories
+(an existing one is tightened). Every step has an **intent**, written before the call is sent
+(op, action, target and the call's fingerprint), and an **answer** written after: a
+`journal_step` record when the broker named a request, else the refusal of a call it built none
+for, so every step a resume meets is answered the same way. A pending step that runs gets a run
+intent before `token_run` and a settled record after. The fingerprint is an HMAC-SHA256 under the
+runner's `journal.key` of `{op:action, target, args}`, since the request digest is the broker's
+and cannot be computed for a call not yet sent; the key sits beside the records, so it guards
+against offline guessing by someone who copies the journal, not against the runner's own user,
+who can rewrite records and key alike. Records are checked when read (the schema, and the actor,
+id and code digest of `meta.json`); a malformed or foreign record is a journal error, an `error`
+result.
+
+- **Replay.** A resume serves a step only when its op, action, target and fingerprint match;
+  a different call is refused `replay-mismatch`, every later call too, and the run ends `error`:
+  the journal is never replayed into another program.
+- **The crash window.** A step with an intent and no answer was sent, or may have been, and
+  its outcome is unknown: it is **never sent again**. A resume that meets one ends `error`
+  (`broker`, `step-outcome-unknown`). For the paused step, whose request has ids, the runner asks
+  the broker instead: if a run of it was sent and its answer lost, `paused_by_state` still
+  `pending`, `expired`, `approved` or `denied` says it never ran, and the resume goes on; any
+  other state ends the resume `step-outcome-unknown`.
+- **Journal failures.** An intent that cannot be written is never sent. An answer that cannot
+  be written means the call happened: the run stops relaying at once (`journal-unavailable`),
+  the call is still reported, and the run ends `error` with its token spent `finished`, so the
+  execution never resumes and nothing is re-sent. A pending call of such a run is reported as an
+  `error` call (`journal-unavailable`); its request stays pending at the broker for its owner to
+  cancel.
+- **Crashes.** A runner that dies leaves its journal `running` with an owner that is gone; the
+  broker's sweep spends that run's token `crashed`. The runner marks such an execution
+  `interrupted` (at its sweep, at most once a minute, or when a resume finds it), and an
+  interrupted execution never resumes (`execution-interrupted`): the steps it sent are in its
+  journal, for an operator to reconcile against the broker's audit trail.
+- **What it keeps, and for how long.** An `ok` record keeps the broker's result (redacted by the
+  broker), so the journal holds the agent's tool results while it is retained, and is as
+  sensitive as the program's output; results are kept whole up to 256 KiB each and 8 MiB an
+  execution (beyond, by digest only). At most 200 steps. Executions are swept 7 days after they
+  finished or were interrupted and 30 after they last changed otherwise (a resume of a swept one
+  is refused like an unknown one).
 
 **Search and describe.** `hnx codemode mcp --index DIR --socket PATH` serves
 `codemode_search(query, limit)` and `codemode_describe(name)` (`homelabnext/codemode/mcp_tools.py`,
@@ -201,17 +256,19 @@ tools only read, and what runs code is the broker action, already `exec` and bro
 
 **The contract.** `codemode-runner` (`conformance/protocols/codemode_runner.py`, the eighteenth
 capability): the suite (`conformance/suites/codemode_runner.py`) asks the broker, as an agent, to
-run real programs and judges the result, the broker's state and the journal, with six MUST checks,
-`result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-journalled`,
-`submit-pauses-the-run`, `resume-without-replay` and `call-cap-ends-the-run`, and one mutant each
-(`raw-logs-unchecked-result`, `denial-as-error`, `refusals-unjournalled`, `pause-hidden`,
-`resume-resends`, `cap-hidden`), caught by its own check only. The subject is the reference runner
-over the fake broker (`fake`) or the reference service (`hnx conform run codemode-runner --target
-broker-reference`), with the forking test executor (`conformance/fakes/codemode_runner.py`). A call
-needing approval cannot be reached through the contract's API (an in-process command never needs
-one), so that path, `paused_by_state` waits, exec envelopes and the socket roles are proved by
-`tests/codemode/test_runner.py` against the example manifest. Reference page:
-[capabilities/codemode-runner](capabilities/codemode-runner.md).
+run real programs and judges the result, the broker's state and the journal, with eight MUST
+checks, `result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-journalled`,
+`submit-pauses-the-run`, `resume-without-replay`, `resume-refuses-a-different-call`,
+`denied-pause-is-a-value` (with the `approval-control` hook) and `call-cap-ends-the-run`, and one
+mutant each (`raw-logs-unchecked-result`, `denial-as-error`, `refusals-unjournalled`,
+`pause-hidden`, `resume-resends`, `replay-by-step-only`, `denied-pause-waits`, `cap-hidden`),
+caught by its own check only. The subject is the reference runner over the fake broker (`fake`)
+or the reference service (`hnx conform run codemode-runner --target broker-reference`), with the
+forking test executor (`conformance/fakes/codemode_runner.py`). A call needing approval cannot be
+reached through the contract's API (an in-process command never needs one), so that path,
+`paused_by_state` waits and expiry, exec envelopes, the socket roles and the failure paths above
+are proved by `tests/codemode/test_runner.py` and `tests/codemode/test_runner_hardening.py`.
+Reference page: [capabilities/codemode-runner](capabilities/codemode-runner.md).
 
 ## Later phases
 

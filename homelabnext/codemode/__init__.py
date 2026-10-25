@@ -6,8 +6,10 @@ from a broker manifest and its handler documents it writes, for every profile th
 grants actions to, the typed stubs of the program's namespaces (``types.d.ts`` and
 ``stubs.pyi``, one namespace per action prefix) and the search index ``codemode_search`` will
 read (``search.json``).  :mod:`.model` decides what a profile may see, :mod:`.render` writes the
-three files from that one model, :mod:`.cli` is the command.  The runner, the executor and the
-search and describe tools arrive in CM-4 and CM-5.
+three files from that one model, :mod:`.cli` is the command.  CM-5b adds the runner
+(:mod:`.runner`, ``codemode.execute``'s handler), its step journal (:mod:`.journal`) and the
+search and describe tools (:mod:`.mcp_tools`, the ``hnx-codemode`` server); the executor
+contract is CM-4's (``conformance/protocols/codemode_executor.py``).
 """
 
 from __future__ import annotations

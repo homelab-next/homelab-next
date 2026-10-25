@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/codemode/execution_request/1.0",
-  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "x-draft": "ADR-0031 (proposed): the runner landed with CM-5b; not frozen, may change before acceptance",
   "title": "Code Mode execution request",
   "description": "The params of the broker action codemode.execute: one program the runner runs in the sandbox. The actor and the time are the enclosing broker request's, never params, so a program runs as the profile the broker authenticated. resume: true continues the paused execution of the same execution_id: the runner refuses it unless that execution exists, belongs to the same actor and has the same code digest (sha256 of the canonical JSON of {language, code}), and then replays completed steps from the journal. A request without resume whose execution_id already exists is refused, so two runs never share a journal. Absent budget caps take the runner's defaults; the runner may lower a cap, never raise it above these maxima.",
   "type": "object",

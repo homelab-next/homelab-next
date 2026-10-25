@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **The codemode.execute handler: schema results, denials as values, a journal of every call, pause on submit, resume without replay, the broker's cap.**
 
 - Contract: [`conformance.protocols.codemode_runner`](../../conformance/protocols/codemode_runner.py) (`conformance.protocols.codemode_runner:CodemodeRunner`)
-- Conformance suite: [`conformance.suites.codemode_runner`](../../conformance/suites/codemode_runner.py) (6 checks: 6 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.codemode_runner`](../../conformance/suites/codemode_runner.py) (8 checks: 8 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -55,7 +55,13 @@ e. *A resume does not replay side effects.*  A resume (`resume: true`, the same 
    paused request by its id once it may run (`token_run`; the runner reads `token_status`
    to decide, never polling `token_run`), and sends only the calls after it.  A finished
    execution never resumes.
-f. *The broker's call cap ends the run.*  A call the broker refuses `call-cap-reached` (the
+f. *A resume never replays the journal into another program.*  A call that differs from the
+   journalled one at its step (another action, target or arguments) is refused, nothing after it
+   is sent, and the run ends `error`.
+g. *A denied pause is a value too.*  A resume of a run paused on a request its approver denied
+   tells the program (reason `request-denied`) and records a denied call naming that request,
+   instead of waiting for ever.
+h. *The broker's call cap ends the run.*  A call the broker refuses `call-cap-reached` (the
    execution's cap, held by the broker) is a denied call without request ids, and the run ends
    `limit` with `limit: calls` however the program handled the refusal.
 
@@ -142,13 +148,16 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `every-call-is-journalled` | MUST | every call the broker answered with a request id has a journal_step record bound to the actor and the code digest, with its step, action, request id and digest, outcome and reason or result; a token refusal is not journalled | `codemode-tokens` |
 | `submit-pauses-the-run` | MUST | a submit leaves its request pending at the broker and ends the run paused, pending naming the step, action and request; the program makes no call after it | `codemode-tokens` |
 | `resume-without-replay` | MUST | a resume of a paused execution answers its journalled steps from the journal (replayed), runs the paused request by its id and sends only the calls after it; a finished execution never resumes | `codemode-tokens` |
+| `resume-refuses-a-different-call` | MUST | a resume whose program makes another call than the journal holds at a step never replays the journal into it: the call is refused replay-mismatch, nothing after it is sent, and the run ends error | `codemode-tokens` |
+| `denied-pause-is-a-value` | MUST | a resume of a run paused on a request its approver denied tells the program the reason with reason request-denied, a denied call naming that request | `codemode-tokens`, `approval-control` |
 | `call-cap-ends-the-run` | MUST | a call the broker refuses call-cap-reached is a denied call without request ids, and the run ends limit (calls) however the program handled the refusal | `codemode-tokens` |
 
 ### Features an adapter may declare
 
 | Feature | Kind | Checks that need it |
 |---|---|---|
-| `codemode-tokens` | product feature (checks skip without it) | `result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-journalled`, `submit-pauses-the-run`, `resume-without-replay`, `call-cap-ends-the-run` |
+| `approval-control` | test hook (a MUST check needing it is `untested` without it) | `denied-pause-is-a-value` |
+| `codemode-tokens` | product feature (checks skip without it) | `result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-journalled`, `submit-pauses-the-run`, `resume-without-replay`, `resume-refuses-a-different-call`, `denied-pause-is-a-value`, `call-cap-ends-the-run` |
 
 ### Defects the suite is proven to catch
 
@@ -158,9 +167,11 @@ Each is a deliberately broken fake (`hnx conform run codemode-runner --target br
 |---|---|---|
 | `cap-hidden` | `call-cap-ends-the-run` | a call refused call-cap-reached leaves the run with the program's own status |
 | `denial-as-error` | `denied-call-is-a-value` | a broker refusal reaches the program as broker.Error, so it cannot tell a denial apart |
+| `denied-pause-waits` | `denied-pause-is-a-value` | a pause whose request was denied reads as still waiting: the resume pauses for ever |
 | `pause-hidden` | `submit-pauses-the-run` | a pending answer is told to the program as ok, so it runs on past the pause |
 | `raw-logs-unchecked-result` | `result-matches-the-schema` | printed output reaches logs with its control characters and the result is not held to its schema |
 | `refusals-unjournalled` | `every-call-is-journalled` | a refusal the broker answered with a request id is not journalled |
+| `replay-by-step-only` | `resume-refuses-a-different-call` | a resume replays a journalled step by its number whatever the call at that step now is |
 | `resume-resends` | `resume-without-replay` | a resume sends every journalled step to the broker again |
 
 ## Implementations
@@ -201,7 +212,7 @@ No service in `examples/services.yml` declares `capability: codemode-runner`.
    def make(**config) -> CodemodeRunner: ...
    ```
 
-3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
+3. **Describe the target** (YAML; `features` lists only what the product really offers; the test hooks `approval-control` are for fakes; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
    ```yaml
    name: my-target
@@ -220,4 +231,4 @@ No service in `examples/services.yml` declares `capability: codemode-runner`.
    hnx conform run codemode-runner --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (6) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (8) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

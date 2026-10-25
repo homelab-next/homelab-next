@@ -90,6 +90,7 @@ class _Broker:
         self._timeout = float(cfg["wall_s"])
         self._max_calls = cfg.get("max_calls")  # None: the no-call-cap mutant
         self._sticky = cfg.get("pause") != "catchable"
+        self._bare = cfg.get("wire") == "bare"  # the bare-wire mutant: op and target dropped
         self.Paused = Paused if self._sticky else _CatchablePaused
         self.sent = 0
         self.pending: dict | None = None
@@ -112,9 +113,9 @@ class _Broker:
         step = self.sent
         self.sent += 1
         msg = {"token": self._token, "action": action, "args": args or {}}
-        if op != "call":
+        if op != "call" and not self._bare:
             msg["op"] = op
-        if target is not None:
+        if target is not None and not self._bare:
             msg["target"] = target
         line = json.dumps(msg)
         try:

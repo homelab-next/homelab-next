@@ -34,7 +34,13 @@ e. *A resume does not replay side effects.*  A resume (``resume: true``, the sam
    paused request by its id once it may run (``token_run``; the runner reads ``token_status``
    to decide, never polling ``token_run``), and sends only the calls after it.  A finished
    execution never resumes.
-f. *The broker's call cap ends the run.*  A call the broker refuses ``call-cap-reached`` (the
+f. *A resume never replays the journal into another program.*  A call that differs from the
+   journalled one at its step (another action, target or arguments) is refused, nothing after it
+   is sent, and the run ends ``error``.
+g. *A denied pause is a value too.*  A resume of a run paused on a request its approver denied
+   tells the program (reason ``request-denied``) and records a denied call naming that request,
+   instead of waiting for ever.
+h. *The broker's call cap ends the run.*  A call the broker refuses ``call-cap-reached`` (the
    execution's cap, held by the broker) is a denied call without request ids, and the run ends
    ``limit`` with ``limit: calls`` however the program handled the refusal.
 

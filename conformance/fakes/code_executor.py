@@ -188,6 +188,7 @@ class ForkingExecutor:
     broker_bind = DEFAULT_BROKER_BIND
     _egress = "broker-only"  # what the child's hook lets the program connect to
     _pause = "sticky"  # a pending reply pauses the run whatever the program catches
+    _wire = "full"  # the wire carries a call's op and target
 
     def __init__(self) -> None:
         self._dirs: list[str] = []
@@ -257,6 +258,7 @@ class ForkingExecutor:
             "memory_backstop": 2 * limits.memory_bytes + (512 << 20),
             "max_calls": self._max_calls(limits),
             "pause": self._pause,
+            "wire": self._wire,
             "cpu_backstop_s": math.ceil(limits.cpu_s) + 1,
             "wall_s": limits.wall_s,
             "egress": self._egress,
@@ -482,3 +484,10 @@ class UnboundedResultExecutor(ForkingExecutor):
 
     def _result_budget(self, limits):
         return None
+
+
+class BareWireExecutor(ForkingExecutor):
+    """Mutant: the broker client sends only the token, the action and the args: a submit goes
+    out as a call and a call's target is dropped."""
+
+    _wire = "bare"

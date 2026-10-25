@@ -28,6 +28,7 @@ WHY = {
     "execution_result.limit-unnamed": ("$", "'limit' is a required property"),
     "execution_result.ok-with-limit": ("$", "under {'required': ['limit']}"),
     "execution_result.denied-without-reason": ("calls/0", "'reason' is a required property"),
+    "execution_result.delivered-as-on-a-denied-call": ("calls/0/outcome", "'ok' was expected"),
     "execution_result.denied-with-a-success-reason": ("calls/0/reason", "should not be valid"),
     "execution_result.replayed-pending-call": ("calls/1", "{'replayed': {'const': True}}"),
     "execution_result.log-line-with-line-separator": ("logs/0", "does not match"),

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/codemode/journal_step/1.0",
-  "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
+  "x-draft": "ADR-0031 (proposed): the runner landed with CM-5b; not frozen, may change before acceptance",
   "title": "Code Mode step-journal record",
   "description": "One record of a step of an execution, keyed by (execution_id, step) and bound to the actor and the program (code_digest). The journal is append-only and the latest record for a step is the one that counts: a pending record is followed by the settled one once the approved request runs. On resume the runner serves a settled (ok, denied or error) step instead of calling the broker again only when the actor, the code digest and the step's request digest all match; a mismatch is a different call and is refused, never replayed. A pending step's request is run by its request_id once approved (the approval binds to its digest), never submitted again. Request digests are the broker's (secret arguments enter them keyed with the broker's digest key), so the runner takes them from the broker's answers and never computes them. result is the broker's redacted result, recorded only for an ok step, and result_digest the sha256 of its canonical JSON.",
   "type": "object",

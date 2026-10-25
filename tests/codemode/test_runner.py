@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from conformance.fakes.code_executor import ForkingExecutor
 from conformance.fakes.command_broker import FakeBroker
 from conformance.protocols.broker import CODEMODE_EXECUTE, ArgSpec, BrokerError, code_digest
 from homelabnext.broker.client import BrokerClient
@@ -47,13 +46,6 @@ class Clock:
 
     def advance(self, **kw: float) -> None:
         self.t += timedelta(**kw)
-
-
-@pytest.fixture
-def executor():
-    ex = ForkingExecutor()
-    yield ex
-    ex.close()
 
 
 def _example(tmp_path, executor, **kw):
@@ -103,12 +95,12 @@ def test_the_suite_passes_on_both_brokers():
     for target in ("fake", "broker-reference"):
         run = run_capability("codemode-runner", target, ROOT)
         assert run.error is None and run.too_few is None, run.error
-        assert [r.status for r in run.results] == ["pass"] * 6, [r.evidence for r in run.results]
+        assert [r.status for r in run.results] == ["pass"] * 8, [r.evidence for r in run.results]
 
 
 def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
-    assert len(runs) == 6
+    assert len(runs) == 8
     for m in runs:
         assert m.detected and m.failed == [m.expected], (m.mutant, m.failed, m.reason)
 
@@ -212,7 +204,13 @@ def test_a_result_schema_mismatch_and_envelopes_are_data(tmp_path, executor):
         "cm.cut": lambda **kw: {**envelope, "output": "partial", "truncated": True},
         "cm.typed": lambda **kw: {"count": "not a number"},
     }
-    index = {AGENT: {"cm.typed": {"result": {"schema": {"type": "object", "required": ["n"]}}}}}
+    index = {
+        AGENT: {
+            "cm.text": {"kind": "exec"},
+            "cm.cut": {"kind": "exec"},
+            "cm.typed": {"result": {"schema": {"type": "object", "required": ["n"]}}},
+        }
+    }
     b, _runner = _fake(tmp_path, executor, commands, index=index)
     code = (
         "out = [broker.call('cm.text', {'name': 'a'})]\n"
@@ -226,15 +224,21 @@ def test_a_result_schema_mismatch_and_envelopes_are_data(tmp_path, executor):
     res = _run(b, code)
     assert res["value"] == ["plain text\n", "output-truncated", "result-schema-mismatch"], res
     assert [c["outcome"] for c in res["calls"]] == ["ok", "ok", "ok"], "the broker's outcome stands"
+    assert [c.get("delivered_as") for c in res["calls"]] == [
+        None,
+        "output-truncated",
+        "result-schema-mismatch",
+    ], "an ok record must say what the program got instead"
 
 
 def test_unwrap():
     env = {"exit_code": 0, "truncated": False, "stderr_bytes": 3, "output": {"a": 1}}
-    assert unwrap(env) == ("ok", {"a": 1})
-    assert unwrap({**env, "truncated": True}) == ("error", "output-truncated")
-    assert unwrap({**env, "exit_code": 2}) == ("error", "handler-failed")
-    assert unwrap({**env, "extra": 1})[1]["extra"] == 1, "only the exact envelope is unwrapped"
-    assert unwrap("text") == ("ok", "text")
+    assert unwrap(env, "exec") == ("ok", {"a": 1})
+    assert unwrap({**env, "truncated": True}, "exec") == ("error", "output-truncated")
+    assert unwrap(env, "lane") == ("ok", env), "only an exec action's envelope is unwrapped"
+    assert unwrap(env, None) == ("ok", env), "an action the index does not know is not unwrapped"
+    assert unwrap({**env, "extra": 1}, "exec")[1]["extra"] == 1, "only the exact envelope"
+    assert unwrap("text", "exec") == ("ok", "text")
 
 
 def test_a_program_that_changes_its_calls_is_not_replayed(tmp_path, executor):
@@ -289,9 +293,7 @@ def test_a_wrong_token_on_the_wire_is_refused_and_not_forwarded(tmp_path, execut
     )
     res = _run(b, code)
     assert res["value"] == {"ok": False, "denied": True, "reason": "token-invalid"}, res
-    assert res["calls"] == [
-        {"step": 0, "action": "cm.a", "outcome": "denied", "reason": "token-invalid"}
-    ]
+    assert res["calls"] == [], "a request the relay refused took a step"
     assert ran == []
 
 
@@ -320,21 +322,65 @@ def test_the_journal_is_append_only_bounded_and_private(tmp_path):
     assert not j.begin(AGENT, "exec-0001", code_digest("python", "x = 1"), "tok-2", T0)
     fp = j.fingerprint("call:cm.a", None, {"secret": "hunter2"})
     assert "hunter2" not in fp and fp.startswith("hmac-sha256:")
-    j.append(_record(0, "pending"), fp)
+    j.answer(AGENT, "exec-0001", 1, call=fp, record=_record(1, "pending"))
+    with pytest.raises(JournalError, match="without its intent"):  # an answer needs its intent
+        j.steps(AGENT, "exec-0001")
+    (j._dir(AGENT, "exec-0001") / "000001-0.json").unlink()
+    j.intend(AGENT, "exec-0001", 0, op="call", action="cm.a", target=None, call=fp)
     with pytest.raises(JournalError):
-        j.append(_record(0, "pending"), fp)
-    j.append(_record(0, "ok", result={"a": 1}, result_digest="sha256:" + "1" * 64), fp)
+        j.intend(AGENT, "exec-0001", 0, op="call", action="cm.a", target=None, call=fp)
+    j.answer(AGENT, "exec-0001", 0, call=fp, record=_record(0, "pending"))
+    with pytest.raises(JournalError):  # one answer: nothing replaces it
+        j.answer(AGENT, "exec-0001", 0, call=fp, refusal={"outcome": "denied", "reason": "x"})
+    j.intend_run(AGENT, "exec-0001", 0, call=fp)
+    ok = _record(0, "ok", result={"a": 1}, result_digest="sha256:" + "1" * 64)
+    j.settle(AGENT, "exec-0001", 0, call=fp, record=ok)
     with pytest.raises(JournalError):  # settled: nothing after it
-        j.append(_record(0, "denied", reason="x"), fp)
+        j.settle(AGENT, "exec-0001", 0, call=fp, record=ok)
     with pytest.raises(JournalError):
-        j.append(_record(200, "pending"), fp)
-    assert [r["outcome"] for r in j.records(AGENT, "exec-0001")] == ["pending", "ok"]
+        j.intend(AGENT, "exec-0001", 200, op="call", action="cm.a", target=None, call=fp)
     kept, digest, whole = j.kept_result({"big": "x" * 100})
     assert kept is None and not whole and digest.startswith("sha256:")
+    kept, _, whole = j.kept_result({"a": 1}, used=j.max_execution_bytes)
+    assert kept is None and not whole, "the execution's total bound is not held"
     assert (j.root.stat().st_mode & 0o777) == 0o700
     key = j.root / "journal.key"
     assert (key.stat().st_mode & 0o777) == 0o600 and len(key.read_bytes()) == 32
     assert j.execution("profile:other", "exec-0001") is None, "an id is the actor's own"
+
+
+def test_journal_records_are_checked_when_read(tmp_path):
+    j = Journal(tmp_path / "runner")
+    digest = code_digest("python", "x = 1")
+    assert j.begin(AGENT, "exec-0001", digest, "tok-1", T0)
+    fp = j.fingerprint("call:cm.a", None, {})
+    j.intend(AGENT, "exec-0001", 0, op="call", action="cm.a", target=None, call=fp)
+    other = _record(0, "pending", execution_id="exec-0002")
+    j.answer(AGENT, "exec-0001", 0, call=fp, record=other)
+    with pytest.raises(JournalError, match="another execution"):
+        j.steps(AGENT, "exec-0001")
+    path = next(j._dir(AGENT, "exec-0001").glob("000000-0.json"))
+    path.write_text('{"record": {"step": "zero"}}')
+    with pytest.raises(JournalError, match="malformed"):
+        j.records(AGENT, "exec-0001")
+
+
+def test_the_journal_tightens_and_takes_over_what_a_crash_left(tmp_path):
+    (tmp_path / "runner" / "journal").mkdir(parents=True)
+    os.chmod(tmp_path / "runner" / "journal", 0o755)
+    j = Journal(tmp_path / "runner")
+    assert (j.root.stat().st_mode & 0o777) == 0o700, "an existing directory was not tightened"
+    j._dir(AGENT, "exec-0001").mkdir(mode=0o700)  # a crash between mkdir and meta.json
+    assert j.begin(AGENT, "exec-0001", code_digest("python", "x = 1"), "tok-1", T0)
+    assert j.execution(AGENT, "exec-0001")["state"] == "running"
+
+
+def test_the_state_change_is_a_check_and_set(tmp_path):
+    j = Journal(tmp_path / "runner")
+    j.begin(AGENT, "exec-0001", code_digest("python", "x = 1"), "tok-1", T0)
+    assert j.update(AGENT, "exec-0001", T0, state="paused")
+    assert j.update(AGENT, "exec-0001", T0, expect="paused", state="running")
+    assert not j.update(AGENT, "exec-0001", T0, expect="paused", state="running")
 
 
 def test_the_journal_refuses_symlinks(tmp_path):
@@ -351,9 +397,9 @@ def test_the_sweep_keeps_paused_executions_longer(tmp_path):
     for eid, state in (("exec-done", "finished"), ("exec-held", "paused")):
         j.begin(AGENT, eid, digest, "tok-1", T0)
         j.update(AGENT, eid, T0, state=state)
-    assert j.sweep(T0 + timedelta(days=8)) == 1
+    assert j.sweep(T0 + timedelta(days=8))["removed"] == 1
     assert j.execution(AGENT, "exec-done") is None and j.execution(AGENT, "exec-held")
-    assert j.sweep(T0 + timedelta(days=31)) == 1
+    assert j.sweep(T0 + timedelta(days=31))["removed"] == 1
     assert j.execution(AGENT, "exec-held") is None
 
 

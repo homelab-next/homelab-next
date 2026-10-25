@@ -23,10 +23,12 @@ from homelabnext.codemode.runner import Runner
 __all__ = [
     "CapHiddenRunner",
     "DenialAsErrorRunner",
+    "DeniedWaitsRunner",
     "HiddenPauseRunner",
     "RawLogsRunner",
     "ReferenceRunner",
     "ResendingRunner",
+    "StepOnlyReplayRunner",
     "UnjournalledRefusalRunner",
     "make",
 ]
@@ -88,35 +90,28 @@ class DenialAsErrorRunner(ReferenceRunner):
     """Mutant: a broker refusal reaches the program as ``broker.Error``, not ``broker.Denied``
     (the record still says denied)."""
 
-    def _refusal(self, run, step, action, target, exc, fp):
-        reply = super()._refusal(run, step, action, target, exc, fp)
-        return _as_error(reply)
-
-    def _refused(self, run, step, action, target, outcome, reason):
-        return _as_error(super()._refused(run, step, action, target, outcome, reason))
-
-
-def _as_error(reply):
-    if reply.get("denied"):
-        return {"ok": False, "error": True, "reason": reply["reason"]}
-    return reply
+    def serve_call(self, run, msg):
+        reply = super().serve_call(run, msg)
+        if reply.get("denied"):
+            return {"ok": False, "error": True, "reason": reply["reason"]}
+        return reply
 
 
 class UnjournalledRefusalRunner(ReferenceRunner):
     """Mutant: a refusal the broker answered with a request id is not journalled."""
 
-    def _journal(self, run, rec, fp):
+    def _journal(self, run, rec, fp, *, settle=False):
         if rec["outcome"] in ("denied", "error"):
-            return
-        super()._journal(run, rec, fp)
+            return True
+        return super()._journal(run, rec, fp, settle=settle)
 
 
 class HiddenPauseRunner(ReferenceRunner):
     """Mutant: a pending answer is journalled and recorded, but the program is told ``ok`` and
     runs on past the pause."""
 
-    def _answered(self, run, step, action, target, answer, fp):
-        reply = super()._answered(run, step, action, target, answer, fp)
+    def _answered(self, run, step, action, target, answer, fp, *, settle=False):
+        reply = super()._answered(run, step, action, target, answer, fp, settle=settle)
         return {"ok": True, "value": None} if reply.get("pending") else reply
 
 
@@ -124,13 +119,12 @@ class ResendingRunner(ReferenceRunner):
     """Mutant: a resume sends every journalled step to the broker again (and then answers it
     from the journal, marked replayed, as if it had not)."""
 
-    def _replay(self, run, step, entry, action, fp):
-        rec = entry["record"]
-        if rec["outcome"] != "pending":
+    def _replay(self, run, step, entry, op, action, target, fp):
+        if not self._is_open(entry):
             args = getattr(run, "_last_args", {})
             with contextlib.suppress(Exception):
                 self.sandbox_broker.token_call(run.secret, action, args)
-        return super()._replay(run, step, entry, action, fp)
+        return super()._replay(run, step, entry, op, action, target, fp)
 
     def serve_call(self, run, msg):
         if isinstance(msg, dict):
@@ -138,11 +132,38 @@ class ResendingRunner(ReferenceRunner):
         return super().serve_call(run, msg)
 
 
+class StepOnlyReplayRunner(ReferenceRunner):
+    """Mutant: a resume replays a journalled step by its number, whatever the call at that step
+    now is (its action, target and arguments are never compared)."""
+
+    def _replay(self, run, step, entry, op, action, target, fp):
+        want = (entry.get("intent") or {}).get("intent") or {}
+        call = (entry.get("intent") or {}).get("call", fp)
+        return super()._replay(
+            run,
+            step,
+            entry,
+            want.get("op", op),
+            want.get("action", action),
+            want.get("target"),
+            call,
+        )
+
+
 class CapHiddenRunner(ReferenceRunner):
     """Mutant: a call the broker refuses ``call-cap-reached`` is recorded, but the run ends with
     the program's own status (``ok`` when it caught the refusal)."""
 
-    def _refused(self, run, step, action, target, outcome, reason):
-        reply = super()._refused(run, step, action, target, outcome, reason)
+    def _refused(self, run, step, action, target, outcome, reason, fp, *, settle=False):
+        reply = super()._refused(run, step, action, target, outcome, reason, fp, settle=settle)
         run.capped = False
         return reply
+
+
+class DeniedWaitsRunner(ReferenceRunner):
+    """Mutant: a paused request its approver denied is read as still waiting, so the resume
+    pauses again for ever instead of telling the program."""
+
+    def _paused_state(self, status):
+        state = super()._paused_state(status)
+        return "pending" if state == "denied" else state

@@ -50,7 +50,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 | `context` | scoped retrieval over the knowledge graph for agents | scope, inactive-record, ranking and stale-copy checks |
 | `projects` | projects, steps and tasks under board rules, linked to strategy records by uid | board-rule, idempotency, version-conflict and change-feed checks |
 | `codemode-executor` | one Code Mode program in a fresh sandbox that reaches only the broker (ADR-0031) | egress, credential, limit, disposability and result-bound checks |
-| `codemode-runner` | the handler of `codemode.execute`: every call a program makes is a broker request with the run's token (ADR-0031) | result-shape, denial, journal, pause, resume-without-replay and call-cap checks |
+| `codemode-runner` | the handler of `codemode.execute`: every call a program makes is a broker request with the run's token (ADR-0031) | result-shape, denial, journal, pause, resume-without-replay, replay-mismatch, denied-pause and call-cap checks |
 
 The authoritative list and the Python interfaces are in [docs/interfaces.md](docs/interfaces.md).
 The vocabulary is in [docs/glossary.md](docs/glossary.md).

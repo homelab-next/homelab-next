@@ -13,16 +13,19 @@ Python only, as the executor suite's are."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from conformance.fakes.codemode_runner import (
     CapHiddenRunner,
     DenialAsErrorRunner,
+    DeniedWaitsRunner,
     HiddenPauseRunner,
     RawLogsRunner,
     ReferenceRunner,
     ResendingRunner,
+    StepOnlyReplayRunner,
     UnjournalledRefusalRunner,
 )
 from conformance.protocols.broker import CODEMODE_EXECUTE, TOKEN_REFUSALS, ArgSpec, code_digest
@@ -40,6 +43,7 @@ SUITE = Suite(
 
 TOKENS = ["codemode-tokens"]
 ARGS = {"name": ArgSpec("str")}
+_REASON = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
 class _Lab:
@@ -168,8 +172,12 @@ def _(r):
         assert value[0] == "token-action-not-allowed", (
             f"{lang}: an action outside the token reached the program as {value[0]!r}"
         )
-        assert isinstance(value[1], str) and value[1] not in ("ran", ""), (
+        assert isinstance(value[1], str) and _REASON.match(value[1]), (
             f"{lang}: invalid arguments reached the program as {value[1]!r}"
+        )
+        assert value[1] not in (*TOKEN_REFUSALS, "ran", "approved", "allowed"), (
+            f"{lang}: the broker's refusal of invalid arguments reached the program as "
+            f"{value[1]!r}, not the broker's own reason"
         )
         assert value[2] == {"ok": "after"}, f"{lang}: the call after the denials got {value[2]}"
         shape = [(c["step"], c["outcome"], c.get("reason")) for c in calls]
@@ -295,7 +303,7 @@ def _(r):
         "python": (
             f"x = broker.call({a!r}, {{'name': 'one'}})\n"
             f"y = broker.submit({b!r}, {{'name': 'two'}})\n"
-            f"z = broker.call({c!r}, {{'name': 'three'}})\n"
+            f"z = broker.call({c!r}, {{'name': 'three'}}) if y else None\n"
             "result = [x, y, z]\n"
         )
     }
@@ -329,6 +337,76 @@ def _(r):
     assert ran == {a: ["one"] * n, b: ["two"] * n, c: ["three"] * n}, (
         f"over a run and its resume each command ran {ran}: a journalled step was sent again"
     )
+
+
+@SUITE.check(
+    "resume-refuses-a-different-call",
+    "a resume whose program makes another call than the journal holds at a step never replays "
+    "the journal into it: the call is refused replay-mismatch, nothing after it is sent, and the "
+    "run ends error",
+    requires=TOKENS,
+)
+def _(r):
+    lab = _Lab(r)
+    a, b = lab.cmds[:2]
+    programs = {
+        "python": (
+            "import time\n"
+            f"broker.call({a!r}, {{'name': str(time.time_ns())}})\n"
+            f"broker.submit({b!r}, {{'name': 'held'}})\n"
+            "result = 'went on'\n"
+        )
+    }
+    langs = _languages(r, programs)
+    for lang in langs:
+        eid = uniq("exec")
+        first, _ = lab.execute(programs[lang], lang, eid=eid)
+        assert first["status"] == "paused", f"{lang}: the first run ended {first['status']}"
+        res, _ = lab.execute(programs[lang], lang, eid=eid, resume=True)
+        assert res["status"] == "error", f"{lang}: a resume with a different call ended {res}"
+        assert not any(c.get("replayed") for c in res["calls"]), (
+            f"{lang}: a different call was answered from the journal: {res['calls']}"
+        )
+    assert lab.ran[a], f"{a} never ran"
+    assert lab.ran[b] == [], f"the held request ran after a replay mismatch: {lab.ran[b]}"
+
+
+@SUITE.check(
+    "denied-pause-is-a-value",
+    "a resume of a run paused on a request its approver denied tells the program the reason "
+    "with reason request-denied, a denied call naming that request",
+    requires=[*TOKENS, "approval-control"],
+)
+def _(r):
+    lab = _Lab(r)
+    held = lab.cmds[0]
+    programs = {
+        "python": (
+            "try:\n"
+            f"    broker.submit({held!r}, {{'name': 'risky'}})\n"
+            "    result = 'ran'\n"
+            "except (broker.Denied, broker.Error) as exc:\n"
+            "    result = exc.reason\n"
+        )
+    }
+    for lang in _languages(r, programs):
+        eid = uniq("exec")
+        first, _ = lab.execute(programs[lang], lang, eid=eid)
+        assert first["status"] == "paused", f"{lang}: the submit ended {first['status']}"
+        rid = first["pending"][0]["request_id"]
+        lab.b.decide_request(rid, "denied")
+        res, _ = lab.execute(programs[lang], lang, eid=eid, resume=True)
+        assert (res["status"], res.get("value")) == ("ok", "request-denied"), (
+            f"{lang}: the program saw a denied pause as {res.get('status')} {res.get('value')!r}"
+        )
+        (call,) = res["calls"]
+        assert (call["outcome"], call.get("reason"), call.get("request_id")) == (
+            "denied",
+            "request-denied",
+            rid,
+        ), f"{lang}: the denied pause was recorded {call}"
+        assert call.get("request_digest") == first["pending"][0]["request_digest"], call
+    assert lab.ran[held] == [], f"a denied request ran: {lab.ran[held]}"
 
 
 @SUITE.check(
@@ -400,6 +478,17 @@ MUTANTS = {
         ResendingRunner,
         "resume-without-replay",
         "a resume sends every journalled step to the broker again",
+    ),
+    "replay-by-step-only": _m(
+        StepOnlyReplayRunner,
+        "resume-refuses-a-different-call",
+        "a resume replays a journalled step by its number whatever the call at that step now is",
+    ),
+    "denied-pause-waits": Mutant(
+        DeniedWaitsRunner,
+        "denied-pause-is-a-value",
+        "a pause whose request was denied reads as still waiting: the resume pauses for ever",
+        features=frozenset([*TOKENS, "approval-control"]),
     ),
     "cap-hidden": _m(
         CapHiddenRunner,
