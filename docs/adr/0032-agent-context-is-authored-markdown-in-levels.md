@@ -1,5 +1,5 @@
 ---
-summary: 'Proposed: no context database; agent context stays authored Markdown/YAML in git, served in levels (summary, outline, one section).'
+summary: 'No context database; agent context stays authored Markdown/YAML in git, served in levels (summary, outline, one section).'
 ---
 # ADR-0032: Agent context is authored Markdown served in levels; no context database
 
