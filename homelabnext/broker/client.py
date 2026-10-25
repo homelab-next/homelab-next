@@ -150,3 +150,53 @@ class BrokerClient:
     def audit(self, *, tail: int = 50, **match: str | None) -> list[dict[str, Any]]:
         """The last ``tail`` audit records matching ``match`` (relay only)."""
         return self.request("audit", tail=tail, **match)["records"]
+
+    # ---------------------------------------------------------------- Code Mode (manifest 1.7)
+    def token_issue(
+        self,
+        request_id: str,
+        *,
+        sandbox_id: str,
+        actions: list[str],
+        max_calls: int | None = None,
+        ttl_s: int | None = None,
+    ) -> dict[str, Any]:
+        """``{secret, claims}``: a token for the running ``codemode.execute`` (runner only)."""
+        return self.request(
+            "token-issue",
+            request_id=request_id,
+            sandbox_id=sandbox_id,
+            actions=list(actions),
+            max_calls=max_calls,
+            ttl_s=ttl_s,
+        )
+
+    def token_spend(self, token_id: str) -> dict[str, Any]:
+        return self.request("token-spend", token_id=token_id)
+
+    def token_status(self, token_id: str) -> dict[str, Any]:
+        return self.request("token-status", token_id=token_id)
+
+    def token_call(
+        self,
+        token: str,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        target: str | None = None,
+    ) -> Any:
+        """A call made with a token (sandbox only): the actor is the token's."""
+        fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-call", **fields)["result"]
+
+    def token_submit(
+        self,
+        token: str,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        """``{request_id, state, paused}``: the token is paused from here on."""
+        fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-submit", **fields)

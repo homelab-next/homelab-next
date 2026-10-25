@@ -2,7 +2,7 @@
 # Code Mode build plan
 
 The order in which [ADR-0031](adr/0031-code-mode-through-the-broker.md) (proposed) is built.
-CM-1, CM-3 and CM-4 have landed (both described below); nothing else here is built yet. Steps
+CM-1, CM-2, CM-3, CM-4 and CM-5a have landed (described below); nothing else here is built yet. Steps
 tagged **PUBLIC-NOW** are provable in CI with fakes, like the [build order](build-order.md)'s P
 phases; steps tagged **SERVER** need the lab and are documented, not run, here.
 
@@ -11,8 +11,8 @@ contracts, with their reference fakes and mutants, land before any real sandbox 
 real executor goes live only when the same suite passes against it.
 
 ```
-CM-1 ADR + plan --> CM-2 schemas --> CM-3 generator --+--> CM-5 runner contract --> CM-6 golden suites
-                                  \-> CM-4 executor contract -/                          |
+CM-1 ADR + plan --> CM-2 schemas --> CM-3 generator --+--> CM-5a tokens --> CM-5b runner --> CM-6 golden suites
+                                  \-> CM-4 executor contract -/                                |
 CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role live (SERVER)
 ```
 
@@ -24,7 +24,8 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 | CM-2 | PUBLIC-NOW | **Landed.** Schemas under `schemas/codemode/` (drafts): execution request and result (`status` ok, paused, denied, error, limit), capability token claims, step-journal record; examples and negatives (drafts, frozen when the ADR is accepted) | `make schemas` passes; every negative is refused for its stated reason |
 | CM-3 | PUBLIC-NOW | **Landed.** `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the broker manifest (its grants, actions and handler documents) and writes, per agent profile, synchronous typed stubs and the search index, from each action's argument spec; generated marker; goldens from `examples/` in `examples/codemode/<profile>/`. The MCP catalog and exec result schemas (a `result_schema` in the handler document) arrive with CM-5 | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
 | CM-4 | PUBLIC-NOW, **landed** | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
-| CM-5 | PUBLIC-NOW | The runner and the `codemode-runner` capability: `codemode.execute` as a broker action whose handler is the runner; the `codemode` tool class and catalog record for search and describe; token issue through the broker; step journal; pause on `submit`, resume without replay; denied calls as values; the broker refuses calls on a paused or over-cap token (codemode-runner check). Suite with the five MUST checks and mutants | suite green against the fake broker (`conformance/fakes/`); G-13 stays green with the new action and record; mutants caught |
+| CM-5a | PUBLIC-NOW, **landed** | Capability tokens issued, held and enforced by the broker ([broker](broker.md#code-mode-capability-tokens)): `codemode.execute`'s params checked as an execution request and the request in flight while its handler (the runner) runs; `issue_token` for a runner only (manifest 1.7 `codemode.runners`), claims from the request, actions narrowed to what `decide()` admits for the actor, call cap, lifetime and live tokens capped by the manifest's `codemode` block; the secret kept as a digest; every token call checked in order (invalid, sandbox, expired, spent, paused, action, cap) and counted broker-side before `decide()`; a submit pauses the token; spend, and resume as a new token for the same actor and code; audit 1.3 `token_id`/`execution_id`; the `runner` and `sandbox` socket peers. The `broker` contract's feature `codemode-tokens`, proved by the extended suite `broker-tokens` | the eight MUST checks pass on the fake and the reference broker; each of the eight mutants is caught by its own check only |
+| CM-5b | PUBLIC-NOW | The runner and the `codemode-runner` capability: the runner as `codemode.execute`'s handler; the `codemode` tool class and catalog record for search and describe; the step journal; pause on `submit`, resume without replay; denied calls as values. Suite with the five MUST checks and mutants | suite green against the fake broker (`conformance/fakes/`); G-13 stays green with the new action and record; mutants caught |
 | CM-6 | PUBLIC-NOW | Golden suites `codemode-<role>` against the fakes, with the same tasks in classic MCP mode as the baseline; scorers for the answer, the broker call count, denied calls and ungranted actions; the G-02 corpus placed inside tool results a program reads | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
 | CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; the stubs are synchronous, so a TypeScript executor must offer a blocking host call to the broker (`Atomics.wait` on a worker, or a sync bridge): check it before choosing | a short decision note picks the executor and records the numbers |
 | CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite, after the egress-probe fixes from phase 2, passes against the real executor on staging |
@@ -41,7 +42,8 @@ The suite `conformance/suites/codemode_executor.py` has fifteen MUST checks: the
 a broker round trip, errors, denials, a denial's reason, a pause the program cannot swallow,
 broker errors, the call cap, and oversized, unencodable and unknown-language programs refused.
 The client-side pause and call cap are behaviour, not enforcement: the broker's refusal on a
-paused or over-cap token is (CM-5). Its mutants are
+paused or over-cap token is, and has landed with CM-5a (the `broker-tokens` checks
+`paused-token-refused` and `call-cap-enforced-by-the-broker`, at the broker's API). Its mutants are
 `open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap` and
 `pause-catchable`, and the reference page is
 [capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
@@ -123,7 +125,8 @@ Each is planned as steps like the ones above when phase 1 closes.
    - post-cap calls: a capped program must not reach the broker after `run` returns;
    - a tamper check: a program resetting its client state or calling the broker directly
      cannot exceed the cap or continue past a pause (the broker's refusal on the token is the
-     enforcement, CM-5);
+     enforcement, landed with CM-5a and proved at the broker's API; the sandbox-side probe
+     remains);
    - an environment allowlist and canaries set before the executor is constructed, and the
      canary absent from the output as well as the environment;
    - well-known credential paths in the sandbox's filesystem;

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.6",
+  "$id": "https://schemas.example.internal/homelabnext/broker/manifest/1.7",
   "title": "Broker manifest",
-  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, matched exactly; self-approval and the agent rule compare normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers. 1.2 adds, additively, lanes (write lanes the broker's built-in lane handler writes into: kind files or records-inbox, a root under the data root, per-actor subdirectories, a filename pattern, a size cap, a format and an optional content schema, exclusive create unless overwrite), an action's optional lane (its handler is then builtin/lane) and handler_docs (the handler documents, relative to the manifest, that pin each exec handler's digest). 1.3 adds, additively, the transport identities: callers (a peer, by numeric uid or user name, mapped to the one profile it acts as; a peer not listed is refused), approval_relays (peers trusted to carry a human approver's identity for one issuer; the approvers rules still apply) and dev_identity (whether the CLI's asserted --as identity is accepted; absent means false). 1.4 adds, additively, refusal_limit: how many refused requests one transport peer (a caller or an unknown peer; approval relays are exempt) may collect per window before the socket answers it rate-limited for the rest of the window, audited once per window; absent means 60 per 60 s. 1.5 adds, additively, quotas on accepted work: quotas.pending_per_actor (how many requests one actor may have pending at once; a submit past it is refused too-many-pending; absent means 20) and quotas.notify_window_s (an actor's approval requests page the approver at most once per window, the page counting the actor's pending requests; absent means 300 s), and a lane's max_files and max_total_bytes (what one lane directory may hold; absent means 4096 files and 64 MiB). 1.6 adds, additively, a shared lane's per-actor share (max_files_per_actor and max_bytes_per_actor: what one actor's own files in a per_actor false lane may come to; absent means an eighth of the lane's max_files and max_total_bytes) and a lane's max_writes_per_hour (files one actor may write into the lane directory per hour, refused lane-rate-exceeded past it; absent means 120 on a shared lane and no limit on a per-actor one); an actor's approval requests page only while it has no open page, quotas.notify_window_s apart at least; and max_files may be null (no file cap: an append-only lane).",
+  "description": "The allowlist. default is the constant deny: an action absent from actions, an actor absent from grants, or a tier above the grant's max_tier is refused. mode shadow records decisions without enforcing them. approvers is the allowlist of identities (issuer and subject, matched exactly; self-approval and the agent rule compare normalized) whose approvals count; without it no approval is accepted. An approver of kind agent, or one whose subject names a granted profile, counts only when allow_agent_approvers is true. approval_ttl_s defaults to 900 when absent. 1.1 adds approvers and allow_agent_approvers. 1.2 adds, additively, lanes (write lanes the broker's built-in lane handler writes into: kind files or records-inbox, a root under the data root, per-actor subdirectories, a filename pattern, a size cap, a format and an optional content schema, exclusive create unless overwrite), an action's optional lane (its handler is then builtin/lane) and handler_docs (the handler documents, relative to the manifest, that pin each exec handler's digest). 1.3 adds, additively, the transport identities: callers (a peer, by numeric uid or user name, mapped to the one profile it acts as; a peer not listed is refused), approval_relays (peers trusted to carry a human approver's identity for one issuer; the approvers rules still apply) and dev_identity (whether the CLI's asserted --as identity is accepted; absent means false). 1.4 adds, additively, refusal_limit: how many refused requests one transport peer (a caller or an unknown peer; approval relays are exempt) may collect per window before the socket answers it rate-limited for the rest of the window, audited once per window; absent means 60 per 60 s. 1.5 adds, additively, quotas on accepted work: quotas.pending_per_actor (how many requests one actor may have pending at once; a submit past it is refused too-many-pending; absent means 20) and quotas.notify_window_s (an actor's approval requests page the approver at most once per window, the page counting the actor's pending requests; absent means 300 s), and a lane's max_files and max_total_bytes (what one lane directory may hold; absent means 4096 files and 64 MiB). 1.6 adds, additively, a shared lane's per-actor share (max_files_per_actor and max_bytes_per_actor: what one actor's own files in a per_actor false lane may come to; absent means an eighth of the lane's max_files and max_total_bytes) and a lane's max_writes_per_hour (files one actor may write into the lane directory per hour, refused lane-rate-exceeded past it; absent means 120 on a shared lane and no limit on a per-actor one); an actor's approval requests page only while it has no open page, quotas.notify_window_s apart at least; and max_files may be null (no file cap: an append-only lane). 1.7 adds, additively, codemode: the broker's limits on Code Mode capability tokens (ADR-0031) and the transport identities that use them. max_calls caps the calls one token may carry (absent 50, never above the token schema's 200), ttl_margin_s how long past its run's wall budget a token may live (absent 10 s), default_wall_s the wall budget of a codemode.execute that names none (absent 60 s), max_live_tokens_per_actor the live tokens one actor may hold at once (absent 4); runners are the peers that may ask for and spend tokens (the runner service: by uid or user, with the svc id the broker knows it as), and sandboxes the peers that may present one (by uid or user, optionally with the sandbox_id they are, which a token presented by them must name). A peer is listed once, across callers, approval_relays, runners and sandboxes.",
   "type": "object",
   "properties": {
     "manifest_id": {
@@ -350,6 +350,85 @@
       "properties": {
         "pending_per_actor": {"type": "integer", "minimum": 1, "maximum": 10000},
         "notify_window_s": {"type": "number", "minimum": 0, "maximum": 86400}
+      },
+      "additionalProperties": false
+    },
+    "codemode": {
+      "type": "object",
+      "description": "1.7: Code Mode capability tokens (ADR-0031): the broker's caps on them and the peers that ask for (runners) and present (sandboxes) them.",
+      "properties": {
+        "max_calls": {"type": "integer", "minimum": 1, "maximum": 200},
+        "ttl_margin_s": {"type": "integer", "minimum": 0, "maximum": 300},
+        "default_wall_s": {"type": "integer", "minimum": 1, "maximum": 300},
+        "max_live_tokens_per_actor": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "runners": {"type": "array", "items": {
+          "type": "object",
+          "properties": {
+            "uid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967294,
+              "description": "Numeric user id of the connecting process (SO_PEERCRED)."
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+              "description": "User name, resolved to a uid when the service starts."
+            },
+            "service": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id",
+              "description": "The runner's identity: the issuer of the tokens it asks for, in every audit record of them."
+            }
+          },
+          "required": ["service"],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "uid"
+              ]
+            },
+            {
+              "required": [
+                "user"
+              ]
+            }
+          ]
+        }},
+        "sandboxes": {"type": "array", "items": {
+          "type": "object",
+          "properties": {
+            "uid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967294,
+              "description": "Numeric user id of the connecting process (SO_PEERCRED)."
+            },
+            "user": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+              "description": "User name, resolved to a uid when the service starts."
+            },
+            "sandbox_id": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug",
+              "description": "The sandbox instance this peer is; a token it presents must be bound to it. Absent: a pool of sandboxes shares the peer, and the token's binding is the runner's to keep."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "uid"
+              ]
+            },
+            {
+              "required": [
+                "user"
+              ]
+            }
+          ]
+        }}
       },
       "additionalProperties": false
     }

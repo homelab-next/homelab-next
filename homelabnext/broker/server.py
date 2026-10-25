@@ -9,11 +9,16 @@ uid through the manifest (``schemas/broker/manifest`` 1.4):
 * ``approval_relays: [{uid | user, issuer}]`` - a process that authenticated a human (the hub
   behind the SSO front door, stage 2b) and files approvals and denials for that human, for its
   one issuer.  The manifest's approver rules (allowlist, no self-approval, no agent approver)
-  still apply to the human it names.
+  still apply to the human it names;
+* ``codemode.runners: [{uid | user, service}]`` (1.7) - the Code Mode runner: it asks for a
+  capability token for a ``codemode.execute`` whose handler is running, and spends it;
+* ``codemode.sandboxes: [{uid | user, sandbox_id?}]`` (1.7) - a sandbox: it may only present a
+  token, and the token's actor is the one it acts as.  With ``sandbox_id`` the peer is that one
+  sandbox, and a token bound to another is refused ``token-sandbox-mismatch``.
 
 A peer in neither list is refused (``unknown-caller``) before its request is read, and audited;
 the server answers at once and closes without waiting for, or parsing, anything it sent.
-A peer is listed once (``hnx broker validate`` refuses a peer that is both a caller and a relay).
+A peer is listed once (``hnx broker validate`` refuses a peer listed in two of these roles).
 
 Protocol: one request per connection.  The client sends one JSON object, terminated by a newline
 or by closing its write side, of at most ``max_request_bytes`` (default 1 MiB); the server
@@ -35,6 +40,12 @@ op                        peer    fields
 ``pending``               relay   -
 ``audit``                 relay   ``action``, ``caller``, ``outcome``, ``operation``,
                                   ``request_id`` (filters), ``tail`` (default 50, max 500)
+``token-issue``           runner  ``request_id``, ``sandbox_id``, ``actions``, ``max_calls``,
+                                  ``ttl_s``: ``{secret, claims}``
+``token-spend``           runner  ``token_id``
+``token-status``          runner  ``token_id``
+``token-call`` /          sandbox ``token``, ``action``, ``params``, ``target``
+``token-submit``
 ========================  ======  ===========================================================
 
 The body never names the actor: a top-level ``actor``, ``caller`` (outside ``audit``), ``as``,
@@ -101,6 +112,8 @@ __all__ = [
     "FORBIDDEN_FIELDS",
     "PROTOCOL_VERSION",
     "RELAY_OPS",
+    "RUNNER_OPS",
+    "SANDBOX_OPS",
     "BrokerServer",
     "Identity",
     "PeerMap",
@@ -153,12 +166,28 @@ RELAY_OPS: dict[str, frozenset[str]] = {
     "pending": frozenset(),
     "audit": frozenset({"action", "caller", "outcome", "operation", "request_id", "tail"}),
 }
+#: what a Code Mode runner may ask (manifest 1.7 ``codemode.runners``)
+RUNNER_OPS: dict[str, frozenset[str]] = {
+    "token-issue": frozenset({"request_id", "sandbox_id", "actions", "max_calls", "ttl_s"}),
+    "token-spend": frozenset({"token_id"}),
+    "token-status": frozenset({"token_id"}),
+}
+#: what a sandbox may ask: only calls made with a token (manifest 1.7 ``codemode.sandboxes``)
+SANDBOX_OPS: dict[str, frozenset[str]] = {
+    "token-call": frozenset({"token", "action", "params", "target"}),
+    "token-submit": frozenset({"token", "action", "params", "target"}),
+}
+_TABLES = {"caller": CALLER_OPS, "relay": RELAY_OPS, "runner": RUNNER_OPS, "sandbox": SANDBOX_OPS}
 #: top-level fields that would name the actor: the transport says who is calling, never the body
 FORBIDDEN_FIELDS = frozenset(
     {"actor", "caller", "as", "who", "profile", "identity", "uid", "user", "approver_uid"}
 )
 #: operations the audit schema knows; anything else is audited as ``connect``
-_AUDIT_OPS = frozenset({"call", "submit", "status", "run", "cancel", "approve", "deny"})
+_AUDIT_OPS = frozenset(
+    {"call", "submit", "status", "run", "cancel", "approve", "deny", "token-issue", "token-spend"}
+)
+#: a transport refusal of a token op is audited as the operation it carries
+_AUDITED_AS = {"token-call": "call", "token-submit": "submit"}
 _MAX_NOTE = 2000
 _MAX_NAME = 64
 
@@ -185,16 +214,20 @@ def _clean(value: Any, limit: int = 128) -> str:
 # ---------------------------------------------------------------- identity
 @dataclass(frozen=True)
 class Identity:
-    """Who a peer is: a ``caller`` acting as ``profile``, or a ``relay`` for ``issuer``."""
+    """Who a peer is: a ``caller`` acting as ``profile``, a ``relay`` for ``issuer``, a Code Mode
+    ``runner`` known as ``service``, or a ``sandbox`` (``sandbox_id`` when it is one sandbox)."""
 
     role: str
     uid: int
     profile: str | None = None
     issuer: str | None = None
+    service: str | None = None
+    sandbox_id: str | None = None
 
 
 class PeerMap:
-    """The manifest's ``callers`` and ``approval_relays`` by uid; user names resolved once."""
+    """The manifest's ``callers``, ``approval_relays`` and ``codemode`` runners and sandboxes by
+    uid; user names resolved once."""
 
     def __init__(
         self,
@@ -205,8 +238,14 @@ class PeerMap:
         lookup = user_uid or (lambda name: pwd.getpwnam(name).pw_uid)
         self._by_uid: dict[int, Identity] = {}
         problems: list[str] = []
-        for where, role in (("callers", "caller"), ("approval_relays", "relay")):
-            for entry in manifest.get(where, []):
+        cm = manifest.get("codemode") or {}
+        for where, role, entries in (
+            ("callers", "caller", manifest.get("callers", [])),
+            ("approval_relays", "relay", manifest.get("approval_relays", [])),
+            ("codemode.runners", "runner", cm.get("runners", [])),
+            ("codemode.sandboxes", "sandbox", cm.get("sandboxes", [])),
+        ):
+            for entry in entries:
                 if "uid" in entry:
                     uid = int(entry["uid"])
                 else:
@@ -219,7 +258,12 @@ class PeerMap:
                     problems.append(f"{where}: uid {uid} is listed twice")
                     continue
                 self._by_uid[uid] = Identity(
-                    role, uid, profile=entry.get("profile"), issuer=entry.get("issuer")
+                    role,
+                    uid,
+                    profile=entry.get("profile"),
+                    issuer=entry.get("issuer"),
+                    service=entry.get("service"),
+                    sandbox_id=entry.get("sandbox_id"),
                 )
         if problems:
             raise ManifestError(problems)
@@ -327,8 +371,11 @@ def _refuse(
     """Audit a transport refusal and build its response."""
     body = body or {}
     caller = who.profile if who is not None and who.role == "caller" else f"uid:{uid}"
+    if who is not None and who.role == "runner":
+        caller = str(who.service)
     action = body.get("action") if isinstance(body.get("action"), str) else ""
     rid = body.get("request_id")
+    op = _AUDITED_AS.get(op, op) if isinstance(op, str) else op
     svc.audit_refusal(
         caller,
         op if op in _AUDIT_OPS else "connect",
@@ -428,11 +475,19 @@ def _handle(svc: BrokerService, who: Identity, raw: bytes | None, problem: str) 
             "the caller is the authenticated peer; the request may not name it",
             body,
         )
-    table = CALLER_OPS if who.role == "caller" else RELAY_OPS
-    if op not in CALLER_OPS and op not in RELAY_OPS:
+    table = _TABLES[who.role]
+    if not any(op in t for t in _TABLES.values()):
         return _refuse(svc, who, uid, op, "invalid", "unknown-operation", "no such operation")
     if op not in table:
-        reason = "not-an-approval-relay" if who.role == "caller" else "not-a-caller"
+        reason = (
+            "not-an-approval-relay"
+            if op in RELAY_OPS
+            else "not-a-codemode-runner"
+            if op in RUNNER_OPS
+            else "not-a-sandbox"
+            if op in SANDBOX_OPS
+            else "not-a-caller"
+        )
         return _refuse(svc, who, uid, op, "denied", reason, f"this peer may not {op}", body)
     extra = set(body) - table[op] - {"v", "op"}
     if extra:
@@ -442,8 +497,12 @@ def _handle(svc: BrokerService, who: Identity, raw: bytes | None, problem: str) 
     try:
         if who.role == "caller":
             result = _caller_op(svc, who, op, body)
-        else:
+        elif who.role == "relay":
             result = _relay_op(svc, who, op, body)
+        elif who.role == "runner":
+            result = _runner_op(svc, who, op, body)
+        else:
+            result = _sandbox_op(svc, who, op, body)
     except BrokerError as exc:
         return _from_exception(exc)
     except _BadField as exc:
@@ -500,6 +559,40 @@ def _caller_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, An
         return {"request_id": rid, "result": svc.run(caller, rid)}
     svc.cancel(caller, rid)
     return {"request_id": rid, "state": "cancelled"}
+
+
+def _runner_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:
+    runner = str(who.service)
+    if op == "token-issue":
+        token = svc.issue_token(
+            runner,
+            _rid(body),
+            sandbox_id=body.get("sandbox_id"),
+            actions=body.get("actions"),
+            max_calls=body.get("max_calls"),
+            ttl_s=body.get("ttl_s"),
+        )
+        return {"secret": token.secret, "claims": dict(token.claims)}
+    tid = body.get("token_id")
+    if not isinstance(tid, str) or not tid:
+        raise _BadField("token_id is a non-empty string")
+    if op == "token-status":
+        return svc.token_status(runner, tid)
+    svc.spend_token(runner, tid)
+    return {"token_id": tid, "state": "spent"}
+
+
+def _sandbox_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:
+    action, params, token = body.get("action"), body.get("params", {}), body.get("token")
+    if not isinstance(action, str) or not action:
+        raise _BadField("action is a non-empty string")
+    if not isinstance(token, str):
+        raise _BadField("token is a string")  # the value is never repeated
+    kw = {"target": body.get("target"), "sandbox_id": who.sandbox_id}
+    if op == "token-call":
+        return {"result": svc.token_call(token, action, params, **kw)}
+    rid = svc.token_submit(token, action, params, **kw)
+    return {"request_id": rid, "state": "pending", "paused": True}
 
 
 def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:

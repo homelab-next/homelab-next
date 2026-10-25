@@ -1,0 +1,14 @@
+{
+  "action": "dhcp.lease",
+  "args": {},
+  "at": "2026-10-25T02:00:03.000000Z",
+  "audit_id": "aud-0007",
+  "caller": "profile:triage",
+  "execution_id": "exec-0001",
+  "manifest_id": "lab-broker-codemode",
+  "operation": "call",
+  "outcome": "denied",
+  "reason": "token-paused",
+  "token_id": "token-0001",
+  "via": "uid:3101"
+}

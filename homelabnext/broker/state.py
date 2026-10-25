@@ -460,6 +460,14 @@ class StateDir:
                 with contextlib.suppress(FileNotFoundError):
                     p.unlink()
 
+    def instance_alive(self, instance: Any) -> bool:
+        """Whether the broker instance ``instance`` (:meth:`instance_id`) may still be running:
+        False only when its lock can be taken (or it never was one), True when it cannot be
+        told."""
+        if not (isinstance(instance, str) and is_id(instance)):
+            return False
+        return self._claimant_alive({"instance": instance})
+
     def _claimant_alive(self, claim: dict[str, Any]) -> bool:
         iid = claim.get("instance")
         if isinstance(iid, str) and is_id(iid):

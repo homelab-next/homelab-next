@@ -24,7 +24,7 @@ fake, the target-file adapters with their product limits, and the integration st
 
 ```bash
 hnx conform list                      # the seventeen capabilities (also: hnx conform --list)
-hnx conform list --all                # plus the extended suites (backup, dns, edge)
+hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
