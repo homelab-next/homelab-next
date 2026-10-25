@@ -18,7 +18,8 @@
     "code": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 65536
+      "maxLength": 65536,
+      "description": "The program. Each namespace method is one synchronous broker call (the stubs hnx codemode gen writes); a call that needs approval pauses the whole run."
     },
     "budget": {
       "type": "object",

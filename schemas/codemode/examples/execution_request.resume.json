@@ -1,6 +1,6 @@
 {
   "execution_id": "exec-0003",
   "language": "typescript",
-  "code": "const r = await dns.lookup({name: 'app-01'});\nreturn await dns.recordSet({name: 'app-01', address: '192.0.2.10'});\n",
+  "code": "const r = dns.lookup({name: 'app-01'});\nreturn dns.record_set({name: 'app-01', address: '192.0.2.10'});\n",
   "resume": true
 }
