@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // The Code Mode namespaces of profile:triage (ADR-0031): one per broker action prefix,
 // holding only the actions the broker admits for this profile.  Each function is one
-// broker request for the action it names, its argument the request's params.
+// broker request for the action it names, its argument the request's params; it returns
+// the result, and one that needs a person's approval pauses the run until it is decided.
 
 interface LaneWrite {
   bytes: number;
@@ -15,9 +16,9 @@ declare namespace finding {
    * Write a text file into your own findings lane. Tier write.
    *
    * @param args.content text, at most 262144 bytes; an existing file is never replaced
-   * @param args.name the file name
+   * @param args.name the file name; matching ^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{0,60}\.md$
    */
-  function write(args: { content: string; name: string }): Promise<LaneWrite>;
+  function write(args: { content: string; name: string }): LaneWrite;
 }
 
 declare namespace memory {
@@ -25,9 +26,9 @@ declare namespace memory {
    * Write a text file into your own memory lane. Tier write.
    *
    * @param args.content text, at most 65536 bytes; an existing file is never replaced
-   * @param args.name the file name
+   * @param args.name the file name; matching ^[a-z0-9][a-z0-9-]{0,62}\.md$
    */
-  function write(args: { content: string; name: string }): Promise<LaneWrite>;
+  function write(args: { content: string; name: string }): LaneWrite;
 }
 
 declare namespace proposal {
@@ -38,19 +39,19 @@ declare namespace proposal {
    * @param args.note records note frontmatter: title, risk, rollback, ...; type one of proposal; requesting_agent is bound to the caller
    * @param args.slug the file name's slug
    */
-  function file(args: { body?: string; note: Record<string, unknown>; slug?: string }): Promise<LaneWrite>;
+  function file(args: { body?: string; note: Record<string, unknown>; slug?: string }): LaneWrite;
 }
 
 declare namespace service {
   /**
-   * Restart one service after a drain period (stand-in that reports only). Tier execute. Needs a person's approval: the run pauses until it is approved.
+   * Restart one service after a drain period (stand-in that reports only). Tier execute. Needs a person's approval: the run pauses until it is decided.
    *
    * @param args.grace_s >= 0, <= 600
    */
-  function restart(args: { grace_s: number }): Promise<unknown>;
+  function restart(args: { grace_s: number }): unknown;
 
   /**
    * Report one service's state (read only, stand-in). Tier read.
    */
-  function status(args?: { verbose?: boolean }): Promise<unknown>;
+  function status(args?: { verbose?: boolean }): unknown;
 }

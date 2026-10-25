@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // The Code Mode namespaces of profile:reader (ADR-0031): one per broker action prefix,
 // holding only the actions the broker admits for this profile.  Each function is one
-// broker request for the action it names, its argument the request's params.
+// broker request for the action it names, its argument the request's params; it returns
+// the result, and one that needs a person's approval pauses the run until it is decided.
 
 declare namespace service {
   /**
    * Report one service's state (read only, stand-in). Tier read.
    */
-  function status(args?: { verbose?: boolean }): Promise<unknown>;
+  function status(args?: { verbose?: boolean }): unknown;
 }
