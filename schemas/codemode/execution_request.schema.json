@@ -3,19 +3,16 @@
   "$id": "https://schemas.example.internal/homelabnext/codemode/execution_request/1.0",
   "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
   "title": "Code Mode execution request",
-  "description": "The parameters of the broker action codemode.execute: one program an agent asks the runner to run in the sandbox. The program reaches lab systems only through broker calls made with a capability token scoped to this execution; budget caps what the run may use, and the runner may lower any cap but never raise it. resume_of names a paused execution to continue after its pending approvals land; completed steps replay from the journal instead of running again.",
+  "description": "The params of the broker action codemode.execute: one program the runner runs in the sandbox. The actor and the time are the enclosing broker request's, never params, so a program runs as the profile the broker authenticated. resume: true continues the paused execution of the same execution_id: the runner refuses it unless that execution exists, belongs to the same actor and has the same code digest (sha256 of the canonical JSON of {language, code}), and then replays completed steps from the journal. Absent budget caps take the runner's defaults; the runner may lower a cap, never raise it above these maxima.",
   "type": "object",
   "properties": {
     "execution_id": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
     },
-    "actor": {
-      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
-    },
     "language": {
       "enum": [
         "python",
-        "javascript"
+        "typescript"
       ]
     },
     "code": {
@@ -49,19 +46,14 @@
       },
       "additionalProperties": false
     },
-    "resume_of": {
-      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
-    },
-    "created": {
-      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    "resume": {
+      "type": "boolean"
     }
   },
   "required": [
     "execution_id",
-    "actor",
     "language",
-    "code",
-    "created"
+    "code"
   ],
   "additionalProperties": false
 }

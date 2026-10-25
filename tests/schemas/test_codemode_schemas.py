@@ -19,20 +19,36 @@ SCHEMAS = sorted(DIR.glob("*.schema.json"))
 WHY = {
     "execution_request.wall-too-long": ("budget/wall_s", "maximum"),
     "execution_request.language-unknown": ("language", "is not one of"),
-    "execution_request.extra-field": ("$", "credentials"),
-    "execution_request.actor-not-a-profile": ("actor", "does not match"),
+    "execution_request.actor-in-params": ("$", "'actor' was unexpected"),
+    "execution_request.resume-of-another-execution": ("$", "'resume_of' was unexpected"),
     "execution_result.paused-without-pending": ("$", "'pending' is a required property"),
+    "execution_result.paused-without-a-pending-call": ("calls", "does not contain items"),
+    "execution_result.ok-with-a-pending-call": ("calls", "'const': 'pending'"),
+    "execution_result.denied-without-a-denied-call": ("calls", "does not contain items"),
     "execution_result.limit-unnamed": ("$", "'limit' is a required property"),
+    "execution_result.ok-with-limit": ("$", "under {'required': ['limit']}"),
     "execution_result.denied-without-reason": ("calls/0", "'reason' is a required property"),
-    "execution_result.ok-with-error": ("$", "should not be valid"),
+    "execution_result.reason-not-in-vocabulary": ("calls/0/reason", "is not one of"),
+    "execution_result.broker-call-without-request-id": ("calls/0", "'request_id' is a required"),
+    "execution_result.ok-with-error": ("$", "under {'required': ['error']}"),
     "execution_result.ok-without-value": ("$", "'value' is a required property"),
+    "execution_result.log-line-with-newline": ("logs/0", "does not match"),
+    "execution_result.pending-with-free-text": ("pending/0", "'summary' was unexpected"),
+    "execution_result.pending-without-digest": ("pending/0", "'request_digest' is a required"),
+    "execution_result.truncated-without-value": ("$", "'value' is a dependency of 'truncated'"),
     "token.issuer-not-broker": ("issuer", "'svc:broker' was expected"),
     "token.no-actions": ("actions", "should be non-empty"),
-    "token.no-expiry": ("$", "'expires' is a required property"),
+    "token.no-expiry": ("$", "'expires_at' is a required property"),
     "token.duplicate-action": ("actions", "non-unique"),
-    "token.carries-a-secret": ("$", "secret"),
+    "token.carries-a-secret": ("$", "'secret' was unexpected"),
+    "token.nested-execution": ("actions/1", "^codemode"),
+    "token.wildcard-action": ("actions/0", "does not match"),
+    "token.not-bound-to-a-sandbox": ("$", "'sandbox_id' is a required property"),
     "journal_step.no-request-digest": ("$", "'request_digest' is a required property"),
-    "journal_step.pending-is-not-a-step": ("outcome", "is not one of"),
+    "journal_step.no-actor": ("$", "'actor' is a required property"),
+    "journal_step.no-code-digest": ("$", "'code_digest' is a required property"),
+    "journal_step.ok-without-result": ("$", "'result' is a required property"),
+    "journal_step.pending-with-result": ("$", "{'required': ['result']}"),
     "journal_step.negative-step": ("step", "minimum"),
 }
 
@@ -77,11 +93,25 @@ def test_a_paused_result_needs_at_least_one_pending_request():
 
 def test_only_a_paused_result_lists_pending_requests():
     doc = json.loads((DIR / "examples" / "execution_result.ok.json").read_text())
-    doc["pending"] = [{"request_id": "req-0001", "action": "dhcp.lease"}]
+    call = doc["calls"][0]
+    doc["pending"] = [{k: call[k] for k in ("step", "request_id", "request_digest", "action")}]
+    errors = sc.errors_for(_schema("execution_result"), doc, REGISTRY)
+    assert any("should not be valid under {'required': ['pending']}" in e for e in errors), errors
+
+
+def test_a_call_refused_before_the_broker_has_no_request_id():
+    doc = json.loads((DIR / "examples" / "execution_result.denied-handled.json").read_text())
+    doc["calls"][1] |= {"request_id": "req-0099", "request_digest": "sha256:" + "e" * 64}
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)
 
 
-def test_a_replayed_call_carries_no_reason():
+def test_a_replayed_denial_keeps_its_reason():
+    doc = json.loads((DIR / "examples" / "execution_result.denied-handled.json").read_text())
+    doc["calls"][0]["replayed"] = True
+    assert sc.errors_for(_schema("execution_result"), doc, REGISTRY) == []
+
+
+def test_an_ok_call_carries_no_reason():
     doc = json.loads((DIR / "examples" / "execution_result.ok.json").read_text())
-    doc["calls"][0] |= {"outcome": "replayed", "reason": "from-journal"}
+    doc["calls"][0]["reason"] = "not-granted"
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)

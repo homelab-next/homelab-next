@@ -1,6 +1,5 @@
 {
   "execution_id": "exec-0001",
-  "actor": "profile:triage",
   "language": "bash",
   "code": "lease = dhcp.lease(hostname='app-01')\nguest = hypervisor.guest(address=lease['address'])\nreturn {'guest': guest['name'], 'state': guest['state']}\n",
   "budget": {
@@ -8,6 +7,5 @@
     "max_calls": 10,
     "max_output_bytes": 8192,
     "memory_mb": 128
-  },
-  "created": "2026-10-25T02:00:00Z"
+  }
 }

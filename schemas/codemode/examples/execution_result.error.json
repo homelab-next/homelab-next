@@ -1,10 +1,12 @@
 {
   "execution_id": "exec-0006",
+  "actor": "profile:triage",
+  "code_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "status": "error",
   "error": {
     "kind": "syntax",
     "message": "line 2: unexpected indent"
   },
   "calls": [],
-  "finished": "2026-10-25T02:00:04Z"
+  "finished_at": "2026-10-25T02:00:04Z"
 }

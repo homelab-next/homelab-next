@@ -1,0 +1,27 @@
+{
+  "execution_id": "exec-0003",
+  "actor": "profile:triage",
+  "code_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "status": "ok",
+  "value": {
+    "changed": true
+  },
+  "calls": [
+    {
+      "step": 0,
+      "action": "dns.lookup",
+      "request_id": "req-0010",
+      "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outcome": "ok",
+      "replayed": true
+    },
+    {
+      "step": 1,
+      "action": "dns.record-set",
+      "request_id": "req-0011",
+      "request_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "outcome": "ok"
+    }
+  ],
+  "finished_at": "2026-10-25T02:05:00Z"
+}

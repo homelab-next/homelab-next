@@ -1,8 +1,6 @@
 {
-  "execution_id": "exec-0002",
-  "actor": "profile:triage",
-  "language": "javascript",
-  "code": "return await dns.recordSet({name: 'app-01', address: '192.0.2.10'});",
-  "resume_of": "exec-0001",
-  "created": "2026-10-25T02:05:00Z"
+  "execution_id": "exec-0003",
+  "language": "typescript",
+  "code": "const r = await dns.lookup({name: 'app-01'});\nreturn await dns.recordSet({name: 'app-01', address: '192.0.2.10'});\n",
+  "resume": true
 }
