@@ -76,10 +76,11 @@ class BrokerClient:
         body = {"v": 1, "op": op, **{k: v for k, v in fields.items() if v is not None}}
         data = json.dumps(body, sort_keys=True).encode("utf-8") + b"\n"
         if bearer is not None:
-            if not _sendable_bearer(bearer):  # what the broker would answer for it, unsent
-                err = BrokerError("a bearer is one printable ASCII line, a Code Mode token")
-                err.reason = "token-invalid"  # type: ignore[attr-defined]
-                raise err
+            if not _sendable_bearer(bearer):  # refused here, unsent, as the broker refuses a token
+                raise Denied(
+                    "a bearer is one printable ASCII line, a Code Mode token",
+                    reason="token-invalid",
+                )
             data = bearer.encode("ascii") + b"\n" + data
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(self.timeout_s)

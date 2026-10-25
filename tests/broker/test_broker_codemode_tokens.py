@@ -1179,4 +1179,37 @@ def test_the_client_refuses_an_unsendable_bearer_as_token_invalid(bearer, tmp_pa
     client = BrokerClient(str(tmp_path / "no.sock"))
     with pytest.raises(BrokerError) as exc:
         client.token_call(bearer, "echo.one", {})
-    assert type(exc.value) is BrokerError and exc.value.reason == "token-invalid"
+    # the broker's own answer for a secret it does not know: Denied, token-invalid
+    assert type(exc.value) is Denied and exc.value.reason == "token-invalid"
+
+
+def test_a_flush_the_trail_cannot_take_keeps_its_count(tmp_path, monkeypatch, caplog):
+    import logging
+
+    clock = Clock()
+    svc = _svc(tmp_path, clock=clock)
+    svc.page_timers = False
+    for _ in range(5):
+        _reason(lambda: svc.token_call(UNKNOWN, "echo.one", {"text": "x"}))
+    clock.advance(61)
+    real = svc._audit
+
+    def full_disk(*a, **kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(svc, "_audit", full_disk)
+    with caplog.at_level(logging.WARNING, logger="homelabnext.broker.service"):
+        assert svc.flush_coalesced() == 0
+    assert "4 coalesced token-invalid refusal(s) not yet recorded" in caplog.text
+    monkeypatch.setattr(svc, "_audit", real)
+    assert svc.flush_coalesced() == 1, "the count was lost with the failed write"
+    invalid = [d for d in svc.state.audit_records() if d.get("reason") == "token-invalid"]
+    assert invalid[-1]["args"] == {"coalesced": 4}
+
+
+def test_the_issue_answer_never_shows_its_secret_in_a_repr(tmp_path):
+    from homelabnext.broker.server import _Issued
+
+    svc = _svc(tmp_path)
+    tok = _execute(svc, lambda req: _issue(svc, req))
+    assert tok.secret not in repr(_Issued(tok))

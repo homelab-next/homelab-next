@@ -110,7 +110,7 @@ import struct
 import threading
 import time
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -412,9 +412,9 @@ def _from_exception(exc: BrokerError) -> dict[str, Any]:
     )
     reason = getattr(exc, "reason", "") or type(exc).__name__
     out = _error(reason, str(exc), kind)
-    for field in ("request_id", "request_digest"):  # a refusal of a request that was built
-        if isinstance(getattr(exc, field, None), str):
-            out[field] = getattr(exc, field)
+    for name in ("request_id", "request_digest"):  # a refusal of a request that was built
+        if isinstance(getattr(exc, name, None), str):
+            out[name] = getattr(exc, name)
     if getattr(exc, "admitted", False):
         out["_admitted"] = True  # internal: popped before the answer is sent
     return out
@@ -623,7 +623,7 @@ def _handle(
 class _Issued:
     """``token-issue``'s answer, kept apart until the response is built."""
 
-    token: Any
+    token: Any = field(repr=False)  # it holds the secret: never in a repr or a traceback
 
 
 class _BadField(Exception):

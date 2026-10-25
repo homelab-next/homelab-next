@@ -640,8 +640,9 @@ class BrokerService:
     def register_runner(self, runner, handler):
         """In process: ``handler`` runs ``codemode.execute`` (it gets ``{request_id, actor,
         params}``) and ``runner`` may issue and spend its tokens.  The latest runner registered
-        runs it; an earlier one stays a runner, holding the runs and tokens it already has.  A manifest that declares
-        ``codemode.execute`` itself (an exec handler) names its runners in ``codemode.runners``."""
+        runs it; an earlier one stays a runner, holding the runs and tokens it already has.  A
+        manifest that declares ``codemode.execute`` itself (an exec handler) lists its runners in
+        ``codemode.runners`` and, with several, names the action's in its ``runner``."""
         if any(a["action"] == CODEMODE_EXECUTE for a in self.manifest["actions"]):
             raise ValueError(f"{CODEMODE_EXECUTE} is a manifest action; its runner is its handler")
         if not (isinstance(runner, str) and runner) or not callable(handler):
@@ -1861,17 +1862,25 @@ class BrokerService:
                     del self._coalescing[key]
                     if held:
                         due.append((key, held))
+        written = 0
         for (kind, peer), held in due:
             ctx = TRANSPORT_PEER.set(peer if peer.startswith("uid:") else None)
             try:
-                with contextlib.suppress(*_AUDIT_FAILURES):
-                    caller = UNKNOWN_TOKEN_CALLER if kind == "token-invalid" else peer
-                    self._audit(
-                        caller, "", "connect", "denied", reason=kind, args={"coalesced": held}
-                    )
+                caller = UNKNOWN_TOKEN_CALLER if kind == "token-invalid" else peer
+                self._audit(caller, "", "connect", "denied", reason=kind, args={"coalesced": held})
+                written += 1
+            except _AUDIT_FAILURES as exc:
+                # the trail cannot take it now: keep the count for the next flush, never lose it
+                log.warning("%d coalesced %s refusal(s) not yet recorded (%s)", held, kind, exc)
+                with self._coalesce_lock:
+                    st = self._coalescing.get((kind, peer))
+                    if st is None:  # still an ended window, so the next flush tries again
+                        self._coalescing[(kind, peer)] = [now - COALESCE_WINDOW_S, held]
+                    else:
+                        st[1] += held
             finally:
                 TRANSPORT_PEER.reset(ctx)
-        return len(due)
+        return written
 
     def _arm_flush(self, delay: float) -> None:
         if not self.page_timers:
