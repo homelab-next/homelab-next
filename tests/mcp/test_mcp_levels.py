@@ -432,7 +432,7 @@ def test_section_content_is_the_raw_text_and_says_so():
     are cleaned, and the tool description and docs say so instead of implying otherwise."""
     from homelabnext.mcp import TOOLS
 
-    raw = "## Sub\x1b[31m‮\n\nBody \x1b[0m​ text.\n"
+    raw = "## Sub\x1b[31m\u202e\n\nBody \x1b[0m\u200b\u2028text.\n"
     c = _catalog(docs={"doc:docs/r.md": ("docs/r.md", "R", raw)})
     out = c.section("docs/r.md", "sub-31m", allowed=["doc:"])
     assert out["content"] == raw and out["digest"] == hashlib.sha256(raw.encode()).hexdigest()
