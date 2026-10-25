@@ -1,3 +1,6 @@
+---
+summary: 'Agents ask a broker for named actions: default deny, pinned handlers, approvals bound to the request digest, every outcome audited.'
+---
 # ADR-0017: Broker service
 
 - **Status:** proposed

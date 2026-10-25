@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from homelabnext.context.levels import front_matter
+
 ADR_DIR = Path(__file__).resolve().parents[2] / "docs" / "adr"
 HEADINGS = ["Status", "Context", "Decision", "Consequences", "Alternatives"]
 STATUSES = {"proposed", "accepted", "rejected"}
@@ -29,7 +31,8 @@ def test_sequential_adrs_apart_from_reserved_numbers():
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])
 def test_adr_has_five_headings_and_status(path: Path):
-    text = path.read_text()
+    raw = path.read_text()
+    text = raw[front_matter(raw)[1] :]  # a leading front-matter block (the L0 summary) is not the log
     assert re.match(rf"# ADR-{path.name[:4]}: \S", text), "title must be '# ADR-NNNN: ...'"
     status = re.search(r"^- \*\*Status:\*\* (.+)$", text, re.M)
     assert status, "missing Status line"

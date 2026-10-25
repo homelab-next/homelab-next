@@ -1,3 +1,6 @@
+---
+summary: 'Veritas is every authored file a generator or gate reads as the standard or a copy source; accepted name and its two rules.'
+---
 # ADR-0028: Veritas: the single source of truth
 
 - **Status:** accepted (the name and its two rules; see Consequences)

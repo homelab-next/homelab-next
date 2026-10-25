@@ -1,3 +1,6 @@
+---
+summary: 'Detections are authored once in Sigma and cited by logical id, not copied per product.'
+---
 # ADR-0006: Detections are authored in Sigma, compiled to the engine, and referenced by logical id
 
 - **Status:** proposed
