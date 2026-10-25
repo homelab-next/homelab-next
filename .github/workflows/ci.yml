@@ -47,44 +47,80 @@ jobs:
       - name: test code reads no wall clock or unseeded randomness
         run: python tools/hermetic_lint.py
 
+  # The suite in four shards per Python version: each job runs every fourth collected test
+  # (tests/shard_report.py), and test-ok below proves from their reports that together they ran
+  # every test exactly once and that each suite's summed time kept its budget.  Run whole, the
+  # 3.12 job's pytest took 34.5 min on a runner (2026-10-25).
   test:
+    name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    # 45 since the 3.12 job's pytest alone took 34.5 min on a runner (2026-10-25), past 35 with
-    # setup; main measured 28-29 min for the whole job the same day
-    timeout-minutes: 45
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
+        python:
           # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
           # lookup-plugin tests (which import ansible) run; and Go, which the Go tools' tests
           # then require (HNX_REQUIRE_GO), so they cannot skip with "go is not installed" here
-          - python-version: "3.12"
+          - version: "3.12"
             extras: "test,lake,mcp,ansible"
             go: true
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
-          - python-version: "3.11"
+          - version: "3.11"
             extras: "test"
+            go: false
+        shard: [1, 2, 3, 4]  # test-ok counts on all four: change both together
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/python-deps
         with:
-          python-version: ${{ matrix.python-version }}
-          extras: ${{ matrix.extras }}
+          python-version: ${{ matrix.python.version }}
+          extras: ${{ matrix.python.extras }}
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
-        if: matrix.go
+        if: matrix.python.go
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false  # the tests build throwaway modules: nothing worth caching
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
       - env:
-          HNX_REQUIRE_GO: ${{ matrix.go && '1' || '' }}
+          HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
+          SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+          --shard "$SHARD/4" --shard-report "$RUNNER_TEMP/shard.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()  # a failed shard's report says why to test-ok too
+        with:
+          name: shard-${{ matrix.python.version }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard.json
+          if-no-files-found: error
+          retention-days: 3
+
+  test-ok:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: shard-*
+          path: ${{ runner.temp }}/shards
+      # standard library only (tests/shard_report.py): the runner's own python3, nothing installed
+      - name: every shard passed, together they ran each test once, every suite kept its budget
+        env:
+          TEST: ${{ needs.test.result }}
+        run: |
+          echo "test: $TEST"
+          python3 -m tests.shard_report --groups 3.11,3.12 "$RUNNER_TEMP/shards"
+          [ "$TEST" = success ]
 
   # The linters and validators some tests call only when they are installed: actionlint and zizmor
   # (the workflows here and the private-overlay deploy templates), nats-server (the lab's events

@@ -63,7 +63,12 @@ def ci_pytest_args():
     runs = [shlex.split(s.get("run", "")) for s in ci["jobs"]["test"]["steps"]]
     runs = [w for w in runs if w[:3] == ["python", "-m", "pytest"] and "not live" in w]
     assert len(runs) == 1, runs
-    return runs[0][3:]
+    # less the shard flags: each CI job runs a shard of what make test runs whole
+    words = runs[0][3:]
+    for flag in ("--shard", "--shard-report"):
+        if flag in words:
+            del words[words.index(flag) : words.index(flag) + 2]
+    return words
 
 
 def test_make_test_selects_what_the_ci_test_job_selects():

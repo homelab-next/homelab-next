@@ -9,12 +9,18 @@ criterion).
 Each rule is a function over the parsed workflow that returns its problems, so the negative
 self-tests below can feed it a workflow edited the ways a selection quietly shrinks (an
 ``--ignore``, a different ``-m``, a path filter on either trigger, a job-level ``if:``,
-``PYTEST_ADDOPTS``) and prove each one is caught.
+``PYTEST_ADDOPTS``, a shard that no job runs or no merge counts) and prove each one is caught.
+
+The test job runs the suite in shards (``--shard "$SHARD/N"``, one job per shard of the matrix),
+which is a selection only in each job: :func:`shard_problems` holds that the matrix runs shards
+1..N and that the ``test-ok`` job merges their reports (``tests/shard_report.py``), proving they
+ran every test exactly once, and fails unless every shard passed.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -35,6 +41,8 @@ NARROWING = ("paths", "paths-ignore", "branches-ignore", "types")
 PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
 #: the flag-value pairs of CI's pytest selection
 PAIRS = {("-m", "not live"), ("--deselect", FLOOR_TEST)}
+#: the shard flags: which shard (the job's own, of N) and where its report goes
+SHARD = re.compile(r"^\$SHARD/([1-9][0-9]*)$")
 
 
 def _ci():
@@ -70,8 +78,9 @@ def trigger_problems(doc) -> list[str]:
 
 def pytest_problems(run: str) -> list[str]:
     """The test job's pytest is ``python -m pytest -q -m "not live" --deselect FLOOR_TEST``,
-    in any order: an allowlist, so any other flag, value or word (``--ignore``, ``-k``,
-    ``-p no:...``, a path, ``|| true``) is a problem."""
+    in any order, with optionally ``--shard "$SHARD/N" --shard-report FILE`` (checked against
+    the job by :func:`shard_problems`): an allowlist, so any other flag, value or word
+    (``--ignore``, ``-k``, ``-p no:...``, a path, ``|| true``) is a problem."""
     words = shlex.split(run)
     if words[:3] != ["python", "-m", "pytest"]:
         return [f"the test step is not `python -m pytest ...`: {run!r}"]
@@ -81,13 +90,50 @@ def pytest_problems(run: str) -> list[str]:
         w = rest[i]
         if w == "-q":
             i += 1
-        elif (w, *rest[i + 1 : i + 2]) in PAIRS:
+        elif (
+            (w, *rest[i + 1 : i + 2]) in PAIRS
+            or (w == "--shard" and SHARD.match(" ".join(rest[i + 1 : i + 2])))
+            or (w == "--shard-report" and len(rest) > i + 1)
+        ):
             i += 2
         else:
             out.append(f"pytest argument {w!r} is not part of CI's selection")
             i += 1
     if rest.count("-m") != 1:
         out.append('pytest must select exactly -m "not live"')
+    if rest.count("--shard") > 1 or rest.count("--shard-report") != rest.count("--shard"):
+        out.append("pytest takes --shard and --shard-report once each, or neither")
+    return out
+
+
+def shard_problems(doc, run: str) -> list[str]:
+    """A sharded run: the matrix runs shards 1..N, each job its own, and test-ok merges them."""
+    words = shlex.split(run)
+    if "--shard" not in words:
+        return []
+    n = int(SHARD.match(words[words.index("--shard") + 1])[1])
+    jobs = doc.get("jobs") or {}
+    test = jobs.get("test") or {}
+    out = []
+    if (test.get("strategy") or {}).get("matrix", {}).get("shard") != list(range(1, n + 1)):
+        out.append(f"test: the matrix must run shards 1..{n}, the N of --shard")
+    (step,) = [s for s in test.get("steps") or [] if s.get("run") == run]
+    if (step.get("env") or {}).get("SHARD") != "${{ matrix.shard }}":
+        out.append("test: SHARD must be the job's own ${{ matrix.shard }}")
+    ok = jobs.get("test-ok") or {}
+    needs = ok.get("needs")
+    if "test" not in ([needs] if isinstance(needs, str) else needs or []):
+        out.append("test-ok: must need the test job, so it waits for every shard")
+    if ok.get("if") != "always()" or "continue-on-error" in ok:
+        out.append("test-ok: must run whatever the shards did (if: always()), and fail with them")
+    runs = [(s.get("run", ""), s.get("env") or {}) for s in ok.get("steps") or []]
+    if not any(
+        "python3 -m tests.shard_report" in r
+        and '[ "$TEST" = success ]' in r
+        and env.get("TEST") == "${{ needs.test.result }}"
+        for r, env in runs
+    ):
+        out.append("test-ok: must merge the shard reports and fail unless every shard passed")
     return out
 
 
@@ -132,7 +178,7 @@ def selection_problems(doc) -> list[str]:
     runs = _pytest_runs(doc)
     if not runs:
         return ["the test job has no `python -m pytest` step"]
-    found = [pytest_problems(r) for r in runs]
+    found = [pytest_problems(r) or shard_problems(doc, r) for r in runs]
     return [] if [] in found else [p for f in found for p in f]
 
 
@@ -184,6 +230,9 @@ BASE_RUN = f'python -m pytest -q -m "not live" --deselect {FLOOR_TEST}'
         BASE_RUN + ' -m "not live"',
         f'python -m pytest -q -m="not live" --deselect {FLOOR_TEST}',
         BASE_RUN.replace("python -m pytest", "pytest"),
+        BASE_RUN + ' --shard "1/4" --shard-report r.json',  # a fixed shard, not the job's own
+        BASE_RUN + ' --shard "$SHARD/4"',  # no report: nothing can count it
+        BASE_RUN + ' --shard "$SHARD/4" --shard "$SHARD/2" --shard-report r.json',
     ],
 )
 def test_a_narrowed_pytest_line_is_caught(run):
@@ -277,3 +326,27 @@ def test_pytest_addopts_in_any_env_is_caught(scope):
         target.setdefault("env", {})["PYTEST_ADDOPTS"] = "--ignore=tests/broker"
 
     assert job_problems(_edited(edit))
+
+
+def _sharded_step(doc):
+    (step,) = [s for s in doc["jobs"]["test"]["steps"] if "--shard" in s.get("run", "")]
+    return step
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda d: d["jobs"]["test"]["strategy"]["matrix"].update(shard=[1, 2, 3]),
+        lambda d: d["jobs"]["test"]["strategy"]["matrix"].update(shard=[1, 2, 3, 4, 5]),
+        lambda d: d["jobs"]["test"]["strategy"]["matrix"].pop("shard"),
+        lambda d: _sharded_step(d)["env"].update(SHARD="1"),
+        lambda d: d["jobs"].pop("test-ok"),
+        lambda d: d["jobs"]["test-ok"].update(needs=["lint"]),
+        lambda d: d["jobs"]["test-ok"].pop("if"),
+        lambda d: d["jobs"]["test-ok"].update({"continue-on-error": True}),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1].update(run="echo ok"),
+        lambda d: d["jobs"]["test-ok"]["steps"][-1]["env"].update(TEST="success"),
+    ],
+)
+def test_a_shard_no_job_runs_or_no_merge_counts_is_caught(edit):
+    assert selection_problems(_edited(edit))
