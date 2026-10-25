@@ -56,6 +56,10 @@ DERIVED: tuple[tuple[str, str], ...] = (
         "test:tests/generators/test_llm_gateway.py",
     ),
     ("examples/model-serving/gateway/*/*", "test:tests/models/test_serving_plan.py"),
+    (
+        "examples/llm-orchestrator-gateway/gateway/*/*",
+        "test:tests/generators/test_agent_homes.py",
+    ),
     ("examples/model-serving/vllm_server/*", "test:tests/models/test_serving_plan.py"),
     ("workflows/stackstorm/*", "test:tests/workflows/test_workflows_st2.py"),
 )
