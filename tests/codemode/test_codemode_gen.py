@@ -427,10 +427,10 @@ def test_the_index_carries_what_codemode_describe_needs():
     handler = json.loads((EXAMPLE / "handlers" / "service-restart.handler.json").read_text())
     restart = index["service.restart"]
     assert restart["kind"] == "exec" and restart["params"] == handler["params_schema"]
-    assert restart["result"] is None
+    assert restart["result"]["schema"] == handler["result_schema"]
     assert restart["signatures"] == {
-        "python": "service.restart(*, grace_s: int) -> Any",
-        "typescript": "service.restart(args: { grace_s: number }): unknown",
+        "python": "service.restart(*, grace_s: int) -> ServiceRestartResult",
+        "typescript": "service.restart(args: { grace_s: number }): ServiceRestartResult",
     }
     memory = index["memory.write"]
     assert memory["kind"] == "lane" and memory["result"]["type"] == "LaneWrite"
@@ -448,5 +448,8 @@ def test_calls_are_synchronous_in_both_languages():
         tree = ast.parse(files[f"{slug}/stubs.pyi"])
         assert not any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
         assert any(isinstance(n, ast.FunctionDef) for n in ast.walk(tree))
-    assert "function restart(args: { grace_s: number }): unknown;" in files["triage/types.d.ts"]
+    assert (
+        "function restart(args: { grace_s: number }): ServiceRestartResult;"
+        in files["triage/types.d.ts"]
+    )
     assert "the run pauses until it is decided" in files["triage/types.d.ts"]

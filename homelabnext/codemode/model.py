@@ -20,8 +20,10 @@ Schema object:
   or a JSON object or list for a ``json`` lane), ``{note, body?, slug?}`` for a records inbox.
   Its result is the lane write's ``{path, bytes, digest}``.
 
-An exec handler declares no result schema yet (CM-5 adds one), so its result is untyped: the
-runner hands a program the handler's ``output``.
+An exec handler may declare a ``result_schema`` (handler document 1.2): the schema of the
+handler's ``output`` once decoded as JSON, rendered with the same type mapping as parameters and
+held to the same text checks.  Without one its result is untyped: the runner hands a program the
+handler's ``output``.
 
 Names: a segment that cannot be an identifier in both stub languages, or would shadow a Python
 builtin the stub's annotations use (a keyword, ``delete``, ``class``, ``list``, ``str``), gets a
@@ -357,10 +359,12 @@ def build_models(
                 if doc is None:
                     problems.append(f"{name}: no handler document declares its params_schema")
                     continue
-                kind, params, result = "exec", doc["params_schema"], None
+                kind, params, result = "exec", doc["params_schema"], doc.get("result_schema")
                 text = doc["description"]
             summary, bad = doc_line(f"{name}: description", text)
             bad += _param_problems(name, params)
+            if kind == "exec" and result is not None:
+                bad += _schema_problems(f"{name}: result", result)
             problems += bad
             if not bad:
                 methods.append(

@@ -14,7 +14,9 @@ approvals bound to the exact request. Reference evaluator: `homelabnext.broker`.
 
 Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action's `lane` and
 `handler_docs`; handler 1.1 adds `argv`, `secrets` (names resolved at run time) and
-`max_output_bytes`. Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
+`max_output_bytes`; handler 1.2 adds `result_schema` (a JSON Schema object for the handler's
+`output` decoded as JSON: the Code Mode generator types results from it, the broker does not
+enforce it). Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
 `uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
 for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;
 absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
