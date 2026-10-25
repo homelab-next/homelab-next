@@ -21,6 +21,26 @@
     "type": "object"
   },
   "requires_approval": true,
+  "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "params": {
+        "type": "object"
+      },
+      "token_present": {
+        "type": "boolean"
+      },
+      "would_restart": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "would_restart",
+      "token_present",
+      "params"
+    ],
+    "type": "object"
+  },
   "secrets": [
     "DEMO_API_TOKEN"
   ],
