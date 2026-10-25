@@ -77,9 +77,10 @@ DENY_REASON, ERROR_REASON = "action-not-granted", "handler-failed"
 
 
 class _Broker:
-    """A stand-in broker: ``echo`` (and any ``echo.*``) returns its args, ``hold`` is pending approval, ``fail``
-    answers with an error, ``deny`` and anything else is denied, and a call with another token is
-    denied.  Records every call it answers, and the pending replies it gave."""
+    """A stand-in broker: ``echo`` (and any ``echo.*``) returns its args, ``hold`` is pending
+    approval, ``fail`` answers with an error, ``deny`` and anything else is denied, and a call
+    with another token is denied.  Records every call it answers, and the pending replies it
+    gave."""
 
     def __init__(self, bind: tuple[str, int]) -> None:
         self.token = secrets.token_hex(16)

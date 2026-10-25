@@ -67,8 +67,9 @@ h. *The prelude runs first, in the program's namespace.*  ``run`` takes an optio
    not a trust boundary: it runs with the program's rights and nothing more.
 
 **The program's view (language ``python``).**  The program is module source.  It sees one name
-of its own, ``broker``, and the names the prelude defines: ``broker.call(action, args=None, *, target=None)`` sends one request to
-the broker and returns the reply's value, and ``broker.submit(action, args=None, *, target=None)``
+of its own, ``broker``, and the names the prelude defines:
+``broker.call(action, args=None, *, target=None)`` sends one request to the broker and returns
+the reply's value, and ``broker.submit(action, args=None, *, target=None)``
 submits one for approval (the reply is pending, so the run pauses; CM-5b).  Calls are
 synchronous (no ``await``).  Its value is the module
 global ``result`` when it ends (``None`` when unset).  Printed text (stdout and stderr together)

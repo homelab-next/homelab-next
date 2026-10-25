@@ -62,7 +62,7 @@ from typing import Any
 from conformance.protocols.codemode_executor import MAX_PROGRAM_CHARS
 from homelabnext.generators.core import MARKER
 
-from .model import SLUG_RE, CodemodeError, Method, ProfileModel, build_models
+from .model import SLUG_RE, CodemodeError, Method, ProfileModel, build_models, doc_line
 
 __all__ = [
     "DEFAULT_MANIFEST",
@@ -70,6 +70,8 @@ __all__ = [
     "FILES",
     "PRELUDE_FILE",
     "check",
+    "prelude_from_index",
+    "prelude_source",
     "py_type",
     "render",
     "render_files",
@@ -476,45 +478,61 @@ def render_py(model: ProfileModel) -> str:
 
 
 # ----------------------------------------------------------- the runtime prelude
-def _prelude_method(m: Method) -> list[str]:
+#: one method of a prelude: (namespace, method, action, target, whether a param is named target)
+PreludeMethod = tuple[str, str, str, "str | None", bool]
+
+
+def _prelude_method(pm: PreludeMethod) -> list[str]:
     """One method of the prelude: ``broker.call`` of its action, the target (when the action
-    takes one) as the request's target and every other keyword as its params."""
-    action = json.dumps(m.action)
-    if m.target:
-        default = "" if m.target == "required" else "=None"
-        sig, call = f"self, *, target{default}, **params", f"call({action}, params, target=target)"
-    else:
-        sig, call = "self, **params", f"call({action}, params)"
-    return [f"        def {m.method}({sig}):", f"            return {call}"]
+    takes one) as the request's target and every other keyword as its params.  A ``target=``
+    given to an action that takes none is refused here, a ``TypeError`` before anything is
+    sent, rather than passed on as a param an open schema would accept."""
+    _ns, method, action, target, own = pm
+    name = json.dumps(action)
+    if target:
+        default = "" if target == "required" else "=None"
+        sig, call = f"self, *, target{default}, **params", f"call({name}, params, target=target)"
+        return [f"        def {method}({sig}):", f"            return {call}"]
+    lines = [f"        def {method}(self, **params):"]
+    if not own:
+        msg = json.dumps(f"{action} takes no target")
+        lines += ['            if "target" in params:', f"                raise TypeError({msg})"]
+    return [*lines, f"            return call({name}, params)"]
 
 
-def render_prelude(model: ProfileModel) -> str:
-    """The Python runtime prelude: the executor runs it in the program's own namespace, inside
-    the sandbox and before the program, with ``broker`` bound (CM-4), so the namespaces of
-    ``stubs.pyi`` are real objects.  Each method is ``broker.call`` of its action, bound when the
-    prelude runs (a program that rebinds ``broker`` does not redirect them), so a stub call is
-    exactly the broker request ``broker.call`` would send and is checked by the broker the same
-    way.  It holds no state and no secret; ``broker.call`` keeps working beside it."""
+def _model_methods(model: ProfileModel) -> list[PreludeMethod]:
+    return [
+        (m.namespace, m.method, m.action, m.target, "target" in (m.params.get("properties") or {}))
+        for m in model.methods
+    ]
+
+
+def prelude_source(profile: str, marker: str, methods: Iterable[PreludeMethod]) -> str:
+    """The prelude text of ``profile`` binding ``methods`` (each namespace in order of first
+    appearance), under the marker line ``marker``.  :func:`render_prelude` (the committed file)
+    and :func:`prelude_from_index` (what the runner hands an executor) both build it here."""
     head = [
-        f"# {_marker(model)}",
+        f"# {marker}",
         f"# {SPDX}",
         "# @generated: `hnx codemode gen --check` holds this file; regenerate it, never edit it",
-        f'"""The Code Mode runtime prelude of {model.profile} (ADR-0031): binds the namespaces of',
+        f'"""The Code Mode runtime prelude of {profile} (ADR-0031): binds the namespaces of',
         "stubs.pyi to the run's broker.  The executor runs it in the program's own namespace, in the",
         "sandbox, before the program; each method is broker.call of its action, with the action's",
         "target as the request's target, so the broker checks a stub call as it checks broker.call.",
         '"""',
     ]
-    spaces = model.namespaces
+    spaces: dict[str, list[PreludeMethod]] = {}
+    for pm in methods:
+        spaces.setdefault(pm[0], []).append(pm)
     if not spaces:
         return "\n".join(head) + "\n"
     body = ["", "", "def _bind(call):"]
-    for i, (ns, methods) in enumerate(spaces.items()):
+    for i, (ns, group) in enumerate(spaces.items()):
         if i:
             body.append("")
         body += [f"    class _{_class_name(ns)}:", "        __slots__ = ()"]
-        for m in methods:
-            body += ["", *_prelude_method(m)]
+        for pm in group:
+            body += ["", *_prelude_method(pm)]
     body += ["", "    return {"]
     body += [f'        "{ns}": _{_class_name(ns)}(),' for ns in spaces]
     body += ["    }", "", ""]
@@ -524,9 +542,55 @@ def render_prelude(model: ProfileModel) -> str:
     text = "\n".join(head + body) + "\n"
     if len(text) > MAX_PROGRAM_CHARS:
         raise CodemodeError(
-            [f"{model.profile}: the prelude is {len(text)} characters, over {MAX_PROGRAM_CHARS}"]
+            [f"{profile}: the prelude is {len(text)} characters, over {MAX_PROGRAM_CHARS}"]
         )
     return text
+
+
+def render_prelude(model: ProfileModel) -> str:
+    """The Python runtime prelude: the executor runs it in the program's own namespace, inside
+    the sandbox and before the program, with ``broker`` bound (CM-4), so the namespaces of
+    ``stubs.pyi`` are real objects.  Each method is ``broker.call`` of its action, bound when the
+    prelude runs (a program that rebinds ``broker`` does not redirect them), so a stub call is
+    exactly the broker request ``broker.call`` would send and is checked by the broker the same
+    way.  It holds no state and no secret; ``broker.call`` keeps working beside it."""
+    return prelude_source(model.profile, _marker(model), _model_methods(model))
+
+
+def prelude_from_index(doc: Mapping[str, Any]) -> str:
+    """The prelude rebuilt from a profile's search index (``search.json``), the text
+    :func:`render_prelude` writes for the same model.  Nothing in the index decides which action
+    a method calls: the namespace and method are derived from each action's own name (its
+    ``call`` is ignored), so an edited index can rename nothing into another action; the target
+    must be ``required``, ``optional`` or null and the namespace must not be reserved.  Raises
+    :class:`CodemodeError` for an index it cannot rebuild from."""
+    from .model import _ACTION_RE, RESERVED_NAMESPACES, split_action
+
+    problems: list[str] = []
+    profile, marker = doc.get("profile"), doc.get("_generated")
+    if not isinstance(profile, str) or not isinstance(marker, str) or "\n" in marker:
+        raise CodemodeError(["the index names no profile or marker"])
+    if not marker.startswith(GENERATOR) or doc_line("marker", marker)[1]:
+        raise CodemodeError(["the index's marker is not this generator's"])
+    methods: list[PreludeMethod] = []
+    for entry in doc.get("actions") or []:
+        name = entry.get("name") if isinstance(entry, Mapping) else None
+        target = entry.get("target") if isinstance(entry, Mapping) else None
+        if not isinstance(name, str) or not _ACTION_RE.fullmatch(name):
+            problems.append(f"an action name {name!r} is not an action name")
+            continue
+        if target not in (None, "required", "optional"):
+            problems.append(f"{name}: target {target!r}")
+            continue
+        ns, method = split_action(name)
+        if ns in RESERVED_NAMESPACES:
+            problems.append(f"{name}: namespace {ns!r} is reserved")
+            continue
+        props = (entry.get("params") or {}).get("properties") or {}
+        methods.append((ns, method, name, target, isinstance(props, Mapping) and "target" in props))
+    if problems:
+        raise CodemodeError(problems)
+    return prelude_source(profile, marker, methods)
 
 
 # ------------------------------------------------------------------ the index
@@ -635,7 +699,8 @@ def _marked(out: Path) -> list[str]:
 
 def check(out: str | Path, files: Mapping[str, str]) -> list[str]:
     """Drift between ``files`` and ``out`` (empty = clean): missing, differing, symlinked and
-    stale files.  An unreadable file raises ``OSError`` (the check could not measure)."""
+    stale files, and any other file in a profile's directory (``unexpected``: nothing but the
+    generator's files belongs there, and an extra ``.py`` would ride along unreviewed).  An unreadable file raises ``OSError`` (the check could not measure)."""
     out = Path(out)
     problems = []
     for rel, text in files.items():
@@ -647,6 +712,12 @@ def check(out: str | Path, files: Mapping[str, str]) -> list[str]:
         elif p.read_bytes() != text.encode("utf-8"):
             problems.append(f"differs: {rel}")
     problems += [f"stale: {rel}" for rel in _marked(out) if rel not in files]
+    for slug in sorted({rel.split("/", 1)[0] for rel in files}):
+        d = out / slug
+        if d.is_dir() and not d.is_symlink():  # anything else in a profile's directory
+            problems += [
+                f"unexpected: {slug}/{p.name}" for p in sorted(d.iterdir()) if p.name not in FILES
+            ]
     return problems
 
 

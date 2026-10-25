@@ -25,6 +25,8 @@ def _bind(call):
         __slots__ = ()
 
         def write(self, **params):
+            if "target" in params:
+                raise TypeError("finding.write takes no target")
             return call("finding.write", params)
 
     class _Hypervisor:
@@ -37,12 +39,16 @@ def _bind(call):
         __slots__ = ()
 
         def write(self, **params):
+            if "target" in params:
+                raise TypeError("memory.write takes no target")
             return call("memory.write", params)
 
     class _Proposal:
         __slots__ = ()
 
         def file(self, **params):
+            if "target" in params:
+                raise TypeError("proposal.file takes no target")
             return call("proposal.file", params)
 
     class _Service:

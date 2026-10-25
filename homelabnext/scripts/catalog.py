@@ -20,6 +20,7 @@ header, two scripts share an id, or either file differs from what the headers pr
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import pathlib
 import subprocess
@@ -49,7 +50,8 @@ CATALOG_SCHEMA = "homelabnext.scripts.catalog/1"
 SCRIPT_SUFFIXES = (".py", ".sh", ".bash", ".py.j2", ".sh.j2")
 SKIP_DIRS = {".git", "build", "dist", "node_modules", "__pycache__", ".venv", "venv", ".tox"}
 
-#: (path prefix, or file name when it has no slash) -> why files there are not scripts
+#: (path prefix, a file name when it has no slash, or a glob when it has a ``*``) -> why files
+#: there are not scripts
 EXCLUDED: dict[str, str] = {
     "homelabnext/": "package modules: run through `hnx` or `python -m`, never as files",
     "tests/": "test code: pytest imports it",
@@ -58,8 +60,9 @@ EXCLUDED: dict[str, str] = {
     "ansible/plugins/": "Ansible plugins: Ansible loads them, nothing executes them",
     "workflows/stackstorm/": "rendered StackStorm action shims: its python runner imports them "
     "(`hnx workflows st2 render`)",
-    "examples/codemode/": "generated Code Mode outputs (`hnx codemode gen`): a profile's runtime "
-    "prelude is source the executor runs inside a program's sandbox, never a file run",
+    "examples/codemode/*/prelude.py": "a profile's generated Code Mode runtime prelude (`hnx "
+    "codemode gen`): source the runner rebuilds and its executor runs inside a program's "
+    "sandbox, never a file run",
     "conftest.py": "pytest configuration",
     "setup.py": "the build backend's hook, run by setuptools",
 }
@@ -96,7 +99,10 @@ def tracked_files(root: pathlib.Path) -> list[str]:
 
 def _excluded(rel: str) -> str | None:
     for key, why in EXCLUDED.items():
-        if (key.endswith("/") and rel.startswith(key)) or (
+        if "*" in key:  # a glob over the whole path, ``*`` within one segment
+            if fnmatch.fnmatchcase(rel, key) and rel.count("/") == key.count("/"):
+                return why
+        elif (key.endswith("/") and rel.startswith(key)) or (
             "/" not in key and rel.split("/")[-1] == key
         ):
             return why
