@@ -194,8 +194,8 @@ def test_a_live_controller_declares_admission_by_its_route_and_never_the_fault_h
     ``fault-injection`` is never declared: with ``admission`` the hook checks are ``untested``
     (a MUST is not skipped by leaving a hook out); without it they skip."""
     for fixes, feats, hook_status in (
-        ((), frozenset(), "skip"),
-        (api.UPSTREAM, frozenset({"admission"}), "untested"),
+        ((), frozenset({"priority"}), "skip"),
+        (api.UPSTREAM, frozenset({"priority", "admission"}), "untested"),
     ):
         fake = FakeController(tmp_path, fixes=fixes).start()
         o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, poll=0.01, wait_floor=5)

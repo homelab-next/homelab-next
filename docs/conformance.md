@@ -24,7 +24,8 @@ fake, the target-file adapters with their product limits, and the integration st
 
 ```bash
 hnx conform list                      # the eighteen capabilities (also: hnx conform --list)
-hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens)
+hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens,
+                                      # orchestration-features)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
@@ -166,8 +167,15 @@ The eighteen names are fixed by `docs/interfaces.md`.  Contracts that already ha
 | `codemode-runner` | `CodemodeRunner` | the handler of `codemode.execute` (ADR-0031 decisions 2, 6, 7 and 10), asked through the broker as an agent: a result that is the `schemas/codemode/execution_result` (the actor, the program's code digest, every call with its request ids, printed output as single lines), a broker refusal reaching the program as `broker.Denied` with the broker's reason and recorded as a denied call (with request ids once the broker built the request, none for a token refusal), a `journal_step` record of every call the broker answered with a request id, a submit pausing the run with `pending` naming it and nothing sent after, a resume answering journalled steps from the journal (`replayed`) and running the paused request by its id without sending a journalled step again, a resume refusing a call that differs from the journal's, a denied pause told to the program as `request-denied`, and the broker's `call-cap-reached` ending the run `limit` (`calls`); proved over the fake broker and the reference service (`broker-reference`), with the forking test executor |
 
 Extended suites (listed with `--all`, not among the eighteen): `backup` (immutable snapshots,
-verified restores, retention), `dns` (zone semantics the registry's aliases rely on) and `edge`
-(reverse-proxy routing and forward-auth hygiene).
+verified restores, retention), `dns` (zone semantics the registry's aliases rely on), `edge`
+(reverse-proxy routing and forward-auth hygiene), `broker-tokens` (the broker's Code Mode tokens)
+and `orchestration-features`. The last one holds the optional features of the `orchestration`
+contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
+shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
+exclusive), local-only jobs never re-run on cloud, and a run list with each run once in its
+state. Each of its checks requires its own feature, so a target that declares none of them skips
+the suite ([orchestration-controller.md](orchestration-controller.md)). It is a suite of its own
+because the `orchestration` suite would reach the 24-check ceiling with these checks.
 
 ## Proving the suite can fail: mutants
 
@@ -188,7 +196,8 @@ MUTANTS = {
 `hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all`
 for every suite) and
 `tests/conform/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
-caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
+caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `broker-tokens`, `codemode-executor`,
+`codemode-runner`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
 `requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
 mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a

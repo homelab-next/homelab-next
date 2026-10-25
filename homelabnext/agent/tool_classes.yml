@@ -74,6 +74,7 @@ capabilities:
   cap:notify: [egress, send]
   cap:edge: [egress]
   cap:orchestration: [exec]
+  cap:orchestration-features: [exec]  # the optional orchestration features: the same surface as cap:orchestration
   cap:codemode-executor: [exec]
   cap:broker: [exec]
   cap:broker-tokens: [exec]  # the broker's codemode token surface (runner and sandbox roles); broker-only like cap:broker

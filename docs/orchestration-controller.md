@@ -106,8 +106,9 @@ Other findings, not MUST failures:
   every key per run.
 - **A submit cannot be held.** A cancel sent right after a submit races the next 2 s tick, so
   `cancel-before-start-never-runs` can in principle flake against a live controller.
-- **No authentication**, and **no list or events endpoint**. Neither is part of this contract
-  yet (see the proposed fields below).
+- **No authentication**, and **no list or events endpoint**. Listing runs is now an optional
+  feature of the contract (`list-runs`, below), which the adapter does not declare; events and
+  authentication are not part of it.
 
 ### Running it live
 
@@ -199,19 +200,38 @@ follow.
   that backend, or when `max_context` differs from the role's `max_context_tokens`.
 - An invariant: no `HERMES_HOME/config.yaml` names an IP address or an engine model id.
 
-## Proposed additive `orchestration` contract fields
+## Additive `orchestration` contract features
 
-These are not contract changes. Each would be an optional feature (ADR-0001: evolve additively),
-so the in-memory fake and a StackStorm-backed adapter can skip the checks.
+These are not contract changes. Each one is an optional feature (ADR-0001: evolve additively),
+clauses f-j of `conformance/protocols/orchestration.py`. A target that does not declare a feature
+skips its checks, so the in-memory fake of another product and a StackStorm-backed adapter are
+unaffected. The checks for the five features built here are the extended suite
+`orchestration-features` (`conformance/suites/orchestration_features.py`). With them the
+`orchestration` suite would have reached the 24-check ceiling. The in-memory fake implements every
+feature. It has two local backends and one cloud backend, and a retry of a job that is not
+local-only moves to a cloud backend that satisfies the job's constraints.
 
-| Feature | Field / call | What a check would prove |
+| Feature | Field / call | What the check proves |
 |---|---|---|
-| `priority` | `submit(..., priority: int)`, 1 = first | Among queued runs, a lower number starts first (SHOULD: ordering can only be observed when a single slot is used). |
+| `priority` | `submit(..., priority: int)`, 1 = first | **Built**: `lower-priority-number-starts-first` (SHOULD). With every slot filled, a priority-9 run and a priority-1 run are queued, and one slot is freed: the priority-1 run starts first. Ordering can only be observed while a single slot is free, so the check needs `admission` and a reported limit, and it skips without one. Its defect (first come, first served) is pinned by `tests/conform/test_conform_orchestration_features.py`, because only a MUST can name a registered mutant. |
 | `admission` | `capacity() -> (limit, in_flight, holders)` | **Built** (see "Holds" above): capacity is held only by live work and is released on success, failure, cancel, deadline, worker death and restart. |
 | `deadline` | `submit(..., deadline_s: float)` | **Built in the contract and the fake** (`deadline-expiry-frees-capacity`): a run still unfinished at its deadline ends `failed`, its error names the deadline, and its capacity is released. The controller's API takes no per-run deadline, so the check skips there. |
-| `shadow` | `submit(..., shadow: bool)` | A shadow run uses the shadow lane and never the real one, and the controller allows one unfinished shadow run per job (`429` otherwise). |
-| `constraints` | `define(..., constraints={"require_tags": [...], "min_context": int, "exclusive": bool})` | A run whose constraints no backend satisfies is rejected or stays queued, and does not run on a backend that violates them. |
-| `local-only` | `define(..., local_only: bool)` | A local-only run that fails is never re-run on cloud. |
-| `list-runs` | `runs(state=...)` | Every submitted run appears exactly once, in its current state. |
+| `shadow` | `submit(..., shadow: bool)`; `placements(run_id)` gives each attempt's lane | **Built**: `shadow-run-executes-only-on-the-shadow-lane` checks that every attempt of a shadow run, its retry included, runs on the `shadow` lane, and every attempt of an ordinary run on `real` (mutant `shadow-retry-on-real-lane`). `one-unfinished-shadow-run-per-job` checks that while a job has a queued or running shadow run, another shadow submit raises `ShadowRunPending`, the 429-equivalent. A repeated idempotency key still returns its run. Ordinary runs and other jobs' shadow runs are accepted, and so is a new shadow run once the first has finished (mutant `shadow-limit-counts-running-only`). |
+| `constraints` | `define(..., constraints={"require_tags": [...], "min_context": int, "exclusive": bool})`; `backends()`, `placements(run_id)` | **Built**: `unsatisfiable-constraints-never-run` checks that a job whose tags or context no backend has is rejected (`ConstraintsUnsatisfiable`), or that its run stays queued or fails without executing (mutant `best-effort-placement`). `every-attempt-meets-the-constraints` checks every attempt, the retry included, against the tightest constraints the backends allow (mutant `retry-ignores-constraints`). `exclusive-run-has-its-backend-alone` checks that an exclusive run does not start beside another run on its backend, and that no other run starts beside it (mutant `exclusive-not-enforced`). |
+| `local-only` | `define(..., local_only: bool)`; `backends()`, `placements(run_id)` | **Built**: `local-only-run-never-reruns-on-cloud`. A local-only run whose attempts fail is retried on local backends only, and its body never runs again, under its run id or a new one (mutant `local-only-escalates`). |
+| `list-runs` | `runs(state=...)` | **Built**: `runs-lists-every-run-once-in-its-state`. Succeeded, failed after a retry, cancelled, queued and running runs each appear exactly once in their current state. A repeated key and a retry add no row, and `runs(state=s)` returns only runs in `s` (mutant `row-per-attempt`). |
+
+Each MUST check has a mutant that it catches and no other check catches
+(`orchestration-features` is in `ONLY_ITS_OWN` of `tests/conform/test_conform_mutants.py`).
+
+The `llm_orchestrator` adapter declares `priority` and none of the others. The job API takes a
+priority from 1 to 100 and admits the lowest number first, then submit order (`handlers.go:97-111`
+and the scheduler's queue order, as the recorded stand-in models them). The adapter sends the
+number it is given and refuses one outside that range. Its `capacity()` reports no limit, so the
+priority check skips there. The job API reports neither the backend nor the lane an attempt ran
+on, so it cannot show `shadow`, `constraints` or `local-only` being honoured, even though the
+controller has shadow lanes and `local_only` profiles. It has no list route for `list-runs`. A
+controller-side route that reports placements is what would let the adapter declare those
+features.
 
 `RunStatus.attempts` already exists in the contract. `0003` is what makes the controller fill it.
