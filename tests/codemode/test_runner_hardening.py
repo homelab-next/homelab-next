@@ -503,7 +503,8 @@ def test_the_peer_uid_is_read_from_the_connection_and_only_established(tmp_path)
     lst.bind(("0.0.0.0", 0))
     lst.listen(2)
     port = lst.getsockname()[1]
-    cli = _socket.create_connection(("127.0.0.1", port))  # no-raw-endpoint: allow loopback, the test's own listener
+    loopback = "127.0.0.1"  # no-raw-endpoint: allow loopback, the test's own listener
+    cli = _socket.create_connection((loopback, port))
     conn, addr = lst.accept()
     try:
         assert _tcp_peer_uid(addr, conn.getsockname()[:2]) == os.getuid()
