@@ -58,6 +58,8 @@ EXCLUDED: dict[str, str] = {
     "ansible/plugins/": "Ansible plugins: Ansible loads them, nothing executes them",
     "workflows/stackstorm/": "rendered StackStorm action shims: its python runner imports them "
     "(`hnx workflows st2 render`)",
+    "examples/codemode/": "generated Code Mode outputs (`hnx codemode gen`): a profile's runtime "
+    "prelude is source the executor runs inside a program's sandbox, never a file run",
     "conftest.py": "pytest configuration",
     "setup.py": "the build backend's hook, run by setuptools",
 }

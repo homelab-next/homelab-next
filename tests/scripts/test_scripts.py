@@ -182,6 +182,7 @@ def test_excluded_classes_are_not_scripts_unless_they_carry_a_header(tmp_path):
             "homelabnext/mod.py": "x = 1\n",
             "tests/test_x.py": "#!/usr/bin/env python3\n",
             "conftest.py": "x = 1\n",
+            "examples/codemode/triage/prelude.py": "service = None\n",
             "conformance/fakes/server.py": header(id="fake-server", kind="service"),
         },
     )
