@@ -912,9 +912,14 @@ class BrokerService:
             err = Denied(f"{caller!r} may not run {action!r}", reason=decision["reason"])
             raise _carry(err, request)
         try:
-            if target is not None and not (isinstance(target, str) and _SVC_RE.match(target)):
+            # fullmatch: ``$`` would let a trailing newline through ("svc:dns\n")
+            if target is not None and not (isinstance(target, str) and _SVC_RE.fullmatch(target)):
                 raise _Refused("invalid", "invalid-target", "target must be a svc: id")
             self._check_args(act, caller, args, _stamp(now))
+            doc = getattr(act, "handler", None) if act is not None else None
+            if target is None and isinstance(doc, Mapping) and doc.get("target") == "required":
+                # handler 1.3: the handler reads its target; without one it reports on nothing
+                raise _Refused("invalid", "target-required", f"{action}: names no target")
         except _Refused as exc:
             self._audit(
                 caller,

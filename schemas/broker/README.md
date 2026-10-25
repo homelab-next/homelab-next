@@ -18,7 +18,7 @@ Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action
 `output` decoded as JSON: the Code Mode generator types results from it, the broker does not
 enforce it); handler 1.3 adds `target` (`required` or `optional`: whether a request for the action
 names the `svc:` target it is about; the Code Mode generator gives the method a `target` parameter
-from it, the broker does not enforce it). A handler 1.2 (or 1.3) document cannot be loaded by a
+from it, and the broker refuses a request without one for an action that requires it, `target-required`). A handler 1.2 (or 1.3) document cannot be loaded by a
 broker older than its version (the schema refuses the unknown field). Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
 `uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
 for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;

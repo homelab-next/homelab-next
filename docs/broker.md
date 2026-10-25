@@ -141,9 +141,11 @@ types the method's result from it.
 
 A handler document (1.3) may also carry `target`: `required` or `optional`, whether a request for
 the action names the `svc:` target it is about (handed to the handler as `HNX_BROKER_TARGET`);
-absent, the action takes none. Like `result_schema` it is a declaration, not a check: the broker
-admits a request with or without a target as before. `hnx codemode gen` gives the action's method
-a `target` parameter from it ([CM-3](codemode.md#cm-3-the-generator)).
+absent, the action takes none. The broker refuses a request for a `required` action that names
+no target (`target-required`, an `invalid` outcome, audited, after the params are checked), since
+its handler would report on nothing; it still admits a target on an action that takes none. A
+target is matched whole (`svc:dns` followed by a newline is `invalid-target`). `hnx codemode gen`
+gives the action's method a `target` parameter from it ([CM-3](codemode.md#cm-3-the-generator)).
 
 The broker validates `params` against `params_schema`, reads the handler once, checks its sha256
 against `handler_digest` (refusing with `handler-digest-mismatch`), and runs exactly those bytes
