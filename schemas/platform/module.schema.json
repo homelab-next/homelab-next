@@ -1774,12 +1774,13 @@
                   "cap:broker",
                   "cap:mcp-catalog",
                   "cap:records",
-                  "cap:orchestration"
+                  "cap:orchestration",
+                  "cap:codemode-executor"
                 ]
               }
             }
           ],
-          "description": "The shared component; never secrets, broker, mcp-catalog, records or orchestration, and edge or idp only with an overlay grant."
+          "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration or codemode-executor, and edge or idp only with an overlay grant."
         },
         "file": {
           "$ref": "#/$defs/rel_path"
