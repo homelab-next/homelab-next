@@ -47,8 +47,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
 import stat
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -562,11 +562,14 @@ def _destinations(out: Path, files: Mapping[str, str]) -> list[str]:
 
 
 def _replace(dest: Path, data: bytes) -> None:
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+    # a fresh name opened O_EXCL | O_NOFOLLOW, created through the umask like any other file the
+    # checkout holds (mkstemp's 0600 would make the goldens unreadable to other users)
+    tmp = dest.parent / f".{dest.name}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o666)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.chmod(tmp, 0o644)
         os.replace(tmp, dest)
     except BaseException:
         with contextlib.suppress(OSError):
