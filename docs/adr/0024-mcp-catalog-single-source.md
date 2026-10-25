@@ -1,5 +1,5 @@
 ---
-summary: 'One record per MCP server is the single source for the class table, graph, system pages and hub views.'
+summary: One record per MCP server is the single source for the class table, graph, system pages and hub views.
 ---
 # ADR-0024: Keep every MCP server in one catalog and generate everything else from it
 

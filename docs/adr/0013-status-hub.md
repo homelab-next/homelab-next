@@ -1,5 +1,5 @@
 ---
-summary: 'One read-only status hub over status sources registered in the registry; views pick from that menu.'
+summary: One read-only status hub over status sources registered in the registry; views pick from that menu.
 ---
 # ADR-0013: One read-only status hub over registered status sources
 

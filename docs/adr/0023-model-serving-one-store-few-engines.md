@@ -1,5 +1,5 @@
 ---
-summary: 'One model store, each model once, pinned by commit and sha256; vLLM serves production from it, a few engines elsewhere.'
+summary: One model store, each model once, pinned by commit and sha256; vLLM serves production from it, a few engines elsewhere.
 ---
 # ADR-0023: Serve models from one pinned store with vLLM; Unsloth Studio is the GUI; retire Ollama and LM Studio
 

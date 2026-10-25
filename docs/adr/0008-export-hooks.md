@@ -1,5 +1,5 @@
 ---
-summary: 'Every stateful product ships an export hook that a restore drill exercises.'
+summary: Every stateful product ships an export hook that a restore drill exercises.
 ---
 # ADR-0008: Every stateful product ships an export hook, exercised by the restore drill
 

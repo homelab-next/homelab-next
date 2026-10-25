@@ -1,5 +1,5 @@
 ---
-summary: 'Machine state is append-only sidecar events and status changes are intents a decider applies, so writes never conflict.'
+summary: Machine state is append-only sidecar events and status changes are intents a decider applies, so writes never conflict.
 ---
 # ADR-0014: Conflict-free writes: append-only events, derived state, intents and a decider
 

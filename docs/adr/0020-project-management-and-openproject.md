@@ -1,5 +1,5 @@
 ---
-summary: 'Project management is a capability with board rules as MUSTs; OpenProject mirrors strategy one way and the repo wins.'
+summary: Project management is a capability with board rules as MUSTs; OpenProject mirrors strategy one way and the repo wins.
 ---
 # ADR-0020: Make project management a capability, with OpenProject as its first product
 

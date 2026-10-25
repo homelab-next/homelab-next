@@ -25,8 +25,8 @@ from .rules import _active, measures_of
 __all__ = ["render_index", "wiki_link"]
 
 SUMMARY = (
-    "Generated index of the strategy records: priorities of work, the objective cascade, "
-    "requirements and RFIs, each shown by its computed number."
+    "Generated index of the example strategy records: priorities of work, the objective "
+    "cascade, requirements and RFIs, each shown by its computed number."
 )
 HEADER = (
     "---\n" + generated_summary_lines(SUMMARY) + "\n---\n"

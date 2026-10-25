@@ -1,5 +1,5 @@
 ---
-summary: 'Products live only in provider modules filling slots from a slot registry; optional missions are feature modules.'
+summary: Products live only in provider modules filling slots from a slot registry; optional missions are feature modules.
 ---
 # ADR-0027: Build the lab from provider, feature and core modules, each declared by one manifest
 

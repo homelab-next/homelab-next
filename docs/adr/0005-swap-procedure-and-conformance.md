@@ -1,5 +1,5 @@
 ---
-summary: 'Every swap of a product follows one procedure, and every capability has a passing swap conformance test.'
+summary: Every swap of a product follows one procedure, and every capability has a passing swap conformance test.
 ---
 # ADR-0005: Every product swap follows one procedure and every capability has a passing swap test
 
