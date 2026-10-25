@@ -37,39 +37,55 @@ Code Mode capability tokens (feature ``codemode-tokens``, ADR-0031 decisions 2, 
 ``allow`` and admitted by the same checks, whose handler is the *runner*
 (``register_runner(runner, handler)``: ``handler`` gets the request, ``{request_id, actor,
 params}``, where ``params`` is a ``schemas/codemode/execution_request``).  While that handler runs,
-and only then, the runner may ``issue_token(runner, request_id, ...)``: a token for that one run
-of that one execution, whose claims (``schemas/codemode/token``) the broker takes from the request
-itself - its id, its authenticated actor, the execution id and the code digest
-(:func:`code_digest`) - never from the runner.  Only an identity registered as a runner may
-issue or spend.  The broker refuses to issue (``Denied``, each with its reason): an action that
+and only then, that runner - no other - may ``issue_token(runner, request_id, ...)``: a token
+for that one run of that one execution, whose claims (``schemas/codemode/token``) the broker takes
+from the request itself - its id, its authenticated actor, the execution id and the code digest
+(:func:`code_digest`) - never from the runner.  Execution ids are the actor's own: another
+actor's id neither shows nor blocks.  The broker refuses to issue (``Denied``, each with its
+reason): a run that is not in flight for this runner (``execution-not-in-flight``), an action that
 ``decide`` would not admit for the actor (``token-action-not-admitted``: the token narrows the
 actor's grants, never widens them), a ``codemode.*`` action (``token-action-codemode``), more
-calls than the broker's cap or the request's own budget (``token-max-calls-exceeded``), a lifetime
-past the run's wall budget plus the broker's margin (``token-ttl-exceeded``), a second token for
-one request (``request-has-token``), a fresh run of an execution id that already exists
-(``execution-exists``), a resume (``params.resume``) of an execution that is unknown, another
-actor's, or whose latest token is neither paused nor spent (``execution-not-resumable``, one
-answer for all three), a resume with another program (``resume-code-mismatch``) and an actor's
-token past its live-token cap (``too-many-live-tokens``).
+calls than the broker's cap or the request's own budget allow (``token-max-calls-exceeded``), a
+lifetime past the run's wall budget plus the broker's margin (``token-ttl-exceeded``), a second
+token for one request (``request-has-token``), a fresh run of an execution id the actor already
+has (``execution-exists``), a resume (``params.resume``) of an execution that is not paused -
+unknown, running, finished (``execution-not-resumable``) - a resume with another program
+(``resume-code-mismatch``) and an actor's token past its live-token cap
+(``too-many-live-tokens``).
+
+**The call cap is per execution**, in total across its runs: a resume's token carries what is
+left of the first run's ``max_calls``, never a fresh one.
 
 The sandbox presents the token's ``secret`` (a high-entropy random value the broker keeps only a
-digest of; it is in no claim, no audit record and no error) to ``token_call`` and
-``token_submit``.  The actor is the token's, never one the caller names.  In order, the broker
-refuses with ``Denied`` and an audit record carrying the token and execution ids: a secret it
-does not know (``token-invalid``: one answer for an unknown and a wrong secret), a token held by
-another sandbox than its own (``token-sandbox-mismatch``, when the caller says which), expired
-(``token-expired``), spent (``token-spent``), paused (``token-paused``), an action the token does
-not list (``token-action-not-allowed``) and a call past ``max_calls`` (``call-cap-reached``).
-Every call that passes those checks counts one towards ``max_calls`` - before ``decide`` runs, so
-a call ``decide`` then refuses counts too, and a program cannot probe the allowlist past its cap -
-and the count is the broker's, so a program that resets its client gains nothing.  It then takes
-the ordinary path for the token's actor: ``decide``, approvals, argument checks, one audit record.
-An accepted ``token_submit`` **pauses** the token: the request waits for its owner (an approval,
-then ``run``), so the program cannot go on, and every later call on that token is refused
-``token-paused``.  ``spend_token`` ends a token (the run finished); a token also ends with its
-``codemode.execute``: when the handler returns, a token of that request still live is spent.  A
-resume is another ``codemode.execute`` of the same execution id with ``resume: true``, whose
-runner is issued a new token, never the old one.
+digest of; it is in no claim, no audit record and no error) to ``token_call``, ``token_submit``
+and ``token_run``.  The actor is the token's, never one the caller names.  In order, the broker
+refuses with ``Denied`` and an audit record carrying the token and execution ids
+(:data:`TOKEN_REFUSALS`): a secret it does not know (``token-invalid``: one answer for an unknown
+and a wrong secret), a token presented by another sandbox than its own
+(``token-sandbox-mismatch``, when the caller says which), expired (``token-expired``), spent
+(``token-spent``), paused (``token-paused``), an action the token does not list
+(``token-action-not-allowed``) and a call past ``max_calls`` (``call-cap-reached``).  Every call
+that passes those checks counts one towards the cap - before ``decide`` runs, so a call ``decide``
+then refuses counts too - and the count is the broker's, so a program that resets its client
+gains nothing.  It then takes the ordinary path for the token's actor.  Every answer names the
+request the broker built for it: ``{result, request_id, request_digest[, target]}``, and a
+``BrokerError`` raised once that request exists carries ``request_id`` and ``request_digest``
+too.
+
+**Pause.** An accepted ``token_submit``, and a ``token_call`` whose action needs approval, store
+the request ``pending`` and pause the token in one step: the answer is ``{state: "pending",
+request_id, request_digest}``, and every later call on the token is refused ``token-paused``.
+``spend_token(runner, token_id, outcome)`` ends a token with ``finished`` (the execution never
+resumes) or ``paused`` (only for a paused token: the execution waits); the end of its
+``codemode.execute`` spends a token still live as ``finished``.  A resume is another
+``codemode.execute`` of the same execution id with ``resume: true``, issued a new token only while
+the execution is paused.  Its program then ``token_run(token, request_id)``s the request the
+earlier token paused on - only that one (``token-request-not-paused``), only once it may run
+(``request-not-approved``), counted like any call - and gets ``{result, request_id,
+request_digest}``.  ``token_status(runner, token_id)`` is the runner's view of its own token,
+including the state of the request a pause waits on (``paused_by_state``: ``pending``,
+``approved``, ``denied``, ``done``, ...).  Another runner's token reads as no token
+(``unknown-token``); an identity that is no runner gets ``not-a-codemode-runner``.
 
 Clock: a target declaring the ``clock-control`` hook offers ``tick(seconds)``, moving the clock
 that ``issued_at`` and expiry are judged by.  The feature's checks are the extended suite
@@ -109,6 +125,9 @@ TOKEN_REFUSALS = (
     "token-paused",
     "token-action-not-allowed",
     "call-cap-reached",
+    # token_run only: the request named is not one this execution paused on, or may not run yet
+    "token-request-not-paused",
+    "request-not-approved",
 )
 
 
@@ -246,17 +265,44 @@ class CodemodeTokens(Protocol):
         ttl_s: int | None = None,
     ) -> IssuedToken:
         """A token for the ``codemode.execute`` request ``request_id`` while its handler runs;
-        absent ``max_calls`` and ``ttl_s`` take the request's budget within the broker's caps."""
+        absent ``max_calls`` and ``ttl_s`` take the request's budget within the broker's caps
+        (a resume: what is left of the execution's cap)."""
 
     def token_call(
-        self, token: str, command: str, args: Mapping[str, Any], *, sandbox_id: str | None = None
-    ) -> Any:
-        """``call`` as the token's actor, after the token checks; counts towards the cap."""
+        self,
+        token: str,
+        command: str,
+        args: Mapping[str, Any],
+        *,
+        target: str | None = None,
+        sandbox_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        """``call`` as the token's actor, after the token checks; counts towards the cap.
+        ``{result, request_id, request_digest[, target]}``, or ``{state: "pending", ...}`` when
+        the action needs approval (the token is then paused)."""
 
     def token_submit(
-        self, token: str, command: str, args: Mapping[str, Any], *, sandbox_id: str | None = None
-    ) -> str:
-        """``submit`` as the token's actor, after the token checks; an accepted one pauses it."""
+        self,
+        token: str,
+        command: str,
+        args: Mapping[str, Any],
+        *,
+        target: str | None = None,
+        sandbox_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        """``submit`` as the token's actor: ``{state: "pending", request_id, request_digest}``;
+        the token is paused."""
 
-    def spend_token(self, runner: str, token_id: str) -> None:
-        """End the token: every later call on it is refused ``token-spent``."""
+    def token_run(
+        self, token: str, request_id: str, *, sandbox_id: str | None = None
+    ) -> Mapping[str, Any]:
+        """Run the request an earlier token of the same execution paused on, once it may run:
+        ``{result, request_id, request_digest}``; counts towards the cap."""
+
+    def spend_token(self, runner: str, token_id: str, outcome: str = "finished") -> None:
+        """End the runner's token (``finished`` or ``paused``): later calls are refused
+        ``token-spent``."""
+
+    def token_status(self, runner: str, token_id: str) -> Mapping[str, Any]:
+        """The runner's view of its token, with ``claims``, ``state``, ``calls``, ``outcome`` once
+        spent, ``paused_by`` and ``paused_by_state`` once paused."""

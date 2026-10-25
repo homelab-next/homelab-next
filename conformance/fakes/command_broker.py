@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import re
 import secrets
 from collections.abc import Callable, Mapping, Sequence
@@ -78,8 +79,10 @@ class FakeBroker:
         self._inflight: dict[str, dict[str, Any]] = {}  # request id -> the running execute
         self._tokens: dict[str, dict[str, Any]] = {}  # token id -> claims, digest, state, calls
         self._by_digest: dict[str, str] = {}  # sha256 of a secret -> token id
-        self._executions: dict[str, dict[str, Any]] = {}  # execution id -> actor, code, tokens
+        #: (actor, execution id) -> code digest, the cap, tokens, state: ids are the actor's own
+        self._executions: dict[tuple[str, str], dict[str, Any]] = {}
         self._token: dict[str, Any] | None = None  # the token the current call is made with
+        self._execute_runner: str | None = None  # the runner codemode.execute's handler is
 
     def register(self, command, handler, args):
         self._cmds[command] = (handler, dict(args))
@@ -144,9 +147,11 @@ class FakeBroker:
 
     # ---- deferred requests: bound to the caller that submitted them
     def submit(self, caller, command, args):
+        return self._submit(caller, command, dict(args), f"req-{next(self._seq)}")
+
+    def _submit(self, caller, command, args, rid):
         args = dict(args)  # the copy that is checked is the copy that runs
         _, spec = self._admit(caller, command, args, operation="submit")
-        rid = f"req-{next(self._seq)}"
         self._reqs[rid] = {"caller": caller, "command": command, "args": args}
         self._reqs[rid]["state"] = "pending"
         self._log(caller, command, "ok", spec, args, operation="submit", request_id=rid)
@@ -213,23 +218,39 @@ class FakeBroker:
         return _EPOCH + timedelta(seconds=self._now)
 
     def register_runner(self, runner, handler):
+        """The latest runner registered runs codemode.execute; every one stays a runner."""
         self._runners[runner] = handler
+        self._execute_runner = runner
         self._cmds[CODEMODE_EXECUTE] = (handler, {})
 
     def _execute_run(self, caller, rid, handler, spec, args, **extra):
-        """Run ``codemode.execute``: the request is in flight while its handler runs, and a token
-        of it still live when the handler returns is spent (it never outlives its run)."""
-        self._inflight[rid] = {"request_id": rid, "actor": caller, "params": dict(args)}
-        request = {"request_id": rid, "actor": caller, "params": dict(args)}
+        """Run ``codemode.execute``: the request is in flight, for its runner, while its handler
+        runs, and a token of it still live when the handler returns is spent (finished)."""
+        run = {"request_id": rid, "actor": caller, "params": dict(args)}
+        self._inflight[rid] = {**run, "runner": self._execute_runner}
         try:
             return self._execute(
-                caller, CODEMODE_EXECUTE, lambda **_: handler(request), spec, args, **extra
+                caller, CODEMODE_EXECUTE, lambda **_: handler(dict(run)), spec, args, **extra
             )
         finally:
             del self._inflight[rid]
             for tok in self._tokens.values():
-                if tok["claims"]["request_id"] == rid and tok["state"] == "live":
-                    tok["state"] = "spent"
+                if tok["claims"]["request_id"] == rid:
+                    if tok["state"] == "live":
+                        tok.update(state="spent", outcome="finished")
+                    self._settle(tok)
+
+    def _settle(self, tok) -> None:
+        """An execution's state follows its latest token."""
+        ex = self._executions[tok["key"]]
+        if ex["tokens"][-1] != tok["claims"]["token_id"]:
+            return
+        if tok["state"] == "live":
+            ex["state"] = "running"
+        elif tok["state"] == "paused" or tok.get("outcome") == "paused":
+            ex["state"] = "paused"
+        else:
+            ex["state"] = "finished"
 
     def _refuse_issue(self, runner, rid, reason, message, **ids):
         self._audit.append(
@@ -244,6 +265,15 @@ class FakeBroker:
     def _live(self, tok: Mapping[str, Any]) -> bool:
         return tok["state"] == "live" and self._clock() < tok["expires"]
 
+    def _run_for(self, runner, request_id):
+        """The in-flight run ``runner`` may issue for; another runner's reads as none."""
+        run = self._inflight.get(request_id)
+        return run if run is not None and run["runner"] == runner else None
+
+    def _remaining(self, known) -> int:
+        """What is left of an execution's cap: it is per execution, across all its runs."""
+        return known["max_calls"] - sum(self._tokens[t]["calls"] for t in known["tokens"])
+
     def issue_token(self, runner, request_id, *, sandbox_id, actions, max_calls=None, ttl_s=None):
         if runner not in self._runners:
             self._refuse_issue(runner, request_id, "not-a-codemode-runner", "not a runner")
@@ -256,7 +286,7 @@ class FakeBroker:
         for n in (max_calls, ttl_s):
             if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 1):
                 raise InvalidArguments("max_calls and ttl_s are positive integers")
-        run = self._inflight.get(request_id)
+        run = self._run_for(runner, request_id)
         if run is None:
             self._refuse_issue(runner, request_id, "execution-not-in-flight", "not running")
         actor, params = run["actor"], run["params"]
@@ -268,44 +298,49 @@ class FakeBroker:
             self._refuse_issue(runner, request_id, "token-action-codemode", "no codemode", **ids)
         if len(set(actions)) != len(actions) or not all(self._admitted(actor, a) for a in actions):
             self._refuse_issue(runner, request_id, "token-action-not-admitted", "narrows", **ids)
-        want = (
-            max_calls
-            if max_calls is not None
-            else min(MAX_CALLS, budget.get("max_calls", MAX_CALLS))
-        )
-        if want > MAX_CALLS or want > budget.get("max_calls", MAX_CALLS):
+        digest = code_digest(params["language"], params["code"])
+        known = self._executions.get((actor, eid))  # execution ids are the actor's own
+        if not params.get("resume"):
+            if known is not None:
+                self._refuse_issue(runner, request_id, "execution-exists", "exists", **ids)
+            cap = min(MAX_CALLS, budget.get("max_calls", MAX_CALLS))
+        else:
+            if not self._resumable(known):
+                self._refuse_issue(runner, request_id, "execution-not-resumable", "no", **ids)
+            if known["code_digest"] != digest:
+                self._refuse_issue(runner, request_id, "resume-code-mismatch", "code", **ids)
+            cap = min(self._resume_cap(known), budget.get("max_calls", MAX_CALLS))
+            if cap < 1:
+                self._refuse_issue(runner, request_id, "call-cap-reached", "cap spent", **ids)
+        want = cap if max_calls is None else max_calls
+        if want > cap:
             self._refuse_issue(runner, request_id, "token-max-calls-exceeded", "cap", **ids)
         limit = budget.get("wall_s", DEFAULT_WALL_S) + TTL_MARGIN_S
         ttl = ttl_s if ttl_s is not None else limit
         if ttl > limit:
             self._refuse_issue(runner, request_id, "token-ttl-exceeded", "too long", **ids)
-        digest = code_digest(params["language"], params["code"])
-        known = self._executions.get(eid)
-        if not params.get("resume"):
-            if known is not None:
-                self._refuse_issue(runner, request_id, "execution-exists", "exists", **ids)
-        else:
-            last = self._tokens[known["tokens"][-1]] if known else None
-            if known is None or known["actor"] != actor or last["state"] not in ("paused", "spent"):
-                self._refuse_issue(runner, request_id, "execution-not-resumable", "no", **ids)
-            if known["code_digest"] != digest:
-                self._refuse_issue(runner, request_id, "resume-code-mismatch", "code", **ids)
         mine = [t for t in self._tokens.values() if t["claims"]["actor"] == actor and self._live(t)]
         if len(mine) >= MAX_LIVE_PER_ACTOR:
             self._refuse_issue(runner, request_id, "too-many-live-tokens", "live tokens", **ids)
         return self._mint(runner, run, digest, sandbox_id, list(actions), want, ttl)
 
+    def _resumable(self, known) -> bool:
+        return known is not None and known["state"] == "paused"
+
+    def _resume_cap(self, known) -> int:
+        return self._remaining(known)
+
     def _mint(self, runner, run, digest, sandbox_id, actions, max_calls, ttl):
         now = self._clock().replace(microsecond=0)
         tid, secret = f"tok-{next(self._seq)}", "hnxcmt_" + secrets.token_urlsafe(32)
-        eid = run["params"]["execution_id"]
+        eid, actor = run["params"]["execution_id"], run["actor"]
         claims = {
             "token_id": tid,
             "execution_id": eid,
             "request_id": run["request_id"],
             "code_digest": digest,
             "sandbox_id": sandbox_id,
-            "actor": run["actor"],
+            "actor": actor,
             "issuer": "svc:broker",
             "audience": "svc:broker",
             "actions": actions,
@@ -314,12 +349,20 @@ class FakeBroker:
             "expires_at": _stamp(now + timedelta(seconds=ttl)),
         }
         expires = now + timedelta(seconds=ttl)
-        self._tokens[tid] = {"claims": claims, "state": "live", "calls": 0, "expires": expires}
+        self._tokens[tid] = {
+            "claims": claims,
+            "state": "live",
+            "calls": 0,
+            "expires": expires,
+            "runner": runner,
+            "key": (actor, eid),
+        }
         self._by_digest[self._digest(secret)] = tid  # the secret itself is never kept
         known = self._executions.setdefault(
-            eid, {"actor": run["actor"], "code_digest": digest, "tokens": []}
+            (actor, eid), {"code_digest": digest, "max_calls": max_calls, "tokens": []}
         )
         known["tokens"].append(tid)
+        known["state"] = "running"
         self._audit.append(
             AuditRecord(
                 runner,
@@ -342,27 +385,45 @@ class FakeBroker:
         )
         return hashlib.sha256(raw).hexdigest()
 
-    def _token_for(self, token, command, operation, sandbox_id):
+    @staticmethod
+    def _request_digest(action, actor, args) -> str:
+        body = json.dumps(
+            {"action": action, "actor": actor, "params": args},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=repr,
+        )
+        return "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+    def _token_for(self, token, command, operation, sandbox_id, *, rid=None):
         """The token record a call presents, after every token check (in the contract's
-        order); refusals are audited and never name the secret."""
+        order), counted; refusals are audited and never name the secret."""
         tid = self._by_digest.get(self._digest(token))
         tok = self._tokens.get(tid) if tid else None
-        actor = tok["claims"]["actor"] if tok else "token:unknown"
-        ids = {"token_id": tid, "execution_id": tok["claims"]["execution_id"]} if tok else {}
         reason = self._token_problem(tok, command, sandbox_id)
+        if not reason and rid is not None:
+            reason = self._run_problem(tok, rid)
         if reason:
-            self._audit.append(
-                AuditRecord(actor, str(command), "denied", {}, operation, None, reason, **ids)
-            )
-            raise Denied("the token does not allow this call", reason=reason)
+            self._token_refused(tok, command, operation, reason)
         tok["calls"] += 1
         return tok
+
+    def _token_refused(self, tok, command, operation, reason):
+        actor, ids = "token:unknown", {}
+        if tok is not None:
+            claims = tok["claims"]
+            actor = claims["actor"]
+            ids = {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
+        self._audit.append(
+            AuditRecord(actor, str(command or ""), "denied", {}, operation, None, reason, **ids)
+        )
+        raise Denied("the token does not allow this call", reason=reason)
 
     def _token_problem(self, tok, command, sandbox_id) -> str:
         if tok is None:
             return "token-invalid"
         claims = tok["claims"]
-        if sandbox_id is not None and sandbox_id != claims["sandbox_id"]:
+        if sandbox_id and sandbox_id != claims["sandbox_id"]:  # "" is a pool: no dedicated ids
             return "token-sandbox-mismatch"
         if self._clock() >= tok["expires"]:
             return "token-expired"
@@ -370,48 +431,138 @@ class FakeBroker:
             return "token-spent"
         if tok["state"] == "paused":
             return "token-paused"
-        if command not in claims["actions"]:
+        if command is not None and command not in claims["actions"]:
             return "token-action-not-allowed"
         if tok["calls"] >= claims["max_calls"]:
             return "call-cap-reached"
         return ""
 
-    def _as_token(self, tok, fn):
+    def _run_problem(self, tok, rid) -> str:
+        """Why ``token_run`` may not run ``rid``: only a request an earlier token of the same
+        execution paused on, of the same actor, listed in the token, and runnable now."""
+        known = self._executions[tok["key"]]
+        paused = {  # an earlier token's: a paused token never runs its own request
+            self._tokens[t].get("paused_by")
+            for t in known["tokens"]
+            if t != tok["claims"]["token_id"]
+        }
+        req = self._reqs.get(rid)
+        if rid not in paused or req is None or req["caller"] != tok["claims"]["actor"]:
+            return "token-request-not-paused"
+        if req["command"] not in tok["claims"]["actions"]:
+            return "token-action-not-allowed"
+        if req["state"] != "pending":  # the fake's requests need no approval: pending may run
+            return "request-not-approved"
+        return ""
+
+    def _as_token(self, tok, fn, request=None):
         outer, self._token = self._token, tok
         try:
             return fn()
+        except BrokerError as exc:
+            if request is not None:
+                self._carry(exc, request)
+            raise
         finally:
             self._token = outer
 
-    def token_call(self, token, command, args, *, sandbox_id=None):
-        tok = self._token_for(token, command, "call", sandbox_id)
-        return self._as_token(tok, lambda: self.call(tok["claims"]["actor"], command, args))
+    @staticmethod
+    def _carry(exc, request) -> None:
+        """A refusal after the request was built names it, as an answer does."""
+        exc.request_id = request["request_id"]
+        exc.request_digest = request["request_digest"]
 
-    def token_submit(self, token, command, args, *, sandbox_id=None):
+    def _answer(self, request, target, **out):
+        if target is not None:
+            out["target"] = target
+        return {**out, **request}
+
+    def token_call(self, token, command, args, *, target=None, sandbox_id=None):
+        tok = self._token_for(token, command, "call", sandbox_id)
+        actor, args = tok["claims"]["actor"], dict(args)
+        request = {
+            "request_id": f"req-{next(self._seq)}",
+            "request_digest": self._request_digest(command, actor, args),
+        }
+        result = self._as_token(tok, lambda: self.call(actor, command, args), request)
+        return self._answer(request, target, result=result)
+
+    def token_submit(self, token, command, args, *, target=None, sandbox_id=None):
         tok = self._token_for(token, command, "submit", sandbox_id)
-        rid = self._as_token(tok, lambda: self.submit(tok["claims"]["actor"], command, args))
+        actor, args = tok["claims"]["actor"], dict(args)
+        rid = f"req-{next(self._seq)}"
+        request = {"request_id": rid, "request_digest": self._request_digest(command, actor, args)}
+        self._as_token(tok, lambda: self._submit(actor, command, args, rid), request)
+        self._reqs[rid]["digest"] = request["request_digest"]
         self._pause(tok, rid)
-        return rid
+        return self._answer(request, target, state="pending")
+
+    def token_run(self, token, request_id, *, sandbox_id=None):
+        tok = self._token_for(token, None, "run", sandbox_id, rid=request_id)
+        req = self._reqs[request_id]
+        request = {"request_id": request_id, "request_digest": req.get("digest", "")}
+        result = self._as_token(tok, lambda: self.run(req["caller"], request_id), request)
+        return {"result": result, **request}
 
     def _pause(self, tok, rid) -> None:
         """A submitted request waits for its owner: the program cannot go on."""
         if tok["state"] == "live":
             tok["state"] = "paused"
             tok["paused_by"] = rid
+            self._settle(tok)
 
-    def spend_token(self, runner, token_id):
-        tok = self._tokens.get(token_id) if runner in self._runners else None
+    def _runner_token(self, runner, token_id):
+        tok = self._tokens.get(token_id)
+        return tok if tok is not None and tok["runner"] == runner else None
+
+    def spend_token(self, runner, token_id, outcome="finished"):
+        if outcome not in ("finished", "paused"):
+            raise InvalidArguments("outcome is finished or paused")
+        tok = self._runner_token(runner, token_id) if runner in self._runners else None
+        reason = ""
         if tok is None:
             reason = "not-a-codemode-runner" if runner not in self._runners else "unknown-token"
+        elif outcome == "paused" and tok["state"] != "paused" and tok.get("outcome") != "paused":
+            reason = "token-not-paused"
+        if reason:
             self._audit.append(
                 AuditRecord(runner, CODEMODE_EXECUTE, "denied", {}, "token-spend", None, reason)
             )
             raise Denied("no such token for this runner", reason=reason)
-        tok["state"] = "spent"
+        if tok["state"] != "spent":
+            tok.update(state="spent", outcome=outcome)
+            self._settle(tok)
         eid = tok["claims"]["execution_id"]
         self._audit.append(
-            AuditRecord(runner, CODEMODE_EXECUTE, "ok", {}, "token-spend", None, "", token_id, eid)
+            AuditRecord(
+                runner,
+                CODEMODE_EXECUTE,
+                "ok",
+                {"outcome": outcome},
+                "token-spend",
+                None,
+                "",
+                token_id,
+                eid,
+            )
         )
+
+    def token_status(self, runner, token_id):
+        tok = self._runner_token(runner, token_id) if runner in self._runners else None
+        if tok is None:
+            reason = "not-a-codemode-runner" if runner not in self._runners else "unknown-token"
+            raise Denied("no such token for this runner", reason=reason)
+        state = tok["state"]
+        if state == "live" and self._clock() >= tok["expires"]:
+            state = "expired"
+        out = {"claims": dict(tok["claims"]), "state": state, "calls": tok["calls"]}
+        if tok.get("outcome"):
+            out["outcome"] = tok["outcome"]
+        if tok.get("paused_by"):
+            req = self._reqs.get(tok["paused_by"], {})
+            out["paused_by"] = tok["paused_by"]
+            out["paused_by_state"] = {"pending": "approved"}.get(req.get("state"), req.get("state"))
+        return out
 
     @staticmethod
     def _run_handler(command, handler, args):
@@ -637,11 +788,11 @@ class WideningTokenBroker(FakeBroker):
     def _admitted(self, actor, action):
         return action in self._cmds
 
-    def token_call(self, token, command, args, *, sandbox_id=None):
-        tok = self._token_for(token, command, "call", sandbox_id)
-        actor = tok["claims"]["actor"]
-        self.allow(actor, [command])  # "the token is the grant"
-        return self._as_token(tok, lambda: self.call(actor, command, args))
+    def token_call(self, token, command, args, *, target=None, sandbox_id=None):
+        tok = self._tokens.get(self._by_digest.get(self._digest(token), ""))
+        if tok is not None:
+            self.allow(tok["claims"]["actor"], [command])  # "the token is the grant"
+        return super().token_call(token, command, args, target=target, sandbox_id=sandbox_id)
 
 
 class AmbientActorBroker(FakeBroker):
@@ -654,15 +805,25 @@ class AmbientActorBroker(FakeBroker):
         self._latest = run["actor"]
         return super()._mint(runner, run, *a, **kw)
 
-    def token_call(self, token, command, args, *, sandbox_id=None):
-        tok = self._token_for(token, command, "call", sandbox_id)
-        return self._as_token(tok, lambda: self.call(self._latest, command, args))
+    def _ambient(self, token, fn):
+        tok = self._tokens.get(self._by_digest.get(self._digest(token), ""))
+        if tok is None:
+            return fn()
+        real, tok["claims"]["actor"] = tok["claims"]["actor"], self._latest
+        try:
+            return fn()
+        finally:
+            tok["claims"]["actor"] = real
 
-    def token_submit(self, token, command, args, *, sandbox_id=None):
-        tok = self._token_for(token, command, "submit", sandbox_id)
-        rid = self._as_token(tok, lambda: self.submit(self._latest, command, args))
-        self._pause(tok, rid)
-        return rid
+    def token_call(self, token, *a, **kw):
+        return self._ambient(
+            token, lambda: super(AmbientActorBroker, self).token_call(token, *a, **kw)
+        )
+
+    def token_submit(self, token, *a, **kw):
+        return self._ambient(
+            token, lambda: super(AmbientActorBroker, self).token_submit(token, *a, **kw)
+        )
 
 
 class ClientCapBroker(FakeBroker):
@@ -675,12 +836,14 @@ class ClientCapBroker(FakeBroker):
         return super()._token_problem(tok, command, sandbox_id)
 
 
-class NoPauseBroker(FakeBroker):
-    """Defect: a submit through a token leaves the token live, so the program goes on past the
-    call that is waiting for approval."""
+class PausedStillValidBroker(FakeBroker):
+    """Defect: a paused token is still honoured: the pause is recorded (the execution waits) but
+    nothing refuses the token, so the program goes on past the call that awaits approval."""
 
-    def _pause(self, tok, rid):
-        return None
+    def _token_problem(self, tok, command, sandbox_id):
+        if tok is not None and tok["state"] == "paused":
+            tok = {**tok, "state": "live"}
+        return super()._token_problem(tok, command, sandbox_id)
 
 
 class SpentStillValidBroker(FakeBroker):
@@ -707,19 +870,66 @@ class ResumeAnyCodeBroker(FakeBroker):
 
     def issue_token(self, runner, request_id, **kw):
         run = self._inflight.get(request_id)
-        known = self._executions.get(run["params"]["execution_id"]) if run else None
-        if run and known and run["params"].get("resume"):
+        if run and run["params"].get("resume"):
             p = run["params"]
-            known["code_digest"] = code_digest(p["language"], p["code"])
+            known = self._executions.get((run["actor"], p["execution_id"]))
+            if known:
+                known["code_digest"] = code_digest(p["language"], p["code"])
         return super().issue_token(runner, request_id, **kw)
+
+
+class FinishedResumesBroker(FakeBroker):
+    """Defect: a finished execution resumes like a paused one (any ended token will do)."""
+
+    def _resumable(self, known):
+        return known is not None and known["state"] in ("paused", "finished")
+
+
+class ResumeFreshCapBroker(FakeBroker):
+    """Defect: the cap is per token, not per execution: every resume starts with a fresh
+    ``max_calls``, so a program that pauses and resumes calls without bound."""
+
+    def _resume_cap(self, known):
+        return MAX_CALLS
+
+
+class TokenRunAnyRequestBroker(FakeBroker):
+    """Defect: ``token_run`` runs any pending request of the actor's, not only the one its
+    execution paused on."""
+
+    def _run_problem(self, tok, rid):
+        req = self._reqs.get(rid)
+        if req is None or req["caller"] != tok["claims"]["actor"]:
+            return "token-request-not-paused"
+        return "" if req["state"] == "pending" else "request-not-approved"
+
+
+class RequestlessRefusalBroker(FakeBroker):
+    """Defect: a token call refused after its request was built does not say which request,
+    so the runner cannot journal the broker's answer."""
+
+    @staticmethod
+    def _carry(exc, request):
+        return None
+
+
+class AnyRunnerBroker(FakeBroker):
+    """Defect: any runner may issue for, spend and read any run's token, not only the runner
+    the run belongs to."""
+
+    def _run_for(self, runner, request_id):
+        return self._inflight.get(request_id)
+
+    def _runner_token(self, runner, token_id):
+        return self._tokens.get(token_id)
 
 
 class EchoingTokenBroker(FakeBroker):
     """Defect: a refused token call names the token it was given, so the secret lands in the
     caller's error text (and in any log that records it)."""
 
-    def _token_for(self, token, command, operation, sandbox_id):
+    def _token_for(self, token, *a, **kw):
         try:
-            return super()._token_for(token, command, operation, sandbox_id)
+            return super()._token_for(token, *a, **kw)
         except Denied as exc:
             raise Denied(f"token {token!r} refused: {exc}", reason=exc.reason) from None

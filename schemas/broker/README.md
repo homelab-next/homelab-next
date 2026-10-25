@@ -31,10 +31,12 @@ requests page only while it has no open page, `notify_window_s` apart at least, 
 `null`: no file cap, for an append-only lane bounded by its bytes and its write rate.
 Manifest 1.7 adds `codemode` (ADR-0031, Code Mode capability tokens): the caps on a token
 (`max_calls`, default 50; `ttl_margin_s` past its run's wall budget, default 10 s; `default_wall_s`
-of a request naming none, default 60 s; `max_live_tokens_per_actor`, default 4) and two transport
+of a request naming none, default 60 s; `max_live_tokens_per_actor`, default 4; `retention_days` an
+ended execution's tokens are kept, default 7) and two transport
 roles, `runners` (a peer and the `svc:` id it issues tokens as) and `sandboxes` (a peer that may
 only present a token, optionally one `sandbox_id`); a peer is listed once across all four roles.
-Audit 1.3 adds the operations `token-issue` and `token-spend` and `token_id` and `execution_id`,
+Audit 1.3 adds the operations `token-issue`, `token-pause` and `token-spend` and `token_id` and
+`execution_id`,
 carried by every record of a call made with a token (`docs/broker.md`, "Code Mode capability
 tokens").
 Reference service and walkthrough: `docs/broker.md`, ADR-0017.

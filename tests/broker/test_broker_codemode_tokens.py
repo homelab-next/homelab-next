@@ -27,6 +27,8 @@ EXAMPLE = ROOT / "examples" / "broker" / "manifest.yml"
 AGENT = "profile:triage"
 RUNNER = "svc:codemode-runner"
 T0 = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+#: a well-formed secret no token has
+UNKNOWN = "hnxcmt_" + "z" * 43
 
 
 class Clock:
@@ -111,7 +113,7 @@ def test_reference_service_passes_the_token_suite():
 
 def test_the_token_suite_catches_every_mutant():
     runs = mutation_runs("broker-tokens", ROOT)
-    assert len(runs) == 8 and all(m.detected for m in runs), [m.name for m in runs]
+    assert len(runs) == 13 and all(m.detected for m in runs), [m.name for m in runs]
 
 
 # -- issue --------------------------------------------------------------------------------------
@@ -227,6 +229,16 @@ def test_the_manifest_caps_calls_lifetime_and_live_tokens(tmp_path):
     assert nested == "too-many-live-tokens", "a second live token for the actor was issued"
 
 
+def _pause(svc, eid="exec-0001", *, actor=AGENT, code="x = 1", **budget):
+    """A first run of ``eid`` that ends paused on a submitted ``echo.one``: (token, answer)."""
+
+    def program(req):
+        tok = _issue(svc, req)
+        return tok, svc.token_submit(tok.secret, "echo.one", {"text": "later"})
+
+    return _execute(svc, program, actor=actor, eid=eid, code=code, **budget)
+
+
 def test_one_token_per_run_and_resume_rules(tmp_path):
     svc = _svc(tmp_path)
 
@@ -234,32 +246,52 @@ def test_one_token_per_run_and_resume_rules(tmp_path):
         tok = _issue(svc, req)
         return tok, _reason(lambda: _issue(svc, req))
 
-    tok, again = _execute(svc, first, code="a = 1")
+    _tok, again = _execute(svc, first, eid="exec-done", code="a = 1")
     assert again == "request-has-token"
+    fresh = _reason(lambda: _execute(svc, lambda r: _issue(svc, r), eid="exec-done"))
+    assert fresh == "execution-exists"
+    finished = _reason(
+        lambda: _execute(svc, lambda r: _issue(svc, r), eid="exec-done", code="a = 1", resume=True)
+    )
+    assert finished == "execution-not-resumable", "a finished execution resumed"
+    paused, _ = _pause(svc, code="a = 1")
     assert (
-        _reason(lambda: _execute(svc, lambda r: _issue(svc, r), code="a = 1")) == "execution-exists"
+        _reason(lambda: _execute(svc, lambda r: _issue(svc, r), eid="exec-none", resume=True))
+        == "execution-not-resumable"
     )
-    foreign = _reason(
-        lambda: _execute(
-            svc, lambda r: _issue(svc, r), actor="profile:other", code="a = 1", resume=True
-        )
-    )
-    assert foreign in ("execution-not-resumable", "not-granted"), foreign
+    new = _execute(svc, lambda r: _issue(svc, r), code="a = 1", resume=True)
+    assert new.claims["token_id"] != paused.claims["token_id"]
+
+
+def test_execution_ids_are_each_actors_own(tmp_path):
+    svc = _svc(tmp_path)
     svc.allow("profile:other", [CODEMODE_EXECUTE, "echo.one"])
+    _pause(svc, code="a = 1")  # triage's exec-0001, paused
     foreign = _reason(
         lambda: _execute(
             svc, lambda r: _issue(svc, r), actor="profile:other", code="a = 1", resume=True
         )
     )
     assert foreign == "execution-not-resumable", "another actor resumed the execution"
-    assert (
-        _reason(lambda: _execute(svc, lambda r: _issue(svc, r), eid="exec-none", resume=True))
-        == "execution-not-resumable"
-    )
-    new = _execute(svc, lambda r: _issue(svc, r), code="a = 1", resume=True)
-    assert new.claims["token_id"] != tok.claims["token_id"]
-    doc = svc.tokens.execution("exec-0001")
-    assert doc["tokens"] == [tok.claims["token_id"], new.claims["token_id"]]
+    theirs = _execute(svc, lambda r: _issue(svc, r), actor="profile:other", code="b = 2")
+    assert theirs.claims["execution_id"] == "exec-0001", "the same id was blocked for another actor"
+
+
+def test_a_resume_carries_what_is_left_of_the_cap(tmp_path):
+    svc = _svc(tmp_path)
+
+    def program(req):
+        tok = _issue(svc, req)
+        svc.token_call(tok.secret, "echo.one", {"text": "1"})
+        svc.token_call(tok.secret, "echo.one", {"text": "2"})
+        return svc.token_submit(tok.secret, "echo.one", {"text": "3"})
+
+    _execute(svc, program, max_calls=4)
+    resumed = _execute(svc, lambda r: _issue(svc, r), resume=True)
+    assert resumed.claims["max_calls"] == 1
+    # spent: nothing left, so a further resume of a re-paused execution is refused at issue
+    ex = svc.tokens.execution(svc.tokens.token(resumed.claims["token_id"])["exec_key"])
+    assert svc.tokens.calls_of(ex) == 3 and ex["max_calls"] == 4
 
 
 # -- enforcement --------------------------------------------------------------------------------
@@ -354,25 +386,89 @@ def test_refusal_order_and_audit(tmp_path):
     assert all(d.get("execution_id") == "exec-0001" for d in named)
 
 
-def test_a_submit_needing_approval_pauses_the_token(tmp_path):
+def test_a_call_needing_approval_pauses_and_a_resume_runs_it(tmp_path):
     svc = _svc(tmp_path)
+    actions = ["service.restart", "service.status"]
 
     def program(req):
-        tok = _issue(svc, req, ["service.restart", "service.status"])
-        rid = svc.token_submit(tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue")
+        tok = _issue(svc, req, actions)
+        ans = svc.token_call(tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue")
         after = _reason(
             lambda: svc.token_call(tok.secret, "service.status", {}, target="svc:queue")
         )
-        return tok, rid, after, svc.token_status(RUNNER, tok.claims["token_id"])
+        return tok, ans, after, svc.token_status(RUNNER, tok.claims["token_id"])
 
-    tok, rid, after, status = _execute(svc, program)
+    tok, ans, after, status = _execute(svc, program)
+    rid = ans["request_id"]
+    assert ans["state"] == "pending" and ans["target"] == "svc:queue"
+    assert ans["request_digest"] == svc.detail(AGENT, rid)["request"]["digest"]
     assert after == "token-paused"
-    assert (status["state"], status["paused_by"], status["calls"]) == ("paused", rid, 1)
+    assert (status["state"], status["paused_by"], status["paused_by_state"], status["calls"]) == (
+        "paused",
+        rid,
+        "pending",
+        1,
+    )
     detail = svc.detail(AGENT, rid)
     assert detail["verdict"] == "needs-approval" and detail["state"] == "pending"
-    assert svc.token_status(RUNNER, tok.claims["token_id"])["state"] == "paused", (
-        "the end of the execute spent a paused token"
-    )
+    ops = [d["operation"] for d in svc.state.audit_records() if d.get("token_id")]
+    assert "token-pause" in ops, "the pause left no audit record"
+    svc.spend_token(RUNNER, tok.claims["token_id"], "paused")
+
+    def early(req):
+        t = _issue(svc, req, actions)
+        return _reason(lambda: svc.token_run(t.secret, rid))
+
+    # not approved yet: a resume may be issued, and its token_run is refused (not counted); the
+    # runner reads paused_by_state first, because a resumed run that ends unpaused finishes
+    assert _execute(svc, early, resume=True) == "request-not-approved"
+    svc.approve(rid, "sso:operator-one")
+    assert svc.token_status(RUNNER, tok.claims["token_id"])["paused_by_state"] == "approved"
+    resumed_ex = svc.tokens.execution(svc.tokens.token(tok.claims["token_id"])["exec_key"])
+    assert resumed_ex["state"] == "finished", resumed_ex
+
+
+def test_a_resume_runs_the_approved_request(tmp_path):
+    svc = _svc(tmp_path)
+    actions = ["service.restart"]
+
+    def program(req):
+        tok = _issue(svc, req, actions)
+        return tok, svc.token_call(
+            tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue"
+        )
+
+    tok, ans = _execute(svc, program)
+    rid = ans["request_id"]
+    svc.approve(rid, "sso:operator-one")
+
+    def resumed(req):
+        t = _issue(svc, req, actions)
+        return svc.token_run(t.secret, rid)
+
+    ran = _execute(svc, resumed, resume=True)
+    assert ran["request_id"] == rid and ran["request_digest"] == ans["request_digest"]
+    assert ran["result"]["exit_code"] == 0
+    assert svc.token_status(RUNNER, tok.claims["token_id"])["paused_by_state"] == "done"
+
+
+def test_answers_and_post_admission_refusals_name_the_request(tmp_path):
+    svc = _svc(tmp_path)
+
+    def program(req):
+        tok = _issue(svc, req, ["echo.one", "service.status"])
+        ok = svc.token_call(tok.secret, "echo.one", {"text": "x"})
+        with pytest.raises(InvalidArguments) as bad:
+            svc.token_call(tok.secret, "echo.one", {"nope": 1})
+        with pytest.raises(BrokerError) as pre:
+            svc.token_call(tok.secret, "dns.lookup", {})
+        return ok, bad.value, pre.value
+
+    ok, bad, pre = _execute(svc, program)
+    assert ok["result"] == {"echo": "x"} and ok["request_digest"].startswith("sha256:")
+    assert bad.request_id.startswith("req-") and bad.request_digest.startswith("sha256:")
+    assert getattr(bad, "admitted", False)
+    assert not hasattr(pre, "request_id") and not getattr(pre, "admitted", False)
 
 
 def test_a_token_dies_with_its_execute_and_on_spend(tmp_path):
@@ -485,7 +581,7 @@ def test_a_manifest_exec_codemode_execute_is_in_flight_while_its_handler_runs(tm
 
 # -- the socket transport -------------------------------------------------------------------------
 
-RUNNER_UID, SANDBOX_UID, POOL_UID, AGENT_UID = 3001, 3101, 3102, 2001
+RUNNER_UID, OTHER_RUNNER_UID, SANDBOX_UID, POOL_UID, AGENT_UID = 3001, 3002, 3101, 3102, 2001
 
 
 def _transport_manifest():
@@ -497,7 +593,10 @@ def _transport_manifest():
         "grants": [],
         "callers": [{"uid": AGENT_UID, "profile": AGENT}],
         "codemode": {
-            "runners": [{"uid": RUNNER_UID, "service": RUNNER}],
+            "runners": [
+                {"uid": RUNNER_UID, "service": RUNNER},
+                {"uid": OTHER_RUNNER_UID, "service": "svc:other-runner"},
+            ],
             "sandboxes": [{"uid": SANDBOX_UID, "sandbox_id": "sandbox-01"}, {"uid": POOL_UID}],
         },
     }
@@ -520,15 +619,17 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
             RUNNER_UID,
             op="token-issue",
             request_id=req["request_id"],
-            sandbox_id="sandbox-02",
+            sandbox_id="sandbox-pool",
             actions=["echo.one"],
         )
         assert issued["ok"], issued
         secret = issued["result"]["secret"]
         call = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"text": "x"}}
+        bad = {**call, "params": {"nope": 1}}
         return issued["result"], {
             "pool": _ask(svc, peers, POOL_UID, **call),
             "bound": _ask(svc, peers, SANDBOX_UID, **call),
+            "invalid": _ask(svc, peers, POOL_UID, **bad),
             "agent": _ask(svc, peers, AGENT_UID, **call),
             "runner-call": _ask(svc, peers, RUNNER_UID, **call),
             "sandbox-issue": _ask(
@@ -541,21 +642,132 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
                 actions=["x.y"],
             ),
             "actor": _ask(svc, peers, POOL_UID, **call, actor="profile:other"),
+            "other-runner": _ask(
+                svc,
+                peers,
+                OTHER_RUNNER_UID,
+                op="token-status",
+                token_id=issued["result"]["claims"]["token_id"],
+            ),
+            "submit": _ask(
+                svc,
+                peers,
+                POOL_UID,
+                op="token-submit",
+                token=secret,
+                action="echo.one",
+                params={"text": "s"},
+            ),
         }
 
     issued, got = _execute(svc, program)
-    assert got["pool"] == {"ok": True, "result": {"result": {"echo": "x"}}}
-    assert got["bound"]["error"] == "token-sandbox-mismatch"
+    assert got["pool"]["ok"] and got["pool"]["result"]["result"] == {"echo": "x"}
+    assert got["pool"]["result"]["request_digest"].startswith("sha256:")
+    assert got["bound"]["error"] == "token-sandbox-mismatch", "a dedicated peer used a pool token"
+    assert got["invalid"]["error"] == "invalid-params" and got["invalid"]["request_id"]
+    assert "_admitted" not in got["invalid"], "the transport's own marker leaked"
     assert got["agent"]["error"] == "not-a-sandbox"
     assert got["runner-call"]["error"] == "not-a-sandbox"
     assert got["sandbox-issue"]["error"] == "not-a-codemode-runner"
     assert got["actor"]["error"] == "actor-in-body"
+    assert got["other-runner"]["error"] == "unknown-token", "another runner read the token"
+    assert got["submit"]["result"]["state"] == "pending"
     for name, resp in got.items():
         assert issued["secret"] not in json.dumps(resp), f"{name}: the answer echoed the secret"
     status = _ask(svc, peers, RUNNER_UID, op="token-status", token_id=issued["claims"]["token_id"])
-    assert status["result"]["state"] == "spent" and status["result"]["calls"] == 1
+    assert status["result"]["state"] == "paused" and status["result"]["calls"] == 3
     vias = {d.get("via") for d in svc.state.audit_records() if d.get("token_id")}
     assert f"uid:{POOL_UID}" in vias and f"uid:{RUNNER_UID}" in vias
+
+
+def test_a_dedicated_sandboxs_token_is_its_own(tmp_path):
+    svc = _svc(tmp_path, _transport_manifest())
+    peers = PeerMap(svc.manifest)
+
+    def program(req):
+        secret = _ask(
+            svc,
+            peers,
+            RUNNER_UID,
+            op="token-issue",
+            request_id=req["request_id"],
+            sandbox_id="sandbox-01",
+            actions=["echo.one"],
+        )["result"]["secret"]
+        call = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"text": "x"}}
+        return _ask(svc, peers, POOL_UID, **call), _ask(svc, peers, SANDBOX_UID, **call)
+
+    from_pool, own = _execute(svc, program)
+    assert from_pool["error"] == "token-sandbox-mismatch", "a pool peer used a dedicated token"
+    assert own["ok"], own
+
+
+def test_refusal_limits_neither_lock_out_the_runner_nor_a_pool(tmp_path):
+    from homelabnext.broker.server import RefusalLimiter
+
+    manifest = _transport_manifest()
+    manifest["codemode"]["max_calls"] = 200
+    svc = _svc(tmp_path, manifest)
+    svc.allow("profile:other", [CODEMODE_EXECUTE, "echo.one"])
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(60, 600)
+
+    def ask(uid, **body):
+        return handle_request(svc, peers, uid, json.dumps(body).encode(), limiter=limiter)
+
+    def noisy(req):
+        secret = ask(
+            RUNNER_UID,
+            op="token-issue",
+            request_id=req["request_id"],
+            sandbox_id="sandbox-pool",
+            actions=["echo.one"],
+        )["result"]["secret"]
+        bad = {"op": "token-call", "token": secret, "action": "echo.one", "params": {"nope": 1}}
+        return [ask(POOL_UID, **bad)["error"] for _ in range(61)]
+
+    errors = _execute(svc, noisy, max_calls=200)
+    assert set(errors) == {"invalid-params"}, "admitted calls' refusals rate-limited the pool"
+    # 61 refused resumes by one actor, asked by the runner, do not lock the runner out
+    for _ in range(61):
+        _reason(
+            lambda: _execute(
+                svc,
+                lambda r: ask(
+                    RUNNER_UID,
+                    op="token-issue",
+                    request_id=r["request_id"],
+                    sandbox_id="s",
+                    actions=["echo.one"],
+                ),
+                eid="exec-nothing",
+                resume=True,
+            )
+        )
+
+    def quiet(req):
+        out = ask(
+            RUNNER_UID,
+            op="token-issue",
+            request_id=req["request_id"],
+            sandbox_id="sandbox-pool",
+            actions=["echo.one"],
+        )
+        call = {
+            "op": "token-call",
+            "token": out["result"]["secret"],
+            "action": "echo.one",
+            "params": {"text": "x"},
+        }
+        return out, ask(POOL_UID, **call)
+
+    issued, call = _execute(svc, quiet, actor="profile:other", eid="exec-quiet")
+    assert issued["ok"], issued
+    assert call["ok"], f"another program on the same pool uid was locked out: {call}"
+    # an unknown token is a pre-admission refusal: it does count
+    for _ in range(61):
+        ask(POOL_UID, op="token-call", token=UNKNOWN, action="echo.one")
+    assert ask(POOL_UID, op="token-call", token="x", action="echo.one")["error"] == "rate-limited"
 
 
 def test_a_peer_is_listed_once_across_the_four_roles(tmp_path):
@@ -581,3 +793,112 @@ def test_a_state_directory_copy_keeps_the_tokens_state(tmp_path):
     shutil.copytree(tmp_path / "state", tmp_path / "copy")
     again = _svc(tmp_path, state="copy")
     assert _reason(lambda: again.token_call(tok.secret, "echo.one", {"text": "x"})) == "token-spent"
+
+
+# -- spend outcomes, the sweep and retention --------------------------------------------------------
+
+
+def test_spend_outcomes(tmp_path):
+    svc = _svc(tmp_path)
+
+    def program(req):
+        tok = _issue(svc, req)
+        tid = tok.claims["token_id"]
+        return [
+            _reason(lambda: svc.spend_token(RUNNER, tid, "paused")),
+            _reason(lambda: svc.spend_token(RUNNER, tid, "abandoned")),
+            _reason(lambda: svc.token_status(AGENT, tid)),
+            _reason(lambda: svc.spend_token(AGENT, tid)),
+        ]
+
+    assert _execute(svc, program) == [
+        "token-not-paused",
+        "invalid-params",
+        "not-a-codemode-runner",
+        "not-a-codemode-runner",
+    ]
+    spends = [d for d in svc.state.audit_records() if d["operation"] == "token-spend"]
+    assert spends[-1]["args"] == {"outcome": "finished"} and spends[-1]["outcome"] == "ok"
+
+
+def test_a_crashed_run_is_spent_and_never_resumes(tmp_path, monkeypatch):
+    clock = Clock()
+    svc = _svc(tmp_path, clock=clock)
+
+    def program(req):
+        tok = _issue(svc, req)
+        monkeypatch.setattr(svc.state, "instance_alive", lambda iid: False)  # its broker is gone
+        swept = svc.sweep_tokens(force=True)
+        monkeypatch.undo()
+        return tok, swept, _reason(lambda: svc.token_call(tok.secret, "echo.one", {"text": "x"}))
+
+    tok, swept, after = _execute(svc, program)
+    assert swept["crashed"] == 1 and after == "token-spent"
+    doc = svc.tokens.token(tok.claims["token_id"])
+    assert (doc["state"], doc["outcome"]) == ("spent", "crashed")
+    assert svc.tokens.execution(doc["exec_key"])["state"] == "crashed"
+    assert _reason(lambda: _execute(svc, lambda r: _issue(svc, r), resume=True)) == (
+        "execution-not-resumable"
+    )
+
+
+def test_a_crashed_paused_run_stays_resumable(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+
+    def program(req):
+        tok = _issue(svc, req)
+        svc.token_submit(tok.secret, "echo.one", {"text": "later"})
+        monkeypatch.setattr(svc.state, "instance_alive", lambda iid: False)
+        svc.sweep_tokens(force=True)
+        monkeypatch.undo()
+
+    _execute(svc, program)
+    assert _execute(svc, lambda r: _issue(svc, r), resume=True).claims["max_calls"] == 49
+
+
+def test_the_sweep_drops_expired_live_entries_and_old_executions(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, clock=clock)
+
+    def program(req):
+        tok = _issue(svc, req, ttl_s=5)
+        clock.advance(6)
+        return tok, svc.sweep_tokens(force=True)
+
+    tok, swept = _execute(svc, program)
+    assert swept["expired"] == 1 and not list((svc.tokens.root / "live").glob("*.json"))
+    clock.advance(6 * 86400)
+    assert svc.sweep_tokens(force=True)["removed"] == 0, "removed before the retention passed"
+    clock.advance(2 * 86400)
+    assert svc.sweep_tokens(force=True)["removed"] == 1
+    assert svc.tokens.token(tok.claims["token_id"]) is None
+    assert not list((svc.tokens.root / "secrets").glob("*.json"))
+    # the id is free again once its execution is gone
+    assert _execute(svc, lambda r: _issue(svc, r)).claims["execution_id"] == "exec-0001"
+
+
+def test_the_store_lock_nests_and_still_excludes_other_threads(tmp_path):
+    from homelabnext.broker.tokens import TokenStore
+
+    store = TokenStore(tmp_path)
+    order, done = [], threading.Event()
+
+    def other():
+        with store.locked():
+            order.append("other")
+
+    def nested():
+        with store.locked():
+            with store.locked():  # nested in one thread: no second flock, no deadlock
+                t = threading.Thread(target=other, daemon=True)
+                t.start()
+                t.join(0.3)
+                order.append("inner" if t.is_alive() else "other got in")
+            order.append("outer")
+        t.join(5)
+        done.set()
+
+    threading.Thread(target=nested, daemon=True).start()  # a deadlock fails, never hangs
+    assert done.wait(10), "a nested entry deadlocked on its own lock"
+    assert order == ["inner", "outer", "other"], order
+    assert store._fd is None and store._depth == 0

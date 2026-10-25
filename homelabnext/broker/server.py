@@ -3,7 +3,7 @@
 
 ``hnx broker serve`` (ADR-0017, stage 2a).  Identity is authenticated by the kernel: the server
 reads the connecting process's credentials (``SO_PEERCRED``; Linux only, see below) and maps its
-uid through the manifest (``schemas/broker/manifest`` 1.4):
+uid through the manifest (``schemas/broker/manifest`` 1.7):
 
 * ``callers: [{uid | user, profile}]`` - an agent's process; it acts as exactly that profile;
 * ``approval_relays: [{uid | user, issuer}]`` - a process that authenticated a human (the hub
@@ -14,7 +14,10 @@ uid through the manifest (``schemas/broker/manifest`` 1.4):
   capability token for a ``codemode.execute`` whose handler is running, and spends it;
 * ``codemode.sandboxes: [{uid | user, sandbox_id?}]`` (1.7) - a sandbox: it may only present a
   token, and the token's actor is the one it acts as.  With ``sandbox_id`` the peer is that one
-  sandbox, and a token bound to another is refused ``token-sandbox-mismatch``.
+  sandbox, and only its tokens are accepted from it; a peer without one is a pool, and a token
+  bound to a dedicated sandbox is refused from it (both ``token-sandbox-mismatch``).  A refusal
+  after a token was admitted is not counted against the peer's refusal limit (the token's cap
+  bounds it), and the runner is exempt from the limit, like a relay.
 
 A peer in neither list is refused (``unknown-caller``) before its request is read, and audited;
 the server answers at once and closes without waiting for, or parsing, anything it sent.
@@ -42,10 +45,12 @@ op                        peer    fields
                                   ``request_id`` (filters), ``tail`` (default 50, max 500)
 ``token-issue``           runner  ``request_id``, ``sandbox_id``, ``actions``, ``max_calls``,
                                   ``ttl_s``: ``{secret, claims}``
-``token-spend``           runner  ``token_id``
+``token-spend``           runner  ``token_id``, ``outcome`` (``finished`` | ``paused``)
 ``token-status``          runner  ``token_id``
-``token-call`` /          sandbox ``token``, ``action``, ``params``, ``target``
-``token-submit``
+``token-call`` /          sandbox ``token``, ``action``, ``params``, ``target``: ``{result |
+``token-submit``                  state: pending, request_id, request_digest, target?}``
+``token-run``             sandbox ``token``, ``request_id`` (a request an earlier token of the
+                                  execution paused on): ``{result, request_id, request_digest}``
 ========================  ======  ===========================================================
 
 The body never names the actor: a top-level ``actor``, ``caller`` (outside ``audit``), ``as``,
@@ -169,13 +174,14 @@ RELAY_OPS: dict[str, frozenset[str]] = {
 #: what a Code Mode runner may ask (manifest 1.7 ``codemode.runners``)
 RUNNER_OPS: dict[str, frozenset[str]] = {
     "token-issue": frozenset({"request_id", "sandbox_id", "actions", "max_calls", "ttl_s"}),
-    "token-spend": frozenset({"token_id"}),
+    "token-spend": frozenset({"token_id", "outcome"}),
     "token-status": frozenset({"token_id"}),
 }
 #: what a sandbox may ask: only calls made with a token (manifest 1.7 ``codemode.sandboxes``)
 SANDBOX_OPS: dict[str, frozenset[str]] = {
     "token-call": frozenset({"token", "action", "params", "target"}),
     "token-submit": frozenset({"token", "action", "params", "target"}),
+    "token-run": frozenset({"token", "request_id"}),
 }
 _TABLES = {"caller": CALLER_OPS, "relay": RELAY_OPS, "runner": RUNNER_OPS, "sandbox": SANDBOX_OPS}
 #: top-level fields that would name the actor: the transport says who is calling, never the body
@@ -187,7 +193,7 @@ _AUDIT_OPS = frozenset(
     {"call", "submit", "status", "run", "cancel", "approve", "deny", "token-issue", "token-spend"}
 )
 #: a transport refusal of a token op is audited as the operation it carries
-_AUDITED_AS = {"token-call": "call", "token-submit": "submit"}
+_AUDITED_AS = {"token-call": "call", "token-submit": "submit", "token-run": "run"}
 _MAX_NOTE = 2000
 _MAX_NAME = 64
 
@@ -351,7 +357,13 @@ def _from_exception(exc: BrokerError) -> dict[str, Any]:
         else "BrokerError"
     )
     reason = getattr(exc, "reason", "") or type(exc).__name__
-    return _error(reason, str(exc), kind)
+    out = _error(reason, str(exc), kind)
+    for field in ("request_id", "request_digest"):  # a refusal of a request that was built
+        if isinstance(getattr(exc, field, None), str):
+            out[field] = getattr(exc, field)
+    if getattr(exc, "admitted", False):
+        out["_admitted"] = True  # internal: popped before the answer is sent
+    return out
 
 
 def _jsonable(value: Any) -> Any:
@@ -413,7 +425,9 @@ def handle_request(
     token = TRANSPORT_PEER.set(f"uid:{uid}")
     try:
         who = peers.lookup(uid)
-        limited = limiter if who is None or who.role != "relay" else None
+        # relays (a person's decisions) and the Code Mode runner (it acts for every agent: one
+        # program's refusals must not lock the others out) are exempt
+        limited = limiter if who is None or who.role not in ("relay", "runner") else None
         if limited is not None:
             over, first = limited.check(uid)
             if over:
@@ -427,12 +441,17 @@ def handle_request(
             )
         else:
             response = _handle(svc, who, raw, problem)
+        # a sandbox's call refused after its token was admitted is bounded by the token's cap
+        # (and is another program's business on a shared pool uid): only refusals before
+        # admission, an unknown token above all, count against the peer
+        admitted = bool(response.pop("_admitted", False))
         # every refusal counts, whatever its class: not-pending is a plain BrokerError, and an
         # agent looping run on a finished request must not write one audit record per try
         if (
             limited is not None
             and not response.get("ok")
             and response.get("error") not in NOT_REFUSALS
+            and not admitted
         ):
             limited.refused(uid)
         return response
@@ -578,21 +597,29 @@ def _runner_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, An
         raise _BadField("token_id is a non-empty string")
     if op == "token-status":
         return svc.token_status(runner, tid)
-    svc.spend_token(runner, tid)
-    return {"token_id": tid, "state": "spent"}
+    outcome = body.get("outcome", "finished")
+    if not isinstance(outcome, str):
+        raise _BadField("outcome is finished or paused")
+    svc.spend_token(runner, tid, outcome)
+    return {"token_id": tid, "state": "spent", "outcome": outcome}
 
 
 def _sandbox_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:
+    if op == "token-run":
+        if not isinstance(body.get("token"), str):
+            raise _BadField("token is a string")
+        sandbox = who.sandbox_id or ""
+        return svc.token_run(body["token"], _rid(body), sandbox_id=sandbox)
     action, params, token = body.get("action"), body.get("params", {}), body.get("token")
     if not isinstance(action, str) or not action:
         raise _BadField("action is a non-empty string")
     if not isinstance(token, str):
         raise _BadField("token is a string")  # the value is never repeated
-    kw = {"target": body.get("target"), "sandbox_id": who.sandbox_id}
+    # the peer's sandbox: one dedicated sandbox, or "" for a pool (see the module doc)
+    kw = {"target": body.get("target"), "sandbox_id": who.sandbox_id or ""}
     if op == "token-call":
-        return {"result": svc.token_call(token, action, params, **kw)}
-    rid = svc.token_submit(token, action, params, **kw)
-    return {"request_id": rid, "state": "pending", "paused": True}
+        return svc.token_call(token, action, params, **kw)
+    return svc.token_submit(token, action, params, **kw)
 
 
 def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any]) -> Any:

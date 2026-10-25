@@ -33,9 +33,13 @@ def _raise(response: Mapping[str, Any]) -> None:
     message = str(response.get("message") or reason)
     kind = response.get("kind")
     if kind == "Denied":
-        raise Denied(message, reason=reason)
-    err = InvalidArguments(message) if kind == "InvalidArguments" else BrokerError(message)
-    err.reason = reason  # type: ignore[attr-defined]
+        err: BrokerError = Denied(message, reason=reason)
+    else:
+        err = InvalidArguments(message) if kind == "InvalidArguments" else BrokerError(message)
+        err.reason = reason  # type: ignore[attr-defined]
+    for field in ("request_id", "request_digest"):  # the request a refusal was about, if built
+        if isinstance(response.get(field), str):
+            setattr(err, field, response[field])
     raise err
 
 
@@ -171,8 +175,8 @@ class BrokerClient:
             ttl_s=ttl_s,
         )
 
-    def token_spend(self, token_id: str) -> dict[str, Any]:
-        return self.request("token-spend", token_id=token_id)
+    def token_spend(self, token_id: str, outcome: str = "finished") -> dict[str, Any]:
+        return self.request("token-spend", token_id=token_id, outcome=outcome)
 
     def token_status(self, token_id: str) -> dict[str, Any]:
         return self.request("token-status", token_id=token_id)
@@ -184,10 +188,12 @@ class BrokerClient:
         params: Mapping[str, Any] | None = None,
         *,
         target: str | None = None,
-    ) -> Any:
-        """A call made with a token (sandbox only): the actor is the token's."""
+    ) -> dict[str, Any]:
+        """A call made with a token (sandbox only), as the token's actor: ``{result, request_id,
+        request_digest}``, or ``{state: pending, ...}`` when it needs approval (the token is
+        paused)."""
         fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
-        return self.request("token-call", **fields)["result"]
+        return self.request("token-call", **fields)
 
     def token_submit(
         self,
@@ -197,6 +203,11 @@ class BrokerClient:
         *,
         target: str | None = None,
     ) -> dict[str, Any]:
-        """``{request_id, state, paused}``: the token is paused from here on."""
+        """``{state: pending, request_id, request_digest}``: the token is paused from here on."""
         fields = {"token": token, "action": action, "params": dict(params or {}), "target": target}
         return self.request("token-submit", **fields)
+
+    def token_run(self, token: str, request_id: str) -> dict[str, Any]:
+        """Run the request an earlier token of the execution paused on, once approved
+        (sandbox only): ``{result, request_id, request_digest}``."""
+        return self.request("token-run", token=token, request_id=request_id)

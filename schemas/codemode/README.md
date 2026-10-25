@@ -24,16 +24,21 @@ request from the broker.
 
 **Reasons.** A denied or failed call carries the broker's own reason exactly as the broker gives
 it (any reason but the success ones `allowed`, `approved` and `approval-required`), or, for a call
-refused before it reached the broker, `token-expired`, `token-action-not-allowed` or
-`call-cap-reached` (the sandbox's broker client), `broker-unreachable` or `rate-limited` (the
-transport refused the peer before reading a request). Such a call has no request id or digest and
-is never journalled, so a resume calls again with its new token; every other call has both.
+refused before the broker built a request for it, a token refusal by the sandbox's client or the
+broker's token check (`TOKEN_REFUSALS` of `conformance/protocols/broker.py`: `token-invalid`,
+`token-sandbox-mismatch`, `token-expired`, `token-spent`, `token-paused`,
+`token-action-not-allowed`, `call-cap-reached`, `token-request-not-paused`,
+`request-not-approved`), `broker-unreachable` or `rate-limited` (the transport refused the peer
+before reading a request). Such a call has no request id or digest and is never journalled, so a
+resume calls again with its new token; every other call has both, from the broker's answer.
 
 **Journal and tokens.** The journal is append-only and the latest record for a step counts: a
 pending record is followed by the settled one once the approved request runs. Request digests are
 the broker's (secret arguments enter them keyed with its digest key), so the runner takes them from
 the broker's answers and never computes them. Every run of an execution, its start and each
-resume, gets a fresh token bound to that run's `codemode.execute` request id.
+resume, gets a fresh token bound to that run's `codemode.execute` request id. The call cap is the
+execution's, in total across its runs: a resume's token carries what is left of it. Only a paused
+execution resumes; a finished one never does (`docs/broker.md`, "Code Mode capability tokens").
 
 **Runtime rules** the schemas cannot express, for the runner and the broker to enforce and the
 `codemode-runner` contract (CM-5) to check:

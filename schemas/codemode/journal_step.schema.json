@@ -50,7 +50,7 @@
           "approval-required"
         ]
       },
-      "description": "Why the step was denied or failed: the broker's own reason (never a success reason). Calls refused before they reached the broker are not journalled, so a resume calls again with its new token."
+      "description": "Why the step was denied or failed: the broker's own reason (never a success reason). Calls refused before the broker built a request for them (a token refusal by the sandbox's client or the broker's token check, broker-unreachable, rate-limited) are not journalled, so a resume calls again with its new token."
     },
     "result": {},
     "result_digest": {
@@ -117,9 +117,15 @@
         "reason": {
           "not": {
             "enum": [
+              "token-invalid",
+              "token-sandbox-mismatch",
               "token-expired",
+              "token-spent",
+              "token-paused",
               "token-action-not-allowed",
               "call-cap-reached",
+              "token-request-not-paused",
+              "request-not-approved",
               "broker-unreachable",
               "rate-limited"
             ]
