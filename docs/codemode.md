@@ -2,9 +2,9 @@
 # Code Mode build plan
 
 The order in which [ADR-0031](adr/0031-code-mode-through-the-broker.md) (proposed) is built.
-Nothing here is built yet. Steps tagged **PUBLIC-NOW** are provable in CI with fakes, like the
-[build order](build-order.md)'s P phases; steps tagged **SERVER** need the lab and are
-documented, not run, here.
+CM-1 and CM-3 have landed (CM-3 below); nothing else here is built yet. Steps tagged
+**PUBLIC-NOW** are provable in CI with fakes, like the [build order](build-order.md)'s P phases;
+steps tagged **SERVER** need the lab and are documented, not run, here.
 
 The rule from the build order holds: **contracts before services.** The executor and runner
 contracts, with their reference fakes and mutants, land before any real sandbox does, and the
@@ -22,7 +22,7 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 |---|---|---|---|
 | CM-1 | PUBLIC-NOW | ADR-0031 (proposed) and this plan | the ADR log and doc-fact tests pass |
 | CM-2 | PUBLIC-NOW | Schemas under `schemas/codemode/`: execution request and result (`status` ok, paused, denied, error, limit), capability token claims, step-journal record; examples, negatives, frozen baselines | `make schemas` passes; every negative is refused for its stated reason |
-| CM-3 | PUBLIC-NOW | `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the MCP catalog and the broker manifest and writes, per agent profile, the typed stubs and the search index, from each action's argument spec and result schema; generated marker; goldens from `examples/` | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
+| CM-3 | PUBLIC-NOW | **Landed.** `hnx codemode gen [--check]` in `homelabnext/codemode/`: reads the broker manifest (its grants, actions and handler documents) and writes, per agent profile, the typed stubs and the search index, from each action's argument spec; generated marker; goldens from `examples/` in `examples/codemode/<profile>/` | `--check` fails on a hand edit and on a manifest change; a profile's output names only its granted actions; wired into `make gates` |
 | CM-4 | PUBLIC-NOW | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
 | CM-5 | PUBLIC-NOW | The runner and the `codemode-runner` capability: `codemode.execute` as a broker action whose handler is the runner; the `codemode` tool class and catalog record for search and describe; token issue through the broker; step journal; pause on `submit`, resume without replay; denied calls as values. Suite with the five MUST checks and mutants | suite green against the fake broker (`conformance/fakes/`); G-13 stays green with the new action and record; mutants caught |
 | CM-6 | PUBLIC-NOW | Golden suites `codemode-<role>` against the fakes, with the same tasks in classic MCP mode as the baseline; scorers for the answer, the broker call count, denied calls and ungranted actions; the G-02 corpus placed inside tool results a program reads | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
@@ -32,6 +32,29 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 
 Phase 1 is done when CM-9 is, both contracts are green with every mutant caught, and at least
 one role has a recorded adoption decision.
+
+### CM-3: the generator
+
+```bash
+hnx codemode gen            # examples/broker/manifest.yml -> examples/codemode/<profile>/
+hnx codemode gen --check    # writes nothing; exit 1 on drift (make gates, CI)
+hnx codemode gen --manifest path/to/manifest.yml --out build/codemode   # another manifest
+```
+
+Per profile the manifest grants actions to, `<out>/<profile>/` gets three files from one model
+(`homelabnext/codemode/model.py`): `types.d.ts` (a `declare namespace` per action prefix, one
+function per action taking the params as one object), `stubs.pyi` (a class per namespace bound to a
+module-level name, keyword-only parameters) and `search.json` (`name`, `call`, `summary`, `tier`,
+`needs_approval`). Which actions a profile sees is asked of `homelabnext.broker.decide` with one
+shadow probe per granted action, as `hnx broker actions` lists them, so an ungranted action, one
+above the grant's `max_tier` or one with no handler never appears, and `needs-approval` becomes
+`needs_approval: true`. An exec action's parameters are its handler's `params_schema`; a lane
+action's are the lane's (`{name, content}`, or `{note, body?, slug?}` for a records inbox) and its
+result is `LaneWrite` (`{path, bytes, digest}`). A handler declares no result schema yet, so an
+exec action returns `unknown`/`Any`. The MCP catalog is not read yet: the `codemode` tool class and
+its catalog record arrive with the runner (CM-5). `--check` fails on a file that differs (a hand
+edit; a manifest or handler change), one that is missing, and a marked file no profile renders any
+more; `gen` writes and deletes those.
 
 ## Later phases
 
