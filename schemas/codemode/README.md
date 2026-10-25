@@ -36,8 +36,18 @@ the broker's answers and never computes them. Every run of an execution, its sta
 resume, gets a fresh token bound to that run's `codemode.execute` request id.
 
 **Runtime rules** the schemas cannot express, for the runner and the broker to enforce and the
-`codemode-runner` contract (CM-5) to check: the actor is the enclosing broker request's and matches
-the token, the result and the journal; a token's `expires_at` is after `issued_at` and no later
-than the run's wall budget allows; a spent `token_id` is refused; calls are in step order with
-unique steps and every `pending` entry matches a pending call; byte sizes (value, result, logs) are capped by `max_output_bytes`, since `maxLength`
-counts characters.
+`codemode-runner` contract (CM-5) to check:
+
+- a request without `resume` whose execution id already exists is refused, so two runs never
+  share a journal; a resume needs a paused execution of the same actor and code digest;
+- the actor is the enclosing broker request's and matches the token, the result and the journal;
+- every run (start or resume) gets a fresh token bound to its own request id; `expires_at` is
+  after `issued_at` and within the run's wall budget; a spent `token_id` is refused;
+- a call's outcome, reason, request id and digest are the broker's answer for that call, as its
+  audit record holds it (the schema checks only that a reason is not a success reason, since the
+  broker's vocabulary is not a closed list);
+- calls are in step order with unique steps, and every `pending` entry matches a pending call;
+- the journal is append-only and a step's only transition is pending to settled: nothing is
+  appended after an `ok`, `denied` or `error` record;
+- byte sizes (value, result, logs) are capped by `max_output_bytes`, since `maxLength` counts
+  characters.
