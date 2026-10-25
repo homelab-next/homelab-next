@@ -126,12 +126,14 @@ suite_budgets = [
   # baseline-control roles (21 roles, each config hook run end to end against fake daemons), 1080
   # since the serving roles (model store, vLLM, Open WebUI): about 0.85s a playbook start and 0.35s
   # a task, spread thinly over 445 tests, measured 850-920s on CI runners after model_store's
-  # per-file stats became one module call
-  "tests/roles = 1080",
+  # per-file stats became one module call; 1200 since main's own CI measured 1085s and 1096s
+  # (2026-10-24/25), over 1080 with no test changed
+  "tests/roles = 1200",
   "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
-  # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs
-  "tests/graph = 90",
+  # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
+  # 100 since CI measured 91s with 30 ADRs
+  "tests/graph = 100",
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
@@ -139,8 +141,9 @@ suite_budgets = [
   # X-10 over all of them, the lab adapters over their stand-ins and records' interleaving check
   # (both wait in real time).  main runs it under the 60s default on CI; on a loaded 4-core box
   # this branch measured +11% CPU (54s vs 49s) and +9-39% wall over main, the excess mostly those
-  # waits: 90 is 1.5x the default it would otherwise sit at
-  "tests/conform = 90",
+  # waits: 90 is 1.5x the default it would otherwise sit at; 100 since CI measured 90.3s once the
+  # orchestration suite reached 17 checks
+  "tests/conform = 100",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed
