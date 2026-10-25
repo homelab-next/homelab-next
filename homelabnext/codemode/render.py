@@ -47,8 +47,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
 import stat
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -562,11 +562,13 @@ def _destinations(out: Path, files: Mapping[str, str]) -> list[str]:
 
 
 def _replace(dest: Path, data: bytes) -> None:
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+    # a fresh name created exclusively ("x" refuses any existing path, a symlink included) with
+    # the mode the umask gives every other file in the checkout; mkstemp's 0600 would leave the
+    # goldens unreadable to other users, and a fixed chmod would override the umask
+    tmp = dest.parent / f".{dest.name}.{secrets.token_hex(8)}.tmp"
     try:
-        with os.fdopen(fd, "wb") as fh:
+        with open(tmp, "xb") as fh:
             fh.write(data)
-        os.chmod(tmp, 0o644)
         os.replace(tmp, dest)
     except BaseException:
         with contextlib.suppress(OSError):

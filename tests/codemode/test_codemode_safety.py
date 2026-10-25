@@ -14,6 +14,7 @@ import ast
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -453,3 +454,18 @@ def test_yaml_with_integer_keys_reaches_the_cli_as_exit_2(tmp_path, capsys):
     assert code == 2
     assert "Traceback" not in capsys.readouterr().err
     assert not os.path.exists(tmp_path / "out")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+@pytest.mark.parametrize(("umask", "mode"), [(0o022, 0o644), (0o027, 0o640), (0o077, 0o600)])
+def test_written_files_take_their_mode_from_the_umask(tmp_path, umask, mode):
+    # no fixed chmod: a generated golden is created like any other file of the checkout
+    files = render(EXAMPLE / "manifest.yml")
+    old = os.umask(umask)
+    try:
+        write(tmp_path, files)
+    finally:
+        os.umask(old)
+    for rel in files:
+        assert stat.S_IMODE((tmp_path / rel).stat().st_mode) == mode, rel
+    assert not list(tmp_path.rglob("*.tmp"))
