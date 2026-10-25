@@ -367,8 +367,8 @@ def test_journal_records_are_checked_when_read(tmp_path):
 
 def test_the_journal_tightens_and_takes_over_what_a_crash_left(tmp_path):
     (tmp_path / "runner" / "journal").mkdir(parents=True)
-    # group-readable: looser than the journal allows, and not world-readable
-    os.chmod(tmp_path / "runner" / "journal", 0o750)
+    # traversable by others but not readable: looser than the journal allows
+    os.chmod(tmp_path / "runner" / "journal", 0o711)
     j = Journal(tmp_path / "runner")
     assert (j.root.stat().st_mode & 0o777) == 0o700, "an existing directory was not tightened"
     j._dir(AGENT, "exec-0001").mkdir(mode=0o700)  # a crash between mkdir and meta.json
