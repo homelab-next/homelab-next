@@ -1,6 +1,8 @@
 ---
 title: Status sources
 type: status-catalog
+summary: 'The status hub menu: every status source a service offers, with its module, kind, interval, stale-after window and what it reports.'
+summary_generated: true
 generated_by: hnx status catalog generate
 ---
 

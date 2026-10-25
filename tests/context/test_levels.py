@@ -514,3 +514,35 @@ def test_a_generator_marked_summary_is_generated_not_authored():
         assert summary_of(text, "a.md")[1] == "authored", bad
     broken = f"---\nsummary: {'x' * 200}\n{GENERATED_KEY}: true\n---\n# T\n\nProse.\n"
     assert summary_of(broken, "a.md") == ("Prose.", "first-paragraph")
+
+
+def test_generated_summary_lines_parse_back_and_are_marked_generated():
+    from homelabnext.context.levels import generated_summary_lines
+
+    text = "Pages: what a: b covers"
+    block = generated_summary_lines(text)
+    fm, _ = front_matter(f"---\n{block}\n---\nbody\n")
+    assert fm == {"summary": text, "summary_generated": True}
+
+
+def test_generated_summary_lines_refuse_an_invalid_summary():
+    from homelabnext.context.levels import generated_summary_lines
+
+    for bad in ("", "two\nlines", "x" * 161):
+        with pytest.raises(ValueError):
+            generated_summary_lines(bad)
+
+
+def test_generator_written_docs_pages_carry_a_generated_summary():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    for rel in (
+        "docs/scripts/catalog.md",
+        "docs/status/sources.md",
+        "docs/strategy/README.md",
+        "docs/terms.md",
+    ):
+        fm, _ = front_matter((root / rel).read_text(encoding="utf-8"))
+        assert fm is not None and fm.get("summary_generated") is True, rel
+        assert check_summary(fm["summary"]) is None, rel

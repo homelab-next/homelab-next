@@ -87,6 +87,7 @@ __all__ = [
     "find_section",
     "first_paragraph",
     "front_matter",
+    "generated_summary_lines",
     "headings",
     "is_markdown",
     "memo_bytes",
@@ -513,6 +514,25 @@ def summary_of(text: str, path: str, doc_id: str = "") -> tuple[str, str]:
         return authored, ("generated" if front.get(GENERATED_KEY) is True else "authored")
     para = first_paragraph(text)
     return (para, "first-paragraph") if para else ("", "none")
+
+
+def generated_summary_lines(summary: str) -> str:
+    """The ``summary:`` and ``summary_generated: true`` front-matter lines a generator writes for a
+    summary it derived (no trailing newline).  Written by the YAML emitter, so every character is
+    escaped as YAML needs and parses back unchanged.  The text must pass :func:`check_summary`."""
+    problem = check_summary(summary)
+    if problem:
+        raise ValueError(problem)
+    import yaml
+
+    body = yaml.safe_dump(
+        {"summary": summary, GENERATED_KEY: True},
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+        width=1 << 30,
+    )
+    return body.rstrip("\n")
 
 
 def check_summary(value: Any) -> str | None:
