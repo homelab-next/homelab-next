@@ -28,7 +28,11 @@ WHY = {
     "execution_result.limit-unnamed": ("$", "'limit' is a required property"),
     "execution_result.ok-with-limit": ("$", "under {'required': ['limit']}"),
     "execution_result.denied-without-reason": ("calls/0", "'reason' is a required property"),
-    "execution_result.reason-not-in-vocabulary": ("calls/0/reason", "is not one of"),
+    "execution_result.denied-with-a-success-reason": ("calls/0/reason", "should not be valid"),
+    "execution_result.replayed-pending-call": ("calls/1", "{'replayed': {'const': True}}"),
+    "execution_result.log-line-with-line-separator": ("logs/0", "does not match"),
+    "execution_result.duplicate-pending": ("pending", "non-unique"),
+    "execution_result.output-limit-not-truncated": ("$", "'truncated' is a required property"),
     "execution_result.broker-call-without-request-id": ("calls/0", "'request_id' is a required"),
     "execution_result.ok-with-error": ("$", "under {'required': ['error']}"),
     "execution_result.ok-without-value": ("$", "'value' is a required property"),
@@ -50,6 +54,8 @@ WHY = {
     "journal_step.ok-without-result": ("$", "'result' is a required property"),
     "journal_step.pending-with-result": ("$", "{'required': ['result']}"),
     "journal_step.negative-step": ("step", "minimum"),
+    "journal_step.client-refusal-journalled": ("reason", "should not be valid"),
+    "journal_step.denied-with-result": ("$", "{'required': ['result']}"),
 }
 
 
@@ -115,3 +121,34 @@ def test_an_ok_call_carries_no_reason():
     doc = json.loads((DIR / "examples" / "execution_result.ok.json").read_text())
     doc["calls"][0]["reason"] = "not-granted"
     assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)
+
+
+#: what the broker answers with (homelabnext/broker, docs/broker.md) for calls it did not run
+BROKER_REFUSALS = [
+    "default-deny", "not-granted", "invalid-params", "invalid-target", "too-many-pending",
+    "lane-quota-exceeded", "lane-rate-exceeded", "handler-failed", "handler-timeout",
+    "handler-spawn-failed", "secret-unavailable", "internal-error", "busy", "audit-unavailable",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("reason", BROKER_REFUSALS)
+def test_a_broker_refusal_reason_is_recorded_as_given(reason):
+    doc = json.loads((DIR / "examples" / "execution_result.lane-quota.json").read_text())
+    doc["calls"][0]["reason"] = reason
+    assert sc.errors_for(_schema("execution_result"), doc, REGISTRY) == []
+
+
+def test_the_success_reasons_excluded_are_the_brokers_own():
+    decision = json.loads((ROOT / "schemas/broker/decision.schema.json").read_text())
+    vocab = set(decision["properties"]["reason"]["enum"])
+    reason = _schema("execution_result")["properties"]["calls"]["items"]["properties"]["reason"]
+    assert set(reason["not"]["enum"]) == {"allowed", "approved", "approval-required"} <= vocab
+
+
+def test_a_rate_limited_call_has_no_request_id():
+    doc = json.loads((DIR / "examples" / "execution_result.lane-quota.json").read_text())
+    doc["calls"][0]["reason"] = "rate-limited"
+    assert sc.errors_for(_schema("execution_result"), doc, REGISTRY)
+    for k in ("request_id", "request_digest"):
+        del doc["calls"][0][k]
+    assert sc.errors_for(_schema("execution_result"), doc, REGISTRY) == []

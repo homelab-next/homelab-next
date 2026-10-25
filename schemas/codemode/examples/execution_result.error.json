@@ -1,7 +1,7 @@
 {
   "execution_id": "exec-0006",
   "actor": "profile:triage",
-  "code_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "code_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
   "status": "error",
   "error": {
     "kind": "syntax",

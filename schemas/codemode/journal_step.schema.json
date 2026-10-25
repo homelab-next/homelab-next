@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/codemode/journal_step/1.0",
   "x-draft": "ADR-0031 (proposed): no runner yet; not frozen, may change before acceptance",
   "title": "Code Mode step-journal record",
-  "description": "One step of an execution, keyed by (execution_id, step) and bound to the actor and the program (code_digest). On resume the runner serves a recorded ok, denied or error step instead of calling the broker again only when the actor, the code digest and the step's request digest all match; a mismatch is a different call and is refused, never replayed. A pending step records the broker request waiting for approval: on resume, once approved, the runner runs that request_id (the approval binds to its digest) instead of submitting a new one. result is the broker's redacted result and result_digest the sha256 of its canonical JSON.",
+  "description": "One record of a step of an execution, keyed by (execution_id, step) and bound to the actor and the program (code_digest). The journal is append-only and the latest record for a step is the one that counts: a pending record is followed by the settled one once the approved request runs. On resume the runner serves a settled (ok, denied or error) step instead of calling the broker again only when the actor, the code digest and the step's request digest all match; a mismatch is a different call and is refused, never replayed. A pending step's request is run by its request_id once approved (the approval binds to its digest), never submitted again. Request digests are the broker's (secret arguments enter them keyed with the broker's digest key), so the runner takes them from the broker's answers and never computes them. result is the broker's redacted result, recorded only for an ok step, and result_digest the sha256 of its canonical JSON.",
   "type": "object",
   "properties": {
     "execution_id": {
@@ -41,29 +41,16 @@
       ]
     },
     "reason": {
-      "enum": [
-        "default-deny",
-        "not-granted",
-        "tier-exceeds-grant",
-        "handler-missing",
-        "approval-digest-mismatch",
-        "approval-denied",
-        "approval-self-approved",
-        "approval-expired",
-        "approval-approver-not-allowed",
-        "approval-agent-approver",
-        "approval-time-invalid",
-        "approval-replayed",
-        "not-request-owner",
-        "token-expired",
-        "token-action-not-allowed",
-        "call-cap-reached",
-        "broker-unreachable",
-        "handler-failed",
-        "handler-timeout",
-        "invalid-arguments"
-      ],
-      "description": "Why a call was denied or failed: the broker's own decision reason (broker/decision), or a reason the broker client in the sandbox gives for a call refused before it reached the broker (token-expired, token-action-not-allowed, call-cap-reached, broker-unreachable), which then has no request id or digest."
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "not": {
+        "enum": [
+          "allowed",
+          "approved",
+          "approval-required"
+        ]
+      },
+      "description": "Why the step was denied or failed: the broker's own reason (never a success reason). Calls refused before they reached the broker are not journalled, so a resume calls again with its new token."
     },
     "result": {},
     "result_digest": {
@@ -87,7 +74,10 @@
       "if": {
         "properties": {
           "outcome": {
-            "const": "denied"
+            "enum": [
+              "denied",
+              "error"
+            ]
           }
         },
         "required": [
@@ -97,56 +87,7 @@
       "then": {
         "required": [
           "reason"
-        ],
-        "properties": {
-          "reason": {
-            "enum": [
-              "default-deny",
-              "not-granted",
-              "tier-exceeds-grant",
-              "handler-missing",
-              "approval-digest-mismatch",
-              "approval-denied",
-              "approval-self-approved",
-              "approval-expired",
-              "approval-approver-not-allowed",
-              "approval-agent-approver",
-              "approval-time-invalid",
-              "approval-replayed",
-              "not-request-owner",
-              "token-expired",
-              "token-action-not-allowed",
-              "call-cap-reached"
-            ]
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "outcome": {
-            "const": "error"
-          }
-        },
-        "required": [
-          "outcome"
         ]
-      },
-      "then": {
-        "required": [
-          "reason"
-        ],
-        "properties": {
-          "reason": {
-            "enum": [
-              "broker-unreachable",
-              "handler-failed",
-              "handler-timeout",
-              "invalid-arguments"
-            ]
-          }
-        }
       }
     },
     {
@@ -172,45 +113,23 @@
       }
     },
     {
-      "if": {
-        "not": {
-          "required": [
-            "reason"
-          ],
-          "properties": {
-            "reason": {
-              "enum": [
-                "token-expired",
-                "token-action-not-allowed",
-                "call-cap-reached",
-                "broker-unreachable"
-              ]
-            }
+      "properties": {
+        "reason": {
+          "not": {
+            "enum": [
+              "token-expired",
+              "token-action-not-allowed",
+              "call-cap-reached",
+              "broker-unreachable",
+              "rate-limited"
+            ]
           }
         }
       },
-      "then": {
-        "required": [
-          "request_id",
-          "request_digest"
-        ]
-      },
-      "else": {
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "request_id"
-              ]
-            },
-            {
-              "required": [
-                "request_digest"
-              ]
-            }
-          ]
-        }
-      }
+      "required": [
+        "request_id",
+        "request_digest"
+      ]
     },
     {
       "if": {
@@ -232,14 +151,16 @@
     },
     {
       "if": {
-        "properties": {
-          "outcome": {
-            "const": "pending"
-          }
-        },
-        "required": [
-          "outcome"
-        ]
+        "not": {
+          "properties": {
+            "outcome": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "outcome"
+          ]
+        }
       },
       "then": {
         "not": {

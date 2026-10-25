@@ -59,33 +59,20 @@
             ]
           },
           "reason": {
-            "enum": [
-              "default-deny",
-              "not-granted",
-              "tier-exceeds-grant",
-              "handler-missing",
-              "approval-digest-mismatch",
-              "approval-denied",
-              "approval-self-approved",
-              "approval-expired",
-              "approval-approver-not-allowed",
-              "approval-agent-approver",
-              "approval-time-invalid",
-              "approval-replayed",
-              "not-request-owner",
-              "token-expired",
-              "token-action-not-allowed",
-              "call-cap-reached",
-              "broker-unreachable",
-              "handler-failed",
-              "handler-timeout",
-              "invalid-arguments"
-            ],
-            "description": "Why a call was denied or failed: the broker's own decision reason (broker/decision), or a reason the broker client in the sandbox gives for a call refused before it reached the broker (token-expired, token-action-not-allowed, call-cap-reached, broker-unreachable), which then has no request id or digest."
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "not": {
+              "enum": [
+                "allowed",
+                "approved",
+                "approval-required"
+              ]
+            },
+            "description": "Why a call was denied or failed: the broker's own reason, as its decision and audit records give it (never a success reason), or, for a call refused before it reached the broker, one of token-expired, token-action-not-allowed, call-cap-reached (by the sandbox's broker client), broker-unreachable or rate-limited (the transport refused the peer before reading a request); such a call has no request id or digest."
           },
           "replayed": {
             "type": "boolean",
-            "description": "true when the step was served from the journal on resume instead of calling the broker again; the outcome and reason are the recorded ones"
+            "description": "true when the step was served from the journal on resume instead of calling the broker again (never on a pending call, which a resume runs); the outcome and reason are the recorded ones"
           }
         },
         "required": [
@@ -98,7 +85,10 @@
             "if": {
               "properties": {
                 "outcome": {
-                  "const": "denied"
+                  "enum": [
+                    "denied",
+                    "error"
+                  ]
                 }
               },
               "required": [
@@ -108,56 +98,7 @@
             "then": {
               "required": [
                 "reason"
-              ],
-              "properties": {
-                "reason": {
-                  "enum": [
-                    "default-deny",
-                    "not-granted",
-                    "tier-exceeds-grant",
-                    "handler-missing",
-                    "approval-digest-mismatch",
-                    "approval-denied",
-                    "approval-self-approved",
-                    "approval-expired",
-                    "approval-approver-not-allowed",
-                    "approval-agent-approver",
-                    "approval-time-invalid",
-                    "approval-replayed",
-                    "not-request-owner",
-                    "token-expired",
-                    "token-action-not-allowed",
-                    "call-cap-reached"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "outcome": {
-                  "const": "error"
-                }
-              },
-              "required": [
-                "outcome"
               ]
-            },
-            "then": {
-              "required": [
-                "reason"
-              ],
-              "properties": {
-                "reason": {
-                  "enum": [
-                    "broker-unreachable",
-                    "handler-failed",
-                    "handler-timeout",
-                    "invalid-arguments"
-                  ]
-                }
-              }
             }
           },
           {
@@ -184,29 +125,22 @@
           },
           {
             "if": {
-              "not": {
-                "required": [
-                  "reason"
-                ],
-                "properties": {
-                  "reason": {
-                    "enum": [
-                      "token-expired",
-                      "token-action-not-allowed",
-                      "call-cap-reached",
-                      "broker-unreachable"
-                    ]
-                  }
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "token-expired",
+                    "token-action-not-allowed",
+                    "call-cap-reached",
+                    "broker-unreachable",
+                    "rate-limited"
+                  ]
                 }
               }
             },
             "then": {
-              "required": [
-                "request_id",
-                "request_digest"
-              ]
-            },
-            "else": {
               "not": {
                 "anyOf": [
                   {
@@ -219,6 +153,36 @@
                       "request_digest"
                     ]
                   }
+                ]
+              }
+            },
+            "else": {
+              "required": [
+                "request_id",
+                "request_digest"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "outcome": {
+                  "const": "pending"
+                }
+              },
+              "required": [
+                "outcome"
+              ]
+            },
+            "then": {
+              "not": {
+                "properties": {
+                  "replayed": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "replayed"
                 ]
               }
             }
@@ -257,16 +221,17 @@
         ],
         "additionalProperties": false
       },
-      "description": "The calls waiting for approval, by step, request id and the digest an approval binds to. No free text: an approver reads the request from the broker, never a summary the program could write."
+      "description": "The calls waiting for approval, by step, request id and the digest an approval binds to. No free text: an approver reads the request from the broker, never a summary the program could write.",
+      "uniqueItems": true
     },
     "logs": {
       "type": "array",
       "maxItems": 100,
       "items": {
         "type": "string",
-        "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f]*$",
+        "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]*$",
         "maxLength": 1000,
-        "description": "one line of program output: no newline or control character"
+        "description": "one line of program output: no line break, control character or bidirectional override"
       }
     },
     "limit": {
@@ -292,7 +257,7 @@
         },
         "message": {
           "type": "string",
-          "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f]*$",
+          "pattern": "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]*$",
           "maxLength": 2000,
           "description": "untrusted: the program's own exception text where kind is syntax or runtime"
         }
@@ -453,6 +418,29 @@
         "required": [
           "value"
         ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "limit": {
+            "const": "output"
+          }
+        },
+        "required": [
+          "limit"
+        ]
+      },
+      "then": {
+        "required": [
+          "value",
+          "truncated"
+        ],
+        "properties": {
+          "truncated": {
+            "const": true
+          }
+        }
       }
     }
   ],
