@@ -58,10 +58,46 @@ def test_a_path_outside_the_directory_is_refused(docs):
     assert "not a Markdown page under" in index.check(docs / "README.md")[0]
 
 
-def test_the_real_index_is_current():
+@pytest.mark.parametrize("rel", ["docs/README.md", "docs/adr/README.md"])
+def test_the_real_indexes_are_current(rel):
     from pathlib import Path
 
-    assert index.check(Path(__file__).resolve().parents[2] / "docs" / "README.md") == []
+    assert index.check(Path(__file__).resolve().parents[2] / rel) == []
+
+
+TABLE = (
+    "| Page | One line |\n|---|---|\n"
+    "| [A](a.md) | <!-- hnx:gen:summary:a.md -->Words a.<!-- /hnx:gen --> |\n"
+    "| [B](sub/b.md) | <!-- hnx:gen:summary:sub/b.md -->Words b.<!-- /hnx:gen --> |\n"
+)
+
+
+def test_a_table_index_is_held_like_a_list(docs):
+    path = docs / "README.md"
+    path.write_text(TABLE)
+    assert index.check(path) == []
+    path.write_text(TABLE + "| [A again](a.md) | hand-written |\n")
+    assert any("a.md but has no summary span" in p for p in index.check(path))
+    path.write_text(
+        TABLE + "| [C](a.md) | <!-- hnx:gen:summary:sub/b.md -->Words b.<!-- /hnx:gen --> |\n"
+    )
+    assert any("links a.md but its span is for sub/b.md" in p for p in index.check(path))
+    (docs / "a.md").write_text("---\nsummary: Words | a.\n---\n# A\n")
+    path.write_text(TABLE)
+    assert main(["docs", "index", "generate", str(path)]) == 0  # the pipe arrives in the row
+    assert any("holds `|`, which splits the row" in p for p in index.check(path))
+
+
+def test_several_indexes_in_one_call_fail_if_any_does(docs, capsys):
+    (docs / "other").mkdir()
+    (docs / "other" / "c.md").write_text("---\nsummary: Words c.\n---\n# C\n")
+    other = docs / "other" / "README.md"
+    other.write_text("- [C](c.md): <!-- hnx:gen:summary:c.md -->Words c.<!-- /hnx:gen -->\n")
+    assert main(["docs", "index", "check", str(other)]) == 0
+    assert main(["docs", "index", "check", str(docs / "README.md"), str(other)]) == 1
+    out = capsys.readouterr().out
+    assert "stale: a.md" in out and "docs index: ok" in out  # every index is reported
+    assert main(["docs", "index", "check", str(other), str(docs / "nowhere.md")]) == 2
 
 
 def test_generate_keeps_crlf_and_replaces_the_file_atomically(docs):
