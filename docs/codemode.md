@@ -26,21 +26,28 @@ CM-7 sandbox spike (SERVER) --> CM-8 real executor (SERVER) --> CM-9 one role li
 | CM-4 | PUBLIC-NOW, **landed** | The `codemode-executor` capability: protocol, a reference fake (test-only, not a boundary), a suite with the five MUST checks (no network but the broker, no credentials, limits enforced, disposable, result bounded) and one registered mutant per check | the fake passes; `hnx conform mutants all` catches every new mutant; capability pages regenerated |
 | CM-5 | PUBLIC-NOW | The runner and the `codemode-runner` capability: `codemode.execute` as a broker action whose handler is the runner; the `codemode` tool class and catalog record for search and describe; token issue through the broker; step journal; pause on `submit`, resume without replay; denied calls as values. Suite with the five MUST checks and mutants | suite green against the fake broker (`conformance/fakes/`); G-13 stays green with the new action and record; mutants caught |
 | CM-6 | PUBLIC-NOW | Golden suites `codemode-<role>` against the fakes, with the same tasks in classic MCP mode as the baseline; scorers for the answer, the broker call count, denied calls and ungranted actions; the G-02 corpus placed inside tool results a program reads | both modes run in CI against the fake inference server; the report shows accuracy and turns per mode |
-| CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency | a short decision note picks the executor and records the numbers |
+| CM-7 | SERVER | Sandbox spike on the sandbox host: OpenShell against gVisor, judged against ADR-0031 decision 5; cold start, per-run cost with a warm pool, syscall overhead, real handler latency; a TypeScript executor needs a blocking host call (`Atomics.wait` or a sync bridge) behind the synchronous stubs | a short decision note picks the executor and records the numbers |
 | CM-8 | SERVER | The real executor adapter and an Ansible role for the sandbox host: a warm pool with a fresh child or isolate per run, egress only to the broker (host firewall), no credentials | the CM-4 suite passes against the real executor on staging |
 | CM-9 | SERVER | One role enabled in the private overlay with read actions only (DNS and DHCP lookups, hypervisor nodes and guests, network clients and devices, one lake query) | the correlation task passes on the lab; the live golden run beats MCP mode for that role, or the role stays on MCP mode and the result is recorded |
 
-CM-4 as landed: the contract is `conformance/protocols/codemode_executor.py` (`CodeExecutor.run`
-returns status `ok`, `denied`, `error` or `limit`; the broker is a TCP endpoint and a per-run
-token, never an environment variable), the suite `conformance/suites/codemode_executor.py` (nine
-MUST checks: the five above plus a broker round trip, errors and denials as statuses and an
-unknown language refused; mutants `open-egress`, `env-leak`, `no-timeout`, `reused-state` and
-`unbounded-result`) and the reference page
-[capabilities/codemode-executor](capabilities/codemode-executor.md). The reference fake forks
-each program from a warm Python process that never runs one itself (the warm-pool shape of
-ADR-0031 decision 5) and puts it behind an audit hook: it is test-only and **not an isolation
-boundary**. The suite's programs are Python, so a TypeScript executor (CM-7) needs them written
-for it.
+CM-4 as landed: the contract is `conformance/protocols/codemode_executor.py`, in the vocabulary of
+`schemas/codemode` (PR #64): `CodeExecutor.run` returns status `ok`, `paused`, `denied`, `error`
+or `limit`, an error as `{kind, message}` (one line, at most 2000 characters), the cap that ended
+a run, a value cut to a `truncated` prefix of its pinned JSON, the printed output and the pending
+call of a paused run. The broker is an endpoint the harness serves where the executor declares
+(`broker_bind`) and a token scoped to the run, never an environment variable; the executor owns
+the transport, and its broker client caps calls (`max_calls`, refused as `call-cap-reached`).
+The suite `conformance/suites/codemode_executor.py` has fourteen MUST checks: the five above plus
+a broker round trip, errors, denials, a denial's reason, a pause the program cannot swallow,
+broker errors, the call cap, oversized programs and unknown languages refused. Its mutants are
+`open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap` and
+`pause-catchable`, and the reference page is
+[capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
+programs per language, and a declared language a check has no program for fails it as
+untested. The reference fake forks each program from a warm Python process that never runs one
+itself (the warm-pool shape of ADR-0031 decision 5) and puts it behind an audit hook: it is
+test-only and **not an isolation boundary**. The programs are Python only, so the TypeScript
+executor CM-7 may choose (built in CM-8) needs them written for it.
 
 Phase 1 is done when CM-9 is, both contracts are green with every mutant caught, and at least
 one role has a recorded adoption decision.
@@ -51,7 +58,13 @@ Each is planned as steps like the ones above when phase 1 closes.
 
 2. **Hardening.** An adversarial sandbox suite (escape attempts, egress probes, resource
    exhaustion); the injection-in-results corpus against real models; the live golden and
-   injection evals on a timer with a page on regression.
+   injection evals on a timer with a page on regression. Pending operator authorization, the
+   isolation checks deferred from the CM-4 review: post-cap calls (a capped program must not
+   reach the broker after `run` returns); an environment allowlist and canaries set before the
+   executor is constructed; more egress families (IPv6, `AF_UNIX`) and resolver-based DNS, with
+   UDP judged by what the decoy received; non-root, no capabilities, no-new-privileges, a
+   read-only root, and process-count and scratch-size limits; the token's absence beyond the
+   environment; and more disposable locations.
 3. **Rule approvals.** `rule` as an approver kind in the broker's approval check; a standing-rule
    schema, lint and register in the overlay; checks that a call outside a rule's shape escalates,
    a top tier is never rule-approved, an expired rule approves nothing and rule approvals are
@@ -63,7 +76,7 @@ Each is planned as steps like the ones above when phase 1 closes.
 
 ## Open questions
 
-- OpenShell or gVisor (CM-7), and so the language inside the sandbox (Python or TypeScript; the
+- OpenShell or gVisor (the CM-7 spike), and so the language inside the sandbox (Python or TypeScript; the
   stubs can be generated for either from the same argument specs).
 - Whether a read-only `codemode.execute` variant, whose token reaches only read actions, should
   exist for reader profiles.

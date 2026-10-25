@@ -53,7 +53,14 @@ AUTHORITY_SLOTS = (
     "cap:mcp-catalog",
 )
 #: shared components whose configuration a module can never merge into (no grant opens these)
-NEVER_SHARED = ("cap:secrets", "cap:broker", "cap:mcp-catalog", "cap:records", "cap:orchestration")
+NEVER_SHARED = (
+    "cap:secrets",
+    "cap:broker",
+    "cap:mcp-catalog",
+    "cap:records",
+    "cap:orchestration",
+    "cap:codemode-executor",  # a merged key could widen the sandbox's egress or environment
+)
 #: interchange formats a dataset or a stateful slot exports in (a draft list; additive)
 NEUTRAL_FORMATS = (
     "parquet", "jsonl", "csv", "json", "markdown-tree", "object-tree", "zone-file", "sigma",
@@ -699,7 +706,7 @@ def _defs() -> dict[str, Any]:
             {
                 "target": {
                     "allOf": [ref("cap_ref"), {"not": {"enum": list(NEVER_SHARED)}}],
-                    "description": "The shared component; never secrets, broker, mcp-catalog, records or orchestration, and edge or idp only with an overlay grant.",
+                    "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration or codemode-executor, and edge or idp only with an overlay grant.",
                 },
                 "file": ref("rel_path"),
                 "reason": text(300),

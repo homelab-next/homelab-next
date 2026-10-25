@@ -13,7 +13,7 @@ generated_by: hnx docs capabilities generate
 **The sandbox for one Code Mode program: broker-only egress, no credentials, caps, disposable.**
 
 - Contract: [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py) (`conformance.protocols.codemode_executor:CodeExecutor`)
-- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (10 checks: 9 MUST, 1 SHOULD)
+- Conformance suite: [`conformance.suites.codemode_executor`](../../conformance/suites/codemode_executor.py) (15 checks: 14 MUST, 1 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -22,44 +22,69 @@ Contract for `codemode-executor`: the sandbox that runs one Code Mode program (A
 
 `run` executes one program in a fresh sandbox and returns an `ExecutionResult`.  The
 sandbox is what decision 5 of ADR-0031 describes: it holds nothing and reaches nothing but the
-broker.  The rules, one per suite check:
+broker.  The result's vocabulary is that of `schemas/codemode/execution_result` (a draft that
+lands with the schemas PR, #64; until then this module is the reference).  The rules, one or two
+suite checks each:
 
 a. *No network but the broker.*  The program can open a connection to the broker endpoint it was
    given, and to nothing else: no other address or port, over TCP or UDP, and no name lookup.
    A refused attempt is an `OSError` inside the program, never a connection.
 b. *No credentials.*  The sandbox environment and the files the program can read hold no secret:
-   nothing from the caller's environment, none of the caller's files, and not the run's broker
-   token either (the token reaches the program only through its `broker` handle).
+   nothing from the caller's environment and none of the caller's files.  The run's broker token
+   is scoped to this one run and is not hidden from the program (its `broker` handle uses it),
+   but it is never put in the sandbox environment.
 c. *Limits are enforced.*  A program that exceeds a cap in `Limits` (CPU seconds, memory,
    wall-clock seconds, bytes of printed output) is ended, and the result has status `limit`
    with `limit` naming the cap (`LIMITS`).  The run never ends `ok` past a cap.
+   Memory is resident (committed) memory, not address space; an executor may enforce it with
+   an address-space cap, but a program that raises `MemoryError` itself has a `runtime`
+   error, not a memory limit.  `output` is the program's printed output exceeding
+   `output_bytes`.  Broker calls are capped by `max_calls`: the executor's broker client
+   refuses a call past the cap without sending it, as a denial with reason
+   `call-cap-reached`, and the run goes on (`calls` is in `LIMITS` for a runner that
+   ends a run on the cap; this contract does not).
 d. *Disposable.*  Every run starts from nothing: no file, environment variable or interpreter
    state that an earlier run wrote is visible to a later one.  A writable scratch directory
    (the working directory, `TMPDIR` and `HOME`) exists for the run and goes with it.
-e. *The result is bounded.*  The program's value is its JSON serialization.  When that is longer
-   than `Limits.result_bytes`, the result carries `truncated=True` and, as `value`, a
-   prefix of the serialization (a `str` of at most `result_bytes` UTF-8 bytes, cut on a
-   character boundary).  An oversized value is never returned whole.
-f. *Every outcome is a result.*  A program that raises, does not compile, or leaves a value that
-   is not JSON ends with status `error` and `error` naming the kind (`ERROR_KINDS`);
-   a broker call the broker denies raises `broker.Denied` inside the program, and a program
-   that lets it escape ends with status `denied`.  `run` itself raises only for the caller's
-   own mistakes (`UnsupportedLanguage`).
+e. *The result is bounded.*  The program's value is its JSON serialization, pinned as
+   `VALUE_JSON` (compact, UTF-8, non-ASCII kept: what `JSON.stringify` produces).  When
+   that is longer than `Limits.result_bytes`, the result carries `truncated=True` and, as
+   `value`, a prefix of the serialization (a `str` of at most `result_bytes` UTF-8 bytes,
+   cut on a character boundary).  `truncated` is the value's own flag, implied by no status.
+   An oversized value is never returned whole.
+f. *Every outcome is a result.*  A program that does not compile, raises, exits non-zero or
+   leaves a value that is not JSON ends with status `error`; `error.kind` is one of
+   `ERROR_KINDS` and `error.message` is one line of at most `MESSAGE_MAX`
+   characters with no control character, line separator or bidirectional override.  `run`
+   itself raises only for the caller's own mistakes: a language not in `languages`
+   (`UnsupportedLanguage`) and a program longer than `MAX_PROGRAM_CHARS`
+   characters (`ProgramTooLarge`), before anything runs.
+g. *The broker's answers reach the program as the broker gave them.*  A denial raises
+   `broker.Denied` carrying the broker's `reason`; a program that lets it escape ends with
+   status `denied`.  An error reply raises `broker.Error` (catchable, with `reason`); an
+   unreachable broker raises it with reason `broker-unreachable`; escaping, either ends the run
+   with error kind `broker`.  A pending reply (the call needs approval) pauses the whole run:
+   it raises `broker.Paused`, a `BaseException` that `except Exception` does not catch,
+   every later call raises it again, and the run ends with status `paused` and the call in
+   `pending` however the program handled it.  Resuming is the runner's (CM-5).
 
 **The program's view (language `python`).**  The program is module source.  It sees one name
 of its own, `broker`: `broker.call(action, args=None)` sends one request to the broker and
-returns the reply's value, raising `broker.Denied` when the broker denies it.  Calls are
-synchronous (no `await`); a call that needs approval pauses the whole run, which is the
-runner's (CM-5).  Language names are those of schemas/codemode: `python` and `typescript`.  Its value is
-the module global `result` when it ends (`None` when unset).  Printed text (stdout and stderr
-together) is returned as `output`.
+returns the reply's value.  Calls are synchronous (no `await`).  Its value is the module
+global `result` when it ends (`None` when unset).  Printed text (stdout and stderr together)
+is returned as `output`.  Language names are those of schemas/codemode: `python` and
+`typescript`.
 
-**The broker wire.**  One TCP connection to `(endpoint.host, endpoint.port)` per call; the
-sandbox writes one JSON line `{"token": ..., "action": ..., "args": {...}}` and reads one JSON
-line back: `{"ok": true, "value": ...}`, or `{"ok": false, "denied": true}`.  This is the
-minimum the executor needs; the runner contract (CM-5) owns what the broker does with a call.
-The suite serves a stand-in broker (and its decoys) on loopback; an executor whose sandbox runs
-on another host names the harness address it can reach as the attribute `broker_host`.
+**The broker wire.**  The executor owns the transport between the sandbox and the broker: it
+may connect from inside the sandbox to the endpoint, or relay over a unix socket or vsock.  At
+the endpoint, one TCP connection per call carries one JSON line `{"token": ..., "action": ...,
+"args": {...}}` and one JSON line back, one of `REPLIES`: `{"ok": true, "value": ...}`,
+`{"ok": false, "denied": true, "reason": ...}`, `{"ok": false, "pending": true,
+"request_id": ..., "request_digest": ...}` or `{"ok": false, "error": true, "reason": ...}`.
+The runner contract (CM-5) owns what the broker does with a call.  The suite serves a
+stand-in broker (and its decoys) at the address the executor declares as `broker_bind`
+(`(host, port)`; loopback and an ephemeral port by default), so a sandbox behind a static
+firewall rule can reach it.
 
 Programs are untrusted model output.  An executor is an isolation boundary only when its sandbox
 is: the suite proves the properties above from inside a program, which is necessary, not
@@ -78,6 +103,7 @@ Attributes the subject must expose:
 | Attribute | Type | Default | Notes |
 |---|---|---|---|
 | `languages` | `frozenset[str]` | required | the program languages this executor runs |
+| `broker_bind` | `tuple[str, int]` | required | where the harness serves the broker (DEFAULT_BROKER_BIND) |
 
 #### `CodeExecutor.run`
 
@@ -101,9 +127,10 @@ def run(
 **Returns:** `ExecutionResult`
 
 Runs `program` in a fresh sandbox to its end or a cap.  Raises UnsupportedLanguage
-for a language not in `languages`, before anything runs.
+for a language not in `languages` and ProgramTooLarge for a program longer than
+MAX_PROGRAM_CHARS characters, before anything runs.
 
-**Raises:** `UnsupportedLanguage`
+**Raises:** `UnsupportedLanguage`, `ProgramTooLarge`
 
 ## Data shapes in and out
 
@@ -111,13 +138,22 @@ for a language not in `languages`, before anything runs.
 
 Defined in [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py).
 
-Where the sandbox reaches the broker, and the run's token for it.
+Where the broker answers this run, and the run's token for it.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `host` | `str` | required | an address literal: the sandbox resolves no names |
 | `port` | `int` | required |  |
-| `token` | `str` | required | the run's broker token; never in the sandbox environment |
+| `token` | `str` | required | scoped to this run; never in the sandbox environment |
+
+### `ExecutionError` (dataclass, frozen)
+
+Defined in [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py).
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `kind` | `str` | required | one of ERROR_KINDS |
+| `message` | `str` | `''` | one line, at most MESSAGE_MAX characters; untrusted program text |
 
 ### `ExecutionResult` (dataclass, frozen)
 
@@ -125,12 +161,13 @@ Defined in [`conformance.protocols.codemode_executor`](../../conformance/protoco
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `status` | `str` | required | ok \| denied \| error \| limit |
+| `status` | `str` | required | ok \| paused \| denied \| error \| limit |
 | `value` | `Any` | `None` | the program's value; a str prefix of its JSON when truncated |
-| `truncated` | `bool` | `False` |  |
+| `truncated` | `bool` | `False` | the value was cut at result_bytes |
 | `limit` | `str \| None` | `None` | which cap ended the run (status limit) |
-| `error` | `str \| None` | `None` | the error kind (status error) |
-| `output` | `str` | `''` | printed output, at most Limits.output_bytes |
+| `error` | `ExecutionError \| None` | `None` | status error |
+| `output` | `str` | `''` | printed output, at most Limits.output_bytes UTF-8 bytes |
+| `pending` | `tuple[PendingCall, ...]` | `()` | status paused: the call waiting for approval |
 
 ### `Limits` (dataclass, frozen)
 
@@ -141,18 +178,37 @@ The caps of one run.  Every value is finite and greater than zero.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `cpu_s` | `float` | `2.0` | CPU seconds |
-| `memory_bytes` | `int` | `268435456` | address space |
+| `memory_bytes` | `int` | `268435456` | resident (committed) memory |
 | `wall_s` | `float` | `5.0` | wall-clock seconds from start to end |
+| `max_calls` | `int` | `200` | broker calls; one past the cap is refused (call-cap-reached) |
 | `output_bytes` | `int` | `65536` | printed output, stdout and stderr together |
 | `result_bytes` | `int` | `65536` | the value's JSON serialization; longer is truncated |
+
+### `PendingCall` (dataclass, frozen)
+
+Defined in [`conformance.protocols.codemode_executor`](../../conformance/protocols/codemode_executor.py).
+
+A call that needs approval: the run paused on it.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `step` | `int` | required | the call's index among the calls this run sent, from 0 |
+| `action` | `str` | required |  |
+| `request_id` | `str` | required |  |
+| `request_digest` | `str` | required | the digest an approval binds to |
 
 ### Constants
 
 | Name | Value |
 |---|---|
-| `ERROR_KINDS` | `('exception', 'syntax', 'unserializable', 'crashed')` |
-| `LIMITS` | `('cpu', 'memory', 'wall', 'output')` |
-| `STATUSES` | `('ok', 'denied', 'error', 'limit')` |
+| `ERROR_KINDS` | `('syntax', 'runtime', 'sandbox', 'token', 'broker')` |
+| `LIMITS` | `('cpu', 'memory', 'wall', 'calls', 'output')` |
+| `MAX_PROGRAM_CHARS` | `65536` |
+| `MESSAGE_MAX` | `2000` |
+| `MESSAGE_UNSAFE` | `'[\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]'` |
+| `REPLIES` | `('ok', 'denied', 'pending', 'error')` |
+| `STATUSES` | `('ok', 'paused', 'denied', 'error', 'limit')` |
+| `VALUE_JSON` | `{'ensure_ascii': False, 'separators': (',', ':'), 'allow_nan': False}` |
 
 ### Errors
 
@@ -161,6 +217,7 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | Exception | Base | Meaning | Named by |
 |---|---|---|---|
 | `ExecutorError` | `Exception` |  |  |
+| `ProgramTooLarge` | `ExecutorError` | The program is longer than `MAX_PROGRAM_CHARS` characters. | `CodeExecutor.run` |
 | `UnsupportedLanguage` | `ExecutorError` | The executor does not run programs in the requested language. | `CodeExecutor.run` |
 
 ### JSON Schemas
@@ -179,8 +236,13 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `limits-enforced` | MUST | CPU, memory, wall-clock and output caps end the run with status limit naming the cap |  |
 | `disposable` | MUST | a second run sees no file, variable or interpreter state the first one left |  |
 | `result-bounded` | MUST | a value longer than result_bytes comes back as a truncated prefix, never whole |  |
-| `program-error-is-a-status` | MUST | a program that raises, does not compile or leaves a non-JSON value ends with status error |  |
+| `program-error-is-a-status` | MUST | a program that fails to compile, raises, exits non-zero or leaves a non-JSON value ends error |  |
 | `denied-call-is-a-status` | MUST | a denied broker call raises broker.Denied in the program; escaping, it ends the run denied |  |
+| `denial-reason-reaches-the-program` | MUST | the reason the broker gives for a denial is the reason the program reads |  |
+| `pending-pauses-the-run` | MUST | a call that needs approval ends the run paused, with the call pending; the program cannot swallow it |  |
+| `broker-error-is-an-error` | MUST | an error reply is a catchable broker.Error; escaping, it or an unreachable broker ends the run with error kind broker |  |
+| `call-cap-enforced` | MUST | a call past max_calls is refused before the broker as call-cap-reached, and the run goes on |  |
+| `oversized-program-refused` | MUST | a program longer than 65536 characters is refused before anything runs; one of exactly that length runs |  |
 | `unknown-language-refused` | MUST | a language the executor does not list is refused before anything runs |  |
 | `output-returned` | SHOULD | what the program prints comes back as output |  |
 
@@ -195,8 +257,10 @@ Each is a deliberately broken fake (`hnx conform run codemode-executor --target 
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `env-leak` | `no-credentials` | the sandbox inherits the caller's environment variables |
+| `no-call-cap` | `call-cap-enforced` | the broker client never counts calls; a loop calls the broker without end |
 | `no-timeout` | `limits-enforced` | no wall-clock cap: a program that sleeps runs as long as it likes |
 | `open-egress` | `no-network-but-broker` | the sandbox's network is on: a program reaches any address, not only the broker |
+| `pause-catchable` | `pending-pauses-the-run` | a pending reply is an ordinary exception: except Exception swallows the pause |
 | `reused-state` | `disposable` | one scratch directory for every run, never cleaned |
 | `unbounded-result` | `result-bounded` | an oversized value is returned whole |
 
@@ -224,6 +288,7 @@ No service in `examples/services.yml` declares `capability: codemode-executor`.
    from conformance.protocols.codemode_executor import (
        CodeExecutor,
        ExecutorError,
+       ProgramTooLarge,
        UnsupportedLanguage,
    )
    ```
@@ -251,4 +316,4 @@ No service in `examples/services.yml` declares `capability: codemode-executor`.
    hnx conform run codemode-executor --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (9) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
