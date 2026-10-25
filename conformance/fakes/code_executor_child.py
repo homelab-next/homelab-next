@@ -253,6 +253,8 @@ def _program(cfg: dict, out_w: int, res_w: int, code_fd: int) -> None:
     except BaseException as exc:
         error = {"kind": "sandbox", "message": "the prelude failed: " + _message(exc)}
         header = {"status": "error", "error": error}
+        if cfg.get("prelude_failure") == "swallow":  # the prelude-failure-swallowed mutant
+            header = _execute(source, glb)
     else:
         header = _execute(source, glb)
     if broker.pending is not None and broker._sticky:

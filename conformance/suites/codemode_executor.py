@@ -35,6 +35,7 @@ from conformance.fakes.code_executor import (
     NoTimeoutExecutor,
     OpenEgressExecutor,
     PreludeDroppedExecutor,
+    PreludeFailureSwallowedExecutor,
     ReusedStateExecutor,
     UnboundedResultExecutor,
 )
@@ -299,9 +300,11 @@ def stub_prelude() -> str:
 
 @SUITE.check(
     "stubs-reach-the-broker",
-    "with the prelude the runner hands over (the generated namespaces), a program calling a stub "
-    "reaches the broker with that stub's action, its keywords as the params and its target as "
-    "the call's target, exactly as the broker.call it stands for; broker.call works beside it",
+    "with the prelude the runner hands over (the generated namespaces), run before the program, "
+    "a program calling a stub reaches the broker with that stub's action, its keywords as the "
+    "params and its target as the call's target, exactly as the broker.call it stands for; "
+    "broker.call works beside it; a prelude that fails is a sandbox error and the program never "
+    "runs",
 )
 def _(ex):
     stubs = {
@@ -316,7 +319,9 @@ def _(ex):
         ),
     }
     prelude = {"python": stub_prelude()}
-    for lang in _languages(ex, stubs, plain, prelude):
+    broken = {"python": "raise RuntimeError('the prelude broke')\n"}
+    after = {"python": "broker.call('echo', {'ran': True})\nresult = 1\n"}
+    for lang in _languages(ex, stubs, plain, prelude, broken, after):
         with _broker(ex) as b:
             res = _run(ex, stubs[lang], b, language=lang, prelude=prelude[lang])
             value = _ok(res, "a program calling the generated stubs")
@@ -334,6 +339,10 @@ def _(ex):
                 f"{lang}: a stub call's op and target went out as {stub_wire}, where broker.call "
                 f"sends {b.wire}"
             )
+        with _broker(ex) as b:  # a prelude that fails ends the run before the program runs
+            res = _run(ex, after[lang], b, language=lang, prelude=broken[lang])
+            _error(res, "sandbox", "a prelude that fails")
+            assert b.calls == [], f"{lang}: the program ran after its prelude failed: {b.calls}"
 
 
 @SUITE.check(
@@ -831,6 +840,11 @@ MUTANTS = {
         PreludeDroppedExecutor,
         "stubs-reach-the-broker",
         "the prelude is never run: a program sees only broker, not the generated namespaces",
+    ),
+    "prelude-failure-swallowed": Mutant(
+        PreludeFailureSwallowedExecutor,
+        "stubs-reach-the-broker",
+        "a prelude that fails is ignored and the program runs without the names it binds",
     ),
     "unbounded-result": Mutant(
         UnboundedResultExecutor,

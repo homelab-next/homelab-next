@@ -101,7 +101,7 @@ def test_the_suite_passes_on_both_brokers():
 
 def test_every_mutant_is_caught_by_its_own_check_only():
     runs = mutation_runs("codemode-runner", ROOT)
-    assert len(runs) == 9
+    assert len(runs) == 10
     for m in runs:
         assert m.detected and m.failed == [m.expected], (m.name, m.failed, m.reason)
 

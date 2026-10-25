@@ -784,3 +784,47 @@ def test_a_fault_of_the_runner_is_named_as_one(tmp_path, executor, monkeypatch):
         {"step": 0, "action": "cm.a", "outcome": "error", "reason": "runner-fault"}
     ]
     assert "runner-fault" in res["error"]["message"]
+
+
+def test_a_relay_reason_the_runner_does_not_name_is_a_logged_runner_fault(
+    tmp_path, executor, caplog
+):
+    """A refusal reason outside RELAY_REASONS is the runner's own bug: it is listed as
+    runner-fault and logged, never silently filed as the program's malformed request."""
+    _ran, cmds = _counted("cm.a")
+    b, runner = _fake(tmp_path, executor, cmds)
+    orig = runner._serve_locked
+
+    def serve(run, msg):
+        if msg.get("action") == "cm.odd":
+            return {"ok": False, "error": True, "reason": "made-up"}
+        return orig(run, msg)
+
+    runner._serve_locked = serve
+    code = "try:\n    broker.call('cm.odd', {})\nexcept broker.Error:\n    pass\nresult = 1\n"
+    with caplog.at_level("WARNING", logger="homelabnext.codemode.runner"):
+        res = _run(b, code)
+    assert [r["reason"] for r in res["relay_refusals"]] == ["runner-fault"]
+    assert any("does not list" in r.getMessage() for r in caplog.records)
+
+
+def test_a_token_that_is_not_ascii_is_a_foreign_line_not_a_dropped_connection(
+    tmp_path, executor, caplog
+):
+    """hmac.compare_digest raises TypeError on a non-ASCII str: the connection used to drop
+    uncounted, logged at ERROR.  Now it is a line without the run's token like any other."""
+    ran, cmds = _counted("cm.a")
+    b, _runner = _fake(tmp_path, executor, cmds)
+    code = (
+        "import json, socket\n"
+        "s = socket.socket(); s.connect(broker._addr)\n"
+        "s.sendall(json.dumps(dict(token='t\\u00e9', action='cm.a', args={})).encode()+b'\\n')\n"
+        "reply = json.loads(s.makefile().readline()); s.close()\n"
+        "result = [reply, broker.call('cm.a', {'name': 'mine'})]\n"
+    )
+    with caplog.at_level("ERROR"):
+        res = _run(b, code)
+    assert res["status"] == "ok", res
+    assert res["value"][0] == {"ok": False, "denied": True, "reason": "token-invalid"}
+    assert ran["cm.a"] == ["mine"] and "relay_refusals" not in res
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]

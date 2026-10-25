@@ -53,12 +53,14 @@ broker errors, the call cap, oversized, unencodable and unknown-language program
 (with CM-5b) a submit and a call's target relayed on the wire as `op` and `target`, and (phase 2,
 CM-10) `stubs-reach-the-broker`: with the generated prelude `run(..., prelude=...)` takes (rule h),
 a program calling a stub reaches the broker with its action, its keywords as params and its
-target, on the wire exactly as the `broker.call` it stands for.
+target, on the wire exactly as the `broker.call` it stands for, and a prelude that fails is a
+`sandbox` error before the program runs.
 The client-side pause and call cap are behaviour, not enforcement: the broker's refusal on a
 paused or over-cap token is, and has landed with CM-5a (the `broker-tokens` checks
 `paused-token-refused` and `call-cap-enforced-by-the-broker`, at the broker's API). Its mutants are
 `open-egress`, `env-leak`, `no-timeout`, `reused-state`, `unbounded-result`, `no-call-cap`,
-`pause-catchable`, `bare-wire` and `prelude-dropped`, and the reference page is
+`pause-catchable`, `bare-wire`, `prelude-dropped` and `prelude-failure-swallowed`, and the
+reference page is
 [capabilities/codemode-executor](capabilities/codemode-executor.md). Each check holds its
 programs per language, and a declared language a check has no program for fails it as
 untested. The reference fake forks each program from a warm Python process that never runs one
@@ -240,13 +242,16 @@ listed in the result's `relay_refusals` (CM-11): `at_step` (the steps the run ha
 arrived), `op`, `action` as the program sent it (untrusted text, one line, cut to 128
 characters; absent when it was not text), `outcome` (`denied` or `error`, how the program was
 told) and `reason` (`request-malformed`, `too-many-refusals`, `token-paused`,
-`call-cap-reached`, `journal-unavailable`, `step-outcome-unknown`, `replay-mismatch`), the first
-64 in arrival order and the rest counted in `relay_refusals_omitted`. A line without the token is
+`call-cap-reached`, `journal-unavailable`, `step-outcome-unknown`, `replay-mismatch`, and
+`runner-fault`, logged, for a refusal the runner does not name), the first 64 in arrival order
+and the rest counted in `relay_refusals_omitted`, which the CM-6 harness treats as an ungranted
+attempt (it fails closed on what it cannot see). A line without the token is
 not the program's and is never listed (anyone on the loopback could write one). They are a list of
 their own, not entries of `calls`, because a call record is a step (`calls` is step-ordered with
 unique steps, bounded by the 200-step bound, and counted as broker calls) holding a well-formed
-action and the broker's own outcome, and a relay refusal is none of those: it took no step, its
-action is often not an action name (`delete_mailbox`), and the broker never saw it. So a program's
+action and the broker's own outcome, and a relay refusal is none of those: it is no answer of
+the broker's (a replay mismatch even used a step number the result then skips), its action is
+often not an action name (`delete_mailbox`), and the broker never saw it. So a program's
 attempt is in its result even when it never reached the broker, which is what the CM-6 harness
 reads, and the contract check `relay-refusals-are-reported` (mutant `relay-refusals-hidden`)
 holds a runner to it.
@@ -374,7 +379,9 @@ checks, `result-matches-the-schema`, `denied-call-is-a-value`, `every-call-is-jo
 `relay-refusals-are-reported`, and one mutant each (`raw-logs-unchecked-result`,
 `denial-as-error`, `refusals-unjournalled`, `pause-hidden`, `resume-resends`,
 `replay-by-step-only`, `denied-pause-waits`, `cap-hidden`, `relay-refusals-hidden`), caught by its
-own check only. The subject is the reference runner over the fake broker (`fake`)
+own check only, and a second for the last check, `foreign-lines-listed` (a line without the run's
+token listed as the program's; the check sends one from inside the sandbox where the executor's
+client exposes its endpoint, as the reference one does, and also holds `relay_refusals_omitted`). The subject is the reference runner over the fake broker (`fake`)
 or the reference service (`hnx conform run codemode-runner --target broker-reference`), with the
 forking test executor (`conformance/fakes/codemode_runner.py`). A call needing approval cannot be
 reached through the contract's API (an in-process command never needs one), so that path,

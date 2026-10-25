@@ -229,6 +229,7 @@ RELAY_REASONS = frozenset(
         "journal-unavailable",
         "step-outcome-unknown",
         "replay-mismatch",
+        "runner-fault",
     }
 )
 #: the run's defaults when its budget names none (the broker's ``codemode.default_wall_s`` is 60)
@@ -869,7 +870,7 @@ class Runner:
             reply = self._serve_locked(run, msg)
             if reply is not None and len(run.calls) == calls and _is_refusal(reply):
                 token = msg.get("token") if isinstance(msg, Mapping) else None
-                if isinstance(token, str) and run.secret and hmac.compare_digest(token, run.secret):
+                if run.secret and _same_token(token, run.secret):
                     self._relay_refused(run, steps, msg, reply)
             return reply
 
@@ -890,13 +891,18 @@ class Runner:
             entry["action"] = _line(action, MAX_ACTION_CHARS)
         reason = reply.get("reason")
         entry["outcome"] = "denied" if reply.get("denied") else "error"
-        entry["reason"] = reason if reason in RELAY_REASONS else "request-malformed"
+        if reason not in RELAY_REASONS:  # a relay refusal this runner does not name: its bug
+            log.warning(
+                "codemode: the relay refused with a reason it does not list (%.64r)", reason
+            )
+            reason = "runner-fault"
+        entry["reason"] = reason
         run.relay_refused.append(entry)
 
     def _serve_locked(self, run: _Run, msg: Any) -> dict[str, Any] | None:
         """:meth:`serve_call` under the run's lock, the run still open."""
         token = msg.get("token") if isinstance(msg, Mapping) else None
-        if not (isinstance(token, str) and hmac.compare_digest(token, run.secret)):
+        if not _same_token(token, run.secret):
             # not the program's: never counted against the run, never a step
             run.foreign += 1
             if run.foreign > MAX_FOREIGN_LINES:
@@ -1372,6 +1378,15 @@ class _Relay:
 
 
 # ---------------------------------------------------------------- helpers
+def _same_token(token: Any, secret: str) -> bool:
+    """Whether a wire line's ``token`` is the run's, compared in constant time as bytes: a
+    token that is not ASCII text is simply not the run's (``hmac.compare_digest`` raises on a
+    non-ASCII ``str``, which dropped the connection uncounted)."""
+    if not isinstance(token, str) or not token.isascii():
+        return False
+    return hmac.compare_digest(token.encode("ascii"), secret.encode("utf-8"))
+
+
 def _is_refusal(reply: Mapping[str, Any]) -> bool:
     """A reply that refuses the request (denied or an error), not a value or a pause."""
     return not reply.get("ok") and not reply.get("pending")

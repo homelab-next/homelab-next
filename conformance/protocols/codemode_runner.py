@@ -49,8 +49,9 @@ i. *A request refused before the broker is still reported.*  A request of the pr
    and is no call of the result (an action that is not an action name, a target that is not a
    ``svc:`` id, a call after the run paused or stopped), is listed in the result's
    ``relay_refusals`` with the action as the program sent it, how the program was told and why,
-   so what a program attempted can be judged from its result alone.  A line without the token
-   is not the program's and is not listed.
+   so what a program attempted can be judged from its result alone; past the first 64, the
+   rest are counted in ``relay_refusals_omitted``.  A line without the token is not the
+   program's and is not listed.
 
 The program's view is the CM-4 executor's (``conformance/protocols/codemode_executor.py``):
 ``broker.call(action, args)``, ``broker.submit(action, args)``, ``broker.Denied``,

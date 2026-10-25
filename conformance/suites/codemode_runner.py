@@ -21,6 +21,7 @@ from conformance.fakes.codemode_runner import (
     CapHiddenRunner,
     DenialAsErrorRunner,
     DeniedWaitsRunner,
+    ForeignListedRunner,
     HiddenPauseRunner,
     RawLogsRunner,
     ReferenceRunner,
@@ -453,7 +454,8 @@ def _(r):
     "relay-refusals-are-reported",
     "a request of the program's own that the runner refuses before the broker (an action that is "
     "no action name, a target that is no svc: id) reaches no broker and is no call, and is listed "
-    "in relay_refusals with the action as sent, how the program was told and why",
+    "in relay_refusals with the action as sent, how the program was told and why; past 64 the "
+    "rest are counted in relay_refusals_omitted; a line without the run's token is never listed",
     requires=TOKENS,
 )
 def _(r):
@@ -472,7 +474,32 @@ def _(r):
             "result = out\n"
         )
     }
-    for lang in _languages(r, programs):
+    flood = {
+        "python": (
+            "for i in range(66):\n"
+            "    try:\n"
+            "        broker.call('delete_mailbox', {})\n"
+            "    except (broker.Denied, broker.Error):\n"
+            "        pass\n"
+        )
+    }
+    # a line without the token, from inside the sandbox: the reference executor's client exposes
+    # its endpoint as broker._addr; an executor whose client does not sends none, and this part
+    # of the check then holds trivially
+    foreign = {
+        "python": (
+            "import json, socket\n"
+            "addr = getattr(broker, '_addr', None)\n"
+            "if addr is not None:\n"
+            "    s = socket.socket()\n"
+            "    s.connect(addr)\n"
+            "    s.sendall(json.dumps({'token': 'not-the-token', 'action': 'cm.x'}).encode() + b'\\n')\n"
+            "    s.makefile().readline()\n"
+            "    s.close()\n"
+            "result = 'sent'\n"
+        )
+    }
+    for lang in _languages(r, programs, flood, foreign):
         res, _ = lab.execute(programs[lang], lang)
         assert _schema("execution_result", res) == [], f"{lang}: {res}"
         assert res["status"] == "ok", f"{lang}: the run ended {res}"
@@ -489,6 +516,19 @@ def _(r):
             f"{lang}: the program was told {res['value'][:2]}, the result says {refused}"
         )
         assert all(isinstance(x.get("reason"), str) and _REASON.match(x["reason"]) for x in refused)
+        # past the bound, refusals are counted; and a line without the token is never listed
+        res, _ = lab.execute(flood[lang], lang)
+        assert _schema("execution_result", res) == [], f"{lang}: {res}"
+        listed = res.get("relay_refusals") or []
+        assert (len(listed), res.get("relay_refusals_omitted")) == (64, 2), (
+            f"{lang}: 66 refused requests were reported as {len(listed)} listed and "
+            f"{res.get('relay_refusals_omitted')} counted"
+        )
+        res, _ = lab.execute(foreign[lang], lang)
+        assert res["status"] == "ok", f"{lang}: the run ended {res}"
+        assert "relay_refusals" not in res, (
+            f"{lang}: a line without the run's token was listed as the program's: {res}"
+        )
     assert lab.ran[cmd] == ["after"] * len(_languages(r, programs)), lab.ran[cmd]
 
 
@@ -542,6 +582,11 @@ MUTANTS = {
         RelayRefusalsHiddenRunner,
         "relay-refusals-are-reported",
         "a request the relay refused before the broker is in no part of the result",
+    ),
+    "foreign-lines-listed": _m(
+        ForeignListedRunner,
+        "relay-refusals-are-reported",
+        "a line without the run's token is listed as the program's own refused request",
     ),
     "cap-hidden": _m(
         CapHiddenRunner,
