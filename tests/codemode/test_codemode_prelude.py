@@ -228,3 +228,39 @@ def test_a_profile_with_no_methods_gets_a_prelude_that_binds_nothing():
     )[0]
     rec, glb = _run_prelude(render_prelude(model), "")
     assert rec.sent == [] and not any(not k.startswith("__") for k in glb if k != "broker")
+
+
+def _index(*names):
+    from homelabnext.codemode.render import GENERATOR
+
+    marker = f"{GENERATOR} from broker manifest test-broker for profile:reader - do not edit; x"
+    return {
+        "_generated": marker,
+        "profile": "profile:reader",
+        "actions": [{"name": n, "target": None, "params": {"type": "object"}} for n in names],
+    }
+
+
+@pytest.mark.parametrize(
+    ("names", "why"),
+    [
+        (("a-b.x", "a--b.x"), "both render as _AB"),  # two namespaces, one class: last one wins
+        (("q.b-c", "q.b.c"), "are both q.b_c"),  # two actions, one method
+    ],
+)
+def test_an_index_whose_names_collide_is_refused_like_the_manifest(names, why):
+    """Review: the index rebuild skipped the generator's collision checks, so an index could make
+    one stub stand for another action.  Both ask model.name_collisions now."""
+    from homelabnext.codemode.render import prelude_from_index
+
+    with pytest.raises(CodemodeError) as info:
+        prelude_from_index(_index(*names))
+    assert any(why in p for p in info.value.problems), info.value.problems
+    manifest = _manifest(
+        [_exec(n) for n in names],
+        [{"profile": "profile:reader", "actions": list(names), "max_tier": "read"}],
+    )
+    with pytest.raises(CodemodeError) as info:
+        render_files(build_models(manifest, [_doc(n) for n in names]))
+    assert any(why in p for p in info.value.problems), info.value.problems
+    prelude_from_index(_index(names[0]))  # either alone is fine
