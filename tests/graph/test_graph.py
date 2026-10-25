@@ -262,6 +262,17 @@ def test_dangling_doc_link_fails(tmp_path, repo_copy):
     assert {"file:docs/systems/nope.md", "file:docs/missing-page.md"} <= dangling
 
 
+def test_an_overlong_wiki_link_is_dangling_not_a_crash(tmp_path, repo_copy):
+    # [[...]] text is looked up as a file; a name over the system's length limit raised
+    # OSError (ENAMETOOLONG) and took the whole graph build down with it
+    root = _fresh(tmp_path, repo_copy)
+    f = root / "docs/glossary.md"
+    long = "a" * 5000
+    f.write_text(f.read_text(encoding="utf-8") + f"\nSee [[{long}]].\n", encoding="utf-8")
+    dangling = {e.dst for e in check(root).integrity.dangling}
+    assert f"file:docs/{long}.md" in dangling
+
+
 def test_duplicate_id_fails(tmp_path, repo_copy, capsys):
     """Two record files claiming one id never reach the graph: the register loader refuses them
     (a record file is named after its id), and ``hnx graph check`` reports that and fails.  A

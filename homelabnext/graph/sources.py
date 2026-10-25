@@ -105,7 +105,7 @@ class Builder:
             if len(exact) == 1:
                 self.edge(src, exact[0], etype, source)
                 continue
-            if not (self.root / path).exists():
+            if not _lookup(self.root / path, Path.exists):
                 self.edge(src, f"file:{path}", etype, source)
                 continue
             if policy == "owner" and not exact:
@@ -1309,13 +1309,23 @@ def read_docs(b: Builder) -> None:
                 targets.add(hit)
                 continue
             cand = [f"docs/{raw}.md", f"docs/{raw}"]
-            hit = next((c for c in cand if (b.root / c).is_file()), "")
+            hit = next((c for c in cand if _lookup(b.root / c, Path.is_file)), "")
             if not hit and "/" not in raw and len(by_stem.get(raw, [])) == 1:
                 hit = by_stem[raw][0]
             targets.add(hit or f"docs/{raw}.md")
         for t in sorted(targets):
             if t != rel:
                 b.path_ref(src, t, "links", rel)
+
+
+def _lookup(p: Path, test: Callable[[Path], bool]) -> bool:
+    """``test(p)`` (``Path.exists``, ``Path.is_file``), false for a path the system cannot even
+    look up (a name over the length limit, or one holding a NUL): a link's target is document
+    text, never a trusted path, and one bad link must not take the whole build down."""
+    try:
+        return test(p)
+    except (OSError, ValueError):
+        return False
 
 
 def _norm(p: PurePosixPath) -> str:
