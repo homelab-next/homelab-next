@@ -137,27 +137,38 @@ def _(o):
     requires=["shadow"],
 )
 def _(o):
-    job, other = uniq("job"), uniq("job")
-    o.define(job, lambda p: "ok")
+    job, other, gate = uniq("job"), uniq("job"), _Gate()
+    # the first shadow run blocks until released, so it is still unfinished (queued, or running
+    # on a target that starts runs on its own) for every submit that must be refused
+    o.define(job, lambda p: gate(p) if p.get("hold") else "ok")
     o.define(other, lambda p: "ok")
     key = uniq("k")
-    first = o.submit(job, {}, idempotency_key=key, shadow=True)
-    assert o.submit(job, {}, idempotency_key=key, shadow=True) == first, "a repeated key moved"
-    raises(
-        lambda: o.submit(job, {}, idempotency_key=uniq("k"), shadow=True),
-        "a second shadow run while the first is queued",
-        ShadowRunPending,
-    )
-    real = o.submit(job, {}, idempotency_key=uniq("k"))
-    elsewhere = o.submit(other, {}, idempotency_key=uniq("k"), shadow=True)
-    for rid in (real, elsewhere):
-        assert o.wait(rid, timeout=START_S).state == "succeeded", f"{rid} did not run"
-    assert o.cancel(first).state == "cancelled"
+    try:
+        first = o.submit(job, {"hold": True}, idempotency_key=key, shadow=True)
+        same = o.submit(job, {"hold": True}, idempotency_key=key, shadow=True)
+        assert same == first, "a repeated key moved"
+        raises(
+            lambda: o.submit(job, {}, idempotency_key=uniq("k"), shadow=True),
+            "a second shadow run while the first is unfinished",
+            ShadowRunPending,
+        )
+        _drive(o, first, START_S)
+        assert gate.started.wait(START_S), "the first shadow run never started"
+        raises(
+            lambda: o.submit(job, {}, idempotency_key=uniq("k"), shadow=True),
+            "a second shadow run while the first is running",
+            ShadowRunPending,
+        )
+        real = o.submit(job, {}, idempotency_key=uniq("k"))
+        elsewhere = o.submit(other, {}, idempotency_key=uniq("k"), shadow=True)
+        for rid in (real, elsewhere):
+            assert o.wait(rid, timeout=START_S).state == "succeeded", f"{rid} did not run"
+    finally:
+        gate.release.set()
+    assert o.wait(first, timeout=START_S).state == "succeeded", "the first shadow run never ended"
+    # once the first has finished, a new shadow run is accepted (this submit must not raise)
     after = o.submit(job, {}, idempotency_key=uniq("k"), shadow=True)
     assert o.wait(after, timeout=START_S).state == "succeeded"
-    again = o.submit(job, {}, idempotency_key=uniq("k"), shadow=True)
-    assert again != after, "a finished shadow run blocked the next one"
-    o.cancel(again)
 
 
 # ---------------------------------------------------------------- h. constraints

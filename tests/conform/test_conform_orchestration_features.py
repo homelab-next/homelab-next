@@ -97,3 +97,23 @@ def test_the_controller_adapter_declares_priority_and_sends_it(tmp_path):
     finally:
         o.close()
         fake.stop()
+
+
+class _Eager(FakeOrchestrator):
+    """A correct target that starts a run as soon as it is submitted (a controller admits on
+    its own tick, waited on or not)."""
+
+    def submit(self, name, params, **kw):
+        rid = super().submit(name, params, **kw)
+        with self._cv:
+            self._runs[rid]["wanted"] = True
+            self._admit()
+        return rid
+
+
+def test_the_shadow_limit_check_passes_a_target_that_starts_runs_eagerly():
+    """The first shadow run must still be unfinished when the second is submitted: with a body
+    that returns at once, an eager target finished it first and the check failed a correct
+    subject."""
+    (res,) = run_checks(suite.SUITE, _Eager, only=["one-unfinished-shadow-run-per-job"])
+    assert res.status == "pass", res.evidence
