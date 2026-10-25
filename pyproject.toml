@@ -153,8 +153,13 @@ suite_budgets = [
   # branch 128.1s and 128.2s (+10.5s). Of that, the runner suite's runs are about 2s; the rest is
   # its eight mutants, each a whole-suite run (about 0.6s each), the report and X-10 runs that
   # now include it, the broker-reference target, and the executor suite's new check and mutant
-  # in every run of that suite; 130 would leave under 2s over the branch's own measurement
-  "tests/conform = 140",
+  # in every run of that suite; 130 would leave under 2s over the branch's own measurement; 150
+  # since the executor suite's stubs-reach-the-broker check (two programs, in the fake's run and
+  # in each of its nine mutants', the report and X-10) and the runner suite's ninth check and
+  # mutant: A/B on one local 4-core box, two runs each, interleaved, main 122.0s and 120.5s,
+  # this branch 126.2s and 127.7s (+5.7s, 4.7%); main at about 132s on CI would put the branch
+  # near 138s, under 2s inside 140
+  "tests/conform = 150",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed
