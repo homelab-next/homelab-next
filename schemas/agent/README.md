@@ -4,7 +4,7 @@ Contracts for the agent layer (library: `homelabnext.agent`, guide: `docs/agent.
 
 | Schema | What it is |
 |---|---|
-| `profile` | a **compiled** profile: parts by logical id, grants, the permission ceiling they were checked against, hard budgets, `reads_untrusted` (1.1), `include` (1.2: rules for linked knowledge in the pack, seeded only from grants), digest, provenance |
+| `profile` | a **compiled** profile: parts by logical id, grants, the permission ceiling they were checked against, hard budgets, `reads_untrusted` (1.1), `include` (1.2: rules for linked knowledge in the pack, seeded only from grants; 1.4: an optional `detail`, `summary` or `outline`, absent meaning the whole content), digest, provenance |
 | `context_manifest` | what goes into one agent's context pack and in which tier order (stable, session, volatile); pre-gates; memory scopes; `screen` (1.1: redaction of untrusted sections, on by default) |
 | `pregate_output` | the verdict of a mandatory pre-run check (`ok`, `degraded`, `stale`, `failed`) |
 | `report_result` | what an agent hands back: `pack_id`, cites, unknowns, memory updates; `output` (1.1: the structured result an actor may act on) |

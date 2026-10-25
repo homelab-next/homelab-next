@@ -1,6 +1,8 @@
 ---
 title: codemode-executor
 type: capability
+summary: 'The sandbox for one Code Mode program: broker-only egress, no credentials, caps, disposable.'
+summary_generated: true
 capability: codemode-executor
 protocol: 'conformance.protocols.codemode_executor:CodeExecutor'
 generated_by: hnx docs capabilities generate

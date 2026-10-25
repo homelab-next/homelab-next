@@ -1,6 +1,8 @@
 ---
 title: codemode-runner
 type: capability
+summary: 'The codemode.execute handler: schema results, denials as values, a journal of every call, pause on submit, resume without replay, the broker''s cap.'
+summary_generated: true
 capability: codemode-runner
 protocol: 'conformance.protocols.codemode_runner:CodemodeRunner'
 generated_by: hnx docs capabilities generate

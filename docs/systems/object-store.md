@@ -1,6 +1,8 @@
 ---
 title: object-store
 type: system
+summary: object-store provides the object-store capability (minio), owned by data-team.
+summary_generated: true
 service: object-store
 capability: object-store
 impl: minio

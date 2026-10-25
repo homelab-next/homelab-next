@@ -3,7 +3,7 @@
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
     "classes": "sha256:f3fd0eb61dd2dbd1d1ecaff8230ddf8fa077c4e088afb52db61d81eb6e0c55b8",
     "profiles": {
-      "profile:reader": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
+      "profile:reader": "sha256:c2a60bc0b12f1c5f9a10218cc6008dca2c4ce03d7d2fc8c12d9d2ac80f2e448c",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
     "registry": "5a210420bb5c5f60ed4ea6e782d268ef6a4f49633b90c8ad93a408973a6cbf89"
@@ -243,7 +243,7 @@
         "analyst"
       ],
       "principal": "profile:reader",
-      "profile": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
+      "profile": "sha256:c2a60bc0b12f1c5f9a10218cc6008dca2c4ce03d7d2fc8c12d9d2ac80f2e448c",
       "reads_untrusted": true
     },
     {

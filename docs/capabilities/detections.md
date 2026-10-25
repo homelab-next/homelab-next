@@ -1,6 +1,8 @@
 ---
 title: detections
 type: capability
+summary: 'Detection engine: shipped must-fire fixtures fire, must-not-fire fixtures stay silent.'
+summary_generated: true
 capability: detections
 protocol: 'conformance.protocols.detections:DetectionTarget'
 generated_by: hnx docs capabilities generate
