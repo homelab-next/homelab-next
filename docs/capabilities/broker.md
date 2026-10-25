@@ -99,18 +99,25 @@ resumes) or `paused` (only for a paused token: the execution waits); the end of 
 `codemode.execute` spends a token still live as `finished`.  A resume is another
 `codemode.execute` of the same execution id with `resume: true`, issued a new token only while
 the execution is paused.  Its program then `token_run(token, request_id)`s the request the
-earlier token paused on - only that one (`token-request-not-paused`), only once it may run
-(`request-not-approved` while it still waits), counted like any call - and gets `{result,
-request_id, request_digest}`.  Those refusals, before `token_run` runs anything, are token
-refusals: that call built no request, so they carry no request id.  A paused request an approver
-denied is the exception: it was decided, so `token_run` refuses it `request-denied` (not a
-token refusal) with its `request_id` and `request_digest`, audited like any decided request.  `token_status(runner, token_id)` is the runner's view of its own token,
-including the state of the request a pause waits on (`paused_by_state`: `pending`,
-`approved`, `denied`, `done`, ...).  Another runner's token reads as no token
+earlier token paused on - only that one (`token-request-not-paused`, not counted), only once
+it may run (`request-not-approved` while it still waits) - and gets `{result, request_id,
+request_digest}`.  Past that binding check every `token_run` counts against the cap, a refused
+one included, so a program polling a request that is not approved yet spends its cap.  The
+refusals before `token_run` runs anything are token refusals: that call built no request, so
+they carry no request id.  A paused request an approver denied is the exception: it was decided,
+so `token_run` refuses it `request-denied` (not a token refusal) with its `request_id` and
+`request_digest`, audited like any decided request.  `token_status(runner, token_id)` is the
+runner's view of its own token, including the state of the request a pause waits on
+(`paused_by_state`: `pending`, `approved`, `expired` (its approval expired unused, so it
+waits for a fresh one), `denied`, `done`, ...).  Another runner's token reads as no token
 (`unknown-token`); an identity that is no runner gets `not-a-codemode-runner`.
 
-Clock: a target declaring the `clock-control` hook offers `tick(seconds)`, moving the clock
-that `issued_at` and expiry are judged by.  The feature's checks are the extended suite
+A sandbox client that refuses to send a malformed token (not the prefix, not one printable
+ASCII line) answers it as the broker would, `token-invalid`.
+
+Hooks: a target declaring `clock-control` offers `tick(seconds)`, moving the clock that
+`issued_at` and expiry are judged by; one declaring `approval-control` offers
+`decide_request(request_id, verdict)`, an approver's verdict (`denied`) on a pending request.  The feature's checks are the extended suite
 `broker-tokens` (`conformance/suites/broker_tokens.py`), run against the same targets.
 
 ## How to use it

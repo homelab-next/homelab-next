@@ -49,7 +49,13 @@ from typing import Any
 
 from .state import is_id, write_exclusive, write_temp
 
-__all__ = ["TokenStore", "execution_key", "secret_digest"]
+__all__ = ["BEARER_PREFIX", "MAX_BEARER_BYTES", "TokenStore", "execution_key", "secret_digest"]
+
+#: every token's secret starts so; on the socket, a first line that does is a sandbox's bearer
+#: line (``docs/broker.md``, "Sandbox socket framing")
+BEARER_PREFIX = "hnxcmt_"
+#: the longest bearer line the broker reads (a token is 50 characters)
+MAX_BEARER_BYTES = 256
 
 _DIRS = ("tokens", "secrets", "live", "executions", "inflight", "runs")
 #: execution states after which nothing runs again (kept until the retention passes)

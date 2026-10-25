@@ -21,9 +21,9 @@ get to decide that it was not tested.
 
 Features are of two kinds.  *Product* features (``streaming``, ``wildcards``, ...) describe what
 the implementation offers; a check needing one is skipped when it is absent.  *Test hooks*
-(:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``) only let the suite reach a state; a
-``must`` check that needs an undeclared hook is ``untested``, which fails like a failure - not
-declaring a hook cannot be a way around a MUST.  The product decides first: a check that also
+(:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``, ``approval-control``) only let the
+suite reach a state; a ``must`` check that needs an undeclared hook is ``untested``, which fails
+like a failure - not declaring a hook cannot be a way around a MUST.  The product decides first: a check that also
 needs a product feature the target does not declare is skipped, hook or no hook, because there
 is nothing to test (a target without ``admission`` has no capacity for a fault to leak).
 
@@ -54,7 +54,7 @@ __all__ = [
 SEVERITIES = ("must", "should")
 STATUSES = ("pass", "fail", "skip", "waived", "untested")
 #: features that are harness hooks rather than product abilities (see the module docstring)
-TEST_HOOKS = frozenset({"clock-control", "fault-injection"})
+TEST_HOOKS = frozenset({"clock-control", "fault-injection", "approval-control"})
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
 

@@ -47,7 +47,7 @@ op                        peer    fields
 ``audit``                 relay   ``action``, ``caller``, ``outcome``, ``operation``,
                                   ``request_id`` (filters), ``tail`` (default 50, max 500)
 ``token-issue``           runner  ``request_id``, ``sandbox_id``, ``actions``, ``max_calls``,
-                                  ``ttl_s``: ``{secret, claims}``
+                                  ``ttl_s``: ``{claims}``, the secret beside it
 ``token-spend``           runner  ``token_id``, ``outcome`` (``finished`` | ``paused``)
 ``token-status``          runner  ``token_id``
 ``token-call`` /          sandbox ``action``, ``params``, ``target``: ``{result |
@@ -117,6 +117,8 @@ from typing import Any
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
 from .service import TRANSPORT_PEER, BrokerService, ManifestError
+from .tokens import BEARER_PREFIX as _TOKEN_PREFIX
+from .tokens import MAX_BEARER_BYTES
 
 __all__ = [
     "CALLER_OPS",
@@ -150,8 +152,7 @@ RATE_LIMITED = "rate-limited"
 #: how much higher a sandbox uid's ceiling for requests with no known token is than the limit
 UNKNOWN_TOKEN_FACTOR = 10
 #: a request whose first line starts so is a sandbox's: that line is its token (the bearer line)
-BEARER_PREFIX = b"hnxcmt_"
-MAX_BEARER_BYTES = 256
+BEARER_PREFIX = _TOKEN_PREFIX.encode("ascii")
 #: failures of the broker itself (its trail, its secret store, its host), never counted as the
 #: peer's refusals: an outage of any of them must not rate-limit a healthy agent
 NOT_REFUSALS = frozenset(
@@ -310,6 +311,7 @@ class RefusalLimiter:
         #: key (a uid; a sandbox's (uid, token digest)) -> [window start, refusals, suppressed]
         self._peers: dict[Hashable, list[float]] = {}
         self._unknown: RefusalLimiter | None = None
+        self._pruned = clock()
 
     @property
     def unknown_tokens(self) -> RefusalLimiter:
@@ -317,11 +319,12 @@ class RefusalLimiter:
         a wrong secret, a malformed request): :data:`UNKNOWN_TOKEN_FACTOR` times this limit, in
         the same window, so one program's garbage cannot lock its pool out at the normal limit,
         and a flood of it still ends."""
-        if self._unknown is None:
-            self._unknown = RefusalLimiter(
-                self.max_refusals * UNKNOWN_TOKEN_FACTOR, self.window_s, clock=self.clock
-            )
-        return self._unknown
+        with self._lock:  # created once, whichever thread asks first
+            if self._unknown is None:
+                self._unknown = RefusalLimiter(
+                    self.max_refusals * UNKNOWN_TOKEN_FACTOR, self.window_s, clock=self.clock
+                )
+            return self._unknown
 
     @classmethod
     def from_manifest(cls, manifest: Mapping[str, Any], **kw: Any) -> RefusalLimiter:
@@ -332,9 +335,18 @@ class RefusalLimiter:
             **kw,
         )
 
+    def _prune(self, now: float) -> None:
+        """Drop every key whose window has ended, at most once a window: a sandbox's key names a
+        token, so keys would otherwise pile up one per token that was ever refused."""
+        if now - self._pruned < self.window_s and now >= self._pruned:
+            return
+        self._pruned = now
+        for key in list(self._peers):
+            self._current(key, now)
+
     def _current(self, uid: Hashable, now: float) -> list[float] | None:
         st = self._peers.get(uid)
-        if st is not None and now - st[0] >= self.window_s:
+        if st is not None and not 0 <= now - st[0] < self.window_s:  # ended, or a clock step
             if st[2]:
                 log.warning(
                     "%s: %d request(s) answered rate-limited in the last window",
@@ -349,7 +361,9 @@ class RefusalLimiter:
         """(limited, first): whether ``uid`` is over its limit now, and whether this is the first
         request of the window to be refused for it (the one that is audited)."""
         with self._lock:
-            st = self._current(uid, self.clock())
+            now = self.clock()
+            self._prune(now)
+            st = self._current(uid, now)
             if st is None or st[1] < self.max_refusals:
                 return False, False
             st[2] += 1
@@ -435,6 +449,10 @@ def _refuse(
         reason,
         action=action,
         request_id=rid[:128] if isinstance(rid, str) and rid else None,
+        # a sandbox's refusals before any token was read (no bearer, a malformed body, a token
+        # in the body, an unknown operation) are coalesced per peer, like unknown secrets: a
+        # shared pool uid cannot crowd the trail with them
+        coalesce=who is not None and who.role == "sandbox" and reason != RATE_LIMITED,
     )
     # the operation as one of the protocol's own names, never the text the peer sent: a body can
     # carry a token's secret beside its op, so nothing read from it is logged
@@ -589,7 +607,23 @@ def _handle(
             "this relay carries approvers of another issuer",
             body,
         )
+    if isinstance(result, _Issued):
+        # the secret goes to the runner at the answer's top level, beside the result: the
+        # result (the claims, which the runner reads and sends back in later requests) never
+        # shares a container with it, and it is never serialised with anything else
+        return {
+            "ok": True,
+            "result": _jsonable({"claims": dict(result.token.claims)}),
+            "secret": result.token.secret,
+        }
     return {"ok": True, "result": _jsonable(result)}
+
+
+@dataclass(frozen=True)
+class _Issued:
+    """``token-issue``'s answer, kept apart until the response is built."""
+
+    token: Any
 
 
 class _BadField(Exception):
@@ -643,10 +677,7 @@ def _runner_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, An
             max_calls=body.get("max_calls"),
             ttl_s=body.get("ttl_s"),
         )
-        # the answer is built from the two apart: the claims are a fresh copy, the secret is
-        # added last and appears in nothing else (no log, no audit record, no error)
-        claims = json.loads(json.dumps(dict(token.claims)))
-        return {"claims": claims, "secret": token.secret}
+        return _Issued(token)  # its secret is answered beside the result, never in it
     tid = body.get("token_id")
     if not isinstance(tid, str) or not tid:
         raise _BadField("token_id is a non-empty string")

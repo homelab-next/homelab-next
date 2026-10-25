@@ -307,7 +307,8 @@ Refused, each audited (operation `token-issue`) with its reason:
 | `call-cap-reached` | a resume of an execution that has made every call its cap allows |
 | `too-many-live-tokens` | the actor already holds `codemode.max_live_tokens_per_actor` (default 4) live tokens |
 
-The answer is `{secret, claims}`, once. The secret is 256 random bits (`hnxcmt_` and 43
+The answer is the secret and the claims, once (over the socket the secret sits beside the
+result, `{"ok": true, "result": {"claims": ...}, "secret": ...}`, never inside it). The secret is 256 random bits (`hnxcmt_` and 43
 URL-safe characters); the broker keeps only its sha256, beside the claims, the runner, the state
 (`live`, `paused`, `spent` with an outcome) and the call count, in `<state>/codemode/`
 (`homelabnext/broker/tokens.py`). It is in no claim, no audit record, no error and no log.
@@ -319,8 +320,8 @@ left of the first run's `max_calls`, never a fresh one, so pausing and resuming 
 `token_run`; over the socket `token-call`, `token-submit`, `token-run`). On the socket the
 secret is a **bearer line** of its own, the token alone on the first line and the JSON body on
 the next; it is never a body field (`token` in the body is refused `request-invalid`), so nothing
-the broker parses out of a body, audits or names in a log line ever held it, and the issue
-answer's `claims` are a fresh copy beside it. The actor is the token's: the request names none
+the broker parses out of a body, audits or names in a log line ever held it ([Sandbox socket
+framing](#sandbox-socket-framing)). The actor is the token's: the request names none
 (`actor-in-body`), and the sandbox's peer has no profile of its own. In order, a call is refused `Denied` and audited (with `token_id` and `execution_id`) for:
 
 1. `token-invalid`: no token has that secret. An unknown and a wrong secret get the same answer,
@@ -335,7 +336,8 @@ answer's `claims` are a fresh copy beside it. The actor is the token's: the requ
 4. `token-action-not-allowed`: an action the token does not list (a `codemode.*` one never is);
 5. `call-cap-reached`: the token's `max_calls` already made;
 6. for `token_run` only: `token-request-not-paused` (the request is not one an earlier token of
-   this execution paused on) and `request-not-approved` (it still waits for its approval).
+   this execution paused on; not counted) and, after the count, `request-not-approved` (it still
+   waits for its approval).
 
 These reasons are `TOKEN_REFUSALS` of `conformance/protocols/broker.py`: refusals before the call
 runs anything, `token_run`'s included, so that call built no request and the refusal has no
@@ -348,7 +350,8 @@ the check, under the token store's lock (`flock` across processes, a re-entrant 
 descriptor within one), before `decide()` runs. So a call `decide()` then refuses, or whose
 arguments are invalid, or whose handler fails, counts: a program cannot probe the allowlist past
 its cap, and two concurrent calls cannot both take the last one. A call the token checks refuse
-does not count. The call then takes the ordinary path for the token's actor: `decide()`,
+does not count. A `token_run` counts once past its binding check, refused or not: a program that
+polls a request not approved yet (each poll an audit record under the lock) spends its cap. The call then takes the ordinary path for the token's actor: `decide()`,
 approvals, argument checks, the handler, one outcome record.
 
 **Answers.** Every answer names the request the broker built: `{result, request_id,
@@ -366,11 +369,14 @@ cannot leave a pending request beside a live token. Every later call on the toke
 execution waits) or `finished` (it never resumes). The end of its `codemode.execute` spends a
 token still live as `finished`; a paused one stays paused. `token_status` (`token-status`) is the
 runner's view of its token, with `paused_by` and `paused_by_state` (`pending`, `approved`,
-`denied`, `done`, ...): the runner resumes once it reads `approved`. A resume is a new
+`expired`, `denied`, `done`, ...): the runner resumes once it reads `approved`. `expired` is not
+terminal: an approval that expires unused puts the request back to waiting, the approver is
+paged again and a fresh approval is accepted ([Approvals](#approvals)), so the runner keeps
+waiting, now knowing that it waits on a new approval rather than the one it saw. A resume is a new
 `codemode.execute` of the same execution id with `resume: true`: only a **paused** execution, of
 the same actor and code digest, is issued a new token, and its program calls
 `token_run(token, request_id)` for the paused request, which runs it as the actor through the
-ordinary `run` path, counts against the cap and answers `{result, request_id, request_digest}`.
+ordinary `run` path and answers `{result, request_id, request_digest}`.
 A resumed run that ends without pausing again finishes the execution, so the runner reads
 `paused_by_state` before it resumes.
 
@@ -837,6 +843,33 @@ approval can no longer be used: show the form again, a fresh approval is accepte
 `subject` is the person's SSO subject. The broker then applies the manifest's rules to that person:
 `approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
 never runs, submits or reads a request for itself (`not-a-caller`).
+
+### Sandbox socket framing
+
+A Code Mode sandbox (a `codemode.sandboxes` peer, [above](#code-mode-capability-tokens)) speaks
+the same protocol with one addition, so that its token never travels inside a body the broker
+parses, audits or names in a log line: the token goes on a **bearer line** of its own.
+
+- **Detection.** When the first line of a request starts with `hnxcmt_` (the prefix every token
+  has; `BEARER_PREFIX` of `homelabnext/broker/tokens.py`), that line is the bearer and the request
+  body is the line after it. Any other first line is the body, as for every other peer: a token
+  sent without its prefix, or anything not JSON, is parsed as the body and answered
+  `request-malformed`.
+- **The bearer line.** At most 256 bytes (`MAX_BEARER_BYTES`) before its newline, else the request
+  is answered `request-too-large` without being parsed; a trailing `\r` is stripped and the line
+  is decoded as ASCII. The body after it keeps the usual limit (`--max-request-bytes`), and EOF
+  right after the bearer line is an empty body (`request-malformed`).
+- **Who sends one.** Only a sandbox, and only with `token-call`, `token-submit` and `token-run`:
+  a bearer line from any other peer, and a sandbox's token operation without one, are
+  `request-invalid`; so is a body naming a `token` field. A client that will not send a malformed
+  token (not the prefix, not one printable ASCII line) reports `token-invalid`, as the broker
+  would (`BrokerClient` does).
+- **Example.** `hnxcmt_<43 characters>\n{"v": 1, "op": "token-call", "action": "dns.lookup",
+  "params": {"name": "app-01"}}\n`; the answer is one JSON object as usual. A `token-issue`
+  answer carries the new token's secret beside the result, `{"ok": true, "result": {"claims":
+  ...}, "secret": "<the token>"}`, never inside it.
+- **Versioning.** Requests without a bearer line are unchanged on the wire, and `v` stays 1. A
+  future bearer scheme takes a new prefix (or a new `v`), never a new meaning for `hnxcmt_`.
 
 ### Front-door approvals
 

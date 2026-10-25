@@ -154,7 +154,7 @@ from .state import (
     new_id,
     process_identity,
 )
-from .tokens import TokenStore, execution_key, secret_digest
+from .tokens import BEARER_PREFIX, TokenStore, execution_key, secret_digest
 
 __all__ = [
     "DEFAULT_NOTIFY_WINDOW_S",
@@ -225,7 +225,7 @@ TOKEN_SWEEP_INTERVAL_S = 60.0
 SPEND_OUTCOMES = ("finished", "paused")
 NOT_A_RUNNER = "not-a-codemode-runner"
 #: refused unknown secrets are audited once per transport peer and this many seconds
-INVALID_TOKEN_AUDIT_WINDOW_S = 60.0
+COALESCE_WINDOW_S = 60.0
 #: token_run of a paused request an approver denied: the request was decided, so the refusal
 #: names it (request_id, request_digest), unlike the token refusals
 REQUEST_DENIED = "request-denied"
@@ -233,7 +233,6 @@ REQUEST_DENIED = "request-denied"
 RUNNER_HANDLER = "builtin/codemode-runner"
 #: the caller of a token-authenticated call whose secret names no token
 UNKNOWN_TOKEN_CALLER = "token:unknown"
-_BEARER_PREFIX = "hnxcmt_"
 _PROFILE_RE = re.compile(r"^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the token a call is being made with: every audit record written meanwhile names it
 _TOKEN: ContextVar[Mapping[str, Any] | None] = ContextVar("hnx_broker_token", default=None)
@@ -578,13 +577,9 @@ class BrokerService:
             r["service"]: None for r in cm.get("runners", [])
         }
         self._tokens_swept = datetime.min.replace(tzinfo=UTC)
-        #: transport peer -> (window start, refused unknown secrets not audited in it)
-        self._invalid_seen: dict[str, tuple[datetime | None, int]] = {}
-        self._invalid_lock = threading.Lock()
-        try:  # a crash's leftovers are settled before anything is issued
-            self.sweep_tokens(force=True)
-        except OSError:
-            log.exception("codemode tokens could not be swept at start")
+        #: (kind, transport peer) -> [window start (monotonic), refusals held back in it]
+        self._coalescing: dict[tuple[str, str], list[float]] = {}
+        self._coalesce_lock = threading.Lock()
         quotas = self.manifest.get("quotas") or {}
         self.pending_per_actor = int(quotas.get("pending_per_actor", DEFAULT_PENDING_PER_ACTOR))
         self._submit_lock = threading.Lock()  # the pending count and the new request, as one
@@ -610,6 +605,10 @@ class BrokerService:
         self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
         self._lane_red: dict[str, tuple[str, str]] = {}  # lane-quota key -> (lane, actor)
         self._notify_warned = float("-inf")  # when a failed send was last logged
+        try:  # a crash's leftovers are settled before anything is issued
+            self.sweep_tokens(force=True)
+        except OSError:
+            log.exception("codemode tokens could not be swept at start")
         if notifier is not None:
             notifier.register_pair(APPROVAL_TITLE, APPROVAL_CLEARED)
             notifier.register_pair(LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED)
@@ -786,10 +785,22 @@ class BrokerService:
         *,
         action: str = "",
         request_id: str | None = None,
+        coalesce: bool = False,
     ) -> None:
         """Audit a refusal made before the service saw the request (the socket transport's:
-        an unknown peer, an actor named in the body, a malformed or oversized request)."""
-        self._audit(caller, action, operation, outcome, reason=reason, request_id=request_id)
+        an unknown peer, an actor named in the body, a malformed or oversized request).  With
+        ``coalesce`` (a sandbox's: no bearer, a malformed body, a token in the body, an unknown
+        operation) the records are coalesced per peer like unknown secrets (:meth:`_coalesce`,
+        kind ``sandbox-refused``)."""
+        args = None
+        if coalesce:
+            held = self._coalesce("sandbox-refused")
+            if held is None:
+                return
+            args = {"coalesced": held} if held else None
+        self._audit(
+            caller, action, operation, outcome, reason=reason, request_id=request_id, args=args
+        )
 
     def audit(self) -> Sequence[AuditRecord]:
         return [
@@ -1582,6 +1593,7 @@ class BrokerService:
         if not force and (now - self._tokens_swept).total_seconds() < TOKEN_SWEEP_INTERVAL_S:
             return {}
         self._tokens_swept = now
+        self.flush_coalesced()  # a window that ended with refusals held back leaves its count
         before = now - timedelta(days=self.token_retention_days)
         counts = self.tokens.sweep(
             _stamp(now), alive=self.state.instance_alive, retention_before=_stamp(before)
@@ -1724,7 +1736,7 @@ class BrokerService:
         now = self._now().astimezone(UTC).replace(microsecond=0)
         if len(self.tokens.live_of(actor, _stamp(now))) >= self.live_tokens_per_actor:
             refuse("too-many-live-tokens", f"at most {self.live_tokens_per_actor} live tokens")
-        secret = _BEARER_PREFIX + secrets.token_urlsafe(32)  # 256 bits; returned once, never kept
+        secret = BEARER_PREFIX + secrets.token_urlsafe(32)  # 256 bits; returned once, never kept
         claims = {
             "token_id": new_id("tok"),
             "execution_id": eid,
@@ -1799,7 +1811,7 @@ class BrokerService:
             ids["request_digest"] = request["digest"]
         args = None
         if claims is None:  # a secret that names no token: one record per peer and window
-            coalesced = self._invalid_token_seen()
+            coalesced = self._coalesce("token-invalid")
             if coalesced is None:
                 raise Denied("the token does not allow this call", reason=reason)
             args = {"coalesced": coalesced} if coalesced else None
@@ -1816,20 +1828,63 @@ class BrokerService:
         err = Denied("the token does not allow this call", reason=reason)
         raise _carry(err, request) if request is not None else err
 
-    def _invalid_token_seen(self) -> int | None:
-        """Coalesce the records of refused unknown secrets per transport peer: the first of a
-        :data:`INVALID_TOKEN_AUDIT_WINDOW_S` window is audited, carrying how many the previous
-        window suppressed (an int, 0 for none); every other one returns None, and is counted.
-        A garbage-token flood cannot fill the trail."""
+    def _coalesce(self, kind: str) -> int | None:
+        """Coalesce one kind of refusal record per transport peer (``token-invalid``: a secret
+        that names no token; ``sandbox-refused``: a sandbox's request refused by the transport
+        before any token was read): the first of a :data:`COALESCE_WINDOW_S` window is written
+        and returns how many the previous window held back (0 for none); every other one returns
+        None and is counted.  A window is judged on the monotonic clock, and an elapsed time
+        that is negative (a clock stepped back) ends it rather than extending it.  What a window
+        held back is written once it ends, by :meth:`flush_coalesced` (a timer, the token
+        sweep, or the next refusal), so a flood that stops still leaves its count."""
         peer = TRANSPORT_PEER.get() or "in-process"
-        now = self._now()
-        with self._invalid_lock:
-            start, suppressed = self._invalid_seen.get(peer, (None, 0))
-            if start is not None and (now - start).total_seconds() < INVALID_TOKEN_AUDIT_WINDOW_S:
-                self._invalid_seen[peer] = (start, suppressed + 1)
+        now = self._mono()
+        with self._coalesce_lock:
+            st = self._coalescing.get((kind, peer))
+            if st is not None and 0 <= now - st[0] < COALESCE_WINDOW_S:
+                st[1] += 1
+                if st[1] == 1:
+                    self._arm_flush(COALESCE_WINDOW_S - (now - st[0]))
                 return None
-            self._invalid_seen[peer] = (now, 0)
-            return suppressed
+            held = st[1] if st is not None else 0
+            self._coalescing[(kind, peer)] = [now, 0]
+            return held
+
+    def flush_coalesced(self) -> int:
+        """Write one record for every coalescing window that has ended with refusals held back
+        (``args.coalesced``: how many), and forget it.  Returns how many it wrote."""
+        now = self._mono()
+        due = []
+        with self._coalesce_lock:
+            for key, (start, held) in list(self._coalescing.items()):
+                if not 0 <= now - start < COALESCE_WINDOW_S:
+                    del self._coalescing[key]
+                    if held:
+                        due.append((key, held))
+        for (kind, peer), held in due:
+            ctx = TRANSPORT_PEER.set(peer if peer.startswith("uid:") else None)
+            try:
+                with contextlib.suppress(*_AUDIT_FAILURES):
+                    caller = UNKNOWN_TOKEN_CALLER if kind == "token-invalid" else peer
+                    self._audit(
+                        caller, "", "connect", "denied", reason=kind, args={"coalesced": held}
+                    )
+            finally:
+                TRANSPORT_PEER.reset(ctx)
+        return len(due)
+
+    def _arm_flush(self, delay: float) -> None:
+        if not self.page_timers:
+            return
+        timer = threading.Timer(max(0.0, delay) + 0.05, self._flush_quietly)
+        timer.daemon = True
+        timer.start()
+
+    def _flush_quietly(self) -> None:
+        try:
+            self.flush_coalesced()
+        except Exception:  # a timer thread: the next sweep or refusal flushes again
+            log.exception("coalesced refusal counts could not be written")
 
     def _count(self, tok: dict[str, Any]) -> None:
         tok["calls"] += 1
@@ -1902,7 +1957,8 @@ class BrokerService:
     def token_run(self, token, request_id, *, sandbox_id=None):
         """Run, as the token's actor, the request an earlier token of the same execution paused
         on, once it may run (approved, or needing none): ``{result, request_id,
-        request_digest}``.  It counts against the cap like any call.  Everything after the
+        request_digest}``.  Past the binding check it counts against the cap, refused or not (so
+        polling a request not approved yet spends the cap).  Everything after the
         binding check uses the broker's own record of that request id (``paused_by``), never the
         id the caller sent, which arrived in the same request body as the token's secret."""
         with self.tokens.locked():
@@ -1922,12 +1978,15 @@ class BrokerService:
                     reason = "token-request-not-paused"
                 elif rec["request"]["action"] not in tok["claims"]["actions"]:
                     reason = "token-action-not-allowed"
-                elif self._paused_state(rid, rec) == "denied":
-                    reason = REQUEST_DENIED  # decided: named like any decided request
-                elif self._paused_state(rid, rec) != "approved":
-                    reason = "request-not-approved"
             if not reason:
+                # past the binding, every token_run counts, a refused one too: a program polling
+                # a request that is not approved yet spends its cap, so the polling is bounded
                 self._count(tok)
+                state = self._paused_state(rid, rec)
+                if state == "denied":
+                    reason = REQUEST_DENIED  # decided: named like any decided request
+                elif state != "approved":
+                    reason = "request-not-approved"
         action = rec["request"]["action"] if rec else ""
         if reason:
             decided = rec["request"] if reason == REQUEST_DENIED else None
@@ -1949,7 +2008,11 @@ class BrokerService:
         if rec["verdict"] != "needs-approval":
             return "approved"
         verdict = self.approval_state(request_id, rec["request"])
-        return {"valid": "approved", "denied": "denied"}.get(verdict, "pending")
+        # an approval that expired unused puts the request back to waiting (a fresh approval is
+        # accepted, and it is paged again): "expired" tells the runner it waits on a new one
+        return {"valid": "approved", "denied": "denied", "expired": "expired"}.get(
+            verdict, "pending"
+        )
 
     def _runner_token(self, who, token_id):
         """The token ``who`` holds (it issued it), or None: another runner's token reads as no
@@ -1990,6 +2053,16 @@ class BrokerService:
             tok["claims"]["request_id"],
             args={"outcome": outcome},
         )
+
+    def _decide_for_test(self, request_id: str, verdict: str) -> None:
+        """The conformance hook ``approval-control`` (:func:`make` only): an approver's verdict
+        on a pending request.  ``denied`` takes its one transition, as a denial filed through
+        :meth:`deny` would; an in-process command needs no approval, so ``approved`` changes
+        nothing."""
+        if verdict == "denied":
+            self.state.claim(
+                request_id, {"op": "deny", "by": "conformance", "at": _stamp(self._now())}
+            )
 
     def token_status(self, runner, token_id) -> dict[str, Any]:
         """A runner's view of its token: its claims, ``state`` (``live``, ``paused``, ``spent``;
@@ -2502,7 +2575,8 @@ def make(**config: Any) -> BrokerService:
         )
     svc._tmpdir = tmp  # the directory lives as long as the service
     svc.tick = clock.tick
-    svc.features = BrokerService.features | {"clock-control"}
+    svc.decide_request = svc._decide_for_test  # the approval-control hook
+    svc.features = BrokerService.features | {"clock-control", "approval-control"}
     return svc
 
 

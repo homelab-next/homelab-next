@@ -113,7 +113,7 @@ def test_reference_service_passes_the_token_suite():
 
 def test_the_token_suite_catches_every_mutant():
     runs = mutation_runs("broker-tokens", ROOT)
-    assert len(runs) == 13 and all(m.detected for m in runs), [m.name for m in runs]
+    assert len(runs) == 14 and all(m.detected for m in runs), [m.name for m in runs]
 
 
 # -- issue --------------------------------------------------------------------------------------
@@ -640,13 +640,13 @@ def test_runner_and_sandbox_peers_over_the_socket(tmp_path):
             actions=["echo.one"],
         )
         assert issued["ok"], issued
-        secret = issued["result"]["secret"]
+        secret = issued["secret"]
         call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
         bad = {**call, "params": {"nope": 1}}
         # a body naming a token is refused, whatever it holds (not this run's secret: nothing
         # secret is ever put in a body)
         in_body = {"op": "token-call", "token": UNKNOWN, "action": "echo.one", "params": {}}
-        return issued["result"], {
+        return {"secret": secret, "claims": issued["result"]["claims"]}, {
             "pool": _ask(svc, peers, POOL_UID, bearer=secret, **call),
             "bound": _ask(svc, peers, SANDBOX_UID, bearer=secret, **call),
             "invalid": _ask(svc, peers, POOL_UID, bearer=secret, **bad),
@@ -717,7 +717,7 @@ def test_a_dedicated_sandboxs_token_is_its_own(tmp_path):
             request_id=req["request_id"],
             sandbox_id="sandbox-01",
             actions=["echo.one"],
-        )["result"]["secret"]
+        )["secret"]
         call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
         return (
             _ask(svc, peers, POOL_UID, bearer=secret, **call),
@@ -753,7 +753,7 @@ def test_one_program_cannot_rate_limit_another_on_a_pool(tmp_path):
             **kw,
         )
         assert out["ok"], out
-        return out["result"]["secret"]
+        return out["secret"]
 
     call = {"op": "token-call", "action": "echo.one", "params": {"text": "x"}}
 
@@ -984,17 +984,20 @@ def test_issue_keeps_the_secret_out_of_everything_but_the_answer(tmp_path, caplo
             sandbox_id="sandbox-pool",
             actions=["echo.one"],
         )
-        bearer = issued["result"]["secret"]
+        bearer = issued["secret"]
         refusals = [
             _ask(svc, peers, POOL_UID, bearer=bearer, op="token-call", action="nope.no"),
             _ask(svc, peers, POOL_UID, bearer=bearer, op="nope"),
             _ask(svc, peers, RUNNER_UID, op="token-status", token_id="tok-none"),
         ]
-        return issued["result"], refusals
+        return issued, refusals
 
-    result, refusals = _execute(svc, program)
-    bearer = result["secret"]
-    assert set(result) == {"secret", "claims"} and bearer not in json.dumps(result["claims"])
+    issued, refusals = _execute(svc, program)
+    bearer = issued["secret"]
+    # the secret is answered beside the result, never in it: what the runner reads and sends
+    # back (the claims, the token id) never shared a container with it
+    assert set(issued) == {"ok", "result", "secret"} and set(issued["result"]) == {"claims"}
+    assert bearer not in json.dumps(issued["result"])
     assert all(bearer not in json.dumps(r) for r in refusals)
     assert all(bearer not in json.dumps(d) for d in svc.state.audit_records())
     assert bearer not in caplog.text, "the secret reached a log line"
@@ -1018,3 +1021,162 @@ def test_the_bearer_line_is_read_apart_from_the_body():
     assert read(body + b"\n", close=False) == (body, "", None)
     assert read(body) == (body, "", None)
     assert read(b"hnxcmt_" + b"x" * 300 + b"\n" + body)[1] == "request-too-large"
+
+
+# -- the wire, the limiter and coalescing ---------------------------------------------------------
+
+
+class _Conn:
+    """A socket stand-in whose recv returns the scripted chunks, then EOF."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self.chunks = list(chunks)
+
+    def settimeout(self, _t) -> None:
+        pass
+
+    def recv(self, _n: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else b""
+
+
+@pytest.mark.parametrize(
+    ("chunks", "want"),
+    [
+        # a bearer split across chunks, and its prefix split mid-word
+        ((b"hnxcm", b"t_" + b"a" * 43, b"\n{}", b"\n"), (b"{}", "", "hnxcmt_" + "a" * 43)),
+        ((b"hnxcmt_ab\r\n{}\r\n",), (b"{}\r", "", "hnxcmt_ab")),  # a bearer's \r is stripped
+        ((b"hnxcmt_ab\n",), (b"", "", "hnxcmt_ab")),  # a bearer, then EOF: no body
+        ((b"hnxcmt_ab",), (b"", "", "hnxcmt_ab")),  # no newline at all
+        ((b'{"op": "x"}\nhnxcmt_ab\n',), (b'{"op": "x"}', "", None)),  # not first: body only
+        ((b"hnxcmt_ab\n", b"{" + b"a" * 2000 + b"}\n"), (None, "request-too-large", None)),
+    ],
+)
+def test_read_request_framing(chunks, want):
+    from homelabnext.broker.server import _read_request
+
+    assert _read_request(_Conn(*chunks), 1024, 5.0) == want
+
+
+def test_a_non_sandbox_bearer_and_a_bad_first_line_are_refused(tmp_path):
+    svc = _svc(tmp_path, _transport_manifest())
+    peers = PeerMap(svc.manifest)
+    caller = _ask(svc, peers, AGENT_UID, bearer=UNKNOWN, op="actions")
+    assert caller["error"] == "request-invalid", "a caller's bearer line was accepted"
+    junk = handle_request(svc, peers, POOL_UID, b"hnxcmt-not-a-bearer")
+    assert junk["error"] == "request-malformed"
+
+
+def test_the_limiter_keys_a_sandbox_by_token_and_prunes(tmp_path):
+    from homelabnext.broker.server import RefusalLimiter, _sandbox_key
+
+    svc = _svc(tmp_path, _transport_manifest())
+    tok = _execute(svc, lambda req: _issue(svc, req))
+    now = [0.0]
+    limiter = RefusalLimiter(2, 10, clock=lambda: now[0])
+    key, lim = _sandbox_key(svc, POOL_UID, tok.secret, limiter)
+    assert (key, lim) == ((POOL_UID, tok.claims["token_id"]), limiter)
+    assert tok.secret not in repr(key)
+    unknown_key, unknown = _sandbox_key(svc, POOL_UID, UNKNOWN, limiter)
+    assert (unknown_key, unknown) == (POOL_UID, limiter.unknown_tokens)
+    assert unknown.max_refusals == 20 and limiter.unknown_tokens is unknown
+    for i in range(50):  # one refusal each for 50 tokens: 50 keys, none seen again
+        limiter.refused((POOL_UID, f"tok-{i}"))
+    assert len(limiter._peers) == 50
+    now[0] = 11.0
+    limiter.check((POOL_UID, "tok-new"))
+    assert limiter._peers == {}, "expired keys were kept"
+    now[0] = 5.0  # a clock stepped back ends a window rather than stretching it
+    limiter.refused(POOL_UID)
+    limiter.refused(POOL_UID)
+    assert limiter.check(POOL_UID) == (True, True)
+    now[0] = 1.0
+    assert limiter.check(POOL_UID) == (False, False)
+
+
+def test_sandbox_transport_refusals_are_coalesced_and_flushed(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, _transport_manifest(), clock=clock)
+    svc.page_timers = False
+    peers = PeerMap(svc.manifest)
+    bad = [
+        {"op": "token-call", "action": "echo.one"},  # no bearer
+        {"op": "token-call", "token": UNKNOWN, "action": "echo.one"},  # a token in the body
+        {"op": "nope"},
+    ]
+    for i in range(600):
+        _ask(svc, peers, POOL_UID, **bad[i % 3])
+    handle_request(svc, peers, POOL_UID, b"{not json")
+
+    def records():
+        return [d for d in svc.state.audit_records() if d.get("via") == f"uid:{POOL_UID}"]
+
+    assert len(records()) == 1, f"601 refusals left {len(records())} records"
+    assert svc.flush_coalesced() == 0, "flushed before the window ended"
+    clock.advance(61)
+    assert svc.flush_coalesced() == 1
+    last = records()[-1]
+    assert (last["reason"], last["args"]) == ("sandbox-refused", {"coalesced": 600})
+    clock.advance(-3600)  # a clock stepped back: the next refusal opens a window, audited
+    _ask(svc, peers, POOL_UID, op="nope")
+    assert len(records()) == 3
+
+
+def test_a_flood_of_unknown_secrets_that_stops_still_leaves_its_count(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, clock=clock)
+    svc.page_timers = False
+    for _ in range(40):
+        _reason(lambda: svc.token_call(UNKNOWN, "echo.one", {"text": "x"}))
+    clock.advance(61)
+    svc.sweep_tokens(force=True)  # the sweep flushes what a window held back
+    invalid = [d for d in svc.state.audit_records() if d.get("reason") == "token-invalid"]
+    assert len(invalid) == 2 and invalid[-1]["args"] == {"coalesced": 39}, invalid
+
+
+def test_polling_token_run_spends_the_cap(tmp_path):
+    svc = _svc(tmp_path)
+    actions = ["service.restart"]
+
+    def program(req):
+        tok = _issue(svc, req, actions)
+        return svc.token_call(tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue")
+
+    ans = _execute(svc, program)
+
+    def poll(req):
+        tok = _issue(svc, req, actions, max_calls=3)
+        return [_reason(lambda: svc.token_run(tok.secret, ans["request_id"])) for _ in range(5)]
+
+    got = _execute(svc, poll, resume=True)
+    assert got == ["request-not-approved"] * 3 + ["call-cap-reached"] * 2, got
+
+
+def test_an_expired_approval_reads_expired_and_waits_for_a_fresh_one(tmp_path):
+    clock = Clock()
+    svc = _svc(tmp_path, clock=clock)
+    actions = ["service.restart"]
+
+    def program(req):
+        tok = _issue(svc, req, actions)
+        ans = svc.token_call(tok.secret, "service.restart", {"grace_s": 5}, target="svc:queue")
+        return tok, ans
+
+    tok, ans = _execute(svc, program)
+    svc.approve(ans["request_id"], "sso:operator-one")
+    clock.advance(901)  # past approval_ttl_s: the approval expired unused
+    status = svc.token_status(RUNNER, tok.claims["token_id"])
+    assert status["paused_by_state"] == "expired"
+    svc.approve(ans["request_id"], "sso:operator-one")  # a fresh approval is accepted
+    assert svc.token_status(RUNNER, tok.claims["token_id"])["paused_by_state"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "bearer", ["hnxcmt_a\rb", "hnxcmt_é", "hnxcmt_a\nb", "nope", "hnxcmt_" + "a" * 300]
+)
+def test_the_client_refuses_an_unsendable_bearer_as_token_invalid(bearer, tmp_path):
+    from homelabnext.broker.client import BrokerClient
+
+    client = BrokerClient(str(tmp_path / "no.sock"))
+    with pytest.raises(BrokerError) as exc:
+        client.token_call(bearer, "echo.one", {})
+    assert type(exc.value) is BrokerError and exc.value.reason == "token-invalid"

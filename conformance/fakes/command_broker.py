@@ -65,7 +65,7 @@ def _execution_problems(params: Any) -> list[str]:
 
 
 class FakeBroker:
-    features = frozenset({"codemode-tokens", "clock-control"})
+    features = frozenset({"codemode-tokens", "clock-control", "approval-control"})
 
     def __init__(self) -> None:
         self._cmds: dict[str, tuple[Callable[..., Any], Mapping[str, ArgSpec]]] = {}
@@ -405,19 +405,31 @@ class FakeBroker:
             reason = self._run_problem(tok, rid)
         if reason:
             self._token_refused(tok, command, operation, reason)
-        tok["calls"] += 1
+        tok["calls"] += 1  # past the binding a token_run counts, refused or not
+        if rid is not None:
+            reason = self._approval_problem(rid)
+            if reason == "request-denied":  # decided: the refusal names its request
+                req = self._reqs[rid]
+                request = {"request_id": rid, "request_digest": req.get("digest", "")}
+                self._token_refused(tok, req["command"], operation, reason, request=request)
+            elif reason:
+                self._token_refused(tok, self._reqs[rid]["command"], operation, reason)
         return tok
 
-    def _token_refused(self, tok, command, operation, reason):
+    def _token_refused(self, tok, command, operation, reason, *, request=None):
         actor, ids = "token:unknown", {}
         if tok is not None:
             claims = tok["claims"]
             actor = claims["actor"]
             ids = {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
+        rid = request["request_id"] if request else None
         self._audit.append(
-            AuditRecord(actor, str(command or ""), "denied", {}, operation, None, reason, **ids)
+            AuditRecord(actor, str(command or ""), "denied", {}, operation, rid, reason, **ids)
         )
-        raise Denied("the token does not allow this call", reason=reason)
+        exc = Denied("the token does not allow this call", reason=reason)
+        if request is not None:  # a decided request (request-denied) is named
+            exc.request_id, exc.request_digest = request["request_id"], request["request_digest"]
+        raise exc
 
     def _token_problem(self, tok, command, sandbox_id) -> str:
         if tok is None:
@@ -451,9 +463,21 @@ class FakeBroker:
             return "token-request-not-paused"
         if req["command"] not in tok["claims"]["actions"]:
             return "token-action-not-allowed"
-        if req["state"] != "pending":  # the fake's requests need no approval: pending may run
-            return "request-not-approved"
         return ""
+
+    def _approval_problem(self, rid) -> str:
+        """After the binding (and the count): whether the paused request may run now.  The
+        fake's requests need no approval, so a pending one may; a denied one is decided."""
+        state = self._reqs[rid]["state"]
+        if state == "denied":
+            return "request-denied"
+        return "" if state == "pending" else "request-not-approved"
+
+    def decide_request(self, request_id, verdict):
+        """Test hook ``approval-control``: an approver's verdict on a pending request."""
+        req = self._reqs[request_id]
+        if verdict == "denied" and req["state"] == "pending":
+            req["state"] = "denied"
 
     def _as_token(self, tok, fn, request=None):
         outer, self._token = self._token, tok
@@ -893,6 +917,15 @@ class ResumeFreshCapBroker(FakeBroker):
         return MAX_CALLS
 
 
+class DeniedLooksPendingBroker(FakeBroker):
+    """Defect: a paused request its approver denied is answered request-not-approved, a token
+    refusal with no request named, so the runner waits on a request that will never run."""
+
+    def _approval_problem(self, rid):
+        reason = super()._approval_problem(rid)
+        return "request-not-approved" if reason == "request-denied" else reason
+
+
 class TokenRunAnyRequestBroker(FakeBroker):
     """Defect: ``token_run`` runs any pending request of the actor's, not only the one its
     execution paused on."""
@@ -901,7 +934,7 @@ class TokenRunAnyRequestBroker(FakeBroker):
         req = self._reqs.get(rid)
         if req is None or req["caller"] != tok["claims"]["actor"]:
             return "token-request-not-paused"
-        return "" if req["state"] == "pending" else "request-not-approved"
+        return ""
 
 
 class RequestlessRefusalBroker(FakeBroker):
@@ -932,4 +965,5 @@ class EchoingTokenBroker(FakeBroker):
         try:
             return super()._token_for(token, *a, **kw)
         except Denied as exc:
-            raise Denied(f"token {token!r} refused: {exc}", reason=exc.reason) from None
+            exc.args = (f"token {token!r} refused: {exc}",)  # the same refusal, now naming it
+            raise

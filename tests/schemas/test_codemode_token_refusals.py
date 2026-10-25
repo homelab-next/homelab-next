@@ -41,3 +41,24 @@ def test_request_denied_names_its_request_and_is_no_token_refusal():
     from homelabnext.broker.service import REQUEST_DENIED
 
     assert REQUEST_DENIED == "request-denied"
+
+
+def _example(name):
+    return json.loads((ROOT / "schemas" / "codemode" / "examples" / name).read_text())
+
+
+def test_a_request_denied_call_carries_its_request_ids():
+    from homelabnext.agent.schemas import schema_errors
+
+    result = _example("execution_result.denied-handled.json")
+    step = _example("journal_step.denied.json")
+    result["calls"][0]["reason"] = step["reason"] = "request-denied"
+    assert schema_errors("codemode", "execution_result", result) == []
+    assert schema_errors("codemode", "journal_step", step) == []
+    for doc in (result["calls"][0], step):
+        doc.pop("request_id")
+        doc.pop("request_digest")
+    assert schema_errors("codemode", "execution_result", result), (
+        "a request-denied call without ids"
+    )
+    assert schema_errors("codemode", "journal_step", step), "a request-denied step without ids"

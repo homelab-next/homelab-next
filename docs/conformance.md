@@ -77,7 +77,9 @@ def _(store):  # the subject: any implementation of the Protocol
 * **Features.** Optional abilities are a set of names on the subject or in the target file, of
   two kinds.  *Product* features (`streaming`, `embeddings`, `wildcards`, `metadata`) describe
   what the implementation offers: a check with `requires=[...]` is skipped, not failed, when one
-  is absent.  *Test hooks* (`clock-control`, `fault-injection`) only let the suite reach a state:
+  is absent.  *Test hooks* (`clock-control`, `fault-injection`, `approval-control`: an
+  approver's decision on a pending request, `decide_request(request_id, verdict)`) only let the
+  suite reach a state:
   a `must` check that needs an undeclared hook is **`untested`**, which fails the capability like
   a failure, so not declaring a hook is never a way around a MUST.  The product decides first: a
   check that needs both a product feature and a hook skips when the product feature is absent

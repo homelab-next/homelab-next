@@ -22,10 +22,24 @@ from typing import Any
 
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
+from .tokens import BEARER_PREFIX, MAX_BEARER_BYTES
+
 __all__ = ["DEFAULT_CLIENT_TIMEOUT_S", "MAX_RESPONSE_BYTES", "BrokerClient"]
 
 DEFAULT_CLIENT_TIMEOUT_S = 600.0
 MAX_RESPONSE_BYTES = 64 << 20
+
+
+def _sendable_bearer(bearer: Any) -> bool:
+    """A bearer line the broker can read: the token prefix, printable ASCII, no line break, at
+    most :data:`MAX_BEARER_BYTES`."""
+    return (
+        isinstance(bearer, str)
+        and bearer.startswith(BEARER_PREFIX)
+        and bearer.isascii()
+        and bearer.isprintable()
+        and len(bearer) <= MAX_BEARER_BYTES
+    )
 
 
 def _raise(response: Mapping[str, Any]) -> None:
@@ -56,11 +70,16 @@ class BrokerClient:
         """Send ``{"v": 1, "op": op, **fields}`` (None fields dropped); the result or raise.
         ``bearer`` (a sandbox's Code Mode token) goes as its own line ahead of the body, never
         inside it."""
+        return self._exchange(op, bearer, fields).get("result")
+
+    def _exchange(self, op: str, bearer: str | None, fields: Mapping[str, Any]) -> dict:
         body = {"v": 1, "op": op, **{k: v for k, v in fields.items() if v is not None}}
         data = json.dumps(body, sort_keys=True).encode("utf-8") + b"\n"
         if bearer is not None:
-            if "\n" in bearer or not bearer.startswith("hnxcmt_"):
-                raise BrokerError("a bearer is one line, a Code Mode token")
+            if not _sendable_bearer(bearer):  # what the broker would answer for it, unsent
+                err = BrokerError("a bearer is one printable ASCII line, a Code Mode token")
+                err.reason = "token-invalid"  # type: ignore[attr-defined]
+                raise err
             data = bearer.encode("ascii") + b"\n" + data
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(self.timeout_s)
@@ -86,7 +105,7 @@ class BrokerClient:
             raise err
         if not response["ok"]:
             _raise(response)
-        return response.get("result")
+        return response
 
     @staticmethod
     def _receive(sock: socket.socket) -> bytes:
@@ -171,15 +190,17 @@ class BrokerClient:
         max_calls: int | None = None,
         ttl_s: int | None = None,
     ) -> dict[str, Any]:
-        """``{secret, claims}``: a token for the running ``codemode.execute`` (runner only)."""
-        return self.request(
-            "token-issue",
-            request_id=request_id,
-            sandbox_id=sandbox_id,
-            actions=list(actions),
-            max_calls=max_calls,
-            ttl_s=ttl_s,
-        )
+        """``{secret, claims}``: a token for the running ``codemode.execute`` (runner only).
+        The broker answers the secret beside the result, never inside it."""
+        fields = {
+            "request_id": request_id,
+            "sandbox_id": sandbox_id,
+            "actions": list(actions),
+            "max_calls": max_calls,
+            "ttl_s": ttl_s,
+        }
+        response = self._exchange("token-issue", None, fields)
+        return {"claims": response["result"]["claims"], "secret": response["secret"]}
 
     def token_spend(self, token_id: str, outcome: str = "finished") -> dict[str, Any]:
         return self.request("token-spend", token_id=token_id, outcome=outcome)

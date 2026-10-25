@@ -18,6 +18,7 @@ from conformance.fakes.command_broker import (
     AmbientActorBroker,
     AnyRunnerBroker,
     ClientCapBroker,
+    DeniedLooksPendingBroker,
     EchoingTokenBroker,
     FakeBroker,
     FinishedResumesBroker,
@@ -32,8 +33,10 @@ from conformance.fakes.command_broker import (
 )
 from conformance.protocols.broker import (
     CODEMODE_EXECUTE,
+    TOKEN_REFUSALS,
     ArgSpec,
     BrokerError,
+    Denied,
     InvalidArguments,
     code_digest,
 )
@@ -398,6 +401,37 @@ def _(b):
 
 
 @SUITE.check(
+    "token-run-names-a-denied-request",
+    "token_run of a paused request its approver denied is refused request-denied, naming the "
+    "request (request_id, request_digest): a decided request, not a token refusal",
+    requires=[*TOKENS, "approval-control"],
+)
+def _(b):
+    runner, agent, (cmd, _), calls = _token_setup(b)
+    eid = uniq("exec")
+    _first, paused = _paused_run(b, runner, agent, cmd, eid)
+    b.decide_request(paused["request_id"], "denied")
+
+    def resumed(req):
+        tok = runner.issue(req, [cmd])
+        try:
+            b.token_run(tok.secret, paused["request_id"])
+        except Denied as exc:
+            return exc
+        return None
+
+    exc = runner.execute(agent, resumed, execution_id=eid, resume=True)
+    assert exc is not None, "a denied request ran"
+    assert exc.reason == "request-denied", f"a denied paused request was refused {exc.reason!r}"
+    assert exc.reason not in TOKEN_REFUSALS, "request-denied must not be a token refusal"
+    named = (getattr(exc, "request_id", None), getattr(exc, "request_digest", None))
+    assert named == (paused["request_id"], paused["request_digest"]), (
+        f"the refusal names {named}, not the denied request"
+    )
+    assert calls == [], f"the denied request's handler ran: {calls}"
+
+
+@SUITE.check(
     "answers-carry-the-request",
     "a token call's answer, and a refusal raised once its request was built, name the request "
     "(request_id, request_digest)",
@@ -513,13 +547,9 @@ def make_fake():
     return FakeBroker()
 
 
-def _m(factory, check, description, *, clock=False):
-    return Mutant(
-        factory,
-        check,
-        description,
-        features=frozenset([*TOKENS, *(["clock-control"] if clock else [])]),
-    )
+def _m(factory, check, description, *, clock=False, hooks=()):
+    hooks = [*hooks, *(["clock-control"] if clock else [])]
+    return Mutant(factory, check, description, features=frozenset([*TOKENS, *hooks]))
 
 
 MUTANTS = {
@@ -568,6 +598,12 @@ MUTANTS = {
         FinishedResumesBroker,
         "resume-needs-a-paused-execution-and-same-code",
         "a finished execution resumes like a paused one",
+    ),
+    "denied-looks-pending": _m(
+        DeniedLooksPendingBroker,
+        "token-run-names-a-denied-request",
+        "a denied paused request is answered request-not-approved, naming nothing",
+        hooks=["approval-control"],
     ),
     "token-run-any-request": _m(
         TokenRunAnyRequestBroker,
