@@ -19,6 +19,7 @@ examples/review-policy.yml     which reviews each artefact needs (shared with do
 hnx registers build examples/registers build/registers   # validate (fatal) and render HTML + JSON
 hnx registers links examples/registers/lessons [--check]  # regenerate / check the Links blocks
 hnx registers review examples/registers [--today D] [--strict] [--json]   # what the review owes
+hnx registers summaries examples/registers docs [--json]   # summary lint (ADR-0032)
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
 hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review must carry
 hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event
@@ -83,6 +84,7 @@ fields are named `## Heading` sections; the `## Links` block is generated. A com
 uid: 01a15e4e-758c-7315-892d-68b45030268f
 type: lesson
 title: Measure certificate lifetime from the client side
+summary: Judge a certificate by what a client is served (connect and read notAfter), not by the renewal job's exit code or log.
 kind: practice
 status: active
 date: 2026-10-19
@@ -131,6 +133,14 @@ Rules the parser enforces (fatally, all problems at once):
 * the `## Links` block is a function of the record's own front-matter only (`systems`, `related`,
   a runbook's `lessons`, `applies_to`, and an `Archive:` line for an inactive record), links written `[[<uid>]]` with no
   number or title, so editing, retitling or renumbering one record never makes another stale. `make check` fails while one is stale; `hnx registers links DIR` rewrites it.
+
+* `summary:` (optional, ADR-0032) is one line of at most 160 characters with no control
+  character: the record's level 0, which the MCP server's `context_for` serves instead of the
+  content ([MCP server](mcp.md), [[mcp]]). Write it for a reader deciding whether to open the
+  record; it is content, so it is in the review digest and a review covers it. A malformed one
+  fails the validation and `hnx registers summaries` (part of `make registers`); a record or
+  docs page without one is counted as a warning, not a failure yet. A docs page may carry one in
+  its front-matter the same way.
 
 Sections: a pitfall has Symptom, Contributing factor, Root cause, Preventive control, Open reason,
 Notes; a practice has Method, Rationale, Retired reason, Notes; a runbook has Purpose and Steps.

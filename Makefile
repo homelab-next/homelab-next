@@ -212,12 +212,15 @@ contracts:
 
 # lessons/ and runbooks/ are record directories (one Markdown file per entry); every record's
 # generated `## Links` block is current (`hnx registers links <dir>` rewrites them); the lesson
-# review's due list is printed as a warning, never a failure (`... review --strict` fails on it)
+# review's due list is printed as a warning, never a failure (`... review --strict` fails on it);
+# every front-matter `summary:` of a record or docs page is one line of <= 160 characters
+# (ADR-0032: a broken one fails, a missing one is counted as a warning)
 RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
 	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
 	$(PY) -m homelabnext.registers review examples/registers
+	$(PY) -m homelabnext.registers summaries examples/registers docs
 
 # the strategy-to-task records (docs/strategy.md): the example tree validates (schemas, link
 # rules, lifecycle, review tiers, the doctrine in examples/strategy/doctrine.yml), every record's

@@ -64,7 +64,8 @@ def _files(d: pathlib.Path) -> set[pathlib.Path]:
 
 def test_two_review_events_in_the_same_second_never_collide(lab):
     rec = lab / "lessons" / f("LL-005")
-    digest = record_digest_of(load_register(lab / "lessons")["lessons"][4])
+    before = load_register(lab / "lessons")["lessons"][4]
+    digest = record_digest_of(before)
     a = write_event(rec, _review("agent:example-checker", "agent", "check", digest), when=T0)
     b = write_event(rec, _review("agent:example-checker", "agent", "check", digest), when=T0)
     assert a != b
@@ -72,7 +73,8 @@ def test_two_review_events_in_the_same_second_never_collide(lab):
     assert b.name == "20261020T093000Z-review-agent-example-checker-2.yml"
     assert yaml.safe_load(a.read_text())["digest"] == digest[:19]  # neither overwrote the other
     reviews = load_register(lab / "lessons")["lessons"][4]["reviews"]
-    assert len(reviews) == 4 and reviews[-1]["date"] == dt.date(2026, 10, 20)
+    assert len(reviews) == len(before["reviews"]) + 2  # the example's own reviews, then both
+    assert [r["date"] for r in reviews].count(dt.date(2026, 10, 20)) == 2
 
 
 def test_racing_writers_in_one_second_each_get_their_own_file(tmp_path):
@@ -113,7 +115,8 @@ def test_editing_the_prose_and_adding_events_never_touch_the_same_file(lab):
     assert _sha(rec) != record_bytes  # the prose changed ...
     assert {p: _sha(p) for p in _files(ev.events_dir(rec))} == events_now  # ... no event did
     after = load_register(lab / "lessons")["lessons"][0]
-    assert after["notes"].startswith("Re-read") and len(after["reviews"]) == 3
+    assert after["notes"].startswith("Re-read")
+    assert len(after["reviews"]) == len(entry["reviews"]) + 1
     assert after["recurrences"] == entry["recurrences"]
 
 
@@ -741,19 +744,29 @@ def test_a_rekey_carries_earlier_reviews_of_its_from_digest_only(lab):
     rec = lab / "lessons" / f("LL-005")
     old = record_digest_of(_ll5(lab))
     validate_lessons(load_register(lab / "lessons"), policy)  # reviewed: valid
+    current = [r for r in _ll5(lab)["reviews"] if old.startswith(r["digest"])]
+    assert current  # the example's reviews of its present content
     rec.write_text(rec.read_text().replace("instead of trusting", "rather than trusting"))
     new = record_digest_of(_ll5(lab))
     assert new != old
     with pytest.raises(RegisterError, match="needs agent check, agent audit"):
         validate_lessons(load_register(lab / "lessons"), policy)  # an edit: stale
-    rekey = {"event": "rekey", "by": "hnx:migrate", "date": dt.date(2026, 10, 22)}
+    # after the example's own latest event, whatever its date: a rekey carries earlier reviews
+    last = max(
+        dt.datetime.strptime(p.name[:16], "%Y%m%dT%H%M%SZ") for p in _files(ev.events_dir(rec))
+    )
+    at = last.replace(tzinfo=dt.UTC) + dt.timedelta(days=1)
+    rekey = {"event": "rekey", "by": "hnx:migrate", "date": at.date()}
     rekey.update({"from": old, "to": new, "reason": "identity rewrite, content unchanged"})
-    ev.create_event(ev.events_dir(rec), rekey, when=dt.datetime(2026, 10, 22, tzinfo=dt.UTC))
+    ev.create_event(ev.events_dir(rec), rekey, when=at)
     validate_lessons(load_register(lab / "lessons"), policy)  # carried: valid again
-    assert {r["digest"] for r in _ll5(lab)["reviews"]} == {new}
+    digests = [r["digest"] for r in _ll5(lab)["reviews"]]
+    assert digests.count(new) == len(current)  # each one carried to the new digest ...
+    assert not [d for d in digests if old.startswith(d)]  # ... and none left on the old
     # a review of the old digest recorded after the rekey is not carried
-    late = _review("agent:example-auditor", "agent", "audit", old, "2026-10-23")
-    ev.create_event(ev.events_dir(rec), late, when=dt.datetime(2026, 10, 23, tzinfo=dt.UTC))
+    at += dt.timedelta(days=1)
+    late = _review("agent:example-auditor", "agent", "audit", old, at.date().isoformat())
+    ev.create_event(ev.events_dir(rec), late, when=at)
     assert [r["digest"] for r in _ll5(lab)["reviews"]][-1] == old[:19]
 
 
