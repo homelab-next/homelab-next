@@ -1,0 +1,93 @@
+{
+  "budget_mode": "enforce",
+  "budgets": {
+    "max_input_tokens": 32000,
+    "max_output_tokens": 2000,
+    "max_runtime_s": 600,
+    "max_tool_calls": 20
+  },
+  "ceiling": {
+    "budgets": {
+      "max_input_tokens": 64000,
+      "max_output_tokens": 4000,
+      "max_runtime_s": 900,
+      "max_tool_calls": 40
+    },
+    "capabilities": [
+      "cap:lake-query",
+      "cap:records-propose"
+    ],
+    "mcp": [
+      "lake",
+      "records"
+    ],
+    "tier": "write"
+  },
+  "data_tier": "local-only",
+  "digest": "sha256:30777015e19021d65819d55b0ddd07409e6516c27f44afb9904d481a638732fb",
+  "grants": {
+    "capabilities": [
+      "cap:lake-query"
+    ],
+    "mcp": [
+      "lake"
+    ],
+    "tier": "read"
+  },
+  "id": "profile:reader",
+  "include": [
+    {
+      "budget": 12,
+      "depth": 1,
+      "detail": "brief",
+      "from": "capabilities",
+      "kinds": [
+        "lesson",
+        "runbook"
+      ],
+      "max_chars": 4000
+    }
+  ],
+  "memory_scopes": [
+    "analyst"
+  ],
+  "model_role": "mdl:fast-classifier",
+  "parts": {
+    "capabilities": [
+      "cap:lake-query"
+    ],
+    "skills": [
+      "skill:summarise",
+      "skill:triage"
+    ]
+  },
+  "persona": "persona:analyst",
+  "provenance": [
+    {
+      "digest": "sha256:8af9d277a2049c968f822d398edcf82d4b083a3b9faf06d058f1e1ad16655e39",
+      "id": "cap:lake-query",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:ddf4e64479c2b96ccd26341a8f9c7dd28159c16f78cea659d5692c932ec7c80f",
+      "id": "persona:analyst",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:5e779450dd0365743f7d231adeb82ae960fa1891d8b4f281ae702c10bbea02cc",
+      "id": "profile:reader-levels",
+      "source": "spec"
+    },
+    {
+      "digest": "sha256:ee35ab8a83541b741aa1ae498b4c1e6adfcbca7801008d9d98e3908da087bfc6",
+      "id": "skill:summarise",
+      "source": "parts-library"
+    },
+    {
+      "digest": "sha256:6451bdc881ad30ef8faafceef66ab7480957851cc3c8ce563c983582dab91ab7",
+      "id": "skill:triage",
+      "source": "parts-library"
+    }
+  ],
+  "reads_untrusted": true
+}
