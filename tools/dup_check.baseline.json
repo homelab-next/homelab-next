@@ -7,9 +7,9 @@
  },
  "summary": {
   "clones": 34,
-  "duplicated_lines": 427,
-  "total_lines": 112960,
-  "duplicated_percent": 0.38
+  "duplicated_lines": 425,
+  "total_lines": 134395,
+  "duplicated_percent": 0.32
  },
  "increases": [],
  "clones": {
@@ -192,6 +192,18 @@
     "152f00aef6"
    ]
   },
+  "8ba531d3100fec70": {
+   "tokens": 57,
+   "lines": 5,
+   "count": 1,
+   "files": [
+    "conformance/fakes/secret_store.py"
+   ],
+   "fingerprints": [
+    "0cde3e9b8d",
+    "15b0620334"
+   ]
+  },
   "8ea3fbc0510ad430": {
    "tokens": 78,
    "lines": 13,
@@ -370,19 +382,6 @@
    "fingerprints": [
     "03cfb065e1",
     "060af653af"
-   ]
-  },
-  "f419894940d85fe1": {
-   "tokens": 64,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "conformance/fakes/secret_store.py"
-   ],
-   "fingerprints": [
-    "0cde3e9b8d",
-    "0f8e3fb477",
-    "15b0620334"
    ]
   }
  }
