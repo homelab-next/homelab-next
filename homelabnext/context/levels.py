@@ -5,9 +5,10 @@ A context document is read in three levels, so a caller pays only for what it op
 
 * **L0, the summary.**  The front-matter ``summary:`` an author wrote and a review covered
   (``summary_source: authored``); one a generator derived from source data and marked with
-  ``summary_generated: true`` (``generated``: no person wrote or reviewed it); without one, a derived line (``first-paragraph``, or
-  ``synthesized`` for a node whose content the indexer built from its attributes); else nothing
-  (``none``).  No model writes a summary: what is served is what git holds.
+  ``summary_generated: true`` (``generated``: no person wrote or reviewed it); without one, a
+  derived line (``first-paragraph``, or ``synthesized`` for a node whose content the indexer built
+  from its attributes); else nothing (``none``).  No model writes a summary: what is served is
+  what git holds.
 * **L1, the outline.**  The ATX headings (``#`` to ``######``) with their level, title, a slug,
   the heading path (``Decision/Consequences``) and the size of the section each opens.
 * **L2, one section.**  A heading's own line and everything up to the next heading of the same or
@@ -497,8 +498,9 @@ def is_synthesized(content: str, doc_id: str) -> bool:
 
 def summary_of(text: str, path: str, doc_id: str = "") -> tuple[str, str]:
     """``(summary, summary_source)``: the front-matter ``summary`` of a Markdown document
-    (``authored``, or ``generated`` when a generator marked it with :data:`GENERATED_KEY`); else its first paragraph; for an indexer-built node (``doc_id`` given) its
-    synthesized line; else ``("", "none")``.  An authored summary that breaks
+    (``authored``, or ``generated`` when a generator marked it with :data:`GENERATED_KEY`); else
+    its first paragraph; for an indexer-built node (``doc_id`` given) its synthesized line; else
+    ``("", "none")``.  An authored summary that breaks
     :func:`check_summary` is not served as authored (the lints report it)."""
     if is_synthesized(text, doc_id):
         s = _synthesized(text)

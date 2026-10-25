@@ -65,10 +65,12 @@ filesystem reader has none of this platform's scope rules, profile verification 
    summary and the heading outline with its slugs, paths and sizes, instead of its body. The
    level is read exactly as the MCP server serves it (same summary logic, same decoding and size
    cap, same slugs), the outline prints the bare `outline_digest` that `section` accepts, and
-   the pack's knowledge record keeps the digest of the full content. A node with no summary is
+   the pack's knowledge record keeps the digest of the full content (of the served text, plus
+   `file_digest` of the file's own bytes, when the two differ: undecodable bytes, an empty file or
+   one over the store's cap). A node with no summary is
    its title line, recorded as `none`, never its body. `max_chars` caps what is emitted, and an
    outline stops at the last whole heading that fits and says how many it left out.
-6. **A summary is authored, short and reviewed.** `summary:` is accepted on lessons (schema
+6. **A summary is authored, short and reviewed (generated pages excepted).** `summary:` is accepted on lessons (schema
    2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control or invisible
    format character.
    It is content, so it is in the record's review digest. `hnx registers summaries` (in

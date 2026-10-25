@@ -443,3 +443,84 @@ def test_explain_shows_each_nodes_detail(root):
     assert "detail: outline" in out
     out = explain(_sel(root, {**RULE, "kinds": ["lesson"]}))
     assert "detail: full" in out
+
+
+# ------------------------------------------------------------------ second review round
+
+BAD_UTF8 = b"---\nsummary: Caf\xe9 note.\n---\n# T\n\n## S\nx\n"
+
+
+@pytest.mark.parametrize("order", ["leveled-first", "full-first"])
+def test_a_full_rule_that_cannot_read_a_node_excludes_it_in_either_order(root, order):
+    (root / "docs/lake-query.md").write_bytes(BAD_UTF8)
+    leveled = {**RULE, "kinds": ["doc"], "detail": "summary"}
+    full = {**RULE, "kinds": ["doc"]}
+    rules = (leveled, full) if order == "leveled-first" else (full, leveled)
+    sel = _sel(root, *rules)
+    assert "doc:docs/lake-query.md" not in ids(sel)
+    why = {e["id"]: e["reason"] for e in sel.excluded}
+    assert why["doc:docs/lake-query.md"] == "content unreadable: docs/lake-query.md"
+    # the leveled rule alone still serves it, as MCP does
+    assert "doc:docs/lake-query.md" in ids(_sel(root, leveled))
+
+
+def test_the_record_names_the_files_own_digest_when_the_served_text_differs(root, monkeypatch):
+    import hashlib
+
+    path = root / "docs/lake-query.md"
+    path.write_bytes(BAD_UTF8)
+    rule = {**RULE, "kinds": ["doc"], "detail": "outline"}
+    i = _item(_sel(root, rule), "doc:docs/lake-query.md")
+    own = "sha256:" + hashlib.sha256(BAD_UTF8).hexdigest()
+    assert i["file_digest"] == own and i["digest"] != own
+    assert f"file digest: {own}\n" in i["text"]
+    # an over-cap file: digest is of the attributes the store serves, the file's own is recorded
+    monkeypatch.setattr("homelabnext.context.repo.MAX_CONTENT_CHARS", 100)
+    path.write_text("# Big\n\n" + "x" * 500)
+    a = _item(_sel(root, rule), "doc:docs/lake-query.md")
+    path.write_text("# Big\n\n" + "y" * 500)
+    b = _item(_sel(root, rule), "doc:docs/lake-query.md")
+    assert a["digest"] == b["digest"] and a["file_digest"] != b["file_digest"]
+    monkeypatch.undo()
+    # a file the store serves exactly carries none, and neither does a full node
+    plain = _sel(root, {**RULE, "kinds": ["lesson"], "detail": "summary"})
+    assert "file_digest" not in _item(plain, "lesson:LL-010")
+    assert "file_digest" not in _item(_sel(root, {**RULE, "kinds": ["lesson"]}), "lesson:LL-010")
+
+
+def test_an_empty_file_is_its_attributes_as_the_store_serves_it(root):
+    (root / "docs/lake-query.md").write_text("")
+    g = fake_graph()
+    sel = select_knowledge(profile_with({**RULE, "kinds": ["doc"], "detail": "outline"}), g, root)
+    i = _item(sel, "doc:docs/lake-query.md")
+    assert i["summary_source"] == "synthesized" and "built from attributes" in i["text"]
+    assert "file_digest" in i  # the empty file's own bytes are named
+    out = _catalog(g, root).outline("doc:docs/lake-query.md", allowed=["doc:"])
+    assert out["summary_source"] == "synthesized" and out["headings"] == []
+    assert i["digest"] == "sha256:" + out["digest"]
+
+
+def test_the_outline_never_exceeds_its_room(monkeypatch):
+    from types import SimpleNamespace
+
+    from homelabnext.agent.knowledge import _outline_lines
+    from homelabnext.context.levels import parse
+
+    doc = "# D\n\n" + "".join(f"## Heading {n}\n\nt\n\n" for n in range(30))
+    parsed = parse(doc)
+    n = len(parsed.headings)
+    for room in range(0, 3000, 7):
+        got = _outline_lines(parsed, n, 40, room)
+        assert 40 + sum(len(x) + 1 for x in got) <= room or got == [], room
+    full = _outline_lines(parsed, n, 0, 1 << 20)
+    exact = sum(len(x) + 1 for x in full)
+    assert full == _outline_lines(parsed, n, 0, exact)  # fits exactly: no cut note reserved
+    assert not any("outline cut" in x for x in full)
+    assert "outline cut" in _outline_lines(parsed, n, 0, exact - 1)[-1]
+    # the parse-cut trailer counts against the room too
+    cut = SimpleNamespace(headings=parsed.headings, truncated=True, parsed_chars=77)
+    with_trailer = _outline_lines(cut, n, 0, 1 << 20)
+    assert with_trailer[-1] == "(outline cut: only the first 77 characters read)"
+    tight = sum(len(x) + 1 for x in with_trailer) - 1
+    got = _outline_lines(cut, n, 0, tight)
+    assert sum(len(x) + 1 for x in got) <= tight and "headings not listed" in got[-1]

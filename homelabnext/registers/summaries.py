@@ -39,6 +39,8 @@ class SummaryReport:
     #: no person wrote or reviewed it, so they are counted apart from the authored ones
     generated_pages: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    #: things worth fixing that do not fail the lint (a ``summary_generated`` that is not a bool)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -46,7 +48,7 @@ class SummaryReport:
 
     def lines(self, missing: bool = False) -> list[str]:
         """One line per problem, ``missing:`` lines when asked, then the counts."""
-        out = [f"FAIL {p}" for p in self.problems]
+        out = [f"FAIL {p}" for p in self.problems] + [f"WARN {w}" for w in self.warnings]
         if missing:
             out += [f"missing {p}" for p in self.missing_records + self.missing_pages]
         out.append(
@@ -100,4 +102,9 @@ def lint_summaries(paths: Iterable[str | Path], root: str | Path | None = None) 
                 rep.problems.append(f"{shown}: {why}")
             elif front.get(GENERATED_KEY) is True:
                 rep.generated_pages.append(shown)
+            if GENERATED_KEY in front and not isinstance(front[GENERATED_KEY], bool):
+                rep.warnings.append(
+                    f"{shown}: {GENERATED_KEY} must be the boolean true or false, not "
+                    f"{front[GENERATED_KEY]!r}: the summary is read as authored"
+                )
     return rep

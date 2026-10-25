@@ -133,3 +133,12 @@ def test_generated_summaries_are_counted_apart_from_missing_and_authored(tmp_pat
     assert rep.generated_pages == ["gen.md"]
     assert rep.missing_pages == ["none.md"] and len(rep.problems) == 1
     assert "1 with a generated one" in rep.lines()[-1]
+
+
+def test_a_non_boolean_generated_marker_warns_but_does_not_fail(tmp_path):
+    (tmp_path / "s.md").write_text('---\nsummary: Words.\nsummary_generated: "true"\n---\n# S\n')
+    (tmp_path / "ok.md").write_text("---\nsummary: Words.\nsummary_generated: false\n---\n# O\n")
+    rep = lint_summaries([tmp_path], tmp_path)
+    assert rep.ok and rep.generated_pages == []
+    assert len(rep.warnings) == 1 and rep.warnings[0].startswith("s.md: summary_generated")
+    assert any(ln.startswith("WARN s.md") for ln in rep.lines())

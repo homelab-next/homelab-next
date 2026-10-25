@@ -422,9 +422,16 @@ include:
   normalised rules, each rule's seeds, every included id with its rank, path, review tiers and
   content digest, and every exclusion with its rule and reason. Same profile, same checkout and
   same task give a byte-identical pack. A pack built without a selection has no `knowledge` key.
-  Whatever the detail, `digest` is the digest of the FULL content, so a run still says exactly
-  which version of the content it referred to; a `summary` or `outline` node also records its
-  `detail`, `summary_source` and `content_chars` (a `full` node carries none of the three).
+  Whatever the detail, `digest` is the digest of the FULL content the pack read, so a run still
+  says exactly which version of the content it referred to; a `summary` or `outline` node also
+  records its `detail`, `summary_source` and `content_chars` (a `full` node carries none of the
+  three). A leveled node is read as the context store reads it, so for a file with undecodable
+  bytes, an empty file, or one over the store's size cap, `digest` and `content_chars` are those of
+  the served text (the replaced text, or the node's attributes). The record then also carries
+  `file_digest`, the digest of the file's own bytes (and the header a `file digest:` line), so an
+  edit to such a file still changes what the record names. It is absent when the served text is
+  the file exactly. If a `full` rule includes a node it cannot read strictly, the node is excluded
+  (`content unreadable`) whatever other rules say.
 
 ```
 hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \

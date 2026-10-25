@@ -17,8 +17,9 @@ looking through the nodes that only name one, transitively: a system tag (to wha
 ``resolves_to``), a product (to the services and compose services that ``run`` it and the adapters
 written ``for`` it), an adapter (to what it ``implements``) and a compose service (to what it
 ``provides``).  A proxy that reaches nothing access-bearing counts as an ungranted subject (fail
-closed).  A node is eligible only when it has a subject and **every** subject is granted: a page about a granted and an ungranted capability is excluded, one hop away
-or not.  Candidates are found on the graph with ungranted access-bearing nodes removed (nothing
+closed).  A node is eligible only when it has a subject and **every** subject is granted: a page
+about a granted and an ungranted capability is excluded, one hop away or not.
+Candidates are found on the graph with ungranted access-bearing nodes removed (nothing
 is reached *through* one), but subjects are read on the full graph, so removing a node can never
 make a candidate look clean.
 
@@ -50,6 +51,7 @@ emitted.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -205,38 +207,57 @@ def _pruned(graph: Graph, granted: set[str]) -> Graph:
     return Graph(nodes, edges)
 
 
+def _file_digest(path: Path) -> str:
+    """``sha256:`` of the file's own bytes (streamed: a large file is never held twice)."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return "sha256:" + h.hexdigest()
+
+
 def _content_of(
     graph: Graph, nid: str, root: Path, shared: Mapping[str, int], served: bool = False
-) -> tuple[str | None, bool]:
-    """``(content, file_backed)``: the file that defines the node when it defines nothing else,
-    else a text built from the node's attributes (``file_backed`` False).
+) -> tuple[str | None, bool, str | None]:
+    """``(content, file_backed, file_digest)``: the file that defines the node when it defines
+    nothing else, else a text built from the node's attributes (``file_backed`` False).
 
     ``served`` is for a ``summary`` or ``outline`` node: the text is then exactly what the context
-    store indexes (:func:`homelabnext.context.repo.read_served`: undecodable bytes replaced, a file
-    over the store's cap replaced by the node's attributes), so the slugs and the digest of a level
-    are the ones the MCP server serves.  The default (``full``) reads strictly, as it always did."""
+    store indexes (:func:`homelabnext.context.repo.read_served`: undecodable bytes replaced; an
+    empty file or one over the store's cap replaced by the node's attributes), so the slugs and the
+    digest of a level are the ones the MCP server serves.  ``file_digest`` is then the digest of
+    the file's own bytes when the served text is not exactly them, else ``None``.  The default
+    (``full``) reads strictly, as it always did."""
     node = graph.nodes[nid]
     if node.path and shared.get(node.path) == 1:
         target = (root / node.path).resolve()
         if root != target and root not in target.parents:
-            return None, True
+            return None, True, None
         if served:
             from homelabnext.context.repo import _summary as indexed_text
             from homelabnext.context.repo import read_served
 
             if not target.is_file():
-                return None, True
+                return None, True, None
             text = read_served(root, node.path)
-            return (text, True) if text is not None else (indexed_text(node), False)
+            backed = bool(text)  # the store's `content or _summary(n)`
+            if not backed:
+                text = indexed_text(node)
+            try:
+                own = _file_digest(target)
+            except OSError:
+                own = None
+            same = backed and own == "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+            return text, backed, None if same else own
         try:
-            return target.read_text(encoding="utf-8"), True
+            return target.read_text(encoding="utf-8"), True, None
         except (OSError, UnicodeDecodeError):
-            return None, True
+            return None, True, None
     lines = [f"{node.kind} {node.id}: {node.title}".rstrip(": ")]
     if node.path:
         lines.append(f"defined in: {node.path}")
     lines += [f"{k}: {canonical_json(v)}" for k, v in sorted(node.attrs.items())]
-    return "\n".join(lines) + "\n", False
+    return "\n".join(lines) + "\n", False, None
 
 
 #: how much each detail reads; a node several rules include is carried at the richest
@@ -276,24 +297,46 @@ def _leveled(
                 f"outline ({n} heading{'s' * (n != 1)}; "
                 "open one with the MCP section tool, by slug or path):"
             )
-            used = sum(len(x) + 1 for x in lines)
-            for listed, h in enumerate(parsed.headings):
-                line = (
-                    f"{'  ' * (h.level - 1)}- {'#' * h.level} {h.title}"
-                    f"  slug={h.slug}  path={h.path}  chars={h.chars}"
-                )
-                cut = f"(outline cut: {n - listed} of {n} headings not listed)"
-                if used + len(line) + 1 + len(cut) + 1 > room:
-                    lines.append(cut)
-                    break
-                lines.append(line)
-                used += len(line) + 1
-            else:
-                if parsed.truncated:
-                    lines.append(
-                        f"(outline cut: only the first {parsed.parsed_chars} characters read)"
-                    )
+            lines += _outline_lines(parsed, n, sum(len(x) + 1 for x in lines), room)
     return "\n".join(lines) + "\n", source
+
+
+def _outline_lines(parsed, n: int, used: int, room: int) -> list[str]:
+    """The heading lines of an outline that fit in ``room`` characters beside the ``used`` ones
+    already in the body, then the note (the parse cut, or how many headings were left out) when it
+    fits too.  Lines are built only until the room is spent, so a document with a hundred thousand
+    headings costs no more than its rule allows."""
+    trailer = (
+        f"(outline cut: only the first {parsed.parsed_chars} characters read)"
+        if parsed.truncated
+        else ""
+    )
+    lines: list[str] = []
+    total = used
+    for h in parsed.headings:
+        lines.append(
+            f"{'  ' * (h.level - 1)}- {'#' * h.level} {h.title}"
+            f"  slug={h.slug}  path={h.path}  chars={h.chars}"
+        )
+        total += len(lines[-1]) + 1
+        if total > room:  # the room is spent: stop building
+            break
+    else:
+        if not trailer:
+            return lines
+        if total + len(trailer) + 1 <= room:
+            return [*lines, trailer]
+    # not everything fits (with its note): drop headings from the end until the count of those
+    # left out, which is itself a line, fits
+    k = len(lines) - 1
+    total -= len(lines[-1]) + 1 if lines else 0
+    while k >= 0:
+        note = f"(outline cut: {n - k} of {n} headings not listed)"
+        if total + len(note) + 1 <= room:
+            return [*lines[:k], note]
+        total -= len(lines[k - 1]) + 1 if k else 0
+        k -= 1
+    return []
 
 
 def _section_name(rank: int, nid: str) -> str:
@@ -335,6 +378,7 @@ def select_knowledge(
     best: dict[str, dict[str, Any]] = {}  # included: id -> entry
     excluded: dict[str, dict[str, Any]] = {}
     all_seeds: list[tuple[str, ...]] = []
+    unreadable: dict[str, int] = {}  # nodes a `full` rule could not read: out whatever else says
 
     def exclude(nid: str, reason: str, rule: int) -> None:
         if nid not in excluded:
@@ -405,16 +449,17 @@ def select_knowledge(
                     # roomy summary rule must not widen a tight full rule
                     got, have = rule.get("detail", "full"), best[nid]["detail"]
                     if _RICHNESS[got] > _RICHNESS[have]:
-                        upgraded = True
                         if got == "full" and best[nid]["_served"]:
                             # full reads strictly: it carries the file itself, not its served view
-                            full, backed_full = _content_of(graph, nid, root, shared)
-                            upgraded = full is not None
-                            if upgraded:
-                                best[nid].update(text=full, digest=sha256_text(full))
-                                best[nid]["_content"], best[nid]["_served"] = backed_full, False
-                        if upgraded:
-                            best[nid].update(detail=got, max_chars=rule["max_chars"])
+                            full, backed_full, _ = _content_of(graph, nid, root, shared)
+                            if full is None:  # a full rule that cannot read it: as it alone would
+                                unreadable[nid] = ri
+                                del best[nid]
+                                continue
+                            best[nid].update(text=full, digest=sha256_text(full))
+                            best[nid]["_content"], best[nid]["_served"] = backed_full, False
+                            best[nid].pop("file_digest", None)
+                        best[nid].update(detail=got, max_chars=rule["max_chars"])
                     elif got == have:
                         best[nid]["max_chars"] = max(best[nid]["max_chars"], rule["max_chars"])
                     if (dist, -score) < (best[nid]["distance"], -best[nid]["score"]):
@@ -427,11 +472,13 @@ def select_knowledge(
             text = None
             backed = True
             if reason is None:
-                text, backed = _content_of(
+                text, backed, own = _content_of(
                     graph, nid, root, shared, served=rule.get("detail", "full") != "full"
                 )
                 if text is None:
                     reason = f"content unreadable: {node.path}"
+                    if rule.get("detail", "full") == "full":
+                        unreadable[nid] = ri
             if reason is not None:
                 exclude(nid, reason, ri)
                 continue
@@ -453,8 +500,12 @@ def select_knowledge(
                 "detail": rule.get("detail", "full"),
                 "_content": backed,
                 "_served": rule.get("detail", "full") != "full",
+                **({"file_digest": own} if own else {}),
             }
 
+    for nid, ri in unreadable.items():  # a rule asking for the whole thing cannot have it
+        best.pop(nid, None)
+        exclude(nid, f"content unreadable: {graph.nodes[nid].path}", ri)
     order = sorted(best.values(), key=lambda i: (i["distance"], -i["score"], i["id"]))
     included = []
     for rank, item in enumerate(order, 1):
@@ -496,6 +547,7 @@ def _header(item: Mapping[str, Any]) -> str:
         f"reviews: {', '.join(item['reviewed']) or 'none'}\n"
         f"rank: {item['rank']} (distance {item['distance']}, {how})\n"
         f"content digest: {item['digest']}\n"
+        + (f"file digest: {item['file_digest']}\n" if "file_digest" in item else "")
         + (
             f"detail: {item['detail']} (summary source: {item['summary_source']}; "
             f"{item['content_chars']} characters in full)\n"
