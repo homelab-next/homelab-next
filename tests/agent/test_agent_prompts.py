@@ -240,3 +240,23 @@ def test_cli_render_examples(capsys):
 def test_shipped_templates_are_packaged_data():
     assert DEFAULT_TEMPLATE_DIR.is_dir()
     assert {p.suffix for p in template_paths()} == {".yml"}
+
+
+def test_a_screener_kept_across_renders_keeps_its_labels():
+    """``render_prompt(..., screener=)``: one screener over several renders gives a value the same
+    label in each (its contract); without one every render starts its numbering again."""
+    from homelabnext.agent.screen import Screener
+    from homelabnext.agent.template import DEFAULT_TEMPLATE_DIR, load_template, render_prompt
+
+    tmpl = load_template(DEFAULT_TEMPLATE_DIR / "agent-tool-result.yml")
+
+    def body(values, screener=None):
+        out = render_prompt(tmpl, values, screener=screener).messages[-1]["content"]
+        return out
+
+    first = {"tool": "x", "tool-result": '{"a": "192.0.2.21"}'}
+    second = {"tool": "x", "tool-result": '{"b": ["192.0.2.20", "192.0.2.21"]}'}
+    kept = Screener(redact_private_ips=True, denylist=[])
+    assert "[REDACTED:ip:1]" in body(first, kept)
+    assert '["[REDACTED:ip:2]", "[REDACTED:ip:1]"]' in body(second, kept)
+    assert '["[REDACTED:ip:1]", "[REDACTED:ip:2]"]' in body(second)  # a fresh one per render

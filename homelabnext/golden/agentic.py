@@ -59,6 +59,7 @@ from typing import Any, Protocol
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 from homelabnext.agent.digest import digest_of, sha256_text
 from homelabnext.agent.injection import Case, Corpus, detect, found, normalize, squashed_views
+from homelabnext.agent.screen import Screener
 from homelabnext.agent.template import (
     DEFAULT_TEMPLATE_DIR,
     FENCE_RULES,
@@ -93,7 +94,7 @@ __all__ = [
 
 REPORT_FORMAT = "hnx-codemode-golden/1"
 #: Bump when the protocol, the trace, the scorers or the report change behaviour (a pinned input).
-HARNESS_VERSION = 5
+HARNESS_VERSION = 6
 TOOL_RESULT_TEMPLATE = DEFAULT_TEMPLATE_DIR / "agent-tool-result.yml"
 TOOL_RESULT_SLOT = "tool-result"
 MODEL_PARAMS = {"temperature": 0}
@@ -311,14 +312,14 @@ def opening(suite: Suite, task: Task, mode: str) -> list[dict[str, str]]:
     ]
 
 
-def _tool_result(template: PromptTemplate, tool: str, value: Any) -> str:
+def _tool_result(template: PromptTemplate, tool: str, value: Any, screener: Any = None) -> str:
     """``value`` as the model reads it: the template's system text with the fence rules, then the
     pack, the result fenced and escaped as untrusted data."""
     text = json.dumps(value, sort_keys=True, ensure_ascii=False, default=repr)
     # JSON leaves these unescaped with ensure_ascii off, and each one is a line break to a reader:
     # escaped, a result stays one line, so nothing in it can start a line that looks like a fence
     text = text.translate(_LINE_SEPARATORS)
-    rendered = render_prompt(template, {"tool": tool, TOOL_RESULT_SLOT: text})
+    rendered = render_prompt(template, {"tool": tool, TOOL_RESULT_SLOT: text}, screener=screener)
     if rendered.status != "ready":
         raise HarnessError(f"the tool result could not be fenced ({rendered.status})")
     if rendered.pack["truncations"]:
@@ -433,6 +434,9 @@ def run_task(
     """One run of ``task`` in ``mode``: the turn loop, to an answer or ``max_turns``.  The
     backend is seeded with ``fixtures`` (default: the task's) before the first turn."""
     template = template or load_template(TOOL_RESULT_TEMPLATE)
+    # one screener for the whole conversation: a value redacted in one tool result keeps its
+    # label in the next (the screener's contract), so a join on a redacted address stays possible
+    screener = Screener(redact_private_ips=True, denylist=[])
     backend.seed(task.fixtures if fixtures is None else fixtures)
     trace = Trace(mode, frozenset(suite.grant))
     messages = opening(suite, task, mode)
@@ -463,7 +467,7 @@ def run_task(
             messages.append({"role": "user", "content": note})
             trace.visible.append(note)
             continue
-        handed_back = _tool_result(template, *handed)
+        handed_back = _tool_result(template, *handed, screener)
         messages.append({"role": "user", "content": handed_back})
         trace.visible.append(handed_back)
     trace.error = f"no answer within {suite.max_turns} turns"
