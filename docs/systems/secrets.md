@@ -1,6 +1,7 @@
 ---
 title: secrets
 type: system
+summary: secrets provides the secrets capability (openbao), owned by identity-team.
 service: secrets
 capability: secrets
 impl: openbao

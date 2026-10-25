@@ -1,6 +1,7 @@
 ---
 title: lake-catalog
 type: capability
+summary: "Tables, schemas and commit-then-checkpoint idempotent writes."
 capability: lake-catalog
 protocol: 'conformance.protocols.lake:LakeClient'
 generated_by: hnx docs capabilities generate

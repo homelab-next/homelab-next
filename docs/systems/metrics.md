@@ -1,6 +1,7 @@
 ---
 title: metrics
 type: system
+summary: metrics provides the metrics capability (prometheus), owned by platform-team.
 service: metrics
 capability: metrics
 impl: prometheus

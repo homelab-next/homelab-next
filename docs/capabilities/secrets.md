@@ -1,6 +1,7 @@
 ---
 title: secrets
 type: capability
+summary: "Versioned key-value secrets with leases and redacted errors."
 capability: secrets
 protocol: 'conformance.protocols.secrets:SecretStore'
 generated_by: hnx docs capabilities generate

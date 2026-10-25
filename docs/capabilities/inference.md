@@ -1,6 +1,7 @@
 ---
 title: inference
 type: capability
+summary: "OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias."
 capability: inference
 protocol: 'conformance.protocols.inference:InferenceClient'
 generated_by: hnx docs capabilities generate

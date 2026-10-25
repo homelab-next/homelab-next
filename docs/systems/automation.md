@@ -1,6 +1,7 @@
 ---
 title: automation
 type: system
+summary: automation provides the automation capability (stackstorm), owned by platform-team.
 service: automation
 capability: automation
 impl: stackstorm

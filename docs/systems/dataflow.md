@@ -1,6 +1,7 @@
 ---
 title: dataflow
 type: system
+summary: dataflow provides the dataflow capability (nifi), owned by data-team.
 service: dataflow
 capability: dataflow
 impl: nifi

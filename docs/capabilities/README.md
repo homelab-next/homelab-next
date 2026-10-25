@@ -1,6 +1,7 @@
 ---
 title: Capabilities
 type: capability-index
+summary: "Every capability contract: what it is for, how many operations and checks it has, and which adapters and services provide it."
 generated_by: hnx docs capabilities generate
 ---
 

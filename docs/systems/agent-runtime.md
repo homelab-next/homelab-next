@@ -1,6 +1,8 @@
 ---
 title: agent-runtime
 type: system
+summary: agent-runtime provides the agent-runtime capability (orchestrator), owned
+  by ml-team.
 service: agent-runtime
 capability: agent-runtime
 impl: orchestrator

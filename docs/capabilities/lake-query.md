@@ -1,6 +1,7 @@
 ---
 title: lake-query
 type: capability
+summary: "SQL (portable subset) over the OCSF tables with bound named parameters."
 capability: lake-query
 protocol: 'conformance.protocols.lake:LakeClient'
 generated_by: hnx docs capabilities generate

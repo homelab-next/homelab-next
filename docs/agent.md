@@ -36,7 +36,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`),
+All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.4, additive: `include.detail`),
 `agent/report_result` (1.1, additive: `output`),
 `agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
 1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
@@ -361,6 +361,7 @@ include:
     budget: 12                  # max nodes this rule includes, 1..50 (default 12)
     max_chars: 4000             # per node, the pack's section cap (default 4000)
     require_reviews: [agent_check, audit]           # optional
+    detail: full                # full (default) | summary | outline (ADR-0032)
 ```
 
 - **Seeds are grants.** `capabilities` seeds from the granted `cap:` ids, `mcp` from the granted
@@ -397,10 +398,26 @@ include:
   escaped like every volatile section. Order is `related` rank (distance, edge weight, id). Over
   `budget_chars`, knowledge is dropped first, lowest rank first, before any other section, and
   each drop is in `truncations`. The `knowledge-` prefix is reserved for manifests.
+- **Detail (levels).** A rule's `detail` says how much of each included node the pack carries.
+  `full` (the default) is the whole content, exactly as above, and is never written to the
+  normalised rule, so a profile that does not use `detail` keeps its digest and its packs stay
+  byte-identical. `summary` carries level 0 only: the header, then `summary: <text>` (the authored
+  front-matter `summary:`, else the first paragraph, else for a node built from attributes the
+  derived line, the same text the MCP `context_for` serves). `outline` adds the heading outline,
+  one line per heading with its level, title, `slug=`, `path=` and `chars=`, so the agent can open
+  one section with the MCP `section` tool; a node that is not Markdown says it has no headings. A
+  node with no summary at all keeps its title line, reads `(no summary)` and records
+  `summary_source: none`: it never falls back to the full text. A node several rules include is
+  carried at the richest detail any of them asks. Grant filtering, exclusions, ranking and `budget`
+  do not depend on `detail`, and `max_chars` caps what is emitted, so a summary fits where the
+  full text would be cut.
 - **Auditable.** The pack's `knowledge` block records the profile and graph digests, the
   normalised rules, each rule's seeds, every included id with its rank, path, review tiers and
   content digest, and every exclusion with its rule and reason. Same profile, same checkout and
   same task give a byte-identical pack. A pack built without a selection has no `knowledge` key.
+  Whatever the detail, `digest` is the digest of the FULL content, so a run still says exactly
+  which version of the content it referred to; a `summary` or `outline` node also records its
+  `detail`, `summary_source` and `content_chars` (a `full` node carries none of the three).
 
 ```
 hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \

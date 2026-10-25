@@ -935,11 +935,35 @@ def _field_table(fields: list[Field], header: str = "Field") -> list[str]:
     return [*out, ""]
 
 
+INDEX_SUMMARY = (
+    "Every capability contract: what it is for, how many operations and checks it has, "
+    "and which adapters and services provide it."
+)
+
+
+def _yaml_str(text: str) -> str:
+    """``text`` as one YAML scalar on one line."""
+    import json
+
+    return json.dumps(text, ensure_ascii=False)  # JSON strings are valid YAML double-quoted
+
+
+def capability_summary(c: Capability) -> str:
+    """The page's level-0 summary (ADR-0032): the contract's one-line purpose as a sentence, cut to
+    the summary limit."""
+    from homelabnext.context.levels import clean, cut
+
+    purpose = clean(c.summary)
+    first = purpose[:1].upper() + purpose[1:]
+    return cut(f"{first.rstrip('.')}.")
+
+
 def render_page(c: Capability, root: Path) -> str:
     L: list[str] = [
         "---",
         f"title: {c.name}",
         "type: capability",
+        f"summary: {_yaml_str(capability_summary(c))}",
         f"capability: {c.name}",
         f"protocol: '{c.protocol}'",
         f"generated_by: {GENERATOR}",
@@ -1241,6 +1265,7 @@ def render_index(caps: list[Capability], registry: Registry | None) -> str:
         "---",
         "title: Capabilities",
         "type: capability-index",
+        f"summary: {_yaml_str(INDEX_SUMMARY)}",
         f"generated_by: {GENERATOR}",
         "---",
         "",

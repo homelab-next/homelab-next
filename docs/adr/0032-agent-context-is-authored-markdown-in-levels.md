@@ -86,6 +86,11 @@ filesystem reader has none of this platform's scope rules, profile verification 
   contract as an adapter declaring the `semantic` feature (`conformance/protocols/context.py`
   describes one), scoped and verified like any other. It should be adopted only after evals show
   it beats the keyword store on that corpus.
+- **Packs use the levels too:** an `include:` rule's `detail` (`full` by default, `summary` or
+  `outline`) makes a context pack carry a node's level 0 or 1 instead of its body, and the pack
+  record keeps the digest of the full content. Generated capability and system pages carry a
+  `summary:` derived from the registry and the contract, so the lint's gap shrinks without
+  anyone writing a line.
 - **Obliges us to maintain:** the parsing rules in `homelabnext/context/levels.py` and their
   tests (fences, front-matter, slugs, paths), the summary rule shared by the lint, the record
   validation and the schemas, and the behaviour change in `context_for`'s default.

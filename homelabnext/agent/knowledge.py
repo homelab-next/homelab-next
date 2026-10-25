@@ -34,6 +34,18 @@ none contributes a rendering of its own graph record.  Paths never leave ``root`
 
 Determinism: the selection is a function of the profile, the graph and the task; ordering is by
 distance, then score, then id, and the record carries the graph's digest.
+
+**Detail** (``detail:`` on a rule, ADR-0032).  ``full`` (the default) carries the whole content, as
+it always did.  ``summary`` carries only the node's level 0 (the authored front-matter ``summary:``,
+else its first paragraph, else for a node built from attributes a derived line; see
+:func:`homelabnext.context.levels.summary_of`) and ``outline`` adds the heading outline with sizes
+(slugs and paths the MCP ``section`` tool takes).  A node with no summary carries its title line and
+``(no summary)``, with ``summary_source: none`` recorded; it never falls back to the full text.
+A node included by several rules is carried at the richest detail any asks.  The pack record keeps
+the digest of the FULL content whatever was emitted, and for a non-``full`` node also says its
+``detail``, ``summary_source`` and ``content_chars`` (a ``full`` node carries none of the three,
+so a pack without a ``detail`` rule is byte-for-byte what it was).  ``max_chars`` caps what is
+emitted.
 """
 
 from __future__ import annotations
@@ -193,21 +205,61 @@ def _pruned(graph: Graph, granted: set[str]) -> Graph:
     return Graph(nodes, edges)
 
 
-def _content(graph: Graph, nid: str, root: Path, shared: Mapping[str, int]) -> str | None:
+def _content_of(
+    graph: Graph, nid: str, root: Path, shared: Mapping[str, int]
+) -> tuple[str | None, bool]:
+    """``(content, file_backed)``: the file that defines the node when it defines nothing else,
+    else a text built from the node's attributes (``file_backed`` False)."""
     node = graph.nodes[nid]
     if node.path and shared.get(node.path) == 1:
         target = (root / node.path).resolve()
         if root != target and root not in target.parents:
-            return None
+            return None, True
         try:
-            return target.read_text(encoding="utf-8")
+            return target.read_text(encoding="utf-8"), True
         except (OSError, UnicodeDecodeError):
-            return None
+            return None, True
     lines = [f"{node.kind} {node.id}: {node.title}".rstrip(": ")]
     if node.path:
         lines.append(f"defined in: {node.path}")
     lines += [f"{k}: {canonical_json(v)}" for k, v in sorted(node.attrs.items())]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", False
+
+
+#: how much each detail reads; a node several rules include is carried at the richest
+_RICHNESS = {"summary": 0, "outline": 1, "full": 2}
+
+
+def _leveled(graph: Graph, nid: str, text: str, file_backed: bool, detail: str):
+    """``(body, summary_source)`` for a ``summary`` or ``outline`` node: level 0 of the node's
+    content, and for ``outline`` the heading outline with sizes."""
+    from homelabnext.context.levels import clean, is_markdown, parse, summary_of
+    from homelabnext.context.repo import _summary as indexed_text  # what the MCP serves
+
+    node = graph.nodes[nid]
+    if file_backed:
+        summary, source = summary_of(text, node.path)
+    else:
+        summary, source = summary_of(indexed_text(node), "", node.id)
+    lines = [f"summary: {summary}" if summary else "(no summary)"]
+    if detail == "outline":
+        if not (file_backed and is_markdown(node.path)):
+            lines.append("outline: (no headings: not a Markdown document)")
+        else:
+            parsed = parse(text)
+            lines.append(
+                f"outline ({len(parsed.headings)} heading{'s' * (len(parsed.headings) != 1)}; "
+                "open one with the MCP section tool, "
+                "by slug or path):"
+            )
+            for h in parsed.headings:
+                lines.append(
+                    f"{'  ' * (h.level - 1)}- {'#' * h.level} {clean(h.title)}"
+                    f"  slug={h.slug}  path={h.path}  chars={h.chars}"
+                )
+            if parsed.truncated:
+                lines.append(f"(outline cut: only the first {parsed.parsed_chars} characters read)")
+    return "\n".join(lines) + "\n", source
 
 
 def _section_name(rank: int, nid: str) -> str:
@@ -316,6 +368,8 @@ def select_knowledge(
                 if taken < rule["budget"]:  # already included by an earlier rule
                     best[nid]["rules"].append(ri)
                     best[nid]["max_chars"] = max(best[nid]["max_chars"], rule["max_chars"])
+                    if _RICHNESS[rule.get("detail", "full")] > _RICHNESS[best[nid]["detail"]]:
+                        best[nid]["detail"] = rule.get("detail", "full")
                     if (dist, -score) < (best[nid]["distance"], -best[nid]["score"]):
                         best[nid].update(distance=dist, score=round(score, 6), via=via)
                         best[nid]["from"] = parent
@@ -324,8 +378,9 @@ def select_knowledge(
             if reason is None and taken >= rule["budget"]:
                 reason = f"over budget: rule {ri} includes at most {rule['budget']} nodes"
             text = None
+            backed = True
             if reason is None:
-                text = _content(graph, nid, root, shared)
+                text, backed = _content_of(graph, nid, root, shared)
                 if text is None:
                     reason = f"content unreadable: {node.path}"
             if reason is not None:
@@ -346,6 +401,8 @@ def select_knowledge(
                 "max_chars": rule["max_chars"],
                 "digest": sha256_text(text),
                 "text": text,
+                "detail": rule.get("detail", "full"),
+                "_content": backed,
             }
 
     order = sorted(best.values(), key=lambda i: (i["distance"], -i["score"], i["id"]))
@@ -353,7 +410,14 @@ def select_knowledge(
     for rank, item in enumerate(order, 1):
         excluded.pop(item["id"], None)  # another rule included it
         entry = {**item, "rank": rank, "section": _section_name(rank, item["id"])}
-        entry["text"] = _header(entry) + item["text"]
+        backed = entry.pop("_content")
+        if entry["detail"] == "full":
+            del entry["detail"]  # absent means full: such a pack is unchanged
+            entry["text"] = _header(entry) + item["text"]
+        else:
+            body, source = _leveled(graph, item["id"], item["text"], backed, entry["detail"])
+            entry.update(summary_source=source, content_chars=len(item["text"]))
+            entry["text"] = _header(entry) + body
         included.append(entry)
     return Selection(
         profile=profile["id"],
@@ -375,7 +439,13 @@ def _header(item: Mapping[str, Any]) -> str:
         f"reviews: {', '.join(item['reviewed']) or 'none'}\n"
         f"rank: {item['rank']} (distance {item['distance']}, {how})\n"
         f"content digest: {item['digest']}\n"
-        "---\n"
+        + (
+            f"detail: {item['detail']} (summary source: {item['summary_source']}; "
+            f"{item['content_chars']} characters in full)\n"
+            if "detail" in item
+            else ""
+        )
+        + "---\n"
     )
 
 

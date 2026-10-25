@@ -274,3 +274,32 @@ def test_cli_prints_drafts_as_info_and_checks_reviewed_pages(reg, pages, capsys)
         and "info: draft (needs agent check" in out
         and "dns.md" not in out.split("info:")[1].split("\n")[0]
     )
+
+
+def test_every_page_carries_a_valid_derived_summary(reg, tmp_path):
+    """ADR-0032 level 0: a ``summary:`` from the registry row alone, passing the shared lint."""
+    from homelabnext.context.levels import check_summary, front_matter, summary_of
+    from homelabnext.sop.pages import system_summary
+
+    generate_pages(reg, tmp_path)
+    for s in reg.services.values():
+        text = (tmp_path / f"{s.name}.md").read_text()
+        fm, _ = front_matter(text)
+        assert fm["summary"] == system_summary(s)
+        assert check_summary(fm["summary"]) is None and s.name in fm["summary"]
+        assert summary_of(text, f"{s.name}.md") == (fm["summary"], "authored")
+    from homelabnext.registers.summaries import lint_summaries
+
+    rep = lint_summaries([tmp_path])
+    assert rep.ok and rep.missing_pages == []
+
+
+def test_the_summary_is_machine_owned_and_does_not_disturb_a_review(reg, tmp_path):
+    generate_pages(reg, tmp_path)
+    p = tmp_path / "events.md"
+    before = page_digest(p.read_text())
+    p.write_text(p.read_text().replace("summary: ", "summary: stale ", 1))
+    assert page_digest(p.read_text()) == before  # a machine key: not part of the review digest
+    assert generate_pages(reg, tmp_path).updated == ["events.md"]  # regenerated, not kept
+    assert "stale" not in p.read_text().split("---")[1]
+    assert check_pages(reg, tmp_path).ok()

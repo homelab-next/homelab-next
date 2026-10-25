@@ -1,6 +1,7 @@
 ---
 title: idp
 type: capability
+summary: "Issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail."
 capability: idp
 protocol: 'conformance.protocols.idp:IdentityProvider'
 generated_by: hnx docs capabilities generate

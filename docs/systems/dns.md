@@ -1,6 +1,7 @@
 ---
 title: dns
 type: system
+summary: dns provides the dns capability (technitium), owned by platform-team.
 service: dns
 capability: dns
 impl: technitium

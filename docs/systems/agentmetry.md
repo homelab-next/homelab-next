@@ -1,6 +1,7 @@
 ---
 title: agentmetry
 type: system
+summary: agentmetry provides the agent-audit capability (agentmetry), owned by platform-team.
 service: agentmetry
 capability: agent-audit
 impl: agentmetry

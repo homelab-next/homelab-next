@@ -103,3 +103,23 @@ def test_examples_have_no_lab_identifiers():
             if f.is_file() and f.suffix in {".json", ".yml", ".md"}:
                 hits = leak_scan.scan_text(f.read_text(), str(f), leak_scan.PATTERNS, deny)
                 assert hits == [], hits
+
+
+def test_profile_include_detail_is_checked_by_the_schema():
+    """agent/profile 1.4: include.detail is `summary` or `outline` (absent means full); the
+    compiler never writes `full`, and an unknown value is refused."""
+    schema = json.loads((ROOT / "schemas/agent/profile.schema.json").read_text())
+    assert schema["$id"].endswith("/agent/profile/1.4")
+    good = json.loads((ROOT / "schemas/agent/examples/profile.reader.json").read_text())
+    assert {r["detail"] for r in good["include"]} == {"summary", "outline"}
+    assert sc.errors_for(schema, good, REGISTRY) == []
+    for bad in ("full", "brief", ""):
+        doc = json.loads(json.dumps(good))
+        doc["include"][0]["detail"] = bad
+        assert sc.errors_for(schema, doc, REGISTRY), bad
+    neg = json.loads(
+        (ROOT / "schemas/agent/negative/profile.include-detail-unknown.json").read_text()
+    )
+    assert any(
+        "detail" in e or "brief" in e for e in map(str, sc.errors_for(schema, neg, REGISTRY))
+    )

@@ -1,6 +1,7 @@
 ---
 title: context
 type: capability
+summary: "Scoped retrieval for agents: relation before keywords, no inactive or stale hits, deterministic."
 capability: context
 protocol: 'conformance.protocols.context:ContextStore'
 generated_by: hnx docs capabilities generate

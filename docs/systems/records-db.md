@@ -1,6 +1,7 @@
 ---
 title: records-db
 type: system
+summary: records-db provides the records-db capability (postgresql), owned by data-team.
 service: records-db
 capability: records-db
 impl: postgresql

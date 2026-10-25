@@ -1,6 +1,7 @@
 ---
 title: uptime
 type: system
+summary: uptime provides the uptime capability (uptime-kuma), owned by platform-team.
 service: uptime
 capability: uptime
 impl: uptime-kuma

@@ -1,6 +1,7 @@
 ---
 title: edge-proxy
 type: system
+summary: edge-proxy provides the edge-proxy capability (caddy), owned by platform-team.
 service: edge-proxy
 capability: edge-proxy
 impl: caddy

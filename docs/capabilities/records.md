@@ -1,6 +1,7 @@
 ---
 title: records
 type: capability
+summary: "Validated proposals in one agent lane; operator-only approve/deny/complete moves."
 capability: records
 protocol: 'conformance.protocols.records:RecordsTarget'
 generated_by: hnx docs capabilities generate

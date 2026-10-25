@@ -1,6 +1,7 @@
 ---
 title: events
 type: capability
+summary: "Publish/consume with acknowledgement, bounded redelivery and dead letters."
 capability: events
 protocol: 'conformance.protocols.events:EventBus'
 generated_by: hnx docs capabilities generate

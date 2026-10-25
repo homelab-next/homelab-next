@@ -1,6 +1,7 @@
 ---
 title: idp
 type: system
+summary: idp provides the idp capability (authentik), owned by identity-team.
 service: idp
 capability: idp
 impl: authentik
