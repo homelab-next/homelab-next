@@ -158,7 +158,11 @@ suite_budgets = [
   # in each of its nine mutants', the report and X-10) and the runner suite's ninth check and
   # mutant: A/B on one local 4-core box, two runs each, interleaved, main 122.0s and 120.5s,
   # this branch 126.2s and 127.7s (+5.7s, 4.7%); main at about 132s on CI would put the branch
-  # near 138s, under 2s inside 140
+  # near 138s, under 2s inside 140. Remeasured after the review fixes (the executor suite's
+  # prelude-failure probe and its mutant, the runner suite's flood and foreign-line probes and
+  # its tenth mutant), same box, interleaved: main 126.5s and 127.8s, this branch 136.2s and
+  # 141.3s (+11.6s), past 140 locally, so 150 stays (145 would leave under 4s); splitting the
+  # mutant sweeps out of this budget is proposed in docs/codemode.md instead of further raises
   "tests/conform = 150",
 ]
 skip_reasons = [
