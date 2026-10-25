@@ -23,7 +23,7 @@ fake, the target-file adapters with their product limits, and the integration st
 ## Running
 
 ```bash
-hnx conform list                      # the sixteen capabilities (also: hnx conform --list)
+hnx conform list                      # the seventeen capabilities (also: hnx conform --list)
 hnx conform list --all                # plus the extended suites (backup, dns, edge)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
@@ -136,7 +136,7 @@ failure.  From Python: `homelabnext.conform.run("object-store", {"adapter": "pkg
 
 ## The capabilities
 
-The sixteen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
+The seventeen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
 (lake, notify, records, detections, context, projects) reuse it; the rest are the Protocols in
 `conformance/protocols/`.
 
@@ -158,8 +158,9 @@ The sixteen names are fixed by `docs/interfaces.md`.  Contracts that already hav
 | `detections` | `DetectionTarget` | must-fire fire, must-not-fire stay silent, deterministic, no mutation |
 | `context` | `ContextStore` | mandatory exact scope (nothing outside it as a hit, snippet, error or relation path), inactive records excluded, relation outranks keywords, deterministic order with ties by id, budget prefix, re-index replaces, delete removes, hostile text, byte-exact content and digest |
 | `projects` | `ProjectStore` | the board rules (a step belongs to an open project, a project closes in the same write as its last step and stays closed, a finished item carries a result, blocks hold), UUIDv7 uids, idempotent create by external key, optimistic versions (a stale one conflicts, every change adds one), a complete change feed, links that resolve, no cycles; also proved on OpenProject over a recorded fake (`tests/projects`) |
+| `codemode-executor` | `CodeExecutor` | one program per fresh sandbox (ADR-0031 decision 5), in the vocabulary of `schemas/codemode`: no connection or name lookup but the broker endpoint (served where the executor declares, `broker_bind`), no caller environment, files or token in the sandbox environment, CPU, resident-memory, wall-clock and output caps end the run as `limit` naming the cap, the call cap refuses a call as `call-cap-reached`, nothing survives into the next run, an oversized value comes back as a truncated prefix of its pinned JSON, errors are `{kind, message}` with a bounded single-line message, a denial's reason reaches the program, a pending call pauses the run however the program catches it, programs over 65536 characters or not UTF-8 text are refused; the client-side pause and call cap are behaviour, the broker's refusal on the token (CM-5) is the enforcement; checks hold their programs per language and a declared language without one is untested; the reference fake forks each run from a warm process and puts it behind an audit hook, test-only and not a boundary |
 
-Extended suites (listed with `--all`, not among the sixteen): `backup` (immutable snapshots,
+Extended suites (listed with `--all`, not among the seventeen): `backup` (immutable snapshots,
 verified restores, retention), `dns` (zone semantics the registry's aliases rely on) and `edge`
 (reverse-proxy routing and forward-auth hygiene).
 
@@ -264,12 +265,12 @@ A capability has a **passing test** when its suite exists, executes at least six
 failing `must` check, and (on the `fake` target) catches every one of its mutants.  Capabilities
 named in `capabilities.yml` but lacking a suite are listed too.
 
-`capabilities.yml` at the repository root is the list of capabilities this tree declares (the sixteen
+`capabilities.yml` at the repository root is the list of capabilities this tree declares (the seventeen
 names, one per line under `capabilities:`).  The exporter and invariants X-04 and X-10 read it, so a
 deployment that adds a capability adds it there and must then ship its suite, or the report and the
 invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
-falls back to the built-in sixteen).  `make conform-check` (`tools/conform_coverage.py`) runs
-`hnx conform list` and `hnx conform report --json` and fails if any of the sixteen lacks a passing
+falls back to the built-in seventeen).  `make conform-check` (`tools/conform_coverage.py`) runs
+`hnx conform list` and `hnx conform report --json` and fails if any of the seventeen lacks a passing
 test; `make conform` runs every suite against the built-in fakes, and the nightly workflow runs
 `hnx conform run all` after the lab-in-a-box smoke.
 

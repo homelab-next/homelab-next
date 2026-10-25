@@ -109,7 +109,7 @@ def test_unknown_tool_and_bad_arguments_are_refused(cat):
 
 def test_list_capabilities_matches_the_capability_model(cat):
     caps = {c["name"]: c for c in _call(cat, "list_capabilities")["capabilities"]}
-    assert len(caps) == 16
+    assert len(caps) == 17
     ctx = caps["context"]
     assert (ctx["operations"], ctx["must"], ctx["should"]) == (4, 13, 3)
     assert ctx["implementations"]["fake"] == "FakeContextStore"
