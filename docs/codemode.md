@@ -230,7 +230,7 @@ result.
   be written means the call happened: the run stops relaying at once (`journal-unavailable`),
   the call is still reported, and the run ends `error` with its token spent `finished`, so the
   execution never resumes and nothing is re-sent. A pending call of such a run is reported as an
-  `error` call (`journal-unavailable`); its request stays pending at the broker for its owner to
+  `error` call (`run-stopped`), as in any run stopped before its pause could stand; its request stays pending at the broker for its owner to
   cancel.
 - **Crashes.** A runner that dies leaves its journal `running` with an owner that is gone; the
   broker's sweep spends that run's token `crashed`. The runner marks such an execution

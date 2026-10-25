@@ -81,7 +81,8 @@ answered.  When the intent cannot be written the call is not sent; when the answ
 the call has happened: the run stops relaying at once (every later call is refused
 ``journal-unavailable``), the call is still reported in ``calls``, and the run ends ``error`` with
 its token spent ``finished``, so the execution never resumes and nothing is re-sent.  A pending
-call of such a run is reported as an ``error`` call (``journal-unavailable``): its request stays
+call of such a run (or of any run stopped before its pause could stand) is reported as an
+``error`` call (``run-stopped``): its request stays
 pending at the broker, for its owner to cancel.  A crash leaves the journal ``running`` with an
 owner that is gone; the runner marks it ``interrupted`` (at its sweep, or when a resume finds
 it), and an interrupted execution never resumes, as the broker's own sweep spends the crashed
@@ -628,7 +629,7 @@ class Runner:
         if status["status"] != "paused":  # a run that is not paused reports no pending call
             for c in calls:
                 if c["outcome"] == "pending":
-                    c.update(outcome="error", reason="journal-unavailable")
+                    c.update(outcome="error", reason="run-stopped")
         out: dict[str, Any] = {
             "execution_id": run.execution_id,
             "actor": run.actor,

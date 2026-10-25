@@ -316,3 +316,22 @@ def test_relay_replies_are_json_lines(tmp_path, executor):
     res = _run(b, code)
     assert res["value"] == {"ok": False, "error": True, "reason": "request-malformed"}
     assert json.dumps(res["calls"]) == "[]"
+
+
+def test_a_pause_the_journal_cannot_record_is_reported_stopped(tmp_path, executor, monkeypatch):
+    """A pending answer the journal cannot write: the run is not paused (it could never resume
+    safely), and the call is reported as an error call, run-stopped, naming its request."""
+    _ran, cmds = _counted("cm.b")
+    b, runner = _fake(tmp_path, executor, cmds)
+    orig = runner.store.answer
+
+    def answer(*a, **kw):
+        if (kw.get("record") or {}).get("outcome") == "pending":
+            raise JournalError("No space left on device")
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(runner.store, "answer", answer)
+    res = _run(b, "broker.submit('cm.b', {'name': 'held'})\n")
+    assert res["status"] == "error" and "pending" not in res, res
+    (call,) = res["calls"]
+    assert (call["outcome"], call["reason"]) == ("error", "run-stopped") and call["request_id"]
