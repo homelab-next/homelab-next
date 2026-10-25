@@ -36,7 +36,9 @@ filesystem reader has none of this platform's scope rules, profile verification 
 2. **Context is served in three levels** by `hnx mcp serve` (`homelabnext/context/levels.py`,
    `homelabnext/mcp/catalog.py`):
    - **L0, the summary:** a front-matter `summary:` the author wrote and a review covered
-     (`summary_source: authored`), else the document's first prose paragraph reduced to visible
+     (`summary_source: authored`), or one a generator derived from source data and marked with
+     `summary_generated: true` (`generated`: nobody wrote or reviewed it, and the lint counts such
+     pages apart), else the document's first prose paragraph reduced to visible
      text and cut to 160 characters (`first-paragraph`), or for a node built from attributes its
      first line (`synthesized`), else nothing (`none`). `context_for` returns this level by default
      (`detail: "summary"`: id, kind, title, path, score, digest, summary; no content);
@@ -58,7 +60,17 @@ filesystem reader has none of this platform's scope rules, profile verification 
    lines) and every title, slug, path and derived summary is cleaned of control and invisible
    format characters before a model sees it; content stays the raw document text its digest
    covers, and is untrusted data.
-5. **A summary is authored, short and reviewed.** `summary:` is accepted on lessons (schema
+5. **Context packs use the levels too.** An `include:` rule's `detail` (`full` by default,
+   `summary` or `outline`; `agent/profile` 1.4) makes the pack carry a node's L0 summary, or the
+   summary and the heading outline with its slugs, paths and sizes, instead of its body. The
+   level is read exactly as the MCP server serves it (same summary logic, same decoding and size
+   cap, same slugs), the outline prints the bare `outline_digest` that `section` accepts, and
+   the pack's knowledge record keeps the digest of the full content (of the served text, plus
+   `file_digest` of the file's own bytes, when the two differ: undecodable bytes, an empty file or
+   one over the store's cap). A node with no summary is
+   its title line, recorded as `none`, never its body. `max_chars` caps what is emitted, and an
+   outline stops at the last whole heading that fits and says how many it left out.
+6. **A summary is authored, short and reviewed (generated pages excepted).** `summary:` is accepted on lessons (schema
    2.1), runbooks (2.2) and docs pages: one line, at most 160 characters, no control or invisible
    format character.
    It is content, so it is in the record's review digest. `hnx registers summaries` (in
@@ -86,6 +98,11 @@ filesystem reader has none of this platform's scope rules, profile verification 
   contract as an adapter declaring the `semantic` feature (`conformance/protocols/context.py`
   describes one), scoped and verified like any other. It should be adopted only after evals show
   it beats the keyword store on that corpus.
+- **Packs use the levels too:** an `include:` rule's `detail` (`full` by default, `summary` or
+  `outline`) makes a context pack carry a node's level 0 or 1 instead of its body, and the pack
+  record keeps the digest of the full content. Generated capability and system pages carry a
+  `summary:` derived from the registry and the contract, so the lint's gap shrinks without
+  anyone writing a line.
 - **Obliges us to maintain:** the parsing rules in `homelabnext/context/levels.py` and their
   tests (fences, front-matter, slugs, paths), the summary rule shared by the lint, the record
   validation and the schemas, and the behaviour change in `context_for`'s default.

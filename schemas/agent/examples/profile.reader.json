@@ -24,7 +24,7 @@
     "tier": "write"
   },
   "data_tier": "local-only",
-  "digest": "sha256:b855f7d3bf4d947b92df54cdb815d2099722c7a62166abf05cd2af0c62837114",
+  "digest": "sha256:c2a60bc0b12f1c5f9a10218cc6008dca2c4ce03d7d2fc8c12d9d2ac80f2e448c",
   "grants": {
     "capabilities": [
       "cap:lake-query"
@@ -35,6 +35,29 @@
     "tier": "read"
   },
   "id": "profile:reader",
+  "include": [
+    {
+      "budget": 12,
+      "depth": 1,
+      "detail": "summary",
+      "from": "capabilities",
+      "kinds": [
+        "lesson",
+        "runbook"
+      ],
+      "max_chars": 4000
+    },
+    {
+      "budget": 4,
+      "depth": 1,
+      "detail": "outline",
+      "from": "capabilities",
+      "kinds": [
+        "doc"
+      ],
+      "max_chars": 4000
+    }
+  ],
   "memory_scopes": [
     "analyst"
   ],
@@ -61,6 +84,11 @@
       "source": "parts-library"
     },
     {
+      "digest": "sha256:5a3f0406379da518d57d1aaef8d15f0f144a70d9291941c4a6b61d1613c8a5a5",
+      "id": "profile:reader",
+      "source": "spec"
+    },
+    {
       "digest": "sha256:ee35ab8a83541b741aa1ae498b4c1e6adfcbca7801008d9d98e3908da087bfc6",
       "id": "skill:summarise",
       "source": "parts-library"
@@ -69,11 +97,6 @@
       "digest": "sha256:6451bdc881ad30ef8faafceef66ab7480957851cc3c8ce563c983582dab91ab7",
       "id": "skill:triage",
       "source": "parts-library"
-    },
-    {
-      "digest": "sha256:d0dea5a68c67f5ac89cebfaf9c015c48c2bea0247c0be4958ce3538828e021f3",
-      "id": "profile:reader",
-      "source": "spec"
     }
   ],
   "reads_untrusted": true

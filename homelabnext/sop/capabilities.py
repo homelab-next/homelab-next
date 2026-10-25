@@ -50,6 +50,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext.context.levels import GENERATED_KEY
 from homelabnext.registry.model import Registry, env_var_name
 
 PAGES_DIR = "docs/capabilities"
@@ -935,11 +936,42 @@ def _field_table(fields: list[Field], header: str = "Field") -> list[str]:
     return [*out, ""]
 
 
+INDEX_SUMMARY = (
+    "Every capability contract: what it is for, how many operations and checks it has, "
+    "and which adapters and services provide it."
+)
+
+
+def _summary_lines(text: str) -> str:
+    """The ``summary:`` front-matter line for ``text`` and the key marking it generated
+    (ADR-0032: no person wrote or reviewed it).  Written by the YAML emitter, so every character
+    (a noncharacter such as U+FFFE included) is escaped as YAML needs and parses back unchanged."""
+    body = yaml.safe_dump(
+        {"summary": text, GENERATED_KEY: True},
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+        width=1 << 30,
+    )
+    return body.rstrip("\n")
+
+
+def capability_summary(c: Capability) -> str:
+    """The page's level-0 summary (ADR-0032): the contract's one-line purpose as a sentence, cut to
+    the summary limit."""
+    from homelabnext.context.levels import clean, cut
+
+    purpose = clean(c.summary)
+    first = purpose[:1].upper() + purpose[1:]
+    return cut(f"{first.rstrip('.')}.")
+
+
 def render_page(c: Capability, root: Path) -> str:
     L: list[str] = [
         "---",
         f"title: {c.name}",
         "type: capability",
+        _summary_lines(capability_summary(c)),
         f"capability: {c.name}",
         f"protocol: '{c.protocol}'",
         f"generated_by: {GENERATOR}",
@@ -1241,6 +1273,7 @@ def render_index(caps: list[Capability], registry: Registry | None) -> str:
         "---",
         "title: Capabilities",
         "type: capability-index",
+        _summary_lines(INDEX_SUMMARY),
         f"generated_by: {GENERATOR}",
         "---",
         "",

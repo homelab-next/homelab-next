@@ -35,7 +35,12 @@ class SummaryReport:
     pages: int = 0
     missing_records: list[str] = field(default_factory=list)
     missing_pages: list[str] = field(default_factory=list)
+    #: pages whose summary a generator derived (``summary_generated: true``): they have one, but
+    #: no person wrote or reviewed it, so they are counted apart from the authored ones
+    generated_pages: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    #: things worth fixing that do not fail the lint (a ``summary_generated`` that is not a bool)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -43,12 +48,13 @@ class SummaryReport:
 
     def lines(self, missing: bool = False) -> list[str]:
         """One line per problem, ``missing:`` lines when asked, then the counts."""
-        out = [f"FAIL {p}" for p in self.problems]
+        out = [f"FAIL {p}" for p in self.problems] + [f"WARN {w}" for w in self.warnings]
         if missing:
             out += [f"missing {p}" for p in self.missing_records + self.missing_pages]
         out.append(
             f"summaries: {self.records} record(s), {len(self.missing_records)} without a summary; "
-            f"{self.pages} page(s), {len(self.missing_pages)} without a summary"
+            f"{self.pages} page(s), {len(self.missing_pages)} without a summary, "
+            f"{len(self.generated_pages)} with a generated one"
             + (" (WARNING: a missing summary is not a failure yet)" if self._missing else "")
         )
         return out
@@ -71,7 +77,7 @@ def _files(path: Path) -> list[tuple[Path, bool]]:
 def lint_summaries(paths: Iterable[str | Path], root: str | Path | None = None) -> SummaryReport:
     """Check the summary of every record and page under ``paths`` (shown relative to ``root``,
     default the current directory)."""
-    from homelabnext.context.levels import check_summary, front_matter
+    from homelabnext.context.levels import GENERATED_KEY, check_summary, front_matter
 
     base = Path(root or ".").resolve()
     rep = SummaryReport()
@@ -94,4 +100,11 @@ def lint_summaries(paths: Iterable[str | Path], root: str | Path | None = None) 
             why = check_summary(front["summary"])
             if why:
                 rep.problems.append(f"{shown}: {why}")
+            elif front.get(GENERATED_KEY) is True:
+                rep.generated_pages.append(shown)
+            if GENERATED_KEY in front and not isinstance(front[GENERATED_KEY], bool):
+                rep.warnings.append(
+                    f"{shown}: {GENERATED_KEY} must be the boolean true or false, not "
+                    f"{front[GENERATED_KEY]!r}: the summary is read as authored"
+                )
     return rep

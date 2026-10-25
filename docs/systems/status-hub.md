@@ -1,6 +1,8 @@
 ---
 title: status-hub
 type: system
+summary: status-hub provides the status-hub capability (homelabnext), owned by platform-team.
+summary_generated: true
 service: status-hub
 capability: status-hub
 impl: homelabnext
