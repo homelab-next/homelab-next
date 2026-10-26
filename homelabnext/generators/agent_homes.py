@@ -12,7 +12,9 @@ role table, where that role is bound to the backend's ``svc:``.  Two checks:
 * :func:`controller_problems` (``hnx gen gateway render SPEC OUT --check``, when the spec has a
   ``controller:`` block): every controller backend ``name`` is a ``svc:`` of the gateway spec, its
   home's ``model.default`` is a role bound to that backend and to no other, and its ``max_context`` equals the
-  role's ``max_context_tokens``.  The controller config is read as the controller reads it; which
+  role's ``max_context_tokens``; the home's ``model.base_url`` is the gateway's (the block's
+  ``base_url``), and its ``model.context_length``, when set, is no more than that role's
+  ``max_context_tokens``.  The controller config is read as the controller reads it; which
   home belongs to which backend is the spec's ``controller.homes`` (one home per local backend,
   so the controller still decides where a session lands).
 * :func:`home_findings` (``hnx gen gateway homes``, invariant A-14): a home's ``config.yaml``
@@ -31,6 +33,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import re
 import sys
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -66,13 +69,78 @@ class ControllerRef:
 
     config: Path
     homes: dict[str, Path] = field(default_factory=dict)  # backend name -> HERMES_HOME
+    #: the gateway's URL as every home's ``model.base_url`` names it
+    base_url: str = ""
+
+
+#: the only URL shape a gateway URL, and a home's ``model.base_url``, may have: https, an ASCII
+#: host name of letters, digits and hyphens with at least one dot, an optional port, and a path of
+#: plain segments.  No userinfo, backslash, whitespace, percent-escape, query or fragment: those
+#: are where two URL parsers disagree on the host (``https://other\\@gateway/`` is the gateway to
+#: :func:`urllib.parse.urlsplit` and ``other`` to a WHATWG client), so a home could pass the check
+#: and still call around the gateway.
+_URL_SHAPE = re.compile(
+    r"https://(?P<host>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>(?:/[a-z0-9._~-]*)*)",
+    re.IGNORECASE,
+)
+
+
+def _canonical(url: Any) -> tuple[str, int, str] | None:
+    """``(host, port, path)`` of a URL of :data:`_URL_SHAPE` (host lower-cased, the default port
+    filled in, one trailing ``/`` dropped), or None for anything else."""
+    m = _URL_SHAPE.fullmatch(url) if isinstance(url, str) else None
+    if m is None:
+        return None
+    port = int(m["port"]) if m["port"] else 443
+    if not 0 < port < 65536:
+        return None
+    path = m["path"]
+    return m["host"].lower(), port, path[:-1] if path.endswith("/") else path
+
+
+def gateway_url_problem(url: Any) -> str | None:
+    """Why ``url`` cannot be the gateway's base URL, or None: it must have :data:`_URL_SHAPE`,
+    and no label of its host may read as a number (a dotted quad, ``0x7f000001``), which a
+    resolver would take as an address."""
+    if url is None or url == "":
+        return "the gateway's URL that every home's model.base_url names is required"
+    if not isinstance(url, str):
+        return f"{url!r} must be a string, the gateway's URL"
+    c = _canonical(url)
+    if c is None:
+        return (
+            f"{url!r} must be https://HOST[:PORT][/PATH] with an ASCII host name (letters, digits, "
+            "hyphens, at least one dot), plain path segments, and no credentials, escapes, "
+            "whitespace, query or fragment"
+        )
+    host, _, path = c
+    if any(re.fullmatch(r"[0-9]+|0x[0-9a-f]*", label) for label in host.split(".")):
+        return f"{url!r} names an address, not a host name; name the gateway by its host name"
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return f"{url!r} has a '.' or '..' path segment"
+    return None
+
+
+def same_url(a: Any, b: str) -> bool:
+    """``a`` and ``b`` are one URL of :data:`_URL_SHAPE`: scheme and host compared without case,
+    the default port spelled or not, a trailing ``/`` ignored.  Any other ``a`` is not."""
+    ca = _canonical(a)
+    return ca is not None and ca == _canonical(b)
 
 
 def parse_controller(raw: Any, base: Path, problems: list[str]) -> ControllerRef | None:
-    """``controller: {config: FILE, homes: {BACKEND: DIR}}``, or None (with problems)."""
-    if not isinstance(raw, Mapping) or set(raw) - {"config", "homes"}:
-        problems.append("controller takes config (the controller's config file) and homes")
+    """``controller: {config: FILE, base_url: URL, homes: {BACKEND: DIR}}``, or None (with
+    problems)."""
+    if not isinstance(raw, Mapping) or set(raw) - {"config", "homes", "base_url"}:
+        problems.append(
+            "controller takes config (the controller's config file), base_url (the gateway's "
+            "URL as the homes name it) and homes"
+        )
         return None
+    url_problem = gateway_url_problem(raw.get("base_url"))
+    if url_problem:
+        problems.append(f"controller.base_url: {url_problem}")
     cfg = raw.get("config")
     if not isinstance(cfg, str) or not cfg:
         problems.append("controller.config: the controller's config file is required")
@@ -99,7 +167,9 @@ def parse_controller(raw: Any, base: Path, problems: list[str]) -> ControllerRef
         home = inside(f"controller.homes.{name}", d)
         if home is not None:
             homes[str(name)] = home
-    return ControllerRef(config, homes) if config is not None else None
+    if config is None or url_problem:
+        return None
+    return ControllerRef(config, homes, str(raw["base_url"]))
 
 
 def _load(path: Path) -> Any:
@@ -135,19 +205,20 @@ def controller_backends(doc: Any) -> tuple[list[tuple[str, Mapping[str, Any]]], 
     return good, problems
 
 
-def _home_model(home: Path) -> tuple[Any, str | None]:
-    """``(model.default, problem)`` of ``<home>/config.yaml``."""
+def _home_model(home: Path) -> tuple[Mapping[str, Any], str | None]:
+    """``(model, problem)`` of ``<home>/config.yaml``: its ``model`` mapping, with a string
+    ``model.default``."""
     path = home / HOME_FILE
     try:
         doc = _load(path)
     except OSError as exc:
-        return None, f"cannot read {path}: {exc.strerror or exc}"
+        return {}, f"cannot read {path}: {exc.strerror or exc}"
     except (yaml.YAMLError, ValueError, RecursionError) as exc:  # ValueError: not UTF-8
-        return None, f"{path} is not YAML text: {exc}"
+        return {}, f"{path} is not YAML text: {exc}"
     model = doc.get("model") if isinstance(doc, Mapping) else None
     if not isinstance(model, Mapping) or not isinstance(model.get("default"), str):
-        return None, f"{path} has no model.default"
-    return model["default"], None
+        return {}, f"{path} has no model.default"
+    return model, None
 
 
 def controller_problems(spec: Any) -> list[str]:
@@ -181,10 +252,17 @@ def controller_problems(spec: Any) -> list[str]:
         if home is None:
             problems.append(f"{head}: no HERMES_HOME under the spec's controller.homes")
             continue
-        default, why = _home_model(home)
+        model, why = _home_model(home)
         if why:
             problems.append(f"{head}: {why}")
             continue
+        default = model["default"]
+        if not same_url(model.get("base_url"), ref.base_url):
+            problems.append(
+                f"{head}: its home's model.base_url {model.get('base_url')!r} is not the "
+                f"gateway's {ref.base_url!r}, so its calls skip the gateway's keys, limits and "
+                "locality rule"
+            )
         role = spec.table.roles.get(default)
         if role is None:
             problems.append(
@@ -206,10 +284,26 @@ def controller_problems(spec: Any) -> list[str]:
             )
             continue
         ctx, want = e.get("max_context"), role.max_context_tokens
+        if isinstance(want, bool) or not isinstance(want, int):
+            problems.append(
+                f"{head}: its home's role mdl:{default} has no max_context_tokens, so neither the "
+                "backend's max_context nor the home's context_length can be held to it"
+            )
+            continue
         if isinstance(ctx, bool) or ctx != want:
             problems.append(
                 f"{head}: max_context {ctx!r} differs from mdl:{default}'s max_context_tokens "
                 f"{want!r}; admission and min_context affinity would judge another context"
+            )
+        # less is allowed (the agent compacts sooner); more overflows the engine mid-session
+        length = model.get("context_length")
+        if length is not None and (
+            isinstance(length, bool) or not isinstance(length, int) or not 0 < length <= want
+        ):
+            problems.append(
+                f"{head}: its home's model.context_length {length!r} is not a whole number of "
+                f"tokens up to mdl:{default}'s max_context_tokens {want!r}; the agent would fill a "
+                "context the engine does not serve"
             )
     known = set(names)
     for name in sorted(set(ref.homes) - known):
