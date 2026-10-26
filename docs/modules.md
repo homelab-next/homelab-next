@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:09f9c7ea64c4d06a
+summary_of: outline:sha256:ac3d2ea65e02ae7f
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -956,22 +956,60 @@ Model-role rebinds go through the same record with `{slot: cap:inference, role}`
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
 open (below).
 
-## The product-name lint (rule 1): specification
+## The product-name lint (rule 1)
 
-Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
+Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints.py`, run by
+`make gates`, the CI `schemas` job (with `--ci-base`) and invariant X-11.
 
-- **Vocabulary**: every provider's `product.name`, `display` (lower-cased, spaces as `-`/`_`) and
-  `aliases`, from the tree and the overlay; `tools/product_names.yml` for products without a provider
-  module yet; **model identifiers** from the role table; and product-named environment variable
-  prefixes (`<PRODUCT>_*`).
-- **Where allowed**: inside a provider module; site configuration (the overlay, the public example
-  sites); ADRs, the changelog and prose.
-- **What is linted**: code, config keys and values, schema `enum`/`default`/`const`, CLI defaults
-  and choices, file and directory names, env names, in the core and in feature and core modules.
-- **Skipped**: comments, docstrings and Markdown prose. **Matching**: case-insensitive, bounded,
-  `-` and `_` alike. **Suppression**: a path glob with a reason, plus a baseline that only shrinks.
-- The contract tests already apply it to the examples (feature and core modules, sites, the slot
-  registry).
+- **Vocabulary**: every provider's `product.name`, `display` and `aliases`, from
+  `examples/modules/`, the public `modules/` and an overlay's `lab/modules/` (`--overlay`);
+  `tools/product_names.yml` `products:` for products without a provider module yet (each with a
+  `why`; unambiguous names only); and **model identifiers** from the role table
+  (`examples/model_roles.json`, `--roles`). Each name must be lower-case words of at most 128
+  characters, and a manifest that is not well formed is an error, never skipped.
+- **Where allowed**: a provider module's directory, **for its own product only** (claiming
+  `kind: provider` does not open a directory to every product); site configuration
+  (`examples/modules/sites/`, `examples/private-overlay/`, an overlay's `lab/`); the role table;
+  Markdown prose (ADRs and the changelog included); and the reviewed globs of
+  `tools/product_names.yml` `allow:`, each with a reason (generated catalogues and other gates'
+  path lists, whose paths are counted where they live).
+- **What is linted**: the files `git ls-files` lists under the root (tracked, plus untracked but
+  not ignored; a directory walk outside a git work tree). Python string and bytes constants as
+  Python reads them (escapes decoded, implicit concatenation joined, f-string parts) and
+  identifiers; every key and string value of YAML (sets, ordered maps and binaries included) and
+  JSON, except the string value of a prose key (`description`, `title`, `$comment`, `summary`,
+  `reason`, `why`, `purpose`, `help`); the lines of every other text file, whatever its suffix
+  (`Dockerfile`, `Makefile`, `.env`, `.html`, `.sql` included) or encoding (UTF-8; UTF-16 or
+  UTF-32 by BOM or byte pattern; otherwise Latin-1); every file, directory and submodule name; and
+  a symbolic link's target text and, for a link into the tree, the target's content under the
+  link's path. A binary (a NUL byte in a suffix not known as text) is skipped whatever its size; a
+  text file over 20 MB is an error.
+- **Skipped**: comments (Python, and `#` or `//` lines in the formats that use them), docstrings
+  (as nodes, so code on the same line is still read) and prose.
+- **Matching**: one pass of one pattern per file (about 5 seconds over this tree). A file is parsed
+  only when its letters and digits contain some name's, or it holds an escape or a line
+  continuation, so the prefilter never skips a file a parse would match in. Case-insensitive after
+  compatibility normalisation with combining marks and invisible format characters removed; `-`,
+  `_`, `.`, a space or nothing between a name's parts; bounded by a non-alphanumeric or a
+  camel-case, upper-case-run or letter/digit seam, so `NorthwindObjectsClient`,
+  `NORTHWINDOBJECTSClient` and `getNorthwindObjects` count and a longer word containing the name
+  does not (`OPENBAOADDR`, all capitals glued, is a known miss). It finds ordinary spellings, not
+  deliberate obfuscation (`"open" + "bao"`, an encoded string): that is what review of a change is
+  for.
+- **Baseline**: `tools/product_names.baseline.json` holds today's counts per path and product
+  (the core still names its reference products in about 530 paths). A count above it fails, and so
+  does an entry above what is there. `make product-names-baseline` (`--update`) rewrites it to what
+  is there and is refused when any product's total would rise. In CI `--ci-base` also compares the
+  committed baseline and vocabulary with the base commit's (the same base rule as
+  `tools/schema_check.py --ci-base`): no path's count may rise above its count there (a file git
+  sees as renamed or copied keeps its old path's counts, and a split records its new path under
+  `tools/product_names.yml` `moved:` with a reason, so a new file never takes on debt freed
+  elsewhere), no product's total may rise (so a copy never doubles debt), and no spelling linted
+  there (a product, an alias, a provider's display name, a model id) may stop being linted unless
+  `retired:` says why (each retirement is printed in the CI log). Neither file can be loosened by
+  hand. Moving product code into a provider module is how it shrinks.
+- **Exit**: 0 clean, 1 violations, 2 a bad input, 100 the lint itself failed (X-11 reports that
+  as "could not measure", not as a failure).
 
 ## Prerequisite record changes
 
@@ -1058,7 +1096,8 @@ listed as deferred.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the
    fictional examples in the contract tests, plus the two-way check against what runs, uniqueness
    against the core's own names, and refusing an overlay module that shadows a shipped id.
-10. **The product-name lint** (specified above).
+10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
+    the core's existing product names are a baseline that only shrinks.
 
 ## Open questions
 

@@ -31,7 +31,7 @@ def test_every_non_header_table_line_parses():
 
 def test_pillar_x_rows_match_plugins():
     by_id = {r[0]: r[3] for r in rows()}
-    assert sorted(i for i in by_id if i.startswith("X-")) == [f"X-{n:02d}" for n in range(1, 11)]
+    assert sorted(i for i in by_id if i.startswith("X-")) == [f"X-{n:02d}" for n in range(1, 12)]
     for i, tag in by_id.items():
         if i.startswith("X-"):
             assert (tag == "SERVER") == (i in SERVER_ONLY), i
