@@ -6,8 +6,9 @@ redirect handling is what is tested: an AppRole login (``POST /v1/auth/approle/l
 token), a KV v2 read (``GET /v1/<mount>/data/<name>``, needs a live token) and
 ``POST /v1/auth/token/revoke-self`` (kills the calling token).  For ``hnx secrets seed`` it also
 answers a KV v2 metadata read (``GET /v1/<mount>/metadata/<name>``) and a write
-(``POST /v1/<mount>/data/<name>``, honouring ``options.cas``); ``tokens`` are operator tokens
-that are live from the start.  With ``redirect_to`` set it
+(``POST /v1/<mount>/data/<name>``, honouring ``options.cas``) and the mount's description
+(``GET /v1/sys/internal/ui/mounts/<mount>``, KV version ``kv_version``); ``tokens`` are operator
+tokens that are live from the start, ``deleted`` names whose current version is soft-deleted.  With ``redirect_to`` set it
 answers every request with a 307 to that origin instead, the way a hostile or misconfigured
 proxy would.  Every request is recorded as ``(method, path, X-Vault-Token)``.
 """
@@ -31,12 +32,16 @@ class FakeOpenBao:
         redirect_to: str | None = None,
         revoke_status: int = 204,
         tokens: tuple[str, ...] = (),
+        kv_version: str = "2",
+        deleted: tuple[str, ...] = (),
     ):
         self.values = values or {}  # "<mount>/<name>" -> {field: value}
         self.redirect_to = redirect_to
         self.revoke_status = revoke_status
         self.calls: list[tuple[str, str, str | None]] = []
         self.live: set[str] = set(tokens)
+        self.kv_version = kv_version
+        self.deleted = set(deleted)
         self.minted = 0
         fake = self
 
@@ -76,13 +81,23 @@ class FakeOpenBao:
                         fake.live.discard(token or "")
                         return self._reply(204)
                     return self._reply(fake.revoke_status, {"errors": ["denied"]})
+                if self.path.startswith("/v1/sys/internal/ui/mounts/"):
+                    if token not in fake.live:
+                        return self._reply(403, {"errors": ["permission denied"]})
+                    opts = {"version": fake.kv_version} if fake.kv_version else {}
+                    return self._reply(200, {"data": {"type": "kv", "options": opts}})
                 if self.path.startswith("/v1/") and "/metadata/" in self.path:
                     if token not in fake.live:
                         return self._reply(403, {"errors": ["permission denied"]})
                     mount, _, rest = self.path[len("/v1/") :].partition("/metadata/")
-                    if f"{mount}/{rest}" not in fake.values:
+                    key = f"{mount}/{rest}"
+                    if key not in fake.values and key not in fake.deleted:
                         return self._reply(404, {"errors": []})
-                    return self._reply(200, {"data": {"current_version": 1}})
+                    gone = "2026-01-01T00:00:00Z" if key in fake.deleted else ""
+                    version = {"deletion_time": gone, "destroyed": False}
+                    return self._reply(
+                        200, {"data": {"current_version": 1, "versions": {"1": version}}}
+                    )
                 if method == "POST" and self.path.startswith("/v1/") and "/data/" in self.path:
                     if token not in fake.live:
                         return self._reply(403, {"errors": ["permission denied"]})

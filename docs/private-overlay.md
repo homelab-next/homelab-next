@@ -218,54 +218,71 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 
 ### Seeding the credentials
 
-`hnx secrets` creates every credential the lab names, so step 3 is not a hand-typed list:
+`hnx secrets` creates every credential the lab names, so step 3 is not a hand-typed list. Point it
+at the overlay and at the roles you deploy (not at `examples/`, whose fictional modules name
+secrets your lab does not have):
 
 ```sh
-# every secret:<name> the overlay and the roles you deploy name, and how each gets its value
+# every secret:<name> they name, and how each gets its value
 hnx secrets plan lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml
 
 # as the operator, while the root (or an admin) token is still valid
-export BAO_ADDR=https://bao.example.internal:8200 BAO_CACERT=ca.pem BAO_TOKEN=...
+export BAO_ADDR="https://<openbao>:8200" BAO_CACERT=ca.pem BAO_TOKEN=...
 hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --dry-run
-hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --ask
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --ask \
+  --from-file mcp/ssh-key=keys/mcp-ssh
 ```
 
 `lab/secrets.yml` (start from `examples/private-overlay/lab/secrets.yml`) says how each name gets
-its value: the first rule whose glob matches the name wins, else the default.
+its value, by the first rule whose glob matches the name. `also:` adds names no file holds (the
+deploy's vault password is a workflow variable).
 
 | Kind | Value |
 |---|---|
 | `password` | letters, digits, `-` and `_` (20 to 128 characters) |
 | `token` | URL-safe base64 of N random bytes, with an optional fixed `prefix` (LiteLLM keys start with `sk-`) |
 | `hex` | N random bytes as hex |
-| `external` | issued elsewhere (a Tailscale auth key, a UniFi API key, a cloud model key): never generated. `--ask` prompts for each one that is missing; otherwise it is listed, with its `how` |
+| `external` | issued elsewhere (a Tailscale auth key, an API key, a database URL, a private key): never generated. `--ask` prompts for each one that is missing, `--from-file NAME=FILE` reads one from a file (multi-line values); otherwise it is listed with its `how` |
+| `unclassified` | no rule matches: listed by `plan`, never generated. A value made up for a key another system issues would only fail later, and a later run could not replace it. Add a rule |
 
-`seed` writes a value only where OpenBao has none: each write is a check-and-set at version 0, so
-an existing credential is never overwritten, not even by a second run at the same moment. Run it
-again after adding a role and only the new names are created. Values exist only in memory and in
-the HTTPS request: the output names secrets and outcomes, never a value.
+How `seed` writes:
 
-**Vaultwarden.** With `--vaultwarden`, each secret the spec's `vaultwarden.include` covers is
-also stored as a login item named `secret:<name>` in one folder. That includes secrets that
-already existed, which are read from OpenBao. First point the Bitwarden CLI at the server and
-unlock it:
+* **Never over an existing value.** It writes only where OpenBao has none, and each write is a
+  check-and-set at version 0, so an existing credential is never overwritten, not even by a second
+  run at the same moment. The mount must be KV version 2: version 1 ignores check-and-set, so
+  `seed` refuses it before writing anything.
+* **Only what is new.** A secret whose current version is deleted is reported, not replaced. Run
+  `seed` again after adding a role, and only the new names are created.
+* **It asks first.** It says how many secrets it will write and asks (`--yes` off a terminal).
+* **Exit codes.** It exits 0 once every name has a value, 3 while some still need one (an external
+  not given, an unclassified name), 1 on an error, and 2 on a usage error.
+* **Values stay out of sight.** They exist only in memory and in the HTTPS request; the output
+  names secrets and outcomes, never a value.
+* **Seeding only stores the value.** Where a service must also know it (the SIEM's enrolment
+  password, the directory's bind account, the UPS monitor's password), the role sets it from the
+  same name, or you set it in that service's console from the value in OpenBao.
+
+**Vaultwarden.** With `--vaultwarden`, each secret the spec's `vaultwarden.include` covers is also
+stored as a login item named `secret:<name>`, in the spec's folder (created if missing). That
+includes secrets that already existed, which are read from OpenBao. First point the Bitwarden CLI
+at the server and unlock it:
 
 ```sh
-bw config server https://vault.example.internal && bw login
+bw config server "https://<vaultwarden>" && bw login
 export BW_SESSION="$(bw unlock --raw)"
 hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --vaultwarden
 ```
 
-The value reaches `bw` on its standard input, never on a command line. An item that already exists
-is left as it is.
+The item reaches `bw` on its standard input, never on a command line, and `bw` runs with only the
+environment it needs (never `BAO_TOKEN`). An item that already exists is left as it is, and a
+`--dry-run` creates nothing there either.
 
-* **OpenBao stays the source of truth.** The deploy never reads Vaultwarden, and a value
-  rotated in OpenBao is not updated there (delete the item and seed again).
+* **OpenBao stays the source of truth.** The deploy never reads Vaultwarden, and a value rotated
+  in OpenBao is not updated there (delete the item and seed again).
 * **Break-glass material is not seeded.** OpenBao's unseal keys and root-token recovery, and the
-  operator's age identity, go into Vaultwarden by hand. They also need a copy off the lab
-  (paper, or a password manager the lab does not host): a Vaultwarden on the lab is down exactly
-  when you need them. The Bitwarden apps' offline copy of the vault helps, but it does not replace
-  that.
+  operator's age identity, go into Vaultwarden by hand. They also need a copy off the lab (paper,
+  or a password manager the lab does not host): a Vaultwarden on the lab is down exactly when you
+  need them. The Bitwarden apps' offline copy of the vault helps, but it does not replace that.
 
 ### Tailscale: the deploy tag, least access
 
