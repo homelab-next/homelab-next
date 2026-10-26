@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:vault-1
+description: "Vaultwarden: the people's copy of the lab's credentials, beside OpenBao's."
+kind: lxc
+provisioning: terraform
+placement: {node: main-1, vmid: 126}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 1024}
+  disks: [{name: rootfs, size_gb: 16, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: services, ip: 192.0.2.76}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: web-mgmt, proto: tcp, ports: "443", source: "zone:mgmt"}
+    - {name: web-proxy, proto: tcp, ports: "443", source: "198.51.100.10/32"}
+capability: cap:records
+tags: [prod]
+owners: {primary: platform-team}

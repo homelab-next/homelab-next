@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:siem-1
+description: "Collects, decodes and correlates the fleet's logs into alerts."
+kind: vm
+provisioning: terraform
+placement: {node: main-1, vmid: 120}
+resources:
+  cpu: {cores: 16}
+  memory: {size_mb: 32768}
+  disks: [{name: rootfs, size_gb: 300, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+# the deploy account Ansible logs in as: passwordless sudo is the explicit opt-in for automation
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], sudo: nopasswd}
+network: {zone: services, ip: 192.0.2.70}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: console, proto: tcp, ports: "443", source: "zone:mgmt"}
+    - {name: agents-mgmt, proto: tcp, ports: "1514:1515", source: "zone:mgmt"}
+    - {name: agents-services, proto: tcp, ports: "1514:1515", source: "zone:services"}
+    - {name: agents-data, proto: tcp, ports: "1514:1515", source: "zone:data"}
+    - {name: agents-edge, proto: tcp, ports: "1514:1515", source: "zone:edge"}
+capability: cap:detections
+capability_groups: [cap_siem]
+tags: [prod]
+owners: {primary: platform-team}

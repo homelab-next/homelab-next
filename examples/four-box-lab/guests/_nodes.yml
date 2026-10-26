@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The one hypervisor: 2 x 64-core CPUs (256 threads) and 1 TiB of memory, less a reserve for
+# Proxmox and a 128 GiB ZFS ARC; three pools (NVMe mirrors for guest disks, one U.3 SSD for
+# write-heavy rebuildable data, the raidz2 for bulk); and a mirror of its guests' traffic to a
+# spare NIC cabled straight to sensor-1's second capture NIC (`hnx guests render --target
+# node-mirror`). Replace the NIC and bridge names with the host's own (`ip -br link`).
+nodes:
+  main-1:
+    firewall: enabled
+    power: {ups: ups-a}
+    capacity:
+      threads: 256
+      memory_mb: 1048576
+      reserve: {threads: 8, memory_mb: 163840}
+      cpu_overcommit: 2
+    pools:
+      fast: {size_gb: 3500, media: nvme}
+      write: {size_gb: 3300, media: ssd}
+      bulk: {size_gb: 27000, media: hdd}
+    mirror: {to: enp65s0f1, bridges: [vmbr0]}
