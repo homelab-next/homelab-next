@@ -787,19 +787,19 @@ log are unchanged) until the ADR is accepted and the two are folded together. Th
   report is recomputed from the manifests and the site and compared, never trusted as written.
 * **`route.selection_diff`**: `[{slot, instance, from, to}]`, exactly one line per moving slot
   instance from the outgoing to the incoming module, for a swap with no network route.
-  `apply_selection_diff` is its cutover, and refuses a line that does not read `from`, so a diff
-  cannot be applied twice or to another selection.
+  `apply_selection_diff` is its cutover: it runs the cutover gate first, so only the record's
+  checked diff is applied, and refuses a line that does not read `from`, so a diff cannot be
+  applied twice or to another selection.
 * **`legs`**: `[{instance, order}]`, every instance of the swap once, orders 1..n.
 * The site checked against is the selection the swap **starts** from: each moving instance is
   served by the outgoing module there. `migration.format` is one both providers migrate the slot
-  in, and its import count equals the boundary count; `credentials_revoked` names only the
-  outgoing provider's credentials, and decommission waits until none is outstanding.
-
-`tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
-these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission. The
-contract version a dependant requires is the slot's, not the provider's, so it is not part of the
-re-check.
-
+  in, its import count equals the boundary count and it rejected nothing, and it never comes with
+  `start_empty`; `credentials_revoked` names only the outgoing provider's credentials.
+* Three gates: `module_swap_problems` (the record holds), `cutover_problems` (it holds, no
+  dependant blocks, and the data either moved or the swap starts empty by decision) and
+  `decommission_problems` (against the selection after the cutover: once the outgoing module
+  serves nothing, every credential it issued is revoked; while it still serves another instance,
+  its credentials stay, since revoking them would break that instance).
 
 | Change from 1.1 | Why |
 |---|---|
@@ -812,6 +812,16 @@ re-check.
 | `meaning_changes: [{field, before, after}]` | a feed move changed what a rule id meant |
 | `credentials_revoked: [secret:...]` gating `decommission-check` | the old provider's issued credentials go |
 | `legs: [{instance, order}]` | the DNS swap's two-leg cutover across instances |
+
+`tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
+these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission.
+
+What the draft leaves out, on purpose: the contract version a dependant requires is the slot's,
+not the provider's, so it is not re-checked; a dependant that reaches the slot only through an
+interface is not seen (as in `rules.dependants`); one record migrates in one format, so a swap of
+several slots that migrate in different formats is one record per format; a `holder: consumers`
+credential is the template of the keys the store issues, so revoking it stands for those keys;
+and `meaning_changes` is recorded, never checked.
 
 Model-role rebinds go through the same record with `{slot: cap:inference, role}`, golden evaluations
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain

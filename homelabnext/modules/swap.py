@@ -17,6 +17,7 @@ trusted as written: :func:`module_swap_problems` recomputes it and refuses a dif
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from homelabnext.modules.rules import selected
@@ -40,6 +41,17 @@ def _asks(mod: Doc, slot: str, instance: str) -> list[tuple[str, Doc]]:
             if ask["cap"] == f"cap:{slot}" and ask.get("instance", instance) == instance:
                 out.append((relation, ask))
     return out
+
+
+def _lines(site: Doc, slot: str) -> list[Doc]:
+    """The site's selection lines for a slot: none for ``none``, ``pass-through`` or no entry."""
+    chosen = site.get("slots", {}).get(slot)
+    return chosen if isinstance(chosen, list) else []
+
+
+def _key(e: Doc) -> tuple:
+    # a module may ask twice for one instance: the whole entry breaks the tie, so order is stable
+    return (e["slot"], e["instance"], e["module"], e["relation"], json.dumps(e, sort_keys=True))
 
 
 def _fmt(f: Doc) -> str:
@@ -95,7 +107,7 @@ def dependants_report(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[Doc]:
                 if reasons:
                     entry["reasons"] = reasons
                 out.append(entry)
-    return sorted(out, key=lambda e: (e["slot"], e["instance"], e["module"], e["relation"]))
+    return sorted(out, key=_key)
 
 
 def blocked(report: list[Doc]) -> list[str]:
@@ -105,7 +117,8 @@ def blocked(report: list[Doc]) -> list[str]:
 
 def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str]:
     """The rules JSON Schema cannot say, against the manifests and the site the swap starts from.
-    Each problem is one string; an empty list is a swap the cutover may proceed with."""
+    Each problem is one string; an empty list is a record that holds.  Whether its cutover may run
+    is :func:`cutover_problems`, which also refuses a blocking dependant."""
     out: list[str] = []
     frm, to = swap["from_module"], swap["to_module"]
     # gate modules-differ (it replaces 1.1's adapters-differ: the same adapter is normal)
@@ -123,8 +136,7 @@ def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str
         for mid in (frm, to):
             if _offer(mods[mid], slot) is None:
                 out.append(f"{mid} does not fill the {slot} slot")
-        chosen = site.get("slots", {}).get(slot)
-        serving = [c["provider"] for c in chosen or [] if c.get("instance") == instance]
+        serving = [c["provider"] for c in _lines(site, slot) if c.get("instance") == instance]
         if serving != [frm]:
             out.append(
                 f"{slot}/{instance} is served by {serving or 'nothing'} in the site, not {frm}: "
@@ -147,11 +159,15 @@ def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str
             out.append("legs must name every instance of the swap exactly once")
         if sorted(leg["order"] for leg in legs) != list(range(1, len(legs) + 1)):
             out.append("legs' orders must be 1..n, each once")
-    want_report = dependants_report(swap, mods, site)
-    got_report = sorted(
-        swap["dependants"]["report"],
-        key=lambda e: (e["slot"], e["instance"], e["module"], e["relation"]),
-    )
+    for ask in mods[to].get("requires", {}).get("capabilities", []):
+        need = ask["cap"].removeprefix("cap:")
+        if not _lines(site, need):
+            out.append(f"{to} requires {ask['cap']}, which the site does not select")
+    try:
+        want_report = dependants_report(swap, mods, site)
+    except KeyError as exc:
+        return [*out, f"the site selects a module with no manifest: {exc}"]
+    got_report = sorted(swap["dependants"]["report"], key=_key)
     if got_report != want_report:
         missing = [e["module"] for e in want_report if e not in got_report]
         extra = [e["module"] for e in got_report if e not in want_report]
@@ -173,11 +189,18 @@ def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str
                     out.append(
                         f"migration.format {mig['format']!r} is not one {mid} migrates {slot} in"
                     )
+        if mig["import_result"]["rejected"]:
+            out.append(
+                f"migration rejected {mig['import_result']['rejected']} record(s): every exported "
+                "record is imported, or the swap starts empty by decision"
+            )
         if mig["import_result"]["imported"] != mig["boundary"]["count"]:
             out.append(
                 f"migration imported {mig['import_result']['imported']} but the boundary counts "
                 f"{mig['boundary']['count']}"
             )
+    if mig is not None and "start_empty" in swap:
+        out.append("migration and start_empty are exclusive: the data moves or it does not")
     issued = {c["secret"] for c in mods[frm].get("credentials", [])}
     for s in swap.get("credentials_revoked", []):
         if s not in issued:
@@ -185,23 +208,49 @@ def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str
     return out
 
 
+def cutover_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str]:
+    """The cutover gate: the record holds (:func:`module_swap_problems`), no dependant blocks, and
+    the data either moved (``migration``) or the swap starts empty by a recorded decision."""
+    out = module_swap_problems(swap, mods, site)
+    if out:
+        return out
+    stop = blocked(dependants_report(swap, mods, site))
+    if stop:
+        out.append(f"the cutover is blocked by {', '.join(stop)}")
+    if "migration" not in swap and "start_empty" not in swap:
+        out.append("the cutover waits on a migration or a recorded start_empty decision")
+    return out
+
+
 def credentials_outstanding(swap: Doc, mods: dict[str, Doc]) -> list[str]:
-    """The outgoing provider's credentials not yet revoked: decommission-check waits on none."""
+    """The outgoing provider's credentials not yet revoked."""
     issued = {c["secret"] for c in mods[swap["from_module"]].get("credentials", [])}
     return sorted(issued - set(swap.get("credentials_revoked", [])))
 
 
-def apply_selection_diff(site: Doc, swap: Doc) -> Doc:
+def decommission_problems(swap: Doc, mods: dict[str, Doc], after: Doc) -> list[str]:
+    """The decommission gate, against the selection after the cutover: once the outgoing module
+    serves nothing, every credential it issued is revoked.  While it still serves another
+    instance its credentials stay (revoking them would break that instance), so none is owed."""
+    frm = swap["from_module"]
+    if frm in selected(after, mods):
+        return []
+    return [f"{s} is not revoked" for s in credentials_outstanding(swap, mods)]
+
+
+def apply_selection_diff(site: Doc, swap: Doc, mods: dict[str, Doc]) -> Doc:
     """The cutover of a swap whose route is a selection diff: a copy of ``site`` with each changed
-    line flipped to the incoming module.  A line that does not read ``from`` refuses, so a diff
-    can never be applied twice or to the wrong selection."""
+    line flipped to the incoming module.  It runs :func:`cutover_problems` first and refuses on
+    any, so the diff is the record's checked one; a line that does not read ``from`` refuses, so a
+    diff cannot be applied to a selection it was not checked against (the result included)."""
+    problems = cutover_problems(swap, mods, site)
+    if problems:
+        raise ValueError("cutover refused: " + "; ".join(problems))
+    if "selection_diff" not in swap["route"]:
+        raise ValueError("the route is an endpoint: there is no selection diff to apply")
     out = copy.deepcopy(site)
     for d in swap["route"]["selection_diff"]:
-        lines = [
-            c
-            for c in out.get("slots", {}).get(d["slot"]) or []
-            if c.get("instance") == d["instance"]
-        ]
+        lines = [c for c in _lines(out, d["slot"]) if c.get("instance") == d["instance"]]
         if len(lines) != 1 or lines[0]["provider"] != d["from"]:
             raise ValueError(
                 f"{d['slot']}/{d['instance']}: the site does not select it from {d['from']}"
