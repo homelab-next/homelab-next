@@ -1,6 +1,6 @@
 ---
 summary: 'The public repo and the private overlay: what lives where, how hnx finds private data, encryption, bootstrapping a server, the runner, reviews and deploys.'
-summary_of: outline:sha256:5c6637b4c63c8a8a
+summary_of: outline:sha256:0553d9b74b8038f4
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
@@ -160,7 +160,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    the unseal key shares and the initial root token go to the password manager and to paper,
    split as you decided, never into a repository, a chat or an Actions secret. Unseal, create the
    KV v2 mount (`secret/`), write the lab's credentials under the names the registry and roles use
-   (`secret:<name>` maps to `secret/data/<name>`), then revoke the root token.
+   (`secret:<name>` maps to `secret/data/<name>`) with `hnx secrets seed`
+   ([Seeding the credentials](#seeding-the-credentials)), then revoke the root token.
 4. **An identity for the deploy.** Create an AppRole for the deploy with a policy that can read
    only the paths the deploy needs (and the vault password at `secret/data/ansible/vault-password`
    if you keep it there), for example:
@@ -214,6 +215,57 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
    `gh workflow run deploy.yml --ref main` (or *Run workflow* in the Actions tab), and watch the
    run. The runbook walks through each check.
+
+### Seeding the credentials
+
+`hnx secrets` creates every credential the lab names, so step 3 is not a hand-typed list:
+
+```sh
+# every secret:<name> the overlay and the roles you deploy name, and how each gets its value
+hnx secrets plan lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml
+
+# as the operator, while the root (or an admin) token is still valid
+export BAO_ADDR=https://bao.example.internal:8200 BAO_CACERT=ca.pem BAO_TOKEN=...
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --dry-run
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --ask
+```
+
+`lab/secrets.yml` (start from `examples/private-overlay/lab/secrets.yml`) says how each name gets
+its value: the first rule whose glob matches the name wins, else the default.
+
+| Kind | Value |
+|---|---|
+| `password` | letters, digits, `-` and `_` (20 to 128 characters) |
+| `token` | URL-safe base64 of N random bytes, with an optional fixed `prefix` (LiteLLM keys start with `sk-`) |
+| `hex` | N random bytes as hex |
+| `external` | issued elsewhere (a Tailscale auth key, a UniFi API key, a cloud model key): never generated. `--ask` prompts for each one that is missing; otherwise it is listed, with its `how` |
+
+`seed` writes a value only where OpenBao has none: each write is a check-and-set at version 0, so
+an existing credential is never overwritten, not even by a second run at the same moment. Run it
+again after adding a role and only the new names are created. Values exist only in memory and in
+the HTTPS request: the output names secrets and outcomes, never a value.
+
+**Vaultwarden.** With `--vaultwarden`, each secret the spec's `vaultwarden.include` covers is
+also stored as a login item named `secret:<name>` in one folder. That includes secrets that
+already existed, which are read from OpenBao. First point the Bitwarden CLI at the server and
+unlock it:
+
+```sh
+bw config server https://vault.example.internal && bw login
+export BW_SESSION="$(bw unlock --raw)"
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --vaultwarden
+```
+
+The value reaches `bw` on its standard input, never on a command line. An item that already exists
+is left as it is.
+
+* **OpenBao stays the source of truth.** The deploy never reads Vaultwarden, and a value
+  rotated in OpenBao is not updated there (delete the item and seed again).
+* **Break-glass material is not seeded.** OpenBao's unseal keys and root-token recovery, and the
+  operator's age identity, go into Vaultwarden by hand. They also need a copy off the lab
+  (paper, or a password manager the lab does not host): a Vaultwarden on the lab is down exactly
+  when you need them. The Bitwarden apps' offline copy of the vault helps, but it does not replace
+  that.
 
 ### Tailscale: the deploy tag, least access
 

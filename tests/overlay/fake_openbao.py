@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """A fake OpenBao on loopback for the vault password client and the ``hnx_secret`` lookup.
 
-It answers the three calls those clients make, over a real socket so the stdlib opener's own
+It answers the calls those clients make, over a real socket so the stdlib opener's own
 redirect handling is what is tested: an AppRole login (``POST /v1/auth/approle/login``, mints a
 token), a KV v2 read (``GET /v1/<mount>/data/<name>``, needs a live token) and
-``POST /v1/auth/token/revoke-self`` (kills the calling token).  With ``redirect_to`` set it
+``POST /v1/auth/token/revoke-self`` (kills the calling token).  For ``hnx secrets seed`` it also
+answers a KV v2 metadata read (``GET /v1/<mount>/metadata/<name>``) and a write
+(``POST /v1/<mount>/data/<name>``, honouring ``options.cas``); ``tokens`` are operator tokens
+that are live from the start.  With ``redirect_to`` set it
 answers every request with a 307 to that origin instead, the way a hostile or misconfigured
 proxy would.  Every request is recorded as ``(method, path, X-Vault-Token)``.
 """
@@ -27,12 +30,13 @@ class FakeOpenBao:
         tls: ssl.SSLContext | None = None,
         redirect_to: str | None = None,
         revoke_status: int = 204,
+        tokens: tuple[str, ...] = (),
     ):
         self.values = values or {}  # "<mount>/<name>" -> {field: value}
         self.redirect_to = redirect_to
         self.revoke_status = revoke_status
         self.calls: list[tuple[str, str, str | None]] = []
-        self.live: set[str] = set()
+        self.live: set[str] = set(tokens)
         self.minted = 0
         fake = self
 
@@ -72,6 +76,24 @@ class FakeOpenBao:
                         fake.live.discard(token or "")
                         return self._reply(204)
                     return self._reply(fake.revoke_status, {"errors": ["denied"]})
+                if self.path.startswith("/v1/") and "/metadata/" in self.path:
+                    if token not in fake.live:
+                        return self._reply(403, {"errors": ["permission denied"]})
+                    mount, _, rest = self.path[len("/v1/") :].partition("/metadata/")
+                    if f"{mount}/{rest}" not in fake.values:
+                        return self._reply(404, {"errors": []})
+                    return self._reply(200, {"data": {"current_version": 1}})
+                if method == "POST" and self.path.startswith("/v1/") and "/data/" in self.path:
+                    if token not in fake.live:
+                        return self._reply(403, {"errors": ["permission denied"]})
+                    mount, _, rest = self.path[len("/v1/") :].partition("/data/")
+                    body = json.loads(raw or b"{}")
+                    cas = (body.get("options") or {}).get("cas")
+                    if cas == 0 and f"{mount}/{rest}" in fake.values:
+                        msg = "check-and-set parameter did not match the current version"
+                        return self._reply(400, {"errors": [msg]})
+                    fake.values[f"{mount}/{rest}"] = dict(body.get("data") or {})
+                    return self._reply(200, {"data": {"version": 1}})
                 if method == "GET" and self.path.startswith("/v1/"):
                     if token not in fake.live:
                         return self._reply(403, {"errors": ["permission denied"]})
