@@ -857,7 +857,15 @@ def test_the_reader_is_a_view_only_user_with_one_spend_log_key():
         (lambda d: d["users"][0].update(user_role="proxy_admin"), "users: each user"),
         (lambda d: d["users"][0].update(models=[]), "users: each user"),
         (lambda d: d["users"].append({"user_id": "x", "user_role": "proxy_admin_viewer"}), "users"),
-        (lambda d: d["keys"][-1].update(user_id="someone-else"), "is not in users"),
+        (lambda d: d["keys"][-1].update(user_id="someone-else"), "a user of users"),
+        (lambda d: d["keys"][-1].pop("user_id"), "a user of users"),
+        (lambda d: d["keys"][-1].update(key_type="llm_api"), "key_type widens"),
+        (lambda d: d["keys"][-1].update(team_id="t"), "team_id widens"),
+        (lambda d: d["keys"][-1].update(rpm_limit=1), "only the telemetry reader"),
+        (lambda d: d["keys"][0].update(key_type="management"), "key_type widens"),
+        (lambda d: d["keys"][0].update(permissions={"get_spend_routes": True}), "permissions"),
+        (lambda d: d["keys"][0].update(models=["all-proxy-models"]), "names every model"),
+        (lambda d: d["keys"][0].update(key_alias="telemetry-reader"), "only the telemetry"),
         (lambda d: d.update(users={}), "users: each user"),
     ],
 )
@@ -934,7 +942,17 @@ def test_provision_creates_the_reader_user_without_a_spare_key_then_updates_it()
         api.httpd.shutdown()
 
 
-def test_provision_refuses_a_malformed_users_list():
-    doc = {"users": [{"user_role": "proxy_admin_viewer"}], "keys": []}
-    with pytest.raises(gw.GatewaySpecError, match="users must be a list"):
-        gw.provision_litellm(doc, f"http://{LOOPBACK}:9", "m", environ={})
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"users": [{"user_role": "proxy_admin_viewer"}], "keys": []},
+        {"users": [{"user_id": "u", "user_role": "proxy_admin", "models": []}], "keys": []},
+        {"keys": [{"key_alias": "a", "key_env": "X", "models": ["m"], "key_type": "management"}]},
+    ],
+)
+def test_provision_refuses_a_keys_file_that_grants_more_before_any_request(doc):
+    """A hand-edited or stale keys file never reaches the proxy: an admin user, a user of
+    another shape or a widened key is refused before the first request (port 9 is never
+    called)."""
+    with pytest.raises(gw.GatewaySpecError, match="grants more than a gateway spec declares"):
+        gw.provision_litellm(doc, f"http://{LOOPBACK}:9", "m", environ={"X": "sk-x"})

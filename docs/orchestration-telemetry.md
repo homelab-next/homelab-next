@@ -243,15 +243,26 @@ The gateway spec declares it: `telemetry_reader: {key: secret:llm-gateway/key-te
 (the [orchestrator example](../examples/llm-orchestrator-gateway/gateway.yml) does). `hnx gen
 gateway render` then writes, into `litellm/keys.json`, a user `hnx-telemetry-reader-<spec name>`
 with role `proxy_admin_viewer` and `models: ["no-default-models"]`, and a key `telemetry-reader`
-owned by it with `allowed_routes: ["/spend/logs/v2"]` and the same model block: three locks, each
-enough alone (LiteLLM 1.103 enforces a key's `allowed_routes` for every role, refuses the viewer
-role every inference route, and lets a `no-default-models` user call no model). Provisioning
-(`hnx gen gateway provision`) creates the user before its key, with `auto_create_key: false` so
-no undeclared key appears, puts a hand-widened role or model list back on the next run, and
-prunes the key like any other when the spec drops the reader; the user, which holds nothing once
-its key is gone, stays. The audit of `keys.json` refuses any key but this one with a user or
-routes, and any user but this shape. Bifrost gets no reader: the spend-log adapter is LiteLLM's.
-The operator only stores the key's value under the secret name.
+owned by it with `allowed_routes: ["/spend/logs/v2"]` and the same model block. What confines
+the key is `allowed_routes`: LiteLLM 1.103.3 checks it for every role, the master key's included,
+before any role check (`route_checks.py`, `should_call_route`), and no route lies under
+`/spend/logs/v2/`. The rest is a second guard, narrower than it sounds: the viewer role does
+*not* refuse inference in that release (an LLM route passes `non_proxy_admin_allowed_routes_check`
+before the viewer branch is reached), and `no-default-models` stops only a request that names a
+model, from a key with no team. The viewer role is there because it reads every row of the spend
+logs (another role sees only its own), so the reader sees every call's metadata, and prompts and
+answers too when `store_prompts_in_spend_logs` is on.
+
+Provisioning (`hnx gen gateway provision`) first refuses a keys file that grants more than a spec
+declares (any user but this shape; on any key `key_type`, which LiteLLM turns into other routes,
+`team_id`, which lifts the model block, `permissions`, or a model list naming every model; a
+reader key with any other field), so a hand-edited or stale file cannot create an admin. Then it
+creates the user before its key, with `auto_create_key: false` so no undeclared key appears, puts
+a hand-widened role or model list back on the next run, and prunes the key like any other when
+the spec drops the reader; the user, which holds nothing once its key is gone, stays. The audit of
+`keys.json` (`--check`) applies the same rules. Bifrost gets no reader: the spend-log adapter is
+LiteLLM's. The operator only stores the key's value under the secret name. A reader created by hand
+under the earlier instructions is not found by alias: delete that key and user on the gateway.
 
 #### Enabling tagging on LiteLLM
 

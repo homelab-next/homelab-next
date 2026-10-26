@@ -1188,21 +1188,32 @@ def _audit_keys(text: str, name: str = "") -> list[str]:
                 f"key {alias} is not tagged metadata.{MANAGED}={want!r}: provisioning would "
                 "never delete it once its profile is removed"
             )
-        if ("user_id" in k or "allowed_routes" in k) and not (
-            alias == READER_ALIAS
-            and k.get("allowed_routes") == list(READER_ROUTES)
-            and k.get("models") == [NO_MODELS]
-        ):
-            problems.append(
-                f"key {alias}: only the telemetry reader has a user or allowed_routes, and its "
-                f"routes are exactly {list(READER_ROUTES)} with models [{NO_MODELS!r}]"
-            )
+    return problems + grant_problems(doc)
+
+
+#: key fields that widen what a key may do beyond its declared models, which no generated key
+#: carries: LiteLLM's key_type rewrites allowed_routes after the body is read (llm_api,
+#: management), a team turns off the user's model block, and permissions open spend routes
+_WIDENING = ("key_type", "team_id", "permissions")
+_ALL_MODELS = ("all-proxy-models", "*")
+_READER_FIELDS = {"key_alias", "key_env", "user_id", "models", "allowed_routes", "metadata"}
+
+
+def grant_problems(doc: Any) -> list[str]:
+    """What in a keys file would grant more than the gateway spec declares (empty = nothing).
+    :func:`provision_litellm` refuses a file with any, so a hand-edited or stale file cannot
+    create an admin or an unrestricted key on the proxy."""
+    if not isinstance(doc, Mapping):
+        return ["not a JSON object"]
+    keys = doc.get("keys") if isinstance(doc.get("keys"), list) else []
+    problems: list[str] = []
     users = doc.get("users", [])
     good_users = set()
     for u in users if isinstance(users, list) else [None]:
         if not (
-            isinstance(u, dict)
+            isinstance(u, Mapping)
             and set(u) == {"user_id", "user_role", "models"}
+            and isinstance(u["user_id"], str)
             and u["user_role"] == READER_ROLE
             and u["models"] == [NO_MODELS]
         ):
@@ -1213,8 +1224,28 @@ def _audit_keys(text: str, name: str = "") -> list[str]:
             continue
         good_users.add(u["user_id"])
     for k in keys:
-        if isinstance(k, Mapping) and "user_id" in k and k["user_id"] not in good_users:
-            problems.append(f"key {k.get('key_alias')}: user {k['user_id']!r} is not in users")
+        if not isinstance(k, Mapping):
+            continue
+        alias = k.get("key_alias")
+        for name in _WIDENING:
+            if name in k:
+                problems.append(f"key {alias}: {name} widens what the key may do")
+        models = k.get("models")
+        if isinstance(models, list) and any(m in _ALL_MODELS for m in models):
+            problems.append(f"key {alias}: models names every model")
+        reader = alias == READER_ALIAS or "user_id" in k or "allowed_routes" in k
+        if reader and not (
+            alias == READER_ALIAS
+            and set(k) == _READER_FIELDS
+            and k["allowed_routes"] == list(READER_ROUTES)
+            and k["models"] == [NO_MODELS]
+            and k["user_id"] in good_users
+        ):
+            problems.append(
+                f"key {alias}: only the telemetry reader has a user or allowed_routes; it has "
+                f"exactly {sorted(_READER_FIELDS)}, routes {list(READER_ROUTES)}, models "
+                f"[{NO_MODELS!r}] and a user of users"
+            )
     return problems
 
 
@@ -1383,6 +1414,9 @@ def provision_litellm(
         raise GatewaySpecError(
             "keys file: not an object with a list of keys, each with a key_alias"
         )
+    granted = grant_problems(keys_doc)
+    if granted:
+        raise GatewaySpecError("keys file grants more than a gateway spec declares", granted)
     identity = keys_doc.get("managed_by")
     out: list[str] = []
 
@@ -1404,13 +1438,13 @@ def provision_litellm(
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(4096).decode("utf-8", "replace")
 
-    def ok(alias: str, what: str, status: int, text: str) -> None:
+    def ok(alias: str, what: str, status: int, text: str, kind: str = "key") -> None:
         if status != 200:
-            raise GatewaySpecError(f"key {alias}: {what}: HTTP {status}: {text[:200]}")
+            raise GatewaySpecError(f"{kind} {alias}: {what}: HTTP {status}: {text[:200]}")
 
-    def write(alias: str, path: str, body: dict) -> None:
+    def write(alias: str, path: str, body: dict, kind: str = "key") -> None:
         if not dry_run:
-            ok(alias, path, *call(path, body))
+            ok(alias, path, *call(path, body), kind=kind)
 
     def tokens_of(alias: str) -> list[str]:
         q = urllib.parse.urlencode({"key_alias": alias, "return_full_object": "true"})
@@ -1443,11 +1477,11 @@ def provision_litellm(
         fields = {kk: v for kk, v in u.items() if kk != "user_id"}
         if status == 404:  # LiteLLM answers an unknown user_id with 404
             # auto_create_key false: /user/new would otherwise mint a key nothing declares
-            write(f"user {uid}", "/user/new", {"user_id": uid, **fields, "auto_create_key": False})
+            write(uid, "/user/new", {"user_id": uid, **fields, "auto_create_key": False}, "user")
             verb = "created"
         else:
-            ok(f"user {uid}", "/user/info", status, text)
-            write(f"user {uid}", "/user/update", {"user_id": uid, **fields})
+            ok(uid, "/user/info", status, text, kind="user")
+            write(uid, "/user/update", {"user_id": uid, **fields}, "user")
             verb = "updated"
         say(f"user {uid}: {would}{verb} ({u.get('user_role')})")
     for k in declared_keys:

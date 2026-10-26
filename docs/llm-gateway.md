@@ -37,7 +37,7 @@ hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or a
 ```
 
 A spec may declare the orchestration telemetry's spend-log reader (`telemetry_reader:`, its key's
-secret): LiteLLM then gets a view-only user and one key restricted to `/spend/logs/v2`
+secret): LiteLLM then gets a spend-viewer user and one key confined to `/spend/logs/v2`
 ([orchestration telemetry](orchestration-telemetry.md), "LiteLLM: the spend-log API with a viewer
 key").
 
