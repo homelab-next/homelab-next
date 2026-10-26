@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+model:
+  default: example-4b
+  base_url: https://llm-gateway.example.internal/v1

@@ -292,8 +292,8 @@ services:
       context: ../..
       dockerfile: compose/lab-in-a-box/fakes/Dockerfile
     # example-4b and example-27b: the two bindings of model_roles.valid.json (the gateway profile)
-    command: ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--port", "8000",
-              "--model", "example-4b", "--model", "example-27b"]
+    command: ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--allow-any-host",
+              "--port", "8000", "--model", "example-4b", "--model", "example-27b"]
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_INFERENCE:-8001}:8000"
     healthcheck: &fake-health

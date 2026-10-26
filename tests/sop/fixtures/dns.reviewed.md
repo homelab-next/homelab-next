@@ -108,7 +108,7 @@ Admin credential: secret-store name `dns-admin`; platform-team only.
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.dns`
+- Registry row (Veritas, ADR-0028): `services.dns`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

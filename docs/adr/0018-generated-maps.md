@@ -1,3 +1,7 @@
+---
+summary: Topology, dataflow, architecture and roadmap pages are generated from the repository models, never drawn by hand.
+summary_of: outline:sha256:266b7306573182dd
+---
 # ADR-0018: Generate the lab's maps from its models
 
 - **Status:** proposed

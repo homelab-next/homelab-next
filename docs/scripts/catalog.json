@@ -24,6 +24,57 @@
       "exit": {
         "0": "reported"
       },
+      "id": "broker-example-dhcp-leases",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/dhcp-leases.sh",
+      "purpose": "Example read-only broker handler for dhcp.leases; reports one stand-in lease of the target DHCP server.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-dns-lookup",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/dns-lookup.sh",
+      "purpose": "Example read-only broker handler for dns.lookup; reports a stand-in name and address for the target.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
+      "id": "broker-example-hypervisor-guests",
+      "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "the action's result as JSON on stdout",
+      "owner": "broker",
+      "path": "examples/broker/handlers/hypervisor-guests.sh",
+      "purpose": "Example read-only broker handler for hypervisor.guests; reports one stand-in guest of the target node.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "reported"
+      },
       "id": "broker-example-service-restart",
       "inputs": "the validated params as JSON on stdin; HNX_BROKER_TARGET; the DEMO_API_TOKEN secret",
       "kind": "tool",
@@ -56,13 +107,40 @@
     },
     {
       "exit": {
+        "0": "clean",
+        "1": "a finding (strip, reset, dial, parse, coverage, generate, semantic, pin or allowlist)",
+        "2": "usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)"
+      },
+      "id": "caddy-lint",
+      "inputs": "the tracked tree (Caddyfiles, templates, markdown caddyfile blocks, Caddy JSON/YAML, registries, Dockerfiles, other pins), the caddy generator, tools/caddy_lint.allow.yml and a caddy binary when one is available (required in CI)",
+      "invariant": [
+        "F-23"
+      ],
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per unprotected forward_auth or site, identity header set outside copy_headers, construct the lint cannot read, unread config, path Caddy's own JSON shows reaching an upstream unstripped, vulnerable Caddy pin or stale allowlist rule",
+      "owner": "maintainers",
+      "path": "tools/caddy_lint.py",
+      "purpose": "Fail when a Caddy config in the tree could let a client set its own identity header behind forward_auth (judged on the Caddyfile text and, with a caddy binary, on Caddy's own adapted JSON), cannot be read, or a Caddy pin is below 2.11.2.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:caddy-lint"
+      ]
+    },
+    {
+      "exit": {
         "0": "both sections present",
-        "1": "a section is missing or the version cannot be read"
+        "1": "a section is missing",
+        "2": "the version or CHANGELOG.md cannot be read"
       },
       "id": "check-changelog",
       "inputs": [
         "CHANGELOG.md",
         "homelabnext/_version.py"
+      ],
+      "invariant": [
+        "F-15"
       ],
       "kind": "check",
       "language": "python",
@@ -91,7 +169,7 @@
       "outputs": "one line per file without the header",
       "owner": "maintainers",
       "path": "tools/check_spdx.py",
-      "purpose": "Fail when a tracked source or config file has no SPDX-License-Identifier in its first five lines.",
+      "purpose": "Fail when a tracked source, config or template file has no SPDX-License-Identifier in its first five lines.",
       "status": "active",
       "trigger": [
         "ci:ci/lint",
@@ -170,7 +248,7 @@
       "outputs": "build/conform-report.json and a summary on stdout",
       "owner": "maintainers",
       "path": "tools/conform_coverage.py",
-      "purpose": "Fail unless each of the sixteen capabilities has a passing conformance suite.",
+      "purpose": "Fail unless each of the eighteen capabilities has a passing conformance suite.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
@@ -214,7 +292,7 @@
       ],
       "kind": "check",
       "language": "python",
-      "outputs": "a per-unit coverage table; --json FILE writes it as JSON",
+      "outputs": "a per-unit coverage table (--json FILE evaluates an existing coverage json report instead)",
       "owner": "maintainers",
       "path": "tools/coverage_floor.py",
       "purpose": "Fail when a security-critical unit drops below its line-coverage floor from its own tests.",
@@ -269,10 +347,11 @@
     },
     {
       "exit": {
-        "0": "stopped cleanly"
+        "0": "stopped cleanly",
+        "2": "a host other than loopback without --allow-any-host"
       },
       "id": "fake-openai-server",
-      "inputs": "--host, --port, --model",
+      "inputs": "--host, --port, --model, --allow-any-host",
       "kind": "service",
       "language": "python",
       "outputs": "the HTTP API; nothing on disk",
@@ -371,10 +450,11 @@
     {
       "exit": {
         "0": "safe to start",
+        "3": "the compose configuration could not be resolved (nothing was run)",
         "4": "refused"
       },
       "id": "lab-bind-guard",
-      "inputs": "LAB_BIND and the credentials (environment, .env, .env.example)",
+      "inputs": "LAB_BIND and the credentials (environment, .env, .env.example), then the configuration docker compose resolves from them",
       "kind": "tool",
       "language": "shell",
       "outputs": "the refusal reason on stderr",
@@ -485,8 +565,8 @@
         "0": "all good",
         "1": "a service or check failed",
         "2": "usage",
-        "3": "docker or compose missing",
-        "4": "refused a non-loopback LAB_BIND"
+        "3": "docker or compose missing, or the compose configuration could not be resolved",
+        "4": "refused a non-loopback LAB_BIND or published port"
       },
       "id": "lab-smoke",
       "inputs": "compose/lab-in-a-box settings (.env.example, .env, environment)",
@@ -556,7 +636,8 @@
       "inputs": "paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file",
       "invariant": [
         "F-05",
-        "F-18"
+        "F-18",
+        "Q-06"
       ],
       "kind": "check",
       "language": "python",
@@ -574,6 +655,7 @@
         "make:secret-scan",
         "pre-commit:leak-scan",
         "pre-commit:secret-scan",
+        "script:coverage-floor",
         "script:private-leak-check"
       ]
     },
@@ -714,7 +796,7 @@
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
-        "code:homelabnext/customization/lint.py",
+        "code:homelabnext/endpoint_gate.py",
         "make:gates"
       ]
     },
@@ -776,6 +858,24 @@
       "trigger": [
         "ci:ci/schemas",
         "make:private-overlay-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "decided",
+        "2": "unreadable input or an empty default branch"
+      },
+      "id": "prune-branches",
+      "inputs": "the API's branch and pull request lists (JSON), the default branch, the repository",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one branch to delete per line; with --keep, the kept branches and why",
+      "owner": "maintainers",
+      "path": "tools/prune_branches.py",
+      "purpose": "Decide which branches are finished (their pull request merged or closed) for the prune-branches workflow to delete.",
+      "status": "active",
+      "trigger": [
+        "ci:prune-branches/prune"
       ]
     },
     {

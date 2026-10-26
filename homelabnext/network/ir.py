@@ -101,9 +101,10 @@ class Policy:
 @dataclass(frozen=True)
 class PortPlan:
     port: int
-    kind: str  # access | trunk
+    kind: str  # access | trunk | mirror
     native_vlan: int | None
     tagged_vlans: tuple[int, ...]
+    mirror_from: tuple[int, ...] = ()  # mirror: the source ports copied to this one
 
 
 @dataclass(frozen=True)
@@ -376,7 +377,13 @@ def _switch(sw: dict):
     ports: dict[int, PortPlan] = {}
     for pa in sw["port_assignments"]:
         for p in expand_ports(pa["ports"]):
-            ports[p] = PortPlan(p, pa["kind"], pa.get("vlan"), tuple(sorted(pa.get("vlans", []))))
+            ports[p] = PortPlan(
+                p,
+                pa["kind"],
+                pa.get("vlan"),
+                tuple(sorted(pa.get("vlans", []))),
+                tuple(sorted(expand_ports(pa.get("mirror_from", [])))),
+            )
     return SwitchPlan(
         sw["id"],
         sw["model"],

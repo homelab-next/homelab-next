@@ -116,11 +116,6 @@ def test_target_comes_from_the_environment(tmp_path, monkeypatch):
     assert argv[argv.index("--target") + 1] == "staging"
 
 
-def test_real_report_on_this_repository_passes():
-    r = x10.x10(Context(ROOT))
-    assert r.status == PASS, r.evidence
-
-
 def test_x04_now_passes_on_this_repository():
     r = pillar_x.x04(Context(ROOT))
     assert r.status == PASS, r.evidence
@@ -157,6 +152,8 @@ def test_registers_through_register_and_plugins_dir():
 
 
 def test_end_to_end_through_hnx_invariants_run(tmp_path):
+    """The real report on this repository passes X-10, through ``hnx invariants run`` (this also
+    covers the plain ``x10(Context(ROOT))`` call, which ran the same report a second time)."""
     register = tmp_path / "invariants.yml"
     register.write_text(
         yaml.safe_dump(

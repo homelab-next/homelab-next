@@ -98,7 +98,20 @@ def test_the_cli_passes_the_approvals_url(tmp_path, capsys):
     state = tmp_path / "state"
     args = ["--manifest", str(EXAMPLE), "--state", str(state), "--approvals-url", URL]
     assert (
-        main(["submit", "service.restart", "--as", AGENT, "--params", '{"grace_s": 5}', *args]) == 0
+        main(
+            [
+                "submit",
+                "service.restart",
+                "--as",
+                AGENT,
+                "--target",
+                "svc:queue",
+                "--params",
+                '{"grace_s": 5}',
+                *args,
+            ]
+        )
+        == 0
     )
     [ev] = BrokerService.from_manifest(EXAMPLE, state).state.outbox()
     assert ev["data"]["link"].startswith(URL + "?request=")

@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx guests``: validate, render and plan the guest (compute) model; report baseline coverage."""
+"""``hnx guests``: validate, render and plan the guest (compute) model; report baseline coverage.
+
+Exit codes: 0 ok, 1 an invalid guest set (or a failed ``baselines --check``), 2 a usage error or an
+input that cannot be read or parsed (the site, the guest directory or a guest, policies, nodes,
+keys or baselines file), 3 ``plan --exit-code`` found changes (as ``hnx site plan --exit-code``)."""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ from collections.abc import Sequence
 
 from .baselines import coverage, coverage_text
 from .loader import load_fleet
-from .model import ComputeError
+from .model import ComputeError, ComputeUnreadable
 from .plan import plan as make_plan
 from .plan import read_tree, write_tree
 from .render import TARGETS, render
@@ -69,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(pl)
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
     pl.add_argument("--against", required=True, help="directory holding the previous render")
-    pl.add_argument("--exit-code", action="store_true", help="exit 2 when there are changes")
+    pl.add_argument("--exit-code", action="store_true", help="exit 3 when there are changes")
     b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
     _common(b)
     b.add_argument("--json", action="store_true", help="print the report as JSON")
@@ -129,6 +133,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
         fleet = _fleet(args)
+    except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
+        print(f"hnx guests: {exc}", file=sys.stderr)
+        return 2
     except ComputeError as exc:
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 1
@@ -137,6 +144,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "validate":
         iac = len(fleet.iac())
         print(f"ok: {len(fleet.guests)} guests ({iac} rendered, {len(fleet.manual())} manual)")
+        from .validate import usage_lines
+
+        for line in usage_lines(fleet):
+            print(f"  {line}")
         return 0
     files = render(fleet, args.target)
     if args.cmd == "render":
@@ -151,7 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     p = make_plan(read_tree(args.against), files)
     print(f"plan: {p.summary()}")
     print(p.diff, end="")
-    return 2 if (args.exit_code and not p.empty) else 0
+    # 3, not 2: 2 is an input that cannot be read, which must never read as "changes pending"
+    return 3 if (args.exit_code and not p.empty) else 0
 
 
 if __name__ == "__main__":

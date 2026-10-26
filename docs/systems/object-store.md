@@ -1,6 +1,8 @@
 ---
 title: object-store
 type: system
+summary: object-store provides the object-store capability (minio), owned by data-team.
+summary_generated: true
 service: object-store
 capability: object-store
 impl: minio
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.object-store`
+- Registry row (Veritas, ADR-0028): `services.object-store`
 - Backup: job `weekly-lake`
 <!-- /hnx:gen -->
 

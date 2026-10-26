@@ -15,6 +15,17 @@
 # never assumed harmless).  The compiler refuses such a reader whatever the ceiling policy
 # allows, `hnx agent verify` refuses a hand-edited one, and `hnx agent lint` checks every profile
 # in the repository.  Adding an MCP server = adding a catalog record, in a reviewed change.
+#
+# Agents act only through the broker (checklist G-13, ADR-0030, docs/agent.md "Actors act only
+# through the broker"): ANY profile, reader or not, may hold a grant in a class listed under
+# broker_only only through the broker.  An MCP server with a broker_only tool is granted only when
+# it is the broker's own front (`acts_via: broker`, checked structurally in code), or `acts_via:
+# direct` with a direct_reason, a current human approve review and the ceiling policy's
+# direct_mcp entry for that profile; every capability below is classed (an unclassed one is
+# refused for every profile), and a broker_only one other than cap:broker is never granted; a
+# tier whose classes are broker_only (execute, privileged) needs cap:broker.  A
+# file passed with --classes may forbid more, never less (a table that leaves out a class listed
+# here is refused, as for reader_forbidden).
 
 classes:
   read: queries or fetches from a platform service; no effect outside the agent's own output
@@ -22,9 +33,23 @@ classes:
   exec: runs commands, workflows, containers or broker actions with side effects (shell)
   file-write: creates or changes files, objects or repositories
   egress: sends data to a destination outside the platform (web fetch, search, browser, mail, chat, notifications, tunnels)
+  send: sends a message or a request that changes something elsewhere (mail, chat, a notification, an HTTP request); an effect, so it goes through the broker (its notify actions)
   credential: reads or issues credentials (secret stores, identity providers)
+  codemode: searches and describes the broker actions a profile may compose into a Code Mode program (ADR-0031); no effect of its own, since running a program is the broker action codemode.execute (exec, through the broker's front)
 
-reader_forbidden: [exec, file-write, egress, credential]
+reader_forbidden: [exec, file-write, egress, send, credential, codemode]
+
+# codemode (ADR-0031, CM-5b) is reader-forbidden but NOT broker-only.  Its tools (codemode_search,
+# codemode_describe on hnx-codemode) only read the generator's index of the caller's own granted
+# actions, so holding them needs no broker front.  What runs code is exec: the broker action
+# codemode.execute, reached with broker_call on hnx-broker (broker-only), whose handler is the
+# runner, and every call a program makes is a broker request with the run's token.  So composing
+# a program never bypasses the broker, and making codemode broker-only would only forbid the
+# reads.  Readers may not hold it: a reader can never be granted codemode.execute (an acting
+# action), so the class gives it nothing, and untrusted content steering what a program composes
+# is the injection path ADR-0031 item 9 measures.
+
+broker_only: [exec, file-write, send, credential]
 
 tiers:
   read: [read]
@@ -46,11 +71,34 @@ capabilities:
   cap:events: [record-write]
   cap:detections: [record-write]
   cap:object-store: [read, file-write]
-  cap:notify: [egress]
+  cap:notify: [egress, send]
   cap:edge: [egress]
   cap:orchestration: [exec]
+  cap:orchestration-features: [exec]  # the optional orchestration features: the same surface as cap:orchestration
+  cap:codemode-executor: [exec]
   cap:broker: [exec]
+  cap:broker-tokens: [exec]  # the broker's codemode token surface (runner and sandbox roles); broker-only like cap:broker
+  cap:codemode-runner: [exec]  # runs agents' programs as codemode.execute's handler: reached only as that broker action
   cap:hypervisor: [exec]
   cap:secrets: [credential]
   cap:idp: [credential]
+  # every other capability the registry, the conformance contracts and the module slots name
+  # (G-13 fails closed: a capability this table does not class is refused for every profile)
+  cap:metrics: [read]
+  cap:uptime: [read]
+  cap:dashboards: [read]
+  cap:status-hub: [read]
+  cap:agent-audit: [read]
+  cap:hot-index: [read]
+  cap:siem-source: [read]
+  cap:automation: [exec]
+  cap:agent-runtime: [exec]
+  cap:dataflow: [exec]
+  cap:log-pipeline: [exec]
+  cap:dns: [exec]
+  cap:edge-proxy: [exec]
+  cap:backup: [exec]
+  cap:exposure-management: [exec]
+  cap:records-db: [file-write]
+  cap:static-hosting: [file-write]
 

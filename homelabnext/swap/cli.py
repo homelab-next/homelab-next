@@ -382,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
             print(exc.code, file=sys.stderr)
             return 2
         return int(exc.code or 0)
+    except rec.RecordUnreadable as exc:
+        print(f"hnx swap: {exc}", file=sys.stderr)
+        return 2
     except rec.RecordError as exc:
         print(f"INVALID RECORD: {exc}", file=sys.stderr)
         return 1

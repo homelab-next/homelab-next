@@ -133,11 +133,16 @@ def assemble_pack(
     *,
     denylist: Iterable[str] | None = None,
     knowledge: Any = None,
+    screener: Screener | None = None,
 ) -> tuple[dict, str]:
     """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
 
     ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
     ``knowledge``: a :class:`~homelabnext.agent.knowledge.Selection` to add (see module doc).
+    ``screener``: the :class:`~homelabnext.agent.screen.Screener` to redact with, kept by the
+    caller across packs so its labels stay stable over them (the same value, the same label,
+    the screener's own contract); by default each pack gets a fresh one, built from the
+    manifest's ``screen`` block and ``denylist`` (which a passed screener already carries).
     """
     if not isinstance(manifest, Mapping) or not manifest.get("sections"):
         raise SpecError("manifest must be a mapping with a non-empty 'sections' list")
@@ -154,11 +159,12 @@ def assemble_pack(
     try:
         screen_cfg = screen_config(manifest)
         deny = list(denylist or [])
-        screener = Screener(
-            redact_private_ips=screen_cfg["redact_private_ips"],
-            denylist=deny,
-            types=None if screen_cfg["redact"] else ("denylist",),
-        )
+        if screener is None:
+            screener = Screener(
+                redact_private_ips=screen_cfg["redact_private_ips"],
+                denylist=deny,
+                types=None if screen_cfg["redact"] else ("denylist",),
+            )
     except ValueError as exc:
         raise SpecError(str(exc)) from None
     supplied = dict(inputs.get("sections", {}))

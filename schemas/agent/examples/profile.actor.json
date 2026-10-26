@@ -18,21 +18,21 @@
       "cap:records-propose"
     ],
     "mcp": [
-      "records",
-      "shell"
+      "hnx-broker",
+      "records"
     ],
     "tier": "execute"
   },
   "data_tier": "local-only",
-  "digest": "sha256:ed744f7e5a9beed4c46712e50eb47055c08f9e7d0e51c4d7e45fa3b6ac30012d",
+  "digest": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e",
   "grants": {
     "capabilities": [
       "cap:broker",
       "cap:records-propose"
     ],
     "mcp": [
-      "records",
-      "shell"
+      "hnx-broker",
+      "records"
     ],
     "tier": "execute"
   },
@@ -73,7 +73,7 @@
       "source": "parts-library"
     },
     {
-      "digest": "sha256:66e9800dc70cdb72a8e8cc685ccb6397651dd564bd2d377c79c6a84cc19d763d",
+      "digest": "sha256:b0f00e9b287683c48054f576892ca74f0a68399ea1144e5ffda1c5f2082c8682",
       "id": "profile:responder",
       "source": "spec"
     }

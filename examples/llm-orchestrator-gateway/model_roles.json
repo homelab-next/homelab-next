@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "roles": {
+    "main-reasoner-a": {
+      "tier": "large",
+      "description": "The agent reasoner on engine A only: one role per engine, so the controller keeps choosing the backend a session lands on.",
+      "bindings": [
+        {
+          "backend": "svc:vllm-a",
+          "model_id": "example-27b"
+        }
+      ],
+      "max_context_tokens": 131072
+    },
+    "main-reasoner-b": {
+      "tier": "large",
+      "description": "The same model on engine B, with a shorter loaded context.",
+      "bindings": [
+        {
+          "backend": "svc:vllm-b",
+          "model_id": "example-27b"
+        }
+      ],
+      "max_context_tokens": 65536
+    }
+  }
+}

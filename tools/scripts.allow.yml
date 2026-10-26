@@ -35,6 +35,9 @@ uncalled:
     (examples/broker/manifest.yml handler_docs), from a digest-checked copy in the run directory,
     and tests/broker run it the same way; a manifest is data, not a caller the scanner reads
   broker-example-service-restart: *broker-handler
+  broker-example-dns-lookup: *broker-handler
+  broker-example-dhcp-leases: *broker-handler
+  broker-example-hypervisor-guests: *broker-handler
   workflow-broker-agent-job-submit: >-
     the workflow broker's handler for agent.job.submit: the broker runs it through
     workflows/broker.manifest.json (pinned by workflows/handlers/agent-job-submit.handler.json) when
@@ -59,10 +62,6 @@ not_in_runner:
     CI wrapper around the conformance report; the same report already runs in the invariants
     runner through plugin X-10 (homelabnext.conform.plugins.x10_conformance), so running this
     script there too would measure one property twice
-  check-changelog: >-
-    release hygiene of the tree (an Unreleased section and one for the current version); the
-    nearest checklist row, F-15, also needs a what-changed event per deploy (SERVER), so
-    registering this as F-15 would claim more than it measures
   run-output-lint: >-
     a lint of the repository's own script sources (where they write scratch files), not a property
     of a running fleet; make check and CI run it, and an invariant would re-run the same AST pass

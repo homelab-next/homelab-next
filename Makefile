@@ -15,7 +15,8 @@ REGISTERS_OUT := build/registers
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "hygiene: helpers-lint dup-check tls-lint workstation-lint run-output-lint keyring-check keyring"
+	@echo "Code Mode golden suites (CM-6; checked in gates): codemode-golden-report"
+	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
 	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
@@ -35,12 +36,18 @@ fmt:
 	$(RUFF) check --fix .
 	$(RUFF) format .
 
+# The same selection as CI's test job (tools/tests/test_make_matches_ci.py holds them equal):
+# test_this_repo_meets_the_floor runs tools/coverage_floor.py, the whole suite again under
+# coverage, which no suite time budget allows for; `coverage` below runs it on its own, as CI's
+# coverage job does.
+PYTEST_ARGS := -q -m "not live" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 test:
-	$(PY) -m pytest -q
+	$(PY) -m pytest $(PYTEST_ARGS)
 
-# broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling each keep
-# >= 80% line coverage from their own tests.  Not a prerequisite of `check`: `test` already runs
-# tools/tests/test_coverage_floor.py, which enforces the same floor; this target prints the table.
+# Q-07: each security-critical unit (broker, scope guard, records lifecycle, decide cascade, the
+# agent grant ceiling and the others listed in tools/coverage_floor.py) keeps >= 80% line
+# coverage from its own tests.  A prerequisite of `check`, as the coverage job is of CI.
+check: coverage
 coverage:
 	$(PY) tools/coverage_floor.py
 
@@ -63,7 +70,12 @@ schemas:
 # `custom check` fails on an unowned or expired customization; the system and capability pages
 # (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
 # source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
-# has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md
+# has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md; the Code
+# Mode stubs and search index (examples/codemode/) match the example broker manifest (ADR-0031); the
+# Code Mode golden suites (CM-6) run every task in classic MCP mode and in Code Mode, the G-02
+# corpus inside tool results, against the scripted fake model behind the fake inference server,
+# and the committed report is current (it proves the harness, not a model: docs/codemode.md)
+CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) $(ROLE_LINT) $(ROLES)
@@ -71,10 +83,19 @@ gates:
 	$(PY) -m homelabnext.cli custom check
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
+	$(PY) -m homelabnext.cli docs index check docs/README.md docs/adr/README.md
 	$(PY) -m homelabnext.cli status catalog check
 	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check
 	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
+	$(PY) -m homelabnext.cli codemode gen --check
+	$(PY) -m homelabnext.cli golden codemode --check $(CODEMODE_GOLDEN)
+
+# after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
+# harness: regenerate the report and commit it
+.PHONY: codemode-golden-report
+codemode-golden-report:
+	$(PY) -m homelabnext.cli golden codemode --out $(CODEMODE_GOLDEN)
 
 # every decision spec git tracks is complete, asks well-formed questions, and inline specs stay fast
 decide-lint:
@@ -102,10 +123,14 @@ models-check:
 # the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
 GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
+# the gateway in front of the orchestration controller's engines: --check also holds the
+# controller's backend list and its HERMES_HOMEs to the spec (docs/orchestration-controller.md)
+ORCH_GATEWAY := examples/llm-orchestrator-gateway
 .PHONY: gateway-check gateway-render
 check: gateway-check
 gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
+	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
 
 # the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
 # MCP entries and every profile's grants resolve to it, and the rendered example client configs
@@ -124,6 +149,7 @@ mcp-render:
 # after changing the role table, a profile or the gateway spec: regenerate and commit
 gateway-render:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))
+	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway
 
 # after changing the example store, its role table or its serving spec: regenerate and commit
 .PHONY: serving-render
@@ -204,12 +230,15 @@ contracts:
 
 # lessons/ and runbooks/ are record directories (one Markdown file per entry); every record's
 # generated `## Links` block is current (`hnx registers links <dir>` rewrites them); the lesson
-# review's due list is printed as a warning, never a failure (`... review --strict` fails on it)
+# review's due list is printed as a warning, never a failure (`... review --strict` fails on it);
+# every front-matter `summary:` of a record or docs page is one line of <= 160 characters
+# (ADR-0032: a broken or missing one fails, as does a stale authored one: summary_of outline digest)
 RECORD_DIRS := examples/registers/lessons examples/registers/runbooks
 registers:
 	$(PY) -m homelabnext.registers build examples/registers $(REGISTERS_OUT)
 	$(PY) -m homelabnext.registers links --check $(RECORD_DIRS)
 	$(PY) -m homelabnext.registers review examples/registers
+	$(PY) -m homelabnext.registers summaries examples/registers docs
 
 # the strategy-to-task records (docs/strategy.md): the example tree validates (schemas, link
 # rules, lifecycle, review tiers, the doctrine in examples/strategy/doctrine.yml), every record's
@@ -232,8 +261,8 @@ projects:
 # Every fast criterion of the example register through the invariants runner, never paging; the
 # plugin-only rows (X-04, X-06, X-09, X-10) run nowhere else.  Slow criteria (leak scans, schema
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
-# `test` already runs the fast CLI gates through the register and the rest would repeat ~30 s of
-# gates `check` has just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
+# its CLI gates are gates of `check` already and the rest would repeat ~60 s of what `check` has
+# just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
 INVARIANTS_OUT := build/invariants/results.json
 .PHONY: invariants
 invariants:
@@ -253,7 +282,7 @@ ids-check:
 conform:
 	$(PY) -m homelabnext.cli conform run all --target $(or $(TARGET),fake)
 
-# `hnx conform list` and `hnx conform report --json`; fails if any of the 16 capabilities lacks a passing test
+# `hnx conform list` and `hnx conform report --json`; fails if any of the 18 capabilities lacks a passing test
 conform-check:
 	$(PY) tools/conform_coverage.py
 
@@ -288,11 +317,12 @@ changelog-check:
 #   M-03 no private notify/state/lake helpers outside the shared libraries, and no copy-paste
 #        beyond tools/dup_check.baseline.json (which only shrinks)
 #   F-07 no client with TLS certificate verification off (Python and YAML/JSON; RL013 does roles)
+#   F-23 no Caddy config lets a client set its own identity headers; Caddy pinned >= 2.11.2
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline tls-lint workstation-lint keyring-check keyring run-output-lint
-check: helpers-lint dup-check tls-lint workstation-lint keyring-check run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
+check: helpers-lint dup-check tls-lint caddy-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
 	$(PY) tools/shared_helpers_lint.py .
@@ -304,6 +334,9 @@ dup-check:
 # `$(PY) tools/dup_check.py --update-baseline --allow-increase "<reason>"` by hand.
 dup-baseline:
 	$(PY) tools/dup_check.py --update-baseline .
+
+caddy-lint:
+	$(PY) tools/caddy_lint.py .
 
 tls-lint:
 	$(PY) tools/tls_verify_lint.py .
@@ -336,9 +369,11 @@ fix-check:
 	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
 # Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
-# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown).
+# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown;
+# filelock and setuptools since 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940
+# and GHSA-xmj3-9gf7-h52w).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= ruff pyarrow certifi
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi filelock setuptools
 constraints:
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
 	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
@@ -356,8 +391,9 @@ LAB_DIR := compose/lab-in-a-box
 LAB_ENV := --env-file $(LAB_DIR)/.env.example $(addprefix --env-file ,$(wildcard $(LAB_DIR)/.env))
 LAB_COMPOSE := docker compose $(LAB_ENV) -f $(LAB_DIR)/docker-compose.yml
 
-# bind_guard.sh refuses a non-loopback LAB_BIND unless LAB_I_UNDERSTAND_UNAUTHENTICATED=1 and every
-# credential differs from its .env.example placeholder (lab-smoke runs it through smoke.sh)
+# bind_guard.sh refuses a non-loopback LAB_BIND (as written, and as `docker compose config` resolves
+# it) unless LAB_I_UNDERSTAND_UNAUTHENTICATED=1 and every credential differs from its .env.example
+# placeholder (lab-smoke runs it through smoke.sh)
 lab-up:
 	bash $(LAB_DIR)/bind_guard.sh
 	$(LAB_COMPOSE) up -d --build --wait --wait-timeout 420

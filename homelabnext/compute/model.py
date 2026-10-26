@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-#: The sixteen capabilities named in docs/interfaces.md (``hnx conform --list``).
+#: The eighteen capabilities named in docs/interfaces.md (``hnx conform --list``).
 KNOWN_CAPABILITIES: tuple[str, ...] = (
     "lake-query",
     "lake-catalog",
@@ -31,6 +31,8 @@ KNOWN_CAPABILITIES: tuple[str, ...] = (
     "detections",
     "context",
     "projects",
+    "codemode-executor",
+    "codemode-runner",
 )
 
 #: The capability inventory groups named in docs/role-interface.md section 5.
@@ -114,6 +116,11 @@ class ComputeError(Exception):
     def __init__(self, message: str, problems: Iterable[Problem | str] = ()):
         self.problems = [str(p) for p in problems]
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
+
+
+class ComputeUnreadable(ComputeError):
+    """An input file (site, guest, policies, nodes, keys, baselines) or the guest directory cannot
+    be read or parsed: bad input (``hnx guests`` exit 2), not an invalid guest set (exit 1)."""
 
 
 @dataclass(frozen=True)

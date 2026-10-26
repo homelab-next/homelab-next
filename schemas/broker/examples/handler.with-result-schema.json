@@ -1,0 +1,37 @@
+{
+  "action": "service.status",
+  "audit": true,
+  "description": "Report one service's state.",
+  "handler": "handlers/service-status.sh",
+  "handler_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "idempotent": true,
+  "params_schema": {
+    "properties": {
+      "grace_s": {
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "requires_approval": false,
+  "result_schema": {
+    "properties": {
+      "service": {
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "running",
+          "stopped"
+        ]
+      }
+    },
+    "required": [
+      "service",
+      "state"
+    ],
+    "type": "object"
+  },
+  "tier": "read",
+  "timeout_s": 120
+}

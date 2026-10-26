@@ -16,6 +16,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from homelabnext.modules.scope import (
+    DYNAMIC_PARTS,
+    EMPTY_ALLOWED,
+    ENTRY_PATTERN,
+    PART_DOCS,
+    SCOPE_PARTS,
+    scope_tree,
+)
+
 __all__ = [
     "RESERVED_IDS",
     "lake_table_schema",
@@ -44,7 +53,15 @@ AUTHORITY_SLOTS = (
     "cap:mcp-catalog",
 )
 #: shared components whose configuration a module can never merge into (no grant opens these)
-NEVER_SHARED = ("cap:secrets", "cap:broker", "cap:mcp-catalog", "cap:records", "cap:orchestration")
+NEVER_SHARED = (
+    "cap:secrets",
+    "cap:broker",
+    "cap:mcp-catalog",
+    "cap:records",
+    "cap:orchestration",
+    "cap:codemode-executor",  # a merged key could widen the sandbox's egress or environment
+    "cap:codemode-runner",  # a merged key could widen a token's actions or the relay's endpoint
+)
 #: interchange formats a dataset or a stateful slot exports in (a draft list; additive)
 NEUTRAL_FORMATS = (
     "parquet", "jsonl", "csv", "json", "markdown-tree", "object-tree", "zone-file", "sigma",
@@ -384,8 +401,20 @@ def _defs() -> dict[str, Any]:
                 "model_roles": arr(ref("requirement_model_role")),
                 "interfaces": arr(ref("requirement_interface")),
                 "hosts": arr(ref("requirement_host")),
+                "scope": arr(ref("requirement_scope")),
             },
-            desc="Everything the module needs, by slot, role or interface; never a product.",
+            desc="Everything the module needs, by slot, role, interface or part of the site's network scope; never a product.",
+        ),
+        "requirement_scope": obj(
+            {
+                "part": {
+                    "enum": list(SCOPE_PARTS),
+                    "description": "A part of the site selection's scope block. The module reads the addresses from the selection, never from its own config, and only the parts it declares here (homelabnext.modules.scope.scope_networks refuses any other): a selection that enables it with the part missing, empty (an exclusion may be an explicit []) or malformed is refused (loader), and its reader fails closed. A module that requires any address part (target or a trusted part) also requires exclude.offensive, and exclude.unattended_mutation unless it contributes nothing that can execute (loader; the manifest cannot say a module only filters on a part, or acts on hostnames).",
+                },
+                "purpose": text(200),
+            },
+            ["part"],
+            "A part of the site's network scope the module needs (the external data collector's trusted.wan, so it never reports the lab's own addresses).",
         ),
         "migration": obj(
             {
@@ -678,7 +707,7 @@ def _defs() -> dict[str, Any]:
             {
                 "target": {
                     "allOf": [ref("cap_ref"), {"not": {"enum": list(NEVER_SHARED)}}],
-                    "description": "The shared component; never secrets, broker, mcp-catalog, records or orchestration, and edge or idp only with an overlay grant.",
+                    "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration or codemode-executor, and edge or idp only with an overlay grant.",
                 },
                 "file": ref("rel_path"),
                 "reason": text(300),
@@ -1207,8 +1236,57 @@ def lake_table_schema() -> dict[str, Any]:
     }
 
 
+def scope_entry_schema() -> dict[str, Any]:
+    """One entry of a scope part: the pattern :func:`homelabnext.modules.scope.parse_entry`
+    matches too, so the schema and the reader agree on every entry's text."""
+    return {
+        "type": "string",
+        "maxLength": 64,
+        "pattern": ENTRY_PATTERN,
+        "description": "An IPv4 or IPv6 address or CIDR network: no host bits (IPv4 here, IPv6 in the loader), no leading zeros, no zone id, no whitespace, no IPv4 written inside or embedded in IPv6 (mapped, compatible, NAT64). The loader also refuses /0, special-use blocks (loopback, link-local, multicast, unspecified, reserved), a trusted network broader than /8 (IPv4) or /32 (IPv6), and a network listed twice.",
+    }
+
+
+def scope_source_schema() -> dict[str, Any]:
+    """A dynamic source for a part's addresses (trusted.wan only): specified, not implemented."""
+    return obj(
+        {"source": pat(SLUG, "The name of the source that knows the current addresses.", 64)},
+        ["source"],
+        "A dynamic source instead of a literal network (a DHCP or CGNAT WAN, a delegated IPv6 prefix that changes). Specified, not implemented: the shape is fixed now so freezing it later is additive, and the loader refuses it until a reader exists (docs/modules.md).",
+    )
+
+
+def scope_schema() -> dict[str, Any]:
+    """The selection's ``scope`` object, generated from ``SCOPE_PARTS`` (one source of truth)."""
+
+    def part(name: str) -> dict[str, Any]:
+        if name in EMPTY_ALLOWED:
+            desc = PART_DOCS[name] + " An explicit [] means nothing is excluded; absent is not."
+            return arr(ref("scope_entry"), desc)
+        if name in DYNAMIC_PARTS:
+            items = {"oneOf": [ref("scope_entry"), ref("scope_source")]}
+            return arr(items, PART_DOCS[name], 1)
+        return arr(ref("scope_entry"), PART_DOCS[name], 1)
+
+    props: dict[str, Any] = {}
+    for group, leaves in scope_tree().items():
+        if leaves is None:
+            props[group] = part(group)
+        else:
+            props[group] = obj(
+                {leaf: part(f"{group}.{leaf}") for leaf in leaves},
+                desc=PART_DOCS[group],
+                minProperties=1,
+            )
+    return obj(
+        props,
+        desc="The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32, 3fff::/20), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present (loader), and every reader fails closed.",
+        minProperties=1,
+    )
+
+
 def module_selection_schema() -> dict[str, Any]:
-    """A site's module selection (docs/modules.md): hosts, slot choices, bindings and grants.
+    """A site's module selection (docs/modules.md): hosts, slot choices, bindings, grants, scope.
 
     Only the shape: every cross-reference (a provider fills the slot, an agent key exists, a grant
     is allowed) is a loader rule (``homelabnext/modules/rules.py``, ``site_problems``)."""
@@ -1328,12 +1406,13 @@ def module_selection_schema() -> dict[str, Any]:
         },
         desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
     )
+    scope = scope_schema()
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
         "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
         "title": "Module selection",
-        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, and the grants a module cannot give itself. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",
         "additionalProperties": False,
         "required": ["profile", "hosts", "slots"],
@@ -1360,7 +1439,9 @@ def module_selection_schema() -> dict[str, Any]:
                 "description": "Lane bindings for a selected provider's agents (its placement and config are per slot instance).",
             },
             "grants": grants,
+            "scope": scope,
         },
+        "$defs": {"scope_entry": scope_entry_schema(), "scope_source": scope_source_schema()},
     }
 
 

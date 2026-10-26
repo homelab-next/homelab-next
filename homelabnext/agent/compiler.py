@@ -32,7 +32,12 @@ Rules, all enforced here and tested:
   :func:`verify_profile` refuses a compiled profile edited into that state;
 * ``include:`` rules (:mod:`homelabnext.agent.include`) say which related knowledge goes into the
   pack; they may seed only from grants the profile holds (:class:`IncludeViolation`) and never
-  add one.  A spec without ``include`` compiles to a profile without it.
+  add one.  A spec without ``include`` compiles to a profile without it;
+* actors act only through the broker (:func:`homelabnext.agent.readers.broker_problems`, every
+  profile, ADR-0030): an acting MCP server must be ``acts_via: broker`` in its catalog record (or
+  a reviewed ``acts_via: direct`` one the policy's ``direct_mcp`` names for the profile), no
+  acting capability but ``cap:broker``, and an acting tier only with ``cap:broker``
+  (:class:`BrokerViolation`).
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
 from .digest import digest_of, sha256_text
 from .errors import (
     AgentError,
+    BrokerViolation,
     BudgetError,
     CatalogViolation,
     CeilingViolation,
@@ -58,6 +64,7 @@ from .include import normalise_include
 from .readers import (
     DATA_TIERS,
     ToolClasses,
+    broker_problems,
     default_classes,
     grant_problems,
     profile_problems,
@@ -147,6 +154,12 @@ class CeilingPolicy:
     A local-only profile is granted no MCP server that reaches the internet (a hosted server, or
     ``egress: internet``: its context would leave the lab) unless its entry names that server in
     ``internet_mcp``, an exception per profile and server that the policy owner makes.
+
+    ``direct_mcp`` on an entry names the ``acts_via: direct`` MCP servers (an acting server that
+    does not go through the broker, ADR-0030) the profile may hold: an exception per profile and
+    server that the policy owner makes, on top of the record's ``direct_reason`` and human
+    approve review (:func:`homelabnext.agent.readers.broker_problems`).  Without an entry the
+    profile holds none.
     """
 
     def __init__(self, ceilings: Mapping[str, Mapping[str, Any]], source: str = "policy") -> None:
@@ -156,6 +169,7 @@ class CeilingPolicy:
         self._readers = set()
         self._attested: dict[str, dict[str, str]] = {}
         self._internet: dict[str, frozenset[str]] = {}
+        self._direct: dict[str, frozenset[str]] = {}
         for pid, c in ceilings.items():
             flag = c.get("reads_untrusted") if isinstance(c, Mapping) else None
             if flag is not None and not isinstance(flag, bool):
@@ -180,6 +194,13 @@ class CeilingPolicy:
                 ):
                     raise SpecError(f"{source}: {pid}: internet_mcp is a list of MCP server ids")
                 self._internet[_ids({"id": [pid]}, "id", "profile")[0]] = frozenset(names)
+            if c.get("direct_mcp") is not None:
+                names = c["direct_mcp"]
+                if not isinstance(names, list) or not all(
+                    isinstance(n, str) and _SLUG.fullmatch(n) for n in names
+                ):
+                    raise SpecError(f"{source}: {pid}: direct_mcp is a list of MCP server ids")
+                self._direct[_ids({"id": [pid]}, "id", "profile")[0]] = frozenset(names)
         self._ceilings = {
             _ids({"id": [pid]}, "id", "profile")[0]: _normal_ceiling(c, f"{source}: {pid}")
             for pid, c in ceilings.items()
@@ -195,6 +216,23 @@ class CeilingPolicy:
         if profile_id not in self._ceilings:
             raise CeilingViolation([f"{self.source} has no ceiling for {profile_id}"])
         return dict(self._ceilings[profile_id])
+
+    def direct_mcp(self, profile_id: str) -> frozenset[str]:
+        """The ``acts_via: direct`` MCP servers this policy lets ``profile_id`` hold (ADR-0030);
+        empty for a profile it has no entry or no ``direct_mcp`` for."""
+        return self._direct.get(profile_id, frozenset())
+
+    def direct_notes(self, classes: ToolClasses | None = None) -> list[str]:
+        """Warnings for ``direct_mcp`` entries that name no ``acts_via: direct`` catalog server
+        (an exception for nothing, or for a server that would not need one)."""
+        meta = (classes if classes is not None else default_classes()).catalog or {}
+        return [
+            f"{pid} lists {name!r} in direct_mcp, which is not an acts_via: "
+            "direct catalog server (remove the entry)"
+            for pid, names in sorted(self._direct.items())
+            for name in sorted(names)
+            if (meta.get(name) or {}).get("acts_via") != "direct"
+        ]
 
     def requires_reader(self, profile_id: str) -> bool:
         """True when the policy marks ``profile_id`` as reading untrusted content."""
@@ -372,6 +410,13 @@ def compile_profile(
     if gproblems:
         raise CatalogViolation(gproblems)
 
+    # actors act only through the broker (ADR-0030): every profile, whatever the ceiling allows;
+    # a direct exception is the policy's (a spec's own ceiling never lists one)
+    direct = policy.direct_mcp(pid) if policy is not None else None
+    aproblems = broker_problems(grants, classes, pid, direct)
+    if aproblems:
+        raise BrokerViolation(aproblems)
+
     # 4. include: knowledge only about what is granted (IncludeViolation), never a new grant
     include = normalise_include(spec.get("include"), grants)
 
@@ -431,11 +476,13 @@ def verify_profile(
 
     The reader rule needs no policy: a profile that reads untrusted content (a profile without
     ``reads_untrusted`` counts as one) and holds an acting grant is refused, whatever its ceiling.
+    Nor does the broker rule, except for a direct exception (the policy's ``direct_mcp``): any
+    profile holding an acting grant that does not go through the broker is refused.
     """
     problems = schema_errors("agent", "profile", profile)
     if problems:
         return problems
-    problems += profile_problems(profile, classes)
+    problems += profile_problems(profile, classes, policy)
     if (
         policy is not None
         and policy.requires_reader(profile["id"])

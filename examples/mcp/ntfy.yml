@@ -4,7 +4,7 @@
 id: ntfy
 description: Publishes notifications through the lab's notify service.
 owner: platform-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: npm
@@ -20,9 +20,7 @@ env:
 egress: ['svc:notify']
 data_tier: local-only
 tools:
-- {name: publish, classes: [egress], approval: false}
+- {name: publish, classes: [egress, send], approval: false}
+acts_via: direct
+direct_reason: 'Publishes notifications itself; no shipped profile holds it: a notification goes through the broker''s notify actions (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b447f9d6f79a'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b447f9d6f79a'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b447f9d6f79a'}

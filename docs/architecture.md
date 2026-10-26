@@ -1,3 +1,7 @@
+---
+summary: Thirteen capability layers, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.
+summary_of: outline:sha256:8ffe7a69d79cad46
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Architecture: layers, seams and the spine
 
@@ -52,12 +56,12 @@ The "example tenants" are illustrations only: the reference environment in
 | 8 | Case management and DFIR | Case round trip (create, dedup, comment, close) | a case system (fake*) | `cases` suite |
 | 9 | Threat intelligence | Typed indicators and reports in the lake | a TIP, feeds | schema validation plus replay |
 | 10 | Internal assessment, detection and code security | Authorized internal assessment plans and findings as typed records (own environment only; [terms](terms.md)) | auditing tools | detection fixtures and coverage map |
-| 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval | an inference server (fake*), a context store | `inference` and `context` suites, golden tasks |
+| 11 | LLM serving, orchestration, agents | OpenAI-compatible chat; model-role aliases (ADR-0007); scoped context retrieval; Code Mode programs in a broker-only sandbox (ADR-0031) | an inference server (fake*), a context store, a sandbox host | `inference`, `context`, `codemode-executor` and `codemode-runner` suites, golden tasks |
 | 12 | Observability, alerting, backup, power | OpenMetrics, state-diffed paging, export hooks (ADR-0008) | a metrics stack, ntfy* | `notify` suite; restore drill |
 | 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest; projects and work items linked to strategy records by uid (ADR-0020) | a broker, the records library, a project tool (OpenProject) | lifecycle and fixture runs, `projects` suite |
 
-Sixteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
-`context` and `projects`); the list is authoritative in [interfaces.md](interfaces.md).
+Eighteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
+`context`, `projects`, `codemode-executor` and `codemode-runner`); the list is authoritative in [interfaces.md](interfaces.md).
 
 ## The spine
 
@@ -138,7 +142,9 @@ relay's audit read, and plays the edge for the approver. What it asserts, step b
 The lab trades every protection for a small footprint, so it binds published ports to loopback
 only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 `LAB_I_UNDERSTAND_UNAUTHENTICATED=1` is set **and** every credential differs from its
-`.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`); docker publishes ports through
+`.env.example` placeholder (`compose/lab-in-a-box/bind_guard.sh`, which judges the configuration
+`docker compose config` resolves, refuses a `.env` line it cannot read, and refuses when it
+cannot resolve the configuration at all); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
 run with `no-new-privileges` and `cap_drop: [ALL]` (postgres and uptime add back what their
 entrypoints need; OpenBao keeps docker's defaults). A real deployment changes each service as follows:

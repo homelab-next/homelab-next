@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A fictional four-machine lab, the shape of a first real build (docs/four-box-lab.md):
+#
+#   main-1        one large hypervisor running every guest but the detonation box
+#   sensor-1      a physical network sensor and DFIR server, listening on two capture NICs:
+#                 the switch's mirror of the uplink (port 4) and main-1's own mirror of its guests
+#                 (a direct cable from main-1's spare NIC; guests/_nodes.yml `mirror`)
+#   detonation-1  a physical box for anything that might be malicious, in the one-way zone
+#   dns-2         a single-board computer: the secondary DNS, a zone-transfer copy of dns-1
+#
+# Copy this directory into the private overlay's lab/ and replace the names, addresses, MACs and
+# the console pin with your own. Addresses here are RFC 5737 documentation ranges and names live
+# under example.internal: nothing describes a real network.
+site_version: 1
+
+site:
+  id: anchor
+  domain: example.internal
+  timezone: UTC
+
+zones:
+  - id: mgmt
+    purpose: management
+    vlan_id: 10
+    subnet: 192.0.2.0/26
+    gateway: 192.0.2.1
+    dns: {resolvers: [svc:dns, svc:dns-secondary]}
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [infra]
+  - id: services
+    purpose: security_services
+    vlan_id: 20
+    subnet: 192.0.2.64/26
+    gateway: 192.0.2.65
+    dns: {resolvers: [svc:dns, svc:dns-secondary]}
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [prod]
+  - id: data
+    purpose: storage_and_bus
+    vlan_id: 30
+    subnet: 192.0.2.128/26
+    gateway: 192.0.2.129
+    dns: {resolvers: [svc:dns, svc:dns-secondary]}
+    egress: {internet: deny, inter_zone: {default: deny}}
+    tags: [prod]
+  - id: edge
+    purpose: internet_ingress
+    vlan_id: 40
+    subnet: 198.51.100.0/26
+    gateway: 198.51.100.1
+    dns: {resolvers: [svc:dns, svc:dns-secondary]}
+    egress: {internet: allow, inter_zone: {default: deny}}
+    tags: [untrusted]
+  - id: sandbox
+    purpose: malware_analysis
+    vlan_id: 50
+    subnet: 203.0.113.0/26
+    gateway: 203.0.113.1
+    egress: {internet: deny, inter_zone: {default: deny}, one_way: true}
+    tags: [untrusted, lab]
+
+edge:
+  - {id: internet, kind: internet}
+  - {id: isp-modem, kind: modem, model: Example DOCSIS 3.1}
+  - {id: anchor-gw, kind: router}
+  - {id: core-sw, kind: switch}
+
+power:
+  ups:
+    - {id: ups-a, model: Example 1500VA, monitored_by: nut, nut_name: ups-a, serial: EX-FAKE-0101}
+  default: {ups: ups-a}
+
+router:
+  id: anchor-gw
+  model: unifi
+  mgmt_endpoint: svc:router-console
+  tls_pin:
+    sha256: REPLACE_WITH_CONSOLE_CERT_FINGERPRINT
+
+switches:
+  - id: core-sw
+    model: unifi
+    device_mac: "00:00:5e:00:53:40"
+    uplink_port: 1
+    port_assignments:
+      # the uplink to the router: every zone crosses it on its way between zones or out
+      - {ports: [1], kind: trunk, vlans: [10, 20, 30, 40, 50]}
+      # main-1: management untagged, its guests' zones tagged (no sandbox: that is detonation-1's)
+      - {ports: [2], kind: trunk, vlan: 10, vlans: [20, 30, 40]}
+      # sensor-1's management NIC: its event output and the DFIR server's frontend
+      - {ports: [3], kind: access, vlan: 20}
+      # sensor-1's first capture NIC: a copy of the uplink (hnx site validate warns that it
+      # carries mgmt and sandbox traffic; that is the point of a sensor)
+      - {ports: [4], kind: mirror, mirror_from: [1]}
+      # detonation-1, alone in the one-way zone
+      - {ports: [5], kind: access, vlan: 50}
+      # dns-2, the secondary DNS
+      - {ports: [6], kind: access, vlan: 10}
+
+firewall:
+  default_action: deny
+  zone_to_zone:
+    - {from: mgmt, to: services, action: allow, ports: [22, 443], protocols: [tcp]}
+    - {from: mgmt, to: data, action: allow, ports: [22], protocols: [tcp]}
+    - {from: mgmt, to: edge, action: allow, ports: [22, 443], protocols: [tcp]}
+    - {from: services, to: data, action: allow, ports: [4222, 9000], protocols: [tcp]}
+    - {from: sandbox, to: any, action: deny, one_way_contract: true}
+  # Everything else is a named service: the edge reaches only what it publishes and what its
+  # agents need, never a whole zone.
+  service_exceptions:
+    # names: both resolvers from every zone but the sandbox (it has none: it uses addresses)
+    - {from: [zone:services, zone:data, zone:edge], to: svc:dns, action: allow}
+    - {from: [zone:services, zone:data, zone:edge], to: svc:dns-secondary, action: allow}
+    # the way out for the zones without internet: the resolvers forward, hosts fetch packages and
+    # keep time through egress-1 in the edge
+    - {from: zone:mgmt, to: svc:dns-upstream, action: allow, notes: "dns-1 and dns-2 forward here"}
+    - {from: [zone:mgmt, zone:services, zone:data], to: svc:apt-cache, action: allow}
+    - {from: [zone:mgmt, zone:services, zone:data], to: svc:ntp, action: allow}
+    # identity and the published consoles
+    - {from: [zone:services, zone:edge], to: svc:idp, action: allow}
+    - {from: [zone:mgmt, zone:edge], to: svc:status-hub, action: allow}
+    - {from: zone:edge, to: svc:password-manager, action: allow, notes: "published through proxy-1"}
+    # every host's agents: the SIEM (1514 events, 1515 enrolment) and the DFIR server
+    - {from: [zone:mgmt, zone:data, zone:edge], to: svc:detections, action: allow, ports: [1514, 1515]}
+    - {from: [zone:data, zone:edge], to: svc:dfir, action: allow}
+    - {from: zone:mgmt, to: svc:dfir, action: allow, ports: [8000, 8889], notes: "clients, and the DFIR console"}
+    # the only ways out of the one-way zone: one port each, to one service each
+    - {from: zone:sandbox, to: svc:events, action: allow, ports: [4222], notes: "the one-way telemetry pipe"}
+    - {from: zone:sandbox, to: svc:dfir, action: allow, ports: [8000], notes: "DFIR collection from the detonation box"}
+
+dns:
+  resolvers:
+    - {id: dns-primary, model: technitium, host: svc:dns, authoritative_for: [example.internal], bind_mode: all}
+    - {id: dns-secondary, model: technitium, host: svc:dns-secondary, authoritative_for: [example.internal], bind_mode: all}
+  records:
+    static:
+      - {fqdn: router.example.internal, type: A, value: 192.0.2.1}
+  policy:
+    split_horizon: true
+    ttl_default: 300
+
+adapters:
+  network: unifi
+  dns: zonefile
+  options:
+    zonefile: {serial: 2026102601}

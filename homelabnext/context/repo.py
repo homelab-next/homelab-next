@@ -18,7 +18,7 @@ from homelabnext.graph import Graph, build
 from .model import MAX_CONTENT_CHARS, Document
 from .store import ContextStore
 
-__all__ = ["documents_from_graph", "repo_store"]
+__all__ = ["documents_from_graph", "read_served", "repo_store"]
 
 
 def _summary(node) -> str:
@@ -28,6 +28,22 @@ def _summary(node) -> str:
     for k in sorted(node.attrs):
         lines.append(f"{k}: {json.dumps(node.attrs[k], sort_keys=True, ensure_ascii=False)}")
     return "\n".join(lines) + "\n"
+
+
+def read_served(base: Path, rel: str) -> str | None:
+    """The text the context store indexes for the file ``rel`` under ``base`` (resolved): decoded
+    as UTF-8 with undecodable bytes replaced, or ``None`` when it is not a file inside ``base``,
+    cannot be read, or is longer than :data:`MAX_CONTENT_CHARS` (the store then indexes the node's
+    attributes instead).  Shared with the context pack's levels, so a slug or a digest there is
+    the one the MCP server serves."""
+    f = (base / rel).resolve()
+    if not (f.is_file() and f.is_relative_to(base)):
+        return None
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text if len(text) <= MAX_CONTENT_CHARS else None
 
 
 def documents_from_graph(graph: Graph, root: str | Path) -> list[Document]:
@@ -41,10 +57,7 @@ def documents_from_graph(graph: Graph, root: str | Path) -> list[Document]:
     for n in graph.nodes.values():
         content = ""
         if n.path and owners[n.path] == 1:
-            f = (base / n.path).resolve()
-            if f.is_file() and f.is_relative_to(base):
-                text = f.read_text(encoding="utf-8", errors="replace")
-                content = text if len(text) <= MAX_CONTENT_CHARS else ""
+            content = read_served(base, n.path) or ""
         links = tuple(sorted({e.dst for e in graph.out_edges(n.id) if e.dst in graph.nodes}))
         out.append(
             Document(

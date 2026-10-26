@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# A tool-using suite (modes) that names no grant for its agent.
+suite: codemode-triage
+profile: profile:triage
+modes: [mcp, codemode]
+tasks:
+  - id: one-status
+    prompt: What is the state of svc:queue?
+    expect: {scorer: json_fields, fields: {state: running}}

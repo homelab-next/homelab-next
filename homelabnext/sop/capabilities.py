@@ -50,6 +50,7 @@ from typing import Any
 import yaml
 
 from homelabnext import paths
+from homelabnext.context.levels import generated_summary_lines
 from homelabnext.registry.model import Registry, env_var_name
 
 PAGES_DIR = "docs/capabilities"
@@ -935,11 +936,28 @@ def _field_table(fields: list[Field], header: str = "Field") -> list[str]:
     return [*out, ""]
 
 
+INDEX_SUMMARY = (
+    "Every capability contract: what it is for, how many operations and checks it has, "
+    "and which adapters and services provide it."
+)
+
+
+def capability_summary(c: Capability) -> str:
+    """The page's level-0 summary (ADR-0032): the contract's one-line purpose as a sentence, cut to
+    the summary limit."""
+    from homelabnext.context.levels import clean, cut
+
+    purpose = clean(c.summary)
+    first = purpose[:1].upper() + purpose[1:]
+    return cut(f"{first.rstrip('.')}.")
+
+
 def render_page(c: Capability, root: Path) -> str:
     L: list[str] = [
         "---",
         f"title: {c.name}",
         "type: capability",
+        generated_summary_lines(capability_summary(c)),
         f"capability: {c.name}",
         f"protocol: '{c.protocol}'",
         f"generated_by: {GENERATOR}",
@@ -1241,6 +1259,7 @@ def render_index(caps: list[Capability], registry: Registry | None) -> str:
         "---",
         "title: Capabilities",
         "type: capability-index",
+        generated_summary_lines(INDEX_SUMMARY),
         f"generated_by: {GENERATOR}",
         "---",
         "",

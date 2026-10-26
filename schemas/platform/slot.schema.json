@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/slot/1.0",
+  "x-draft": "ADR-0027 (proposed): the slot registry's fields; not frozen, may change before acceptance, when capability descriptor 1.1 takes them",
+  "title": "Slot registry entry",
+  "description": "One slot of the slot registry (ADR-0027, proposed; docs/modules.md, 'The slot registry'): the capability descriptor fields the module rules read, held as a draft of their own so the published platform/capability 1.0 stays unchanged until the ADR is accepted. Today the registry is examples/modules/slots.yml, one entry per slot.",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "$ref": "#/$defs/contract"
+    },
+    "stage": {
+      "$ref": "#/$defs/stage"
+    },
+    "formats": {
+      "$ref": "#/$defs/formats"
+    },
+    "stateful": {
+      "$ref": "#/$defs/flag"
+    },
+    "export_formats": {
+      "$ref": "#/$defs/export_formats"
+    },
+    "required_in_core": {
+      "$ref": "#/$defs/flag"
+    },
+    "privileged": {
+      "$ref": "#/$defs/flag"
+    },
+    "pass_through": {
+      "$ref": "#/$defs/flag"
+    }
+  },
+  "required": [
+    "stage",
+    "contract",
+    "stateful"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "contract": {
+      "description": "the protocol file in conformance/protocols/, or null: a slot with no contract yet is provisional by declaration",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z][a-z0-9_]*\\.py$"
+    },
+    "stage": {
+      "description": "the SOC pipeline stage (1-10), or null for a core slot outside the pipeline; layer stays",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 10
+    },
+    "formats": {
+      "description": "the boundary formats in and out: pass-through is legal only where the upstream's out meets the downstream's in",
+      "type": "object",
+      "properties": {
+        "in": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "out": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "in",
+        "out"
+      ],
+      "additionalProperties": false
+    },
+    "export_formats": {
+      "description": "the neutral formats a stateful slot's providers export and migrate in",
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "flag": {
+      "type": "boolean"
+    },
+    "slot_rules": {
+      "description": "the slot registry's rules",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "stateful"
+            ],
+            "properties": {
+              "stateful": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "export_formats"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "export_formats"
+            ]
+          },
+          "then": {
+            "required": [
+              "stateful"
+            ],
+            "properties": {
+              "stateful": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "privileged"
+            ],
+            "properties": {
+              "privileged": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "contract"
+            ],
+            "properties": {
+              "contract": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "pass_through"
+            ],
+            "properties": {
+              "pass_through": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "stage",
+              "formats"
+            ],
+            "properties": {
+              "stage": {
+                "type": "integer"
+              },
+              "required_in_core": {
+                "const": false
+              },
+              "formats": {
+                "properties": {
+                  "in": {
+                    "minItems": 1
+                  },
+                  "out": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/slot_rules"
+    }
+  ]
+}

@@ -16,16 +16,16 @@ from homelabnext.conform.registry import load_module
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_list_shows_the_sixteen(capsys):
+def test_list_shows_the_eighteen(capsys):
     assert main(["list"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert [ln.split()[0] for ln in out] == list(CAPABILITIES)
-    assert len(out) == 16
+    assert len(out) == 18
 
 
 def test_dash_dash_list_spelling_from_the_docs(capsys):
     assert main(["--list"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 16
+    assert len(capsys.readouterr().out.splitlines()) == 18
 
 
 def test_list_json_and_all(capsys):
@@ -95,16 +95,40 @@ def test_could_not_measure_exits_100(tmp_path, capsys):
         "    config: {nope: 1}\n"
     )
     assert main(["run", "events", "--target", str(t)]) == 100
-    assert "could not build subject" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "could not build subject" in out
+    # neither a pass nor a failure, in the text as in the exit code
+    assert out.startswith("COULD NOT MEASURE  events  target=") and "FAIL" not in out
 
 
-def test_mutants_command(capsys):
+def test_mutants_command(capsys, monkeypatch):
+    # every registered mutant is proved by tests/conform_sweeps/test_conform_mutants.py, and the report runs them all
+    # again (test_report_all_green_on_the_fakes): here only the command is under test, so 'all'
+    # walks two capabilities
+    import homelabnext.conform.cli as cli
+
+    monkeypatch.setattr(cli, "names", lambda extended=False: ["secrets", "idp"])
     assert main(["mutants"]) == 0
     out = capsys.readouterr().out
-    assert out.count("caught") >= 16 and "MISSED" not in out
+    n = len(load_module("secrets").MUTANTS) + len(load_module("idp").MUTANTS)
+    assert out.count("caught") == n and "MISSED" not in out
     assert main(["mutants", "events", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["mutants"][0]["detected"] is True
+
+
+def test_mutants_all_flag_adds_the_extended_suites(capsys, monkeypatch):
+    # 'all' is the core suites; --all adds the extended ones, as `hnx conform list --all` does
+    import homelabnext.conform.cli as cli
+
+    monkeypatch.setattr(cli, "names", lambda extended=False: ["secrets", *(["dns"] * extended)])
+    assert main(["mutants", "--all", "--json"]) == 0
+    caps = {m["capability"] for m in json.loads(capsys.readouterr().out)["mutants"]}
+    assert caps == {"secrets", "dns"}
+    assert main(["mutants", "--json"]) == 0
+    assert {m["capability"] for m in json.loads(capsys.readouterr().out)["mutants"]} == {"secrets"}
+    assert main(["mutants", "dns", "--all"]) == 2, "--all names every suite; it takes no capability"
+    capsys.readouterr()
 
 
 def test_report_all_green_on_the_fakes(capsys):

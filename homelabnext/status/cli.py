@@ -68,7 +68,7 @@ from homelabnext.registry.model import RegistryError, load
 
 from . import catalog
 from .model import parse_iso, sources_from_registry
-from .views import ViewsError, build_status, load_views
+from .views import ViewsError, ViewsUnreadable, build_status, load_views
 
 DEFAULT_REGISTRY = "examples/services.yml"
 DEFAULT_VIEWS = "examples/status/views.yml"
@@ -314,7 +314,7 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             doc = load_views(args.file, reg, specs)
         except ViewsError as exc:
             print(f"hnx status views: {exc}", file=sys.stderr)
-            return 1
+            return 2 if isinstance(exc, ViewsUnreadable) else 1
         print(f"views: ok ({args.file}: {len(doc['menu'])} menu entries)")
         return 0
     from .agents.config import AgentsConfigError

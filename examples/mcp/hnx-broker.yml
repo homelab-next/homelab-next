@@ -28,8 +28,9 @@ tools:
 - {name: finding_write, classes: [record-write], approval: false}
 - {name: memory_write, classes: [record-write], approval: false}
 - {name: proposal_file, classes: [record-write], approval: false}
+acts_via: broker
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:b7cca256c930'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:b7cca256c930'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:b7cca256c930'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7b356f38f5c1'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7b356f38f5c1'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7b356f38f5c1'}

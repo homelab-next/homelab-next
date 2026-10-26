@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/journal_step/1.0",
+  "x-draft": "ADR-0031 (proposed): the runner landed with CM-5b; not frozen, may change before acceptance",
+  "title": "Code Mode step-journal record",
+  "description": "One record of a step of an execution, keyed by (execution_id, step) and bound to the actor and the program (code_digest). The journal is append-only and the latest record for a step is the one that counts: a pending record is followed by the settled one once the approved request runs. On resume the runner serves a settled (ok, denied or error) step instead of calling the broker again only when the actor, the code digest and the step's request digest all match; a mismatch is a different call and is refused, never replayed. A pending step's request is run by its request_id once approved (the approval binds to its digest), never submitted again. Request digests are the broker's (secret arguments enter them keyed with the broker's digest key), so the runner takes them from the broker's answers and never computes them. result is the broker's redacted result, recorded only for an ok step, and result_digest the sha256 of its canonical JSON.",
+  "type": "object",
+  "properties": {
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "code_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "step": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+    },
+    "target": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+    },
+    "request_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "denied",
+        "pending",
+        "error"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "not": {
+        "enum": [
+          "allowed",
+          "approved",
+          "approval-required"
+        ]
+      },
+      "description": "Why the step was denied or failed: the broker's own reason (never a success reason). Calls refused before the broker built a request for them (a token refusal by the sandbox's client or the broker's token check, broker-unreachable, rate-limited) are not journalled, so a resume calls again with its new token."
+    },
+    "result": {},
+    "result_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "recorded_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "execution_id",
+    "actor",
+    "code_digest",
+    "step",
+    "action",
+    "outcome",
+    "recorded_at"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "denied",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "ok",
+              "pending"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "reason"
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "reason": {
+          "not": {
+            "enum": [
+              "token-invalid",
+              "token-sandbox-mismatch",
+              "token-expired",
+              "token-spent",
+              "token-paused",
+              "token-action-not-allowed",
+              "call-cap-reached",
+              "token-request-not-paused",
+              "request-not-approved",
+              "broker-unreachable",
+              "rate-limited",
+              "runner-fault"
+            ]
+          }
+        }
+      },
+      "required": [
+        "request_id",
+        "request_digest"
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "outcome"
+        ]
+      },
+      "then": {
+        "required": [
+          "result",
+          "result_digest"
+        ]
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": {
+            "outcome": {
+              "const": "ok"
+            }
+          },
+          "required": [
+            "outcome"
+          ]
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "result"
+              ]
+            },
+            {
+              "required": [
+                "result_digest"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "dependentRequired": {
+        "result": [
+          "result_digest"
+        ],
+        "result_digest": [
+          "result"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

@@ -4,9 +4,9 @@
 id: bash
 description: Another shell server (bash); the catalog keeps one.
 owner: platform-team
-status: deprecated
-reason: duplicates shell; grant shell instead
-replaced_by: shell
+status: retired
+reason: duplicated shell, and agents run commands only through the broker (ADR-0030); grant hnx-broker and ask for a named action
+replaced_by: hnx-broker
 origin:
   kind: package
   ecosystem: npm

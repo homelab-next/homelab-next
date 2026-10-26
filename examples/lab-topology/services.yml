@@ -67,7 +67,7 @@ services:
     health: {kind: tcp}
     upstreams: [idp]
     owner: platform-team
-    version: "2.8"
+    version: "2.11.7"
     tls: public
     description: Terminates TLS for the published consoles and asks the IdP who is calling.
   detections:

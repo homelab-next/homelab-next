@@ -1,6 +1,8 @@
 ---
 title: records-db
 type: system
+summary: records-db provides the records-db capability (postgresql), owned by data-team.
+summary_generated: true
 service: records-db
 capability: records-db
 impl: postgresql
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.records-db`
+- Registry row (Veritas, ADR-0028): `services.records-db`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 

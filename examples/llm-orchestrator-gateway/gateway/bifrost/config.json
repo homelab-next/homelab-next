@@ -1,0 +1,147 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "source_of_truth": "config.json",
+  "client": {
+    "enforce_auth_on_inference": true,
+    "drop_excess_requests": false,
+    "disable_content_logging": true
+  },
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "/app/data/config.db"
+    }
+  },
+  "logs_store": {
+    "enabled": false
+  },
+  "framework": {
+    "pricing": {
+      "pricing_url": "file:///app/data/pricing.json",
+      "model_parameters_url": "file:///app/data/model-parameters.json",
+      "mcp_library_sync_interval": 0
+    }
+  },
+  "providers": {
+    "hnx-vllm-a": {
+      "keys": [
+        {
+          "id": "hnx-vllm-a-key",
+          "name": "hnx-vllm-a-key",
+          "value": "no-key",
+          "models": [
+            "main-reasoner-a"
+          ],
+          "aliases": {
+            "main-reasoner-a": "example-27b"
+          },
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://vllm-a.svc.example.internal:8000",
+        "default_request_timeout_in_seconds": 120
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai"
+      }
+    },
+    "hnx-vllm-b": {
+      "keys": [
+        {
+          "id": "hnx-vllm-b-key",
+          "name": "hnx-vllm-b-key",
+          "value": "no-key",
+          "models": [
+            "main-reasoner-b"
+          ],
+          "aliases": {
+            "main-reasoner-b": "example-27b"
+          },
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://vllm-b.svc.example.internal:8000",
+        "default_request_timeout_in_seconds": 120
+      },
+      "custom_provider_config": {
+        "base_provider_type": "openai"
+      }
+    }
+  },
+  "governance": {
+    "virtual_keys": [
+      {
+        "id": "vk-gateway-admin",
+        "name": "gateway-admin",
+        "value": "env.HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "hnx-vllm-a",
+            "allowed_models": [
+              "main-reasoner-a"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          },
+          {
+            "provider": "hnx-vllm-b",
+            "allowed_models": [
+              "main-reasoner-b"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          }
+        ]
+      },
+      {
+        "id": "vk-home-vllm-a",
+        "name": "home-vllm-a",
+        "value": "env.HNX_SECRET_LLM_GATEWAY_KEY_HOME_VLLM_A",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "hnx-vllm-a",
+            "allowed_models": [
+              "main-reasoner-a"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          }
+        ]
+      },
+      {
+        "id": "vk-home-vllm-b",
+        "name": "home-vllm-b",
+        "value": "env.HNX_SECRET_LLM_GATEWAY_KEY_HOME_VLLM_B",
+        "is_active": true,
+        "provider_configs": [
+          {
+            "provider": "hnx-vllm-b",
+            "allowed_models": [
+              "main-reasoner-b"
+            ],
+            "key_ids": [
+              "*"
+            ],
+            "weight": 1.0
+          }
+        ]
+      }
+    ],
+    "auth_config": {
+      "admin_username": "admin",
+      "admin_password": "env.HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD",
+      "is_enabled": true
+    }
+  }
+}
