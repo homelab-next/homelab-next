@@ -62,6 +62,7 @@ prefers:
     - interface: sample-handoff
       version: "1.0"
       cardinality: all
+      gate: true
       purpose: files collected by other modules, with their sidecars
       fallback:
         behaviour: the sandbox only takes files a person submits

@@ -274,6 +274,10 @@ def _defs() -> dict[str, Any]:
                     "enum": ["one", "all"],
                     "description": "one (default): exactly one selected module provides it; all: consume every selected provider.",
                 },
+                "gate": {
+                    "type": "boolean",
+                    "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules).",
+                },
                 "purpose": text(200),
             },
             ["interface", "version"],
@@ -334,6 +338,10 @@ def _defs() -> dict[str, Any]:
                 "interface": ref("interface_id"),
                 "version": ref("contract_version"),
                 "cardinality": {"enum": ["one", "all"]},
+                "gate": {
+                    "type": "boolean",
+                    "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules).",
+                },
                 "purpose": text(200),
                 "fallback": ref("fallback"),
             },
@@ -485,12 +493,12 @@ def _defs() -> dict[str, Any]:
                 "schema_id": ref("schema_id"),
                 "gate": {
                     "type": "boolean",
-                    "description": "A gate interface: the consumer's gate validates every item (publishable-output, sample-handoff), so the consumer owns it. The owner of a gate interface consumes it (requires or prefers it) and never provides it: a producer cannot define what its own output is checked against.",
+                    "description": "true: a gate interface, owned by the module whose gate checks every item; that module consumes it with gate: true and never provides it (homelabnext.modules.rules).",
                 },
                 "description": text(300),
             },
             ["id", "version", "kind", "description"],
-            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface (gate: true).",
+            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. A gate interface (gate: true) is owned by the consumer whose gate checks it.",
             oneOf=[{"required": ["schema"]}, {"required": ["schema_id"]}],
         ),
         "interface_provided": obj(
@@ -1226,9 +1234,9 @@ def interface_schema() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/interface/1.0",
-        "x-draft": "ADR-0027 (proposed): an interface definition as a standalone record (follow-up 3); not frozen, may change before acceptance",
+        "x-draft": "ADR-0027 (proposed): the shape of a manifest interfaces: entry, published as a draft schema (follow-up 3); generated from the module manifest's interface_definition, so it changes with it until accepted, then only with a version bump",
         "title": "Interface definition",
-        "description": "One interface a module owns (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a JSON Schema in the owner, or a shipped schema id), and whether it is a gate. Defined once, in the owner's manifest (its interfaces: entries have exactly this shape); a provider references it, never redefines it. The rules a schema cannot state (one owner per id across every manifest, a gate interface owned by a consumer that never provides it, the schema's $id in the owner's namespace) are in homelabnext.modules.rules.",
+        "description": "The shape of one interfaces: entry in the owner's module manifest (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a path relative to the owner's module directory, or a shipped schema id) and whether it is a gate. No loader reads a standalone interface record yet, and this shape names no owner: the rules a schema cannot state (one owner per id, gate ownership, the schema's $id in the owner's namespace) run on manifests, in homelabnext.modules.rules.",
         **body,
         "$defs": {k: copy.deepcopy(defs[k]) for k in sorted(need)},
     }

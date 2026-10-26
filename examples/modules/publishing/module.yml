@@ -49,6 +49,7 @@ prefers:
     - interface: publishable-output
       version: "1.0"
       cardinality: all
+      gate: true
       purpose: every selected module's publishable items, with their TLP sidecars
       fallback:
         behaviour: with no producer selected nothing is published

@@ -229,15 +229,32 @@ def module_problems(
         p = i["via"].get("prefix")
         if p and not p.startswith(mid + "/"):
             out.append(f"interface {i['interface']}: prefix starts with {mid}/")
+    # Gate ownership is per id (every version): the module whose gate checks an interface marks
+    # its consuming entry gate: true, owns the definition (gate: true) and never provides it.
     provided_ids = {i["interface"] for i in doc.get("provides", {}).get("interfaces", [])}
+    defined = {i["id"]: i for i in doc.get("interfaces", [])}
+    gated = _gated_interfaces(doc)
+    for iid in sorted(gated):
+        if iid not in defined:
+            out.append(
+                f"interface {iid}: consumed with gate: true but not defined here; "
+                "the module whose gate checks an interface owns it"
+            )
+        elif not defined[iid].get("gate"):
+            out.append(
+                f"interface {iid}: consumed with gate: true, so its definition says gate: true"
+            )
     for i in doc.get("interfaces", []):
-        if i.get("gate"):  # a gate interface is owned by the consumer whose gate checks it
-            if i["id"] not in _consumed_interfaces(doc):
-                out.append(f"interface {i['id']}: a gate interface is owned by its consumer")
+        if i.get("gate"):
+            if i["id"] not in gated:
+                out.append(
+                    f"interface {i['id']}: a gate interface; its owner requires or prefers it "
+                    "with gate: true"
+                )
             if i["id"] in provided_ids:
                 out.append(
-                    f"interface {i['id']}: a producer never defines the gate interface it is "
-                    "checked against"
+                    f"interface {i['id']}: a gate interface its owner also provides; a producer "
+                    "never defines what its own output is checked against"
                 )
         if "schema" in i:
             try:
@@ -463,6 +480,16 @@ def _consumed_interfaces(doc: Doc) -> set[str]:
     }
 
 
+def _gated_interfaces(doc: Doc) -> set[str]:
+    """The interface ids this module consumes with gate: true (its gate checks every item)."""
+    return {
+        r["interface"]
+        for r in doc["requires"].get("interfaces", [])
+        + doc.get("prefers", {}).get("interfaces", [])
+        if r.get("gate")
+    }
+
+
 def _slot_ref_problems(cap: str, provisional: bool, slots: dict[str, Doc], what: str) -> list[str]:
     name = cap.removeprefix("cap:")
     if name not in slots:
@@ -586,6 +613,19 @@ def tree_problems(
         for k, v in owners.items()
         if len(v) > 1
     ]
+    gate_defs = {i["id"] for m in mods.values() for i in m.get("interfaces", []) if i.get("gate")}
+    for m in mods.values():  # gate ownership across manifests (per id, every version)
+        for iid in sorted(_gated_interfaces(m)):
+            others = sorted(owners.get(iid, set()) - {m["id"]})
+            if others:
+                out.append(f"{m['id']}: gates on interface {iid}, which {others} defines")
+            elif iid in owners and iid not in gate_defs:
+                out.append(
+                    f"{m['id']}: gates on interface {iid}, whose definition lacks gate: true"
+                )
+        for i in m.get("provides", {}).get("interfaces", []):
+            if i["interface"] in gate_defs and m["id"] in owners.get(i["interface"], set()):
+                out.append(f"{m['id']}: provides interface {i['interface']}, a gate it owns")
     for m in mods.values():
         used = [(i["interface"], i["version"]) for i in m.get("provides", {}).get("interfaces", [])]
         used += [

@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/platform/interface/1.0",
-  "x-draft": "ADR-0027 (proposed): an interface definition as a standalone record (follow-up 3); not frozen, may change before acceptance",
+  "x-draft": "ADR-0027 (proposed): the shape of a manifest interfaces: entry, published as a draft schema (follow-up 3); generated from the module manifest's interface_definition, so it changes with it until accepted, then only with a version bump",
   "title": "Interface definition",
-  "description": "One interface a module owns (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a JSON Schema in the owner, or a shipped schema id), and whether it is a gate. Defined once, in the owner's manifest (its interfaces: entries have exactly this shape); a provider references it, never redefines it. The rules a schema cannot state (one owner per id across every manifest, a gate interface owned by a consumer that never provides it, the schema's $id in the owner's namespace) are in homelabnext.modules.rules.",
+  "description": "The shape of one interfaces: entry in the owner's module manifest (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a path relative to the owner's module directory, or a shipped schema id) and whether it is a gate. No loader reads a standalone interface record yet, and this shape names no owner: the rules a schema cannot state (one owner per id, gate ownership, the schema's $id in the owner's namespace) run on manifests, in homelabnext.modules.rules.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -42,7 +42,7 @@
     },
     "gate": {
       "type": "boolean",
-      "description": "A gate interface: the consumer's gate validates every item (publishable-output, sample-handoff), so the consumer owns it. The owner of a gate interface consumes it (requires or prefers it) and never provides it: a producer cannot define what its own output is checked against."
+      "description": "true: a gate interface, owned by the module whose gate checks every item; that module consumes it with gate: true and never provides it (homelabnext.modules.rules)."
     },
     "description": {
       "type": "string",

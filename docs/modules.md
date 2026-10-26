@@ -267,15 +267,27 @@ interface references it in `provides.interfaces` with `via: {cap, instance, pref
 the prefix is in the provider's own namespace and the instance is one it requires. Ownership is per
 **id**, every version included: the loader refuses a second module defining any version of an id
 another module defines, and a reference to a version the owner does not define. The inline
-definition is what exists; [`schemas/platform/interface.schema.json`](../schemas/platform/interface.schema.json)
-(draft, generated from the manifest's definition, so the two cannot drift) is the same shape as a
-standalone record, with the examples' two gate interfaces as its examples.
+definition is what exists: [`schemas/platform/interface.schema.json`](../schemas/platform/interface.schema.json)
+is the shape of a manifest `interfaces:` entry, published as a draft schema with the examples' two
+gate interfaces as its examples. It is generated from the manifest's definition, so it changes with
+it until acceptance. No loader reads a standalone interface record yet, the shape names no owner,
+and its `schema` path is relative to the owner's module directory: the ownership rules run on
+manifests.
 
 **Gate ownership.** A gate interface is owned by the consumer whose gate input the schema is
-(`publishable-output` belongs to publishing, `sample-handoff` to the sandbox) and is marked
-`gate: true`. The rules refuse a gate interface whose owner does not consume it (require or prefer
-it) and one its owner also provides: a producer never defines what its own output is checked
-against. Unselected modules'
+(`publishable-output` belongs to publishing, `sample-handoff` to the sandbox). The gate module
+marks both sides: its consuming `requires` or `prefers` entry carries `gate: true`, and so does its
+definition. The rules refuse, per id and every version:
+
+- a module gating on an interface it does not define (another module owns it), and a gated
+  interface whose definition lacks `gate: true`;
+- a definition marked `gate: true` that its owner does not consume with `gate: true`;
+- a gate interface its owner also provides.
+
+So a producer cannot take over the interface a gate checks: the gate's own entry names it, and the
+gate must own it. What is not covered: an interface nobody marks as a gate, and a gate module that
+consumes a different interface than it should (both are a change to the gate's own manifest, made
+in review). Unselected modules'
 manifests are still read for definitions; only selected ones run. The interface kinds
 `agent-handoff` and `records-prefix` wait for a real module.
 
@@ -966,7 +978,7 @@ Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
 | `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
 | `platform/swap_record` 1.2 | above | **draft schema** `platform/module_swap` 1.0 holds the additions and their rules; the record stays 1.1 until acceptance |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
-| `platform/interface` 1.0 | the owned interface record (inline in the owner's manifest) | **draft schema**, generated from the manifest's definition; `gate` marks a gate interface |
+| `platform/interface` 1.0 | the owned interface record (inline in the owner's manifest) | **draft schema**: the shape of a manifest `interfaces:` entry, generated from it and changing with it until acceptance; no standalone loader; `gate` on the definition and on the gate's consuming entry |
 | `platform/lake_table` 1.0 | owner, schema, retention, maintenance, freshness | **draft schema** |
 | `registers/invariant` 1.1 | ids `^[A-Z]-NN$` **or** `<module id>/<slug>`, never a pillar letter in a module | specified |
 | `platform/service` 2.7 | status source `module` renamed `group`, `module` kept as a deprecated alias for one minor | specified |
@@ -1021,9 +1033,13 @@ listed as deferred.
 2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
    `platform/module_swap` 1.0 and one swap is driven through its rules end to end in a test;
    folding it into the swap record and the swap kit (`hnx swap`) waits for acceptance.
-3. **`platform/interface` 1.0**: implemented as a draft schema generated from the manifest's
-   definition, with `gate` and the rules that a gate interface's owner consumes it and never
-   provides it (see [Interfaces: one owner](#interfaces-one-owner-platforminterface-10-a-draft-schema)).
+3. **`platform/interface` 1.0**: the shape of a manifest `interfaces:` entry, published as a draft
+   schema generated from the manifest's definition (it changes with it until acceptance, then only
+   with a version bump); `gate: true` on the definition and on the gate's consuming entry, with the
+   rules that the gate module owns the interface and never provides it (see
+   [Interfaces: one owner](#interfaces-one-owner-platforminterface-10-a-draft-schema)). Not done:
+   a loader for standalone records (the shape has no owner field), and any check on an interface
+   nobody marks as a gate.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
    outright instead), grants for broker, idp and remote-admin upstreams, cloud-bound model roles,
    and `grants.shared_config` (the rule refuses edge and idp config outright). The review-policy
