@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -97,9 +99,10 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
-    """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}}}}``: what each hypervisor
-    enforces, and what feeds it (``power``, checked against the site by
-    :func:`homelabnext.power.fleet_problems`)."""
+    """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}, capacity: {...},
+    pools: {...}}}}``: what each hypervisor enforces, what feeds it (``power``, checked against
+    the site by :func:`homelabnext.power.fleet_problems`), and what it holds (``capacity`` and
+    ``pools``, checked against its guests by :func:`homelabnext.compute.validate.validate`)."""
     p = Path(path)
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
@@ -117,7 +120,73 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
         out[str(name)] = {"firewall": fw}
         if isinstance(spec, dict) and "power" in spec:
             out[str(name)]["power"] = spec["power"]
+        if isinstance(spec, dict) and "capacity" in spec:
+            out[str(name)]["capacity"] = _capacity(p, name, spec["capacity"])
+        if isinstance(spec, dict) and "pools" in spec:
+            out[str(name)]["pools"] = _pools(p, name, spec["pools"])
     return out
+
+
+def _count(v: Any, *, low: int = 1) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= low
+
+
+def _capacity(p: Path, name: Any, raw: Any) -> dict[str, Any]:
+    """``{threads, memory_mb, reserve: {threads, memory_mb}, cpu_overcommit}``: the logical CPUs
+    and memory the hypervisor schedules, what it keeps for itself (the hypervisor, a ZFS ARC),
+    and how many guest vCPUs it may place on each thread it gives out (default 1.0)."""
+    where = f"{p}: node {name!r}: capacity"
+    if not isinstance(raw, dict) or set(raw) - {
+        "threads",
+        "memory_mb",
+        "reserve",
+        "cpu_overcommit",
+    }:
+        raise ComputeError(f"{where} takes threads, memory_mb, reserve and cpu_overcommit")
+    if not (_count(raw.get("threads")) and _count(raw.get("memory_mb"))):
+        raise ComputeError(f"{where}: threads and memory_mb are positive whole numbers")
+    reserve = raw.get("reserve", {})
+    if (
+        not isinstance(reserve, dict)
+        or set(reserve) - {"threads", "memory_mb"}
+        or not all(_count(v, low=0) for v in reserve.values())
+    ):
+        raise ComputeError(f"{where}.reserve: threads and memory_mb, whole numbers >= 0")
+    ratio = raw.get("cpu_overcommit", 1.0)
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 1 <= ratio <= 16:
+        raise ComputeError(f"{where}.cpu_overcommit: a number from 1 to 16")
+    left = {
+        "threads": raw["threads"] - reserve.get("threads", 0),
+        "memory_mb": raw["memory_mb"] - reserve.get("memory_mb", 0),
+    }
+    if left["threads"] < 1 or left["memory_mb"] < 1:
+        raise ComputeError(f"{where}: the reserve leaves no threads or memory for guests")
+    # the vCPU budget, once: an exact ratio (1.15 is 23/20, not 1.149999...), floored
+    left["vcpus"] = int(Fraction(str(ratio)) * left["threads"])
+    return {**raw, "reserve": reserve, "cpu_overcommit": float(ratio), "for_guests": left}
+
+
+def _pools(p: Path, name: Any, raw: Any) -> dict[str, dict[str, Any]]:
+    """``{pool: {size_gb, media}}``: the storage pools a guest's disks may name on this node."""
+    where = f"{p}: node {name!r}: pools"
+    if not isinstance(raw, dict) or not raw:
+        raise ComputeError(f"{where}: a mapping of pool name to {{size_gb, media}}")
+    out = {}
+    for pool, spec in raw.items():
+        # the names a guest's disk may use (guest schema: disks[].pool)
+        if not isinstance(pool, str) or not _POOL_RE.match(pool):
+            raise ComputeError(f"{where}: pool name {pool!r} is not one a disk can name")
+        if not isinstance(spec, dict) or set(spec) - {"size_gb", "media"}:
+            raise ComputeError(f"{where}.{pool}: takes size_gb and media")
+        if not _count(spec.get("size_gb")):
+            raise ComputeError(f"{where}.{pool}: size_gb is a positive whole number")
+        if spec.get("media", "ssd") not in ("nvme", "ssd", "hdd"):
+            raise ComputeError(f"{where}.{pool}: media is nvme, ssd or hdd")
+        out[pool] = dict(spec)
+    return out
+
+
+_POOL_RE = re.compile(r"^[a-z][a-z0-9_-]*\Z")
 
 
 def load_keys(path: str | Path) -> dict[str, str]:
