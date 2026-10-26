@@ -1,4 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: prune-branches
+#   kind: tool
+#   purpose: Decide which branches are finished (their pull request merged or closed) for the prune-branches workflow to delete.
+#   owner: maintainers
+#   trigger: [ci:prune-branches/prune]
+#   inputs: the API's branch and pull request lists (JSON), the default branch, the repository
+#   outputs: one branch to delete per line; with --keep, the kept branches and why
+#   exit:
+#     "0": decided
+#     "2": unreadable input or an empty default branch
 """Which branches the prune-branches workflow deletes: the ones whose work is over.
 
     python tools/prune_branches.py BRANCHES.json PULLS.json --default main
