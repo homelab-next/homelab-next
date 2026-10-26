@@ -55,3 +55,98 @@ def test_a_name_belongs_to_the_longest_module_id():
     assert mr._owner("external_collector_edge", ids, "_") == "external-collector"
     assert mr._owner("external_edge", ids, "_") == "external"
     assert mr._owner("other_edge", ids, "_") is None
+
+
+# ------------------------------------------------------------- agents act only through the broker
+def _load(path):
+    import yaml
+
+    return yaml.safe_load(Path(path).read_text())
+
+
+def _collector(tmp_path):
+    """A copy of the external-collector example module (its manifest, files and directory)."""
+    import shutil
+
+    mod = tmp_path / "external-collector"
+    shutil.copytree(ROOT / "examples/modules/external-collector", mod)
+    return _load(mod / "module.yml"), mod
+
+
+def _write(path, doc):
+    import yaml
+
+    Path(path).write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_the_example_modules_act_only_through_the_broker():
+    for manifest in sorted((ROOT / "examples/modules").glob("*/module.yml")):
+        assert mr.broker_rule_problems(_load(manifest), manifest.parent, _load) == [], manifest
+
+
+def test_a_module_contributes_no_acting_record_and_no_acts_via(tmp_path):
+    """ADR-0030 for modules, under ADR-0027 (contributes, never authority): a contributed MCP
+    record has no acting tool and declares no acts_via, broker or direct. The review's repro:
+    an exec tool labelled acts_via: broker and listed for the module's own agent."""
+    doc, mod = _collector(tmp_path)
+    probe = mod / "mcp/external-collector-probe.yml"
+    rec = _load(probe)
+    rec["tools"].append({"name": "run_command", "classes": ["exec"], "approval": True})
+    for via in ({}, {"acts_via": "broker"}, {"acts_via": "direct", "direct_reason": "why"}):
+        _write(probe, {**rec, **via})
+        got = mr.broker_rule_problems(doc, mod, _load)
+        assert any("run_command act: a module contributes no authority" in p for p in got), got
+        if via:
+            assert any("declares acts_via" in p for p in got), got
+    agent = doc["contributes"]["agents"][0]
+    agent["tools"].append("external-collector-probe.run_command")
+    spec_path = mod / agent["spec"]
+    spec = _load(spec_path)
+    _write(spec_path, {**spec, "mcp": ["external-collector-probe"]})
+    _write(probe, {**rec, "acts_via": "broker"})
+    got = "\n".join(mr.broker_rule_problems(doc, mod, _load))
+    assert "tool external-collector-probe.run_command acts" in got
+    assert "grants the module's acting MCP record external-collector-probe" in got
+    probs = mr.module_problems(doc, mod, {}, _load, (tmp_path,))
+    assert any("a module contributes no authority" in p for p in probs)
+    # a record with no acting tool and no acts_via passes (the shipped probe)
+    _write(
+        probe, _load(ROOT / "examples/modules/external-collector/mcp/external-collector-probe.yml")
+    )
+    _write(spec_path, spec)
+    agent["tools"].remove("external-collector-probe.run_command")
+    assert mr.broker_rule_problems(doc, mod, _load) == []
+
+
+def test_a_module_record_cannot_declare_an_acting_tool_down(tmp_path):
+    """VERIFY1: the same record with run_command classed read passed both module rules, because
+    "acting" was only what the record declared. Its classes are floored as the catalog's are."""
+    doc, mod = _collector(tmp_path)
+    probe = mod / "mcp/external-collector-probe.yml"
+    rec = _load(probe)
+    rec["tools"].append({"name": "run_command", "classes": ["read"], "approval": False})
+    _write(probe, rec)
+    needle = "tool run_command acts by its name"
+    assert any(needle in p for p in mr.broker_rule_problems(doc, mod, _load))
+    assert any(needle in p for p in mr.module_problems(doc, mod, {}, _load, (tmp_path,)))
+
+
+def test_a_module_agent_holds_no_acting_grant(tmp_path):
+    doc, mod = _collector(tmp_path)
+    agent = doc["contributes"]["agents"][0]
+    spec_path = mod / agent["spec"]
+    spec = _load(spec_path)
+    _write(spec_path, {**spec, "mcp": ["shell"], "capabilities": [*spec["capabilities"],
+                                                                   "cap:hypervisor"],
+                       "tier": "privileged"})  # fmt: skip
+    got = "\n".join(mr.broker_rule_problems(doc, mod, _load))
+    assert "agent external-collector-analyst: profile:external-collector-analyst" in got
+    for needle in ("'shell' (exec)", "'cap:hypervisor' (exec)", "tier 'privileged'"):
+        assert needle in got, needle
+    # even the broker: a module grants its own agent no acting tool, capability or tier
+    _write(spec_path, {**spec, "mcp": ["hnx-broker"], "capabilities": [*spec["capabilities"],
+                                                                        "cap:broker"],
+                       "tier": "execute"})  # fmt: skip
+    got = "\n".join(mr.broker_rule_problems(doc, mod, _load))
+    for needle in ("acting MCP server 'hnx-broker'", "holds cap:broker", "an acting tier"):
+        assert needle in got, needle

@@ -8,9 +8,11 @@ request time so no object holds it.
 Mapping:
 
 * **Versioned values** are KV version 2 (``<mount>/data/<path>``).  ``put`` writes a version and
-  returns its number, ``get`` reads the latest or ``?version=N``, ``delete`` removes the metadata
-  (every version), ``list`` walks ``<mount>/metadata/...?list=true``.  Every path lives under a
-  namespace (``hnx-conform/<random>`` per subject in scratch mode, removed on ``close()``).
+  returns its number, ``get`` reads the latest or ``?version=N`` (N >= 1: KV v2 reads 0 as
+  "latest", so 0 and negative versions are refused as absent before any request), ``delete``
+  removes the metadata (every version), ``list`` walks ``<mount>/metadata/...?list=true``.
+  Every path lives under a namespace (``hnx-conform/<random>`` per subject in scratch mode,
+  removed on ``close()``).
   KV v2 answers 204 to deleting a path that is not there, so ``delete`` reads the metadata first
   to raise ``SecretNotFound``.
 * **Leases.**  KV v2 has no leases: its reads carry no lease id and nothing to revoke.  The
@@ -189,7 +191,17 @@ class OpenBaoStore:
 
     def get(self, path: str, version: int | None = None) -> Secret:
         _check_path(path)
-        q = "" if version is None else f"?version={int(version)}"
+        if version is not None and (
+            not isinstance(version, int) or isinstance(version, bool) or version < 1
+        ):
+            # KV v2 reads ``?version=0`` as "the latest"; the Protocol numbers versions from 1,
+            # so 0 and anything negative name a version that was never written.  Nothing else is
+            # coerced into one: ``int()`` would read True as 1, 1.9 as 1 and "2" as 2, and raise
+            # ValueError/OverflowError for nan/inf instead of the Protocol's error.
+            # name the type, not the value: the version is an arbitrary caller object
+            shown = version if type(version) is int else f"of type {type(version).__name__}"
+            raise SecretNotFound(f"no secret at {path!r} version {shown}")
+        q = "" if version is None else f"?version={version}"
         status, doc = self._call("GET", self._kv("data", path) + q)
         if status == 404:
             raise SecretNotFound(f"no secret at {path!r}" + (f" version {version}" if q else ""))
@@ -255,8 +267,10 @@ class OpenBaoStore:
 
     def lease(self, path: str, ttl: float) -> Lease:
         _check_path(path)
-        if not isinstance(ttl, int | float) or not ttl > 0:
-            raise LeaseError("ttl must be positive")
+        if not isinstance(ttl, int | float) or not math.isfinite(ttl) or not ttl > 0:
+            # refused before anything is written: math.ceil(inf) would raise OverflowError only
+            # after the lease policy was already in place
+            raise LeaseError("ttl must be a positive, finite number of seconds")
         self.get(path)  # SecretNotFound before any token is minted
         self._ensure_policy()
         seconds = max(1, math.ceil(ttl))

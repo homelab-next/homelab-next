@@ -100,10 +100,8 @@ def _raw(path: Path, data: bytes, *, shut: bool = True) -> dict:
                 s.shutdown(socket.SHUT_WR)
         except BrokenPipeError:
             pass
-        out = b""
-        while chunk := s.recv(65536):
-            out += chunk
-    return json.loads(out)
+        # the broker's own client reading: a busy answer may be followed by a reset
+        return json.loads(BrokerClient._receive(s))
 
 
 def _audit(svc: BrokerService, **match) -> list[dict]:
@@ -124,6 +122,9 @@ def test_every_operation_round_trips(broker, tmp_path):
         "proposal.file",
         "service.status",
         "service.restart",
+        "dns.lookup",
+        "dhcp.leases",
+        "hypervisor.guests",
     }
     assert rows["service.restart"]["needs_approval"] is True
     assert rows["memory.write"]["kind"] == "lane" and "name" in rows["memory.write"]["params"]
@@ -159,7 +160,7 @@ def test_every_operation_round_trips(broker, tmp_path):
     assert c.status(rid)["state"] == "done"
 
     # deny
-    rid2 = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid2 = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     assert c.deny(rid2, "sso", "operator-one")["decision"] == "denied"
     broker.as_uid(None)
@@ -213,7 +214,7 @@ def test_the_body_may_not_name_the_actor(broker):
 
 def test_an_agent_cannot_approve_and_a_relay_cannot_act(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     with pytest.raises(Denied) as exc:  # the agent itself, claiming a human
         c.approve(rid, "sso", "operator-one")
     assert exc.value.reason == "not-an-approval-relay"
@@ -227,7 +228,7 @@ def test_an_agent_cannot_approve_and_a_relay_cannot_act(broker):
 
 def test_relay_approvals_obey_the_approver_rules(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 1})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 1}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     cases = [
         (("sso", "someone-else"), "approval-approver-not-allowed"),
@@ -330,7 +331,7 @@ def test_a_full_server_answers_busy(tmp_path):
 
 def test_concurrent_runs_of_one_approved_request_run_it_once(broker):
     c = BrokerClient(broker.path)
-    rid = c.submit("service.restart", {"grace_s": 2})["request_id"]
+    rid = c.submit("service.restart", {"grace_s": 2}, target="svc:queue")["request_id"]
     broker.as_uid(RELAY_UID)
     c.approve(rid, "sso", "operator-one")
     broker.as_uid(None)
@@ -406,6 +407,37 @@ def test_an_unknown_peer_is_answered_without_holding_its_slot(tmp_path):
         # its slot comes back well before the 3 s read deadline: it is never held for one
         assert slots.freed.wait(2), "the answered stranger kept its slot"
         assert _raw(srv.path, b'{"op": "actions"}\n')["ok"] is True
+
+
+def _answered_then_reset() -> socket.socket:
+    """A client socket whose server sent a whole reply line and then closed without reading the
+    request: the kernel delivers the reply and then reports a reset, not an end of file.  This is
+    the busy path when the request lands after the broker's non-blocking drain (a race that made
+    the relay test below fail now and then)."""
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    busy = {"ok": False, "error": "busy", "message": "too many connections"}
+    server.sendall(json.dumps(busy).encode() + b"\n")
+    server.shutdown(socket.SHUT_WR)
+    client.sendall(b'{"op": "actions"}\n')  # lands unread in the server's queue
+    server.close()  # closing with unread data resets the peer
+    client.settimeout(5)
+    return client
+
+
+def test_a_whole_answer_followed_by_a_reset_is_the_answer():
+    with _answered_then_reset() as sock:
+        assert json.loads(BrokerClient._receive(sock))["error"] == "busy"
+
+
+def test_a_reset_before_a_whole_answer_is_still_a_transport_error():
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    with client:
+        server.sendall(b'{"ok": false, "err')  # half a line
+        client.sendall(b"x\n")
+        server.close()
+        client.settimeout(5)
+        with pytest.raises(ConnectionResetError):
+            BrokerClient._receive(client)
 
 
 def test_agents_cannot_starve_the_approval_relay(tmp_path):
@@ -551,7 +583,7 @@ def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
     svc = _service(tmp_path)
     peers = PeerMap(svc.manifest)
     limiter = RefusalLimiter(3, 60, clock=_Clock())
-    rid = svc.submit("profile:triage", "service.status", {})
+    rid = svc.submit("profile:triage", "service.status", {}, target="svc:queue")
     svc.cancel("profile:triage", rid)
     before = len(svc.audit_documents())
     errors = [
@@ -650,7 +682,16 @@ def test_cli_over_the_socket(broker, cli, tmp_path):
     s = str(broker.path)
     note = '{"name":"cli.md","content":"x"}'
     assert cli("call", "memory.write", "--socket", s, "--params", note)["result"]["bytes"] == 1
-    rid = cli("submit", "service.restart", "--socket", s, "--params", '{"grace_s": 1}')
+    rid = cli(
+        "submit",
+        "service.restart",
+        "--socket",
+        s,
+        "--target",
+        "svc:queue",
+        "--params",
+        '{"grace_s": 1}',
+    )
     rid = rid["request_id"]
     assert cli("pending", "--mine", "--socket", s)[0]["request_id"] == rid
     assert cli("actions", "--socket", s)["caller"] == "profile:triage"

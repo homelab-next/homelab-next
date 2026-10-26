@@ -1,6 +1,8 @@
 ---
 title: edge-proxy
 type: system
+summary: edge-proxy provides the edge-proxy capability (caddy), owned by platform-team.
+summary_generated: true
 service: edge-proxy
 capability: edge-proxy
 impl: caddy
@@ -22,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `edge-proxy`
 - Contract: none (`edge-proxy` is not one of the conformance capabilities)
-- Implementation: `caddy` 2.8.4
+- Implementation: `caddy` 2.11.7
 - Owner: platform-team
 - Tags: core, edge
 <!-- /hnx:gen -->
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.edge-proxy`
+- Registry row (Veritas, ADR-0028): `services.edge-proxy`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

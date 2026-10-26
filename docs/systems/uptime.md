@@ -1,6 +1,8 @@
 ---
 title: uptime
 type: system
+summary: uptime provides the uptime capability (uptime-kuma), owned by platform-team.
+summary_generated: true
 service: uptime
 capability: uptime
 impl: uptime-kuma
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.uptime`
+- Registry row (Veritas, ADR-0028): `services.uptime`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

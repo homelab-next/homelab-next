@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:bus-1
+description: "The event bus every producer publishes to."
+kind: vm
+provisioning: terraform
+placement: {node: main-1, vmid: 140}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 100, pool: write}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+# the deploy account Ansible logs in as: passwordless sudo is the explicit opt-in for automation
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], sudo: nopasswd}
+network: {zone: data, ip: 192.0.2.140}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: bus-services, proto: tcp, ports: "4222", source: "zone:services"}
+    - {name: bus-sandbox, proto: tcp, ports: "4222", source: "zone:sandbox"}
+capability: cap:events
+tags: [prod]
+owners: {primary: platform-team}

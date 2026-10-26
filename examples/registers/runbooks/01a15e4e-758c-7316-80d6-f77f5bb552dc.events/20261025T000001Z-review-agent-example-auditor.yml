@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: agent:example-auditor
+kind: agent
+role: audit
+date: '2026-10-25'
+verdict: pass
+digest: sha256:edbcc5f5ae58362dd0164969c2818f6202d65d57dd59d3c73ac13c605f608ba7
+note: fictional example review (the record now carries its summary, ADR-0032)

@@ -89,6 +89,7 @@ GEN_USAGE = """usage: hnx gen {registry,check,fleet-units,gateway,list} ...
   fleet-units SPEC OUT_DIR                  render systemd units from a fleet_units spec
   gateway render SPEC OUT_DIR [--check]     LiteLLM + Bifrost config from the model-role table
   gateway provision KEYS_JSON               create LiteLLM virtual keys on a running proxy
+  gateway homes --roles ROLES HOME...       no HERMES_HOME names an IP or an engine model id
   list                                      list generator names
 """
 
@@ -130,7 +131,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     ),
     "registers": (
         "lessons/runbooks/invariants: build pages, split|join record files, links blocks, review, "
-        "events (migrate|add), decide transitions",
+        "summaries lint, events (migrate|add), decide transitions",
         _registers,
     ),
     "invariants": ("run the standing invariants (invariants run)", _invariants),
@@ -170,12 +171,17 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.models.cli").main(a),
     ),
     "golden": (
-        "golden tasks and model pins: run|pins check|pins report",
+        "golden tasks and model pins: run|pins check|pins report|codemode (Code Mode against "
+        "classic MCP mode, both against the fakes; CM-6)",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
     "site": ("the site/network model: validate|plan|render|ir|adapters", _site),
     "guests": ("validate/render/plan the guest (compute) model; baselines coverage", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
+    "secrets": (
+        "the credentials a lab names: plan (list them) | seed (create the missing ones in OpenBao)",
+        lambda a: importlib.import_module("homelabnext.secretseed.cli").main(a),
+    ),
     "swap": (
         "run the swap procedure (plan|start|status|advance|rollback|record)",
         lambda a: importlib.import_module("homelabnext.swap.cli").main(a),
@@ -189,7 +195,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.decommission.cli").main(a),
     ),
     "docs": (
-        "generate/check docs: systems (one SOP page per service), capabilities (contract reference)",
+        "generate/check docs: systems (one SOP page per service), capabilities (contract reference), index (docs/README.md descriptions from page summaries)",
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
     "agent": (
@@ -227,6 +233,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "the broker: validate|serve|relay|mcp|actions|call|submit|status|run|cancel|approve|deny|"
         "pending|audit|import-proposals",
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
+    ),
+    "codemode": (
+        "Code Mode (ADR-0031): gen (the per-profile stubs and search index; --check for drift)|"
+        "mcp (the codemode_search and codemode_describe tools)",
+        lambda a: importlib.import_module("homelabnext.codemode.cli").main(a),
     ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",

@@ -53,6 +53,23 @@ class ReaderViolation(AgentError):
         )
 
 
+class BrokerViolation(AgentError):
+    """A profile holds a grant that acts other than through the broker (checklist G-13,
+    ADR-0030): an acting MCP server whose record is not ``acts_via: broker`` (or an exempted
+    ``direct`` one), an acting capability other than ``cap:broker``, or an acting tier without
+    ``cap:broker``."""
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__(
+            "profile acts other than through the broker: "
+            + "; ".join(self.problems)
+            + " (agents act only through the broker: grant hnx-broker and cap:broker and ask for "
+            "a named broker action; a direct exception is a reviewed record and a ceiling "
+            "policy direct_mcp entry)"
+        )
+
+
 class CatalogViolation(AgentError):
     """The profile names MCP servers the MCP catalog does not allow it (ADR-0024): unknown,
     retired or draft, or local-only data for a profile that may use a cloud model."""

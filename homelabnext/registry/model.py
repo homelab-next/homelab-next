@@ -32,6 +32,10 @@ class RegistryError(Exception):
         super().__init__(message + detail)
 
 
+class RegistryUnreadable(RegistryError):
+    """The registry file cannot be read, decrypted or parsed: bad input, not an invalid registry."""
+
+
 # refuses duplicate mapping keys (a silent override is a bug); homelabnext.swap.flip uses it too
 _UniqueKeyLoader = UniqueKeyLoader
 
@@ -498,7 +502,7 @@ def loads(text: str) -> Registry:
     try:
         doc = yaml.load(text, Loader=_UniqueKeyLoader)
     except yaml.YAMLError as exc:
-        raise RegistryError(f"registry is not valid YAML: {exc}") from exc
+        raise RegistryUnreadable(f"registry is not valid YAML: {exc}") from exc
     return build_registry(doc)
 
 
@@ -507,7 +511,7 @@ def load(path: str | Path) -> Registry:
     try:
         text = sops.read_text(p)
     except OSError as exc:
-        raise RegistryError(f"cannot read registry {p}: {exc}") from exc
+        raise RegistryUnreadable(f"cannot read registry {p}: {exc}") from exc
     except sops.SopsError as exc:
-        raise RegistryError(str(exc)) from exc
+        raise RegistryUnreadable(str(exc)) from exc
     return loads(text)

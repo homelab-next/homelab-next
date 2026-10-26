@@ -8,7 +8,7 @@
 #   trigger: [ci:ci/coverage, make:coverage]
 #   invariant: [Q-07]
 #   inputs: the units listed in this file and their tests (runs pytest with coverage)
-#   outputs: a per-unit coverage table; --json FILE writes it as JSON
+#   outputs: a per-unit coverage table (--json FILE evaluates an existing coverage json report instead)
 #   exit:
 #     "0": every unit at or above the floor
 #     "1": some unit below it or not measured
@@ -16,10 +16,13 @@
 """Gate: the security-critical code keeps at least 80% line coverage from its own tests.
 
 Each unit below is measured by the tests that exist for it (not by the whole suite, so a unit
-cannot ride on coverage some unrelated test happens to give it) and must reach ``FLOOR`` percent
-of its statements on its own; one aggregate number would let a well-covered package hide a
-poorly covered one.  Raising a unit's coverage is always fine; lowering ``FLOOR`` or dropping a
-unit is a reviewed change to this file.
+cannot ride on coverage some unrelated test happens to give it): units are grouped by the tests
+they name, and each group runs in its own pytest with coverage of its own units only.  Units
+that name the same tests share a group: the four ``homelabnext/status`` units are all measured
+by ``tests/status``, the package's tests, so they can credit each other.  Each unit must reach
+``FLOOR`` percent of its statements on its own; one aggregate number would let a well-covered
+package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's
+coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed change to this file.
 
 * ``homelabnext/broker``  -- the broker decision evaluator (grants, tiers, approvals) and the
   reference service (lanes, pinned handlers, durable single-use approvals)
@@ -37,9 +40,14 @@ unit is a reviewed change to this file.
 * ``homelabnext/mcp``              -- the read-only MCP server: path refusal, scope intersection
 * ``homelabnext/status/agents/auth.py``   -- the status hub's private-tier front door + access log
 * ``homelabnext/status/agents/ingest.py`` -- the agent-activity push ingest (tokens, limits)
+* ``homelabnext/status/approvals.py`` -- the hub's approval write path (CSRF, origin, digests)
+* ``homelabnext/status/serve.py``     -- the hub's HTTP server (host and origin checks, tiers)
+* ``homelabnext/generators/safe.py``  -- the control-character and injection backstop of generators
+* ``tools/leak_scan.py``              -- the leak and secret scan (F-05, F-18)
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
-  --json FILE  evaluate an existing ``coverage json`` report instead of running the tests
+  --json FILE  evaluate one existing ``coverage json`` report for every unit instead of running
+               the tests
 Exit: 0 every unit at or above the floor, 1 some unit below it (or not measured at all),
 2 the tests failed or the report could not be produced.
 """
@@ -55,7 +63,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FLOOR = 80.0
-REPORT = REPO_ROOT / "build" / "coverage-security.json"
+REPORT_DIR = REPO_ROOT / "build" / "coverage-security"
 
 # unit (a package directory or one module) -> the tests that exercise it
 UNITS: dict[str, tuple[str, ...]] = {
@@ -74,11 +82,27 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/mcp": ("tests/mcp",),
     "homelabnext/status/agents/auth.py": ("tests/status",),
     "homelabnext/status/agents/ingest.py": ("tests/status",),
+    "homelabnext/status/approvals.py": ("tests/status",),
+    "homelabnext/status/serve.py": ("tests/status",),
+    "homelabnext/generators/safe.py": ("tests/generators",),
+    "tools/leak_scan.py": ("tools/tests/test_leak_scan.py",),
 }
 
 
-def _module(unit: str) -> str:
-    return unit.removesuffix(".py").replace("/", ".")
+def _cov_target(unit: str) -> str:
+    """What ``--cov`` measures for a unit: its package or module, or (a tool, not importable as
+    a package) the directory it lives in, which ``per_unit`` then narrows to the file."""
+    if unit.startswith("homelabnext/"):
+        return unit.removesuffix(".py").replace("/", ".")
+    return Path(unit).parent.as_posix()
+
+
+def groups(units: dict[str, tuple[str, ...]] = UNITS) -> dict[tuple[str, ...], list[str]]:
+    """The units measured together: those naming the same tests share one pytest run."""
+    out: dict[tuple[str, ...], list[str]] = {}
+    for unit, tests in units.items():
+        out.setdefault(tuple(tests), []).append(unit)
+    return out
 
 
 def per_unit(report: dict, units: dict[str, tuple[str, ...]] = UNITS) -> dict[str, float | None]:
@@ -118,14 +142,18 @@ def below_floor(coverage: dict[str, float | None], floor: float = FLOOR) -> list
 COVERAGE_BUDGET_SCALE = "2"
 
 
-def run_tests(report: Path) -> int:
+def run_tests(report: Path, tests: tuple[str, ...], units: list[str]) -> int:
+    """Run ``tests`` under coverage of ``units`` only, writing a json report to ``report``."""
     report.parent.mkdir(parents=True, exist_ok=True)
-    paths = sorted({t for tests in UNITS.values() for t in tests})
+    # Python subprocesses the tests start (a CLI run as a program) are measured too: coverage's
+    # `patch = subprocess` (coverage >= 7.10), which pytest-cov 7 leaves to coverage itself
+    rc = report.with_suffix(".coveragerc")
+    rc.write_text("[run]\npatch = subprocess\n")
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not live"]
-    cmd += [f"--cov={_module(u)}" for u in UNITS]
-    cmd += ["--cov-report=", f"--cov-report=json:{report}", *paths]
+    cmd += [f"--cov={t}" for t in dict.fromkeys(_cov_target(u) for u in units)]
+    cmd += [f"--cov-config={rc}", "--cov-report=", f"--cov-report=json:{report}", *tests]
     # the data file goes under build/ with the report, not into the working tree
-    env = {**os.environ, "COVERAGE_FILE": str(report.parent / ".coverage-security")}
+    env = {**os.environ, "COVERAGE_FILE": str(report.with_suffix(".coverage"))}
     # tracing slows every test, so the per-suite time budgets are scaled as tests/suite_policy.py
     # intends for a coverage run; an explicit HNX_SUITE_BUDGET_SCALE still wins
     env.setdefault("HNX_SUITE_BUDGET_SCALE", COVERAGE_BUDGET_SCALE)
@@ -137,18 +165,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--floor", type=float, default=FLOOR)
     ap.add_argument("--json", type=Path, help="an existing coverage json report to evaluate")
     args = ap.parse_args(argv)
-    report_path = args.json
-    if report_path is None:
-        report_path = REPORT
-        if run_tests(report_path) != 0:
-            print("coverage_floor: the tests failed; coverage not evaluated", file=sys.stderr)
+    if args.json is not None:
+        plan = [(args.json, None, list(UNITS))]  # one report, every unit
+    else:
+        plan = [
+            (REPORT_DIR / f"group-{n}.json", tests, units)
+            for n, (tests, units) in enumerate(groups().items())
+        ]
+    coverage: dict[str, float | None] = {}
+    for report_path, tests, units in plan:
+        if tests is not None and run_tests(report_path, tests, units) != 0:
+            print(
+                f"coverage_floor: the tests failed ({' '.join(tests)}); coverage not evaluated",
+                file=sys.stderr,
+            )
             return 2
-    try:
-        report = json.loads(report_path.read_text())
-    except (OSError, ValueError) as exc:
-        print(f"coverage_floor: cannot read {report_path}: {exc}", file=sys.stderr)
-        return 2
-    coverage = per_unit(report)
+        try:
+            report = json.loads(report_path.read_text())
+        except (OSError, ValueError) as exc:
+            print(f"coverage_floor: cannot read {report_path}: {exc}", file=sys.stderr)
+            return 2
+        coverage.update(per_unit(report, dict.fromkeys(units, ())))
     for unit, pct in sorted(coverage.items()):
         print(f"  {unit:<34} {'-' if pct is None else f'{pct:5.1f}%'}")
     problems = below_floor(coverage, args.floor)

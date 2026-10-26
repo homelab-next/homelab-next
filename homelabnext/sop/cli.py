@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx docs systems generate|check|template REGISTRY [DIR]`` and ``hnx docs capabilities``.
 
+``hnx docs index generate|check [FILE]`` fills or checks the page summaries in ``docs/README.md``
+(see :mod:`homelabnext.sop.index`).
+
 ``hnx docs capabilities generate|check [--out DIR] [--registry FILE] [--root CHECKOUT]`` renders or
 checks ``docs/capabilities/`` (see :mod:`homelabnext.sop.capabilities`).
 
@@ -79,12 +82,56 @@ def _mcp_catalog(option: str | None, registry: str):
     return servers.load(path)
 
 
+def index_main(argv: list[str]) -> int:
+    from . import index
+
+    ap = argparse.ArgumentParser(
+        prog="hnx docs index",
+        description="fill or check the page summaries in docs indexes (default docs/README.md) "
+        "from the pages' front matter",
+    )
+    ap.add_argument("cmd", choices=["generate", "check"])
+    ap.add_argument("files", nargs="*", default=["docs/README.md"], metavar="file")
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    paths = [Path(f) for f in args.files]
+    for path in paths:
+        if not path.is_file():
+            print(f"hnx docs index: {_shown(path)}: no such file", file=sys.stderr)
+            return 2
+    return max(_index_one(index, args.cmd, path) for path in paths)
+
+
+def _index_one(index, cmd: str, path: Path) -> int:
+    if cmd == "generate":
+        changed, problems = index.generate(path)
+        for line in problems:
+            print(f"FAIL {line}")
+        print(
+            f"docs index: {'FAIL' if problems else 'written' if changed else 'unchanged'}"
+            f" ({_shown(path)})"
+        )
+        return 1 if problems else 0
+    lines = index.check(path)
+    for line in lines:
+        print(f"FAIL {line}")
+    if lines:
+        print(f"docs index: FAIL ({_shown(path)}); run `hnx docs index generate`")
+        return 1
+    print(f"docs index: ok ({_shown(path)})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["capabilities"]:
         return capabilities_main(argv[1:])
+    if argv[:1] == ["index"]:
+        return index_main(argv[1:])
     ap = argparse.ArgumentParser(prog="hnx docs", description="generate and check documentation")
-    ap.add_argument("topic", choices=["systems", "capabilities"])
+    ap.add_argument("topic", choices=["systems", "capabilities", "index"])
     ap.add_argument("cmd", choices=["generate", "check", "template"])
     ap.add_argument("registry", nargs="?")
     ap.add_argument("dir", nargs="?", default="docs/systems")

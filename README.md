@@ -15,7 +15,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 > linter, detections as code, register and invariant tooling, shared libraries with in-memory fakes
 > (lake, notify, state, records, decision cascade, golden tasks), the site/network, guest/compute
 > and customization models, the **swap kit** (`hnx swap`, parity tools), the **conformance harness**
-> (`hnx conform`, 16 capability suites) and the **lab-in-a-box** compose environment. All of it is
+> (`hnx conform`, 18 capability suites) and the **lab-in-a-box** compose environment. All of it is
 > proven by unit tests, golden files and fakes on a laptop or CI runner. **Nothing has been tested
 > on real hardware or against a live deployment**; the only thing that has run against real
 > containers is the lab-in-a-box smoke test, on a laptop-class host. Parts that need a real server
@@ -25,7 +25,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 
 * `hnx registry|site|guests validate` and `hnx gen`: check the synthetic lab and render artefacts
   from it (resolver config, Terraform, cloud-init, Ansible inventory, network configs) against goldens.
-* `hnx conform list|run|mutants|report`: 16 capability suites run against a built-in fake, against a
+* `hnx conform list|run|mutants|report`: 18 capability suites run against a built-in fake, against a
   deliberately broken fake (every suite must catch its mutants) or against your own adapter named in
   a target file; `hnx conform report --json` lists capabilities without a passing test (invariant X-10).
 * `hnx swap plan|start|status|advance|rollback|record`: the nine-step swap procedure with gates,
@@ -36,7 +36,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 * `make lab-smoke`: a pinned Docker Compose stack within a 4 GB budget, checked service by service
   (needs Docker; the compose smoke on a laptop-class host is the only live test so far).
 * `make check`: lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog and a
-  conformance coverage check that fails if any of the 16 capabilities lacks a passing test.
+  conformance coverage check that fails if any of the 18 capabilities lacks a passing test.
 
 ## The capabilities and their seams
 
@@ -49,6 +49,8 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
 | `cases`, `records`, `detections` | case round-trip, propose/approve/complete, Sigma + fixtures | lifecycle and fixture runs |
 | `context` | scoped retrieval over the knowledge graph for agents | scope, inactive-record, ranking and stale-copy checks |
 | `projects` | projects, steps and tasks under board rules, linked to strategy records by uid | board-rule, idempotency, version-conflict and change-feed checks |
+| `codemode-executor` | one Code Mode program in a fresh sandbox that reaches only the broker (ADR-0031) | egress, credential, limit, disposability and result-bound checks |
+| `codemode-runner` | the handler of `codemode.execute`: every call a program makes is a broker request with the run's token (ADR-0031) | result-shape, denial, journal, pause, resume-without-replay, replay-mismatch, denied-pause and call-cap checks |
 
 The authoritative list and the Python interfaces are in [docs/interfaces.md](docs/interfaces.md).
 The vocabulary is in [docs/glossary.md](docs/glossary.md).
@@ -66,7 +68,7 @@ pip install -e ".[dev]"
 make check          # lint, tests, schemas, gates, detections, registers, SPDX, leak scan, conformance coverage, changelog
 hnx --help          # registry, new, gen, detections, registers, invariants, ids, decide, golden, site, guests, swap, conform, custom, schema-check
 hnx registry validate examples/services.yml
-hnx conform list                      # the 16 capabilities and their suites (needs a checkout)
+hnx conform list                      # the 18 capabilities and their suites (needs a checkout)
 hnx conform run lake-query --target fake
 hnx swap plan                         # the nine steps, their gates and evidence
 ```
@@ -76,12 +78,13 @@ The package is not on PyPI yet; install the wheel attached to a [GitHub release]
 profiles and a minimal example lab (`examples/minimal/`) inside the package, so `hnx site validate`,
 `hnx guests validate`, `hnx registry validate`, `hnx custom list` and `hnx swap plan` work without a
 checkout (the conformance suites, `compose/` and `tools/` stay in the source tree: from a wheel,
-`hnx conform list` names the 16 capabilities and says no suite is installed). An
+`hnx conform list` names the 18 capabilities and says no suite is installed). An
 editable install (`pip install -e .`) reads the same directories from the checkout instead. Every
 lookup goes through `homelabnext/paths.py`: an explicit override (`HNX_SCHEMAS_DIR`,
 `HNX_PROFILES_DIR`, `HNX_EXAMPLES_DIR`, or `HNX_DATA_DIR` for all three), then the packaged copy,
 then the source tree; a miss prints every place that was tried. The top-level `schemas/`,
-`profiles/` and `examples/` stay the single source of truth (the build copies them into the wheel,
+`profiles/` and `examples/` stay the single source of truth (part of Veritas,
+[ADR-0028](docs/adr/0028-veritas-single-source-of-truth.md); the build copies them into the wheel,
 and a test fails if the copy ever differs). The developer gates under `tools/` (`hnx schema-check`,
 `hnx new` linting) still need a checkout.
 
@@ -126,7 +129,7 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/private-overlay.md](docs/private-overlay.md) | the public/private split: a real lab in a private overlay repository, credentials in OpenBao, deploys dispatched by hand from an Actions Environment (skeleton: `examples/private-overlay/`) |
 | `schemas/` | JSON Schemas (ids, events, records, registers, platform, OCSF subsets) with examples, negative cases and frozen baselines |
 | `examples/` | synthetic lab: `services.yml` registry, example registers and the minimal example lab (`examples/minimal/`) |
-| `conformance/`, `capabilities.yml` | the 16 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
+| `conformance/`, `capabilities.yml` | the 18 capability suites (protocol, fake, broken twin, pytest glue), target files, and the list of capabilities the tree declares ([docs/conformance.md](docs/conformance.md)) |
 | `compose/` | the lab-in-a-box reference environment (not shipped in the wheel) |
 | [docs/agent.md](docs/agent.md) | agent profile compiler, context packs and the broker contracts (`hnx agent`, `schemas/agent/`, `schemas/broker/`) |
 | [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
@@ -156,10 +159,10 @@ fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions
 
-Twelve architecture decision records live in [docs/adr/](docs/adr/README.md): schemas in git,
-registry and DNS aliases, shared libraries, role interface, swap procedure, detections as code,
-model roles, export hooks, bus placement, records lifecycle, the public/private split, and the
-deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
+31 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
+line for each. The first twelve cover schemas in git, registry and DNS aliases, shared libraries,
+role interface, swap procedure, detections as code, model roles, export hooks, bus placement,
+records lifecycle, the public/private split, and the deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by
 the same commands, credentials in OpenBao, deploys dispatched by hand from an Actions Environment) is
 [ADR-0021](docs/adr/0021-public-and-private-repositories.md), with the full guide in
 [docs/private-overlay.md](docs/private-overlay.md).
@@ -172,4 +175,4 @@ the same commands, credentials in OpenBao, deploys dispatched by hand from an Ac
 
 ## Licence
 
-Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every source file carries an SPDX header.
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Every Python, shell, YAML, TOML, Go and Jinja template file carries an SPDX header (`tools/check_spdx.py`).

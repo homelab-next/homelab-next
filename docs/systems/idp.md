@@ -1,6 +1,8 @@
 ---
 title: idp
 type: system
+summary: idp provides the idp capability (authentik), owned by identity-team.
+summary_generated: true
 service: idp
 capability: idp
 impl: authentik
@@ -102,7 +104,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.idp`
+- Registry row (Veritas, ADR-0028): `services.idp`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 

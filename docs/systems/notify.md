@@ -1,6 +1,8 @@
 ---
 title: notify
 type: system
+summary: notify provides the notify capability (ntfy), owned by platform-team.
+summary_generated: true
 service: notify
 capability: notify
 impl: ntfy
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.notify`
+- Registry row (Veritas, ADR-0028): `services.notify`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

@@ -1,3 +1,7 @@
+---
+summary: Contracts are JSON Schema files in git, vendor schemas are pinned, and schemas evolve additively only.
+summary_of: outline:sha256:45d346fa6c32983a
+---
 # ADR-0001: Contracts live in `schemas/` in git, vendor schemas are pinned, and evolution is additive-only
 
 - **Status:** proposed

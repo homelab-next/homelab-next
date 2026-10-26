@@ -1,3 +1,7 @@
+---
+summary: 'The MCP catalog, one record per MCP server: the record, fatal rules, adding a server, instances, rendering client configs, importing a lab and reviews.'
+summary_of: outline:sha256:647464bd0bd26d9b
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The MCP catalog: one list of MCP servers
 
@@ -6,7 +10,7 @@ MCP servers is generated from it: the capability classes the agent compiler and 
 judge, the knowledge graph's `mcp:` nodes, the MCP line of the system pages, the status hub's
 **MCP servers** page, and every client configuration an agent runtime reads. The decision is
 [ADR-0024](adr/0024-mcp-catalog-single-source.md); the schema is
-`schemas/platform/mcp_server.schema.json` (1.0); the code is `homelabnext/mcp/servers.py` (records
+`schemas/platform/mcp_server.schema.json` (1.1); the code is `homelabnext/mcp/servers.py` (records
 and checks), `clients.py` (rendering), `importer.py` (import) and `catalog_cli.py`.
 
 ## What lives where now
@@ -53,12 +57,23 @@ implements: [cap:context]        # homelab-next contracts it implements (its con
 tools:
 - {name: read_note, classes: [read], approval: false}
 - {name: write_note, classes: [record-write], approval: false}
+# acts_via: broker | direct      # 1.1: required with an exec, file-write, send or credential tool
+# direct_reason: ...             # with acts_via: direct, and only then
 author: agent:example-builder
 reviews: [...]                   # check, audit, approve (homelabnext.reviews)
 ```
 
 The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-write`, `egress`,
-`credential`. A server's classes are the union of its tools'.
+`send`, `credential`. A server's classes are the union of its tools'.
+
+A server with an **acting** tool (a class in the table's `broker_only`: `exec`, `file-write`,
+`send`, `credential`) says how it acts (1.1, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md)):
+`acts_via: broker` only on the broker's own front (`hnx-broker`, checked structurally against
+`homelabnext/broker/mcp_tools.py`), else `acts_via: direct` with a `direct_reason`. Agents act only through the broker, so a profile holds a direct server
+only as an exception: a current human approve review of the record plus the ceiling policy's
+`direct_mcp` entry for that profile ([agent profiles](agent.md), G-13). `approval: true` means the
+broker grants an approval; a client's confirmation prompt is not one, so only a broker server
+marks an acting tool `approval: true`.
 
 ## The rules (`hnx mcp catalog check`, fatal)
 
@@ -222,14 +237,29 @@ entry N)`.
 - `reason` and `replaced_by` appear only on a deprecated or retired record, and `replaced_by`
   names an active server; `implements` names a homelab-next capability contract
   (a conformance capability), so the graph ties the server to that contract's suite;
+- an `active` or `deprecated` record with an acting tool (`broker_only` class) declares
+  `acts_via` (`direct` with a `direct_reason`), only the broker's own front (fixed in code: id,
+  origin, launch and its exact tools) may say `acts_via: broker`, and only it marks an acting tool
+  `approval: true` (ADR-0030);
+- classes are floored in code, not only declared: a record of known acting software (by a word
+  of what it launches, its package, image, bins, git repo or hosted provider, not its id: ssh,
+  shells, kubernetes, ansible, docker, filesystem, git, a secret store, chat or mail senders) has
+  a tool in that class; a tool whose first verb acts (run, exec, apply, deploy, delete, send,
+  publish, trigger, click, type...; `createIssue` is split at its camelCase) carries an acting
+  class; a tool whose first verb writes (create, update, write...) is `file-write`, or
+  `record-write` only on a record that fronts a capability the class table classes
+  `record-write` (`capabilities` or `implements`: an API that validates what it writes; a label
+  such as `cap:metrics` is not one); a tool whose first verb reads (`get_commit`,
+  `list_open_alerts`) is a read by its name. A module's contributed records are floored the same;
 - with the review policy: an `active` record carries current agent check, agent audit and human
   approve reviews (`mcp-server.active` in `examples/review-policy.yml`; `hnx reviews digest
   examples/mcp/<id>.yml` gives the digest to stamp);
 - every agent profile and context manifest in the checkout (or `--grants PATH...`) grants only
   catalog ids whose status is `active` or `deprecated` (an allowlist: `draft`, `retired` and
   anything else are refused), of a server with a known `data_tier`, never a `local-only` server to a
-  profile whose `data_tier` is not `local-only`, and a reader holds no exec, file-write, egress or
-  credential server. A `deprecated` grant passes with a note pointing at the record's reason and
+  profile whose `data_tier` is not `local-only`, a reader holds no exec, file-write, egress or
+  credential server, and no profile holds an acting server that does not act through the broker
+  unless it is a reviewed direct exception its ceiling policy lists (G-13). A `deprecated` grant passes with a note pointing at the record's reason and
   naming its `replaced_by`. The compiler, `hnx agent verify`, `hnx agent lint` and `render` apply
   the same rules, and they judge grants only against a sound catalog: a record that fails the
   schema, an id that is not its file name or two records with one id refuse every judgement (so a
@@ -365,8 +395,11 @@ The generated example that [broker](broker.md) shows is
 `--client llm-orchestrator` emits exactly the format llm-orchestrator's per-job grants read
 (`internal/grants`, ADR-022 there): one kind per grantable stdio server (a remote server, or one
 whose arguments or settings vary per instance, is reported and left out unless a rendered profile
-is granted it, when it is refused: the job would otherwise run silently without it), and per
-profile a `grants:` block whose instances set only their parameters' env keys.
+is granted it, when it is refused: the job would otherwise run silently without it; a server
+that acts other than through the broker is left out unless a rendered profile is granted it,
+which only a policy's `direct_mcp` exception allows, so the controller refuses any other profile's
+grant of it), and per profile a `grants:` block whose instances set only their parameters' env
+keys.
 `clients.orch_accepts` encodes that loader's rules (YAML without a duplicate key, as yaml.v3
 reads it; known fields only, names, a command, no hard-denied allowed key, no duplicate server, a
 known kind, only allowed env keys) and its scheduler's (a profile that grants one lane must grant

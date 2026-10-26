@@ -70,13 +70,36 @@ argument_specs:
         type: bool
         description: Permit privileged, a dangerous cap_add, or dropping no-new-privileges.
         default: false
+      compose_app_bind_roots:
+        type: list
+        elements: str
+        description: >-
+          Host directories a bind source may lie under (absolute, canonical, not a host-wide
+          directory such as /etc, /var or /srv). Relative sources and named volumes need none.
+        default: ['{{ compose_app_dir }}', '{{ compose_app_data_dir }}']
+      compose_app_bind_extra:
+        type: list
+        elements: dict
+        description: >-
+          Further host paths a bind source may be, each {path, reason}: the exact path, absolute
+          and canonical, and why the application needs it (at least 10 characters).
+        default: []
       compose_app_allow_docker_socket:
         type: bool
-        description: Permit a docker socket, host root or /run bind mount.
+        description: >-
+          Permit the docker socket (/var/run/docker.sock or /run/docker.sock) as a bind source; any
+          other container-runtime socket or state directory also needs its own
+          compose_app_bind_extra entry, and host root, /run, /var and /var/lib stay refused.
         default: false
       compose_app_allow_root:
         type: bool
-        description: Permit an explicit user of root or 0.
+        description: Permit an explicit user (or group) of root or 0, in any spelling.
+        default: false
+      compose_app_allow_root_group:
+        type: bool
+        description: >-
+          Permit the root group alone (user 1000:0), for images built to run as an arbitrary uid
+          in group 0; the user itself must still not be root.
         default: false
       compose_app_log_max_size:
         type: str

@@ -14,7 +14,12 @@ approvals bound to the exact request. Reference evaluator: `homelabnext.broker`.
 
 Manifest 1.2 adds `lanes` (write lanes for the built-in lane handler), an action's `lane` and
 `handler_docs`; handler 1.1 adds `argv`, `secrets` (names resolved at run time) and
-`max_output_bytes`. Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
+`max_output_bytes`; handler 1.2 adds `result_schema` (a JSON Schema object for the handler's
+`output` decoded as JSON: the Code Mode generator types results from it, the broker does not
+enforce it); handler 1.3 adds `target` (`required` or `optional`: whether a request for the action
+names the `svc:` target it is about; the Code Mode generator gives the method a `target` parameter
+from it, and the broker refuses a request without one for an action that requires it, `target-required`). A handler 1.2 (or 1.3) document cannot be loaded by a
+broker older than its version (the schema refuses the unknown field). Manifest 1.3 adds the socket transport's identities: `callers` (a peer, by
 `uid` or `user`, and the one profile it acts as), `approval_relays` (a peer that files approvals
 for the humans of one `issuer`) and `dev_identity` (whether the CLI's asserted `--as` is accepted;
 absent means false). Audit 1.1 adds the operation `connect` (a transport refusal) and `via` (the
@@ -29,6 +34,16 @@ default an eighth of the lane's quotas) and a lane's `max_writes_per_hour` (defa
 lane, none on a per-actor lane; refused `lane-rate-exceeded`); an actor's approval
 requests page only while it has no open page, `notify_window_s` apart at least, and `max_files` may be
 `null`: no file cap, for an append-only lane bounded by its bytes and its write rate.
+Manifest 1.7 adds `codemode` (ADR-0031, Code Mode capability tokens): the caps on a token
+(`max_calls`, default 50; `ttl_margin_s` past its run's wall budget, default 10 s; `default_wall_s`
+of a request naming none, default 60 s; `max_live_tokens_per_actor`, default 4; `retention_days` an
+ended execution's tokens are kept, default 7) and two transport
+roles, `runners` (a peer and the `svc:` id it issues tokens as) and `sandboxes` (a peer that may
+only present a token, optionally one `sandbox_id`); a peer is listed once across all four roles.
+Audit 1.3 adds the operations `token-issue`, `token-pause` and `token-spend` and `token_id` and
+`execution_id`,
+carried by every record of a call made with a token (`docs/broker.md`, "Code Mode capability
+tokens").
 Reference service and walkthrough: `docs/broker.md`, ADR-0017.
 
 Table-driven fixtures: `tests/broker/fixtures/decision_table.yml` (manifest x tier x handler x

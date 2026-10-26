@@ -1361,11 +1361,11 @@ def test_one_test_leg_installs_go_and_requires_it():
 
     ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     job = ci["jobs"]["test"]
-    legs = job["strategy"]["matrix"]["include"]
+    legs = job["strategy"]["matrix"]["python"]
     assert [bool(leg.get("go")) for leg in legs].count(True) == 1  # the other legs prove no-Go
     (go,) = [s for s in job["steps"] if s.get("uses", "").startswith("actions/setup-go@")]
     (pinned,) = [s for s in go_job()["steps"] if s.get("uses", "").startswith("actions/setup-go@")]
-    assert go["uses"] == pinned["uses"] and go["if"] == "matrix.go"
+    assert go["uses"] == pinned["uses"] and go["if"] == "matrix.python.go"
     assert go["with"]["go-version"] == "${{ env.GO_VERSION }}"
     (pytest_step,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
-    assert pytest_step["env"]["HNX_REQUIRE_GO"] == "${{ matrix.go && '1' || '' }}"
+    assert pytest_step["env"]["HNX_REQUIRE_GO"] == "${{ matrix.python.go && '1' || '' }}"

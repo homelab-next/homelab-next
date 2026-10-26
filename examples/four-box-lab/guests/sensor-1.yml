@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:sensor-1
+display_name: Network sensor
+description: "Physical sensor and DFIR server: a management NIC on port 3 and two capture NICs with no address (the switch mirror and main-1's guest mirror)."
+kind: host
+provisioning: host-only
+placement: {node: sensor-1}
+network: {zone: services, ip: 192.0.2.71}
+capability: cap:detections
+capability_groups: [cap_sensor, cap_siem]
+power: {ups: ups-a}
+tags: [prod, sensor]
+owners: {primary: platform-team}

@@ -1,3 +1,4 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
 {% macro rule(r, side) -%}
 {% set addr = r.source if side == 'saddr' else r.dest -%}
 {{ ('ip ' ~ side ~ ' ' ~ addr ~ ' ') if addr != 'any' else '' -}}

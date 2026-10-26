@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# the Code Mode class is codemode (mcp_server 1.2); a spelling the vocabulary does not hold is refused
+id: hnx-codemode
+description: Search and describe the broker actions the calling profile may compose into a program.
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/codemode/mcp_tools.py
+transport:
+  type: stdio
+  bin: hnx
+  entry: codemode-mcp
+  args: [--index, /etc/hnx/codemode, --socket, /run/hnx-broker/broker.sock]
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: codemode_search, classes: [read, code-mode], approval: false}
+author: agent:example-builder

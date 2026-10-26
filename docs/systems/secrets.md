@@ -1,6 +1,8 @@
 ---
 title: secrets
 type: system
+summary: secrets provides the secrets capability (openbao), owned by identity-team.
+summary_generated: true
 service: secrets
 capability: secrets
 impl: openbao
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.secrets`
+- Registry row (Veritas, ADR-0028): `services.secrets`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 

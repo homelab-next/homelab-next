@@ -22,10 +22,24 @@ from typing import Any
 
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
+from .tokens import BEARER_PREFIX, MAX_BEARER_BYTES
+
 __all__ = ["DEFAULT_CLIENT_TIMEOUT_S", "MAX_RESPONSE_BYTES", "BrokerClient"]
 
 DEFAULT_CLIENT_TIMEOUT_S = 600.0
 MAX_RESPONSE_BYTES = 64 << 20
+
+
+def _sendable_bearer(bearer: Any) -> bool:
+    """A bearer line the broker can read: the token prefix, printable ASCII, no line break, at
+    most :data:`MAX_BEARER_BYTES`."""
+    return (
+        isinstance(bearer, str)
+        and bearer.startswith(BEARER_PREFIX)
+        and bearer.isascii()
+        and bearer.isprintable()
+        and len(bearer) <= MAX_BEARER_BYTES
+    )
 
 
 def _raise(response: Mapping[str, Any]) -> None:
@@ -33,9 +47,13 @@ def _raise(response: Mapping[str, Any]) -> None:
     message = str(response.get("message") or reason)
     kind = response.get("kind")
     if kind == "Denied":
-        raise Denied(message, reason=reason)
-    err = InvalidArguments(message) if kind == "InvalidArguments" else BrokerError(message)
-    err.reason = reason  # type: ignore[attr-defined]
+        err: BrokerError = Denied(message, reason=reason)
+    else:
+        err = InvalidArguments(message) if kind == "InvalidArguments" else BrokerError(message)
+        err.reason = reason  # type: ignore[attr-defined]
+    for field in ("request_id", "request_digest"):  # the request a refusal was about, if built
+        if isinstance(response.get(field), str):
+            setattr(err, field, response[field])
     raise err
 
 
@@ -48,10 +66,22 @@ class BrokerClient:
         self.socket_path = os.fspath(socket_path)
         self.timeout_s = timeout_s
 
-    def request(self, op: str, **fields: Any) -> Any:
-        """Send ``{"v": 1, "op": op, **fields}`` (None fields dropped); the result or raise."""
+    def request(self, op: str, *, bearer: str | None = None, **fields: Any) -> Any:
+        """Send ``{"v": 1, "op": op, **fields}`` (None fields dropped); the result or raise.
+        ``bearer`` (a sandbox's Code Mode token) goes as its own line ahead of the body, never
+        inside it."""
+        return self._exchange(op, bearer, fields).get("result")
+
+    def _exchange(self, op: str, bearer: str | None, fields: Mapping[str, Any]) -> dict:
         body = {"v": 1, "op": op, **{k: v for k, v in fields.items() if v is not None}}
         data = json.dumps(body, sort_keys=True).encode("utf-8") + b"\n"
+        if bearer is not None:
+            if not _sendable_bearer(bearer):  # refused here, unsent, as the broker refuses a token
+                raise Denied(
+                    "a bearer is one printable ASCII line, a Code Mode token",
+                    reason="token-invalid",
+                )
+            data = bearer.encode("ascii") + b"\n" + data
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(self.timeout_s)
             try:
@@ -76,13 +106,21 @@ class BrokerClient:
             raise err
         if not response["ok"]:
             _raise(response)
-        return response.get("result")
+        return response
 
     @staticmethod
     def _receive(sock: socket.socket) -> bytes:
         chunks, size = [], 0
         while True:
-            chunk = sock.recv(65536)
+            try:
+                chunk = sock.recv(65536)
+            except ConnectionResetError:
+                # a broker that answers without reading (busy, a stranger) closes with our
+                # request unread, and the kernel reports that as a reset after delivering the
+                # answer: a whole answer line already here is the answer; anything less is not
+                if chunks and b"".join(chunks).endswith(b"\n"):
+                    break
+                raise
             if not chunk:
                 break
             size += len(chunk)
@@ -150,3 +188,62 @@ class BrokerClient:
     def audit(self, *, tail: int = 50, **match: str | None) -> list[dict[str, Any]]:
         """The last ``tail`` audit records matching ``match`` (relay only)."""
         return self.request("audit", tail=tail, **match)["records"]
+
+    # ---------------------------------------------------------------- Code Mode (manifest 1.7)
+    def token_issue(
+        self,
+        request_id: str,
+        *,
+        sandbox_id: str,
+        actions: list[str],
+        max_calls: int | None = None,
+        ttl_s: int | None = None,
+    ) -> dict[str, Any]:
+        """``{secret, claims}``: a token for the running ``codemode.execute`` (runner only).
+        The broker answers the secret beside the result, never inside it."""
+        fields = {
+            "request_id": request_id,
+            "sandbox_id": sandbox_id,
+            "actions": list(actions),
+            "max_calls": max_calls,
+            "ttl_s": ttl_s,
+        }
+        response = self._exchange("token-issue", None, fields)
+        return {"claims": response["result"]["claims"], "secret": response["secret"]}
+
+    def token_spend(self, token_id: str, outcome: str = "finished") -> dict[str, Any]:
+        return self.request("token-spend", token_id=token_id, outcome=outcome)
+
+    def token_status(self, token_id: str) -> dict[str, Any]:
+        return self.request("token-status", token_id=token_id)
+
+    def token_call(
+        self,
+        token: str,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        """A call made with a token (sandbox only), as the token's actor: ``{result, request_id,
+        request_digest}``, or ``{state: pending, ...}`` when it needs approval (the token is
+        paused)."""
+        fields = {"action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-call", bearer=token, **fields)
+
+    def token_submit(
+        self,
+        token: str,
+        action: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        target: str | None = None,
+    ) -> dict[str, Any]:
+        """``{state: pending, request_id, request_digest}``: the token is paused from here on."""
+        fields = {"action": action, "params": dict(params or {}), "target": target}
+        return self.request("token-submit", bearer=token, **fields)
+
+    def token_run(self, token: str, request_id: str) -> dict[str, Any]:
+        """Run the request an earlier token of the execution paused on, once approved
+        (sandbox only): ``{result, request_id, request_digest}``."""
+        return self.request("token-run", bearer=token, request_id=request_id)

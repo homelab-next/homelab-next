@@ -1,0 +1,90 @@
+{
+  "swap_id": "samples-to-other-object-store",
+  "from_module": "example-object-store",
+  "to_module": "other-object-store",
+  "slots": [
+    {
+      "slot": "object-store",
+      "instance": "samples"
+    }
+  ],
+  "route": {
+    "selection_diff": []
+  },
+  "dependants": {
+    "report": [
+      {
+        "module": "example-lake",
+        "kind": "provider",
+        "relation": "requires",
+        "slot": "object-store",
+        "instance": "samples",
+        "checks": {
+          "features": "not-asked",
+          "formats": "not-asked"
+        },
+        "verdict": "holds"
+      },
+      {
+        "module": "example-sandbox",
+        "kind": "feature",
+        "relation": "requires",
+        "slot": "object-store",
+        "instance": "samples",
+        "checks": {
+          "features": "not-asked",
+          "formats": "not-asked"
+        },
+        "verdict": "holds"
+      },
+      {
+        "module": "external-collector",
+        "kind": "feature",
+        "relation": "requires",
+        "slot": "object-store",
+        "instance": "samples",
+        "checks": {
+          "features": "holds",
+          "formats": "holds"
+        },
+        "verdict": "holds"
+      },
+      {
+        "module": "publishing",
+        "kind": "feature",
+        "relation": "requires",
+        "slot": "object-store",
+        "instance": "samples",
+        "checks": {
+          "features": "not-asked",
+          "formats": "not-asked"
+        },
+        "verdict": "holds"
+      }
+    ],
+    "blocked": []
+  },
+  "meaning_changes": [
+    {
+      "field": "object.metadata.etag",
+      "before": "an MD5 of the object",
+      "after": "an opaque version tag"
+    }
+  ],
+  "migration": {
+    "format": "object-tree",
+    "export_manifest_sha256": "3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+    "import_result": {
+      "imported": 1842,
+      "rejected": 0
+    },
+    "boundary": {
+      "min": "samples/2026-01-03/0001",
+      "max": "samples/2026-10-25/0412",
+      "count": 1842
+    }
+  },
+  "credentials_revoked": [
+    "secret:example-object-store/admin-token"
+  ]
+}

@@ -1,6 +1,8 @@
 ---
 title: metrics
 type: system
+summary: metrics provides the metrics capability (prometheus), owned by platform-team.
+summary_generated: true
 service: metrics
 capability: metrics
 impl: prometheus
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.metrics`
+- Registry row (Veritas, ADR-0028): `services.metrics`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

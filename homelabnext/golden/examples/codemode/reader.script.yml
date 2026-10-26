@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Recorded turns of the scripted fake model for the suite codemode-reader (see
+# triage.script.yml): canned, proving the harness, not a model.  Scripts are trusted, CI-run code.
+suite: codemode-reader
+tasks:
+  running-count:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dns-primary}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dhcp}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:queue}
+      - answer: {running: 2, total: 3}
+    codemode:
+      - tool: codemode_search
+        arguments: {query: service status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            names = ["svc:dns-primary", "svc:dhcp", "svc:queue"]
+            rows = [service.status(target=n) for n in names]
+            result = {"running": sum(r["state"] == "running" for r in rows), "total": len(rows)}
+      - answer: $value
+  same-state:
+    mcp:
+      - {tool: broker_actions, arguments: {}}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dns-primary}
+      - tool: broker_call
+        arguments: {action: service.status, params: {}, target: svc:dns-secondary}
+      - answer:
+          same: false
+          states: {svc:dns-primary: running, svc:dns-secondary: degraded}
+    codemode:
+      - tool: codemode_search
+        arguments: {query: service status}
+      - tool: codemode_execute
+        arguments:
+          language: python
+          code: |
+            names = ["svc:dns-primary", "svc:dns-secondary"]
+            states = {n: service.status(target=n)["state"] for n in names}
+            result = {"same": len(set(states.values())) == 1, "states": states}
+      - answer: $value

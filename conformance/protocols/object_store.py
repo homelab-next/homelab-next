@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Contract for ``object-store``: S3-like blobs in buckets.
 
-Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are text
+Deliberately the common subset of S3, MinIO, Ceph and a directory on disk.  Keys are opaque text
 (``/`` is just a character), values are bytes.  Keys are never resolved as paths: ``../x`` and
 ``a/../../b`` are either stored under exactly that key or refused (``ValueError`` /
-``ObjectStoreError``), and no key reaches an object of another bucket.  ``list`` is by prefix, ordered by key
-(code-point order of the UTF-8 bytes), paginated with an opaque ``next`` token.
+``ObjectStoreError``).  A key is stored as exactly that text - no path syntax, no URL or form
+decoding, no case folding: ``a//b``, ``a/./b``, ``./x``, ``a%2Fb``, ``a+b`` and ``Report`` are
+keys of their own (or refused), never another name for ``a/b``, ``x``, ``a b`` or ``report``.  A
+bucket is its own namespace, not a prefix of one flat key space: no key reaches an object of
+another bucket, whatever the separator (``b`` + ``1k`` is not ``b1`` + ``k``; ``x`` + ``y.k`` is
+not ``x.y`` + ``k``).  ``list`` is by prefix, ordered by key (code-point order of
+the UTF-8 bytes), paginated with an opaque ``next`` token, and names existing objects only: a
+deleted key is not listed.
 """
 
 from __future__ import annotations

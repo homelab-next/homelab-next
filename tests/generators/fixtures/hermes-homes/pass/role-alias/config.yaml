@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# passes A-14: a role alias in every model field, and a version that only looks numeric
+model:
+  default: main-reasoner-b
+  base_url: https://llm-gateway.example.internal/v1
+auxiliary:
+  compression:
+    model: main-reasoner-a
+version: "1.4"

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:main-1
+display_name: Main server
+description: "The hypervisor: every guest but the detonation box runs here."
+kind: host
+provisioning: host-only
+placement: {node: main-1}
+network: {zone: mgmt, ip: 192.0.2.10}
+capability: cap:orchestration
+power: {ups: ups-a}
+tags: [prod, hypervisor]
+owners: {primary: platform-team}

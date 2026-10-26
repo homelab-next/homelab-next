@@ -357,8 +357,14 @@ def _substitute(text: str, values: Mapping[str, str]) -> str:
     return _PLACEHOLDER.sub(lambda m: values[m.group(1).strip()], text)
 
 
-def render_prompt(tmpl: PromptTemplate, values: Mapping[str, Any]) -> RenderedPrompt:
+def render_prompt(
+    tmpl: PromptTemplate, values: Mapping[str, Any], *, screener: Any = None
+) -> RenderedPrompt:
     """Render ``values`` into ``tmpl``: trusted slots substituted, untrusted slots fenced.
+
+    ``screener``: a :class:`~homelabnext.agent.screen.Screener` the caller keeps across renders
+    (one conversation's tool results), so a value redacted in one render has the same label in
+    the next; by default every render screens with a fresh one, as before.
 
     Raises :class:`TemplateError` for an unknown slot, a missing required trusted slot, or a
     trusted value that could forge structure.  A missing required *untrusted* slot defers the
@@ -415,7 +421,7 @@ def render_prompt(tmpl: PromptTemplate, values: Mapping[str, Any]) -> RenderedPr
         "budget_chars": tmpl.budget_chars,
         "delimiter": tmpl.delimiter,
     }
-    pack, pack_hash = assemble_pack(manifest, {"sections": untrusted})
+    pack, pack_hash = assemble_pack(manifest, {"sections": untrusted}, screener=screener)
     nonce = _nonce_of(pack, tmpl.delimiter)
     system = _substitute(tmpl.system, trusted).rstrip("\n")
     if nonce is not None:

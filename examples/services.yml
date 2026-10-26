@@ -59,7 +59,7 @@ services:
     health: {kind: tcp}
     upstreams: [dashboards, idp, status-hub]
     owner: platform-team
-    version: "2.8.4"
+    version: "2.11.7"
     tls: public
     tags: [core, edge]
 

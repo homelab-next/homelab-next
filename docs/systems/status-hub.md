@@ -1,6 +1,8 @@
 ---
 title: status-hub
 type: system
+summary: status-hub provides the status-hub capability (homelabnext), owned by platform-team.
+summary_generated: true
 service: status-hub
 capability: status-hub
 impl: homelabnext
@@ -103,7 +105,7 @@ reviews: []
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.status-hub`
+- Registry row (Veritas, ADR-0028): `services.status-hub`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 
