@@ -7,42 +7,69 @@ every footprint on a host fits it.  This module turns the same placements into l
 that understates its footprint starves itself, never its neighbours.  :func:`render` returns, per
 placed host (``<host>/``):
 
-* ``hnx-<id_>-<role_>.slice``: one systemd slice per placed host role, ``CPUQuota`` the role's
+* ``hnx-<id_>-<role_>.slice``: one systemd slice per placed host role (instances of one
+  provider placing the same role on the same host share it, summed), ``CPUQuota`` the role's
   ``cpu`` times ``count`` (100 % is one core), ``MemoryMax`` its ``memory_mb`` times ``count``,
-  ``MemorySwapMax=0`` (an understated module is not let past its memory through swap).  ``-``
-  in a slice name is systemd's hierarchy separator, so the module id and role keep it as ``_``:
-  every role of one module nests under ``hnx-<id_>.slice`` and every module under ``hnx.slice``,
-  and no two (module, role) pairs share a name;
-* ``<unit>.service.d/50-hnx-slice.conf``: each of the module's fleet units (its
-  ``scheduler_jobs`` specs) runs in its role's slice.  A module whose units could run under more
-  than one placed role is refused: the unit spec does not say which role runs it;
+  ``MemoryHigh`` 90 % of that (throttled first, killed at the max), ``MemorySwapMax=0`` (an
+  understated module is not let past its memory through swap; cgroup v2).  The limits are shared
+  by every unit in the slice.  ``-`` in a slice name is systemd's hierarchy separator, so in the
+  module id and role it is replaced by ``_``: every role of one module nests under ``hnx-<id_>.slice`` and every module under
+  ``hnx.slice``, and no two (module, role) pairs share a name;
+* ``hnx-<unit>.service.d/50-hnx-slice.conf``: each of the module's fleet units (its
+  ``scheduler_jobs`` specs, rendered by :mod:`homelabnext.generators.fleet_units` as
+  ``hnx-<name>.service``) runs in its role's slice.  A unit name is bound to its module id, and
+  a module with units must have exactly one placed host role: the unit spec does not say which
+  role runs it (a known limit until it does), and a unit with no slice would run unlimited.  A
+  role's own services (and containers) join their slice with ``Slice=``; nothing here confines
+  a service that does not;
 * ``hnx-module-quota.sh``: caps each module's data root (``/var/lib/hnx-modules/<id>/``) at its
-  ``disk_gb`` on this host, summed over its roles there.  On a ZFS dataset mounted exactly there
-  it sets the dataset's ``quota``; anywhere else it mounts a sparse ext4 image of that size there
-  (``/var/lib/hnx-modules/.images/<id>.img``, a generated ``.mount`` unit), and it refuses a
-  data root that already holds files it would hide, or an image of another size (exit 3: move the
-  data first).  ``--check`` changes nothing and exits 3 while any cap is missing or wrong.
+  ``disk_gb`` on this host, summed over its roles there, and **reserves** that space so a module
+  cannot fill the disk under its neighbours (``disk_gb: 0`` is no cap).  On a ZFS dataset mounted
+  exactly there it sets the dataset's ``refquota`` and ``refreservation`` (snapshots are not
+  counted); on any other filesystem it mounts an ext4 image of that size there (no reserved
+  blocks), allocated in full (``/var/lib/hnx-modules/.images/<id>.img``, a generated
+  ``.mount`` unit), keeping the data root's owner and mode.  It never mounts over files or over a
+  mount it did not make, and it finishes what a failed run left (an image built but not mounted is
+  mounted; a half-built one is removed).  One module's failure does not stop the others.
+  ``--check`` changes nothing and exits 3 while any cap is missing or wrong.
 
-``gpu_memory_mb`` has no systemd control: it stays a placement sum only (the README says so).
-A ``kind: external`` role is placed and limited like any other; its host is outside the lab.
+A cap is never grown or shrunk in place: a different size is refused until the data is moved out.
+The data root keeps its owner and mode; the module's role owns them, and its units name it in
+``read_write_paths``.  ``gpu_memory_mb`` has no systemd control: it stays a placement sum only.
+A role placed on a ``kind: external`` host is not rendered (that host is outside the lab and runs
+none of this); the README lists it.  A slice applies inside the host a role is placed on, whatever
+the role's ``kind``: a vm or lxc host is the guest itself.
+Every value is checked here, not trusted to the schema, because it lands in a unit file or a
+script that runs as root.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from homelabnext.generators.fleet_units import PREFIX as UNIT_PREFIX
 from homelabnext.modules.rules import _placed, selected
 
-__all__ = ["DATA_ROOT", "LimitsError", "render", "slice_name"]
+__all__ = ["DATA_ROOT", "UNIT_DIR", "LimitsError", "render", "slice_name", "write"]
 
 Doc = dict[str, Any]
 DATA_ROOT = "/var/lib/hnx-modules"
+UNIT_DIR = "/etc/systemd/system"
 _NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
-_UNIT = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+_ROOT_PATH = re.compile(r"^(?:/[A-Za-z0-9._-]+)+\Z")
 HEADER = "# Generated by homelabnext.modules.limits from the site selection. Do not edit.\n"
+#: the schema's bounds (module 1.0 footprint and host count), enforced again here
+_BOUNDS = {
+    "cpu": (0.1, 256),
+    "memory_mb": (16, 16 << 20),
+    "disk_gb": (0, 1 << 20),
+    "gpu_memory_mb": (0, 16 << 20),
+}
+_MAX_COUNT = 16
 
 
 class LimitsError(Exception):
@@ -51,8 +78,33 @@ class LimitsError(Exception):
 
 def _checked(kind: str, value: Any) -> str:
     if not isinstance(value, str) or not _NAME.match(value):
-        raise LimitsError(f"{kind} {value!r} is not a lower-case name joined by '-'")
+        raise LimitsError(f"{kind} {value!r:.80} is not a lower-case name joined by '-'")
     return value
+
+
+def _number(where: str, key: str, value: Any, integer: bool) -> float | int:
+    lo, hi = _BOUNDS[key]
+    ok_type = isinstance(value, int) if integer else isinstance(value, (int, float))
+    if isinstance(value, bool) or not ok_type or not math.isfinite(value) or not lo <= value <= hi:
+        kind = "an integer" if integer else "a number"
+        raise LimitsError(f"{where}: {key} {value!r:.40} is not {kind} from {lo} to {hi}")
+    return value
+
+
+def _footprint(where: str, h: Any) -> tuple[Doc, int]:
+    if not isinstance(h, dict) or not isinstance(h.get("footprint"), dict):
+        raise LimitsError(f"{where}: no footprint")
+    fp = h["footprint"]
+    out: Doc = {
+        "cpu": _number(where, "cpu", fp.get("cpu"), False),
+        "memory_mb": _number(where, "memory_mb", fp.get("memory_mb"), True),
+        "disk_gb": _number(where, "disk_gb", fp.get("disk_gb"), True),
+        "gpu_memory_mb": _number(where, "gpu_memory_mb", fp.get("gpu_memory_mb", 0), True),
+    }
+    n = h.get("count", 1)
+    if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= _MAX_COUNT:
+        raise LimitsError(f"{where}: count {n!r:.40} is not an integer from 1 to {_MAX_COUNT}")
+    return out, n
 
 
 def slice_name(module: str, role: str | None = None) -> str:
@@ -75,6 +127,7 @@ def _slice(module: str, role: str, fp: Doc, count: int, host: str) -> str:
         + "CPUAccounting=yes\n"
         + f"CPUQuota={_cpu_percent(fp['cpu'], count)}%\n"
         + "MemoryAccounting=yes\n"
+        + f"MemoryHigh={fp['memory_mb'] * count * 9 // 10}M\n"
         + f"MemoryMax={fp['memory_mb'] * count}M\n"
         + "MemorySwapMax=0\n"
     )
@@ -87,172 +140,244 @@ def _dropin(slice_: str) -> str:
 _QUOTA = r"""#!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # Generated by homelabnext.modules.limits from the site selection. Do not edit.
-# Caps each module's data root on this host at its footprint's disk_gb: a ZFS dataset mounted
-# exactly there gets that quota; anywhere else a sparse ext4 image of that size is mounted there.
-# Usage: hnx-module-quota.sh [--check]   (--check changes nothing; exit 3 while a cap is missing)
+# Caps and reserves each module's data root on this host at its footprint's disk_gb: a ZFS dataset
+# mounted exactly there gets that refquota and refreservation; on any other filesystem an ext4 image of
+# that size, allocated in full, is mounted there. One module's failure does not stop the others.
+# Usage: hnx-module-quota.sh [--check]   (--check changes nothing; exit 3 while a cap is owed)
 set -eu
-ROOT=${HNX_MODULES_ROOT:-@ROOT@}
+ROOT=@ROOT@
 IMAGES="$ROOT/.images"
-UNITS=${HNX_UNIT_DIR:-/etc/systemd/system}
+UNITS=@UNITS@
 CHECK=0
 case "${1:-}" in
   --check) CHECK=1 ;;
   "") ;;
   *) echo "usage: $0 [--check]" >&2; exit 2 ;;
 esac
-rc=0
 say() { echo "hnx-module-quota: $*"; }
-owe() { say "$*" >&2; rc=3; }
+owe() { say "$*" >&2; exit 3; }   # called inside cap's subshell: ends this module only
 
-cap() {
-  id=$1 gb=$2
-  dir="$ROOT/$id"
-  want=$((gb * 1073741824))
-  if [ -L "$dir" ]; then owe "$id: $dir is a symbolic link; refusing"; return; fi
-  if [ "$CHECK" = 0 ]; then mkdir -p "$dir"; elif [ ! -d "$dir" ]; then owe "$id: $dir is missing"; return; fi
-  target=$(findmnt -n -o TARGET --target "$dir")
-  fstype=$(findmnt -n -o FSTYPE --target "$dir")
-  if [ "$target" = "$dir" ] && [ "$fstype" = zfs ]; then
-    ds=$(findmnt -n -o SOURCE --target "$dir")
-    have=$(zfs get -H -p -o value quota "$ds")
-    if [ "$have" = "$want" ]; then say "$id: ZFS $ds quota ${gb}G"; return; fi
-    if [ "$CHECK" = 1 ]; then owe "$id: ZFS $ds quota is $have bytes, want ${gb}G"; return; fi
-    zfs set quota="${gb}G" "$ds"
-    say "$id: ZFS $ds quota set to ${gb}G"
-    return
-  fi
-  img="$IMAGES/$id.img"
-  unit=$(systemd-escape -p --suffix=mount "$dir")
-  if [ "$target" = "$dir" ]; then
-    src=$(findmnt -n -o SOURCE --target "$dir")
-    back=$(losetup -n -O BACK-FILE "$src" 2>/dev/null || true)
-    if [ "$back" != "$img" ]; then owe "$id: $dir is a $fstype mount not made by this script; cap it yourself"; return; fi
-    size=$(stat -c %s "$img")
-    if [ "$size" = "$want" ]; then say "$id: image $img ${gb}G"; return; fi
-    owe "$id: image $img is $size bytes, want ${gb}G: move the data out, remove the image and rerun"
-    return
-  fi
-  if [ "$CHECK" = 1 ]; then owe "$id: $dir has no cap (not its own ZFS dataset or image)"; return; fi
-  if [ -n "$(ls -A "$dir")" ]; then
-    owe "$id: $dir already holds files the image would hide: move them out and rerun"
-    return
-  fi
-  if [ -e "$img" ]; then owe "$id: $img exists but is not mounted: mount or remove it"; return; fi
-  mkdir -p "$IMAGES"
-  chmod 0700 "$IMAGES"
-  truncate -s "${gb}G" "$img"
-  mkfs.ext4 -q -F -L "hnx-$id" "$img"
-  cat >"$UNITS/$unit" <<UNIT
+mount_unit() {  # $1 id, $2 gb, $3 dir, $4 img, $5 unit
+  cat >"$UNITS/$5.tmp" <<UNIT
 # Generated by hnx-module-quota.sh. Do not edit.
 [Unit]
-Description=hnx module $id data root, capped at ${gb}G
+Description=hnx module $1 data root, capped at ${2}G
 
 [Mount]
-What=$img
-Where=$dir
+What=$4
+Where=$3
 Type=ext4
 Options=loop,nodev,nosuid
 
 [Install]
 WantedBy=local-fs.target
 UNIT
+  mv -f "$UNITS/$5.tmp" "$UNITS/$5"
   systemctl daemon-reload
-  systemctl enable --now "$unit"
+  systemctl enable --now "$5"
+}
+
+cap() {
+  id=$1 gb=$2
+  dir="$ROOT/$id"
+  want=$((gb * 1073741824))
+  if [ -L "$ROOT" ] || [ -L "$dir" ]; then owe "$id: $dir or $ROOT is a symbolic link; refusing"; fi
+  if [ "$CHECK" = 0 ]; then mkdir -p "$dir"; elif [ ! -d "$dir" ]; then owe "$id: $dir is missing"; fi
+  target=$(findmnt -n -o TARGET --target "$dir")
+  fstype=$(findmnt -n -o FSTYPE --target "$dir")
+  if [ "$target" = "$dir" ] && [ "$fstype" = zfs ]; then
+    ds=$(findmnt -n -o SOURCE --target "$dir")
+    quota=$(zfs get -H -p -o value refquota "$ds")
+    resv=$(zfs get -H -p -o value refreservation "$ds")
+    if [ "$quota" = "$want" ] && [ "$resv" = "$want" ]; then say "$id: ZFS $ds ${gb}G"; return 0; fi
+    if [ "$CHECK" = 1 ]; then owe "$id: ZFS $ds refquota $quota, refreservation $resv bytes; want ${gb}G"; fi
+    zfs set refquota="${gb}G" refreservation="${gb}G" "$ds"
+    say "$id: ZFS $ds refquota and refreservation set to ${gb}G"
+    return 0
+  fi
+  img="$IMAGES/$id.img"
+  unit=$(systemd-escape -p --suffix=mount "$dir")
+  if [ "$target" = "$dir" ]; then
+    src=$(findmnt -n -o SOURCE --target "$dir")
+    back=$(losetup -n -O BACK-FILE "$src" 2>/dev/null || true)
+    if [ "$back" != "$img" ]; then owe "$id: $dir is a $fstype mount not made by this script; cap it yourself"; fi
+    size=$(stat -c %s "$img")
+    if [ "$size" = "$want" ]; then say "$id: image $img ${gb}G"; return 0; fi
+    owe "$id: image $img is $size bytes, want ${gb}G: move the data out, remove the image and rerun"
+  fi
+  if [ "$CHECK" = 1 ]; then owe "$id: $dir has no cap (not its own ZFS dataset or image)"; fi
+  if [ -L "$IMAGES" ]; then owe "$id: $IMAGES is a symbolic link; refusing"; fi
+  mkdir -p "$IMAGES"
+  chmod 0700 "$IMAGES"
+  if [ -L "$img" ] || [ -L "$img.tmp" ]; then owe "$id: $img is a symbolic link; refusing"; fi
+  rm -f "$img.tmp"   # a half-built image from a failed run: never holds data
+  if [ -e "$img" ]; then
+    # built by an earlier run that stopped before mounting: mount it, never rebuild it
+    if [ -n "$(ls -A "$dir")" ]; then owe "$id: $dir holds files and $img is not mounted: sort it out by hand"; fi
+    mount_unit "$id" "$gb" "$dir" "$img" "$unit"
+    say "$id: $dir mounted from the existing image $img"
+    return 0
+  fi
+  if [ -n "$(ls -A "$dir")" ]; then owe "$id: $dir already holds files the image would hide: move them out and rerun"; fi
+  if [ "$fstype" = zfs ]; then owe "$id: $dir is on ZFS but not its own dataset: zfs create -o mountpoint=$dir <pool>/<path>/$id"; fi
+  owner=$(stat -c %u:%g "$dir")
+  mode=$(stat -c %a "$dir")
+  (set -C; : >"$img.tmp")
+  fallocate -l "${gb}G" "$img.tmp" || { rm -f "$img.tmp"; owe "$id: cannot reserve ${gb}G for $img"; }
+  mkfs.ext4 -q -F -m 0 -L "hnx-$id" "$img.tmp" || { rm -f "$img.tmp"; owe "$id: mkfs failed"; }
+  mv "$img.tmp" "$img"
+  mount_unit "$id" "$gb" "$dir" "$img" "$unit"
+  chown "$owner" "$dir"
+  chmod "$mode" "$dir"
   say "$id: $dir mounted from a ${gb}G image"
 }
 
+rc=0
+run() {
+  # not "if (cap ...)": a command in a condition runs with set -e off, so a failure inside
+  # cap would be ignored; the subshell runs with errexit and ends this module only
+  set +e
+  (set -e; cap "$1" "$2")
+  s=$?
+  set -e
+  if [ "$s" != 0 ]; then
+    if [ "$s" != 3 ]; then say "$1: failed (exit $s)" >&2; fi
+    rc=3
+  fi
+}
 @CAPS@
 exit "$rc"
 """
 
 
-def _quota_script(caps: dict[str, int]) -> str:
-    lines = "\n".join(f"cap {mid} {gb}" for mid, gb in sorted(caps.items()))
-    return _QUOTA.replace("@ROOT@", DATA_ROOT).replace("@CAPS@", lines)
+def _quota_script(caps: dict[str, int], root: str = DATA_ROOT, unit_dir: str = UNIT_DIR) -> str:
+    for p in (root, unit_dir):
+        if not _ROOT_PATH.match(p) or ".." in p.split("/"):
+            raise LimitsError(f"{p!r:.80} is not a plain absolute path")
+    lines = "\n".join(
+        f"run {_checked('module id', mid)} {int(gb)}" for mid, gb in sorted(caps.items())
+    )
+    return _QUOTA.replace("@ROOT@", root).replace("@UNITS@", unit_dir).replace("@CAPS@", lines)
+
+
+def _bound(unit: str, mod: str, ids: set[str]) -> bool:
+    """``unit`` is ``mod`` or ``mod-...``, and no longer module id claims it."""
+    if unit != mod and not unit.startswith(mod + "-"):
+        return False
+    return not any(len(o) > len(mod) and (unit == o or unit.startswith(o + "-")) for o in ids)
 
 
 def render(
     site: Doc,
     mods: dict[str, Doc],
-    units: Callable[[str], set[str]] | None = None,
+    units: Callable[[str], set[str]],
 ) -> dict[str, str]:
-    """``{relative path: content}`` for every placed host, plus ``README.md``.  ``units(module)``
-    returns a module's fleet unit names (default: none)."""
+    """``{relative path: content}`` for every placed host inside the lab, plus ``README.md``.
+    ``units(module)`` returns a module's fleet unit spec names (required: a caller that forgot
+    them would confine nothing without noticing)."""
     try:
         sel = selected(site, mods)
-    except KeyError as exc:
-        raise LimitsError(str(exc)) from None
+        placed = _placed(site, sel)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise LimitsError(f"the selection cannot be read: {exc}") from None
+    hosts = site.get("hosts")
+    if not isinstance(hosts, dict):
+        raise LimitsError("the selection has no hosts")
     files: dict[str, str] = {}
     caps: dict[str, dict[str, int]] = {}
     roles_of: dict[str, list[tuple[str, str]]] = {}
-    rows = []
-    for mod, inst, role, h, host in _placed(site, sel):
+    #: (host, module, role) -> summed footprint: two instances of one provider on one host share
+    #: the role's slice, as rules.footprint_problems sums them
+    use: dict[tuple[str, str, str], Doc] = {}
+    external: list[str] = []
+    for mod, _inst, role, h, host in placed:
+        _checked("module id", mod)
         if h is None:
             raise LimitsError(f"{mod}: placement names {role}, not one of its host roles")
-        if host not in site.get("hosts", {}):
-            raise LimitsError(f"{mod}: placed on unknown host {host}")
+        if host not in hosts or not isinstance(hosts[host], dict):
+            raise LimitsError(f"{mod}: placed on unknown host {host!r:.80}")
         _checked("host", host)
-        fp, n = h["footprint"], h.get("count", 1)
+        fp, n = _footprint(f"{mod}/{role}", h)
+        if hosts[host].get("kind") == "external":
+            external.append(f"{mod}/{role} on {host}")
+            continue
+        u = use.setdefault(
+            (host, mod, role), dict.fromkeys(("cpu", "memory_mb", "disk_gb", "gpu_memory_mb"), 0)
+        )
+        for k in u:
+            u[k] += fp[k] * n
+    rows = []
+    for (host, mod, role), fp in sorted(use.items()):
         sl = slice_name(mod, role)
-        path = f"{host}/{sl}"
-        if path in files:
-            raise LimitsError(f"{mod}/{role}: placed twice on {host} ({inst})")
-        files[path] = _slice(mod, role, fp, n, host)
+        files[f"{host}/{sl}"] = _slice(mod, role, fp, 1, host)
         roles_of.setdefault(mod, []).append((host, sl))
-        if fp.get("disk_gb", 0):
+        if fp["disk_gb"]:
             caps.setdefault(host, {})
-            caps[host][mod] = caps[host].get(mod, 0) + fp["disk_gb"] * n
-        rows.append((host, mod, role, fp, n))
-    for mod in sorted(roles_of):
-        names = sorted(units(mod)) if units else []
+            caps[host][mod] = caps[host].get(mod, 0) + fp["disk_gb"]
+        rows.append((host, mod, role, fp, 1))
+    for mod in sorted(sel):
+        names = units(mod)
         if not names:
             continue
-        placed = roles_of[mod]
-        if len(placed) != 1:
+        placed_roles = roles_of.get(mod, [])
+        if len(placed_roles) != 1:
             raise LimitsError(
-                f"{mod}: fleet units {names} could run under any of {len(placed)} placed host "
-                "roles; a module with units places exactly one"
+                f"{mod}: fleet units {sorted(map(str, names))} need exactly one placed host role "
+                f"to run in, and it has {len(placed_roles)}"
             )
-        host, sl = placed[0]
-        for u in names:
-            if not isinstance(u, str) or not _UNIT.match(u):
-                raise LimitsError(f"{mod}: unit name {u!r} is not a lower-case name joined by '-'")
-            files[f"{host}/{u}.service.d/50-hnx-slice.conf"] = _dropin(sl)
+        host, sl = placed_roles[0]
+        for u in sorted(names, key=str):
+            if not isinstance(u, str) or not _NAME.match(u) or not _bound(u, mod, set(sel)):
+                raise LimitsError(f"{mod}: unit name {u!r:.80} is not bound to the module id")
+            path = f"{host}/{UNIT_PREFIX}{u}.service.d/50-hnx-slice.conf"
+            if path in files:
+                raise LimitsError(f"{mod}: unit {u} on {host} is claimed twice")
+            files[path] = _dropin(sl)
     for host, c in caps.items():
         files[f"{host}/hnx-module-quota.sh"] = _quota_script(c)
-    files["README.md"] = _readme(rows, caps)
+    files["README.md"] = _readme(rows, caps, external)
     return dict(sorted(files.items()))
 
 
-def _readme(rows, caps) -> str:
+def _readme(rows, caps, external) -> str:
     out = [
         "<!-- Generated by homelabnext.modules.limits from the site selection. Do not edit. -->",
         "# Module limits",
         "",
-        "Each placed host role runs in its own systemd slice with its footprint as limits; each",
-        "module's data root is capped at its disk. Install per host: the `.slice` files and the",
-        "`*.service.d/` drop-ins under `/etc/systemd/system/`, then `systemctl daemon-reload`;",
-        "`hnx-module-quota.sh` under `/usr/local/sbin/`, run once and after every change (it",
-        "is idempotent; `--check` reports without changing anything). A role's own services",
-        "join their slice with `Slice=`. GPU memory has no systemd limit: it is a placement sum only.",
+        "Each placed host role runs in its own systemd slice with its footprint as limits (cgroup",
+        "v2); each module's data root is capped and reserved at its disk. Install per host: the",
+        "`.slice` files and the `*.service.d/` drop-ins under `/etc/systemd/system/`, then",
+        "`systemctl daemon-reload`; `hnx-module-quota.sh` under `/usr/local/sbin/`, run as root",
+        "once and after every change (it is idempotent; `--check` reports without changing",
+        "anything). A role's own services join their slice with `Slice=`: a service outside its",
+        "slice runs unlimited. A role reaching MemoryHigh (90 %) is throttled and at MemoryMax it",
+        "is killed: there is no swap past it. GPU memory has no systemd limit: it is a placement",
+        "sum only. A cap is not grown in place: to change one, move the data out and rerun.",
         "",
         "| Host | Module | Host role | CPU | Memory | Disk | GPU memory |",
         "|---|---|---|---|---|---|---|",
     ]
     for host, mod, role, fp, n in sorted(rows, key=lambda r: r[:3]):
-        gpu = fp.get("gpu_memory_mb", 0) * n
+        gpu = fp["gpu_memory_mb"] * n
         out.append(
             f"| {host} | {mod} | {role} | {_cpu_percent(fp['cpu'], n)}% | {fp['memory_mb'] * n} MiB "
             f"| {fp['disk_gb'] * n} GiB | {f'{gpu} MiB (not enforced)' if gpu else '-'} |"
         )
     if not rows:
         out.append("| - | - | - | - | - | - | - |")
-    out += ["", "Disk caps per host (summed over a module's roles there):", ""]
+    out += ["", "Disk caps and reservations per host (summed over a module's roles there):", ""]
     for host in sorted(caps):
         for mod, gb in sorted(caps[host].items()):
             out.append(f"- {host}: `{DATA_ROOT}/{mod}` at {gb} GiB")
     if not caps:
         out.append("- none")
+    if external:
+        out += [
+            "",
+            "Not rendered: roles on external hosts (outside the lab, limited where they run):",
+            "",
+        ]
+        out += [f"- {e}" for e in sorted(external)]
     return "\n".join(out) + "\n"
 
 
