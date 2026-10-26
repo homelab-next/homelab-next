@@ -139,7 +139,10 @@ with no schema, generator or check in any form):
    points (failing closed on an unreadable mount table) and case-folding collisions. No provider
    proves it yet: no slot protocol has `export` and `import_`, so the suite runs only the
    reference importer, labelled as each stateful slot;
-8. footprint limits (`MemoryMax`, `CPUQuota` and disk quotas generated from footprints);
+8. footprint limits: implemented for fleet units and data roots (`homelabnext.modules.limits`: a
+   slice per placed host role with `CPUQuota`, `MemoryHigh`, `MemoryMax` and no swap, the module's
+   fleet units in it, and a reserved disk cap per data root by ZFS `refquota` or an allocated image
+   mount); a role's own services join by `Slice=`, and the loader will run it;
 9. the loader, with its two-way check against what runs, uniqueness against the core's own names
    and the overlay-shadowing refusal;
 10. the product-name lint.
