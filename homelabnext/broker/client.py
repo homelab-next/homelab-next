@@ -112,7 +112,15 @@ class BrokerClient:
     def _receive(sock: socket.socket) -> bytes:
         chunks, size = [], 0
         while True:
-            chunk = sock.recv(65536)
+            try:
+                chunk = sock.recv(65536)
+            except ConnectionResetError:
+                # a broker that answers without reading (busy, a stranger) closes with our
+                # request unread, and the kernel reports that as a reset after delivering the
+                # answer: a whole answer line already here is the answer; anything less is not
+                if chunks and b"".join(chunks).endswith(b"\n"):
+                    break
+                raise
             if not chunk:
                 break
             size += len(chunk)
