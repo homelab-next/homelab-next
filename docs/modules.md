@@ -234,10 +234,20 @@ claim takes one of the host's named resources (`gpu0`) to itself, so two exclusi
 card are refused, and so is a shared user of a card someone holds exclusively. Every selected
 module needs a manifest; nothing is exempt.
 
-**Footprints as limits: specified, not implemented.** The intent is that the generated units and
-guests take footprints as `MemoryMax`, `CPUQuota` and disk quotas, so an understated footprint
-starves its own module, not its neighbours. No generator does this yet; today a footprint is only
-summed by the contract-test rules.
+**Footprints as limits** (follow-up 8): `homelabnext.modules.limits.render(site, modules)` turns
+every placement into limits, so an understated footprint starves its own module, not its
+neighbours. Per placed host it writes one systemd slice per host role
+(`hnx-<id_>-<role_>.slice`, with `-` kept as `_` so the module's roles nest under
+`hnx-<id_>.slice` and no two pairs share a name): `CPUQuota` is `cpu` times `count` (100 % per
+core), `MemoryMax` is `memory_mb` times `count`, and `MemorySwapMax=0`. Each of the module's fleet
+units gets a drop-in that runs it in its role's slice (a module with units and more than one placed
+role is refused: the unit spec does not say which role runs it); a role's own services join with
+`Slice=`. `hnx-module-quota.sh` caps each module's data root (`/var/lib/hnx-modules/<id>/`) at
+its disk on that host: a ZFS dataset mounted exactly there gets that `quota`, anywhere else a
+sparse ext4 image of that size is mounted there by a generated `.mount` unit; it never mounts over
+existing files or a mount it did not make, and `--check` reports without changing anything (exit
+3 while a cap is missing or wrong). GPU memory has no systemd control and stays a placement sum.
+There is no CLI yet: the loader (follow-up 9) will render this from the overlay's selection.
 
 ## Interfaces: one owner (`platform/interface` 1.0: specified, not implemented)
 
@@ -916,7 +926,8 @@ listed as deferred.
 6. **The egress generator**: rendering declared egress into host and unit network policy.
 7. **Import validation**: the MUST that `import_` refuses traversal, symlinks and oversize trees, and
    a test per stateful slot.
-8. **Footprint limits**: generating `MemoryMax`, `CPUQuota` and disk quotas from footprints.
+8. **Footprint limits**: implemented as a generator (see [Footprint and resources](#footprint-and-resources));
+   the loader will run it from the overlay's selection.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the
    fictional examples in the contract tests, plus the two-way check against what runs, uniqueness
    against the core's own names, and refusing an overlay module that shadows a shipped id.

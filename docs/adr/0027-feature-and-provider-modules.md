@@ -134,7 +134,9 @@ with no schema, generator or check in any form):
 5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
 6. the egress generator (declared egress as host and unit network policy);
 7. import validation (no traversal, symlinks or oversize trees) as a protocol MUST with tests;
-8. footprint limits (`MemoryMax`, `CPUQuota` and disk quotas generated from footprints);
+8. footprint limits: implemented (`homelabnext.modules.limits`: a slice per placed host role with
+   `CPUQuota`, `MemoryMax` and no swap, the module's fleet units in it, and a disk cap per data
+   root by ZFS quota or an image mount); the loader will run it;
 9. the loader, with its two-way check against what runs, uniqueness against the core's own names
    and the overlay-shadowing refusal;
 10. the product-name lint.
