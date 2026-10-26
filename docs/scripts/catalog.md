@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-52 scripts: 22 check, 11 job, 2 service, 17 tool.
+53 scripts: 22 check, 11 job, 2 service, 18 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -55,6 +55,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `overlay-runner-job-started` | [`examples/private-overlay/runner/job-started.sh`](../../examples/private-overlay/runner/job-started.sh) | tool | maintainers | Refuse every job on the self-hosted deploy runner except deploy.yml dispatched by hand on main of the one private repository. | `manual` | - | 0 the job is the manual deploy from main; it may run; 1 any other job; the runner fails it before its first step |
 | `overlay-vault-pass-client` | [`examples/private-overlay/bin/vault-pass-client.py`](../../examples/private-overlay/bin/vault-pass-client.py) | tool | maintainers | Print the ansible-vault password of a private overlay from the environment or OpenBao, never from a file. | `manual` | - | 0 password printed; 1 OpenBao refused, redirected or returned no value; 2 not configured |
 | `private-leak-check` | [`tools/private_leak_check.py`](../../tools/private_leak_check.py) | check | maintainers | Fail when a private overlay holds a plaintext secret or an unencrypted sealed file, or when this public tree holds any part of a private overlay. | `ci:ci/schemas`; `make:private-overlay-check` | F-21 | 0 clean; 1 at least one finding; 2 misconfiguration (not an overlay, unreadable .sops.yaml or marker) |
+| `prune-branches` | [`tools/prune_branches.py`](../../tools/prune_branches.py) | tool | maintainers | Decide which branches are finished (their pull request merged or closed) for the prune-branches workflow to delete. | `ci:prune-branches/prune` | - | 0 decided; 2 unreadable input or an empty default branch |
 | `register-ids` | [`tools/register_ids.py`](../../tools/register_ids.py) | check | maintainers | Fail when a record vanished, a key occurs twice, or a record carries no uid. | `make:ids-check`; `pre-commit:register-ids-check-dupes`; `pre-commit:register-ids-check-lost`; `pre-commit:register-ids-check-uids` | M-16; M-17 | 0 nothing lost, duplicated or without a uid; 1 a record vanished, a key occurs twice, or a record has no uid; 2 usage error |
 | `rkhunter-scan` | [`ansible/roles/rkhunter/templates/scan.sh.j2`](../../ansible/roles/rkhunter/templates/scan.sh.j2) | job | platform | Run one scheduled rkhunter rootkit check and record its exit status for the role's health hook. | `timer:rkhunter/scan`; `role:rkhunter` | - | 0 the run finished (the scanner's own status is in last-run) |
 | `role-lint` | [`tools/role_lint.py`](../../tools/role_lint.py) | check | maintainers | Fail when a role or playbook breaks the role interface (docs/role-interface.md). | `ci:ci/schemas`; `code:homelabnext/scaffold/core.py`; `make:gates` | X-05 | 0 clean; 1 findings; 2 could not run |

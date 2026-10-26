@@ -862,6 +862,24 @@
     },
     {
       "exit": {
+        "0": "decided",
+        "2": "unreadable input or an empty default branch"
+      },
+      "id": "prune-branches",
+      "inputs": "the API's branch and pull request lists (JSON), the default branch, the repository",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one branch to delete per line; with --keep, the kept branches and why",
+      "owner": "maintainers",
+      "path": "tools/prune_branches.py",
+      "purpose": "Decide which branches are finished (their pull request merged or closed) for the prune-branches workflow to delete.",
+      "status": "active",
+      "trigger": [
+        "ci:prune-branches/prune"
+      ]
+    },
+    {
+      "exit": {
         "0": "nothing lost, duplicated or without a uid",
         "1": "a record vanished, a key occurs twice, or a record has no uid",
         "2": "usage error"
