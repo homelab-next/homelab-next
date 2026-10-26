@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -143,7 +145,7 @@ def _capacity(p: Path, name: Any, raw: Any) -> dict[str, Any]:
         raise ComputeError(f"{where} takes threads, memory_mb, reserve and cpu_overcommit")
     if not (_count(raw.get("threads")) and _count(raw.get("memory_mb"))):
         raise ComputeError(f"{where}: threads and memory_mb are positive whole numbers")
-    reserve = raw.get("reserve") or {}
+    reserve = raw.get("reserve", {})
     if (
         not isinstance(reserve, dict)
         or set(reserve) - {"threads", "memory_mb"}
@@ -159,6 +161,8 @@ def _capacity(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     }
     if left["threads"] < 1 or left["memory_mb"] < 1:
         raise ComputeError(f"{where}: the reserve leaves no threads or memory for guests")
+    # the vCPU budget, once: an exact ratio (1.15 is 23/20, not 1.149999...), floored
+    left["vcpus"] = int(Fraction(str(ratio)) * left["threads"])
     return {**raw, "reserve": reserve, "cpu_overcommit": float(ratio), "for_guests": left}
 
 
@@ -169,14 +173,20 @@ def _pools(p: Path, name: Any, raw: Any) -> dict[str, dict[str, Any]]:
         raise ComputeError(f"{where}: a mapping of pool name to {{size_gb, media}}")
     out = {}
     for pool, spec in raw.items():
+        # the names a guest's disk may use (guest schema: disks[].pool)
+        if not isinstance(pool, str) or not _POOL_RE.match(pool):
+            raise ComputeError(f"{where}: pool name {pool!r} is not one a disk can name")
         if not isinstance(spec, dict) or set(spec) - {"size_gb", "media"}:
             raise ComputeError(f"{where}.{pool}: takes size_gb and media")
         if not _count(spec.get("size_gb")):
             raise ComputeError(f"{where}.{pool}: size_gb is a positive whole number")
         if spec.get("media", "ssd") not in ("nvme", "ssd", "hdd"):
             raise ComputeError(f"{where}.{pool}: media is nvme, ssd or hdd")
-        out[str(pool)] = dict(spec)
+        out[pool] = dict(spec)
     return out
+
+
+_POOL_RE = re.compile(r"^[a-z][a-z0-9_-]*\Z")
 
 
 def load_keys(path: str | Path) -> dict[str, str]:

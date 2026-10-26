@@ -106,8 +106,11 @@ nodes:
       bulk:  {size_gb: 30000, media: hdd}
 ```
 
-Memory is never overcommitted: a guest's `size_mb` is its ceiling and ballooning only lends memory
-back. Pool sizes are what guests may allocate (after redundancy: a raidz2 of five 10 TB disks
+Memory is never overcommitted: a guest's `size_mb` is its ceiling (for a container, its hard
+limit), and `balloon_min_mb` is not counted, since ballooning only lends memory back. A physical
+host (`kind: host`) draws nothing from a node. When any node declares capacity or pools, a guest
+placed on a node `_nodes.yml` does not list is refused, so a typo cannot escape the check.
+`media` is informational. (The guest schema's `status` note that generators do not read it still holds; validation does.) Pool sizes are what guests may allocate (after redundancy: a raidz2 of five 10 TB disks
 gives about 30 TB), so thin provisioning and snapshots are left out, deliberately: the check is
 for planning, not for what `zfs list` shows on the day.
 

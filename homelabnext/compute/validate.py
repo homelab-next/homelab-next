@@ -206,7 +206,8 @@ def node_usage(fleet: Fleet) -> dict[str, dict[str, Any]]:
     over every guest not retired (a planned guest will be built, so it counts)."""
     usage: dict[str, dict[str, Any]] = {}
     for g in fleet.sorted():
-        if g.raw.get("status") == "retired" or not g.raw.get("resources"):
+        # a physical host's resources are its own, not drawn from a node
+        if g.kind == "host" or g.raw.get("status") == "retired" or not g.raw.get("resources"):
             continue
         u = usage.setdefault(g.node, {"cores": 0, "memory_mb": 0, "disk_gb": {}, "guests": []})
         u["cores"] += int(g.cpu.get("cores", 0))
@@ -224,12 +225,22 @@ def _capacity(fleet: Fleet) -> list[Problem]:
     it has, within the pool's size.  Memory is never overcommitted: a guest's ``size_mb`` is its
     ceiling, and ballooning only lends it back."""
     out: list[Problem] = []
+    measured = any(s.get("capacity") or s.get("pools") for s in fleet.nodes.values())
     for node, u in sorted(node_usage(fleet).items()):
         spec = fleet.nodes.get(node) or {}
         where = f"_nodes.yml {node}"
+        if measured and node not in fleet.nodes:  # a typo would escape every check below
+            out.append(
+                Problem(
+                    where,
+                    f"{len(u['guests'])} guest(s) are placed on {node!r}, which _nodes.yml does "
+                    "not list, so their resources are checked against nothing",
+                )
+            )
+            continue
         cap = spec.get("capacity")
         if cap:
-            vcpus = int(cap["for_guests"]["threads"] * cap["cpu_overcommit"])
+            vcpus = cap["for_guests"]["vcpus"]
             if u["cores"] > vcpus:
                 out.append(
                     Problem(
@@ -279,7 +290,7 @@ def usage_lines(fleet: Fleet) -> list[str]:
         parts = [f"{len(u['guests'])} guests"]
         cap = spec.get("capacity")
         if cap:
-            vcpus = int(cap["for_guests"]["threads"] * cap["cpu_overcommit"])
+            vcpus = cap["for_guests"]["vcpus"]
             parts.append(f"cores {u['cores']}/{vcpus}")
             parts.append(
                 f"memory {u['memory_mb'] // 1024}/{cap['for_guests']['memory_mb'] // 1024} GiB"

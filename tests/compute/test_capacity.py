@@ -107,6 +107,9 @@ def test_a_node_without_capacity_or_pools_asks_nothing(tmp_path, capsys):
         ({"pools": {"fast": {"size_gb": "big"}}}, "positive whole number"),
         ({"pools": {"fast": {"size_gb": 10, "media": "tape"}}}, "nvme, ssd or hdd"),
         ({"pools": {"fast": {"size_gb": 10, "raid": "z2"}}}, "takes size_gb and media"),
+        ({"capacity": {"threads": 4, "memory_mb": 1024, "reserve": None}}, "reserve"),
+        ({"pools": {"Bad Name": {"size_gb": 10}}}, "not one a disk can name"),
+        ({"pools": {1: {"size_gb": 10}}}, "not one a disk can name"),
     ],
 )
 def test_a_malformed_node_spec_is_refused(tmp_path, spec, words):
@@ -114,3 +117,29 @@ def test_a_malformed_node_spec_is_refused(tmp_path, spec, words):
     p.write_text(yaml.safe_dump({"nodes": {"hv": spec}}))
     with pytest.raises(ComputeError, match=words):
         load_nodes(p)
+
+
+def test_a_guest_on_a_node_the_file_does_not_list_is_not_checked_against_nothing(tmp_path, capsys):
+    lab, args = _lab(tmp_path)
+    guest = next(f for f in (lab / "guests").glob("[!_]*.yml")
+                 if (yaml.safe_load(f.read_text()).get("placement") or {}).get("node") == "hv-1"
+                 and yaml.safe_load(f.read_text()).get("resources"))  # fmt: skip
+    _edit(guest, lambda d: d["placement"].update(node="hv1"))  # a typo
+    assert hnx(args) == 1
+    assert (
+        "1 guest(s) are placed on 'hv1', which _nodes.yml does not list" in capsys.readouterr().err
+    )
+
+
+def test_the_vcpu_budget_is_exact_for_a_fractional_ratio(tmp_path):
+    p = tmp_path / "_nodes.yml"
+    p.write_text(
+        yaml.safe_dump(
+            {
+                "nodes": {
+                    "hv": {"capacity": {"threads": 100, "memory_mb": 1024, "cpu_overcommit": 1.15}}
+                }
+            }
+        )
+    )
+    assert load_nodes(p)["hv"]["capacity"]["for_guests"]["vcpus"] == 115  # not int(114.99999)
