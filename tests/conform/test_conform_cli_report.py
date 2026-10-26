@@ -102,7 +102,7 @@ def test_could_not_measure_exits_100(tmp_path, capsys):
 
 
 def test_mutants_command(capsys, monkeypatch):
-    # every registered mutant is proved by test_conform_mutants.py, and the report runs them all
+    # every registered mutant is proved by tests/conform_sweeps/test_conform_mutants.py, and the report runs them all
     # again (test_report_all_green_on_the_fakes): here only the command is under test, so 'all'
     # walks two capabilities
     import homelabnext.conform.cli as cli

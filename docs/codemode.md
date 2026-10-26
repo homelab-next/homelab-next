@@ -593,11 +593,11 @@ settled:
 - **Where they go.** An extended suite, `codemode-executor-isolation`, beside the executor suite
   (which is near the 24-check maximum, `MAX_CHECKS` in `tests/conform/test_conform_suites.py`),
   registered in `EXTENDED` (`homelabnext/conform/registry.py`) and in `ONLY_ITS_OWN`
-  (`tests/conform/test_conform_mutants.py`), with its own `conformance/codemode-executor-isolation/`
+  (`tests/conform_sweeps/test_conform_mutants.py`), with its own `conformance/codemode-executor-isolation/`
   test folder. A suite needs at least six checks (`MIN_CHECKS`), so it lands with its first six
   probes, not empty.
 - **How they are proved.** `hnx conform mutants --all` runs the extended suites' mutants as well
-  as the core ones (`mutants all` is the core suites only), and `tests/conform/test_conform_mutants.py`
+  as the core ones (`mutants all` is the core suites only), and `tests/conform_sweeps/test_conform_mutants.py`
   runs them under `make test`; each probe's mutant is an executor that has exactly the access the
   probe forbids, caught by that probe alone.
 - **What a probe is judged by.** What the harness's own listeners received, never what the
@@ -620,9 +620,9 @@ settled:
   suite.) The forking fake, which is not a boundary, is listed as failing the CM-14 probes it
   cannot meet.
 
-Follow-up, not a step: `tests/conform` has had its budget raised three times as suites grew,
-mostly by the mutant sweeps (each mutant a whole-suite run); splitting the sweeps into a suite of
-their own, with their own budget, would stop the raises.
+The mutant sweeps (each mutant a whole-suite run), the whole report and X-10 end to end are
+their own suite, `tests/conform_sweeps/`, with their own budget: `tests/conform` had been raised
+from 60 s to 150 s as they grew, and is now held at 110 s without them.
 
 ## Later phases
 
