@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
-summary_of: outline:sha256:3698a9ede00e7272
+summary_of: outline:sha256:95558752767c387b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -114,6 +114,35 @@ placed on a node `_nodes.yml` does not list is refused, so a typo cannot escape 
 gives about 30 TB), so thin provisioning and snapshots are left out, deliberately: the check is
 for planning, not for what `zfs list` shows on the day.
 
+### Node mirror
+
+A switch mirror ([network model](network-model.md#mirror-ports-13)) copies what crosses the
+switch, so a network sensor on it never sees two guests of one hypervisor talking over its bridge.
+A node can copy that traffic to a NIC of its own, cabled to the sensor's second capture port:
+
+```yaml
+nodes:
+  hv-1:
+    mirror:
+      to: enp65s0f1             # carries nothing else: no address, not a bridge port
+      bridges: [vmbr0]          # the bridges whose guests are mirrored
+```
+
+`hnx guests render --target node-mirror` writes `mirror/<node>/hnx-mirror.sh` with a systemd
+service and timer. The script puts a `tc` matchall filter on the ingress of every guest port of
+each bridge (`fwpr<vmid>p<n>` with the NIC firewall on, `tap<vmid>i<n>` and `veth<vmid>i<n>`
+without), mirroring to `to`. Each frame a guest sends enters the bridge through one port, so it is
+copied once, whether it goes to another guest or leaves the host; the node's own NICs are not
+mirrored, since what arrives from the switch is the switch mirror's. Guest ports come and go with
+their guests, so the timer re-runs the script every 15 seconds (a guest's first seconds can go
+unmirrored); `hnx-mirror.sh --remove` takes the filters off. The script refuses a capture NIC that
+is missing or is a bridge port, and a bridge that does not exist.
+
+Know what the sensor then sees: every guest on the listed bridges, in every zone, mgmt included,
+with guest-to-outside traffic on both capture ports (once from the node, once from the switch).
+The copies are untagged, so tell zones apart by subnet. Interface names are checked (Linux names,
+at most 15 characters), and a mirroring node's name must be one a guest can name.
+
 The model does not import a site package. It reads zones through a small protocol:
 
 ```python
@@ -140,6 +169,7 @@ have a zones file. Tests can also pass a stub.
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
+| `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are

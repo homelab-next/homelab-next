@@ -100,9 +100,11 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}, capacity: {...},
-    pools: {...}}}}``: what each hypervisor enforces, what feeds it (``power``, checked against
-    the site by :func:`homelabnext.power.fleet_problems`), and what it holds (``capacity`` and
-    ``pools``, checked against its guests by :func:`homelabnext.compute.validate.validate`)."""
+    pools: {...}, mirror: {...}}}}``: what each hypervisor enforces, what feeds it (``power``,
+    checked against the site by :func:`homelabnext.power.fleet_problems`), what it holds
+    (``capacity`` and ``pools``, checked against its guests by
+    :func:`homelabnext.compute.validate.validate`), and where it copies its guests' traffic for a
+    network sensor (``mirror``, rendered by the ``node-mirror`` target)."""
     p = Path(path)
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
@@ -124,6 +126,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
             out[str(name)]["capacity"] = _capacity(p, name, spec["capacity"])
         if isinstance(spec, dict) and "pools" in spec:
             out[str(name)]["pools"] = _pools(p, name, spec["pools"])
+        if isinstance(spec, dict) and "mirror" in spec:
+            out[str(name)]["mirror"] = _mirror(p, name, spec["mirror"])
     return out
 
 
@@ -187,6 +191,31 @@ def _pools(p: Path, name: Any, raw: Any) -> dict[str, dict[str, Any]]:
 
 
 _POOL_RE = re.compile(r"^[a-z][a-z0-9_-]*\Z")
+# a Linux interface name: at most 15 bytes (IFNAMSIZ less the NUL), and a word a shell script can
+# carry without quoting surprises
+_IFNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,14}\Z")
+
+
+def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
+    """``{to: <nic>, bridges: [<bridge>, ...]}``: copy every frame the node's guests send into
+    these bridges to ``to``, a NIC cabled to the sensor's capture port and carrying nothing else.
+    A switch mirror never sees traffic between two guests of one node; this does."""
+    where = f"{p}: node {name!r}: mirror"
+    if not isinstance(raw, dict) or set(raw) != {"to", "bridges"}:
+        raise ComputeError(f"{where}: takes to (a NIC) and bridges (a list), both required")
+    to, bridges = raw["to"], raw["bridges"]
+    if not isinstance(to, str) or not _IFNAME_RE.match(to):
+        raise ComputeError(f"{where}.to: {to!r} is not an interface name")
+    if not isinstance(bridges, list) or not bridges:
+        raise ComputeError(f"{where}.bridges: a non-empty list of bridge names")
+    for br in bridges:
+        if not isinstance(br, str) or not _IFNAME_RE.match(br):
+            raise ComputeError(f"{where}.bridges: {br!r} is not an interface name")
+    if len(set(bridges)) != len(bridges):
+        raise ComputeError(f"{where}.bridges: a bridge is listed twice")
+    if to in bridges:
+        raise ComputeError(f"{where}: to {to!r} is one of the bridges it copies")
+    return {"to": to, "bridges": list(bridges)}
 
 
 def load_keys(path: str | Path) -> dict[str, str]:

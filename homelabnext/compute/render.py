@@ -12,6 +12,7 @@ from .gen import (
     firewall_rules,
     inventory,
     libvirt,
+    node_mirror,
     registry_hosts,
     tailscale_acl,
     terraform_proxmox,
@@ -28,6 +29,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "firewall-rules": firewall_rules.render,
     "baseline-playbook": baseline_playbook.render,
     "tailscale-acl": tailscale_acl.render,
+    "node-mirror": node_mirror.render,
 }
 
 
