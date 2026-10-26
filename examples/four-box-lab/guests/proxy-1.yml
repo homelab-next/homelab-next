@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:proxy-1
+description: "Terminates TLS for the published consoles."
+kind: lxc
+provisioning: terraform
+placement: {node: main-1, vmid: 150}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 1024}
+  disks: [{name: rootfs, size_gb: 8, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: edge, ip: 198.51.100.10}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: https, proto: tcp, ports: "443", source: "any"}
+capability: cap:idp
+capability_groups: [cap_edge]
+tags: [prod]
+owners: {primary: platform-team}

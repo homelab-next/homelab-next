@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registry of the fictional four-box lab (site.yml and guests/ beside it): which service runs on
+# which machine, what it calls and what it tells the status hub. Documentation addresses only.
+registry_version: 1
+
+lab:
+  name: anchor
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  mgmt:     {cidr: 192.0.2.0/26,    description: "management, identity and DNS"}
+  services: {cidr: 192.0.2.64/26,   description: "security services and the sensor"}
+  data:     {cidr: 192.0.2.128/26,  description: event bus and storage}
+  edge:     {cidr: 198.51.100.0/26, description: internet ingress}
+  sandbox:  {cidr: 203.0.113.0/26,  description: detonation (one-way)}
+
+hosts:
+  anchor-gw:    {address: 192.0.2.1,     zone: mgmt,     role: router}
+  dns-1:        {address: 192.0.2.5,     zone: mgmt,     role: resolver}
+  dns-2:        {address: 192.0.2.6,     zone: mgmt,     role: resolver}
+  idp-1:        {address: 192.0.2.7,     zone: mgmt,     role: identity}
+  main-1:       {address: 192.0.2.10,    zone: mgmt,     role: hypervisor}
+  siem-1:       {address: 192.0.2.70,    zone: services, role: siem}
+  sensor-1:     {address: 192.0.2.71,    zone: services, role: sensor}
+  hub-1:        {address: 192.0.2.75,    zone: services, role: status}
+  bus-1:        {address: 192.0.2.140,   zone: data,     role: events}
+  store-1:      {address: 192.0.2.141,   zone: data,     role: storage}
+  proxy-1:      {address: 198.51.100.10, zone: edge,     role: edge}
+  detonation-1: {address: 203.0.113.20,  zone: sandbox,  role: detonation}
+
+services:
+  router-console:
+    capability: router-console
+    impl: unifi
+    host: anchor-gw
+    protocol: https
+    port: 443
+    health: {kind: none}
+    owner: platform-team
+    version: "1.0"
+    tls: internal
+    description: The router's management console (reads by API key).
+  dns:
+    capability: dns
+    impl: technitium
+    host: dns-1
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    owner: platform-team
+    version: "13.0"
+    tls: none
+    description: The primary resolver, authoritative for the lab's zone.
+  dns-secondary:
+    capability: dns-secondary
+    impl: technitium
+    host: dns-2
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    upstreams: [dns]
+    owner: platform-team
+    version: "13.0"
+    tls: none
+    description: The secondary resolver on the single-board computer; a zone-transfer copy of the primary, so names resolve while main-1 is down.
+  idp:
+    capability: idp
+    impl: authentik
+    host: idp-1
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    owner: platform-team
+    version: "2024.8"
+    tls: internal
+    auth: own
+    description: Single sign-on and the forward-auth check in front of every web console.
+  edge-proxy:
+    capability: edge-proxy
+    impl: caddy
+    host: proxy-1
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    upstreams: [idp]
+    owner: platform-team
+    version: "2.11.7"
+    tls: public
+    description: Terminates TLS for the published consoles and asks the IdP who is calling.
+  detections:
+    capability: detections
+    impl: wazuh
+    host: siem-1
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    upstreams: [events]
+    owner: security-team
+    version: "4.9"
+    tls: internal
+    auth: idp
+    description: Decodes the fleet's logs, runs the detection rules and raises alerts on the bus.
+  network-sensor:
+    capability: network-sensor
+    impl: suricata
+    host: sensor-1
+    protocol: tcp
+    port: 1514
+    health: {kind: tcp}
+    upstreams: [detections, events]
+    owner: security-team
+    version: "7.0"
+    tls: none
+    description: Watches both capture NICs (the uplink mirror and main-1's guest mirror) and ships alerts and flow records.
+  dfir:
+    capability: dfir
+    impl: velociraptor
+    host: sensor-1
+    protocol: https
+    port: 8000
+    health: {kind: tcp}
+    owner: security-team
+    version: "0.73"
+    tls: internal
+    description: The DFIR server every client calls home to; collections and hunts across the fleet.
+  detonation:
+    capability: detonation
+    impl: cape
+    host: detonation-1
+    protocol: https
+    port: 8000
+    health: {kind: tcp}
+    upstreams: [events]
+    owner: security-team
+    version: "2.4"
+    tls: internal
+    description: Detonates samples on its own machine in the one-way zone; reports leave only through the bus.
+  status-hub:
+    capability: status-hub
+    impl: hnx-status
+    host: hub-1
+    protocol: http
+    port: 8090
+    health: {kind: http, path: /status.json, expect_status: 200}
+    upstreams: [events]
+    owner: platform-team
+    version: "0.1"
+    tls: none
+    auth: idp
+    description: The read-only status hub and its generated maps.
+  events:
+    capability: events
+    impl: nats
+    host: bus-1
+    protocol: nats
+    port: 4222
+    health: {kind: tcp}
+    owner: platform-team
+    version: "2.10.20"
+    tls: mtls
+    description: The event bus every producer publishes to and every consumer reads.
+  object-store:
+    capability: object-store
+    impl: minio
+    host: store-1
+    protocol: https
+    port: 9000
+    health: {kind: tcp}
+    owner: platform-team
+    version: "2024.9"
+    tls: internal
+    description: S3-compatible object storage for evidence, samples and backups' staging.
