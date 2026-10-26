@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import re
 import sys
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -72,41 +73,60 @@ class ControllerRef:
     base_url: str = ""
 
 
+#: the only URL shape a gateway URL, and a home's ``model.base_url``, may have: https, an ASCII
+#: host name of letters, digits and hyphens with at least one dot, an optional port, and a path of
+#: plain segments.  No userinfo, backslash, whitespace, percent-escape, query or fragment: those
+#: are where two URL parsers disagree on the host (``https://other\\@gateway/`` is the gateway to
+#: :func:`urllib.parse.urlsplit` and ``other`` to a WHATWG client), so a home could pass the check
+#: and still call around the gateway.
+_URL_SHAPE = re.compile(
+    r"https://(?P<host>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>(?:/[a-z0-9._~-]*)*)",
+    re.IGNORECASE,
+)
+
+
+def _canonical(url: Any) -> tuple[str, int, str] | None:
+    """``(host, port, path)`` of a URL of :data:`_URL_SHAPE` (host lower-cased, the default port
+    filled in, one trailing ``/`` dropped), or None for anything else."""
+    m = _URL_SHAPE.fullmatch(url) if isinstance(url, str) else None
+    if m is None:
+        return None
+    port = int(m["port"]) if m["port"] else 443
+    if not 0 < port < 65536:
+        return None
+    path = m["path"]
+    return m["host"].lower(), port, path[:-1] if path.endswith("/") else path
+
+
 def gateway_url_problem(url: Any) -> str | None:
-    """Why ``url`` cannot be the gateway's base URL, or None: an ``https`` URL with a host name
-    (never an IP address, which A-14 refuses in a home anyway), no credentials, query or
-    fragment."""
-    if not isinstance(url, str) or not url.strip():
+    """Why ``url`` cannot be the gateway's base URL, or None: it must have :data:`_URL_SHAPE`,
+    and no label of its host may read as a number (a dotted quad, ``0x7f000001``), which a
+    resolver would take as an address."""
+    if url is None or url == "":
         return "the gateway's URL that every home's model.base_url names is required"
-    try:
-        parts = urlsplit(url)
-        parts.port  # noqa: B018 - a port that is not a number raises here
-    except ValueError as exc:
-        return f"{url!r} is not a URL: {exc}"
-    if parts.scheme != "https" or not parts.hostname:
-        return f"{url!r} must be an https URL with a host name (a home's key travels on it)"
-    if parts.username or parts.password or parts.query or parts.fragment:
-        return f"{url!r} must carry no credentials, query or fragment"
-    if _address(parts.hostname) is not None:
-        return f"{url!r} names an IP address; name the gateway by its host name"
+    if not isinstance(url, str):
+        return f"{url!r} must be a string, the gateway's URL"
+    c = _canonical(url)
+    if c is None:
+        return (
+            f"{url!r} must be https://HOST[:PORT][/PATH] with an ASCII host name (letters, digits, "
+            "hyphens, at least one dot), plain path segments, and no credentials, escapes, "
+            "whitespace, query or fragment"
+        )
+    host, _, path = c
+    if any(re.fullmatch(r"[0-9]+|0x[0-9a-f]*", label) for label in host.split(".")):
+        return f"{url!r} names an address, not a host name; name the gateway by its host name"
+    if any(seg in (".", "..") for seg in path.split("/")):
+        return f"{url!r} has a '.' or '..' path segment"
     return None
 
 
 def same_url(a: Any, b: str) -> bool:
-    """``a`` and ``b`` are one URL: scheme and host compared without case, the default port
-    spelled or not, a trailing ``/`` ignored."""
-    if not isinstance(a, str):
-        return False
-
-    def norm(u: str) -> tuple[str, str, int | None, str]:
-        p = urlsplit(u.strip())
-        port = p.port or {"https": 443, "http": 80}.get(p.scheme.lower())
-        return p.scheme.lower(), (p.hostname or "").rstrip("."), port, p.path.rstrip("/")
-
-    try:
-        return norm(a) == norm(b) and not urlsplit(a).query and not urlsplit(a).fragment
-    except ValueError:
-        return False
+    """``a`` and ``b`` are one URL of :data:`_URL_SHAPE`: scheme and host compared without case,
+    the default port spelled or not, a trailing ``/`` ignored.  Any other ``a`` is not."""
+    ca = _canonical(a)
+    return ca is not None and ca == _canonical(b)
 
 
 def parse_controller(raw: Any, base: Path, problems: list[str]) -> ControllerRef | None:
@@ -264,6 +284,12 @@ def controller_problems(spec: Any) -> list[str]:
             )
             continue
         ctx, want = e.get("max_context"), role.max_context_tokens
+        if isinstance(want, bool) or not isinstance(want, int):
+            problems.append(
+                f"{head}: its home's role mdl:{default} has no max_context_tokens, so neither the "
+                "backend's max_context nor the home's context_length can be held to it"
+            )
+            continue
         if isinstance(ctx, bool) or ctx != want:
             problems.append(
                 f"{head}: max_context {ctx!r} differs from mdl:{default}'s max_context_tokens "

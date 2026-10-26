@@ -210,8 +210,12 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
 - **`hnx gen gateway render SPEC OUT --check` reads the controller's backend list** when the spec
   has a `controller:` block (`config:` names the controller's config file, `base_url:` the
   gateway's URL as the homes name it, and `homes:` maps each backend name to its `HERMES_HOME`).
-  `base_url` is required: an `https` URL with a host name, never an IP address, with no
-  credentials, query or fragment. The backends are the `local` and `local_fallback`
+  `base_url` is required: `https://HOST[:PORT][/PATH]` with an ASCII host name (letters, digits,
+  hyphens, at least one dot, no label that reads as a number), plain path segments, and no
+  credentials, escapes, whitespace, query or fragment. A home's `model.base_url` must have the
+  same shape: those are exactly the forms on which two URL parsers disagree about the host
+  (`https://other\@gateway/` is the gateway to Python's `urlsplit` and `other` to a WHATWG
+  client), so anything else could pass the check and still call around the gateway. The backends are the `local` and `local_fallback`
   entries under `backends` and every entry of its `additional` list. Its `cloud` entry is not
   read: it is the session-level cloud re-run, which reaches the gateway through a cloud home's
   role, not as a gateway backend. The check fails when:
@@ -221,8 +225,9 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
     a session between them; see the paragraph after the mapping table);
   - the backend's `max_context` is missing or differs from that role's `max_context_tokens`;
   - the home's `model.base_url` is not the block's `base_url` (scheme and host compared without
-    case, the default port and a trailing `/` ignored), so the home's calls would skip the
+    case, the default port and one trailing `/` ignored), so the home's calls would skip the
     gateway's keys, limits and locality rule;
+  - the home's role has no `max_context_tokens` to hold `max_context` and `context_length` to;
   - the home's `model.context_length` is set and is not a whole number of tokens up to that
     role's `max_context_tokens`. Less is allowed, since the agent only compacts sooner; more
     would fill a context the engine does not serve;

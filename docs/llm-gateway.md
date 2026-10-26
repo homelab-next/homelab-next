@@ -40,8 +40,8 @@ A spec may also name the orchestration controller in front of it (`controller:`,
 gateway's `base_url` as the homes name it, and one `HERMES_HOME` per local backend). `--check` then
 also fails when a controller backend is not a `svc:` of the spec, its home's `model.default` is not
 a role bound to it alone, its `max_context` is not that role's `max_context_tokens`, its home's
-`model.base_url` is not the gateway's, or its home's `model.context_length` is more than the role's
-`max_context_tokens`
+`model.base_url` is not the gateway's, its home's `model.context_length` is set and not a whole
+number of tokens up to the role's `max_context_tokens`, or that role has no `max_context_tokens`
 ([orchestration-controller.md](orchestration-controller.md), "Checks").
 
 It writes:

@@ -5,6 +5,7 @@ gateway homes``: no home names an IP address or an engine model id)."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 from pathlib import Path
@@ -42,6 +43,7 @@ def test_the_fail_fixture_breaks_each_rule_once():
     problems = ah.controller_problems(gw.load_spec(FAIL / "gateway.yml"))
     assert len(problems) == 7, problems
     by = {p.split(" (", 1)[0].removeprefix("controller backend "): p for p in problems}
+    assert len(by) == 7, problems  # one problem per backend, none hiding another
     assert (
         "max_context 32768 differs from mdl:main-reasoner-a's max_context_tokens 131072"
         in (by["vllm-a"])
@@ -128,6 +130,7 @@ def _set_model(spec: gw.Spec, name: str, **model) -> None:
     path.write_text(yaml.safe_dump(doc), encoding="utf-8")
 
 
+PORT_ZERO = "https://llm-gateway.example.internal:0/v1"  # no-raw-endpoint: allow under test
 OTHER_PORT = "https://llm-gateway.example.internal:8443/v1"  # no-raw-endpoint: allow under test
 
 EXAMPLE_CTL = {
@@ -147,6 +150,18 @@ EXAMPLE_CTL = {
         ({"base_url": OTHER_PORT}, "is not the gateway's"),
         ({"base_url": "https://llm-gateway.example.internal/v1?x=1"}, "is not the gateway's"),
         ({"base_url": ["https://llm-gateway.example.internal/v1"]}, "is not the gateway's"),
+        ({"base_url": "https://user:pw@llm-gateway.example.internal/v1"}, "is not the gateway's"),
+        ({"base_url": "https://@llm-gateway.example.internal/v1"}, "is not the gateway's"),
+        ({"base_url": "https://evil.example\\@llm-gateway.example.internal/v1"}, "is not the"),
+        ({"base_url": PORT_ZERO}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal:/v1"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal./v1"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/v1//"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/v1?"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/v1#"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/v1\n"}, "is not the gateway's"),
+        ({"base_url": " https://llm-gateway.example.internal/v1"}, "is not the gateway's"),
+        ({"base_url": "https://llm-gateway.example.internal/%76%31"}, "is not the gateway's"),
         ({"context_length": 131073}, "context_length 131073 is not a whole number"),
         ({"context_length": 0}, "context_length 0 is not"),
         ({"context_length": True}, "context_length True is not"),
@@ -178,6 +193,16 @@ def test_a_shorter_context_and_the_gateway_url_spelled_differently_pass(tmp_path
         "http://llm-gateway.example.internal/v1",
         "https:///v1",
         "https://192.0.2.10/v1",  # no-raw-endpoint: allow documentation address under test
+        "https://0x7f000001/v1",
+        "https://2130706433/v1",
+        "https://127.1/v1",
+        "https://localhost/v1",
+        "https://llm gateway.example.internal/v1",
+        "https://llm-gateway.ex\u0430mple.example/v1",
+        "https://llm-gateway.example.internal\\@other.example/v1",
+        PORT_ZERO,
+        "https://llm-gateway.example.internal/a/../v1",
+        123,
         "https://[2001:db8::1]/v1",
         "https://user:pw@llm-gateway.example.internal/v1",
         "https://llm-gateway.example.internal/v1?x=1",
@@ -382,3 +407,19 @@ def test_homes_is_a_real_subcommand_with_its_own_help(capsys):
     assert "--roles" in capsys.readouterr().out
     assert hnx(["gen", "gateway", "homes", str(EXAMPLE / "homes/vllm-a")]) == 2  # --roles needed
     assert "--roles" in capsys.readouterr().err
+
+
+def test_a_role_without_max_context_tokens_is_reported_not_a_crash(tmp_path):
+    spec = _with(tmp_path, EXAMPLE_CTL)
+    role = spec.table.roles["main-reasoner-a"]
+    spec.table.roles["main-reasoner-a"] = dataclasses.replace(role, max_context_tokens=None)
+    _set_model(spec, "vllm-a", context_length=4096)
+    problems = ah.controller_problems(spec)
+    assert len(problems) == 1 and "mdl:main-reasoner-a has no max_context_tokens" in problems[0]
+
+
+def test_a_wrong_base_url_and_a_role_problem_are_both_reported(tmp_path):
+    spec = _with(tmp_path, EXAMPLE_CTL)
+    _set_model(spec, "vllm-a", base_url="https://vllm-a.svc.example.internal/v1", default="nope")
+    text = "\n".join(ah.controller_problems(spec))
+    assert "is not the gateway's" in text and "model.default 'nope' is not a role" in text
