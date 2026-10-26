@@ -1,0 +1,10 @@
+{
+  "stage": 11,
+  "contract": "secrets.py",
+  "stateful": true,
+  "export_formats": [
+    "json"
+  ],
+  "required_in_core": true,
+  "privileged": true
+}

@@ -281,19 +281,27 @@ def test_every_slot_the_examples_name_is_in_the_slot_registry():
     assert {c.removeprefix("cap:") for c in named} <= set(SLOTS)
 
 
-#: a slot registry entry is platform/capability 1.1's slot fields (docs/modules.md, "The slot
-#: registry"): the schema holds the registry's rules, so the draft data cannot drift from them
-SLOT_SCHEMA = {
-    "$ref": "https://schemas.example.internal/homelabnext/platform/capability/1.1#/$defs/slot"
-}
+#: a slot registry entry is platform/slot 1.0, a draft (docs/modules.md, "The slot registry"): the
+#: schema holds the registry's rules, so the draft data cannot drift from them
+SLOT_SCHEMA = {"$ref": "https://schemas.example.internal/homelabnext/platform/slot/1.0"}
+#: the trust roots docs/modules.md names: never provisional, always a conformance run and the
+#: human review tier, so dropping the flag from one must fail here, not pass silently
+PRIVILEGED = {"secrets", "idp", "edge", "broker", "orchestration", "records"}
 
 
 @pytest.mark.parametrize("slot", sorted(SLOTS))
-def test_a_slot_is_a_capability_1_1_slot_and_its_contract_is_a_real_protocol(slot):
+def test_a_slot_is_a_registry_entry_and_its_contract_is_a_real_protocol(slot):
     d = SLOTS[slot]
     assert sc.errors_for(SLOT_SCHEMA, d, REG) == []
     if d["contract"] is not None:
         assert (ROOT / "conformance/protocols" / d["contract"]).is_file()
+
+
+def test_the_privileged_slots_are_the_documented_trust_roots_and_each_has_a_suite():
+    from homelabnext.conform.registry import CAPABILITIES, EXTENDED
+
+    assert {s for s, d in SLOTS.items() if d.get("privileged")} == PRIVILEGED
+    assert set(CAPABILITIES) | set(EXTENDED) >= PRIVILEGED
 
 
 @pytest.mark.parametrize(

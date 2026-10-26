@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# The slot registry as platform/capability 1.1 carries it (docs/modules.md, "The slot
-# registry"), for the slots these examples use; every entry validates against the schema's
-# $defs/slot (tests/schemas/test_module_1_0.py). In the repository each slot is its own
+# The slot registry (docs/modules.md, "The slot registry") for the slots these examples use: every
+# entry validates against the draft schema platform/slot 1.0 (tests/schemas/test_module_1_0.py),
+# which capability descriptor 1.1 takes when ADR-0027 is accepted. There each slot would be its own
 # platform/capability record; one file keeps the draft readable. Nothing here names a provider:
 # which modules implement a slot is derived from their manifests, never listed.
 #   stage            the SOC pipeline stage (1-10), or null for a core slot outside the pipeline

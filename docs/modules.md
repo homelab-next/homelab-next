@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:c497e0f0b9af70c0
+summary_of: outline:sha256:4c3f45a233280c05
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -174,15 +174,18 @@ the approval gate reading classifier fields, the notify digest reading the detec
 core modules as their packages migrate. `core-modules` (the loader's own manifest) owns the criteria
 that guard rules no module may contribute about itself.
 
-## The slot registry (capability descriptor 1.1)
+## The slot registry (a draft schema; capability descriptor 1.1 when accepted)
 
-Every slot has a descriptor. `platform/capability` 1.1 (`schemas/platform/capability.schema.json`)
-carries the fields below and their rules; its `$defs/slot` is a registry entry on its own, and
-`examples/modules/slots.yml`, the draft data for the slots the examples use, is validated against
-it by the contract tests (each slot also names a real protocol file when it has a contract). The
-repository has no per-slot capability records yet: the registry is that one draft file. 1.1 is a
-published version like any other (frozen as `schemas/_frozen/1.1/`); a change to these fields is a
-new minor. The fields:
+Every slot has a descriptor; `examples/modules/slots.yml` is the draft data for the slots the
+examples use, and the contract-test rules read it. The fields and their rules are a draft schema
+of their own, `platform/slot` 1.0 (`schemas/platform/slot.schema.json`, `x-draft`): every
+`slots.yml` entry validates against it, each contract names a real protocol file, and the
+privileged set is pinned to the six trust roots named below, each with a conformance suite.
+`platform/capability` stays 1.0 until the ADR is accepted: 1.0 allows undeclared keys, so adding
+these fields' rules to it would refuse a 1.0 descriptor that happened to carry one, which is not
+an additive change. Capability descriptor 1.1 takes them then (a deliberate, documented break, or
+2.0). A `stage` slot need not declare `formats` unless it is `pass_through`, which must pass
+something (non-empty `in` and `out`). The fields:
 
 | Field | Meaning | What it makes computable |
 |---|---|---|
@@ -812,7 +815,7 @@ Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
 
 | Record | Change | State |
 |---|---|---|
-| `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **schema written**; the registry is still the draft `examples/modules/slots.yml`, validated against `$defs/slot` |
+| `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
 | `platform/swap_record` 1.2 | above | specified, not implemented |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
 | `platform/interface` 1.0 | the owned interface record (today inline in the owner's manifest) | specified, not implemented |
@@ -866,7 +869,7 @@ Everything below is described on this page and exists in no form yet: no schema,
 check, not even a contract-test rule. Each is a follow-up before the ADR can be accepted, or is
 listed as deferred.
 
-1. ~~Capability descriptor 1.1~~: the schema is written; what is left is per-slot records in place of the draft `slots.yml`.
+1. **Capability descriptor 1.1**: the fields and rules exist as the draft `platform/slot` 1.0, and `slots.yml` is validated against it; folding them into the descriptor waits for acceptance.
 2. **Swap record 1.2**, with `legs`, `selection_diff` and `dependants.report` defined, and one swap
    driven through it end to end in a test.
 3. **`platform/interface` 1.0** as a standalone record, and a `gate` marker so a gate interface
