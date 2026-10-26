@@ -282,7 +282,9 @@ definition. The rules refuse, per id and every version:
 - a module gating on an interface it does not define (another module owns it), and a gated
   interface whose definition lacks `gate: true`;
 - a definition marked `gate: true` that its owner does not consume with `gate: true`;
-- a gate interface its owner also provides.
+- a gate interface its owner also provides;
+- an id marked `gate: true` on some versions only (an id is a gate when any version says so, and
+  every version must).
 
 So a producer cannot take over the interface a gate checks: the gate's own entry names it, and the
 gate must own it. What is not covered: an interface nobody marks as a gate, and a gate module that

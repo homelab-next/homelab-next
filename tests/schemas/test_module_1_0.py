@@ -498,7 +498,7 @@ MODULE_DEFECTS = {
     "a gate on an interface whose definition is not a gate": (
         "publishing",
         lambda d: d["interfaces"][0].pop("gate"),
-        "interface publishable-output: consumed with gate: true, so its definition says gate: true",
+        "interface publishable-output 1.0: consumed with gate: true, so its definition says gate: true",
     ),
     "a core module that owns a gate it does not consume": (
         "publishing",
@@ -982,6 +982,69 @@ def test_a_gate_whose_definition_is_not_a_gate_is_refused_across_manifests():
         "publishing: gates on interface publishable-output, whose definition lacks gate: true"
         in mr.tree_problems(mods)
     )
+
+
+def _two_versions(first_gate, second_gate):
+    mods = copy.deepcopy(MODULES)
+    v1 = mods["publishing"]["interfaces"][0]
+    v2 = {**copy.deepcopy(v1), "version": "1.1"}
+    for d, g in ((v1, first_gate), (v2, second_gate)):
+        if g is None:
+            d.pop("gate", None)
+        else:
+            d["gate"] = g
+    mods["publishing"]["interfaces"].append(v2)
+    return mods
+
+
+@pytest.mark.parametrize("first,second", [(None, True), (True, None), (False, True), (True, False)])
+def test_every_version_of_a_gate_interface_is_marked_whatever_the_order(first, second):
+    """Negative: gate ownership is per id, every version; an unmarked version is refused in
+    either order, by the module rules and across manifests."""
+    mods = _two_versions(first, second)
+    doc = mods["publishing"]
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    bad = "1.0" if first is not True else "1.1"
+    assert any(
+        p.startswith(f"interface publishable-output {bad}: consumed with gate: true") for p in probs
+    ), probs
+    assert (
+        "interface publishable-output: gate: true on some versions only; every version of a gate "
+        "says it" in mr.tree_problems(mods)
+    )
+
+
+def test_an_unconsumed_version_mix_is_refused_too():
+    mods = _two_versions(None, True)
+    doc = mods["publishing"]
+    doc["prefers"]["interfaces"][0].pop("gate")
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    assert (
+        "interface publishable-output 1.0: another version is a gate, so every version says "
+        "gate: true" in probs
+    )
+
+
+def test_every_version_marked_is_accepted():
+    mods = _two_versions(True, True)
+    doc = mods["publishing"]
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    assert not [p for p in probs if "gate" in p], probs
+    assert not [p for p in mr.tree_problems(mods) if "gate" in p]
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {},
+        {"requires": None, "prefers": {"interfaces": None}},
+        {"requires": {"interfaces": ["x", {"gate": True}, {"interface": 5, "gate": True}]}},
+        {"prefers": {"interfaces": [{"interface": "a", "gate": "yes"}]}},
+        [],
+    ],
+)
+def test_reading_gated_interfaces_tolerates_a_malformed_manifest(doc):
+    assert mr._gated_interfaces(doc) == set()
 
 
 def test_a_producer_may_own_and_provide_an_interface_that_is_not_a_gate():
