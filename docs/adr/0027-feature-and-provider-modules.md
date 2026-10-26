@@ -157,7 +157,8 @@ with no schema, generator or check in any form):
    mount); a role's own services join by `Slice=`, and the loader will run it;
 9. the loader, with its two-way check against what runs, uniqueness against the core's own names
    and the overlay-shadowing refusal;
-10. the product-name lint.
+10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
+    gates` and CI), with the core's existing product names as a baseline that only shrinks.
 
 These are the follow-ups. The ADR is not accepted, and the schemas are not frozen, until the loader
 and the collector pilot have run.

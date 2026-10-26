@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a schema is invalid, lacks an example or a negative, or breaks its frozen baseline.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, code:homelabnext/cli.py, make:schemas]
+#   trigger: [ci:ci/schemas, code:homelabnext/cli.py, make:schemas, script:product-name-lint]
 #   invariant: [Q-10]
 #   inputs: schemas/ (with examples/, negative/ and _frozen/)
 #   outputs: one line per problem and a summary; --freeze writes missing baselines
