@@ -20,8 +20,12 @@ def branch(name, sha, protected=False):
     return {"name": name, "commit": {"sha": sha}, "protected": protected}
 
 
-def pull(ref, sha, state, repo=REPO):
-    return {"state": state, "head": {"ref": ref, "sha": sha, "repo": {"full_name": repo}}}
+def pull(ref, sha, state, repo=REPO, base="main"):
+    return {
+        "state": state,
+        "head": {"ref": ref, "sha": sha, "repo": {"full_name": repo}},
+        "base": {"ref": base},
+    }
 
 
 BRANCHES = [
@@ -79,4 +83,20 @@ def test_bad_input_deletes_nothing(tmp_path, capsys):
     b.write_text('{"message": "Bad credentials"}')  # an API error, not a list
     p.write_text("[]")
     assert pb.main([str(b), str(p), "--default", "main"]) == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_the_base_of_an_open_stacked_pull_request_is_kept():
+    """Deleting a branch another open pull request targets would close that pull request."""
+    branches = [branch("main", "m1"), branch("step-1", "s1"), branch("step-2", "s2")]
+    pulls = [pull("step-1", "s1", "closed"), pull("step-2", "s2", "open", base="step-1")]
+    delete, kept = pb.decide(branches, pulls, default="main", repo=REPO)
+    assert delete == [] and kept["step-1"] == "the base of an open pull request"
+
+
+def test_an_empty_default_branch_deletes_nothing(tmp_path, capsys):
+    b, p = tmp_path / "b.json", tmp_path / "p.json"
+    b.write_text(json.dumps([branch("main", "m1")]))
+    p.write_text(json.dumps([pull("main", "m1", "closed")]))  # main's tip is a closed head
+    assert pb.main([str(b), str(p), "--default", ""]) == 2
     assert capsys.readouterr().out == ""

@@ -11,7 +11,8 @@ delete; ``--keep FILE`` writes the kept ones with the reason, for the run summar
 A branch is deleted only when every one of these holds:
 
 * it is not the default branch and not protected;
-* no open pull request has it as its head;
+* no open pull request has it as its head or as its base (a stacked pull request: deleting its
+  base would close it);
 * its tip is exactly the head commit of a merged or closed pull request from this repository, so
   a branch that got new commits after its pull request closed, or never had one, is kept.
 
@@ -42,6 +43,9 @@ def decide(
     branches: Iterable[dict], pulls: Iterable[dict], *, default: str, repo: str | None = None
 ) -> tuple[list[str], dict[str, str]]:
     """``(to_delete, kept)``: names to delete, and every other branch with why it stays."""
+    pulls = list(pulls)
+    # any open pull request's base, a fork's included: deleting it would close that pull request
+    open_bases = {p["base"]["ref"] for p in pulls if p.get("state") == "open" and p.get("base")}
     pulls = [
         p
         for p in pulls
@@ -59,6 +63,8 @@ def decide(
             kept[name] = "protected"
         elif name in open_heads:
             kept[name] = "an open pull request"
+        elif name in open_bases:
+            kept[name] = "the base of an open pull request"
         elif (name, tip) in finished:
             delete.append(name)
         elif name in with_pr:
@@ -76,6 +82,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--repo", help="owner/name: only pull requests from this repository count")
     ap.add_argument("--keep", type=Path, help="write the kept branches and why, one per line")
     args = ap.parse_args(argv)
+    if not args.default.strip():
+        # an empty default would match no branch, and the default branch would lose its guard
+        print("prune_branches: --default is empty", file=sys.stderr)
+        return 2
     try:
         branches = _flat(json.loads(args.branches.read_text(encoding="utf-8")))
         pulls = _flat(json.loads(args.pulls.read_text(encoding="utf-8")))
