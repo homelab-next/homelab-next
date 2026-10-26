@@ -13,17 +13,17 @@ modules:
       role: check
       date: '2026-10-20'
       verdict: pass
-      digest: sha256:5e5e5e5e5e5e5e5e
+      digest: sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e
     - by: agent:example-auditor
       kind: agent
       role: audit
       date: '2026-10-21'
       verdict: pass
-      digest: sha256:5e5e5e5e5e5e5e5e
+      digest: sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e
     - by: human:example-operator
       kind: human
       role: approve
       date: '2026-10-22'
       verdict: pass
-      digest: sha256:5e5e5e5e5e5e5e5e
+      digest: sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e
       note: read the role tasks and the adapter

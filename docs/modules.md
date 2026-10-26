@@ -363,10 +363,11 @@ errors.
 
 **Manifests join the review policy** (`review-policy.yml` kinds `module-provider`, `module-feature`,
 `module-core`) with the human-approve tier for any change to `credentials`, `control_plane`, agent
-`needs` (data grants), `egress`, or a privileged slot. The kinds exist now, for fetched modules
-(state `locked` in `lab/modules.lock`, see [Supply chain](#supply-chain)): the example policy asks a
-human approve of every fetched module, stricter than the per-field tier; an in-tree module is
-reviewed by this repository's pull requests. The gates this table marks as implemented exist only as
+`needs` (data grants), `egress`, or a privileged slot. The kinds exist for fetched modules (state
+`locked` in `lab/modules.lock`, see [Supply chain](#supply-chain)), where the example policy asks a
+human approve of every one, flatter and stricter than this per-field tier; the per-field tier for
+in-tree manifests is still specified, not implemented (an in-tree module is reviewed by this
+repository's pull requests). The gates this table marks as implemented exist only as
 contract-test rules over the examples (`homelabnext/modules/rules.py`); no loader enforces any of
 them at deploy time.
 
@@ -532,19 +533,35 @@ could ship pre-stamped approvals); `author` is required.
 **The lock, the tree digest and digest-keyed reviews** (follow-up 5): for a fetched module the
 overlay keeps a lock, `lab/modules.lock` (draft schema `platform/module_lock` 1.0): per module id,
 its `origin` (exactly the manifest's), its `tree` digest and the `reviews` of that tree.
-`homelabnext.modules.supply.tree_digest` is `sha256:` over every file of the module directory, code
-and roles included (each file's path, executable bit and content digest, sorted; `.git` left out,
-the commit being pinned in the origin); a symbolic link or special file anywhere refuses it, so a
-module cannot point outside itself. `hnx reviews digest <module dir>` prints it for a reviewer to
-stamp. The reviews have the shape of every other review (`homelabnext.reviews`): each counts only
-while its digest is a prefix of the pinned tree, the manifest's `author` never reviews their own
-module, and the review policy's `module-provider`, `module-feature` and `module-core` kinds say what
-state `locked` needs (in the example policy: an agent check, an independent agent audit and a human
-approve, for every kind). `lock_problems` is the loader's check: every selected fetched module is
-pinned, its origin is the lock's, its directory still has the pinned digest and its reviews meet
-the policy, so **unpinned, changed or unreviewed means not loadable**; a module that changes needs
-a new pin and new reviews, never the old ones. An in-tree module is never locked, and an entry for
-a module that is not selected is refused (it goes with its selection).
+
+- **The tree digest** (`homelabnext.modules.supply.tree_digest`, `hnx reviews digest <module
+  dir>`) is `sha256:` over a `hnx-tree-v1` header and one line per regular file: its path, whether
+  any executable bit is set, and its content digest, sorted by path. It does not cover empty
+  directories, directory modes, ownership, times or other mode bits. A symbolic link, special file,
+  hard-linked file or `.git` entry anywhere refuses it (fetch with `git archive`, or strip `.git`,
+  before pinning: no review reads version-control metadata), and so does a tree over its limits
+  (20 000 files, 2 GiB).
+- **The reviews** have the shape of every other review (`homelabnext.reviews`), inline in the lock
+  (a fetched module cannot hold reviews beside itself; sidecar event files are the alternative if
+  several reviewers conflict on one file). Only a review naming the **full** pinned tree counts
+  (a prefix, which a module author could grind for, is reported); reviews of an earlier tree stay as
+  history and are ignored; a `changes` or `reject` verdict on the pinned tree vetoes it; the
+  manifest's `author` never reviews their own module and may not be `unknown`.
+- **The policy**: kinds `module-provider`, `module-feature` and `module-core`, state `locked`. The
+  example policy asks an agent check, an independent agent audit and a human approve of every kind
+  (flat, stricter than the per-field tier above: the digest covers a whole tree, not a change). A
+  module of no known kind, or of a kind the policy leaves out or asks nothing of, is never loadable;
+  a policy may leave the kinds out, so older policies still load.
+
+`lock_problems` is the loader's check: every selected fetched module is pinned, its origin is the
+lock's, its directory still has the pinned digest and its reviews meet the policy, so **unpinned,
+changed or unreviewed means not loadable**; a module that changes needs a new pin and new reviews.
+A module is in-tree only when its directory is under the public `modules/` tree, whatever its
+manifest says; an in-tree module is never locked, and an entry for a module that is not selected is
+refused. Like every review here, this is a consistency check over what the files claim, not
+authentication: whoever can edit the lock can edit the pin and the reviews, so the lock is reviewed
+by the overlay's own pull requests. The digest is a string, not a snapshot, so the loader loads from
+a copy only it can write.
 
 ## Site selection (`platform/module_selection` 1.0, a draft schema)
 
@@ -942,7 +959,8 @@ listed as deferred.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
    outright instead), grants for broker, idp and remote-admin upstreams, cloud-bound model roles,
    and `grants.shared_config` (the rule refuses edge and idp config outright). The review-policy
-   kinds `module-provider`, `module-feature`, `module-core` exist (follow-up 5).
+   kinds `module-provider`, `module-feature`, `module-core` exist for fetched modules (follow-up
+   5); the per-field tier for in-tree manifests does not.
 5. **Supply chain**: implemented (see [Supply chain](#supply-chain)); the loader will run the check.
 6. **The egress generator**: rendering declared egress into host and unit network policy.
 7. **Import validation**: the MUST that `import_` refuses traversal, symlinks and oversize trees, and

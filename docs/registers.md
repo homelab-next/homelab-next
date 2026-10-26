@@ -26,6 +26,7 @@ hnx registers review examples/registers [--today D] [--strict] [--json]   # what
 hnx registers summaries examples/registers docs [--json]   # summary lint (ADR-0032)
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
 hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review must carry
+hnx reviews digest lab/modules/<id>   # a fetched module's tree digest (docs/modules.md, "Supply chain")
 hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event
 hnx registers events migrate examples/registers/lessons docs/systems   # inline state -> events
 hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--dry-run]

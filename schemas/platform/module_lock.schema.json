@@ -151,7 +151,8 @@
         },
         "digest": {
           "type": "string",
-          "pattern": "^sha256:[0-9a-f]{12,64}$(?!\\n)"
+          "description": "The full pinned tree: a prefix is not enough for a module review.",
+          "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)"
         },
         "note": {
           "type": "string",

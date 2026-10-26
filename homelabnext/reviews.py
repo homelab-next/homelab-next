@@ -4,7 +4,9 @@
 One model for every reviewed artefact: lesson and runbook records
 (``examples/registers/lessons/<uid>.md``), the per-service SOP pages (``docs/systems/``) and the
 strategy-to-task records (``examples/strategy/``, :mod:`homelabnext.strategy`) and the MCP
-catalog's server records (``examples/mcp/<id>.yml``, inline ``reviews:``; :mod:`homelabnext.mcp.servers`).
+catalog's server records (``examples/mcp/<id>.yml``, inline ``reviews:``; :mod:`homelabnext.mcp.servers`)
+and fetched modules (inline in the overlay's ``lab/modules.lock``, keyed by the tree digest;
+:mod:`homelabnext.modules.supply`).
 An artefact carries ``author:`` and its reviews: append-only event files in the sidecar
 directory beside it (``<uid>.events/``, ``docs/systems/dns.events/``; see
 :mod:`homelabnext.registers.events`), each one review entry, or (the older form, still read) an
@@ -109,6 +111,9 @@ ARTEFACT_STATES: dict[str, tuple[str, ...]] = {
     "module-feature": ("locked",),
     "module-core": ("locked",),
 }
+#: kinds a policy may leave out: then nothing of that kind is ever reviewed enough (fetched
+#: modules fail closed), and policies written before the kinds existed still load
+OPTIONAL_ARTEFACTS = frozenset({"module-provider", "module-feature", "module-core"})
 UNKNOWN_AUTHOR = "unknown"
 
 
@@ -211,6 +216,8 @@ def validate_policy(data) -> list[str]:
         problems.append(f"requirements: unknown artefact kind {art!r} ({sorted(ARTEFACT_STATES)})")
     for art, states in ARTEFACT_STATES.items():
         got = reqs.get(art)
+        if got is None and art in OPTIONAL_ARTEFACTS:
+            continue
         if not isinstance(got, dict):
             problems.append(f"requirements.{art}: missing (list every state: {list(states)})")
             continue
@@ -430,10 +437,18 @@ def file_digest(path) -> str:
     ``lab/modules.lock`` pins), a register or strategy record, an MCP catalog record
     (``<catalog>/mcp/<id>.yml``), or a docs/systems page."""
     p = pathlib.Path(path)
-    if p.is_dir() and (p / "module.yml").is_file():
-        from homelabnext.modules.supply import tree_digest
+    if p.is_dir():
+        # reviews <-> supply import each other: supply needs evaluate, this needs tree_digest
+        from homelabnext.modules.supply import SupplyError, tree_digest
 
-        return tree_digest(p)
+        if not (p / "module.yml").is_file():
+            raise ReviewError(
+                str(p), ["a directory is reviewed only as a module (it has no module.yml)"]
+            )
+        try:
+            return tree_digest(p)
+        except SupplyError as exc:
+            raise ReviewError(str(p), [str(exc)]) from None
     text = p.read_text(encoding="utf-8")
     from homelabnext.strategy.records import file_digest as strategy_digest
 
