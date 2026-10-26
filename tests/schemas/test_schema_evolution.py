@@ -58,6 +58,7 @@ NEWER_THAN_1_0 = {
     "register_event.rekey.yml": "registers/register_event 1.3: event rekey",
     "note.register-transition-legacy-code.md": "records/note 1.1: type register-transition",
     "site.tailnet-deploy.yml": "platform/site 1.2: tailnet.deploy",
+    "capability.provisional-slot.json": "platform/capability 1.1: no contract, contracts empty",
     "decision.returned.agent-approved.json": "events/decision.returned 1.1: tier_used agent",
     "agent.job.failed.auto-retried.json": "events/agent.job.failed 1.1: auto_retry_scheduled",
     "mcp_server.broker.yml": "platform/mcp_server 1.1: acts_via",

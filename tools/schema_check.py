@@ -234,6 +234,14 @@ _TIGHTENING_IF_NEW = (
 #: new ``anyOf``), each argued by hand: {(schema name, frozen version): {path: why}}. Nothing may
 #: join for a change the check can judge.
 PROVEN_BY_HAND = {
+    ("platform/capability", "1.0"): {
+        "$.allOf": (
+            "1.1's rules fire only on keys 1.0 never declared (stateful, export_formats, "
+            "privileged, pass_through, contract): a 1.0 descriptor without them meets every "
+            "branch, and the one rule on a 1.0 key, contracts' minItems, moved under "
+            "'contract is null' and only loosens"
+        ),
+    },
     ("registers/register_event", "1.0"): {
         "$.allOf[3].then.properties.from.anyOf": "1.1 widens ^[a-z]+$ to ^[a-z]+(?:-[a-z]+)*$",
         "$.allOf[3].then.properties.to.anyOf": "1.1 widens ^[a-z]+$ to ^[a-z]+(?:-[a-z]+)*$",

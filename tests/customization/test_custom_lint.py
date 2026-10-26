@@ -214,7 +214,7 @@ def test_cu010_contract(tmp_path, uni):
         assert "CU010" in codes(run(sub, uni, [(make_doc(contract=bad), None)])), bad
     for good in [
         "adr:hypervisor-is-not-modular",
-        "https://schemas.example.internal/homelabnext/platform/capability/1.0",
+        "https://schemas.example.internal/homelabnext/platform/capability/1.1",
     ]:
         sub = tmp_path / f"good{len(good)}"
         assert "CU010" not in codes(run(sub, uni, [(make_doc(contract=good), None)]))

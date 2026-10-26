@@ -281,13 +281,37 @@ def test_every_slot_the_examples_name_is_in_the_slot_registry():
     assert {c.removeprefix("cap:") for c in named} <= set(SLOTS)
 
 
+#: a slot registry entry is platform/capability 1.1's slot fields (docs/modules.md, "The slot
+#: registry"): the schema holds the registry's rules, so the draft data cannot drift from them
+SLOT_SCHEMA = {
+    "$ref": "https://schemas.example.internal/homelabnext/platform/capability/1.1#/$defs/slot"
+}
+
+
 @pytest.mark.parametrize("slot", sorted(SLOTS))
-def test_a_slot_with_a_contract_names_a_real_protocol(slot):
+def test_a_slot_is_a_capability_1_1_slot_and_its_contract_is_a_real_protocol(slot):
     d = SLOTS[slot]
-    if d.get("contract"):
+    assert sc.errors_for(SLOT_SCHEMA, d, REG) == []
+    if d["contract"] is not None:
         assert (ROOT / "conformance/protocols" / d["contract"]).is_file()
-    assert not (d.get("privileged") and not d.get("contract")), "a privileged slot has a contract"
-    assert bool(d.get("export_formats")) == bool(d.get("stateful"))
+
+
+@pytest.mark.parametrize(
+    ("edit", "where"),
+    [
+        (lambda d: d.update(privileged=True, contract=None), "contract"),
+        (lambda d: d.pop("export_formats"), "$"),
+        (lambda d: d.update(stateful=False), "stateful"),
+        (lambda d: d.update(pass_through=True, required_in_core=True), "required_in_core"),
+        (lambda d: d.update(layer=4), "$"),
+        (lambda d: d.pop("stage"), "$"),
+    ],
+)
+def test_the_slot_schema_refuses_a_registry_entry_that_breaks_a_rule(edit, where):
+    d = copy.deepcopy(SLOTS["secrets"])
+    edit(d)
+    errs = sc.errors_for(SLOT_SCHEMA, d, REG)
+    assert errs and any(str(e).startswith(where) for e in errs), errs
 
 
 def _contributed_files(doc):
