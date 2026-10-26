@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ipaddress
+from typing import Any
 
 from .model import Fleet, Guest, Problem, ZoneInfo, allowed_groups
 
@@ -196,7 +197,108 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         if require_baselines or g.baseline:
             out += guest_problems(g, fleet.baselines)
     out += _power(fleet)
+    out += _capacity(fleet)
     return out
+
+
+def node_usage(fleet: Fleet) -> dict[str, dict[str, Any]]:
+    """Per node, what its guests ask for: ``cores``, ``memory_mb`` and ``disk_gb`` per pool,
+    over every guest not retired (a planned guest will be built, so it counts)."""
+    usage: dict[str, dict[str, Any]] = {}
+    for g in fleet.sorted():
+        # a physical host's resources are its own, not drawn from a node
+        if g.kind == "host" or g.raw.get("status") == "retired" or not g.raw.get("resources"):
+            continue
+        u = usage.setdefault(g.node, {"cores": 0, "memory_mb": 0, "disk_gb": {}, "guests": []})
+        u["cores"] += int(g.cpu.get("cores", 0))
+        u["memory_mb"] += int(g.memory.get("size_mb", 0))
+        u["guests"].append(g.id)
+        for d in g.disks:
+            pool = str(d.get("pool"))
+            u["disk_gb"][pool] = u["disk_gb"].get(pool, 0) + int(d.get("size_gb", 0))
+    return usage
+
+
+def _capacity(fleet: Fleet) -> list[Problem]:
+    """A node that declares ``capacity`` holds its guests' cores (times ``cpu_overcommit``) and
+    memory within what its reserve leaves; one that declares ``pools`` holds every disk on a pool
+    it has, within the pool's size.  Memory is never overcommitted: a guest's ``size_mb`` is its
+    ceiling, and ballooning only lends it back."""
+    out: list[Problem] = []
+    measured = any(s.get("capacity") or s.get("pools") for s in fleet.nodes.values())
+    for node, u in sorted(node_usage(fleet).items()):
+        spec = fleet.nodes.get(node) or {}
+        where = f"_nodes.yml {node}"
+        if measured and node not in fleet.nodes:  # a typo would escape every check below
+            out.append(
+                Problem(
+                    where,
+                    f"{len(u['guests'])} guest(s) are placed on {node!r}, which _nodes.yml does "
+                    "not list, so their resources are checked against nothing",
+                )
+            )
+            continue
+        cap = spec.get("capacity")
+        if cap:
+            vcpus = cap["for_guests"]["vcpus"]
+            if u["cores"] > vcpus:
+                out.append(
+                    Problem(
+                        where,
+                        f"guests ask for {u['cores']} cores, more than its {vcpus} "
+                        f"({cap['for_guests']['threads']} threads after the reserve, times "
+                        f"cpu_overcommit {cap['cpu_overcommit']:g})",
+                    )
+                )
+            if u["memory_mb"] > cap["for_guests"]["memory_mb"]:
+                out.append(
+                    Problem(
+                        where,
+                        f"guests ask for {u['memory_mb']} MB of memory, more than the "
+                        f"{cap['for_guests']['memory_mb']} MB its reserve leaves",
+                    )
+                )
+        pools = spec.get("pools")
+        if pools:
+            for pool, gb in sorted(u["disk_gb"].items()):
+                if pool not in pools:
+                    out.append(
+                        Problem(
+                            where, f"guests put {gb} GB on pool {pool!r}, which it does not have"
+                        )
+                    )
+                elif gb > pools[pool]["size_gb"]:
+                    out.append(
+                        Problem(
+                            where,
+                            f"guests put {gb} GB on pool {pool!r}, more than its "
+                            f"{pools[pool]['size_gb']} GB",
+                        )
+                    )
+    return out
+
+
+def usage_lines(fleet: Fleet) -> list[str]:
+    """One line per node that declares capacity or pools: what its guests use of it."""
+    lines = []
+    usage = node_usage(fleet)
+    for node in sorted(fleet.nodes):
+        spec = fleet.nodes[node]
+        if not (spec.get("capacity") or spec.get("pools")):
+            continue
+        u = usage.get(node, {"cores": 0, "memory_mb": 0, "disk_gb": {}, "guests": []})
+        parts = [f"{len(u['guests'])} guests"]
+        cap = spec.get("capacity")
+        if cap:
+            vcpus = cap["for_guests"]["vcpus"]
+            parts.append(f"cores {u['cores']}/{vcpus}")
+            parts.append(
+                f"memory {u['memory_mb'] // 1024}/{cap['for_guests']['memory_mb'] // 1024} GiB"
+            )
+        for pool, ps in sorted((spec.get("pools") or {}).items()):
+            parts.append(f"{pool} {u['disk_gb'].get(pool, 0)}/{ps['size_gb']} GB")
+        lines.append(f"{node}: " + ", ".join(parts))
+    return lines
 
 
 def _power(fleet: Fleet) -> list[Problem]:
