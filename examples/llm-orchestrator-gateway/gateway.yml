@@ -25,6 +25,10 @@ keys:
     key: secret:llm-gateway/key-home-vllm-b
     roles: [mdl:main-reasoner-b]
     data_tier: local-only
+# the orchestration telemetry's spend-log reader (docs/orchestration-telemetry.md): a view-only
+# user that may call no model, and one key restricted to /spend/logs/v2
+telemetry_reader:
+  key: secret:llm-gateway/key-telemetry-reader
 controller:
   config: controller.yaml
   base_url: https://llm-gateway.example.internal/v1  # what every home's model.base_url names

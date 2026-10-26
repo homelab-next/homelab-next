@@ -239,10 +239,19 @@ Why not a read-only Postgres role on `LiteLLM_SpendLogs`:
 3. The schema belongs to the gateway's own role and is re-created by migrations, so a grant would
    have to be redone after each one; the database also needs no network path from the hub.
 
-The key is not generated yet: `hnx gen gateway render` creates only model-calling keys, so the
-operator creates this one on the running gateway (`/user/new` with `user_role:
-proxy_admin_viewer`, then `/key/generate` for that user with the route restriction) and stores it
-under the secret name. Generating it from the gateway spec is a follow-up.
+The gateway spec declares it: `telemetry_reader: {key: secret:llm-gateway/key-telemetry-reader}`
+(the [orchestrator example](../examples/llm-orchestrator-gateway/gateway.yml) does). `hnx gen
+gateway render` then writes, into `litellm/keys.json`, a user `hnx-telemetry-reader-<spec name>`
+with role `proxy_admin_viewer` and `models: ["no-default-models"]`, and a key `telemetry-reader`
+owned by it with `allowed_routes: ["/spend/logs/v2"]` and the same model block: three locks, each
+enough alone (LiteLLM 1.103 enforces a key's `allowed_routes` for every role, refuses the viewer
+role every inference route, and lets a `no-default-models` user call no model). Provisioning
+(`hnx gen gateway provision`) creates the user before its key, with `auto_create_key: false` so
+no undeclared key appears, puts a hand-widened role or model list back on the next run, and
+prunes the key like any other when the spec drops the reader; the user, which holds nothing once
+its key is gone, stays. The audit of `keys.json` refuses any key but this one with a user or
+routes, and any user but this shape. Bifrost gets no reader: the spend-log adapter is LiteLLM's.
+The operator only stores the key's value under the secret name.
 
 #### Enabling tagging on LiteLLM
 

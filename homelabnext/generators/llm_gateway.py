@@ -99,6 +99,12 @@ DATA_TIERS = ("local-only", "cloud-allowed")
 #: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
 #: whose alias the spec no longer declares, and never touches an untagged one
 MANAGED = "hnx-managed"
+#: the telemetry reader (docs/orchestration-telemetry.md): its key's alias, the one route it may
+#: call, LiteLLM's view-only admin role, and the model name that blocks every model
+READER_ALIAS = "telemetry-reader"
+READER_ROUTES = ("/spend/logs/v2",)
+READER_ROLE = "proxy_admin_viewer"
+NO_MODELS = "no-default-models"
 #: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
 #: API domains of hosted model providers: no service domain or local host may sit under one, so a
@@ -184,6 +190,13 @@ class Spec:
     #: the orchestration controller whose backends sit behind this gateway (``--check`` holds its
     #: backend list and homes to the spec); None when the spec has no ``controller:`` block
     controller: ControllerRef | None = None
+    #: the telemetry reader's key (``telemetry_reader.key``, a secret reference), or None
+    telemetry_reader: str | None = None
+
+    @property
+    def reader_user(self) -> str:
+        """The LiteLLM user that owns the telemetry reader's key."""
+        return f"hnx-{READER_ALIAS}-{self.name}" if self.name else f"hnx-{READER_ALIAS}"
 
 
 def internal_host(spec: Spec, host: str) -> bool:
@@ -326,6 +339,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
         "backends", "local_only", "keys", "bifrost", "serving", "name", "controller",
+        "telemetry_reader",
     }  # fmt: skip
     spec_name = doc.get("name", "")
     if spec_name != "" and not (isinstance(spec_name, str) and SLUG_RE.match(spec_name)):
@@ -546,12 +560,24 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
 
     master_key = _secret("master_key", doc.get("master_key"), problems)
     database_url = _secret("database_url", doc.get("database_url"), problems)
+    reader = None
+    raw_reader = doc.get("telemetry_reader")
+    if raw_reader is not None:
+        if not isinstance(raw_reader, Mapping) or set(raw_reader) != {"key"}:
+            problems.append(
+                "telemetry_reader takes key (a secret: reference for the spend-log reader's key)"
+            )
+        else:
+            reader = _secret("telemetry_reader.key", raw_reader["key"], problems)
+        if READER_ALIAS in {k.name for k in keys}:
+            problems.append(f"key name {READER_ALIAS!r} is the telemetry reader's; rename the key")
     controller = None
     if doc.get("controller") is not None:
         controller = parse_controller(doc["controller"], base, problems)
-    problems += _secret_collisions(
-        keys, master_key, database_url, backends, {"bifrost.admin_password": admin_password}
-    )
+    others = {"bifrost.admin_password": admin_password}
+    if reader is not None:
+        others["telemetry_reader.key"] = reader
+    problems += _secret_collisions(keys, master_key, database_url, backends, others)
 
     spec = Spec(
         name=spec_name,
@@ -569,6 +595,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         service_domain=service_domain,
         registry_hosts=frozenset(registry_hosts),
         controller=controller,
+        telemetry_reader=reader,
     )
     if not problems:
         problems += locality_problems(spec)
@@ -860,6 +887,22 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         for k in sorted(spec.keys, key=lambda k: k.name)
     ]
     doc_keys: dict[str, Any] = {"managed_by": spec.name} if spec.name else {}
+    if spec.telemetry_reader is not None:
+        # a view-only admin that may call no model, owning one key restricted to the spend-log
+        # route (docs/orchestration-telemetry.md): three locks, each enough on its own
+        doc_keys["users"] = [
+            {"user_id": spec.reader_user, "user_role": READER_ROLE, "models": [NO_MODELS]}
+        ]
+        keys.append(
+            {
+                "key_alias": READER_ALIAS,
+                "key_env": secret_env_name(spec.telemetry_reader),
+                "user_id": spec.reader_user,
+                "models": [NO_MODELS],
+                "allowed_routes": list(READER_ROUTES),
+                "metadata": {"owner": "telemetry", MANAGED: spec.name or True},
+            }
+        )
     return head + body, json.dumps(doc_keys | {"keys": keys}, indent=2) + "\n"
 
 
@@ -1145,6 +1188,33 @@ def _audit_keys(text: str, name: str = "") -> list[str]:
                 f"key {alias} is not tagged metadata.{MANAGED}={want!r}: provisioning would "
                 "never delete it once its profile is removed"
             )
+        if ("user_id" in k or "allowed_routes" in k) and not (
+            alias == READER_ALIAS
+            and k.get("allowed_routes") == list(READER_ROUTES)
+            and k.get("models") == [NO_MODELS]
+        ):
+            problems.append(
+                f"key {alias}: only the telemetry reader has a user or allowed_routes, and its "
+                f"routes are exactly {list(READER_ROUTES)} with models [{NO_MODELS!r}]"
+            )
+    users = doc.get("users", [])
+    good_users = set()
+    for u in users if isinstance(users, list) else [None]:
+        if not (
+            isinstance(u, dict)
+            and set(u) == {"user_id", "user_role", "models"}
+            and u["user_role"] == READER_ROLE
+            and u["models"] == [NO_MODELS]
+        ):
+            problems.append(
+                f"users: each user is the telemetry reader ({READER_ROLE}, models "
+                f"[{NO_MODELS!r}]), got {u!r}"
+            )
+            continue
+        good_users.add(u["user_id"])
+    for k in keys:
+        if isinstance(k, Mapping) and "user_id" in k and k["user_id"] not in good_users:
+            problems.append(f"key {k.get('key_alias')}: user {k['user_id']!r} is not in users")
     return problems
 
 
@@ -1361,6 +1431,25 @@ def provision_litellm(
         return found
 
     would = "would be " if dry_run else ""
+    users = keys_doc.get("users", [])
+    if not isinstance(users, list) or not all(
+        isinstance(u, Mapping) and isinstance(u.get("user_id"), str) and u["user_id"] for u in users
+    ):
+        raise GatewaySpecError("keys file: users must be a list of objects with a user_id")
+    for u in users:
+        uid = u["user_id"]
+        q = urllib.parse.urlencode({"user_id": uid})
+        status, text = call(f"/user/info?{q}")
+        fields = {kk: v for kk, v in u.items() if kk != "user_id"}
+        if status == 404:  # LiteLLM answers an unknown user_id with 404
+            # auto_create_key false: /user/new would otherwise mint a key nothing declares
+            write(f"user {uid}", "/user/new", {"user_id": uid, **fields, "auto_create_key": False})
+            verb = "created"
+        else:
+            ok(f"user {uid}", "/user/info", status, text)
+            write(f"user {uid}", "/user/update", {"user_id": uid, **fields})
+            verb = "updated"
+        say(f"user {uid}: {would}{verb} ({u.get('user_role')})")
     for k in declared_keys:
         alias = k["key_alias"]
         value = environ.get(k["key_env"], "")
@@ -1378,7 +1467,12 @@ def provision_litellm(
         else:
             write(alias, "/key/generate", params | {"key": value})
             verb = "rotated" if stale else "created"
-        say(f"key {alias}: {would}{verb} ({', '.join(k['models'])})")
+        grant = (
+            f"routes {', '.join(k['allowed_routes'])}"
+            if k.get("allowed_routes")
+            else ", ".join(k["models"])
+        )
+        say(f"key {alias}: {would}{verb} ({grant})")
     if not prune:
         return out
     declared = {k["key_alias"] for k in declared_keys}
