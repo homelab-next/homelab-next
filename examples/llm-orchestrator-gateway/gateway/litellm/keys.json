@@ -1,5 +1,14 @@
 {
   "managed_by": "llm-orchestrator-example",
+  "users": [
+    {
+      "user_id": "hnx-telemetry-reader-llm-orchestrator-example",
+      "user_role": "proxy_admin_viewer",
+      "models": [
+        "no-default-models"
+      ]
+    }
+  ],
   "keys": [
     {
       "key_alias": "home-vllm-a",
@@ -22,6 +31,21 @@
       "metadata": {
         "owner": "home-vllm-b",
         "data_tier": "local-only",
+        "hnx-managed": "llm-orchestrator-example"
+      }
+    },
+    {
+      "key_alias": "telemetry-reader",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER",
+      "user_id": "hnx-telemetry-reader-llm-orchestrator-example",
+      "models": [
+        "no-default-models"
+      ],
+      "allowed_routes": [
+        "/spend/logs/v2"
+      ],
+      "metadata": {
+        "owner": "telemetry",
         "hnx-managed": "llm-orchestrator-example"
       }
     }

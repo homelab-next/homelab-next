@@ -577,6 +577,7 @@ class FakeKeyAPI:
 
     def __init__(self):
         self.keys: dict[str, dict] = {}  # token -> stored body (without the value)
+        self.users: dict[str, dict] = {}  # user_id -> stored body
         self.calls: list[tuple[str, str]] = []
         api = self
 
@@ -598,6 +599,11 @@ class FakeKeyAPI:
                 url = urlsplit(self.path)
                 api.calls.append((url.path, self.headers.get("Authorization", "")))
                 q = parse_qs(url.query)
+                if url.path == "/user/info":
+                    uid = q.get("user_id", [""])[0]
+                    if uid not in api.users:
+                        return self.reply(404, {"detail": f"User {uid} not found"})
+                    return self.reply(200, {"user_id": uid, "user_info": api.users[uid]})
                 alias = q.get("key_alias", [None])[0]
                 full = q.get("return_full_object", ["false"])[0] == "true"
                 page, size = int(q.get("page", ["1"])[0]), int(q.get("size", ["10"])[0])
@@ -636,6 +642,16 @@ class FakeKeyAPI:
                         return self.reply(404, {"error": {"message": "Key not found"}})
                     api.keys[t] |= {k: v for k, v in body.items() if k != "key"}
                     return self.reply(200, {"key_alias": api.keys[t]["key_alias"]})
+                if self.path == "/user/new":
+                    if body["user_id"] in api.users:
+                        return self.reply(400, {"error": {"message": "user exists"}})
+                    api.users[body["user_id"]] = dict(body)
+                    return self.reply(200, {"user_id": body["user_id"]})
+                if self.path == "/user/update":
+                    if body["user_id"] not in api.users:
+                        return self.reply(404, {"error": {"message": "user not found"}})
+                    api.users[body["user_id"]] |= body
+                    return self.reply(200, {"user_id": body["user_id"]})
                 if self.path == "/key/delete":
                     gone = [token(k) for k in body["keys"] if api.keys.pop(token(k), None)]
                     return self.reply(200, {"deleted_keys": gone})
@@ -798,3 +814,145 @@ def test_a_spec_name_must_be_a_slug(tmp_path):
     with pytest.raises(gw.GatewaySpecError) as exc:
         gw.spec_from_dict(yaml.safe_load(spec), base=LAB)
     assert any("must be a lower-case slug" in p for p in exc.value.problems)
+
+
+# --- the telemetry reader (docs/orchestration-telemetry.md) ------------------------------------
+ORCH = ROOT / "examples" / "llm-orchestrator-gateway"
+
+
+def reader_keys():
+    _, keys_json = gw.render_litellm(gw.load_spec(ORCH / "gateway.yml"))
+    return json.loads(keys_json)
+
+
+def test_the_reader_is_a_view_only_user_with_one_spend_log_key():
+    spec = gw.load_spec(ORCH / "gateway.yml")
+    doc = reader_keys()
+    assert doc["users"] == [
+        {
+            "user_id": "hnx-telemetry-reader-llm-orchestrator-example",
+            "user_role": "proxy_admin_viewer",
+            "models": ["no-default-models"],
+        }
+    ]
+    (key,) = [k for k in doc["keys"] if k["key_alias"] == "telemetry-reader"]
+    assert key["key_env"] == "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"
+    assert key["allowed_routes"] == ["/spend/logs/v2"] and key["models"] == ["no-default-models"]
+    assert key["user_id"] == doc["users"][0]["user_id"]
+    assert key["metadata"][gw.MANAGED] == "llm-orchestrator-example"  # pruned like any key
+    assert gw._audit_keys(json.dumps(doc), spec.name) == []
+    # every other key stays a plain model key
+    assert all("allowed_routes" not in k for k in doc["keys"] if k is not key)
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (
+            lambda d: d["keys"][-1].update(allowed_routes=["/spend/logs/v2", "/key/generate"]),
+            "only the",
+        ),
+        (lambda d: d["keys"][-1].update(models=[]), "only the telemetry reader"),
+        (lambda d: d["keys"][0].update(allowed_routes=["/spend/logs/v2"]), "only the"),
+        (lambda d: d["users"][0].update(user_role="proxy_admin"), "users: each user"),
+        (lambda d: d["users"][0].update(models=[]), "users: each user"),
+        (lambda d: d["users"].append({"user_id": "x", "user_role": "proxy_admin_viewer"}), "users"),
+        (lambda d: d["keys"][-1].update(user_id="someone-else"), "a user of users"),
+        (lambda d: d["keys"][-1].pop("user_id"), "a user of users"),
+        (lambda d: d["keys"][-1].update(key_type="llm_api"), "key_type widens"),
+        (lambda d: d["keys"][-1].update(team_id="t"), "team_id widens"),
+        (lambda d: d["keys"][-1].update(rpm_limit=1), "only the telemetry reader"),
+        (lambda d: d["keys"][0].update(key_type="management"), "key_type widens"),
+        (lambda d: d["keys"][0].update(permissions={"get_spend_routes": True}), "permissions"),
+        (lambda d: d["keys"][0].update(models=["all-proxy-models"]), "names every model"),
+        (lambda d: d["keys"][0].update(key_alias="telemetry-reader"), "only the telemetry"),
+        (lambda d: d.update(users={}), "users: each user"),
+    ],
+)
+def test_the_audit_refuses_a_reader_that_could_do_more(edit, words):
+    doc = reader_keys()
+    assert doc["keys"][-1]["key_alias"] == "telemetry-reader"
+    edit(doc)
+    problems = gw._audit_keys(json.dumps(doc), "llm-orchestrator-example")
+    assert any(words in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("block", "words"),
+    [
+        ({"key": "plain"}, "telemetry_reader.key"),
+        ({"key": "secret:llm-gateway/key-telemetry-reader", "x": 1}, "telemetry_reader takes key"),
+        ("secret:llm-gateway/key-telemetry-reader", "telemetry_reader takes key"),
+        ({"key": "secret:llm-gateway/key-home-vllm-a"}, "use the same secret"),
+        ({"key": "secret:llm-gateway/master-key"}, "use the same secret"),
+    ],
+)
+def test_a_bad_reader_block_is_a_spec_error(tmp_path, block, words):
+    d = tmp_path / "s"
+    shutil.copytree(ORCH, d, ignore=shutil.ignore_patterns("gateway"))
+    doc = yaml.safe_load((d / "gateway.yml").read_text(encoding="utf-8"))
+    doc["telemetry_reader"] = block
+    (d / "gateway.yml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(d / "gateway.yml")
+    assert any(words in p for p in exc.value.problems), exc.value.problems
+
+
+def test_a_key_named_like_the_reader_is_refused(tmp_path):
+    d = tmp_path / "s"
+    shutil.copytree(ORCH, d, ignore=shutil.ignore_patterns("gateway"))
+    doc = yaml.safe_load((d / "gateway.yml").read_text(encoding="utf-8"))
+    doc["keys"][0]["name"] = "telemetry-reader"
+    (d / "gateway.yml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(d / "gateway.yml")
+    assert any("is the telemetry reader's" in p for p in exc.value.problems)
+
+
+def test_provision_creates_the_reader_user_without_a_spare_key_then_updates_it():
+    api = FakeKeyAPI()
+    try:
+        doc = reader_keys()
+        env = {k["key_env"]: f"sk-fake-{k['key_alias']}" for k in doc["keys"]}
+        uid = doc["users"][0]["user_id"]
+        dry = gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env, dry_run=True)
+        assert f"user {uid}: would be created (proxy_admin_viewer)" in dry
+        assert not api.users and not api.keys, "a dry run wrote"
+        lines = gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
+        assert lines[0] == f"user {uid}: created (proxy_admin_viewer)"  # before its key
+        assert api.users[uid] == {
+            "user_id": uid,
+            "user_role": "proxy_admin_viewer",
+            "models": ["no-default-models"],
+            "auto_create_key": False,  # /user/new would otherwise mint an undeclared key
+        }
+        assert "key telemetry-reader: created (routes /spend/logs/v2)" in lines
+        stored = api.keys[sha("sk-fake-telemetry-reader")]
+        assert stored["allowed_routes"] == ["/spend/logs/v2"] and stored["user_id"] == uid
+        api.users[uid]["user_role"] = "proxy_admin"  # widened by hand: provisioning puts it back
+        again = gw.provision_litellm(doc, api.url, "sk-fake-master", environ=env)
+        assert f"user {uid}: updated (proxy_admin_viewer)" in again
+        assert api.users[uid]["user_role"] == "proxy_admin_viewer"
+        # the reader dropped from the spec: its key is pruned like any other
+        fewer = doc | {"users": [], "keys": [k for k in doc["keys"] if "user_id" not in k]}
+        gone = gw.provision_litellm(fewer, api.url, "sk-fake-master", environ=env)
+        assert any("key telemetry-reader: deleted" in ln for ln in gone)
+        assert not api.valid("sk-fake-telemetry-reader")
+    finally:
+        api.httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"users": [{"user_role": "proxy_admin_viewer"}], "keys": []},
+        {"users": [{"user_id": "u", "user_role": "proxy_admin", "models": []}], "keys": []},
+        {"keys": [{"key_alias": "a", "key_env": "X", "models": ["m"], "key_type": "management"}]},
+    ],
+)
+def test_provision_refuses_a_keys_file_that_grants_more_before_any_request(doc):
+    """A hand-edited or stale keys file never reaches the proxy: an admin user, a user of
+    another shape or a widened key is refused before the first request (port 9 is never
+    called)."""
+    with pytest.raises(gw.GatewaySpecError, match="grants more than a gateway spec declares"):
+        gw.provision_litellm(doc, f"http://{LOOPBACK}:9", "m", environ={"X": "sk-x"})
