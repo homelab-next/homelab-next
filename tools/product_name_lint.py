@@ -74,14 +74,12 @@ import argparse
 import ast
 import contextlib
 import fnmatch
-import io
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import tokenize
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
@@ -351,10 +349,16 @@ def _matches(rel: str, glob: str) -> bool:
 # ----------------------------------------------------------------------------- text extraction
 
 
+#: the AST fields that hold an identifier (a name, an attribute, a parameter, an import), read
+#: from the tree rather than ``tokenize``, whose f-string tokens differ from 3.12 on
+_IDENTIFIER_FIELDS = ("id", "attr", "arg", "name", "asname", "module", "names", "kwd_attrs", "rest")
+
+
 def _python_texts(text: str) -> list[str]:
     """String and bytes constants as Python reads them (escapes decoded, implicit concatenation
-    joined, f-string parts included) and identifiers; comments and docstrings are not read (a
-    docstring is skipped as a node, so code on the same line still is)."""
+    joined, f-string parts included) and identifiers (f-string expressions included); comments
+    and docstrings are not read (a docstring is skipped as a node, so code on the same line still
+    is).  Everything comes from the syntax tree, so every Python version reads the same."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
@@ -370,19 +374,20 @@ def _python_texts(text: str) -> list[str]:
                 and isinstance(first.value.value, str)
             ):
                 docstrings.add(id(first.value))
-        elif isinstance(node, ast.Constant) and id(node) not in docstrings:
+        if isinstance(node, ast.Constant):
+            if id(node) in docstrings:
+                continue
             if isinstance(node.value, str):
                 out.append(node.value)
             elif isinstance(node.value, bytes):
                 out.append(node.value.decode("latin-1"))
-    try:
-        out += [
-            t.string
-            for t in tokenize.generate_tokens(io.StringIO(text).readline)
-            if t.type == tokenize.NAME
-        ]
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        return text.splitlines()
+            continue
+        for field in _IDENTIFIER_FIELDS:
+            value = getattr(node, field, None)
+            if isinstance(value, str):
+                out.append(value)
+            elif isinstance(value, list):
+                out += [v for v in value if isinstance(v, str)]
     return out
 
 

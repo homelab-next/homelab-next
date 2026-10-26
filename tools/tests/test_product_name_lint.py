@@ -183,6 +183,12 @@ def test_a_docstring_hides_nothing_beside_it_and_escapes_are_decoded(tmp_path):
     assert counts(root)["core/g.py"] == {"zorbix": 5}
 
 
+def test_identifiers_come_from_the_tree_so_every_python_version_counts_alike(tmp_path):
+    # tokenize emits the names inside an f-string's braces from 3.12 on and not before
+    root = tree(tmp_path, {"core/v.py": 'import zorbix\nx = f"{zorbix.url}"\n'})
+    assert counts(root)["core/v.py"] == {"zorbix": 2}
+
+
 def test_argparse_choices_count(tmp_path):
     root = tree(tmp_path, {"core/cli.py": 'ap.add_argument("--b", choices=["zorbix", "x"])\n'})
     assert counts(root)["core/cli.py"] == {"zorbix": 1}
