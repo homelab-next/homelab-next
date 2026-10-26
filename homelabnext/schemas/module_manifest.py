@@ -1350,8 +1350,11 @@ def module_selection_schema() -> dict[str, Any]:
             ),
             "headroom": obj({"memory_mb": {"type": "integer", "minimum": 0}}),
             "addresses": arr(
-                ref("scope_entry"),
-                "The host's own addresses (no prefix, or a full-length one), what the egress generator (homelabnext.modules.egress) allows a module role to reach on it. Private: documentation ranges in a public example.",
+                {
+                    "allOf": [ref("scope_entry"), {"not": {"pattern": "/(?!(?:32|128)$)"}}],
+                    "description": "One address: no prefix, or a full-length one (/32, /128).",
+                },
+                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity, until the loader reads them from the guest records and the network model (and refuses a mismatch). Private: documentation ranges in a public example.",
                 1,
             ),
         },

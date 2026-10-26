@@ -134,8 +134,10 @@ with no schema, generator or check in any form):
 5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
 6. the egress generator: implemented (`homelabnext.modules.egress`: an nftables ruleset per lab
    host that lets each module role's slice open connections only to its DNS, its required and
-   preferred slots, its `svc:` targets and, when declared, the internet; isolated roles reach
-   nothing); hosts carry `addresses` in the selection, and the loader will run it;
+   preferred slots, its `svc:` targets and, when declared, global unicast outside the lab;
+   isolated roles reach nothing; inbound, loopback, containers in their own network namespace and
+   root processes are not covered); hosts carry `addresses` in the selection, and the loader
+   will run it;
 7. import validation (no traversal, symlinks or oversize trees) as a protocol MUST with tests;
 8. footprint limits: implemented for fleet units and data roots (`homelabnext.modules.limits`: a
    slice per placed host role with `CPUQuota`, `MemoryHigh`, `MemoryMax` and no swap, the module's
