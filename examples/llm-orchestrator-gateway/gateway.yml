@@ -5,7 +5,8 @@
 #     examples/llm-orchestrator-gateway/gateway
 # and `--check` (make gateway-check) also reads the controller's backend list: every backend
 # name is a svc: here, its home's model.default is a role bound to it, and its max_context is that
-# role's max_context_tokens.
+# role's max_context_tokens; each home's model.base_url is base_url below, and its
+# model.context_length is at most that role's max_context_tokens.
 name: llm-orchestrator-example
 roles: model_roles.json
 domain: example.internal
@@ -26,6 +27,7 @@ keys:
     data_tier: local-only
 controller:
   config: controller.yaml
+  base_url: https://llm-gateway.example.internal/v1  # what every home's model.base_url names
   homes:                      # one HERMES_HOME per local backend
     vllm-a: homes/vllm-a
     vllm-b: homes/vllm-b
