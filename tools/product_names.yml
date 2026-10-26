@@ -7,6 +7,8 @@
 # here must be unambiguous: a common word (vault, cortex, shuffle) would match ordinary text.
 # retired: names deliberately no longer linted ({name, reason}); without an entry here, CI refuses
 # a change that stops linting a name the base commit linted (a dropped alias, product or module).
+# moved: {from, to, reason}: a reviewed split, whose new path may carry the counts its source had at
+# the base commit (no product's total may rise all the same).
 # allow: reviewed path globs where a product name belongs, each with its reason. Provider module
 # directories, site configuration (examples/modules/sites, examples/private-overlay, lab/) and
 # Markdown prose are always allowed; everything else that names a product today is counted in

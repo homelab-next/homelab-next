@@ -32,7 +32,7 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 |---|---|---|---|---|---|
 | P0 | CI, skeleton and the leak gate | licence, CI workflow, ADR log, leak scan | CI itself; the scan has positive and negative fixtures | `.github/workflows/`, `tools/`, `docs/adr/` | F, F-08, Q |
 | P1 | Contracts: schemas in git | logical ids, event envelope, pinned OCSF subsets, agent, broker and records schemas | every schema has examples and negatives; additive evolution is checked against frozen baselines | `schemas/`, `tools/schema_check.py` | T, X-03 |
-| P2 | Names: registry, aliases, generators | `services.yml`, resolver, generated DNS/hosts/scrape targets, the no-raw-endpoint gate | golden outputs from a synthetic example lab | `homelabnext/registry/`, `examples/` | X-01 |
+| P2 | Names: registry, aliases, generators | `services.yml`, resolver, generated DNS/hosts/scrape targets, the no-raw-endpoint gate | golden outputs from a synthetic example lab | `homelabnext/registry/`, `examples/` | X-01, X-11 |
 | P3 | One shared client library per seam | lake, notify, state, records, events, decision cascade | each ships an in-memory fake; crash-safety and idempotency tests | `homelabnext/` | S, O, P, R, A, K |
 | P4 | Conformance harness | one swap test per capability, each with a fake | the suites pass against fakes in CI | `conformance/` | X-04, X-10 |
 | P5 | Role interface and IaC conventions | role argument spec and hooks, capability inventory groups, scaffolds | role and playbook linter with passing and failing roles | `ansible/`, `tools/role_lint.py` | X-05, X-09 |

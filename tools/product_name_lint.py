@@ -57,8 +57,9 @@ a count above it, or a path or product not in it, fails; so does an entry above 
 ``--update`` rewrites it to what is there, refused when any product's total would rise (so a moved
 file keeps its debt, and debt never grows).  ``--base REV`` / ``--ci-base`` (CI) also compare the
 committed baseline and vocabulary with the base commit's: no path's count may rise above its count
-there (a file git sees as renamed or copied keeps its old path's counts, so a new file never takes
-on debt freed elsewhere), and no spelling linted there (a product, an alias, a provider's display
+there (a file git sees as renamed or copied keeps its old path's counts, and a split names its new
+path under ``moved:``, so a new file never takes on debt freed elsewhere), no product's total may
+rise (a copy never doubles debt), and no spelling linted there (a product, an alias, a provider's display
 name, a model id) may stop being linted unless ``retired:`` in the vocabulary says why, so neither
 file can be loosened by hand.
 
@@ -175,11 +176,13 @@ class Vocabulary:
 
     def possible(self, text: str) -> bool:
         """False only when no name can be in ``text`` once it is decoded and parsed.  An escape
-        can spell a letter the raw text does not show, so text with one is always possible."""
-        if _ESCAPE.search(text):
+        or a YAML binary can spell what the raw text does not show, so text with one is always
+        possible; and a comment between two halves of a concatenated string is tried both with
+        and without the comments (``#`` to the end of a line), so neither reading is missed."""
+        if _ESCAPE.search(text) or "!!binary" in text:
             return True
-        sk = _skeleton(text)
-        return any(k in sk for k in self.skeletons)
+        texts = (text, _HASH_COMMENT.sub("", text)) if "#" in text else (text,)
+        return any(k in sk for sk in map(_skeleton, texts) for k in self.skeletons)
 
     def count(self, texts: list[str]) -> Counter:
         c: Counter = Counter()
@@ -211,7 +214,8 @@ def _visible(text: str) -> str:
     not hide a name, then recomposed."""
     if text.isascii():
         return text
-    decomposed = unicodedata.normalize("NFKD", text.translate(_FOLD_ASCII))
+    # folded before and after: NFKD itself yields some of these (a mathematical dotless i)
+    decomposed = unicodedata.normalize("NFKD", text.translate(_FOLD_ASCII)).translate(_FOLD_ASCII)
     return unicodedata.normalize(
         "NFKC",
         "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn")),
@@ -220,6 +224,7 @@ def _visible(text: str) -> str:
 
 #: an escape (Python, YAML, JSON, shell) that could spell a letter the raw text does not show,
 #: or a line continuation that joins two halves of a name
+_HASH_COMMENT = re.compile(r"#[^\n]*")
 _ESCAPE = re.compile(r"\\(?:[xuUN0-7]|\r?\n)")
 
 
@@ -419,7 +424,8 @@ _BOMS = (
 #: suffixes that are never binary: a NUL in one is read through, not a reason to skip the file
 TEXT_SUFFIXES = {
     ".py", ".yml", ".yaml", ".json", ".md", ".j2", ".html", ".sql", ".xml", ".js", ".ts", ".css",
-    ".go", ".rs", ".tf", ".hcl", ".jsonl", ".csv", ".tmpl",
+    ".go", ".rs", ".tf", ".hcl", ".jsonl", ".csv", ".tmpl", ".rb", ".php", ".java", ".kt",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".lua", ".pl", ".ps1", ".swift", ".scala", ".r",
     *HASH_COMMENTS, *SLASH_COMMENTS,
 }  # fmt: skip
 
@@ -536,7 +542,10 @@ def scan(root: Path, vocab: Vocabulary, allowed: list[str]) -> dict[str, Counter
         count(rel, [path.name])
         if path.is_symlink():
             count(rel, [os.readlink(path)])  # the link's target as written
-            target = path.resolve()
+            try:
+                target = path.resolve()
+            except (OSError, RuntimeError):  # a link loop (3.11 and 3.12 raise)
+                continue
             # a link into the tree is read as what it points at, under the link's own path, so a
             # core path linked to an allowed file is still linted where it is used
             if target.is_file() and target.is_relative_to(root):
@@ -616,16 +625,21 @@ def _prefix(root: Path) -> str:
     return r.stdout.strip() if r is not None and r.returncode == 0 else ""
 
 
-def vocabulary_at(root: Path, rev: str) -> Vocabulary:
-    """The vocabulary as it was at ``rev``: the same files, read from git."""
+def vocabulary_at(root: Path, rev: str, roles: bool = True) -> Vocabulary:
+    """The vocabulary as it was at ``rev``: the same files, read from git (the role table only
+    when the head side reads ROOT's own, so a ``--roles`` file is not compared with it)."""
     pre = _prefix(root)
-    wanted = ["examples/modules", "modules", VOCABULARY, ROLES]
-    r = _git(root, "ls-tree", "-r", "--name-only", rev, "--", *(pre + w for w in wanted))
+    wanted = ["examples/modules", "modules", VOCABULARY, *([ROLES] if roles else [])]
+    # pathspecs are relative to ROOT (git -C), and --full-name prints paths from the top level,
+    # which is what `git show REV:path` takes
+    r = _git(root, "ls-tree", "-r", "--name-only", "--full-name", rev, "--", *wanted)
     if r is None or r.returncode:
         raise LintError(f"--base {rev}: cannot list its tree")
     with tempfile.TemporaryDirectory(prefix="product-names-base.") as tmp:
         base = Path(tmp)
         for full in r.stdout.splitlines():
+            if not full.startswith(pre):
+                continue
             rel = full[len(pre) :]
             if not (
                 rel in (VOCABULARY, ROLES) or fnmatch.fnmatchcase(rel, "*modules/*/module.yml")
@@ -638,13 +652,13 @@ def vocabulary_at(root: Path, rev: str) -> Vocabulary:
             (base / rel).write_bytes(blob.stdout)
         if not (base / VOCABULARY).is_file():
             return Vocabulary(by_key={}, pattern=None, skeletons=(), own={})
-        return vocabulary(base, None, base / ROLES)
+        return vocabulary(base, None, base / ROLES if roles else None)
 
 
 def renames(root: Path, rev: str) -> dict[str, str]:
     """``{new path: old path}`` for the files git sees as renamed or copied since ``rev``."""
     pre = _prefix(root)
-    r = _git(root, "diff", "-M", "-C", "--name-status", "-z", rev, "--", ".")
+    r = _git(root, "diff", "-M", "-C", "-l0", "--name-status", "-z", rev, "--", ".")
     if r is None or r.returncode:
         raise LintError(f"--base {rev}: git diff failed")
     parts = r.stdout.split("\0")
@@ -673,12 +687,31 @@ def retired(root: Path) -> dict[str, str]:
     return out
 
 
+def moves(root: Path) -> dict[str, list[str]]:
+    """``tools/product_names.yml`` ``moved:``: ``{to: [from, ...]}``, a reviewed split or merge
+    whose new path takes on the counts its sources had at the base."""
+    out: dict[str, list[str]] = {}
+    for i, e in enumerate(_section(_load_yaml(root / VOCABULARY), "moved")):
+        if not isinstance(e, dict) or not all(isinstance(e.get(k), str) for k in ("from", "to")):
+            raise LintError(f"{VOCABULARY}: moved[{i}] needs from and to paths")
+        if not str(e.get("reason", "")).strip():
+            raise LintError(f"{VOCABULARY}: moved[{i}] ({e['to']}) needs a reason")
+        out.setdefault(e["to"], []).append(e["from"])
+    return out
+
+
 def against_base(
-    root: Path, rev: str, base: dict[str, dict[str, int]], vocab: Vocabulary
+    root: Path,
+    rev: str,
+    base: dict[str, dict[str, int]],
+    vocab: Vocabulary,
+    roles: bool = True,
 ) -> list[str]:
     """The committed baseline and vocabulary against those at ``rev``: no path's count above
     its count there (a renamed or copied file keeps its old path's counts), and no name linted
-    there that is not linted now, unless ``retired:`` says why."""
+    there that is not linted now, unless ``retired:`` says why.  A copy or a ``moved:`` path may
+    take its sources' counts, but no product's total may rise either, so a copy never doubles
+    debt."""
     r = _git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     if r is None or r.returncode:
         raise LintError(f"--base {rev}: not a commit here")
@@ -687,16 +720,26 @@ def against_base(
     if old is not None and old.returncode == 0:
         then = parse_baseline(old.stdout, f"{BASELINE}@{rev[:12]}")
         moved = renames(root, rev)
+        declared = moves(root)
         for rel, c in sorted(base.items()):
-            source = then.get(rel) or then.get(moved.get(rel, ""), {})
+            source: Counter = Counter(then.get(rel) or then.get(moved.get(rel, ""), {}))
+            for src in declared.get(rel, []):
+                source.update(then.get(src, {}))
             for product, n in sorted(c.items()):
                 if n > source.get(product, 0):
                     problems.append(
                         f"{BASELINE}: {rel}: {product} {n}, {source.get(product, 0)} at "
                         f"{rev[:12]}: the baseline never grows (name the slot, move the code into "
-                        "its provider module, or allow the path with a reason)"
+                        "its provider module, or record a split with moved:)"
                     )
-    gone = set(vocabulary_at(root, rev).by_key) - set(vocab.by_key) - set(retired(root))
+        problems += [
+            f"{BASELINE}: {g} at {rev[:12]}: no product's total may rise" for g in grown(base, then)
+        ]
+    gone = set(vocabulary_at(root, rev, roles).by_key) - set(vocab.by_key)
+    gave_up = retired(root)
+    for k in sorted(gone & set(gave_up)):
+        print(f"product_name_lint: {k!r} retired since {rev[:12]}: {gave_up[k]}")
+    gone -= set(gave_up)
     problems += [
         f"{VOCABULARY}: {k!r} was linted at {rev[:12]} and is no longer: a name leaves the "
         "vocabulary only through retired: (with a reason) or by moving to its provider's "
@@ -796,7 +839,9 @@ def _main(argv: list[str] | None) -> int:
             raise LintError(str(exc)) from None
         print(f"product_name_lint: base {rev or '-'} ({why})")
     new, stale = compare(hits, base_counts)
-    grew = against_base(root, rev, base_counts, vocab) if rev else []
+    retired(root)  # a malformed retired: or moved: is an error in every run, not only with --base
+    moves(root)
+    grew = against_base(root, rev, base_counts, vocab, args.roles is None) if rev else []
     if args.json:
         print(
             json.dumps(

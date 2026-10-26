@@ -1002,10 +1002,12 @@ Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints
   is there and is refused when any product's total would rise. In CI `--ci-base` also compares the
   committed baseline and vocabulary with the base commit's (the same base rule as
   `tools/schema_check.py --ci-base`): no path's count may rise above its count there (a file git
-  sees as renamed or copied keeps its old path's counts, so a new file never takes on debt freed
-  elsewhere), and no spelling linted there (a product, an alias, a provider's display name, a
-  model id) may stop being linted unless `tools/product_names.yml` `retired:` says why. Neither
-  file can be loosened by hand. Moving product code into a provider module is how it shrinks.
+  sees as renamed or copied keeps its old path's counts, and a split records its new path under
+  `tools/product_names.yml` `moved:` with a reason, so a new file never takes on debt freed
+  elsewhere), no product's total may rise (so a copy never doubles debt), and no spelling linted
+  there (a product, an alias, a provider's display name, a model id) may stop being linted unless
+  `retired:` says why (each retirement is printed in the CI log). Neither file can be loosened by
+  hand. Moving product code into a provider module is how it shrinks.
 - **Exit**: 0 clean, 1 violations, 2 a bad input, 100 the lint itself failed (X-11 reports that
   as "could not measure", not as a failure).
 

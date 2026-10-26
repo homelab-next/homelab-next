@@ -342,6 +342,9 @@ def test_against_the_base_neither_the_baseline_nor_the_vocabulary_may_grow(tmp_p
         ("core/g.txt", "zorbix\n".encode("utf-16-le")),  # UTF-16 without a BOM
         ("core/h.txt", "zorbix\n".encode("utf-32")),  # UTF-32 with a BOM
         ("core/i.py", b"class ZORBIXClient: pass\n"),  # an upper-case run into a word
+        ("core/j.py", b'x = ("zor"  # first half\n     "bix")\n'),  # a comment between halves
+        ("core/k.yml", b"k: !!binary em9yYml4\n"),  # a YAML binary
+        ("core/l.py", 'x = "zorb\U0001d6a4x"\n'.encode()),  # a mathematical dotless i
     ],
 )
 def test_what_the_prefilter_and_the_decoders_must_not_miss(tmp_path, rel, data):
@@ -428,6 +431,56 @@ def test_against_the_base_no_spelling_may_leave_the_vocabulary_silently(tmp_path
     vocab["retired"] = [{"name": "zbx", "reason": "x"}, {"name": "acmeobj", "reason": "x"}]
     (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
     assert run(root, "--base", "HEAD") == 0
+
+
+def test_a_link_loop_is_not_an_internal_error(tmp_path):
+    root = tree(tmp_path, {})
+    (root / "core").mkdir()
+    (root / "core/a").symlink_to("b")
+    (root / "core/b").symlink_to("a")
+    assert run(root) == 0
+
+
+def _committed(root: Path) -> None:
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+
+
+def test_against_the_base_a_copy_never_doubles_debt_and_a_split_needs_moved(tmp_path, capsys):
+    root = tree(tmp_path, {"core/a.py": 'x = "zorbix"\ny = "zorbix"\n'})
+    assert run(root, "--init") == 0
+    _committed(root)
+    (root / "core/b.py").write_text((root / "core/a.py").read_text())  # a copy
+    baseline = json.loads((root / pl.BASELINE).read_text())
+    baseline["counts"]["core/b.py"] = {"zorbix": 2}
+    (root / pl.BASELINE).write_text(json.dumps(baseline))
+    assert run(root, "--base", "HEAD") == 1
+    assert "no product's total may rise" in capsys.readouterr().out
+    git(root, "checkout", "-q", "--", ".")
+    (root / "core/b.py").write_text('y = "zorbix"\n')  # a split: half moves to a new file
+    (root / "core/a.py").write_text('x = "zorbix"\n')
+    assert run(root, "--update") == 0
+    assert run(root, "--base", "HEAD") == 1
+    vocab = yaml.safe_load((root / pl.VOCABULARY).read_text())
+    vocab["moved"] = [{"from": "core/a.py", "to": "core/b.py", "reason": "split"}]
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 0
+
+
+def test_against_the_base_from_a_subdirectory_a_dropped_name_is_still_seen(tmp_path, capsys):
+    outer = tmp_path / "outer"
+    vocab = {"products": [{"name": "zorbix", "why": "x"}, {"name": "kuma", "why": "x"}]}
+    root = tree(outer / "sub", {pl.VOCABULARY: yaml.safe_dump(vocab)})
+    _committed(outer)
+    vocab["products"].pop()
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 1
+    assert "'kuma' was linted" in capsys.readouterr().out
+    vocab["retired"] = [{"name": "kuma", "reason": "gone"}]
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 0
+    assert "'kuma' retired since" in capsys.readouterr().out
 
 
 def test_the_repository_passes_its_own_lint():
