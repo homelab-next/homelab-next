@@ -346,7 +346,9 @@ def test_check_changes_nothing_and_owes_a_missing_cap(host):
 def test_elsewhere_an_allocated_image_is_made_and_mounted_keeping_owner_and_mode(host):
     root, _m, units_dir, _mount, run = host
     (root / "m").mkdir(parents=True)
-    os.chown(root / "m", 4242, 4343)
+    # another owner where the test may set one (root); its own ids elsewhere (CI runs unprivileged)
+    uid, gid = (4242, 4343) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    os.chown(root / "m", uid, gid)
     (root / "m").chmod(0o750)
     r, calls = run()
     assert r.returncode == 0, r.stderr
@@ -358,7 +360,7 @@ def test_elsewhere_an_allocated_image_is_made_and_mounted_keeping_owner_and_mode
     assert f"What={img}\nWhere={root / 'm'}\n" in unit and "Options=loop,nodev,nosuid" in unit
     assert "systemctl enable --now escaped-m.mount" in calls
     st = (root / "m").stat()
-    assert (st.st_uid, st.st_gid, st.st_mode & 0o777) == (4242, 4343, 0o750)
+    assert (st.st_uid, st.st_gid, st.st_mode & 0o777) == (uid, gid, 0o750)
     assert oct((root / ".images").stat().st_mode & 0o777) == "0o700"
 
 
