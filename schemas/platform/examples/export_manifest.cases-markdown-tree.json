@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "slot": "cases",
+  "format": "markdown-tree",
+  "files": [
+    {
+      "path": "cases/case-0001.md",
+      "size": 26,
+      "sha256": "bea6b57fd5b737df6b865112b08fc4525ef07e02652cd106ce19833db2f98b32"
+    },
+    {
+      "path": "cases/case-0002.md",
+      "size": 28,
+      "sha256": "bb33ac37c8375a714ebd0e8bb9aefdf9d23610e312eb54039114bd801debdae1"
+    },
+    {
+      "path": "index.jsonl",
+      "size": 38,
+      "sha256": "24b12bd96ed0d257764a8423eccdbce1227d7fa29be4dd6fd632e155ad49b05b"
+    }
+  ],
+  "totals": {
+    "files": 3,
+    "bytes": 92
+  }
+}

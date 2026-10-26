@@ -138,7 +138,12 @@ with no schema, generator or check in any form):
    new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader will
    run the check;
 6. the egress generator (declared egress as host and unit network policy);
-7. import validation (no traversal, symlinks or oversize trees) as a protocol MUST with tests;
+7. import validation: the MUST is implemented as a library (`homelabnext.modules.importcheck`),
+   the draft schema `platform/export_manifest` 1.0 and the extended `migration` suite. Beyond
+   traversal, links and oversize trees it also refuses hard links, other filesystems and mount
+   points (failing closed on an unreadable mount table) and case-folding collisions. No provider
+   proves it yet: no slot protocol has `export` and `import_`, so the suite runs only the
+   reference importer, labelled as each stateful slot;
 8. footprint limits: implemented for fleet units and data roots (`homelabnext.modules.limits`: a
    slice per placed host role with `CPUQuota`, `MemoryHigh`, `MemoryMax` and no swap, the module's
    fleet units in it, and a reserved disk cap per data root by ZFS `refquota` or an allocated image

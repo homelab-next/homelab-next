@@ -98,6 +98,7 @@ capabilities:
   cap:dns: [exec]
   cap:edge-proxy: [exec]
   cap:backup: [exec]
+  cap:migration: [exec]  # a stateful slot's export and validated import_ (the migration suite)
   cap:exposure-management: [exec]
   cap:records-db: [file-write]
   cap:static-hosting: [file-write]
