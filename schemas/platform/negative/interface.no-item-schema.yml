@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# An interface names its item schema.
+id: publishable-output
+version: '1.0'
+kind: object-prefix
+gate: true
+description: items offered for publication under a producer's prefix, each with a JSON sidecar carrying
+  its claimed TLP; the gate verifies the claim against the content before anything leaves

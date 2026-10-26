@@ -13,6 +13,7 @@ examples.
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -273,6 +274,10 @@ def _defs() -> dict[str, Any]:
                     "enum": ["one", "all"],
                     "description": "one (default): exactly one selected module provides it; all: consume every selected provider.",
                 },
+                "gate": {
+                    "type": "boolean",
+                    "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules).",
+                },
                 "purpose": text(200),
             },
             ["interface", "version"],
@@ -333,6 +338,10 @@ def _defs() -> dict[str, Any]:
                 "interface": ref("interface_id"),
                 "version": ref("contract_version"),
                 "cardinality": {"enum": ["one", "all"]},
+                "gate": {
+                    "type": "boolean",
+                    "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules).",
+                },
                 "purpose": text(200),
                 "fallback": ref("fallback"),
             },
@@ -482,10 +491,14 @@ def _defs() -> dict[str, Any]:
                     256,
                 ),
                 "schema_id": ref("schema_id"),
+                "gate": {
+                    "type": "boolean",
+                    "description": "true: a gate interface, owned by the module whose gate checks every item; that module consumes it with gate: true and never provides it (homelabnext.modules.rules).",
+                },
                 "description": text(300),
             },
             ["id", "version", "kind", "description"],
-            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface.",
+            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. A gate interface (gate: true) is owned by the consumer whose gate checks it.",
             oneOf=[{"required": ["schema"]}, {"required": ["schema_id"]}],
         ),
         "interface_provided": obj(
@@ -1190,6 +1203,45 @@ def module_schema() -> dict[str, Any]:
     }
 
 
+def _refs(node: Any) -> set[str]:
+    """The ``#/$defs/<name>`` names ``node`` refers to, directly."""
+    out: set[str] = set()
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            r = n.get("$ref")
+            if isinstance(r, str) and r.startswith("#/$defs/"):
+                out.add(r[len("#/$defs/") :])
+            stack += list(n.values())
+        elif isinstance(n, list):
+            stack += n
+    return out
+
+
+def interface_schema() -> dict[str, Any]:
+    """``platform/interface`` 1.0: one interface definition as a standalone record, the same shape
+    a manifest's ``interfaces:`` entries have (one source: the module schema's definition)."""
+    defs = module_schema()["$defs"]
+    body = copy.deepcopy(defs["interface_definition"])
+    need, todo = set(), list(_refs(body))
+    while todo:
+        name = todo.pop()
+        if name not in need:
+            need.add(name)
+            todo += list(_refs(defs[name]))
+    body.pop("description", None)
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": BASE + "platform/interface/1.0",
+        "x-draft": "ADR-0027 (proposed): the shape of a manifest interfaces: entry, published as a draft schema (follow-up 3); generated from the module manifest's interface_definition, so it changes with it until accepted, then only with a version bump",
+        "title": "Interface definition",
+        "description": "The shape of one interfaces: entry in the owner's module manifest (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a path relative to the owner's module directory, or a shipped schema id) and whether it is a gate. No loader reads a standalone interface record yet, and this shape names no owner: the rules a schema cannot state (one owner per id, gate ownership, the schema's $id in the owner's namespace) run on manifests, in homelabnext.modules.rules.",
+        **body,
+        "$defs": {k: copy.deepcopy(defs[k]) for k in sorted(need)},
+    }
+
+
 def lake_table_schema() -> dict[str, Any]:
     retention = {"type": "integer", "minimum": 1, "maximum": 3650}
     return {
@@ -1462,5 +1514,6 @@ def render() -> dict[str, str]:
     return {
         "schemas/platform/module.schema.json": _dump(module_schema()),
         "schemas/platform/lake_table.schema.json": _dump(lake_table_schema()),
+        "schemas/platform/interface.schema.json": _dump(interface_schema()),
         "schemas/platform/module_selection.schema.json": _dump(module_selection_schema()),
     }

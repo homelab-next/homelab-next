@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:c9de97521be17e63
+summary_of: outline:sha256:ac3d2ea65e02ae7f
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -257,7 +257,7 @@ Roles on `kind: external` hosts are listed, not rendered: those hosts are outsid
 memory has no systemd control and stays a placement sum. There is no CLI yet: the loader
 (follow-up 9) will render this from the overlay's selection.
 
-## Interfaces: one owner (`platform/interface` 1.0: specified, not implemented)
+## Interfaces: one owner (`platform/interface` 1.0, a draft schema)
 
 An interface is defined **once**, in the owning module's (or a core module's) `interfaces:`: `id`,
 `version`, `kind` (`object-prefix | event | lake-table | service`), the item schema (`schema`, a
@@ -267,12 +267,29 @@ interface references it in `provides.interfaces` with `via: {cap, instance, pref
 the prefix is in the provider's own namespace and the instance is one it requires. Ownership is per
 **id**, every version included: the loader refuses a second module defining any version of an id
 another module defines, and a reference to a version the owner does not define. The inline
-definition is what exists; a standalone `platform/interface` record is not written.
+definition is what exists: [`schemas/platform/interface.schema.json`](../schemas/platform/interface.schema.json)
+is the shape of a manifest `interfaces:` entry, published as a draft schema with the examples' two
+gate interfaces as its examples. It is generated from the manifest's definition, so it changes with
+it until acceptance. No loader reads a standalone interface record yet, the shape names no owner,
+and its `schema` path is relative to the owner's module directory: the ownership rules run on
+manifests.
 
-**Gate ownership: specified, not implemented.** A gate interface is meant to be owned by the
-consumer, whose gate input the schema is (`publishable-output` belongs to publishing,
-`sample-handoff` to the sandbox). The manifest has no field marking an interface as a gate, so
-nothing yet refuses a gate interface defined by its producer. Unselected modules'
+**Gate ownership.** A gate interface is owned by the consumer whose gate input the schema is
+(`publishable-output` belongs to publishing, `sample-handoff` to the sandbox). The gate module
+marks both sides: its consuming `requires` or `prefers` entry carries `gate: true`, and so does its
+definition. The rules refuse, per id and every version:
+
+- a module gating on an interface it does not define (another module owns it), and a gated
+  interface whose definition lacks `gate: true`;
+- a definition marked `gate: true` that its owner does not consume with `gate: true`;
+- a gate interface its owner also provides;
+- an id marked `gate: true` on some versions only (an id is a gate when any version says so, and
+  every version must).
+
+So a producer cannot take over the interface a gate checks: the gate's own entry names it, and the
+gate must own it. What is not covered: an interface nobody marks as a gate, and a gate module that
+consumes a different interface than it should (both are a change to the gate's own manifest, made
+in review). Unselected modules'
 manifests are still read for definitions; only selected ones run. The interface kinds
 `agent-handoff` and `records-prefix` wait for a real module.
 
@@ -363,8 +380,11 @@ errors.
 
 **Manifests join the review policy** (`review-policy.yml` kinds `module-provider`, `module-feature`,
 `module-core`) with the human-approve tier for any change to `credentials`, `control_plane`, agent
-`needs` (data grants), `egress`, or a privileged slot. **Specified, not implemented**: the review
-policy has no module kinds yet. The gates this table marks as implemented exist only as
+`needs` (data grants), `egress`, or a privileged slot. The kinds exist for fetched modules (state
+`locked` in `lab/modules.lock`, see [Supply chain](#supply-chain)), where the example policy asks a
+human approve of every one, flatter and stricter than this per-field tier; the per-field tier for
+in-tree manifests is still specified, not implemented (an in-tree module is reviewed by this
+repository's pull requests). The gates this table marks as implemented exist only as
 contract-test rules over the examples (`homelabnext/modules/rules.py`); no loader enforces any of
 them at deploy time.
 
@@ -591,11 +611,38 @@ external hosts (IaC, image bake, access, the one-way path) is deferred to the co
 third-party module cannot call itself in-tree. **Reviews never live in a module** (a module author
 could ship pre-stamped approvals); `author` is required.
 
-**The lock, the tree digest and digest-keyed reviews: specified, not implemented.** For a fetched
-module the overlay is meant to keep a lock (`lab/modules.lock`: id, origin, tree digest = sha256
-over every file of the module directory, code and roles included) and the reviews keyed by that
-digest, so that unpinned, changed or unreviewed means not loadable. No lock format, digest tool or
-review check exists.
+**The lock, the tree digest and digest-keyed reviews** (follow-up 5): for a fetched module the
+overlay keeps a lock, `lab/modules.lock` (draft schema `platform/module_lock` 1.0): per module id,
+its `origin` (exactly the manifest's), its `tree` digest and the `reviews` of that tree.
+
+- **The tree digest** (`homelabnext.modules.supply.tree_digest`, `hnx reviews digest <module
+  dir>`) is `sha256:` over a `hnx-tree-v1` header and one line per regular file: its path, whether
+  any executable bit is set, and its content digest, sorted by path. It does not cover empty
+  directories, directory modes, ownership, times or other mode bits. A symbolic link, special file,
+  hard-linked file or `.git` entry anywhere refuses it (fetch with `git archive`, or strip `.git`,
+  before pinning: no review reads version-control metadata), and so does a tree over its limits
+  (20 000 files, 2 GiB).
+- **The reviews** have the shape of every other review (`homelabnext.reviews`), inline in the lock
+  (a fetched module cannot hold reviews beside itself; sidecar event files are the alternative if
+  several reviewers conflict on one file). Only a review naming the **full** pinned tree counts
+  (a prefix, which a module author could grind for, is reported); reviews of an earlier tree stay as
+  history and are ignored; a `changes` or `reject` verdict on the pinned tree vetoes it; the
+  manifest's `author` never reviews their own module and may not be `unknown`.
+- **The policy**: kinds `module-provider`, `module-feature` and `module-core`, state `locked`. The
+  example policy asks an agent check, an independent agent audit and a human approve of every kind
+  (flat, stricter than the per-field tier above: the digest covers a whole tree, not a change). A
+  module of no known kind, or of a kind the policy leaves out or asks nothing of, is never loadable;
+  a policy may leave the kinds out, so older policies still load.
+
+`lock_problems` is the loader's check: every selected fetched module is pinned, its origin is the
+lock's, its directory still has the pinned digest and its reviews meet the policy, so **unpinned,
+changed or unreviewed means not loadable**; a module that changes needs a new pin and new reviews.
+A module is in-tree only when its directory is under the public `modules/` tree, whatever its
+manifest says; an in-tree module is never locked, and an entry for a module that is not selected is
+refused. Like every review here, this is a consistency check over what the files claim, not
+authentication: whoever can edit the lock can edit the pin and the reviews, so the lock is reviewed
+by the overlay's own pull requests. The digest is a string, not a snapshot, so the loader loads from
+a copy only it can write.
 
 ## Site selection (`platform/module_selection` 1.0, a draft schema)
 
@@ -961,7 +1008,7 @@ Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints
 | `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
 | `platform/swap_record` 1.2 | above | **draft schema** `platform/module_swap` 1.0 holds the additions and their rules; the record stays 1.1 until acceptance |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
-| `platform/interface` 1.0 | the owned interface record (today inline in the owner's manifest) | specified, not implemented |
+| `platform/interface` 1.0 | the owned interface record (inline in the owner's manifest) | **draft schema**: the shape of a manifest `interfaces:` entry, generated from it and changing with it until acceptance; no standalone loader; `gate` on the definition and on the gate's consuming entry |
 | `platform/lake_table` 1.0 | owner, schema, retention, maintenance, freshness | **draft schema** |
 | `registers/invariant` 1.1 | ids `^[A-Z]-NN$` **or** `<module id>/<slug>`, never a pillar letter in a module | specified |
 | `platform/service` 2.7 | status source `module` renamed `group`, `module` kept as a deprecated alias for one minor | specified |
@@ -1016,13 +1063,19 @@ listed as deferred.
 2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
    `platform/module_swap` 1.0 and one swap is driven through its rules end to end in a test;
    folding it into the swap record and the swap kit (`hnx swap`) waits for acceptance.
-3. **`platform/interface` 1.0** as a standalone record, and a `gate` marker so a gate interface
-   defined by its producer is refused.
+3. **`platform/interface` 1.0**: the shape of a manifest `interfaces:` entry, published as a draft
+   schema generated from the manifest's definition (it changes with it until acceptance, then only
+   with a version bump); `gate: true` on the definition and on the gate's consuming entry, with the
+   rules that the gate module owns the interface and never provides it (see
+   [Interfaces: one owner](#interfaces-one-owner-platforminterface-10-a-draft-schema)). Not done:
+   a loader for standalone records (the shape has no owner field), and any check on an interface
+   nobody marks as a gate.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
    outright instead), grants for broker, idp and remote-admin upstreams, cloud-bound model roles,
-   `grants.shared_config` (the rule refuses edge and idp config outright), and the review-policy
-   kinds `module-provider`, `module-feature`, `module-core`.
-5. **Supply chain**: the `lab/modules.lock` format, the tree digest, and reviews keyed by it.
+   and `grants.shared_config` (the rule refuses edge and idp config outright). The review-policy
+   kinds `module-provider`, `module-feature`, `module-core` exist for fetched modules (follow-up
+   5); the per-field tier for in-tree manifests does not.
+5. **Supply chain**: implemented (see [Supply chain](#supply-chain)); the loader will run the check.
 6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing)); the
    loader will run it.
 7. **Import validation**: implemented as a library, a draft schema and the `migration` suite (see
