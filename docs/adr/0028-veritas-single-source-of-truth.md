@@ -145,7 +145,7 @@ file.
    | Knowledge graph | the whole repository | never committed (`docs/graph.md`); `hnx graph check` checks integrity (CI) |
    | Maps (ADR-0018) | the site, guest, registry, dataflow models | never committed: rendered on request; goldens pin the renderer |
    | Registry artefacts (the registry's eleven generators: DNS zones, Caddy sites with the `hnx_forward_auth` snippet, scrape and probe targets, firewall matrix, ...) | the registry | never committed here: `hnx registry generate`, `hnx registry check REGISTRY DIR` compares an output directory; goldens in `tests/generators/golden/` |
-   | Guest renders (`hnx guests render`, nine targets: terraform-proxmox, libvirt, cloudinit, inventory, registry-hosts, backup-jobs, firewall-rules, baseline-playbook, tailscale-acl) | the guests (with their nodes, policies, keys and baselines) and the site | never committed here; a site that commits a render (for example its inventory) owns the drift check; goldens in `tests/compute/golden/` |
+   | Guest renders (`hnx guests render`, ten targets: terraform-proxmox, libvirt, cloudinit, inventory, registry-hosts, backup-jobs, firewall-rules, baseline-playbook, tailscale-acl, node-mirror) | the guests (with their nodes, policies, keys and baselines) and the site | never committed here; a site that commits a render (for example its inventory) owns the drift check; goldens in `tests/compute/golden/` |
 
 7. **Records.** Strategy records are Veritas: ADR-0020 decision 5 makes "the strategy repository"
    their source of truth, which for a real lab is the overlay's `lab/strategy/` (ADR-0021; the
