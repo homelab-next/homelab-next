@@ -452,10 +452,6 @@
    "example-27b": 1,
    "example-4b": 1
   },
-  "examples/model_roles.json": {
-   "example-27b": 1,
-   "example-4b": 1
-  },
   "examples/registers/invariants.yml": {
    "authentik": 2,
    "caddy": 8,
@@ -647,7 +643,7 @@
    "uptime-kuma": 1
   },
   "homelabnext/schemas/module_negatives.py": {
-   "northwind-objects": 10
+   "northwind-objects": 5
   },
   "homelabnext/scripts/catalog.py": {
    "stackstorm": 3
@@ -815,13 +811,13 @@
    "vllm": 1
   },
   "schemas/platform/examples/module.multi-slot-provider.yml": {
-   "litware-siem": 8
+   "litware-siem": 4
   },
   "schemas/platform/examples/module.provider.yml": {
-   "northwind-objects": 9
+   "northwind-objects": 5
   },
   "schemas/platform/examples/module.provisional-provider.yml": {
-   "wingtip-pages": 8
+   "wingtip-pages": 4
   },
   "schemas/platform/examples/service.scope-out.yml": {
    "authentik": 1,
@@ -928,55 +924,55 @@
    "vllm": 1
   },
   "schemas/platform/negative/module.adapter-any-callable.yml": {
-   "northwind-objects": 9
+   "northwind-objects": 5
   },
   "schemas/platform/negative/module.config-path-absolute.yml": {
-   "northwind-objects": 9
+   "northwind-objects": 5
   },
   "schemas/platform/negative/module.config-path-traversal.yml": {
-   "northwind-objects": 9
+   "northwind-objects": 5
   },
   "schemas/platform/negative/module.control-plane-reader-builtin.yml": {
-   "wingtip-pages": 8
+   "wingtip-pages": 4
   },
   "schemas/platform/negative/module.core-with-product.yml": {
-   "northwind-objects": 4
-  },
-  "schemas/platform/negative/module.credential-without-holder.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.feature-with-product.yml": {
-   "northwind-objects": 4
-  },
-  "schemas/platform/negative/module.hosts-without-lifecycle.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.licence-kind-none.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.provider-conformance-and-provisional.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.provider-in-bundle.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.provider-without-licence.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.provider-without-product.yml": {
-   "northwind-objects": 4
-  },
-  "schemas/platform/negative/module.provider-without-slot.yml": {
-   "northwind-objects": 9
-  },
-  "schemas/platform/negative/module.provisional-without-reason.yml": {
-   "wingtip-pages": 8
-  },
-  "schemas/platform/negative/module.requires-product-not-slot.yml": {
    "northwind-objects": 2
   },
+  "schemas/platform/negative/module.credential-without-holder.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.feature-with-product.yml": {
+   "northwind-objects": 2
+  },
+  "schemas/platform/negative/module.hosts-without-lifecycle.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.licence-kind-none.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.provider-conformance-and-provisional.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.provider-in-bundle.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.provider-without-licence.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.provider-without-product.yml": {
+   "northwind-objects": 2
+  },
+  "schemas/platform/negative/module.provider-without-slot.yml": {
+   "northwind-objects": 5
+  },
+  "schemas/platform/negative/module.provisional-without-reason.yml": {
+   "wingtip-pages": 4
+  },
+  "schemas/platform/negative/module.requires-product-not-slot.yml": {
+   "northwind-objects": 1
+  },
   "schemas/platform/negative/module.subscription-without-expiry.yml": {
-   "wingtip-pages": 8
+   "wingtip-pages": 4
   },
   "schemas/platform/negative/service.backup-job-brace.yml": {
    "authentik": 1,
@@ -1878,7 +1874,7 @@
    "wazuh": 1
   },
   "tests/schemas/test_module_1_0.py": {
-   "northwind-objects": 4
+   "northwind-objects": 2
   },
   "tests/secretseed/test_secret_seed.py": {
    "openbao": 13,

@@ -282,5 +282,11 @@ def test_server_checks_skip_with_reason(tmp_path, id_):
     assert r.status == "skip" and r.evidence.startswith("SERVER:")
 
 
-def test_all_eight_pillar_x_checks_registered():
-    assert sorted(default_registry().checks) == [f"X-0{i}" for i in range(1, 9)]
+def test_the_pillar_x_checks_registered_here():
+    """X-01..X-08 and X-11 live in pillar_x; X-09 and X-10 come through the entry-point group."""
+    assert sorted(default_registry().checks) == [*(f"X-0{i}" for i in range(1, 9)), "X-11"]
+
+
+def test_x11_runs_the_product_name_lint(tmp_path):
+    r = default_registry().get("X-11").fn(ctx(tmp_path))
+    assert r.status == "skip"  # no tool in an empty tree

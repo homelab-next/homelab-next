@@ -78,6 +78,7 @@ schemas:
 CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
+	$(PY) tools/product_name_lint.py .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check

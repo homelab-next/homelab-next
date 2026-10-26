@@ -257,6 +257,8 @@ jobs:
         run: python -m homelabnext.schemas --check
       - name: no raw endpoints
         run: python tools/no_raw_endpoints.py .
+      - name: product names only in provider modules (X-11)
+        run: python tools/product_name_lint.py .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
       - name: no copy-paste beyond the shrinking baseline (M-03)

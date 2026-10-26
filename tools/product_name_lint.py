@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import fnmatch
 import io
 import json
@@ -87,8 +88,21 @@ ALWAYS_ALLOWED = (
     "**/*.md",
     VOCABULARY,
     BASELINE,
+    ROLES,  # the role table is where model ids belong
 )
-TEXT_SUFFIXES = {".sh", ".j2", ".cfg", ".toml", ".ini", ".conf", ".service", ".timer", ".tf", ".go", ".txt"}
+TEXT_SUFFIXES = {
+    ".sh",
+    ".j2",
+    ".cfg",
+    ".toml",
+    ".ini",
+    ".conf",
+    ".service",
+    ".timer",
+    ".tf",
+    ".go",
+    ".txt",
+}
 MAX_BYTES = 2_000_000
 _NAME = re.compile(r"^[a-z0-9][a-z0-9 ._-]*[a-z0-9]$|^[a-z0-9]$")
 
@@ -122,7 +136,9 @@ def _load_yaml(path: Path) -> Any:
         raise LintError(f"{path}: cannot be read ({exc})") from None
 
 
-def vocabulary(root: Path, overlay: Path | None, roles: Path | None) -> tuple[list[Term], list[str]]:
+def vocabulary(
+    root: Path, overlay: Path | None, roles: Path | None
+) -> tuple[list[Term], list[str]]:
     """The terms to match and the provider module directories (relative) where they are allowed."""
     terms: list[Term] = []
     provider_dirs: list[str] = []
@@ -142,13 +158,15 @@ def vocabulary(root: Path, overlay: Path | None, roles: Path | None) -> tuple[li
         for text in [name, prod.get("display") or "", *(prod.get("aliases") or [])]:
             if text:
                 terms.append(_term(product, str(text)))
-        try:
+        with contextlib.suppress(ValueError):  # an overlay module: outside the tree being linted
             provider_dirs.append(mf.parent.relative_to(root).as_posix())
-        except ValueError:
-            pass  # an overlay module: its directory is outside the tree being linted
     vocab = _load_yaml(root / VOCABULARY) if (root / VOCABULARY).is_file() else {}
     for i, p in enumerate((vocab or {}).get("products") or []):
-        if not isinstance(p, dict) or not isinstance(p.get("name"), str) or not _NAME.match(_norm(p["name"])):
+        if (
+            not isinstance(p, dict)
+            or not isinstance(p.get("name"), str)
+            or not _NAME.match(_norm(p["name"]))
+        ):
             raise LintError(f"{VOCABULARY}: products[{i}] needs a lower-case name")
         if not str(p.get("why", "")).strip():
             raise LintError(f"{VOCABULARY}: products[{i}] ({p['name']}) needs a why")
@@ -165,7 +183,10 @@ def vocabulary(root: Path, overlay: Path | None, roles: Path | None) -> tuple[li
                 mid = b.get("model_id")
                 if isinstance(mid, str) and mid.strip():
                     terms.append(_term(_norm(mid), mid))
-    return terms, provider_dirs
+    unique: dict[tuple[str, str], Term] = {}
+    for t in terms:  # a name and its display name often normalise to one term: count it once
+        unique.setdefault((t.product, t.pattern.pattern), t)
+    return list(unique.values()), provider_dirs
 
 
 def allowlist(root: Path) -> list[tuple[str, str]]:
@@ -203,15 +224,21 @@ def _python_texts(text: str) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             body = getattr(node, "body", [])
-            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-                if isinstance(body[0].value.value, str):
-                    doc_lines.update(range(body[0].lineno, (body[0].end_lineno or body[0].lineno) + 1))
+            first = body[0] if body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                doc_lines.update(range(body[0].lineno, (body[0].end_lineno or body[0].lineno) + 1))
     out = []
     try:
         for tok in tokenize.generate_tokens(io.StringIO(text).readline):
             if tok.type == tokenize.STRING and tok.start[0] in doc_lines:
                 continue
-            if tok.type in (tokenize.STRING, tokenize.NAME) or tok.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
+            if tok.type in (tokenize.STRING, tokenize.NAME) or tok.type == getattr(
+                tokenize, "FSTRING_MIDDLE", -1
+            ):
                 out.append(tok.string)
     except (tokenize.TokenError, IndentationError, SyntaxError):
         return [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
@@ -283,7 +310,7 @@ def scan(root: Path, terms: list[Term], allowed: list[str]) -> dict[str, Counter
         count(rel + ("/" if path.is_dir() else ""), [path.name])  # the name itself
         if path.is_file():
             count(rel, _file_texts(path))
-    return {k: v for k, v in sorted(hits.items())}
+    return dict(sorted(hits.items()))
 
 
 # ----------------------------------------------------------------------------- the baseline
@@ -305,19 +332,25 @@ def load_baseline(path: Path) -> dict[str, dict[str, int]]:
     return counts
 
 
-def compare(hits: dict[str, Counter], base: dict[str, dict[str, int]]) -> tuple[list[str], list[str]]:
+def compare(
+    hits: dict[str, Counter], base: dict[str, dict[str, int]]
+) -> tuple[list[str], list[str]]:
     """(new: names beyond the baseline, stale: baseline entries above what is there)."""
     new, stale = [], []
     for rel, c in hits.items():
         for product, n in sorted(c.items()):
             allowed = base.get(rel, {}).get(product, 0)
             if n > allowed:
-                new.append(f"{rel}: {product} x{n} (baseline {allowed}): name the slot, not the product")
+                new.append(
+                    f"{rel}: {product} x{n} (baseline {allowed}): name the slot, not the product"
+                )
     for rel, c in sorted(base.items()):
         for product, n in sorted(c.items()):
             have = hits.get(rel, Counter()).get(product, 0)
             if have < n:
-                stale.append(f"{rel}: {product} baseline {n}, now {have}: run --shrink (the baseline only shrinks)")
+                stale.append(
+                    f"{rel}: {product} baseline {n}, now {have}: run --shrink (the baseline only shrinks)"
+                )
     return new, stale
 
 
@@ -339,17 +372,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", type=Path, help=f"default ROOT/{BASELINE}")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--shrink", action="store_true", help="lower the baseline to what is there")
-    ap.add_argument("--init", action="store_true", help="write the baseline from scratch (first adoption only)")
+    ap.add_argument(
+        "--init", action="store_true", help="write the baseline from scratch (first adoption only)"
+    )
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
     baseline = args.baseline or root / BASELINE
     try:
         terms, provider_dirs = vocabulary(root, args.overlay, args.roles or root / ROLES)
-        globs = [*ALWAYS_ALLOWED, *(d + "/**" for d in provider_dirs), *(g for g, _ in allowlist(root))]
+        globs = [
+            *ALWAYS_ALLOWED,
+            *(d + "/**" for d in provider_dirs),
+            *(g for g, _ in allowlist(root)),
+        ]
         hits = scan(root, terms, globs)
         if args.init:
             if baseline.exists():
-                print(f"product_name_lint: {baseline} exists; --init is for the first adoption", file=sys.stderr)
+                print(
+                    f"product_name_lint: {baseline} exists; --init is for the first adoption",
+                    file=sys.stderr,
+                )
                 return 2
             doc = {"version": 1, "counts": {r: dict(sorted(c.items())) for r, c in hits.items()}}
             baseline.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
@@ -365,7 +407,9 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(new), file=sys.stderr)
             print("product_name_lint: refusing to shrink while names are new", file=sys.stderr)
             return 1
-        baseline.write_text(json.dumps(shrunk(hits, base), indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        baseline.write_text(
+            json.dumps(shrunk(hits, base), indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
         print(f"product_name_lint: baseline shrunk ({len(stale)} entry(ies) lowered)")
         return 0
     if args.json:

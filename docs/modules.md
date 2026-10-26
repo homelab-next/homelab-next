@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:8fb4a1a1873e95c0
+summary_of: outline:sha256:c9de97521be17e63
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -909,22 +909,31 @@ Model-role rebinds go through the same record with `{slot: cap:inference, role}`
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
 open (below).
 
-## The product-name lint (rule 1): specification
+## The product-name lint (rule 1)
 
-Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
+Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints.py`, run by
+`make gates`, the CI `schemas` job and invariant X-11.
 
-- **Vocabulary**: every provider's `product.name`, `display` (lower-cased, spaces as `-`/`_`) and
-  `aliases`, from the tree and the overlay; `tools/product_names.yml` for products without a provider
-  module yet; **model identifiers** from the role table; and product-named environment variable
-  prefixes (`<PRODUCT>_*`).
-- **Where allowed**: inside a provider module; site configuration (the overlay, the public example
-  sites); ADRs, the changelog and prose.
-- **What is linted**: code, config keys and values, schema `enum`/`default`/`const`, CLI defaults
-  and choices, file and directory names, env names, in the core and in feature and core modules.
-- **Skipped**: comments, docstrings and Markdown prose. **Matching**: case-insensitive, bounded,
-  `-` and `_` alike. **Suppression**: a path glob with a reason, plus a baseline that only shrinks.
-- The contract tests already apply it to the examples (feature and core modules, sites, the slot
-  registry).
+- **Vocabulary**: every provider's `product.name`, `display` (lower-cased, spaces as `-`) and
+  `aliases`, from `examples/modules/`, the public `modules/` and an overlay's `lab/modules/`
+  (`--overlay`); `tools/product_names.yml` `products:` for products without a provider module yet
+  (each with a `why`; unambiguous names only, never a common word); and **model identifiers** from
+  the role table (`examples/model_roles.json`, `--roles`). Environment names are covered by the
+  same match (`NORTHWIND_OBJECTS_ENDPOINT` names `northwind-objects`).
+- **Where allowed**: inside a provider module; site configuration (`examples/modules/sites/`,
+  `examples/private-overlay/`, an overlay's `lab/`); the role table; Markdown prose (ADRs and the
+  changelog included); and the reviewed globs of `tools/product_names.yml` `allow:`, each with a
+  reason.
+- **What is linted**: Python string literals and identifiers, every key and string value of YAML
+  and JSON (so schema `enum`, `default` and `const`, and CLI choices written as data), the
+  non-comment lines of other text files, and file and directory names, in the core and in feature
+  and core modules (the examples' feature and core modules included).
+- **Skipped**: comments, docstrings and Markdown prose. **Matching**: case-insensitive, bounded (no
+  letter or digit on either side), `-`, `_` and a space alike.
+- **Baseline**: `tools/product_names.baseline.json` holds today's counts per path and product
+  (the core still names its reference products in about 540 paths); a count above it fails, and so
+  does an entry above what is there, because it only shrinks (`--shrink` lowers it and refuses while
+  anything is new). Moving product code into a provider module is how it shrinks.
 
 ## Prerequisite record changes
 
@@ -1005,7 +1014,8 @@ listed as deferred.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the
    fictional examples in the contract tests, plus the two-way check against what runs, uniqueness
    against the core's own names, and refusing an overlay module that shadows a shipped id.
-10. **The product-name lint** (specified above).
+10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
+    the core's existing product names are a baseline that only shrinks.
 
 ## Open questions
 

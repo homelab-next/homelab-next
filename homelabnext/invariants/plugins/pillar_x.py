@@ -299,6 +299,8 @@ def register(reg: Registry) -> None:
     reg.register(Check("X-04", "every capability has a conformance test", x04))
     reg.register(Check("X-05", "role linter reports clean", x05))
     reg.register(Check("X-06", "detection ids in specs are logical, never raw rule numbers", x06))
-    reg.register(Check("X-11", "product names only in provider modules, site config and prose", x11))
+    reg.register(
+        Check("X-11", "product names only in provider modules, site config and prose", x11)
+    )
     for id_ in SERVER_ONLY:
         reg.register(Check(id_, SERVER_ONLY[id_], _server(id_)))
