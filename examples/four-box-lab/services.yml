@@ -29,6 +29,7 @@ hosts:
   bus-1:        {address: 192.0.2.140,   zone: data,     role: events}
   store-1:      {address: 192.0.2.141,   zone: data,     role: storage}
   proxy-1:      {address: 198.51.100.10, zone: edge,     role: edge}
+  egress-1:     {address: 198.51.100.11, zone: edge,     role: egress}
   detonation-1: {address: 203.0.113.20,  zone: sandbox,  role: detonation}
 
 services:
@@ -107,14 +108,14 @@ services:
     capability: network-sensor
     impl: suricata
     host: sensor-1
-    protocol: tcp
-    port: 1514
+    protocol: ssh
+    port: 22
     health: {kind: tcp}
     upstreams: [detections, events]
     owner: security-team
     version: "7.0"
     tls: none
-    description: Watches both capture NICs (the uplink mirror and main-1's guest mirror) and ships alerts and flow records.
+    description: Watches both capture NICs (the uplink mirror and main-1's guest mirror) and ships alerts and flow records; it listens on nothing, so its health is the sensor host's SSH.
   dfir:
     capability: dfir
     impl: velociraptor
@@ -173,3 +174,36 @@ services:
     version: "2024.9"
     tls: internal
     description: S3-compatible object storage for evidence, samples and backups' staging.
+  dns-upstream:
+    capability: dns-upstream
+    impl: unbound
+    host: egress-1
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    owner: platform-team
+    version: "1.22"
+    tls: none
+    description: The recursive resolver the lab's resolvers forward to; the only DNS that reaches the internet.
+  apt-cache:
+    capability: apt-cache
+    impl: apt-cacher-ng
+    host: egress-1
+    protocol: http
+    port: 3142
+    health: {kind: tcp}
+    owner: platform-team
+    version: "3.7"
+    tls: none
+    description: The package cache every host without internet installs and updates through.
+  ntp:
+    capability: ntp
+    impl: chrony
+    host: egress-1
+    protocol: udp
+    port: 123
+    health: {kind: none}
+    owner: platform-team
+    version: "4.5"
+    tls: none
+    description: The time source for every host without internet (certificates and logs need a clock).

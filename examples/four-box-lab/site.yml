@@ -103,17 +103,30 @@ firewall:
   zone_to_zone:
     - {from: mgmt, to: services, action: allow, ports: [22, 443], protocols: [tcp]}
     - {from: mgmt, to: data, action: allow, ports: [22], protocols: [tcp]}
-    - {from: mgmt, to: edge, action: allow, ports: [22], protocols: [tcp]}
+    - {from: mgmt, to: edge, action: allow, ports: [22, 443], protocols: [tcp]}
     - {from: services, to: data, action: allow, ports: [4222, 9000], protocols: [tcp]}
-    - {from: edge, to: services, action: allow, ports: [443], protocols: [tcp]}
     - {from: sandbox, to: any, action: deny, one_way_contract: true}
+  # Everything else is a named service: the edge reaches only what it publishes and what its
+  # agents need, never a whole zone.
   service_exceptions:
+    # names: both resolvers from every zone but the sandbox (it has none: it uses addresses)
     - {from: [zone:services, zone:data, zone:edge], to: svc:dns, action: allow}
     - {from: [zone:services, zone:data, zone:edge], to: svc:dns-secondary, action: allow}
+    # the way out for the zones without internet: the resolvers forward, hosts fetch packages and
+    # keep time through egress-1 in the edge
+    - {from: zone:mgmt, to: svc:dns-upstream, action: allow, notes: "dns-1 and dns-2 forward here"}
+    - {from: [zone:mgmt, zone:services, zone:data], to: svc:apt-cache, action: allow}
+    - {from: [zone:mgmt, zone:services, zone:data], to: svc:ntp, action: allow}
+    # identity and the published consoles
     - {from: [zone:services, zone:edge], to: svc:idp, action: allow}
-    - {from: [zone:mgmt, zone:data, zone:edge], to: svc:dfir, action: allow, notes: "DFIR clients call home to sensor-1"}
+    - {from: [zone:mgmt, zone:edge], to: svc:status-hub, action: allow}
+    # every host's agents: the SIEM (1514 events, 1515 enrolment) and the DFIR server
+    - {from: [zone:mgmt, zone:data, zone:edge], to: svc:detections, action: allow, ports: [1514, 1515]}
+    - {from: [zone:data, zone:edge], to: svc:dfir, action: allow}
+    - {from: zone:mgmt, to: svc:dfir, action: allow, ports: [8000, 8889], notes: "clients, and the DFIR console"}
+    # the only ways out of the one-way zone: one port each, to one service each
     - {from: zone:sandbox, to: svc:events, action: allow, ports: [4222], notes: "the one-way telemetry pipe"}
-    - {from: zone:sandbox, to: svc:dfir, action: allow, notes: "DFIR collection from the detonation box: one port, deliberately"}
+    - {from: zone:sandbox, to: svc:dfir, action: allow, ports: [8000], notes: "DFIR collection from the detonation box"}
 
 dns:
   resolvers:

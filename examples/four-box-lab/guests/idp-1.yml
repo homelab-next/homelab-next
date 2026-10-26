@@ -15,7 +15,7 @@ firewall_rules:
     - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
     - {name: sso-mgmt, proto: tcp, ports: "9443", source: "zone:mgmt"}
     - {name: sso-services, proto: tcp, ports: "9443", source: "zone:services"}
-    - {name: sso-edge, proto: tcp, ports: "9443", source: "zone:edge"}
+    - {name: sso-proxy, proto: tcp, ports: "9443", source: "198.51.100.10/32"}
 capability: cap:idp
 tags: [prod]
 owners: {primary: platform-team}

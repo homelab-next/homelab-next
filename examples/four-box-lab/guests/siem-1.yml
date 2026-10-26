@@ -16,6 +16,7 @@ firewall_rules:
   inbound_allow:
     - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
     - {name: console, proto: tcp, ports: "443", source: "zone:mgmt"}
+    - {name: agents-mgmt, proto: tcp, ports: "1514:1515", source: "zone:mgmt"}
     - {name: agents-services, proto: tcp, ports: "1514:1515", source: "zone:services"}
     - {name: agents-data, proto: tcp, ports: "1514:1515", source: "zone:data"}
     - {name: agents-edge, proto: tcp, ports: "1514:1515", source: "zone:edge"}
