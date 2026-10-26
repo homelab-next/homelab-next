@@ -426,9 +426,25 @@ slot instance it lives in; files and path defaults are relative to the module's 
 - Removal exports first (`export_first`, default true); `false` needs a `discard_reason`. A removal
   deletes only the module's own namespaced data, never another module's (the namespaces cannot
   overlap).
-- **Import validation: specified, not implemented.** Each slot's and role's `import_` is meant to
-  validate the tree it reads (no traversal, no symlinks, sizes and counts within the export
-  manifest). No protocol states it as a MUST and no test exercises it.
+- **Import validation** (follow-up 7, implemented as a library and a suite): an export is a tree
+  plus an export manifest (draft schema `platform/export_manifest` 1.0: slot, format, every file's
+  path, size and sha256, and the totals). Each slot's `import_` MUST refuse, before changing
+  anything, a manifest path that traverses (`..`, absolute, backslash, control character, a repeat
+  compared case-insensitively), a symbolic link or special file anywhere in the tree (the root
+  included), a file with a second hard link, an entry on another filesystem or a mount point inside
+  the tree, a missing or unlisted file, a size or sha256 that differs, and a tree over its limits or
+  the caller's tighter ones; it never follows a link while reading.
+  `homelabnext.modules.importcheck` implements it through one `O_NOFOLLOW` descriptor of the root:
+  `check_tree` names the problems (at most 100) without reading content, and every file is opened
+  from its parent's descriptor and re-checked on its own, so a file or directory swapped for a link
+  after the check is refused. `copy_tree` streams a verified tree into a new directory that appears
+  complete or not at all; `read_tree` does the same in memory, for small trees. The manifest is the
+  outgoing provider's own claim: the check proves the tree is safe to read and is what the manifest
+  says, not where it came from. The extended
+  conformance suite `migration` (`conformance/protocols/migration.py`) states the MUST, five
+  deliberately broken importers prove its checks, and it runs once per stateful slot of the slot
+  registry against the reference importer. A real provider proves it when its slot protocol gains
+  `export` and `import_` (below); the format-specific parse stays the slot's own suite.
 - "Start empty" after a swap is a recorded decision with a reason (swap record 1.2).
 
 Slot-level export/import (rule 3): each stateful slot's protocol gains `export(dest) -> manifest`
@@ -914,8 +930,9 @@ listed as deferred.
    kinds `module-provider`, `module-feature`, `module-core`.
 5. **Supply chain**: the `lab/modules.lock` format, the tree digest, and reviews keyed by it.
 6. **The egress generator**: rendering declared egress into host and unit network policy.
-7. **Import validation**: the MUST that `import_` refuses traversal, symlinks and oversize trees, and
-   a test per stateful slot.
+7. **Import validation**: implemented as a library, a draft schema and the `migration` suite (see
+   [`data:` and lifecycle safety](#data-and-lifecycle-safety)); each provider proves it once its
+   slot protocol gains `export` and `import_`.
 8. **Footprint limits**: generating `MemoryMax`, `CPUQuota` and disk quotas from footprints.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the
    fictional examples in the contract tests, plus the two-way check against what runs, uniqueness

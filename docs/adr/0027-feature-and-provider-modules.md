@@ -133,7 +133,9 @@ with no schema, generator or check in any form):
    remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;
 5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
 6. the egress generator (declared egress as host and unit network policy);
-7. import validation (no traversal, symlinks or oversize trees) as a protocol MUST with tests;
+7. import validation: implemented (`homelabnext.modules.importcheck`, the draft schema
+   `platform/export_manifest` 1.0 and the extended `migration` suite, run once per stateful slot);
+   each provider proves it when its slot protocol gains `export` and `import_`;
 8. footprint limits (`MemoryMax`, `CPUQuota` and disk quotas generated from footprints);
 9. the loader, with its two-way check against what runs, uniqueness against the core's own names
    and the overlay-shadowing refusal;
