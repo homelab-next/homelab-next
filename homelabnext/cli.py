@@ -178,6 +178,10 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     "site": ("the site/network model: validate|plan|render|ir|adapters", _site),
     "guests": ("validate/render/plan the guest (compute) model; baselines coverage", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
+    "secrets": (
+        "the credentials a lab names: plan (list them) | seed (create the missing ones in OpenBao)",
+        lambda a: importlib.import_module("homelabnext.secretseed.cli").main(a),
+    ),
     "swap": (
         "run the swap procedure (plan|start|status|advance|rollback|record)",
         lambda a: importlib.import_module("homelabnext.swap.cli").main(a),
