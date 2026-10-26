@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
-summary_of: outline:sha256:e32910f341976db3
+summary_of: outline:sha256:3698a9ede00e7272
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -84,6 +84,32 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
+| with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
+
+### Node capacity and pools
+
+`_nodes.yml` may say what each hypervisor holds, and `hnx guests validate` then refuses a guest set
+that does not fit and prints what each node's guests use (`hv-1: 5 guests, cores 20/28, memory
+38/56 GiB, fast 352/900 GB`). Both blocks are optional; a node without them asks nothing.
+
+```yaml
+nodes:
+  hv-1:
+    capacity:
+      threads: 256            # logical CPUs the hypervisor schedules
+      memory_mb: 1048576
+      reserve: {threads: 8, memory_mb: 131072}   # the hypervisor itself and its ZFS ARC
+      cpu_overcommit: 2       # guest vCPUs per remaining thread (1-16; default 1)
+    pools:                    # the names guests' disks use (resources.disks[].pool)
+      fast:  {size_gb: 7000, media: nvme}
+      write: {size_gb: 3500, media: ssd}
+      bulk:  {size_gb: 30000, media: hdd}
+```
+
+Memory is never overcommitted: a guest's `size_mb` is its ceiling and ballooning only lends memory
+back. Pool sizes are what guests may allocate (after redundancy: a raidz2 of five 10 TB disks
+gives about 30 TB), so thin provisioning and snapshots are left out, deliberately: the check is
+for planning, not for what `zfs list` shows on the day.
 
 The model does not import a site package. It reads zones through a small protocol:
 

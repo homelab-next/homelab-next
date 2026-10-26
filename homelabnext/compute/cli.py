@@ -144,6 +144,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "validate":
         iac = len(fleet.iac())
         print(f"ok: {len(fleet.guests)} guests ({iac} rendered, {len(fleet.manual())} manual)")
+        from .validate import usage_lines
+
+        for line in usage_lines(fleet):
+            print(f"  {line}")
         return 0
     files = render(fleet, args.target)
     if args.cmd == "render":
