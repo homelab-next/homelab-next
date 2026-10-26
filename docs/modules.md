@@ -497,9 +497,25 @@ refused ("... remove the grant"). So **a grant lands in the same overlay change 
 version (its pin in the lock, or the checkout for an in-tree module) that first uses it, and is
 deleted with the version that stops using it**; unselecting a module means deleting its grants. A
 `svc:` target is checked even before the rows are read: a selected slot, an instance, or a name
-bound to a selected feature or core module (whose rows then decide). **The egress generator is specified, not implemented**: nothing renders the declared egress
-into host and unit network policy (`IPAddressDeny`/allow lists, nftables) yet, so today egress is
-declared and checked against grants, not enforced on the wire. **Publishing is the only egress
+bound to a selected feature or core module (whose rows then decide). **The egress generator** (follow-up 6): `homelabnext.modules.egress.render(site, modules, rows)`
+turns it into an nftables ruleset per lab host, so a module role opens connections only to what it
+declared. A socket in a role's slice (the `hnx-<id_>-<role_>.slice` of
+[footprint limits](#footprint-and-resources), matched as `socket cgroupv2 level 3`) jumps to the
+role's chain, which accepts DNS to the selected `dns` instances, each slot the module requires or
+prefers (the provider's rows at their placed host's addresses and ports, or every port of its
+placed hosts when it has no row; a provider with no host role runs outside the lab and is reached
+only over `internet`), each `svc:` target (a row, slot or instance), and with `internet` every
+address outside the lab (private, loopback, link-local, CGNAT, unique-local and
+`scope.trusted.nets` are the lab); it logs and drops the rest. An `isolated` role reaches nothing.
+Any other socket in `hnx.slice` is dropped. Hosts carry their own `addresses` in the selection
+(`hosts.<name>.addresses`, private, documentation ranges in a public example), and every address,
+port and name is checked before it reaches the ruleset. `hnx-egress.service` loads it after
+starting the host's role slices (their cgroups must exist) and `hnx-egress.timer` reloads it every
+30 seconds, because nftables resolves a cgroup once: a restarted slice falls under the `hnx.slice`
+drop until then. It needs the unified cgroup v2 hierarchy. Requirements are the module's, not a
+role's, so every role of a module reaches the slots the module requires. It limits connections a
+module opens, not who connects to it (replies pass as established; inbound is the network model's
+and the edge's). **Publishing is the only egress
 for published content** because the overlay says so, not because publishing says so: only a module
 in `grants.publish` may require, prefer or fall back to `cap:static-hosting`, and the core criterion
 `core-modules/egress-publish-grant` checks it (deferred until the loader exists; the contract tests
@@ -931,7 +947,8 @@ listed as deferred.
    `grants.shared_config` (the rule refuses edge and idp config outright), and the review-policy
    kinds `module-provider`, `module-feature`, `module-core`.
 5. **Supply chain**: the `lab/modules.lock` format, the tree digest, and reviews keyed by it.
-6. **The egress generator**: rendering declared egress into host and unit network policy.
+6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing)); the
+   loader will run it.
 7. **Import validation**: the MUST that `import_` refuses traversal, symlinks and oversize trees, and
    a test per stateful slot.
 8. **Footprint limits**: implemented for fleet units and data roots (see

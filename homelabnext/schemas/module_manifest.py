@@ -1349,6 +1349,11 @@ def module_selection_schema() -> dict[str, Any]:
                 obj({"name": pat(SLUG, None, 32), "kind": pat(SLUG, None, 32)}, ["name", "kind"])
             ),
             "headroom": obj({"memory_mb": {"type": "integer", "minimum": 0}}),
+            "addresses": arr(
+                ref("scope_entry"),
+                "The host's own addresses (no prefix, or a full-length one), what the egress generator (homelabnext.modules.egress) allows a module role to reach on it. Private: documentation ranges in a public example.",
+                1,
+            ),
         },
         ["kind", "capacity"],
         "A site host; capacity stands in for its platform/guest resources.",

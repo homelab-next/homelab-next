@@ -4,6 +4,8 @@ profile: small-lab
 hosts:
   core:
     kind: host
+    addresses:
+    - 192.0.2.10
     capacity:
       cpu: 16
       memory_mb: 32768
@@ -16,6 +18,9 @@ hosts:
       memory_mb: 4096
   data:
     kind: vm
+    addresses:
+    - 192.0.2.11
+    - 2001:db8:20::11
     capacity:
       cpu: 8
       memory_mb: 16384

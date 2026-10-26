@@ -103,6 +103,15 @@
                 "minimum": 0
               }
             }
+          },
+          "addresses": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/$defs/scope_entry"
+            },
+            "minItems": 1,
+            "description": "The host's own addresses (no prefix, or a full-length one), what the egress generator (homelabnext.modules.egress) allows a module role to reach on it. Private: documentation ranges in a public example."
           }
         },
         "description": "A site host; capacity stands in for its platform/guest resources."
