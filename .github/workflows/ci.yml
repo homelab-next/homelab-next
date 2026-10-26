@@ -47,12 +47,14 @@ jobs:
       - name: test code reads no wall clock or unseeded randomness
         run: python tools/hermetic_lint.py
 
-  # The suite in four shards per Python version: each job runs a quarter of the collected tests,
-  # chosen by node id hash (tests/shard_report.py), and test-ok below proves from their reports that together they ran
-  # every test exactly once and that each suite's summed time kept its budget.  Run whole, the
-  # 3.12 job's pytest took 34.5 min on a runner (2026-10-25).
+  # The suite in six shards per Python version: each job runs a sixth of the collected tests,
+  # chosen by node id hash (tests/shard_report.py), and test-ok below proves from their reports
+  # that together they ran every test exactly once and that each suite's summed time kept its
+  # budget.  Run whole, the 3.12 job's pytest took 34.5 min on a runner (2026-10-25); in four
+  # shards its slowest took 593 s against 491 s for the fastest (2026-10-26, near-equal test
+  # counts: the spread is per-test cost, so more shards cut the slowest more than balancing would).
   test:
-    name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/4)
+    name: test (${{ matrix.python.version }}, ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -69,7 +71,7 @@ jobs:
           - version: "3.11"
             extras: "test"
             go: false
-        shard: [1, 2, 3, 4]  # test-ok counts on all four: change both together
+        shard: [1, 2, 3, 4, 5, 6]  # --shard below names the 6: change both together
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -91,7 +93,7 @@ jobs:
         run: >-
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
-          --shard "$SHARD/4" --shard-report "$RUNNER_TEMP/shard.json"
+          --shard "$SHARD/6" --shard-report "$RUNNER_TEMP/shard.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()  # a failed shard's report says why to test-ok too
         with:

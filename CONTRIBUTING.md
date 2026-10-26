@@ -200,8 +200,8 @@ and an entry that no longer excuses anything fails the lint.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
-- **Shards.** CI runs the suite as four jobs per Python version: `pytest --shard I/4
-  --shard-report FILE` runs the tests whose node id hashes to the I-th quarter and writes what it
+- **Shards.** CI runs the suite as six jobs per Python version: `pytest --shard I/6
+  --shard-report FILE` runs the tests whose node id hashes to the I-th sixth and writes what it
   collected, ran and timed. Each shard holds the budgets on its own share of each suite; the `test-ok` job
   (`python -m tests.shard_report --groups 3.11,3.12 DIR`) fails unless every shard passed, together
   they ran each collected test exactly once, and each suite's time summed over the shards is

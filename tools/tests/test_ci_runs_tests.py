@@ -355,6 +355,7 @@ def _sharded_step(doc):
     [
         lambda d: d["jobs"]["test"]["strategy"]["matrix"].update(shard=[1, 2, 3]),
         lambda d: d["jobs"]["test"]["strategy"]["matrix"].update(shard=[1, 2, 3, 4, 5]),
+        lambda d: d["jobs"]["test"]["strategy"]["matrix"].update(shard=[1, 2, 3, 4, 5, 6, 7]),
         lambda d: d["jobs"]["test"]["strategy"]["matrix"].pop("shard"),
         lambda d: _sharded_step(d)["env"].update(SHARD="1"),
         lambda d: d["jobs"].pop("test-ok"),
