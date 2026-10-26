@@ -24,7 +24,7 @@ products:
   - {name: suricata, why: a network sensor product}
   - {name: technitium, why: the dns slot's reference product}
   - {name: trino, why: the lake query engine's reference product}
-  - {name: iceberg, why: the lake table format's reference product}
+  - {name: iceberg, why: "the lake table format's reference product (outside prose the word is only ever the product here)"}
   - {name: minio, why: the object store's reference product}
   - {name: ntfy, why: the notify slot's reference product}
   - {name: openproject, why: the projects slot's reference product}
@@ -35,7 +35,13 @@ products:
   - {name: vllm, why: an inference server product}
   - {name: agentmetry, why: the agent telemetry product}
 allow:
-  - path: "tools/product_name_lint.py"
-    reason: the lint names nothing itself, but its docstring examples are read as strings
+  - path: "docs/scripts/catalog.json"
+    reason: generated from the scripts' hnx-script header comments, which are prose
+  - path: "tools/*.allow.yml"
+    reason: other gates' reviewed path lists; a path that names a product is counted where it lives
+  - path: "tools/dup_check.baseline.json"
+    reason: the duplication baseline lists paths; a path that names a product is counted where it lives
+  - path: "NOTICE"
+    reason: the attribution notice is prose
   - path: "tools/tests/test_product_name_lint.py"
     reason: the lint's own tests plant product names on purpose

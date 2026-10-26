@@ -863,24 +863,26 @@
     {
       "exit": {
         "0": "clean",
-        "1": "violations (a new name, or a baseline entry above what is there)",
-        "2": "usage error or a bad vocabulary, allowlist or baseline"
+        "1": "violations (a new name, a baseline entry above what is there, or a baseline that grew since the base)",
+        "100": "the lint itself failed (could not measure)",
+        "2": "usage error or a bad vocabulary, allowlist, manifest or baseline"
       },
       "id": "product-name-lint",
-      "inputs": "the tree; tools/product_names.yml; tools/product_names.baseline.json; the role table",
+      "inputs": "the tracked tree; tools/product_names.yml; tools/product_names.baseline.json; the role table; the base commit's baseline (--base, --ci-base)",
       "invariant": [
         "X-11"
       ],
       "kind": "check",
       "language": "python",
-      "outputs": "one line per violation; --shrink rewrites the baseline downward",
+      "outputs": "one line per violation; --update rewrites the baseline when no product's total rises",
       "owner": "maintainers",
       "path": "tools/product_name_lint.py",
-      "purpose": "Fail when a product name appears in the core outside a provider module, beyond the shrinking baseline.",
+      "purpose": "Fail when a product name appears in the core outside its provider module, beyond the shrinking baseline.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
-        "make:gates"
+        "make:gates",
+        "make:product-names-baseline"
       ]
     },
     {
@@ -1010,7 +1012,8 @@
       "trigger": [
         "ci:ci/schemas",
         "code:homelabnext/cli.py",
-        "make:schemas"
+        "make:schemas",
+        "script:product-name-lint"
       ]
     },
     {

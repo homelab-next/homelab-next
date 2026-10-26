@@ -9,7 +9,7 @@
     X-06  detection ids are logical (``det:`` ids), no raw rule numbers in specs
     X-07  every stateful product's export hook exercised SERVER (needs a restore drill)
     X-08  cutover-commit audit                           SERVER (needs a real cutover)
-    X-11  product names only in provider modules         (runs tools/product_name_lint.py)
+    X-11  product names only in their provider modules   (runs tools/product_name_lint.py)
 
 X-09 (customizations) and X-10 (conformance has-a-passing-test) are registered through the
 ``homelabnext.invariants.checks`` entry-point group from
@@ -300,7 +300,7 @@ def register(reg: Registry) -> None:
     reg.register(Check("X-05", "role linter reports clean", x05))
     reg.register(Check("X-06", "detection ids in specs are logical, never raw rule numbers", x06))
     reg.register(
-        Check("X-11", "product names only in provider modules, site config and prose", x11)
+        Check("X-11", "product names only in their provider modules, site config and prose", x11)
     )
     for id_ in SERVER_ONLY:
         reg.register(Check(id_, SERVER_ONLY[id_], _server(id_)))

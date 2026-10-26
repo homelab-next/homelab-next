@@ -322,7 +322,7 @@ changelog-check:
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline product-names-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
 check: helpers-lint dup-check tls-lint caddy-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
@@ -335,6 +335,11 @@ dup-check:
 # `$(PY) tools/dup_check.py --update-baseline --allow-increase "<reason>"` by hand.
 dup-baseline:
 	$(PY) tools/dup_check.py --update-baseline .
+
+# after moving or removing product names: rewrite the product-name baseline (refused when any
+# product's total would rise) and commit it
+product-names-baseline:
+	$(PY) tools/product_name_lint.py --update .
 
 caddy-lint:
 	$(PY) tools/caddy_lint.py .

@@ -1527,10 +1527,10 @@ criteria:
   plugin: X-10
   remediation: Run `hnx conform report --json`, then fix the capability it names or add the missing suite or mutant.
 - id: X-11
-  statement: Product names live only in provider modules, site configuration and prose.
+  statement: Product names live only in their provider modules, site configuration and prose, beyond a baseline that only shrinks.
   evidence: plugin
   plugin: X-11
   remediation: >-
     Name the slot (cap:object-store) or the capability alias, not the product; a product name in
     the core makes a swap a code change. Move product-specific code into the provider module, or
-    shrink the baseline when a name is gone (`python3 tools/product_name_lint.py --shrink`).
+    update the baseline when a name moves or is gone (`make product-names-baseline`).

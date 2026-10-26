@@ -5,9 +5,12 @@ skips, and the baseline that only shrinks."""
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,9 +48,20 @@ def run(root: Path, *args: str) -> int:
 
 
 def counts(root: Path) -> dict:
-    terms, dirs = pl.vocabulary(root, None, root / pl.ROLES)
-    globs = [*pl.ALWAYS_ALLOWED, *(d + "/**" for d in dirs), *(g for g, _ in pl.allowlist(root))]
-    return {k: dict(v) for k, v in pl.scan(root, terms, globs).items()}
+    vocab = pl.vocabulary(root, None, root / pl.ROLES)
+    globs = [*pl.ALWAYS_ALLOWED, *(g for g, _ in pl.allowlist(root))]
+    return {k: dict(v) for k, v in pl.scan(root, vocab, globs).items()}
+
+
+def git(root: Path, *args: str) -> None:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env)
 
 
 def test_python_strings_and_identifiers_count_but_comments_and_docstrings_do_not(tmp_path):
@@ -114,6 +128,22 @@ def test_provider_dirs_sites_overlays_and_prose_are_allowed(tmp_path):
     assert counts(root) == {}
 
 
+def test_a_provider_dir_names_only_its_own_product(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "examples/modules/example-store/adapter.py": 'x = "acme-objects"\ny = "zorbix"\n',
+            "examples/modules/evil/module.yml": yaml.safe_dump(
+                {"id": "evil", "kind": "provider", "product": {"name": "evilco"}}
+            ),
+            "examples/modules/evil/impl.py": 'x = "zorbix"\ny = "acme-objects"\nz = "evilco"\n',
+        },
+    )
+    got = counts(root)
+    assert got["examples/modules/example-store/adapter.py"] == {"zorbix": 1}
+    assert got["examples/modules/evil/impl.py"] == {"zorbix": 1, "acme-objects": 1}
+
+
 def test_a_feature_module_naming_a_product_is_counted(tmp_path):
     root = tree(tmp_path, {"examples/modules/example-feature/run.py": 'x = "acme-objects"\n'})
     assert counts(root)["examples/modules/example-feature/run.py"] == {"acme-objects": 1}
@@ -127,7 +157,123 @@ def test_an_allow_glob_needs_a_reason_and_a_product_a_why(tmp_path):
     assert run(root) == 2
 
 
-def test_the_baseline_fails_on_new_names_and_on_stale_entries_and_only_shrinks(tmp_path, capsys):
+def test_camel_case_and_digit_seams_count_but_glued_words_do_not(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "core/f.py": "class ZorbixClient: pass\n"
+            "def getZorbix(): pass\n"
+            "zorbix2 = AcmeObjectsStore = acmeobjects = 1\n"
+            "notzorbix = ZORBIXADDR = 1\n"
+        },
+    )
+    assert counts(root)["core/f.py"] == {"zorbix": 3, "acme-objects": 2}
+
+
+def test_a_docstring_hides_nothing_beside_it_and_escapes_are_decoded(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "core/g.py": '"""doc"""; x = "zorbix"\n'
+            "def f():\n"
+            '    """a docstring"""\n'
+            '    return "\\x7aorbix", b"zorbix", "zor\u200bbix", f"{x}-zorbix"\n'
+        },
+    )
+    assert counts(root)["core/g.py"] == {"zorbix": 5}
+
+
+def test_argparse_choices_count(tmp_path):
+    root = tree(tmp_path, {"core/cli.py": 'ap.add_argument("--b", choices=["zorbix", "x"])\n'})
+    assert counts(root)["core/cli.py"] == {"zorbix": 1}
+
+
+def test_prose_keys_are_skipped_but_their_siblings_are_not(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "core/s.json": json.dumps(
+                {
+                    "description": "backed by zorbix",
+                    "properties": {"backend": {"enum": ["zorbix"], "title": "zorbix"}},
+                }
+            )
+        },
+    )
+    assert counts(root)["core/s.json"] == {"zorbix": 1}
+
+
+def test_every_text_file_is_read_whatever_its_name_or_encoding(tmp_path):
+    root = tree(
+        tmp_path,
+        {
+            "Dockerfile": "FROM zorbix\n# zorbix in a comment\n",
+            "core/page.html": "<p>zorbix</p>\n",
+            "core/build/m.py": 'x = "zorbix"\n',
+            "core/.env.example": "ZORBIX_URL=x\n",
+        },
+    )
+    (root / "core/latin.py").write_bytes(b'# -*- coding: latin-1 -*-\nx = "zorbix \xe9"\n')
+    (root / "core/binary.bin").write_bytes(b"\0zorbix")
+    got = counts(root)
+    for rel in (
+        "Dockerfile",
+        "core/page.html",
+        "core/build/m.py",
+        "core/.env.example",
+        "core/latin.py",
+    ):
+        assert got[rel] == {"zorbix": 1}, rel
+    assert "core/binary.bin" not in got
+
+
+def test_an_oversized_file_is_an_error_not_a_skip(tmp_path, monkeypatch):
+    root = tree(tmp_path, {"core/big.txt": "x" * 100})
+    monkeypatch.setattr(pl, "MAX_BYTES", 10)
+    assert run(root) == 2
+
+
+def test_a_yaml_alias_bomb_is_read_once(tmp_path):
+    lines = ["a0: &a0 [zorbix]"]
+    lines += [f"a{i}: &a{i} [{', '.join([f'*a{i - 1}'] * 9)}]" for i in range(1, 12)]
+    root = tree(tmp_path, {"core/bomb.yml": "\n".join(lines) + "\n"})
+    assert counts(root)["core/bomb.yml"] == {"zorbix": 1}
+
+
+def test_only_tracked_and_unignored_files_are_read_in_a_checkout(tmp_path):
+    root = tree(tmp_path, {"core/a.py": 'x = "zorbix"\n', "core/out.log": "zorbix\n"})
+    (root / ".gitignore").write_text("*.log\n")
+    git(root, "init", "-q")
+    assert set(counts(root)) == {"core/a.py"}
+
+
+@pytest.mark.parametrize(
+    ("rel", "text"),
+    [
+        ("examples/modules/x/module.yml", "kind: provider\nproduct: zorbix\n"),
+        ("examples/modules/x/module.yml", "kind: provider\nproduct: {name: x, aliases: 5}\n"),
+        ("examples/modules/x/module.yml", "kind: provider\nproduct: {name: 'Not A Name!'}\n"),
+        (pl.BASELINE, "[]"),
+        (pl.BASELINE, json.dumps({"version": 1, "counts": {"a": {"x": 0}}})),
+        (pl.BASELINE, json.dumps({"version": 1, "counts": {"a": {"x": True}}})),
+    ],
+)
+def test_a_malformed_input_is_a_usage_error(tmp_path, rel, text):
+    root = tree(tmp_path, {rel: text})
+    assert run(root) == 2
+
+
+def test_an_internal_failure_is_could_not_measure(tmp_path, monkeypatch):
+    root = tree(tmp_path, {})
+
+    def boom(*_a, **_k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(pl, "scan", boom)
+    assert run(root) == 100
+
+
+def test_the_baseline_fails_on_new_names_and_stale_entries_and_never_grows(tmp_path, capsys):
     root = tree(tmp_path, {"core/a.py": 'x = "zorbix"\ny = "zorbix"\n'})
     assert run(root, "--init") == 0
     assert run(root, "--init") == 2  # first adoption only
@@ -135,22 +281,50 @@ def test_the_baseline_fails_on_new_names_and_on_stale_entries_and_only_shrinks(t
     (root / "core/a.py").write_text('x = "zorbix"\ny = "zorbix"\nz = "zorbix"\n')
     assert run(root) == 1
     assert "zorbix x3 (baseline 2)" in capsys.readouterr().out
-    assert run(root, "--shrink") == 1  # never while something is new
+    assert run(root, "--update") == 1  # a total would rise
     (root / "core/a.py").write_text('x = "zorbix"\n')
     assert run(root) == 1
-    assert "run --shrink" in capsys.readouterr().out
-    assert run(root, "--shrink") == 0
+    assert "run --update" in capsys.readouterr().out
+    assert run(root, "--update") == 0
     assert json.loads((root / pl.BASELINE).read_text())["counts"] == {"core/a.py": {"zorbix": 1}}
-    (root / "core/a.py").write_text('x = "nothing"\n')
-    assert run(root, "--shrink") == 0
+    (root / "core/a.py").rename(root / "core/b.py")  # a move keeps its debt
+    assert run(root) == 1
+    assert run(root, "--update") == 0
+    assert json.loads((root / pl.BASELINE).read_text())["counts"] == {"core/b.py": {"zorbix": 1}}
+    (root / "core/b.py").write_text('x = "nothing"\n')
+    assert run(root, "--update") == 0
     assert json.loads((root / pl.BASELINE).read_text())["counts"] == {}
     assert run(root) == 0
 
 
-def test_a_malformed_baseline_is_a_usage_error(tmp_path):
-    root = tree(tmp_path, {})
-    (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": {"a": {"x": 0}}}))
-    assert run(root) == 2
+def test_the_baseline_is_never_written_through_a_link(tmp_path):
+    root = tree(tmp_path, {"core/a.py": 'x = "nothing"\n'})
+    victim = tmp_path / "victim.json"
+    (root / pl.BASELINE).symlink_to(victim)
+    assert run(root, "--init") == 2
+    assert run(root, "--update") == 2
+    assert not victim.exists()
+
+
+def test_against_the_base_neither_the_baseline_nor_the_vocabulary_may_grow(tmp_path, capsys):
+    root = tree(tmp_path, {"core/a.py": 'x = "zorbix"\n'})
+    assert run(root, "--init") == 0
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    assert run(root, "--base", "HEAD") == 0
+    (root / "core/a.py").write_text('x = "zorbix"\ny = "zorbix"\n')
+    baseline = json.loads((root / pl.BASELINE).read_text())
+    baseline["counts"]["core/a.py"]["zorbix"] = 2  # a hand edit that raises the baseline
+    (root / pl.BASELINE).write_text(json.dumps(baseline))
+    assert run(root) == 0
+    assert run(root, "--base", "HEAD") == 1
+    assert "the baseline only shrinks" in capsys.readouterr().out
+    git(root, "checkout", "-q", "--", ".")
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump({"products": []}))  # un-lint zorbix
+    assert run(root, "--base", "HEAD") == 1
+    assert "no longer" in capsys.readouterr().out
+    assert run(root, "--base", "no-such-rev") == 2
 
 
 def test_the_repository_passes_its_own_lint():

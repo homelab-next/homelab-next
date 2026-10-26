@@ -912,28 +912,47 @@ open (below).
 ## The product-name lint (rule 1)
 
 Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints.py`, run by
-`make gates`, the CI `schemas` job and invariant X-11.
+`make gates`, the CI `schemas` job (with `--ci-base`) and invariant X-11.
 
-- **Vocabulary**: every provider's `product.name`, `display` (lower-cased, spaces as `-`) and
-  `aliases`, from `examples/modules/`, the public `modules/` and an overlay's `lab/modules/`
-  (`--overlay`); `tools/product_names.yml` `products:` for products without a provider module yet
-  (each with a `why`; unambiguous names only, never a common word); and **model identifiers** from
-  the role table (`examples/model_roles.json`, `--roles`). Environment names are covered by the
-  same match (`NORTHWIND_OBJECTS_ENDPOINT` names `northwind-objects`).
-- **Where allowed**: inside a provider module; site configuration (`examples/modules/sites/`,
-  `examples/private-overlay/`, an overlay's `lab/`); the role table; Markdown prose (ADRs and the
-  changelog included); and the reviewed globs of `tools/product_names.yml` `allow:`, each with a
-  reason.
-- **What is linted**: Python string literals and identifiers, every key and string value of YAML
-  and JSON (so schema `enum`, `default` and `const`, and CLI choices written as data), the
-  non-comment lines of other text files, and file and directory names, in the core and in feature
-  and core modules (the examples' feature and core modules included).
-- **Skipped**: comments, docstrings and Markdown prose. **Matching**: case-insensitive, bounded (no
-  letter or digit on either side), `-`, `_` and a space alike.
+- **Vocabulary**: every provider's `product.name`, `display` and `aliases`, from
+  `examples/modules/`, the public `modules/` and an overlay's `lab/modules/` (`--overlay`);
+  `tools/product_names.yml` `products:` for products without a provider module yet (each with a
+  `why`; unambiguous names only); and **model identifiers** from the role table
+  (`examples/model_roles.json`, `--roles`). Each name must be lower-case words of at most 128
+  characters, and a manifest that is not well formed is an error, never skipped.
+- **Where allowed**: a provider module's directory, **for its own product only** (claiming
+  `kind: provider` does not open a directory to every product); site configuration
+  (`examples/modules/sites/`, `examples/private-overlay/`, an overlay's `lab/`); the role table;
+  Markdown prose (ADRs and the changelog included); and the reviewed globs of
+  `tools/product_names.yml` `allow:`, each with a reason (generated catalogues and other gates'
+  path lists, whose paths are counted where they live).
+- **What is linted**: the files `git ls-files` lists (tracked, plus untracked but not ignored; a
+  directory walk outside a checkout). Python string and bytes literals with their escapes decoded,
+  f-string parts, and identifiers; every key and string value of YAML and JSON (so schema `enum`,
+  `default` and `const`), except the string value of a prose key (`description`, `title`,
+  `$comment`, `summary`, `reason`, `why`, `purpose`, `help`); the lines of every other text file,
+  whatever its suffix (`Dockerfile`, `Makefile`, `.env`, `.html`, `.sql` included) or encoding
+  (UTF-8, UTF-16 with a mark, otherwise Latin-1); and every file and directory name and symbolic
+  link target. A binary file is skipped; a text file over 20 MB is an error.
+- **Skipped**: comments (Python, and `#` or `//` lines in the formats that use them), docstrings
+  (by exact position, so code on the same line is still read) and prose.
+- **Matching**: one pass of one pattern per file, after a cheap substring check that skips files
+  that cannot match (about 4 seconds over this tree). Case-insensitive after NFKC with invisible
+  format characters removed; `-`, `_`, `.`, a space or nothing between a name's parts; bounded by
+  a non-alphanumeric or a camel-case or letter/digit seam, so `NorthwindObjectsClient` and
+  `getNorthwindObjects` count and a longer word containing the name does not (`OPENBAOADDR`, all
+  capitals glued, is a known miss). It finds ordinary spellings, not deliberate obfuscation
+  (`"open" + "bao"`, an encoded string): that is what review of a change is for.
 - **Baseline**: `tools/product_names.baseline.json` holds today's counts per path and product
-  (the core still names its reference products in about 540 paths); a count above it fails, and so
-  does an entry above what is there, because it only shrinks (`--shrink` lowers it and refuses while
-  anything is new). Moving product code into a provider module is how it shrinks.
+  (the core still names its reference products in about 530 paths). A count above it fails, and so
+  does an entry above what is there. `make product-names-baseline` (`--update`) rewrites it to what
+  is there and is refused when any product's total would rise, so a moved file keeps its debt and
+  debt never grows. In CI `--ci-base` also compares the committed baseline and vocabulary with the
+  base commit's (the same base rule as `tools/schema_check.py --ci-base`): a product whose total
+  rose, or a product dropped from `products:` without its provider module, fails, so neither file
+  can be loosened by hand. Moving product code into a provider module is how it shrinks.
+- **Exit**: 0 clean, 1 violations, 2 a bad input, 100 the lint itself failed (X-11 reports that
+  as "could not measure", not as a failure).
 
 ## Prerequisite record changes
 
