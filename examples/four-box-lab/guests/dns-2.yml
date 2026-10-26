@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:dns-2
+display_name: Secondary DNS
+description: "A single-board computer running the secondary resolver, so names resolve while main-1 is down."
+kind: host
+provisioning: host-only
+placement: {node: dns-2}
+network: {zone: mgmt, ip: 192.0.2.6}
+capability: cap:context
+power: {ups: ups-a}
+tags: [prod]
+owners: {primary: platform-team}
