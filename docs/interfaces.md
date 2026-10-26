@@ -312,7 +312,7 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features, migration) ; ConformError (misconfiguration, exit 2)
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
 # installed wheel lists the eighteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.

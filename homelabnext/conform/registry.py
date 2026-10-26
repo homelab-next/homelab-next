@@ -49,7 +49,14 @@ CAPABILITIES: tuple[str, ...] = (
     "codemode-runner",
 )
 #: additional suites that ship with the harness but are not among the eighteen
-EXTENDED: tuple[str, ...] = ("backup", "dns", "edge", "broker-tokens", "orchestration-features")
+EXTENDED: tuple[str, ...] = (
+    "backup",
+    "dns",
+    "edge",
+    "broker-tokens",
+    "orchestration-features",
+    "migration",
+)
 
 
 class ConformError(Exception):
