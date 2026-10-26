@@ -562,6 +562,11 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["scope"]["target"].__setitem__(0, MALFORMED_CIDR),
         "A scope entry is an address or a CIDR network.",
     ),
+    "addresses-network": (
+        "small-lab",
+        lambda d: d["hosts"]["data"].__setitem__("addresses", [DOC_NET]),
+        "A host address is one address, never a network.",
+    ),
     "scope-unknown-part": (
         "full",
         lambda d: d["scope"]["trusted"].__setitem__("lan", [DOC_NET]),

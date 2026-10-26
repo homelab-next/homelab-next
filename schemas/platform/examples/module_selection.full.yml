@@ -4,6 +4,8 @@ profile: full
 hosts:
   data-core:
     kind: vm
+    addresses:
+    - 192.0.2.10
     capacity:
       cpu: 16
       memory_mb: 32768
@@ -12,6 +14,8 @@ hosts:
       memory_mb: 4096
   detect-core:
     kind: vm
+    addresses:
+    - 192.0.2.11
     capacity:
       cpu: 8
       memory_mb: 16384
@@ -20,6 +24,8 @@ hosts:
       memory_mb: 2048
   sandbox-core:
     kind: vm
+    addresses:
+    - 192.0.2.12
     isolated: true
     capacity:
       cpu: 8
@@ -29,6 +35,9 @@ hosts:
       memory_mb: 2048
   runtime-core:
     kind: vm
+    addresses:
+    - 192.0.2.13
+    - 2001:db8:30::13
     capacity:
       cpu: 8
       memory_mb: 8192

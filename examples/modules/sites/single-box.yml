@@ -11,6 +11,7 @@ hosts:
   # capacity stands in for the host's platform/guest record (resources), which a real site references
   box:
     kind: host
+    addresses: [192.0.2.10]
     capacity: {cpu: 16, memory_mb: 16384, disk_gb: 1000, gpu_memory_mb: 8192}
     resources: [{name: gpu0, kind: gpu}]
     headroom: {memory_mb: 2048}

@@ -923,6 +923,7 @@ SELECTION_NEGATIVES = {
     "scope-empty-list": "scope/trusted/wan",
     "scope-malformed-cidr": "scope/target/0",
     "scope-unknown-part": "scope/trusted",
+    "addresses-network": "hosts/data/addresses/0",
 }
 
 
