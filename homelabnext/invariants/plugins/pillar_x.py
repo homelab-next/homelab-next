@@ -9,6 +9,7 @@
     X-06  detection ids are logical (``det:`` ids), no raw rule numbers in specs
     X-07  every stateful product's export hook exercised SERVER (needs a restore drill)
     X-08  cutover-commit audit                           SERVER (needs a real cutover)
+    X-11  product names only in provider modules         (runs tools/product_name_lint.py)
 
 X-09 (customizations) and X-10 (conformance has-a-passing-test) are registered through the
 ``homelabnext.invariants.checks`` entry-point group from
@@ -40,7 +41,7 @@ import yaml
 
 from ..api import ERROR, FAIL, PASS, SKIP, Check, CheckResult, Context, Registry
 
-__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06"]
+__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11"]
 
 SERVER_ONLY = {
     "X-02": "registry rows vs live listeners needs the running platform",
@@ -61,6 +62,10 @@ def _tool_check(ctx: Context, tool: str, args: list[str], ok_msg: str) -> CheckR
 
 def x01(ctx: Context) -> CheckResult:
     return _tool_check(ctx, "tools/no_raw_endpoints.py", [], "no raw endpoints")
+
+
+def x11(ctx: Context) -> CheckResult:
+    return _tool_check(ctx, "tools/product_name_lint.py", [], "product names in place")
 
 
 def x05(ctx: Context) -> CheckResult:
@@ -294,5 +299,6 @@ def register(reg: Registry) -> None:
     reg.register(Check("X-04", "every capability has a conformance test", x04))
     reg.register(Check("X-05", "role linter reports clean", x05))
     reg.register(Check("X-06", "detection ids in specs are logical, never raw rule numbers", x06))
+    reg.register(Check("X-11", "product names only in provider modules, site config and prose", x11))
     for id_ in SERVER_ONLY:
         reg.register(Check(id_, SERVER_ONLY[id_], _server(id_)))

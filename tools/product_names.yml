@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product-name lint's vocabulary and exemptions (tools/product_name_lint.py; ADR-0027 rule 1;
+# docs/modules.md, "The product-name lint").
+#
+# products: products the platform names that have no provider module yet. Each one moves out of
+# this list when its provider module ships (the module's product block then names it). A name
+# here must be unambiguous: a common word (vault, cortex, shuffle) would match ordinary text.
+# allow: reviewed path globs where a product name belongs, each with its reason. Provider module
+# directories, site configuration (examples/modules/sites, examples/private-overlay, lab/) and
+# Markdown prose are always allowed; everything else that names a product today is counted in
+# tools/product_names.baseline.json, which only shrinks.
+products:
+  - {name: openbao, why: the secrets slot's reference product}
+  - {name: vaultwarden, why: the operator password manager the secret seeding copies into}
+  - {name: litellm, why: the LLM gateway's reference product}
+  - {name: stackstorm, aliases: [st2], why: the orchestration controller's reference product}
+  - {name: nifi, why: the log pipeline's reference product}
+  - {name: prometheus, why: the metrics service's reference product}
+  - {name: grafana, why: the dashboards' reference product}
+  - {name: uptime-kuma, why: the uptime monitor's reference product}
+  - {name: caddy, why: the edge's reference product}
+  - {name: authentik, why: the idp's reference product}
+  - {name: wazuh, why: the SIEM's reference product}
+  - {name: suricata, why: a network sensor product}
+  - {name: technitium, why: the dns slot's reference product}
+  - {name: trino, why: the lake query engine's reference product}
+  - {name: iceberg, why: the lake table format's reference product}
+  - {name: minio, why: the object store's reference product}
+  - {name: ntfy, why: the notify slot's reference product}
+  - {name: openproject, why: the projects slot's reference product}
+  - {name: proxmox, why: the hypervisor the compute model renders for}
+  - {name: unifi, why: the network adapter the site renders for}
+  - {name: tailscale, why: the remote-access product}
+  - {name: ollama, why: an inference server product}
+  - {name: vllm, why: an inference server product}
+  - {name: agentmetry, why: the agent telemetry product}
+allow:
+  - path: "tools/product_name_lint.py"
+    reason: the lint names nothing itself, but its docstring examples are read as strings
+  - path: "tools/tests/test_product_name_lint.py"
+    reason: the lint's own tests plant product names on purpose

@@ -1,0 +1,2083 @@
+{
+ "counts": {
+  ".github/workflows/ci.yml": {
+   "caddy": 16
+  },
+  "ansible/inventory/example/hosts.yml": {
+   "nifi": 3
+  },
+  "ansible/plugins/lookup/hnx_secret.py": {
+   "openbao": 9
+  },
+  "ansible/roles/lynis/meta/argument_specs.yml": {
+   "ntfy": 6
+  },
+  "ansible/roles/lynis/tasks/config.yml": {
+   "ntfy": 1
+  },
+  "ansible/roles/lynis/tasks/validate.yml": {
+   "ntfy": 1
+  },
+  "ansible/roles/needrestart/meta/argument_specs.yml": {
+   "ntfy": 9
+  },
+  "ansible/roles/needrestart/tasks/config.yml": {
+   "ntfy": 1
+  },
+  "ansible/roles/needrestart/tasks/validate.yml": {
+   "ntfy": 1
+  },
+  "ansible/roles/open_webui/meta/argument_specs.yml": {
+   "ollama": 1
+  },
+  "ansible/roles/open_webui/tasks/validate.yml": {
+   "ollama": 1
+  },
+  "ansible/roles/open_webui/vars/main.yml": {
+   "ollama": 4,
+   "vllm": 1
+  },
+  "ansible/roles/suricata_enroll/": {
+   "suricata": 1
+  },
+  "ansible/roles/suricata_enroll/defaults/main.yml": {
+   "suricata": 10
+  },
+  "ansible/roles/suricata_enroll/meta/argument_specs.yml": {
+   "suricata": 28
+  },
+  "ansible/roles/suricata_enroll/meta/main.yml": {
+   "suricata": 1
+  },
+  "ansible/roles/suricata_enroll/tasks/backup.yml": {
+   "suricata": 1
+  },
+  "ansible/roles/suricata_enroll/tasks/export.yml": {
+   "suricata": 5
+  },
+  "ansible/roles/suricata_enroll/tasks/health.yml": {
+   "suricata": 1
+  },
+  "ansible/roles/suricata_enroll/tasks/main.yml": {
+   "suricata": 36
+  },
+  "ansible/roles/suricata_enroll/tasks/readiness.yml": {
+   "suricata": 9
+  },
+  "ansible/roles/suricata_enroll/tasks/restore.yml": {
+   "suricata": 1
+  },
+  "ansible/roles/suricata_enroll/tasks/upgrade.yml": {
+   "suricata": 2
+  },
+  "ansible/roles/suricata_enroll/tasks/validate.yml": {
+   "suricata": 11
+  },
+  "ansible/roles/suricata_enroll/templates/address-groups.yaml.j2": {
+   "suricata": 4
+  },
+  "ansible/roles/suricata_enroll/vars/main.yml": {
+   "suricata": 2
+  },
+  "ansible/roles/tailscale_node/": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/defaults/main.yml": {
+   "tailscale": 11
+  },
+  "ansible/roles/tailscale_node/meta/argument_specs.yml": {
+   "tailscale": 24
+  },
+  "ansible/roles/tailscale_node/meta/main.yml": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/tasks/backup.yml": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/tasks/export.yml": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/tasks/health.yml": {
+   "tailscale": 12
+  },
+  "ansible/roles/tailscale_node/tasks/main.yml": {
+   "tailscale": 19
+  },
+  "ansible/roles/tailscale_node/tasks/platform.yml": {
+   "tailscale": 6
+  },
+  "ansible/roles/tailscale_node/tasks/readiness.yml": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/tasks/restore.yml": {
+   "tailscale": 1
+  },
+  "ansible/roles/tailscale_node/tasks/signing_key.yml": {
+   "tailscale": 23
+  },
+  "ansible/roles/tailscale_node/tasks/upgrade.yml": {
+   "tailscale": 5
+  },
+  "ansible/roles/tailscale_node/tasks/validate.yml": {
+   "tailscale": 17
+  },
+  "ansible/roles/tailscale_node/vars/main.yml": {
+   "tailscale": 8
+  },
+  "ansible/roles/vllm_server/": {
+   "vllm": 1
+  },
+  "ansible/roles/vllm_server/defaults/main.yml": {
+   "vllm": 24
+  },
+  "ansible/roles/vllm_server/meta/argument_specs.yml": {
+   "vllm": 50
+  },
+  "ansible/roles/vllm_server/meta/main.yml": {
+   "vllm": 1
+  },
+  "ansible/roles/vllm_server/tasks/api_key.yml": {
+   "vllm": 8
+  },
+  "ansible/roles/vllm_server/tasks/backup.yml": {
+   "vllm": 1
+  },
+  "ansible/roles/vllm_server/tasks/export.yml": {
+   "vllm": 1
+  },
+  "ansible/roles/vllm_server/tasks/health.yml": {
+   "vllm": 12
+  },
+  "ansible/roles/vllm_server/tasks/main.yml": {
+   "vllm": 41
+  },
+  "ansible/roles/vllm_server/tasks/readiness.yml": {
+   "vllm": 5
+  },
+  "ansible/roles/vllm_server/tasks/restore.yml": {
+   "vllm": 1
+  },
+  "ansible/roles/vllm_server/tasks/retire.yml": {
+   "vllm": 7
+  },
+  "ansible/roles/vllm_server/tasks/upgrade.yml": {
+   "vllm": 9
+  },
+  "ansible/roles/vllm_server/tasks/validate.yml": {
+   "vllm": 41
+  },
+  "ansible/roles/vllm_server/templates/vllm.service.j2": {
+   "vllm": 18
+  },
+  "ansible/roles/vllm_server/vars/main.yml": {
+   "vllm": 2
+  },
+  "ansible/roles/wazuh_agent/": {
+   "wazuh": 1
+  },
+  "ansible/roles/wazuh_agent/defaults/main.yml": {
+   "wazuh": 13
+  },
+  "ansible/roles/wazuh_agent/meta/argument_specs.yml": {
+   "wazuh": 28
+  },
+  "ansible/roles/wazuh_agent/meta/main.yml": {
+   "wazuh": 1
+  },
+  "ansible/roles/wazuh_agent/tasks/backup.yml": {
+   "wazuh": 3
+  },
+  "ansible/roles/wazuh_agent/tasks/export.yml": {
+   "wazuh": 1
+  },
+  "ansible/roles/wazuh_agent/tasks/health.yml": {
+   "wazuh": 5
+  },
+  "ansible/roles/wazuh_agent/tasks/main.yml": {
+   "wazuh": 24
+  },
+  "ansible/roles/wazuh_agent/tasks/readiness.yml": {
+   "wazuh": 3
+  },
+  "ansible/roles/wazuh_agent/tasks/restore.yml": {
+   "wazuh": 1
+  },
+  "ansible/roles/wazuh_agent/tasks/signing_key.yml": {
+   "wazuh": 23
+  },
+  "ansible/roles/wazuh_agent/tasks/upgrade.yml": {
+   "wazuh": 8
+  },
+  "ansible/roles/wazuh_agent/tasks/validate.yml": {
+   "wazuh": 15
+  },
+  "ansible/roles/wazuh_agent/vars/main.yml": {
+   "wazuh": 2
+  },
+  "compose/lab-in-a-box/bind_guard.sh": {
+   "openbao": 2
+  },
+  "compose/lab-in-a-box/broker_e2e.py": {
+   "authentik": 3,
+   "caddy": 1,
+   "stackstorm": 3
+  },
+  "compose/lab-in-a-box/config/llm-gateway/bifrost/config.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "compose/lab-in-a-box/config/llm-gateway/litellm/": {
+   "litellm": 1
+  },
+  "compose/lab-in-a-box/config/llm-gateway/litellm/config.yaml": {
+   "example-27b": 1,
+   "example-4b": 1,
+   "litellm": 3
+  },
+  "compose/lab-in-a-box/config/nats/nats.conf": {
+   "stackstorm": 15
+  },
+  "compose/lab-in-a-box/config/postgres/init/10-litellm.sh": {
+   "litellm": 7
+  },
+  "compose/lab-in-a-box/config/prometheus/": {
+   "prometheus": 1
+  },
+  "compose/lab-in-a-box/config/prometheus/prometheus.yml": {
+   "prometheus": 3
+  },
+  "compose/lab-in-a-box/config/trino/": {
+   "trino": 1
+  },
+  "compose/lab-in-a-box/config/trino/catalog/iceberg.properties": {
+   "iceberg": 1
+  },
+  "compose/lab-in-a-box/config/uptime-kuma/": {
+   "uptime-kuma": 1
+  },
+  "compose/lab-in-a-box/docker-compose.yml": {
+   "example-27b": 1,
+   "example-4b": 1,
+   "litellm": 11,
+   "ntfy": 3,
+   "openbao": 2,
+   "prometheus": 10,
+   "stackstorm": 4,
+   "trino": 10,
+   "uptime-kuma": 3
+  },
+  "compose/lab-in-a-box/rehearsals/swap-lake-query.sh": {
+   "trino": 1
+  },
+  "compose/lab-in-a-box/smoke_checks.py": {
+   "iceberg": 8,
+   "prometheus": 5,
+   "trino": 14,
+   "uptime-kuma": 1
+  },
+  "compose/lab-in-a-box/targets/lake-catalog.yml": {
+   "iceberg": 1,
+   "trino": 1
+  },
+  "compose/lab-in-a-box/targets/lake-query.yml": {
+   "iceberg": 1,
+   "trino": 1
+  },
+  "compose/lab-in-a-box/targets/notify.yml": {
+   "ntfy": 1
+  },
+  "compose/lab-in-a-box/targets/secrets.yml": {
+   "openbao": 1
+  },
+  "conformance/fakes/lake_iceberg.py": {
+   "iceberg": 3
+  },
+  "conformance/fakes/litellm_spend_log_api.py": {
+   "litellm": 2
+  },
+  "conformance/fakes/ntfy_api.py": {
+   "ntfy": 1
+  },
+  "conformance/fakes/openbao_api.py": {
+   "openbao": 1
+  },
+  "conformance/fakes/openproject_api.py": {
+   "openproject": 3
+  },
+  "conformance/fixtures/litellm_spend_logs_v2.json": {
+   "example-27b": 3,
+   "example-4b": 2,
+   "litellm": 6
+  },
+  "conformance/suites/orchestration.py": {
+   "stackstorm": 3
+  },
+  "conformance/targets/lake-iceberg.yml": {
+   "iceberg": 4
+  },
+  "conformance/targets/projects-openproject.yml": {
+   "openproject": 3
+  },
+  "detections/attack_snapshots/wazuh.yml": {
+   "wazuh": 2
+  },
+  "docs/scripts/catalog.json": {
+   "caddy": 15,
+   "iceberg": 1,
+   "litellm": 5,
+   "ntfy": 1,
+   "openbao": 2,
+   "trino": 1,
+   "vllm": 3
+  },
+  "examples/four-box-lab/guests/vault-1.yml": {
+   "openbao": 1,
+   "vaultwarden": 1
+  },
+  "examples/four-box-lab/services.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "minio": 1,
+   "openbao": 1,
+   "suricata": 1,
+   "technitium": 2,
+   "unifi": 1,
+   "vaultwarden": 2,
+   "wazuh": 1
+  },
+  "examples/four-box-lab/site.yml": {
+   "technitium": 2,
+   "unifi": 3
+  },
+  "examples/keyring/keyring.json": {
+   "agentmetry": 4
+  },
+  "examples/lab-topology/services.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "iceberg": 1,
+   "minio": 1,
+   "ntfy": 1,
+   "trino": 1,
+   "unifi": 1
+  },
+  "examples/lab-topology/site.yml": {
+   "unifi": 2
+  },
+  "examples/llm-orchestrator-gateway/controller.yaml": {
+   "vllm": 2
+  },
+  "examples/llm-orchestrator-gateway/gateway.yml": {
+   "vllm": 10
+  },
+  "examples/llm-orchestrator-gateway/gateway/bifrost/config.json": {
+   "example-27b": 2,
+   "vllm": 18
+  },
+  "examples/llm-orchestrator-gateway/gateway/litellm/": {
+   "litellm": 1
+  },
+  "examples/llm-orchestrator-gateway/gateway/litellm/config.yaml": {
+   "example-27b": 2,
+   "litellm": 3,
+   "vllm": 2
+  },
+  "examples/llm-orchestrator-gateway/gateway/litellm/keys.json": {
+   "vllm": 6
+  },
+  "examples/llm-orchestrator-gateway/homes/vllm-a/": {
+   "vllm": 1
+  },
+  "examples/llm-orchestrator-gateway/homes/vllm-b/": {
+   "vllm": 1
+  },
+  "examples/llm-orchestrator-gateway/model_roles.json": {
+   "example-27b": 2,
+   "vllm": 2
+  },
+  "examples/mcp/ntfy.yml": {
+   "ntfy": 6
+  },
+  "examples/minimal/guests/_baselines.yml": {
+   "suricata": 1,
+   "tailscale": 1,
+   "wazuh": 1
+  },
+  "examples/minimal/services.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "minio": 1,
+   "technitium": 1,
+   "unifi": 1,
+   "vllm": 1
+  },
+  "examples/minimal/site.yml": {
+   "technitium": 1,
+   "unifi": 3
+  },
+  "examples/model-serving/gateway/bifrost/config.json": {
+   "example-27b": 1,
+   "example-4b": 2
+  },
+  "examples/model-serving/gateway/litellm/": {
+   "litellm": 1
+  },
+  "examples/model-serving/gateway/litellm/config.yaml": {
+   "example-27b": 1,
+   "example-4b": 2,
+   "litellm": 4
+  },
+  "examples/model-serving/model_roles.json": {
+   "example-27b": 1,
+   "example-4b": 2,
+   "vllm": 1
+  },
+  "examples/model-serving/model_store.json": {
+   "example-27b": 3,
+   "example-4b": 15,
+   "vllm": 2
+  },
+  "examples/model-serving/serving.yml": {
+   "vllm": 3
+  },
+  "examples/model-serving/vllm_server/": {
+   "vllm": 1
+  },
+  "examples/model-serving/vllm_server/instances.yml": {
+   "example-27b": 3,
+   "example-4b": 2,
+   "vllm": 2
+  },
+  "examples/model_roles.eval.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "examples/model_roles.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "examples/registers/invariants.yml": {
+   "authentik": 2,
+   "caddy": 8,
+   "iceberg": 2,
+   "stackstorm": 11,
+   "vllm": 3
+  },
+  "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.events/20261022T120000Z-review-agent-example-checker.yml": {
+   "openbao": 1
+  },
+  "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.events/20261022T120001Z-review-agent-example-auditor.yml": {
+   "openbao": 1
+  },
+  "examples/services.yml": {
+   "agentmetry": 9,
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "nifi": 4,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 4,
+   "stackstorm": 4,
+   "technitium": 1,
+   "trino": 1,
+   "uptime-kuma": 2,
+   "vllm": 1
+  },
+  "examples/status/agents.yml": {
+   "authentik": 2
+  },
+  "examples/status/roster.yml": {
+   "stackstorm": 2
+  },
+  "examples/status/views.yml": {
+   "agentmetry": 3,
+   "grafana": 2
+  },
+  "generators/manifest.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "prometheus": 3,
+   "technitium": 1
+  },
+  "homelabnext/broker/cli.py": {
+   "ntfy": 6
+  },
+  "homelabnext/cli.py": {
+   "litellm": 2,
+   "openbao": 1,
+   "stackstorm": 2
+  },
+  "homelabnext/compute/gen/node_mirror.py": {
+   "proxmox": 1
+  },
+  "homelabnext/compute/gen/tailscale_acl.py": {
+   "tailscale": 7
+  },
+  "homelabnext/compute/gen/terraform_proxmox.py": {
+   "proxmox": 10
+  },
+  "homelabnext/compute/model.py": {
+   "nifi": 1
+  },
+  "homelabnext/compute/render.py": {
+   "proxmox": 3,
+   "tailscale": 3
+  },
+  "homelabnext/conform/adapters/lake.py": {
+   "iceberg": 1,
+   "trino": 7
+  },
+  "homelabnext/conform/adapters/litellm_spend_log.py": {
+   "litellm": 1
+  },
+  "homelabnext/conform/adapters/ntfy.py": {
+   "ntfy": 3
+  },
+  "homelabnext/conform/adapters/openbao.py": {
+   "openbao": 4
+  },
+  "homelabnext/conform/adapters/openproject.py": {
+   "openproject": 11
+  },
+  "homelabnext/detections/backends/__init__.py": {
+   "wazuh": 1
+  },
+  "homelabnext/detections/backends/wazuh.py": {
+   "wazuh": 3
+  },
+  "homelabnext/detections/cli.py": {
+   "wazuh": 1
+  },
+  "homelabnext/generators/builtin.py": {
+   "authentik": 7,
+   "caddy": 9,
+   "prometheus": 5,
+   "technitium": 1
+  },
+  "homelabnext/generators/llm_gateway.py": {
+   "litellm": 25,
+   "vllm": 1
+  },
+  "homelabnext/generators/safe.py": {
+   "caddy": 1
+  },
+  "homelabnext/generators/templates.py": {
+   "caddy": 2
+  },
+  "homelabnext/generators/templates/caddy_site.tmpl": {
+   "caddy": 1
+  },
+  "homelabnext/lake/__init__.py": {
+   "iceberg": 1,
+   "trino": 1
+  },
+  "homelabnext/lake/ddl.py": {
+   "iceberg": 4,
+   "trino": 4
+  },
+  "homelabnext/lake/iceberg.py": {
+   "iceberg": 5
+  },
+  "homelabnext/lake/trino.py": {
+   "trino": 5
+  },
+  "homelabnext/lake/trino_http.py": {
+   "trino": 14
+  },
+  "homelabnext/lake/trino_rest.py": {
+   "iceberg": 1,
+   "trino": 22
+  },
+  "homelabnext/mcp/servers.py": {
+   "ntfy": 1,
+   "openbao": 1
+  },
+  "homelabnext/models/cli.py": {
+   "vllm": 1
+  },
+  "homelabnext/models/serving.py": {
+   "vllm": 17
+  },
+  "homelabnext/models/store.py": {
+   "vllm": 1
+  },
+  "homelabnext/network/adapters/__init__.py": {
+   "unifi": 1
+  },
+  "homelabnext/network/adapters/opnsense.py": {
+   "unifi": 1
+  },
+  "homelabnext/network/adapters/unifi.py": {
+   "unifi": 4
+  },
+  "homelabnext/network/validate.py": {
+   "unifi": 2
+  },
+  "homelabnext/projects/cli.py": {
+   "openproject": 10
+  },
+  "homelabnext/projects/events.py": {
+   "openproject": 4
+  },
+  "homelabnext/projects/openproject/": {
+   "openproject": 1
+  },
+  "homelabnext/projects/openproject/__init__.py": {
+   "openproject": 2
+  },
+  "homelabnext/projects/openproject/backend.py": {
+   "openproject": 1
+  },
+  "homelabnext/projects/openproject/client.py": {
+   "openproject": 6
+  },
+  "homelabnext/projects/openproject/feed.py": {
+   "openproject": 4
+  },
+  "homelabnext/projects/openproject/setup.py": {
+   "openproject": 4
+  },
+  "homelabnext/registry/model.py": {
+   "agentmetry": 3,
+   "nifi": 1,
+   "prometheus": 4,
+   "stackstorm": 1,
+   "uptime-kuma": 1
+  },
+  "homelabnext/schemas/module_negatives.py": {
+   "northwind-objects": 10
+  },
+  "homelabnext/scripts/catalog.py": {
+   "stackstorm": 3
+  },
+  "homelabnext/secretseed/__init__.py": {
+   "openbao": 18,
+   "vaultwarden": 17
+  },
+  "homelabnext/secretseed/cli.py": {
+   "openbao": 6,
+   "vaultwarden": 9
+  },
+  "homelabnext/status/agents/__init__.py": {
+   "agentmetry": 2
+  },
+  "homelabnext/status/agents/config.py": {
+   "authentik": 2
+  },
+  "homelabnext/status/agents/sources.py": {
+   "agentmetry": 6
+  },
+  "homelabnext/status/mapping.py": {
+   "agentmetry": 4
+  },
+  "homelabnext/status/model.py": {
+   "nifi": 1,
+   "prometheus": 2,
+   "stackstorm": 1,
+   "uptime-kuma": 1
+  },
+  "homelabnext/status/products.py": {
+   "nifi": 15,
+   "prometheus": 20,
+   "stackstorm": 22,
+   "uptime-kuma": 9
+  },
+  "homelabnext/swap/rehearsal.py": {
+   "trino": 2
+  },
+  "homelabnext/workflows/cli.py": {
+   "stackstorm": 28
+  },
+  "homelabnext/workflows/st2.py": {
+   "stackstorm": 71
+  },
+  "homelabnext/workflows/st2_bridge.py": {
+   "stackstorm": 18
+  },
+  "homelabnext/workflows/st2_runtime.py": {
+   "stackstorm": 11
+  },
+  "pyproject.toml": {
+   "trino": 2,
+   "wazuh": 1
+  },
+  "schemas/_frozen/1.0/events/agent.job.failed.schema.json": {
+   "stackstorm": 2
+  },
+  "schemas/_frozen/1.0/events/project.changed.schema.json": {
+   "openproject": 4
+  },
+  "schemas/_frozen/1.0/events/schedule.fired.schema.json": {
+   "stackstorm": 2
+  },
+  "schemas/_frozen/1.0/platform/model_serving.schema.json": {
+   "vllm": 7
+  },
+  "schemas/_frozen/1.0/platform/model_store.schema.json": {
+   "vllm": 3
+  },
+  "schemas/_frozen/1.0/status/agent_activity.schema.json": {
+   "agentmetry": 1
+  },
+  "schemas/_frozen/1.0/status/agents.schema.json": {
+   "authentik": 2
+  },
+  "schemas/_frozen/1.0/workflows/stackstorm.schema.json": {
+   "stackstorm": 17
+  },
+  "schemas/_frozen/1.1/events/agent.job.failed.schema.json": {
+   "stackstorm": 2
+  },
+  "schemas/_frozen/1.1/status/agents.schema.json": {
+   "authentik": 3
+  },
+  "schemas/_frozen/1.1/workflows/stackstorm.schema.json": {
+   "stackstorm": 18
+  },
+  "schemas/_frozen/1.2/platform/site.schema.json": {
+   "tailscale": 1
+  },
+  "schemas/_frozen/1.2/status/agents.schema.json": {
+   "authentik": 3
+  },
+  "schemas/_frozen/1.3/platform/site.schema.json": {
+   "tailscale": 1
+  },
+  "schemas/_frozen/1.3/status/agents.schema.json": {
+   "authentik": 3
+  },
+  "schemas/_frozen/2.1/platform/service.json": {
+   "prometheus": 2
+  },
+  "schemas/_frozen/2.2/platform/service.json": {
+   "agentmetry": 1,
+   "caddy": 1,
+   "prometheus": 2
+  },
+  "schemas/_frozen/2.3/platform/service.json": {
+   "agentmetry": 3,
+   "caddy": 1,
+   "nifi": 5,
+   "prometheus": 9,
+   "stackstorm": 6,
+   "uptime-kuma": 3
+  },
+  "schemas/_frozen/2.4/platform/service.json": {
+   "agentmetry": 3,
+   "caddy": 1,
+   "nifi": 5,
+   "prometheus": 9,
+   "stackstorm": 6,
+   "uptime-kuma": 3
+  },
+  "schemas/_frozen/2.5/platform/service.json": {
+   "agentmetry": 3,
+   "caddy": 1,
+   "nifi": 5,
+   "prometheus": 9,
+   "stackstorm": 6,
+   "uptime-kuma": 3
+  },
+  "schemas/_frozen/2.6/platform/service.json": {
+   "agentmetry": 3,
+   "caddy": 1,
+   "nifi": 5,
+   "prometheus": 9,
+   "stackstorm": 6,
+   "uptime-kuma": 3
+  },
+  "schemas/events/agent.job.failed.schema.json": {
+   "stackstorm": 2
+  },
+  "schemas/events/examples/project.changed.openproject.json": {
+   "openproject": 3
+  },
+  "schemas/events/project.changed.schema.json": {
+   "openproject": 4
+  },
+  "schemas/events/schedule.fired.schema.json": {
+   "stackstorm": 2
+  },
+  "schemas/platform/examples/model_roles.embedder.json": {
+   "example-4b": 1
+  },
+  "schemas/platform/examples/model_roles.valid.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "schemas/platform/examples/model_serving.valid.yml": {
+   "vllm": 1
+  },
+  "schemas/platform/examples/model_store.valid.json": {
+   "example-4b": 11,
+   "vllm": 1
+  },
+  "schemas/platform/examples/module.multi-slot-provider.yml": {
+   "litware-siem": 8
+  },
+  "schemas/platform/examples/module.provider.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/examples/module.provisional-provider.yml": {
+   "wingtip-pages": 8
+  },
+  "schemas/platform/examples/service.scope-out.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/examples/service.valid.yml": {
+   "agentmetry": 9,
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "nifi": 4,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 4,
+   "stackstorm": 4,
+   "technitium": 1,
+   "trino": 1,
+   "uptime-kuma": 2,
+   "vllm": 1
+  },
+  "schemas/platform/examples/site.port-mirror.yml": {
+   "technitium": 1,
+   "unifi": 3
+  },
+  "schemas/platform/examples/site.tailnet-deploy.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/examples/site.valid.yml": {
+   "technitium": 1,
+   "unifi": 3
+  },
+  "schemas/platform/examples/swap_record.active.json": {
+   "trino": 3
+  },
+  "schemas/platform/examples/swap_record.closed.json": {
+   "trino": 4
+  },
+  "schemas/platform/examples/swap_record.rolled-back.json": {
+   "trino": 4
+  },
+  "schemas/platform/model_serving.schema.json": {
+   "vllm": 7
+  },
+  "schemas/platform/model_store.schema.json": {
+   "vllm": 3
+  },
+  "schemas/platform/negative/baseline_set.control-apply-unknown.yml": {
+   "wazuh": 1
+  },
+  "schemas/platform/negative/baseline_set.control-group-not-a-cap-group.yml": {
+   "suricata": 1
+  },
+  "schemas/platform/negative/model_roles.digest-not-sha256.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "schemas/platform/negative/model_roles.limits-no-window.json": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "schemas/platform/negative/model_serving.no-exposure.yml": {
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_serving.owned-flag.yml": {
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_serving.privileged-port.yml": {
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_serving.value-is-a-flag.yml": {
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_store.export-without-base.json": {
+   "example-4b": 10,
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_store.file-path-traversal.json": {
+   "example-4b": 11,
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_store.file-without-sha256.json": {
+   "example-4b": 11,
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_store.floating-revision.json": {
+   "example-4b": 11,
+   "vllm": 1
+  },
+  "schemas/platform/negative/model_store.gguf-on-vllm.json": {
+   "example-4b": 11,
+   "vllm": 3
+  },
+  "schemas/platform/negative/model_store.no-license.json": {
+   "example-4b": 11,
+   "vllm": 1
+  },
+  "schemas/platform/negative/module.adapter-any-callable.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.config-path-absolute.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.config-path-traversal.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.control-plane-reader-builtin.yml": {
+   "wingtip-pages": 8
+  },
+  "schemas/platform/negative/module.core-with-product.yml": {
+   "northwind-objects": 4
+  },
+  "schemas/platform/negative/module.credential-without-holder.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.feature-with-product.yml": {
+   "northwind-objects": 4
+  },
+  "schemas/platform/negative/module.hosts-without-lifecycle.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.licence-kind-none.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.provider-conformance-and-provisional.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.provider-in-bundle.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.provider-without-licence.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.provider-without-product.yml": {
+   "northwind-objects": 4
+  },
+  "schemas/platform/negative/module.provider-without-slot.yml": {
+   "northwind-objects": 9
+  },
+  "schemas/platform/negative/module.provisional-without-reason.yml": {
+   "wingtip-pages": 8
+  },
+  "schemas/platform/negative/module.requires-product-not-slot.yml": {
+   "northwind-objects": 2
+  },
+  "schemas/platform/negative/module.subscription-without-expiry.yml": {
+   "wingtip-pages": 8
+  },
+  "schemas/platform/negative/service.backup-job-brace.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.bad-domain.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.bad-protocol.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.bad-version.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.capability-trailing-newline.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.extra-field.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.health-path-brace.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.host-role-multiline.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.http-health-without-path.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.impl-multiline.yml": {
+   "authentik": 2,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.metrics-path-space.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.missing-owner.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.owner-caddy-injection.yml": {
+   "authentik": 1,
+   "caddy": 2,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.owner-trailing-newline.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.owner-yaml-tag.yml": {
+   "authentik": 2,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.port-out-of-range.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.scope-unknown.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.service-name-trailing-newline.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/service.wrong-registry-version.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "schemas/platform/negative/site.access-port-without-vlan.yml": {
+   "unifi": 2
+  },
+  "schemas/platform/negative/site.default-action-allow.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.deploy-exception-without-reason.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.deploy-tag-owner.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.deploy-wildcard-zone.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.edge-kind-unknown.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.exception-from-not-zone-ref.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.exception-to-is-endpoint.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.extra-field.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.mgmt-endpoint-is-url.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.no-zones.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.power-none-without-reason.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.secret-ref-is-literal.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.subnet-not-cidr.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.timezone-local.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.ups-mac-malformed.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/site.vlan-out-of-range.yml": {
+   "unifi": 1
+  },
+  "schemas/platform/negative/swap_record.active-with-null-current-step.json": {
+   "trino": 3
+  },
+  "schemas/platform/negative/swap_record.actor-with-space.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.adapter-is-url.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.adr-ref-not-an-adr.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.capability-wrong-kind.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.closed-without-closure.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.eight-steps.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.evidence-ref-traversal.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.extra-field.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.hash-malformed.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.missing-rollback-key.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.negative-soak-hours.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.no-transitions.json": {
+   "trino": 3
+  },
+  "schemas/platform/negative/swap_record.passed-step-without-evidence.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.passed-step-without-finish-time.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.port-out-of-range.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.rollback-reason-too-short.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.rolled-back-without-rollback.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.status-unknown.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.swap-id-uppercase.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.transition-unknown-event.json": {
+   "trino": 4
+  },
+  "schemas/platform/negative/swap_record.unknown-step-name.json": {
+   "trino": 4
+  },
+  "schemas/platform/service.json": {
+   "agentmetry": 3,
+   "caddy": 1,
+   "nifi": 5,
+   "prometheus": 9,
+   "stackstorm": 6,
+   "uptime-kuma": 3
+  },
+  "schemas/platform/site.schema.json": {
+   "tailscale": 1
+  },
+  "schemas/status/agent_activity.schema.json": {
+   "agentmetry": 1
+  },
+  "schemas/status/agents.schema.json": {
+   "authentik": 3
+  },
+  "schemas/status/examples/orchestration_export.turn.json": {
+   "example-27b": 1
+  },
+  "schemas/status/examples/views.minimal.yml": {
+   "grafana": 2
+  },
+  "schemas/status/negative/orchestration_export.turn-extra-field.json": {
+   "example-27b": 1
+  },
+  "schemas/status/negative/views.external-is-url.yml": {
+   "grafana": 2
+  },
+  "schemas/status/negative/views.external-path-trailing-newline.yml": {
+   "grafana": 2
+  },
+  "schemas/workflows/examples/stackstorm.lab.yml": {
+   "stackstorm": 3
+  },
+  "schemas/workflows/negative/stackstorm.api-key-value.yml": {
+   "stackstorm": 3
+  },
+  "schemas/workflows/negative/stackstorm.mode-unknown.yml": {
+   "stackstorm": 3
+  },
+  "schemas/workflows/negative/stackstorm.secret-literal.yml": {
+   "stackstorm": 3
+  },
+  "schemas/workflows/stackstorm.schema.json": {
+   "stackstorm": 18
+  },
+  "tests/agent/test_agent_injection.py": {
+   "example-4b": 1
+  },
+  "tests/broker/test_broker_cli.py": {
+   "ntfy": 14
+  },
+  "tests/broker/test_broker_relay.py": {
+   "stackstorm": 5
+  },
+  "tests/broker/test_broker_service.py": {
+   "ntfy": 2
+  },
+  "tests/broker/test_broker_stage2b.py": {
+   "ntfy": 1
+  },
+  "tests/compose/test_lab_broker_e2e.py": {
+   "stackstorm": 2
+  },
+  "tests/compose/test_lab_in_a_box.py": {
+   "example-4b": 1,
+   "iceberg": 1,
+   "litellm": 17,
+   "prometheus": 3,
+   "stackstorm": 7,
+   "trino": 3,
+   "uptime-kuma": 5
+  },
+  "tests/compute/fixtures/bpg_proxmox_schema.json": {
+   "proxmox": 4
+  },
+  "tests/compute/fleet/_baselines.yml": {
+   "suricata": 1,
+   "tailscale": 1
+  },
+  "tests/compute/golden/baseline-playbook/baseline.yml": {
+   "suricata": 2,
+   "tailscale": 1
+  },
+  "tests/compute/golden/tailscale-acl-flows/": {
+   "tailscale": 1
+  },
+  "tests/compute/golden/tailscale-acl-flows/tailscale-policy.hujson": {
+   "tailscale": 1
+  },
+  "tests/compute/golden/tailscale-acl/": {
+   "tailscale": 1
+  },
+  "tests/compute/golden/tailscale-acl/tailscale-policy.hujson": {
+   "tailscale": 1
+  },
+  "tests/compute/golden/terraform-proxmox/": {
+   "proxmox": 1
+  },
+  "tests/compute/golden/terraform-proxmox/ct-idp-core.tf": {
+   "proxmox": 1
+  },
+  "tests/compute/golden/terraform-proxmox/providers.tf": {
+   "proxmox": 5
+  },
+  "tests/compute/golden/terraform-proxmox/variables.tf": {
+   "proxmox": 2
+  },
+  "tests/compute/golden/terraform-proxmox/vm-bus-core.tf": {
+   "proxmox": 1
+  },
+  "tests/compute/golden/terraform-proxmox/vm-edge-core.tf": {
+   "proxmox": 1
+  },
+  "tests/compute/golden/terraform-proxmox/vm-infer-core.tf": {
+   "proxmox": 1
+  },
+  "tests/compute/golden/terraform-proxmox/vm-lake-core.tf": {
+   "proxmox": 1
+  },
+  "tests/compute/test_baselines.py": {
+   "suricata": 1,
+   "tailscale": 1
+  },
+  "tests/compute/test_compute.py": {
+   "prometheus": 1,
+   "proxmox": 6
+  },
+  "tests/compute/test_firewall.py": {
+   "proxmox": 8
+  },
+  "tests/compute/test_products.py": {
+   "suricata": 4,
+   "tailscale": 16,
+   "wazuh": 2
+  },
+  "tests/compute/test_settings.py": {
+   "tailscale": 1
+  },
+  "tests/compute/test_tailnet_deploy.py": {
+   "tailscale": 4
+  },
+  "tests/compute/test_terraform_proxmox_schema.py": {
+   "proxmox": 5
+  },
+  "tests/conform/test_conform_lab_adapters.py": {
+   "ntfy": 20,
+   "openbao": 25
+  },
+  "tests/conform/test_conform_lake_targets.py": {
+   "iceberg": 3
+  },
+  "tests/conform/test_conform_litellm_turn_source.py": {
+   "example-27b": 3,
+   "litellm": 4,
+   "ollama": 2,
+   "vllm": 3
+  },
+  "tests/conform/test_conform_targets.py": {
+   "iceberg": 2
+  },
+  "tests/decide/test_decide_adapter.py": {
+   "example-4b": 2
+  },
+  "tests/detections/golden/wazuh/": {
+   "wazuh": 1
+  },
+  "tests/detections/test_attack.py": {
+   "wazuh": 16
+  },
+  "tests/detections/test_detections.py": {
+   "wazuh": 16
+  },
+  "tests/fleet_units/specs/basic.yml": {
+   "stackstorm": 1
+  },
+  "tests/fleet_units/test_fleet_units.py": {
+   "stackstorm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/controller.yaml": {
+   "vllm": 7
+  },
+  "tests/generators/fixtures/controller-backends/fail/gateway.yml": {
+   "vllm": 18
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-a/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-b/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-d/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-d/config.yaml": {
+   "example-4b": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-e/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-f/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-f/config.yaml": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/homes/vllm-g/": {
+   "vllm": 1
+  },
+  "tests/generators/fixtures/controller-backends/fail/model_roles.json": {
+   "example-27b": 5,
+   "example-4b": 2,
+   "vllm": 7
+  },
+  "tests/generators/fixtures/hermes-homes/fail/engine-model-id/config.yaml": {
+   "example-27b": 1
+  },
+  "tests/generators/fixtures/hermes-homes/fail/prefixed-model-id/config.yaml": {
+   "example-27b": 1
+  },
+  "tests/generators/fixtures/inj-owner.services.yml": {
+   "authentik": 2,
+   "caddy": 1,
+   "grafana": 1,
+   "minio": 3,
+   "ntfy": 1,
+   "openbao": 1,
+   "prometheus": 1,
+   "technitium": 1,
+   "trino": 1,
+   "vllm": 1
+  },
+  "tests/generators/golden/blackbox/targets_http.yml": {
+   "agentmetry": 1,
+   "minio": 1
+  },
+  "tests/generators/golden/caddy/": {
+   "caddy": 1
+  },
+  "tests/generators/golden/caddy/sites.caddy": {
+   "caddy": 1
+  },
+  "tests/generators/golden/env/agentmetry.env.generated": {
+   "agentmetry": 1
+  },
+  "tests/generators/golden/idp/blueprint.yaml": {
+   "authentik": 9
+  },
+  "tests/generators/golden/prometheus/": {
+   "prometheus": 1
+  },
+  "tests/generators/golden/prometheus/scrape_configs.yml": {
+   "minio": 1
+  },
+  "tests/generators/test_agent_homes.py": {
+   "example-27b": 9,
+   "example-4b": 4,
+   "vllm": 47
+  },
+  "tests/generators/test_gen_golden.py": {
+   "authentik": 2,
+   "caddy": 16,
+   "prometheus": 4
+  },
+  "tests/generators/test_gen_injection.py": {
+   "authentik": 10,
+   "caddy": 11
+  },
+  "tests/generators/test_llm_gateway.py": {
+   "example-27b": 3,
+   "example-4b": 2,
+   "litellm": 49,
+   "vllm": 1
+  },
+  "tests/golden/conftest.py": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "tests/golden/data/classifier_smoke.report.json": {
+   "example-4b": 1
+  },
+  "tests/golden/test_golden_pins.py": {
+   "example-4b": 1
+  },
+  "tests/golden/test_golden_runner.py": {
+   "example-27b": 2,
+   "example-4b": 1
+  },
+  "tests/graph/test_graph.py": {
+   "openbao": 15
+  },
+  "tests/http/test_http_guards.py": {
+   "ntfy": 2
+  },
+  "tests/integration/golden/guests/terraform-proxmox/": {
+   "proxmox": 1
+  },
+  "tests/integration/golden/guests/terraform-proxmox/providers.tf": {
+   "proxmox": 5
+  },
+  "tests/integration/golden/guests/terraform-proxmox/variables.tf": {
+   "proxmox": 2
+  },
+  "tests/integration/golden/guests/terraform-proxmox/vm-batch-core.tf": {
+   "proxmox": 1
+  },
+  "tests/integration/golden/guests/terraform-proxmox/vm-proxy-core.tf": {
+   "proxmox": 1
+  },
+  "tests/integration/golden/guests/terraform-proxmox/vm-store-core.tf": {
+   "proxmox": 1
+  },
+  "tests/integration/test_four_box_lab.py": {
+   "proxmox": 2,
+   "unifi": 1
+  },
+  "tests/integration/test_site_fleet_end_to_end.py": {
+   "proxmox": 1
+  },
+  "tests/integration/test_swap_with_conformance.py": {
+   "trino": 1
+  },
+  "tests/lake/fake_lab.py": {
+   "iceberg": 1,
+   "trino": 7
+  },
+  "tests/lake/golden/authentication.iceberg.txt": {
+   "iceberg": 1
+  },
+  "tests/lake/golden/authentication.trino.sql": {
+   "trino": 1
+  },
+  "tests/lake/golden/detection_finding.iceberg.txt": {
+   "iceberg": 1
+  },
+  "tests/lake/golden/detection_finding.trino.sql": {
+   "trino": 1
+  },
+  "tests/lake/golden/dns_activity.iceberg.txt": {
+   "iceberg": 1
+  },
+  "tests/lake/golden/dns_activity.trino.sql": {
+   "trino": 1
+  },
+  "tests/lake/golden/network_activity.iceberg.txt": {
+   "iceberg": 1
+  },
+  "tests/lake/golden/network_activity.trino.sql": {
+   "trino": 1
+  },
+  "tests/lake/golden/vulnerability_finding.iceberg.txt": {
+   "iceberg": 1
+  },
+  "tests/lake/golden/vulnerability_finding.trino.sql": {
+   "trino": 1
+  },
+  "tests/lake/test_ddl_goldens.py": {
+   "iceberg": 4,
+   "trino": 5
+  },
+  "tests/lake/test_endpoints_and_extras.py": {
+   "iceberg": 1,
+   "trino": 15
+  },
+  "tests/lake/test_iceberg.py": {
+   "iceberg": 9
+  },
+  "tests/lake/test_trino_rest.py": {
+   "iceberg": 1,
+   "trino": 5
+  },
+  "tests/maps/fixtures/maps/directory/services.yml": {
+   "authentik": 1,
+   "trino": 1
+  },
+  "tests/maps/fixtures/maps/topology.yml": {
+   "unifi": 3
+  },
+  "tests/maps/golden/maps/architecture.json": {
+   "prometheus": 1
+  },
+  "tests/maps/golden/maps/dataflow.json": {
+   "minio": 1
+  },
+  "tests/maps/golden/maps/links.json": {
+   "authentik": 1,
+   "trino": 1
+  },
+  "tests/maps/golden/maps/schedule.json": {
+   "prometheus": 1,
+   "stackstorm": 1
+  },
+  "tests/maps/golden/maps/topology.json": {
+   "unifi": 5
+  },
+  "tests/maps/test_directory.py": {
+   "prometheus": 1,
+   "stackstorm": 3
+  },
+  "tests/maps/test_maps.py": {
+   "minio": 1,
+   "prometheus": 2
+  },
+  "tests/mcp/test_mcp_catalog.py": {
+   "ntfy": 6
+  },
+  "tests/mcp/test_mcp_server.py": {
+   "trino": 2
+  },
+  "tests/models/conftest.py": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "tests/models/models_support.py": {
+   "example-27b": 1,
+   "example-4b": 1
+  },
+  "tests/models/test_model_store.py": {
+   "example-27b": 16,
+   "example-4b": 55,
+   "vllm": 2
+  },
+  "tests/models/test_models_probe.py": {
+   "example-27b": 2
+  },
+  "tests/models/test_models_resolver.py": {
+   "example-27b": 3,
+   "example-4b": 3
+  },
+  "tests/models/test_models_serving.py": {
+   "example-27b": 1
+  },
+  "tests/models/test_serving_plan.py": {
+   "example-27b": 4,
+   "example-4b": 9,
+   "litellm": 6,
+   "ollama": 1,
+   "vllm": 22
+  },
+  "tests/network/fixtures/services.yml": {
+   "authentik": 1,
+   "caddy": 1,
+   "minio": 1,
+   "technitium": 1,
+   "unifi": 1,
+   "vllm": 1
+  },
+  "tests/network/golden/unifi/": {
+   "unifi": 1
+  },
+  "tests/network/golden/unifi/controller.json": {
+   "unifi": 1
+  },
+  "tests/network/golden/unifi/firewall-rules.json": {
+   "unifi": 1
+  },
+  "tests/network/golden/unifi/networks.json": {
+   "unifi": 1
+  },
+  "tests/network/golden/unifi/port-profiles.json": {
+   "unifi": 1
+  },
+  "tests/network/golden/unifi/switch-ports.json": {
+   "unifi": 1
+  },
+  "tests/network/test_adapter_registry.py": {
+   "unifi": 5
+  },
+  "tests/network/test_adapters.py": {
+   "unifi": 9
+  },
+  "tests/network/test_plan.py": {
+   "unifi": 9
+  },
+  "tests/network/test_port_mirror.py": {
+   "unifi": 6
+  },
+  "tests/network/test_site_cli.py": {
+   "unifi": 3
+  },
+  "tests/notify/test_notify.py": {
+   "ntfy": 10
+  },
+  "tests/orchestration/orch_helpers.py": {
+   "litellm": 3
+  },
+  "tests/orchestration/test_orchestration_gateway.py": {
+   "litellm": 7,
+   "ntfy": 1
+  },
+  "tests/orchestration/test_orchestration_pages.py": {
+   "example-27b": 1,
+   "vllm": 3
+  },
+  "tests/orchestration/test_orchestration_store.py": {
+   "example-27b": 1,
+   "vllm": 1
+  },
+  "tests/overlay/fake_openbao.py": {
+   "openbao": 1
+  },
+  "tests/overlay/test_private_overlay_example.py": {
+   "openbao": 8,
+   "tailscale": 4
+  },
+  "tests/packaging/test_wheel_install.py": {
+   "caddy": 1,
+   "openbao": 1,
+   "stackstorm": 1
+  },
+  "tests/parity/test_queries_tables.py": {
+   "iceberg": 2
+  },
+  "tests/projects/test_projects_openproject.py": {
+   "openproject": 35
+  },
+  "tests/projects/test_projects_store.py": {
+   "openproject": 5
+  },
+  "tests/registry/test_registry_model.py": {
+   "nifi": 2
+  },
+  "tests/roles/test_control_roles.py": {
+   "ntfy": 1
+  },
+  "tests/roles/test_hnx_secret_lookup.py": {
+   "openbao": 8
+  },
+  "tests/roles/test_product_roles.py": {
+   "suricata": 44,
+   "tailscale": 43,
+   "wazuh": 47
+  },
+  "tests/roles/test_role_lint.py": {
+   "nifi": 1,
+   "suricata": 1,
+   "tailscale": 1,
+   "vllm": 1,
+   "wazuh": 1
+  },
+  "tests/roles/test_serving_roles.py": {
+   "example-27b": 16,
+   "example-4b": 10,
+   "ollama": 2,
+   "vllm": 106
+  },
+  "tests/schemas/fixtures/baseline_set.1_1.central.yml": {
+   "suricata": 1,
+   "wazuh": 1
+  },
+  "tests/schemas/fixtures/baseline_set.1_2.settings.yml": {
+   "wazuh": 1
+  },
+  "tests/schemas/test_module_1_0.py": {
+   "northwind-objects": 4
+  },
+  "tests/secretseed/test_secret_seed.py": {
+   "openbao": 13,
+   "tailscale": 10,
+   "vaultwarden": 17
+  },
+  "tests/sop/test_capability_pages.py": {
+   "iceberg": 3,
+   "openbao": 4
+  },
+  "tests/status/agent_helpers.py": {
+   "authentik": 4
+  },
+  "tests/status/fixtures/agentmetry-audit-status.json": {
+   "agentmetry": 2
+  },
+  "tests/status/fixtures/nifi-bulletin-board.json": {
+   "nifi": 1
+  },
+  "tests/status/fixtures/nifi-flow-status.json": {
+   "nifi": 1
+  },
+  "tests/status/fixtures/prometheus-alerts.json": {
+   "prometheus": 1
+  },
+  "tests/status/fixtures/prometheus-query-error.json": {
+   "prometheus": 1
+  },
+  "tests/status/fixtures/prometheus-query-scalar.json": {
+   "prometheus": 1
+  },
+  "tests/status/fixtures/prometheus-query-up.json": {
+   "prometheus": 2
+  },
+  "tests/status/fixtures/stackstorm-executions.json": {
+   "stackstorm": 1
+  },
+  "tests/status/fixtures/stackstorm-running.json": {
+   "stackstorm": 1
+  },
+  "tests/status/fixtures/uptime-kuma-heartbeat-all-up.json": {
+   "uptime-kuma": 1
+  },
+  "tests/status/fixtures/uptime-kuma-heartbeat.json": {
+   "uptime-kuma": 1
+  },
+  "tests/status/fixtures/uptime-kuma-status-page.json": {
+   "uptime-kuma": 1
+  },
+  "tests/status/test_agents_private.py": {
+   "authentik": 8
+  },
+  "tests/status/test_agents_sources.py": {
+   "agentmetry": 22
+  },
+  "tests/status/test_approvals.py": {
+   "authentik": 7,
+   "caddy": 5
+  },
+  "tests/status/test_status_products.py": {
+   "agentmetry": 14,
+   "nifi": 35,
+   "prometheus": 41,
+   "stackstorm": 31,
+   "uptime-kuma": 22
+  },
+  "tests/status/test_status_registry.py": {
+   "agentmetry": 1,
+   "caddy": 8
+  },
+  "tests/status/test_status_views.py": {
+   "grafana": 5
+  },
+  "tests/swap/golden/flip.inverse.txt": {
+   "trino": 1
+  },
+  "tests/swap/golden/flip.plan.txt": {
+   "trino": 1
+  },
+  "tests/swap/golden/swap_record.active.json": {
+   "trino": 3
+  },
+  "tests/swap/golden/swap_record.closed.json": {
+   "trino": 4
+  },
+  "tests/swap/golden/swap_record.rolled-back.json": {
+   "trino": 4
+  },
+  "tests/swap/scenario.py": {
+   "trino": 7
+  },
+  "tests/swap/test_decommission.py": {
+   "trino": 1
+  },
+  "tests/swap/test_e2e.py": {
+   "trino": 1
+  },
+  "tests/swap/test_swap_cli.py": {
+   "trino": 1
+  },
+  "tests/workflows/test_st2_bridge.py": {
+   "stackstorm": 28
+  },
+  "tests/workflows/test_workflows_st2.py": {
+   "stackstorm": 210
+  },
+  "tools/caddy_lint.allow.yml": {
+   "caddy": 5
+  },
+  "tools/caddy_lint.py": {
+   "authentik": 16,
+   "caddy": 158
+  },
+  "tools/dup_check.baseline.json": {
+   "iceberg": 2,
+   "ntfy": 3,
+   "openbao": 2,
+   "proxmox": 1,
+   "trino": 2
+  },
+  "tools/leak_scan.py": {
+   "vllm": 1
+  },
+  "tools/no_raw_endpoints.allow.yml": {
+   "iceberg": 1,
+   "openbao": 2,
+   "prometheus": 3,
+   "trino": 2
+  },
+  "tools/scripts.allow.yml": {
+   "litellm": 1,
+   "stackstorm": 1
+  },
+  "tools/shared_helpers.allow.yml": {
+   "ntfy": 2,
+   "trino": 1
+  },
+  "tools/shared_helpers_lint.py": {
+   "ntfy": 6,
+   "trino": 2
+  },
+  "tools/tests/test_caddy_lint.py": {
+   "authentik": 298,
+   "caddy": 289
+  },
+  "tools/tests/test_generated_files_have_checks.py": {
+   "litellm": 1,
+   "stackstorm": 2,
+   "vllm": 1
+  },
+  "tools/tests/test_leak_scan.py": {
+   "vllm": 1
+  },
+  "tools/tests/test_shared_helpers_lint.py": {
+   "ntfy": 2,
+   "trino": 1
+  },
+  "tools/tests/test_tls_verify_lint.py": {
+   "proxmox": 1
+  },
+  "tools/tests/test_workstation_refs.py": {
+   "caddy": 1
+  },
+  "workflows/stackstorm.yml": {
+   "stackstorm": 3
+  },
+  "workflows/stackstorm/": {
+   "stackstorm": 1
+  },
+  "workflows/stackstorm/bridge.json": {
+   "stackstorm": 4
+  },
+  "workflows/stackstorm/homelabnext/actions/admit.py": {
+   "stackstorm": 3
+  },
+  "workflows/stackstorm/homelabnext/actions/approved_run.yaml": {
+   "stackstorm": 1
+  },
+  "workflows/stackstorm/homelabnext/actions/step.py": {
+   "stackstorm": 3
+  },
+  "workflows/stackstorm/homelabnext/actions/workflows/approved_run.yaml": {
+   "stackstorm": 1
+  },
+  "workflows/stackstorm/homelabnext/pack.yaml": {
+   "stackstorm": 3
+  },
+  "workflows/stackstorm/homelabnext/pinned/approved_run.json": {
+   "stackstorm": 1
+  },
+  "workflows/stackstorm/homelabnext/rules/on_agent_job_retry.yaml": {
+   "stackstorm": 1
+  },
+  "workflows/stackstorm/homelabnext/rules/on_approved_run.yaml": {
+   "stackstorm": 2
+  },
+  "workflows/stackstorm/homelabnext/rules/on_proposal_validate.yaml": {
+   "stackstorm": 1
+  }
+ },
+ "version": 1
+}
