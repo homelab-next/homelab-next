@@ -130,7 +130,12 @@ suite_budgets = [
   # per-file stats became one module call; 1200 since main's own CI measured 1085s and 1096s
   # (2026-10-24/25), over 1080 with no test changed
   "tests/roles = 1200",
-  "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
+  "tools/tests = 240",
+  # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
+  # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a
+  # test of its module, and the merge sums every shard's time: 34.2 s in four shards (2026-10-25),
+  # 61.0 s in six (2026-10-26, over the 60 s default); 90 is 1.5x that
+  "tests/golden = 90",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
