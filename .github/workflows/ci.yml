@@ -80,7 +80,7 @@ jobs:
         with:
           python-version: ${{ matrix.python.version }}
           extras: ${{ matrix.python.extras }}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         if: matrix.python.go
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -94,7 +94,7 @@ jobs:
           python -m pytest -q -m "not live"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
           --shard "$SHARD/6" --shard-report "$RUNNER_TEMP/shard.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()  # a failed shard's report says why to test-ok too
         with:
           name: shard-${{ matrix.python.version }}-${{ matrix.shard }}
@@ -114,7 +114,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: shard-*
           path: ${{ runner.temp }}/shards
@@ -159,7 +159,7 @@ jobs:
         with:
           python-version: "3.12"
           extras: test
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -425,7 +425,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: ${{ matrix.module.dir }}/go.mod
           cache-dependency-path: ${{ matrix.module.dir }}/**/go.sum  # the module's and tools/'s
@@ -729,7 +729,7 @@ jobs:
           packages: ruff pip-audit
       # a Go fix proves its test with go test (no toolchain is "cannot prove", never a pass); the
       # pinned GO_VERSION, which switches to a newer toolchain a module's go.mod asks for
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         if: needs.go-modules.outputs.present == 'true'
         with:
           go-version: ${{ env.GO_VERSION }}
