@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+name: prune-branches
+
+# Deletes the branches whose work is over, by hand from the Actions tab: a branch goes only when
+# its tip is the head of a merged or closed pull request from this repository and no open pull
+# request uses it. The default branch, protected branches, branches with an open pull request,
+# branches with commits after their pull request closed, and branches that never had one are
+# kept (tools/prune_branches.py decides; its tests pin each case). The run summary lists both.
+# A deleted branch of a pull request can be restored from that pull request's page.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted, and delete nothing"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: prune-branches
+  cancel-in-progress: false
+
+# Action pins below are full commit SHAs; the trailing comment names the release.
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # deleting a branch is a write to its ref
+      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: decide and delete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$REPO/branches?per_page=100" > "$RUNNER_TEMP/branches.json"
+          gh api --paginate --slurp "repos/$REPO/pulls?state=all&per_page=100" > "$RUNNER_TEMP/pulls.json"
+          python3 tools/prune_branches.py "$RUNNER_TEMP/branches.json" "$RUNNER_TEMP/pulls.json" \
+            --default "$DEFAULT_BRANCH" --repo "$REPO" --keep "$RUNNER_TEMP/kept.tsv" \
+            > "$RUNNER_TEMP/delete.txt"
+          {
+            if [ "$DRY_RUN" = "true" ]; then echo "## Would delete (dry run)"; else echo "## Deleted"; fi
+            echo
+            awk '{ printf "- %c%s%c\n", 96, $0, 96 }' "$RUNNER_TEMP/delete.txt"
+            echo
+            echo "## Kept"
+            echo
+            awk -F '\t' '{ printf "- %c%s%c: %s\n", 96, $1, 96, $2 }' "$RUNNER_TEMP/kept.tsv"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DRY_RUN" = "true" ]; then
+            exit 0
+          fi
+          failed=0
+          while IFS= read -r branch; do
+            [ -n "$branch" ] || continue
+            ref=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$branch")
+            if ! gh api -X DELETE "repos/$REPO/git/refs/heads/$ref" --silent; then
+              echo "::warning::could not delete $branch"
+              failed=1
+            fi
+          done < "$RUNNER_TEMP/delete.txt"
+          exit "$failed"
