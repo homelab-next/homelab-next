@@ -319,12 +319,115 @@ def test_against_the_base_neither_the_baseline_nor_the_vocabulary_may_grow(tmp_p
     (root / pl.BASELINE).write_text(json.dumps(baseline))
     assert run(root) == 0
     assert run(root, "--base", "HEAD") == 1
-    assert "the baseline only shrinks" in capsys.readouterr().out
+    assert "the baseline never grows" in capsys.readouterr().out
     git(root, "checkout", "-q", "--", ".")
     (root / pl.VOCABULARY).write_text(yaml.safe_dump({"products": []}))  # un-lint zorbix
     assert run(root, "--base", "HEAD") == 1
     assert "no longer" in capsys.readouterr().out
     assert run(root, "--base", "no-such-rev") == 2
+
+
+@pytest.mark.parametrize(
+    ("rel", "data"),
+    [
+        ("core/a.yml", b'x: "\\x7aorbix"\n'),  # a YAML escape
+        ("core/a.json", b'{"a": "\\u007aorbix"}'),  # a JSON escape
+        ("core/a.py", b'x = "zor\\\nbix"\n'),  # a Python line continuation
+        ("core/b.yml", b'k: "acme\n  objects"\n'),  # a folded scalar
+        ("core/b.py", 'x = "\u0130nfluxdb"\ny = "influxdb"\n'.encode()),  # a dotted capital I
+        ("core/c.py", b'x = ("acme-" "objects")\n'),  # implicit concatenation
+        ("core/d.py", b'x = f"\\x7aorbix{1}"\n'),  # an escape in an f-string
+        ("core/e.yml", b"x: !!set {zorbix}\n"),  # a YAML set
+        ("core/f.sh", b"z\0\nzorbix\n"),  # a NUL in a text suffix
+        ("core/g.txt", "zorbix\n".encode("utf-16-le")),  # UTF-16 without a BOM
+        ("core/h.txt", "zorbix\n".encode("utf-32")),  # UTF-32 with a BOM
+        ("core/i.py", b"class ZORBIXClient: pass\n"),  # an upper-case run into a word
+    ],
+)
+def test_what_the_prefilter_and_the_decoders_must_not_miss(tmp_path, rel, data):
+    vocab = {"products": [{"name": "zorbix", "why": "x"}, {"name": "influxdb", "why": "x"}]}
+    root = tree(tmp_path, {pl.VOCABULARY: yaml.safe_dump(vocab)})
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(data)
+    got = counts(root)
+    assert got.get(rel), rel
+    assert run(root, "--init") == 0
+
+
+def test_a_binary_is_skipped_whatever_its_size(tmp_path, monkeypatch):
+    root = tree(tmp_path, {})
+    (root / "core").mkdir()
+    (root / "core/weights.bin").write_bytes(b"\0" * 100 + b"zorbix")
+    monkeypatch.setattr(pl, "MAX_BYTES", 10)
+    assert pl._file_texts(root / "core/weights.bin", "core/weights.bin") == []
+    (root / "core/big.txt").write_text("x" * 100)
+    with pytest.raises(pl.LintError, match="over 10 bytes"):
+        pl._file_texts(root / "core/big.txt", "core/big.txt")
+
+
+def test_a_link_into_the_tree_is_read_as_its_target(tmp_path):
+    root = tree(tmp_path, {"README.md": "zorbix\n"})
+    (root / "core").mkdir()
+    (root / "core/cfg.yml").symlink_to("../README.md")
+    assert counts(root)["core/cfg.yml"] == {"zorbix": 1}
+
+
+def test_an_empty_base_and_a_missing_vocabulary_are_usage_errors(tmp_path):
+    root = tree(tmp_path, {})
+    assert run(root, "--base", "") == 2
+    (root / pl.VOCABULARY).unlink()
+    assert run(root) == 2
+
+
+def test_a_subdirectory_of_a_checkout_is_linted_by_git(tmp_path):
+    outer = tmp_path / "outer"
+    root = tree(
+        outer / "sub", {"core/a.py": 'x = "zorbix"\n', "node_modules/b.py": 'x = "zorbix"\n'}
+    )
+    (outer / ".gitignore").write_text("node_modules/\n")
+    git(outer, "init", "-q")
+    assert set(counts(root)) == {"core/a.py"}
+
+
+def test_against_the_base_a_new_path_may_not_take_on_debt_but_a_rename_keeps_its_own(
+    tmp_path, capsys
+):
+    root = tree(tmp_path, {"core/a.py": 'x = "zorbix"\n', "core/b.py": 'x = "acme-objects"\n'})
+    assert run(root, "--init") == 0
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    git(root, "mv", "core/a.py", "core/renamed.py")
+    assert run(root, "--update") == 0
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "rename")
+    assert run(root, "--base", "HEAD^") == 0
+    (root / "core/b.py").write_text("x = 1\n")  # cleanup elsewhere does not fund a new file
+    (root / "core/new.py").write_text('y = "acme-objects"\n')
+    assert run(root, "--update") == 0
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "swap")
+    assert run(root, "--base", "HEAD^") == 1
+    assert "core/new.py: acme-objects 1, 0 at" in capsys.readouterr().out
+
+
+def test_against_the_base_no_spelling_may_leave_the_vocabulary_silently(tmp_path, capsys):
+    vocab = {"products": [{"name": "zorbix", "aliases": ["zbx"], "why": "x"}]}
+    root = tree(tmp_path, {pl.VOCABULARY: yaml.safe_dump(vocab)})
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    vocab["products"][0]["aliases"] = []
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 1
+    assert "'zbx' was linted" in capsys.readouterr().out
+    (root / "examples/modules/example-store/module.yml").write_text(
+        yaml.safe_dump({**PROVIDER, "product": {"name": "acme-objects"}})
+    )
+    assert run(root, "--base", "HEAD") == 1  # a provider's alias dropped too
+    vocab["retired"] = [{"name": "zbx", "reason": "x"}, {"name": "acmeobj", "reason": "x"}]
+    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
+    assert run(root, "--base", "HEAD") == 0
 
 
 def test_the_repository_passes_its_own_lint():

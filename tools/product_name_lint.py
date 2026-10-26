@@ -30,18 +30,25 @@ code change.  The lint reads:
   ``lab/``); Markdown prose (ADRs and the changelog included); the role table; and the reviewed
   path globs of ``tools/product_names.yml`` ``allow:`` (each with a reason);
 * **what is linted** everywhere else, over the tracked and untracked-but-not-ignored files
-  (``git ls-files``; a directory walk outside a git checkout): Python string and bytes constants
-  and identifiers (comments and docstrings are skipped); every key and string value of YAML and
-  JSON, except the string value of a prose key (``description``, ``title``, ``$comment``,
-  ``summary``, ``reason``, ``why``, ``purpose``, ``help``); the lines of every other text file
-  (any suffix, extensionless included), without the comment lines of formats known to use ``#``
-  or ``//``; and every file and directory name.  A binary file (a NUL byte) is skipped; a text file
+  (``git ls-files`` under ROOT; a directory walk outside a git work tree): Python string and
+  bytes constants as Python reads them (escapes decoded, implicit concatenation joined, f-string
+  parts) and identifiers, without comments and docstrings; every key and string value of YAML
+  (sets, ordered maps and binaries included) and JSON, except the string value of a prose key
+  (``description``, ``title``, ``$comment``, ``summary``, ``reason``, ``why``, ``purpose``,
+  ``help``); the lines of every other text file (any suffix, extensionless included; UTF-8,
+  UTF-16 or UTF-32 by BOM or byte pattern, else Latin-1), without the comment lines of formats
+  known to use ``#`` or ``//``; every file, directory and submodule name; and a symbolic link's
+  target text and, for a link into the tree, the target's content under the link's own path.  A
+  binary file (a NUL byte, in a suffix not known as text) is skipped whatever its size; a text file
   over 20 MB is an error, never a silent skip.
 
-**Matching** is case-insensitive after NFKC normalisation with invisible format characters removed,
-with ``-``, ``_``, ``.`` and a space alike between the parts of a name (or none: ``uptimekuma``),
-and bounded: no letter or digit on either side, except at a camel-case or letter/digit seam
-(``OpenbaoClient``, ``getOpenbao``, ``openbao2`` count; ``notopenbao`` and ``OPENBAOADDR`` do not).
+**Matching** is case-insensitive after compatibility normalisation with combining marks and
+invisible format characters removed, with ``-``, ``_``, ``.`` and a space alike between the parts
+of a name (or none: ``uptimekuma``), and bounded: no letter or digit on either side, except at a
+camel-case, upper-case-run or letter/digit seam (``OpenbaoClient``, ``OPENBAOClient``,
+``getOpenbao``, ``openbao2`` count; ``notopenbao`` and ``OPENBAOADDR`` do not).  A file is parsed
+only when its letters and digits contain a name's (or it holds an escape), so the prefilter never
+skips a file a parse would match in.
 It catches the ordinary spellings, not deliberate obfuscation (``"open" + "bao"``, an encoded
 string); that is review's job, which is why this file, the vocabulary and the baseline are owned.
 
@@ -49,8 +56,11 @@ string); that is review's job, which is why this file, the vocabulary and the ba
 a count above it, or a path or product not in it, fails; so does an entry above what is there.
 ``--update`` rewrites it to what is there, refused when any product's total would rise (so a moved
 file keeps its debt, and debt never grows).  ``--base REV`` / ``--ci-base`` (CI) also compare the
-committed baseline with the one at the base commit: no product's total may rise and no product the
-base's vocabulary listed may leave it, so neither can be done by hand-editing either file.
+committed baseline and vocabulary with the base commit's: no path's count may rise above its count
+there (a file git sees as renamed or copied keeps its old path's counts, so a new file never takes
+on debt freed elsewhere), and no spelling linted there (a product, an alias, a provider's display
+name, a model id) may stop being linted unless ``retired:`` in the vocabulary says why, so neither
+file can be loosened by hand.
 
 Usage:
   python tools/product_name_lint.py [ROOT] [--overlay DIR] [--roles FILE] [--json]
@@ -69,6 +79,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import tokenize
 import unicodedata
 from collections import Counter
@@ -76,13 +87,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from homelabnext.state.store import atomic_write_text  # noqa: E402
+try:
+    import yaml
+
+    from homelabnext.state.store import atomic_write_text
+except ImportError as _exc:  # the lint cannot run: "could not measure", never a pass or a fail
+    print(f"product_name_lint: cannot import {_exc.name}", file=sys.stderr)
+    sys.exit(100)
 
 VOCABULARY = "tools/product_names.yml"
 BASELINE = "tools/product_names.baseline.json"
@@ -110,13 +125,18 @@ HASH_COMMENTS = {
 }  # fmt: skip
 SLASH_COMMENTS = {".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".tf", ".css", ".jsonc"}
 MAX_BYTES = 20_000_000
-MAX_TERMS = 2_000
+MAX_TERMS = 500
 MAX_TERM_LEN = 128
 MAX_NODES = 5_000_000  # a YAML or JSON document's nodes, aliases counted once
 _NAME = re.compile(r"^[a-z0-9][a-z0-9 ._/:+-]*[a-z0-9]$|^[a-z0-9]$")
 _SEP = "-_. "
-_LEFT = r"(?:(?<![A-Za-z0-9])|(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z]))"
-_RIGHT = r"(?:(?![A-Za-z0-9])|(?<=[a-z])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z]))"
+#: a name is bounded by a non-alphanumeric, or by a seam: lower to upper (zorbixClient), an
+#: upper-case run into a capitalised word (HTTPZorbix, ZORBIXClient), or letter to digit
+_SEAM = (
+    r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])"
+)
+_LEFT = rf"(?:(?<![A-Za-z0-9])|{_SEAM})"
+_RIGHT = rf"(?:(?![A-Za-z0-9])|{_SEAM})"
 
 
 class LintError(ValueError):
@@ -128,18 +148,25 @@ def _norm(name: str) -> str:
 
 
 _DROP_SEP = str.maketrans("", "", _SEP)
+_NOT_ALNUM = re.compile(r"[^0-9a-z]+")
 
 
 def _key(text: str) -> str:
-    """What a match and a name compare by: lower case, separators dropped."""
-    return text.lower().translate(_DROP_SEP)
+    """What a match and a name compare by: folded case, separators dropped."""
+    return text.casefold().translate(_DROP_SEP)
+
+
+def _skeleton(text: str) -> str:
+    """Only the letters and digits, case-folded: what the prefilter compares, so a name split by
+    quotes, a line break and indentation, or any separator still shows."""
+    return _NOT_ALNUM.sub("", _visible(text).casefold())
 
 
 @dataclass(frozen=True)
 class Vocabulary:
     by_key: dict[str, str]  # _key(spelling) -> the product the baseline counts under
     pattern: re.Pattern[str] | None
-    keys: tuple[str, ...]  # a text whose _key() holds none of these cannot hold a name
+    skeletons: tuple[str, ...]  # a text whose _skeleton() holds none of these holds no name
     own: dict[str, str]  # a provider module's directory (relative) -> its own product
 
     @property
@@ -147,29 +174,53 @@ class Vocabulary:
         return set(self.by_key.values())
 
     def possible(self, text: str) -> bool:
-        keyed = _key(_visible(text))
-        return any(k in keyed for k in self.keys)
+        """False only when no name can be in ``text`` once it is decoded and parsed.  An escape
+        can spell a letter the raw text does not show, so text with one is always possible."""
+        if _ESCAPE.search(text):
+            return True
+        sk = _skeleton(text)
+        return any(k in sk for k in self.skeletons)
 
     def count(self, texts: list[str]) -> Counter:
         c: Counter = Counter()
         if self.pattern is None:
             return c
         for m in self.pattern.finditer(_visible("\n".join(texts))):
-            c[self.by_key[_key(m.group(0))]] += 1
+            c[self.product(m.group(0))] += 1
         return c
+
+    def product(self, matched: str) -> str:
+        """The product a match names.  The pattern folds case as ``re`` does, which is not
+        always ``str.casefold``; a match that does not key back is matched name by name."""
+        found = self.by_key.get(_key(matched))
+        if found is not None:
+            return found
+        for k, prod in self.by_key.items():
+            if re.fullmatch(_body(k), matched, re.IGNORECASE):
+                return prod
+        raise LintError(f"{matched!r} matched but names no product (a lint defect)")
+
+
+#: letters ``re.IGNORECASE`` folds to an ASCII letter that NFKD does not reach
+_FOLD_ASCII = str.maketrans({"\u0131": "i", "\u017f": "s", "\u212a": "K"})
 
 
 def _visible(text: str) -> str:
-    """NFKC, without invisible format characters (a zero-width space, a soft hyphen)."""
+    """What a name is matched in: compatibility-decomposed, without combining marks or invisible
+    format characters (a zero-width space, a soft hyphen), so a dotted capital I or an accent does
+    not hide a name, then recomposed."""
     if text.isascii():
         return text
-    return "".join(
-        ch for ch in unicodedata.normalize("NFKC", text) if unicodedata.category(ch) != "Cf"
+    decomposed = unicodedata.normalize("NFKD", text.translate(_FOLD_ASCII))
+    return unicodedata.normalize(
+        "NFKC",
+        "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn")),
     )
 
 
-#: a Python escape that could spell a letter the raw text does not show
-_PY_ESCAPE = re.compile(r"\\(?:x|u|U|N\{|[0-7])")
+#: an escape (Python, YAML, JSON, shell) that could spell a letter the raw text does not show,
+#: or a line continuation that joins two halves of a name
+_ESCAPE = re.compile(r"\\(?:[xuUN0-7]|\r?\n)")
 
 
 def _body(text: str) -> str:
@@ -224,7 +275,9 @@ def vocabulary(
         with contextlib.suppress(ValueError):  # an overlay module: outside the tree being linted
             own[mf.parent.relative_to(root).as_posix()] = product
     if vocab_doc is None:
-        vocab_doc = _load_yaml(root / VOCABULARY) if (root / VOCABULARY).is_file() else {}
+        if not (root / VOCABULARY).is_file():
+            raise LintError(f"{root / VOCABULARY}: missing (is ROOT the repository's top level?)")
+        vocab_doc = _load_yaml(root / VOCABULARY)
     for i, p in enumerate(_section(vocab_doc, "products")):
         where = f"{VOCABULARY}: products[{i}]"
         if not isinstance(p, dict):
@@ -257,7 +310,8 @@ def vocabulary(
     bodies = sorted({_body(t) for _, t in spellings}, key=lambda b: (-len(b), b))
     alternation = "|".join(bodies)
     pattern = re.compile(rf"{_LEFT}(?i:{alternation}){_RIGHT}") if bodies else None
-    return Vocabulary(by_key=by_key, pattern=pattern, keys=tuple(sorted(by_key)), own=own)
+    skeletons = tuple(sorted({_skeleton(t) for _, t in spellings}))
+    return Vocabulary(by_key=by_key, pattern=pattern, skeletons=skeletons, own=own)
 
 
 def _section(doc: Any, key: str) -> list:
@@ -292,57 +346,36 @@ def _matches(rel: str, glob: str) -> bool:
 # ----------------------------------------------------------------------------- text extraction
 
 
-def _docstrings(body: list[ast.stmt], out: set[tuple[int, int]]) -> None:
-    """The start of every docstring, through statement lists only (no expression walk)."""
-    for node in body:
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            _docstring(node.body, out)
-        for field in ("body", "orelse", "finalbody"):
-            sub = getattr(node, field, None)
-            if isinstance(sub, list):
-                _docstrings(sub, out)
-        for clause in [*getattr(node, "handlers", []), *getattr(node, "cases", [])]:
-            _docstrings(clause.body, out)
-
-
-def _docstring(body: list[ast.stmt], out: set[tuple[int, int]]) -> None:
-    first = body[0] if body else None
-    if (
-        isinstance(first, ast.Expr)
-        and isinstance(first.value, ast.Constant)
-        and isinstance(first.value.value, str)
-    ):
-        out.add((first.value.lineno, first.value.col_offset))
-
-
 def _python_texts(text: str) -> list[str]:
-    """String and bytes literals (escapes decoded) and identifiers; comments and docstrings are
-    not read (a docstring is skipped by its exact position, so code beside it still is)."""
+    """String and bytes constants as Python reads them (escapes decoded, implicit concatenation
+    joined, f-string parts included) and identifiers; comments and docstrings are not read (a
+    docstring is skipped as a node, so code on the same line still is)."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return text.splitlines()  # unparseable: every line, comments and docstrings too
-    docstrings: set[tuple[int, int]] = set()
-    _docstring(tree.body, docstrings)
-    _docstrings(tree.body, docstrings)
+    docstrings: set[int] = set()
     out: list[str] = []
-    in_doc = False
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                docstrings.add(id(first.value))
+        elif isinstance(node, ast.Constant) and id(node) not in docstrings:
+            if isinstance(node.value, str):
+                out.append(node.value)
+            elif isinstance(node.value, bytes):
+                out.append(node.value.decode("latin-1"))
     try:
-        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
-            if tok.type == tokenize.STRING:
-                # an implicitly concatenated docstring is several tokens: skip to the statement's end
-                in_doc = in_doc or tok.start in docstrings
-                if in_doc:
-                    continue
-                try:
-                    value = ast.literal_eval(tok.string)
-                except (ValueError, SyntaxError, MemoryError, RecursionError):
-                    value = tok.string  # an f-string (before 3.12): as written
-                out.append(value.decode("latin-1") if isinstance(value, bytes) else str(value))
-            elif tok.type not in (tokenize.NL, tokenize.COMMENT):
-                in_doc = False
-                if tok.type == tokenize.NAME or tok.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
-                    out.append(tok.string)
+        out += [
+            t.string
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type == tokenize.NAME
+        ]
     except (tokenize.TokenError, IndentationError, SyntaxError):
         return text.splitlines()
     return out
@@ -359,46 +392,75 @@ def _data_texts(doc: Any) -> list[str]:
         nodes += 1
         if nodes > MAX_NODES:
             raise LintError(f"more than {MAX_NODES} nodes")
-        if isinstance(node, (dict, list)):
+        if isinstance(node, (dict, list, set, frozenset, tuple)):
             if id(node) in seen:
                 continue
             seen.add(id(node))
         if isinstance(node, dict):
             for k, v in node.items():
-                out.append(str(k))
+                stack.append(k)  # a key may be any YAML node, a !!set or a !!binary
                 if not (isinstance(v, str) and str(k) in PROSE_KEYS):
                     stack.append(v)
-        elif isinstance(node, list):
+        elif isinstance(node, (list, set, frozenset, tuple)):  # !!set, !!omap, !!pairs
             stack.extend(node)
         elif isinstance(node, str):
             out.append(node)
+        elif isinstance(node, bytes):  # !!binary
+            out.append(node.decode("latin-1"))
     return out
 
 
-def _decode(data: bytes) -> str:
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return data.decode("utf-16")
+_BOMS = (
+    (b"\xff\xfe\x00\x00", "utf-32-le"),
+    (b"\x00\x00\xfe\xff", "utf-32-be"),
+    (b"\xff\xfe", "utf-16-le"),
+    (b"\xfe\xff", "utf-16-be"),
+)
+#: suffixes that are never binary: a NUL in one is read through, not a reason to skip the file
+TEXT_SUFFIXES = {
+    ".py", ".yml", ".yaml", ".json", ".md", ".j2", ".html", ".sql", ".xml", ".js", ".ts", ".css",
+    ".go", ".rs", ".tf", ".hcl", ".jsonl", ".csv", ".tmpl",
+    *HASH_COMMENTS, *SLASH_COMMENTS,
+}  # fmt: skip
+
+
+def _decode(data: bytes, suffix: str) -> str | None:
+    """The text of a file, or None for a binary.  Never a silent skip of text: a BOM names the
+    encoding, a NUL at every other byte is UTF-16 without one, UTF-8 is tried, and Latin-1 maps
+    every remaining byte to a character."""
+    for bom, codec in _BOMS:
+        if data.startswith(bom):
+            return data[len(bom) :].decode(codec, "replace")
+    head = data[:8192]
+    if b"\0" in head:
+        even, odd = head[::2], head[1:][::2]
+        if odd and odd.count(0) > len(odd) * 0.9 and even.count(0) < len(even) * 0.1:
+            return data.decode("utf-16-le", "replace")
+        if even and even.count(0) > len(even) * 0.9 and odd.count(0) < len(odd) * 0.1:
+            return data.decode("utf-16-be", "replace")
+        if suffix not in TEXT_SUFFIXES:
+            return None  # binary
+        data = data.replace(b"\0", b"")
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return data.decode("latin-1")  # never a silent skip: every byte maps to a character
+        return data.decode("latin-1")
 
 
 def _file_texts(path: Path, rel: str, vocab: Vocabulary | None = None) -> list[str]:
     """The texts to match in a file; with ``vocab``, a file in which no name can match is not
     parsed at all (most of the tree, and the expensive part)."""
+    suffix = path.suffix.lower() or path.name.lower()
+    with path.open("rb") as fh:
+        head = fh.read(8192)
+    if _decode(head, suffix) is None:
+        return []  # binary, whatever its size
     if path.stat().st_size > MAX_BYTES:
         raise LintError(f"{rel}: over {MAX_BYTES} bytes; allow it with a reason or split it")
-    data = path.read_bytes()
-    if b"\0" in data[:8192] and not data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return []  # binary
-    text = _decode(data)
-    suffix = path.suffix.lower() or path.name.lower()
-    if (
-        vocab is not None
-        and not vocab.possible(text)
-        and not (suffix == ".py" and _PY_ESCAPE.search(text))
-    ):
+    text = _decode(path.read_bytes(), suffix)
+    if text is None:
+        return []
+    if vocab is not None and not vocab.possible(text):
         return []
     if suffix == ".py":
         return _python_texts(text)
@@ -418,19 +480,26 @@ def _file_texts(path: Path, rel: str, vocab: Vocabulary | None = None) -> list[s
     return lines
 
 
+def _git(root: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess | None:
+    """``git -C ROOT ...``, or None without a git binary."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=text, check=False
+        )
+    except FileNotFoundError:
+        return None
+
+
 def tree_files(root: Path) -> list[str]:
-    """The tracked and untracked-but-not-ignored files (relative), or every file outside git."""
-    r = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        capture_output=True,
-        check=False,
-    )
-    inside = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True, text=True
-    )
-    if r.returncode == 0 and inside.returncode == 0 and Path(inside.stdout.strip()) == root:
+    """The tracked and untracked-but-not-ignored entries under ROOT (relative to it), or every
+    file outside a git work tree.  A submodule is listed by its path, for its name."""
+    inside = _git(root, "rev-parse", "--is-inside-work-tree")
+    if inside is not None and inside.returncode == 0 and inside.stdout.strip() == "true":
+        r = _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", text=False)
+        if r is None or r.returncode:
+            raise LintError(f"git ls-files failed in {root}")
         files = {p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0") if p}
-        return sorted(f for f in files if (root / f).is_file() or (root / f).is_symlink())
+        return sorted(f for f in files if os.path.lexists(root / f))
     out = []
     for path in root.rglob("*"):
         rel = path.relative_to(root).as_posix()
@@ -466,8 +535,13 @@ def scan(root: Path, vocab: Vocabulary, allowed: list[str]) -> dict[str, Counter
         path = root / rel
         count(rel, [path.name])
         if path.is_symlink():
-            count(rel, [os.readlink(path)])  # the link's target, never its content
-        else:
+            count(rel, [os.readlink(path)])  # the link's target as written
+            target = path.resolve()
+            # a link into the tree is read as what it points at, under the link's own path, so a
+            # core path linked to an allowed file is still linted where it is used
+            if target.is_file() and target.is_relative_to(root):
+                count(rel, _file_texts(target, rel, vocab))
+        elif path.is_file():
             count(rel, _file_texts(path, rel, vocab))
     return dict(sorted(hits.items()))
 
@@ -537,43 +611,98 @@ def grown(now: dict[str, Any], then: dict[str, Any]) -> list[str]:
     ]
 
 
+def _prefix(root: Path) -> str:
+    r = _git(root, "rev-parse", "--show-prefix")
+    return r.stdout.strip() if r is not None and r.returncode == 0 else ""
+
+
+def vocabulary_at(root: Path, rev: str) -> Vocabulary:
+    """The vocabulary as it was at ``rev``: the same files, read from git."""
+    pre = _prefix(root)
+    wanted = ["examples/modules", "modules", VOCABULARY, ROLES]
+    r = _git(root, "ls-tree", "-r", "--name-only", rev, "--", *(pre + w for w in wanted))
+    if r is None or r.returncode:
+        raise LintError(f"--base {rev}: cannot list its tree")
+    with tempfile.TemporaryDirectory(prefix="product-names-base.") as tmp:
+        base = Path(tmp)
+        for full in r.stdout.splitlines():
+            rel = full[len(pre) :]
+            if not (
+                rel in (VOCABULARY, ROLES) or fnmatch.fnmatchcase(rel, "*modules/*/module.yml")
+            ):
+                continue
+            blob = _git(root, "show", f"{rev}:{full}", text=False)
+            if blob is None or blob.returncode:
+                raise LintError(f"--base {rev}: cannot read {rel}")
+            (base / rel).parent.mkdir(parents=True, exist_ok=True)
+            (base / rel).write_bytes(blob.stdout)
+        if not (base / VOCABULARY).is_file():
+            return Vocabulary(by_key={}, pattern=None, skeletons=(), own={})
+        return vocabulary(base, None, base / ROLES)
+
+
+def renames(root: Path, rev: str) -> dict[str, str]:
+    """``{new path: old path}`` for the files git sees as renamed or copied since ``rev``."""
+    pre = _prefix(root)
+    r = _git(root, "diff", "-M", "-C", "--name-status", "-z", rev, "--", ".")
+    if r is None or r.returncode:
+        raise LintError(f"--base {rev}: git diff failed")
+    parts = r.stdout.split("\0")
+    out: dict[str, str] = {}
+    i = 0
+    while i < len(parts) - 1:
+        status = parts[i]
+        if status[:1] in ("R", "C"):
+            old, new = parts[i + 1], parts[i + 2]
+            out[new[len(pre) :]] = old[len(pre) :]
+            i += 3
+        else:
+            i += 2
+    return out
+
+
+def retired(root: Path) -> dict[str, str]:
+    """``tools/product_names.yml`` ``retired:``: names deliberately no longer linted, with why."""
+    out = {}
+    for i, e in enumerate(_section(_load_yaml(root / VOCABULARY), "retired")):
+        if not isinstance(e, dict) or not isinstance(e.get("name"), str):
+            raise LintError(f"{VOCABULARY}: retired[{i}] needs a name")
+        if not str(e.get("reason", "")).strip():
+            raise LintError(f"{VOCABULARY}: retired[{i}] ({e['name']}) needs a reason")
+        out[_key(e["name"])] = str(e["reason"])
+    return out
+
+
 def against_base(
     root: Path, rev: str, base: dict[str, dict[str, int]], vocab: Vocabulary
 ) -> list[str]:
-    """The committed baseline and vocabulary against those at ``rev``."""
-
-    def show(path: str) -> str | None:
-        r = subprocess.run(
-            ["git", "-C", str(root), "show", f"{rev}:{path}"], capture_output=True, text=True
-        )
-        return r.stdout if r.returncode == 0 else None
-
-    if subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
-        capture_output=True,
-    ).returncode:
+    """The committed baseline and vocabulary against those at ``rev``: no path's count above
+    its count there (a renamed or copied file keeps its old path's counts), and no name linted
+    there that is not linted now, unless ``retired:`` says why."""
+    r = _git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    if r is None or r.returncode:
         raise LintError(f"--base {rev}: not a commit here")
     problems = []
-    old = show(BASELINE)
-    if old is not None:
-        problems += [
-            f"{BASELINE}: {g} at {rev[:12]}: the baseline only shrinks (move the code, or allow "
-            "the path with a reason)"
-            for g in grown(base, parse_baseline(old, f"{BASELINE}@{rev[:12]}"))
-        ]
-    old_vocab = show(VOCABULARY)
-    if old_vocab is not None:
-        try:
-            doc = yaml.load(old_vocab, Loader=_LOADER)
-        except yaml.YAMLError as exc:
-            raise LintError(f"{VOCABULARY}@{rev[:12]}: cannot be read ({exc})") from None
-        for p in _section(doc, "products"):
-            name = _norm(str(p.get("name", ""))) if isinstance(p, dict) else ""
-            if name and name not in vocab.products:
-                problems.append(
-                    f"{VOCABULARY}: {name} was linted at {rev[:12]} and is no longer: a product "
-                    "leaves products: only for its provider module's product block"
-                )
+    old = _git(root, "show", f"{rev}:{_prefix(root)}{BASELINE}")
+    if old is not None and old.returncode == 0:
+        then = parse_baseline(old.stdout, f"{BASELINE}@{rev[:12]}")
+        moved = renames(root, rev)
+        for rel, c in sorted(base.items()):
+            source = then.get(rel) or then.get(moved.get(rel, ""), {})
+            for product, n in sorted(c.items()):
+                if n > source.get(product, 0):
+                    problems.append(
+                        f"{BASELINE}: {rel}: {product} {n}, {source.get(product, 0)} at "
+                        f"{rev[:12]}: the baseline never grows (name the slot, move the code into "
+                        "its provider module, or allow the path with a reason)"
+                    )
+    gone = set(vocabulary_at(root, rev).by_key) - set(vocab.by_key) - set(retired(root))
+    problems += [
+        f"{VOCABULARY}: {k!r} was linted at {rev[:12]} and is no longer: a name leaves the "
+        "vocabulary only through retired: (with a reason) or by moving to its provider's "
+        "product block"
+        for k in sorted(gone)
+    ]
     return problems
 
 
@@ -586,6 +715,9 @@ def write_baseline(path: Path, counts: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # a path that is not UTF-8 prints, never crashes
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.reconfigure(errors="backslashreplace")
     try:
         return _main(argv)
     except LintError as exc:
@@ -647,6 +779,8 @@ def _main(argv: list[str] | None) -> int:
         print(f"product_name_lint: baseline updated ({before} -> {after} occurrence(s))")
         return 0
     rev = args.base
+    if rev is not None and not rev.strip():
+        raise LintError("--base needs a commit (an empty value would skip the check)")
     if args.ci_base:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from schema_check import ci_base

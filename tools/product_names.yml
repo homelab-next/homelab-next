@@ -5,6 +5,8 @@
 # products: products the platform names that have no provider module yet. Each one moves out of
 # this list when its provider module ships (the module's product block then names it). A name
 # here must be unambiguous: a common word (vault, cortex, shuffle) would match ordinary text.
+# retired: names deliberately no longer linted ({name, reason}); without an entry here, CI refuses
+# a change that stops linting a name the base commit linted (a dropped alias, product or module).
 # allow: reviewed path globs where a product name belongs, each with its reason. Provider module
 # directories, site configuration (examples/modules/sites, examples/private-overlay, lab/) and
 # Markdown prose are always allowed; everything else that names a product today is counted in

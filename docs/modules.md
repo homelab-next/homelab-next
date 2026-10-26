@@ -973,31 +973,39 @@ Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints
   Markdown prose (ADRs and the changelog included); and the reviewed globs of
   `tools/product_names.yml` `allow:`, each with a reason (generated catalogues and other gates'
   path lists, whose paths are counted where they live).
-- **What is linted**: the files `git ls-files` lists (tracked, plus untracked but not ignored; a
-  directory walk outside a checkout). Python string and bytes literals with their escapes decoded,
-  f-string parts, and identifiers; every key and string value of YAML and JSON (so schema `enum`,
-  `default` and `const`), except the string value of a prose key (`description`, `title`,
-  `$comment`, `summary`, `reason`, `why`, `purpose`, `help`); the lines of every other text file,
-  whatever its suffix (`Dockerfile`, `Makefile`, `.env`, `.html`, `.sql` included) or encoding
-  (UTF-8, UTF-16 with a mark, otherwise Latin-1); and every file and directory name and symbolic
-  link target. A binary file is skipped; a text file over 20 MB is an error.
+- **What is linted**: the files `git ls-files` lists under the root (tracked, plus untracked but
+  not ignored; a directory walk outside a git work tree). Python string and bytes constants as
+  Python reads them (escapes decoded, implicit concatenation joined, f-string parts) and
+  identifiers; every key and string value of YAML (sets, ordered maps and binaries included) and
+  JSON, except the string value of a prose key (`description`, `title`, `$comment`, `summary`,
+  `reason`, `why`, `purpose`, `help`); the lines of every other text file, whatever its suffix
+  (`Dockerfile`, `Makefile`, `.env`, `.html`, `.sql` included) or encoding (UTF-8; UTF-16 or
+  UTF-32 by BOM or byte pattern; otherwise Latin-1); every file, directory and submodule name; and
+  a symbolic link's target text and, for a link into the tree, the target's content under the
+  link's path. A binary (a NUL byte in a suffix not known as text) is skipped whatever its size; a
+  text file over 20 MB is an error.
 - **Skipped**: comments (Python, and `#` or `//` lines in the formats that use them), docstrings
-  (by exact position, so code on the same line is still read) and prose.
-- **Matching**: one pass of one pattern per file, after a cheap substring check that skips files
-  that cannot match (about 4 seconds over this tree). Case-insensitive after NFKC with invisible
-  format characters removed; `-`, `_`, `.`, a space or nothing between a name's parts; bounded by
-  a non-alphanumeric or a camel-case or letter/digit seam, so `NorthwindObjectsClient` and
-  `getNorthwindObjects` count and a longer word containing the name does not (`OPENBAOADDR`, all
-  capitals glued, is a known miss). It finds ordinary spellings, not deliberate obfuscation
-  (`"open" + "bao"`, an encoded string): that is what review of a change is for.
+  (as nodes, so code on the same line is still read) and prose.
+- **Matching**: one pass of one pattern per file (about 5 seconds over this tree). A file is parsed
+  only when its letters and digits contain some name's, or it holds an escape or a line
+  continuation, so the prefilter never skips a file a parse would match in. Case-insensitive after
+  compatibility normalisation with combining marks and invisible format characters removed; `-`,
+  `_`, `.`, a space or nothing between a name's parts; bounded by a non-alphanumeric or a
+  camel-case, upper-case-run or letter/digit seam, so `NorthwindObjectsClient`,
+  `NORTHWINDOBJECTSClient` and `getNorthwindObjects` count and a longer word containing the name
+  does not (`OPENBAOADDR`, all capitals glued, is a known miss). It finds ordinary spellings, not
+  deliberate obfuscation (`"open" + "bao"`, an encoded string): that is what review of a change is
+  for.
 - **Baseline**: `tools/product_names.baseline.json` holds today's counts per path and product
   (the core still names its reference products in about 530 paths). A count above it fails, and so
   does an entry above what is there. `make product-names-baseline` (`--update`) rewrites it to what
-  is there and is refused when any product's total would rise, so a moved file keeps its debt and
-  debt never grows. In CI `--ci-base` also compares the committed baseline and vocabulary with the
-  base commit's (the same base rule as `tools/schema_check.py --ci-base`): a product whose total
-  rose, or a product dropped from `products:` without its provider module, fails, so neither file
-  can be loosened by hand. Moving product code into a provider module is how it shrinks.
+  is there and is refused when any product's total would rise. In CI `--ci-base` also compares the
+  committed baseline and vocabulary with the base commit's (the same base rule as
+  `tools/schema_check.py --ci-base`): no path's count may rise above its count there (a file git
+  sees as renamed or copied keeps its old path's counts, so a new file never takes on debt freed
+  elsewhere), and no spelling linted there (a product, an alias, a provider's display name, a
+  model id) may stop being linted unless `tools/product_names.yml` `retired:` says why. Neither
+  file can be loosened by hand. Moving product code into a provider module is how it shrinks.
 - **Exit**: 0 clean, 1 violations, 2 a bad input, 100 the lint itself failed (X-11 reports that
   as "could not measure", not as a failure).
 
