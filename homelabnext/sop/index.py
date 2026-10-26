@@ -1,19 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx docs index generate|check [FILE]``: the descriptions in ``docs/README.md`` come from the
-linked pages' front-matter ``summary:`` (ADR-0032), so the index cannot drift from the pages.
+"""``hnx docs index generate|check [FILE...]``: the descriptions in a docs index (``docs/README.md``,
+and the "One line" column of ``docs/adr/README.md``) come from the linked pages' front-matter
+``summary:`` (ADR-0032), so an index cannot drift from its pages.
 
 The sections, headings, order, grouping and links of the index are authored.  The description
 after a link is a generated span, the same ``hnx:gen`` comment family the system pages use,
 written on one line::
 
     - [MCP server](mcp.md) ([[mcp]]): <!-- hnx:gen:summary:mcp.md -->the summary<!-- /hnx:gen -->
+    | [0001](0001-slug.md) | slug | <!-- hnx:gen:summary:0001-slug.md -->the summary<!-- /hnx:gen --> |
 
 ``generate`` rewrites only the text between each marker pair, from the target page's summary
 (path relative to the index file's directory); everything outside a span is left byte for byte.
 ``check`` exits 1 when a span is stale or its target is missing or has no usable summary, when any
 ``hnx:gen`` marker is malformed or unmatched (no space before ``-->``, an open marker with no
-close on its line, a stray close), when a list entry that starts ``- [`` and links a page has no
-span or a span for a different page, and when a top-level page of the directory is not listed.
+close on its line, a stray close), when an entry -- a line that starts ``- [``, or a table row that
+starts ``|`` with a link alone in its first cell -- names a page and has not exactly one span, for
+that page, when a summary that would land in a table row holds a ``|`` (it would split the row:
+``generate`` then writes nothing), when a summary holds ``<`` or ``>`` (HTML in an index), and
+when a top-level page of the directory is not listed.  A row indented, without its leading ``|``
+or with its link in a later cell is not an entry.
 Text after a closing marker (a status note such as "proposed (ADR-0031)") is authored and kept.
 Line endings are preserved and the file is replaced atomically.  Markers render as nothing on
 GitHub and in Obsidian.
@@ -29,6 +35,7 @@ from homelabnext.registers.summaries import atomic_write_text, read_text_exact
 __all__ = ["SPAN", "check", "generate", "refresh"]
 
 _LIST_LINK = re.compile(r"- \[[^\]]*\]\((?P<target>[^)\s#]+\.md)(?:#[^)\s]*)?\)")
+_ROW_LINK = re.compile(r"\| *\[[^\]]*\]\((?P<target>[^)\s#]+\.md)(?:#[^)\s]*)?\) *\|")
 _ANY_MARKER = re.compile(r"hnx:gen")
 
 SPAN = re.compile(
@@ -52,8 +59,8 @@ def _summary(base: Path, rel: str) -> tuple[str | None, str | None]:
     why = check_summary(value)
     if why:
         return None, f"{rel}: {why}"
-    if "<!--" in value or "-->" in value:
-        return None, f"{rel}: the summary holds an HTML comment marker"
+    if "<" in value or ">" in value:
+        return None, f"{rel}: the summary holds `<` or `>` (HTML has no place in an index)"
     return value, None
 
 
@@ -62,8 +69,10 @@ def refresh(text: str, base: Path) -> tuple[str, list[str], list[str]]:
     stale: list[str] = []
     problems: list[str] = []
 
-    def one(m: re.Match[str]) -> str:
+    def one(m: re.Match[str], in_row: bool) -> str:
         summary, problem = _summary(base, m["path"])
+        if not problem and in_row and "|" in summary:
+            problem = f"{m['path']}: the summary holds `|`, which would split its table row"
         if problem:
             problems.append(problem)
             return m[0]
@@ -71,7 +80,11 @@ def refresh(text: str, base: Path) -> tuple[str, list[str], list[str]]:
             stale.append(m["path"])
         return f"{m['open']}{summary}{m['close']}"
 
-    return SPAN.sub(one, text), stale, problems
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        in_row = bool(_ROW_LINK.match(line))
+        lines[i] = SPAN.sub(lambda m, r=in_row: one(m, r), line)
+    return "\n".join(lines), stale, problems
 
 
 def generate(index: Path) -> tuple[bool, list[str]]:
@@ -98,9 +111,16 @@ def _marker_problems(text: str, index: Path) -> list[str]:
                 f"{index.name}:{n}: malformed or unmatched hnx:gen marker (expected "
                 "`<!-- hnx:gen:summary:PATH -->text<!-- /hnx:gen -->` on one line)"
             )
-        if m := _LIST_LINK.match(line):
+        row = _ROW_LINK.match(line)
+        if row and any("|" in s["body"] for s in spans):
+            out.append(
+                f"{index.name}:{n}: a summary in a table row holds `|`, which splits the row"
+            )
+        if m := _LIST_LINK.match(line) or row:
             if not spans:
                 out.append(f"{index.name}:{n}: entry links {m['target']} but has no summary span")
+            elif len(spans) > 1:
+                out.append(f"{index.name}:{n}: entry has {len(spans)} summary spans, not one")
             elif spans[0]["path"] != m["target"]:
                 out.append(
                     f"{index.name}:{n}: entry links {m['target']} but its span is for "
