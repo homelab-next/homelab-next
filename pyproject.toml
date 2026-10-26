@@ -130,7 +130,12 @@ suite_budgets = [
   # per-file stats became one module call; 1200 since main's own CI measured 1085s and 1096s
   # (2026-10-24/25), over 1080 with no test changed
   "tests/roles = 1200",
-  "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
+  "tools/tests = 240",
+  # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
+  # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a
+  # test of its module, and the merge sums every shard's time: 34.2 s in four shards (2026-10-25),
+  # 61.0 s in six (2026-10-26, over the 60 s default); 90 is 1.5x that
+  "tests/golden = 90",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
@@ -140,13 +145,15 @@ suite_budgets = [
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
   # every suite against its fake, the lab adapters over their stand-ins and records' interleaving
-  # check (both wait in real time), and the codemode suites' real programs. Until 2026-10-26 this
+  # check (both wait in real time), the codemode suites' real programs, and the CLI report over
+  # every suite and mutant. Until 2026-10-26 this
   # suite also held the mutant sweeps and was raised from 60 to 150 in five steps as they grew;
   # without them it measured 84.1s on a local 4-core box (2026-10-26), where it took 136s with
   # them, so 110 leaves it the headroom it had and the sweeps no longer push it
   "tests/conform = 110",
   # the sweeps: each registered mutant through its whole suite (test_conform_mutants.py, the
-  # protocol mutants) and the whole report and X-10 end to end over every suite. They grow with
+  # protocol mutants) and X-10 end to end over every suite (the CLI report tests, one of which
+  # also runs every suite and mutant once, stay in tests/conform). They grow with
   # every check and mutant, so this budget is the one to raise as they do: 50.0s on the same box
   # (2026-10-26), 75 is 1.5x that
   "tests/conform_sweeps = 75",

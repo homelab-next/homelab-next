@@ -620,9 +620,9 @@ settled:
   suite.) The forking fake, which is not a boundary, is listed as failing the CM-14 probes it
   cannot meet.
 
-The mutant sweeps (each mutant a whole-suite run), the whole report and X-10 end to end are
-their own suite, `tests/conform_sweeps/`, with their own budget: `tests/conform` had been raised
-from 60 s to 150 s as they grew, and is now held at 110 s without them.
+The mutant sweeps (each mutant a whole-suite run) and X-10 end to end are their own suite,
+`tests/conform_sweeps/`, with their own budget: `tests/conform` had been raised from 60 s to
+150 s as they grew. It keeps the CLI report tests, one of which runs every suite and mutant once.
 
 ## Later phases
 
