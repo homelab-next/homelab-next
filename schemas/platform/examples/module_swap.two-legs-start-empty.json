@@ -1,0 +1,52 @@
+{
+  "swap_id": "dns-two-legs",
+  "from_module": "example-platform",
+  "to_module": "example-platform-next",
+  "slots": [
+    {
+      "slot": "dns",
+      "instance": "primary"
+    },
+    {
+      "slot": "dns",
+      "instance": "secondary"
+    }
+  ],
+  "route": {
+    "endpoint": {
+      "host": "dns-core",
+      "port": 53
+    }
+  },
+  "legs": [
+    {
+      "instance": "secondary",
+      "order": 1
+    },
+    {
+      "instance": "primary",
+      "order": 2
+    }
+  ],
+  "dependants": {
+    "report": [
+      {
+        "module": "core-staff",
+        "kind": "core",
+        "relation": "prefers",
+        "slot": "dns",
+        "instance": "primary",
+        "checks": {
+          "features": "holds",
+          "formats": "not-asked"
+        },
+        "verdict": "holds"
+      }
+    ],
+    "blocked": []
+  },
+  "start_empty": {
+    "reason": "the resolver cache is rebuilt from the zone files in minutes",
+    "decided_by": "platform-team"
+  }
+}

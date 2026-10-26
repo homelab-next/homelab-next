@@ -14,7 +14,13 @@ import yaml
 
 from homelabnext.agent import grant_problems
 from homelabnext.agent.access import level_of
-from homelabnext.agent.readers import ToolClasses, default_classes, lint_paths, reader_problems
+from homelabnext.agent.readers import (
+    DEFAULT_CLASSES,
+    ToolClasses,
+    default_classes,
+    lint_paths,
+    reader_problems,
+)
 from homelabnext.mcp import servers
 from homelabnext.registry.model import load
 from homelabnext.reviews import load_policy
@@ -32,9 +38,9 @@ OLD_TABLE = {
     "docker": ["exec"], "kubernetes": ["exec"], "ansible": ["exec"],
     "filesystem": ["read", "file-write"], "git": ["read", "file-write"],
     "github": ["egress", "file-write"], "gitlab": ["egress", "file-write"], "fetch": ["egress"],
-    "http": ["egress"], "web": ["egress"], "web-search": ["egress"], "browser": ["egress"],
-    "playwright": ["egress"], "puppeteer": ["egress"], "email": ["egress"], "smtp": ["egress"],
-    "slack": ["egress"], "ntfy": ["egress"], "vault": ["credential"],
+    "http": ["egress", "send"], "web": ["egress"], "web-search": ["egress"], "browser": ["egress"],
+    "playwright": ["egress"], "puppeteer": ["egress"], "email": ["egress", "send"], "smtp": ["egress", "send"],
+    "slack": ["egress", "send"], "ntfy": ["egress", "send"], "vault": ["credential"],
 }  # fmt: skip
 
 
@@ -51,7 +57,8 @@ def test_the_repository_catalog_passes_every_rule():
 def test_the_derived_table_keeps_every_level_and_reader_verdict():
     """Behaviour unchanged: for every name the hand-written table classified, the level and the
     classes a reader may not hold are what they were (hnx-broker gained ``read`` for its
-    read-only tools, which changes neither)."""
+    read-only tools, which changes neither; the senders gained ``send``, ADR-0030, which a reader
+    could not hold as egress either)."""
     table = default_classes()
     assert table.catalog is not None
     for name, old in OLD_TABLE.items():
@@ -200,11 +207,18 @@ def test_duplicate_ids_are_refused(tmp_catalog):
 # ---------------------------------------------------------------------------------- grants
 def test_grants_must_name_active_catalog_servers():
     table = default_classes()
-    assert grant_problems({"mcp": ["lake", "shell"]}, table) == []
+    assert grant_problems({"mcp": ["lake", "hnx-broker"]}, table) == []
+    assert "is a draft" in grant_problems({"mcp": ["shell"]}, table)[0]  # unreviewed (ADR-0030)
     assert "not in the MCP catalog" in grant_problems({"mcp": ["nothing"]}, table)[0]
     assert "is retired" in grant_problems({"mcp": ["puppeteer"]}, table)[0]
     assert "is a draft" in grant_problems({"mcp": ["web-search"]}, table)[0]
-    assert grant_problems({"mcp": ["bash"]}, table) == []  # deprecated: still grantable
+    # bash, exec and terminal were retired by ADR-0030 (agents run commands through the broker)
+    assert "is retired" in grant_problems({"mcp": ["bash"]}, table)[0]
+    meta = {**table.catalog, "ntfy": {**table.catalog["ntfy"], "status": "deprecated"}}
+    doc = yaml.safe_load(DEFAULT_CLASSES.read_text())
+    doc["mcp"] = {k: list(v) for k, v in table.table["mcp"].items()}
+    dep = ToolClasses(doc, catalog=meta)
+    assert grant_problems({"mcp": ["ntfy"]}, dep) == []  # deprecated: still grantable
 
 
 def test_local_only_data_never_reaches_a_cloud_profile():
@@ -333,3 +347,267 @@ def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
     out = capsys.readouterr()
     assert "capabilities names cap:telepathy" in out.out
     assert "note: registry: none beside the catalog" in out.err
+
+
+# ---------------------------------------------------------------- acts_via (ADR-0030)
+def test_an_acting_server_says_how_it_acts(tmp_catalog):
+    """R3.3: an active or deprecated server with an acting tool (exec, file-write, credential)
+    declares acts_via; a draft or retired one is not granted, so it need not."""
+    cat = _edit(tmp_catalog, "shell", lambda r: [r.pop("acts_via"), r.pop("direct_reason"),
+                                                 r.update(status="active")])  # fmt: skip
+    probs = servers.check(cat, registry=REGISTRY)
+    assert any("tool(s) run_command act" in p and "does not say how" in p for p in probs)
+    cat = _edit(tmp_catalog, "shell", lambda r: r.update(status="deprecated", reason="r",
+                                                         replaced_by="hnx-broker"))  # fmt: skip
+    assert any("does not say how" in p for p in servers.check(cat, registry=REGISTRY))
+    cat = _edit(tmp_catalog, "shell", lambda r: r.update(status="retired"))
+    assert not any("does not say how" in p for p in servers.check(cat, registry=REGISTRY))
+    # a server that does not act needs no acts_via
+    assert "acts_via" not in yaml.safe_load((CATALOG / "lake.yml").read_text())
+
+
+def test_only_a_server_that_acts_through_the_broker_promises_an_approval(tmp_catalog):
+    """R3.2: only the broker grants an approval; a client's prompt is not one."""
+    cat = _edit(tmp_catalog, "ssh", lambda r: [r["tools"][0].update(approval=True),
+                                               r.update(status="active")])  # fmt: skip
+    got = [p for p in servers.check(cat, registry=REGISTRY) if "approval: true" in p]
+    assert len(got) == 1 and "ssh_exec" in got[0] and "acts_via: broker" in got[0]
+    # the broker's own tools may need one
+    broker = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
+    assert broker["acts_via"] == "broker"
+    assert any(t["approval"] for t in broker["tools"] if "exec" in t["classes"])
+
+
+def test_the_schema_says_only_the_broker_grants_an_approval():
+    import json
+
+    schema = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
+    text = schema["$defs"]["tool"]["properties"]["approval"]["description"]
+    assert "the client" not in text and "Only the broker grants one" in text
+    assert schema["properties"]["acts_via"]["enum"] == ["broker", "direct"]
+
+
+def test_every_shipped_acting_server_is_the_broker_or_an_unreviewed_direct_draft():
+    """The catalog decisions of ADR-0030: the broker's MCP front acts via the broker; every other
+    server with an acting tool acts directly, says why, and ships as an unreviewed draft: no
+    example carries a human approve for it (an agent can write a review line; the human control
+    is review of the catalog and the ceiling policy, CODEOWNERS), so no profile can hold it."""
+    from homelabnext.agent.readers import table_broker_only
+
+    cat = servers.load(CATALOG)
+    only = set(table_broker_only())
+    acting = {
+        sid: rec.get("acts_via")
+        for sid, rec in cat
+        if rec["status"] != "retired" and any(set(t["classes"]) & only for t in rec["tools"])
+    }
+    assert acting == {
+        "hnx-broker": "broker", "ssh": "direct", "shell": "direct", "ansible": "direct",
+        "kubernetes": "direct", "vault": "direct", "filesystem": "direct", "git": "direct",
+        "github": "direct", "gitlab": "direct", "slack": "direct", "email": "direct",
+        "smtp": "direct", "ntfy": "direct", "http": "direct",
+    }  # fmt: skip
+    for sid, via in acting.items():
+        rec = cat.get(sid)
+        if via == "direct":
+            assert rec["direct_reason"] and rec["status"] == "draft", sid
+            assert not rec.get("reviews"), sid
+
+
+def test_job_submission_and_shell_commands_are_the_brokers():
+    """ADR-0030: the orchestrator's tool server only reads its queue (a job is submitted through
+    the broker action agent.job.submit, docs/stackstorm.md), and the duplicate shell servers are
+    retired, pointing at the broker's MCP front."""
+    import json
+
+    cat = servers.load(CATALOG)
+    assert [t["name"] for t in cat.get("agent-runtime")["tools"]] == ["queue_summary"]
+    manifest = json.loads((ROOT / "workflows" / "broker.manifest.json").read_text())
+    assert "agent.job.submit" in {a["action"] for a in manifest["actions"]}
+    for sid in ("bash", "exec", "terminal"):
+        assert cat.status(sid) == "retired", sid
+        assert cat.get(sid)["replaced_by"] == "hnx-broker", sid
+
+
+# ---------------------------------------------------------------- only the broker's front is broker
+def test_the_broker_records_tools_are_the_brokers_real_tools():
+    """B2: hnx-broker.yml lists exactly what homelabnext/broker/mcp_tools.py registers."""
+    rec = yaml.safe_load((CATALOG / "hnx-broker.yml").read_text())
+    assert {t["name"] for t in rec["tools"]} == set(servers.broker_tools())
+    assert servers.broker_front_problems(rec) == []
+
+
+def _restamp(r: dict) -> None:
+    """The author re-stamps every review to the new content (what an agent author can do)."""
+    digest = servers.record_digest(r)[: len("sha256:") + 12]
+    for x in r.get("reviews") or ():
+        x["digest"] = digest
+
+
+@pytest.mark.parametrize(
+    ("sid", "edit", "needle"),
+    [
+        # P2: an operator relabels ssh to get it back, re-stamping the reviews
+        ("ssh", lambda r: [r.pop("direct_reason"), r.update(acts_via="broker")],
+         "only the broker's own MCP front"),
+        # P4: the real broker record grows a raw shell
+        ("hnx-broker", lambda r: r["tools"].append(
+            {"name": "raw_shell", "classes": ["exec"], "approval": False}),
+         "lists tool(s) raw_shell the broker's MCP front does not register"),
+        # the broker record under another launch
+        ("hnx-broker", lambda r: r["transport"].update(entry="mcp-serve"),
+         "only the broker's own MCP front"),
+    ],
+)  # fmt: skip
+def test_only_the_brokers_own_front_may_say_acts_via_broker(tmp_catalog, sid, edit, needle):
+    def change(r):
+        edit(r)
+        _restamp(r)
+
+    cat = _edit(tmp_catalog, sid, change)
+    assert any(needle in p for p in _check(cat)), _check(cat)
+
+
+def test_a_new_record_claiming_the_broker_is_refused(tmp_catalog):
+    """P5: a third-party record (the SSH package under another id) claims acts_via: broker."""
+    rec = yaml.safe_load((CATALOG / "ssh.yml").read_text())
+    rec.pop("direct_reason")
+    rec.update(id="k8s-ops", acts_via="broker", reviews=[])
+    (tmp_catalog / "k8s-ops.yml").write_text(yaml.safe_dump(rec))
+    problems = servers.check(servers.load(tmp_catalog), registry=REGISTRY)
+    assert any("k8s-ops.yml: acts_via: broker, but only the broker's own" in p for p in problems)
+
+
+def test_a_send_is_an_effect_that_goes_through_the_broker():
+    """S2: posting to chat, sending mail, publishing a notification or an HTTP request change
+    something elsewhere: class send, broker-only (the broker's notify actions), and a server that
+    sends directly promises no approval. Reading the web (fetch, browse) stays egress."""
+    from homelabnext.agent.readers import table_broker_only
+
+    assert "send" in table_broker_only()
+    for sid, tool in (("slack", "post_message"), ("email", "send_email"), ("smtp", "send_email"),
+                      ("ntfy", "publish"), ("http", "request")):  # fmt: skip
+        rec = yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
+        (t,) = [t for t in rec["tools"] if t["name"] == tool]
+        assert "send" in t["classes"] and t["approval"] is False, sid
+    for sid in ("fetch", "web", "browser", "playwright"):
+        rec = yaml.safe_load((CATALOG / f"{sid}.yml").read_text())
+        assert all(t["classes"] == ["egress"] for t in rec["tools"]), sid
+
+
+# ---------------------------------------------------------------- classes cannot be declared down
+@pytest.mark.parametrize("cls", ["read", "record-write"])
+def test_known_acting_software_cannot_declare_its_tools_down(tmp_catalog, cls):
+    """S1 (P3, P3b): ssh_exec classed read or record-write, acts_via dropped and re-stamped, passed
+    every gate; a server of known acting software (by its id, package, image or bins) has a tool
+    in that class, and a tool whose name acts carries an acting class."""
+
+    def down(r):
+        r["tools"][0]["classes"] = [cls]
+        r.pop("acts_via")
+        r.pop("direct_reason")
+        _restamp(r)
+
+    problems = _check(_edit(tmp_catalog, "ssh", down))
+    assert any("ssh.yml: is ssh software, so a tool is classed exec" in p for p in problems)
+    assert any("ssh.yml: tool ssh_exec acts by its name" in p for p in problems)
+    # the same package under an innocent id is still ssh software (its package and bins)
+    rec = yaml.safe_load((CATALOG / "ssh.yml").read_text())
+    down(rec)
+    rec["id"] = "helper"
+    rec["tools"][0]["name"] = "do_it"
+    (tmp_catalog / "helper.yml").write_text(yaml.safe_dump(rec))
+    problems = servers.check(servers.load(tmp_catalog), registry=REGISTRY)
+    assert any("helper.yml: is ssh software" in p for p in problems), problems
+
+
+def _floor_rec(rid: str, tools, package: str | None = None, **extra) -> dict:
+    """A plausible operator record of a third-party server (fictional package)."""
+    rec = yaml.safe_load((CATALOG / "fetch.yml").read_text())
+    package = package or f"@example/mcp-{rid}"
+    rec["origin"].update(package=package, bins=[package.rsplit("/", 1)[-1]])
+    rec.update(id=rid, tools=[{"name": n, "classes": c, "approval": False} for n, c in tools])
+    rec.update(extra)
+    return rec
+
+
+@pytest.mark.parametrize(
+    ("rec", "needle"),
+    [
+        # VERIFY1: a camelCase acting name (a hosted tracker's createIssue) classed egress
+        (
+            _floor_rec("tickets", [("createIssue", ["egress"]), ("searchIssues", ["egress"])]),
+            "tool createIssue writes",
+        ),
+        # browser interaction acts on the page it is on (a form submitted, a button pressed)
+        (
+            _floor_rec("pw", [("browser_navigate", ["egress"]), ("browser_click", ["egress"])]),
+            "tool browser_click acts by its name",
+        ),
+        (_floor_rec("ci", [("trigger_pipeline", ["egress"])]), "tool trigger_pipeline acts"),
+        (_floor_rec("idp", [("disable_user", ["read"])]), "tool disable_user acts"),
+        (_floor_rec("forge", [("get_or_create_issue", ["egress"])]), "get_or_create_issue writes"),
+        # record-write needs a capability the class table classes record-write, not any label
+        (
+            _floor_rec("homeauto", [("set_state", ["record-write"])], capabilities=["cap:metrics"]),
+            "tool set_state writes",
+        ),
+        (
+            _floor_rec(
+                "dashops", [("update_dashboard", ["record-write"])], capabilities=["cap:dashboards"]
+            ),
+            "tool update_dashboard writes",
+        ),
+        (
+            _floor_rec(
+                "sqlhost", [("write_query", ["record-write"])], capabilities=["cap:records-db"]
+            ),
+            "tool write_query writes",
+        ),
+    ],
+)
+def test_a_plausible_record_cannot_declare_an_effect_down(rec, needle):
+    assert any(needle in p for p in servers.floor_problems(rec, f"{rec['id']}.yml")), rec
+
+
+@pytest.mark.parametrize(
+    "rec",
+    [
+        # VERIFY1 false positives: the author's id is a label, not what runs
+        _floor_rec(
+            "obsidian-vault",
+            [("search_notes", ["read"]), ("read_note", ["read"])],
+            package="@example/mcp-obsidian",
+        ),
+        _floor_rec("ssh-audit", [("audit_host", ["read"])], package="@example/mcp-host-audit"),
+        _floor_rec("mail-search", [("search_archive", ["read"])], package="@example/mcp-archive"),
+        # a name led by a read verb reads, whatever noun follows
+        _floor_rec(
+            "forge-read",
+            [
+                ("get_commit", ["read"]),
+                ("get_merge_request", ["read"]),
+                ("get_workflow_run", ["read"]),
+                ("list_open_alerts", ["read"]),
+                ("get_post", ["read"]),
+                ("get_last_update", ["read"]),
+            ],
+        ),
+        # record-write on a record fronting a record-write capability is the platform API's
+        _floor_rec("tracker", [("add_note", ["record-write"])], capabilities=["cap:cases"]),
+    ],
+)
+def test_a_read_only_record_is_not_floored(rec):
+    assert servers.floor_problems(rec, f"{rec['id']}.yml") == []
+
+
+def test_a_writing_tool_is_file_write_unless_a_platform_api_validates_it(tmp_catalog):
+    """S1: record-write means "through a platform API that validates it"; a record that fronts no
+    platform capability writes files. The shipped notes server writes through the records API."""
+    notes = yaml.safe_load((CATALOG / "notes.yml").read_text())
+    assert notes["capabilities"] == ["cap:records"] and notes["egress"] == ["svc:records-db"]
+    cat = _edit(tmp_catalog, "notes", lambda r: [r.pop("capabilities"), _restamp(r)])
+    assert any("notes.yml: tool write_note writes" in p for p in _check(cat))
+    cat = _edit(tmp_catalog, "fetch", lambda r: r["tools"].append(
+        {"name": "upload_page", "classes": ["egress"], "approval": False}))  # fmt: skip
+    assert any("fetch.yml: tool upload_page writes" in p for p in _check(cat))

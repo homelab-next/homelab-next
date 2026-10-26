@@ -4,7 +4,7 @@
 id: vault
 description: Reads secrets from the secret store.
 owner: security-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: pypi
@@ -22,9 +22,7 @@ egress: ['svc:secrets']
 data_tier: local-only
 capabilities: ['cap:secrets']
 tools:
-- {name: read_secret, classes: [credential], approval: true}
+- {name: read_secret, classes: [credential], approval: false}
+acts_via: direct
+direct_reason: 'Reads secrets with its own token; no shipped profile holds it: a credential reaches an agent only through the broker (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:089ec9ec3971'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:089ec9ec3971'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:089ec9ec3971'}

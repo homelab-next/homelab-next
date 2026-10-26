@@ -1,6 +1,8 @@
 ---
 title: dns
 type: system
+summary: dns provides the dns capability (technitium), owned by platform-team.
+summary_generated: true
 service: dns
 capability: dns
 impl: technitium
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.dns`
+- Registry row (Veritas, ADR-0028): `services.dns`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

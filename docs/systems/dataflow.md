@@ -1,6 +1,8 @@
 ---
 title: dataflow
 type: system
+summary: dataflow provides the dataflow capability (nifi), owned by data-team.
+summary_generated: true
 service: dataflow
 capability: dataflow
 impl: nifi
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.dataflow`
+- Registry row (Veritas, ADR-0028): `services.dataflow`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

@@ -1,0 +1,14 @@
+{
+  "stage": 2,
+  "contract": null,
+  "stateful": false,
+  "formats": {
+    "in": [
+      "ocsf"
+    ],
+    "out": [
+      "ocsf"
+    ]
+  },
+  "pass_through": true
+}

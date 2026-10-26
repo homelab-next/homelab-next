@@ -2,6 +2,7 @@
   "uid": "01a15e4e-0000-7000-8000-000000000003",
   "type": "runbook",
   "title": "Deploy a web service",
+  "summary": "Deploy a web service and confirm it from the canary path.",
   "systems": [
     "web-proxy"
   ],

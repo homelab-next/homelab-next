@@ -1,0 +1,62 @@
+{
+  "action": "dhcp.leases",
+  "audit": true,
+  "description": "List the leases one DHCP server holds (read only, stand-in).",
+  "handler": "handlers/dhcp-leases.sh",
+  "handler_digest": "sha256:6c98ad91dd027c1a827f6ed58f436be91cd77e07fa175a125910d83c7fd8b5d3",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "requires_approval": false,
+  "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "leases": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "expires": {
+              "description": "when the lease ends, UTC",
+              "type": "string"
+            },
+            "hostname": {
+              "type": "string"
+            },
+            "mac": {
+              "description": "the network MAC, lower case",
+              "pattern": "^[0-9a-f]{2}(:[0-9a-f]{2}){5}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "address",
+            "mac",
+            "hostname",
+            "expires"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "server": {
+        "description": "the target DHCP server",
+        "type": "string"
+      }
+    },
+    "required": [
+      "server",
+      "leases"
+    ],
+    "type": "object"
+  },
+  "target": "required",
+  "tier": "read",
+  "timeout_s": 10
+}

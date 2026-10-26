@@ -528,13 +528,27 @@ def orch_catalog(
     cat: servers.Catalog, granted_ids: Iterable[str] = (), ctx: servers.LaunchContext | None = None
 ) -> tuple[str, list[str]]:
     """``configs/mcp_catalog.yaml``: every grantable stdio server as a kind.  A server that
-    cannot be a kind is skipped with a note, or refused when a rendered profile is granted it."""
+    cannot be a kind is skipped with a note, or refused when a rendered profile is granted it.
+    A server that acts other than through the broker (an acting tool, and not ``acts_via:
+    broker``, ADR-0030) is a kind only when a rendered profile is granted it, which the broker
+    rule allows only as a policy's ``direct_mcp`` exception: the orchestrator's controller then
+    refuses any other profile's grant of it, a second barrier behind the profile checks."""
+    from homelabnext.agent.readers import table_broker_only
+
     granted_ids = set(granted_ids)
+    acting = set(table_broker_only())
     kinds: dict[str, Any] = {}
     notes: list[str] = []
     problems: list[str] = []
     for sid, rec in cat:
         if rec.get("status") not in servers.GRANTABLE:
+            continue
+        acts = any(set(t.get("classes") or ()) & acting for t in rec.get("tools") or ())
+        if acts and rec.get("acts_via") != "broker" and sid not in granted_ids:
+            notes.append(
+                f"{sid}: acts other than through the broker and no rendered profile is granted "
+                "it; no kind (agents act only through the broker)"
+            )
             continue
         entry, why = orch_kind(sid, rec, ctx)
         if entry is None or (why and sid not in granted_ids):
@@ -750,8 +764,10 @@ def profile_refusals(
     (``platform/agent_profile``): its schema, the same grant rules, ``mcp`` within
     ``mcp_ceiling``, ``mcp`` and ``capabilities`` within the policy's ceiling, and the reader rule
     whenever the policy marks the id a reader (``reads_untrusted: false`` in the file does not turn
-    it off); it is refused without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Rendering
-    never trusts a profile the compiler would not have produced."""
+    it off); it is refused without a ``policy`` too (its own ``mcp_ceiling`` is whatever edited the file).  Both
+    shapes obey the broker rule (an acting grant only through the broker; a direct server only
+    with the policy's ``direct_mcp``, ADR-0030).  Rendering never trusts a profile the compiler
+    would not have produced."""
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
     from homelabnext.agent.readers import ToolClasses, profile_problems, reader_problems
@@ -777,7 +793,7 @@ def profile_refusals(
     )
     if problems:
         return [f"not a compiled or lean agent profile: {p}" for p in problems]
-    problems = profile_problems(doc, classes)
+    problems = profile_problems(doc, classes, policy)  # the broker rule's direct_mcp too
     over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
     if over:
         problems.append(f"mcp outside mcp_ceiling: {over}")

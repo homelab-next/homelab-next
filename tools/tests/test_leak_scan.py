@@ -173,6 +173,53 @@ def test_denylist_word_boundaries(tmp_path: Path):
     assert run_scan(str(f), env={"HNX_DENYLIST": str(deny)}).returncode == 0
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ssh ops@fabrikam-core",  # a host name built on the term
+        "fabrikam_core.example.test",
+        "see x.fabrikam.example",
+        "fabrikam2 and fabrikam-03",  # a numbered variant
+        "the blue_falcon agent",  # the term's own separator swapped
+        "the bluefalcon agent",
+        "BLUE--FALCON",
+    ],
+)
+def test_denylist_terms_match_their_separator_variants(tmp_path: Path, text: str):
+    deny = tmp_path / "deny.txt"
+    deny.write_text("fabrikam\nblue-falcon\n")
+    f = tmp_path / "x.txt"
+    f.write_text(text + "\n")
+    r = run_scan(str(f), env={"HNX_DENYLIST": str(deny)})
+    assert r.returncode == 1, r.stdout
+    assert "[denylist]" in r.stdout
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the blue falcon agent",  # an ordinary phrase is not the hyphenated name
+        "fabrikam\tteam",  # a single-word term is not joined across whitespace
+        "203.0.113.50 and 203.0.113.5001",  # a numeric term is not extended by digits
+    ],
+)
+def test_denylist_terms_do_not_match_phrases_or_longer_numbers(tmp_path: Path, text: str):
+    deny = tmp_path / "deny.txt"
+    deny.write_text("blue-falcon\nfabrikamteam\n203.0.113.5\n")
+    f = tmp_path / "x.txt"
+    f.write_text(text + "\n")
+    r = run_scan(str(f), env={"HNX_DENYLIST": str(deny)})
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_term_written_with_a_space_matches_the_phrase(tmp_path: Path):
+    deny = tmp_path / "deny.txt"
+    deny.write_text("blue falcon\n")
+    f = tmp_path / "x.txt"
+    f.write_text("the Blue  Falcon agent\n")
+    assert run_scan(str(f), env={"HNX_DENYLIST": str(deny)}).returncode == 1
+
+
 @pytest.mark.parametrize("content", [None, ""])
 def test_bad_denylist_is_exit_2(tmp_path: Path, content):
     f = tmp_path / "x.txt"

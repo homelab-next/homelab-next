@@ -1,0 +1,407 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/module_swap/1.0",
+  "x-draft": "ADR-0027 (proposed): the module-keyed part of swap record 1.2; not frozen, may change before acceptance, when platform/swap_record takes these fields",
+  "title": "Module swap",
+  "description": "What a swap record 1.2 adds to the 1.1 record (ADR-0027, proposed; docs/modules.md, 'Swap record 1.2'): the swap keyed on the outgoing and incoming provider modules and the slot instances they serve instead of a capability and two adapters; the route as an endpoint or as the selection lines that change; the cutover legs across instances; the dependants report that gates the cutover, core modules included; field meaning changes; the migration evidence or a recorded decision to start empty; and the outgoing provider's revoked credentials. The 1.1 record's steps, gates and hash-chained log are unchanged and not repeated here. Semantic rules (the report recomputed from the manifests and the site, the legs, the selection diff) are in homelabnext.modules.swap.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "swap_id",
+    "from_module",
+    "to_module",
+    "slots",
+    "route",
+    "dependants"
+  ],
+  "properties": {
+    "swap_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "from_module": {
+      "$ref": "#/$defs/module_id"
+    },
+    "to_module": {
+      "$ref": "#/$defs/module_id"
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/slot_instance"
+      },
+      "description": "the slot instances that move; one record may move several (cases plus ioc-enrichment)"
+    },
+    "route": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endpoint"
+          ],
+          "properties": {
+            "endpoint": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "host",
+                "port"
+              ],
+              "properties": {
+                "host": {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selection_diff"
+          ],
+          "properties": {
+            "selection_diff": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/selection_change"
+              },
+              "description": "the site selection lines that change: no network route moves (a scheduler cutover, a model-role rebind, a static site, an engine behind an unchanged gateway)"
+            }
+          }
+        }
+      ],
+      "description": "one of an endpoint that moves, or the selection lines that change; an unchanged route is allowed (same shared adapter, same address)"
+    },
+    "legs": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "instance",
+          "order"
+        ],
+        "properties": {
+          "instance": {
+            "$ref": "#/$defs/instance"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          }
+        }
+      },
+      "description": "a cutover in legs across instances (the DNS swap's two legs): every instance of the swap once, orders 1..n"
+    },
+    "dependants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report",
+        "blocked"
+      ],
+      "properties": {
+        "report": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/dependant"
+          },
+          "description": "every selected module that requires or prefers a moving slot instance, core modules included, re-checked against the incoming provider; recomputed and compared, never trusted as written"
+        },
+        "blocked": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/module_id"
+          },
+          "description": "the report's modules whose verdict is blocks: a non-empty list refuses the cutover"
+        }
+      }
+    },
+    "meaning_changes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "before": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "after": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "description": "fields whose meaning changes across the swap (a feed move changed what a rule id meant)"
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "export_manifest_sha256",
+        "import_result",
+        "boundary"
+      ],
+      "properties": {
+        "format": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug",
+          "description": "the slot's neutral format both providers export and import"
+        },
+        "export_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "import_result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "imported",
+            "rejected"
+          ],
+          "properties": {
+            "imported": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rejected": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "boundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "min",
+            "max",
+            "count"
+          ],
+          "properties": {
+            "min": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "max": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "description": "the first and last key and the count across the cut"
+        }
+      },
+      "description": "the migrate step's evidence, between shadow-start and dual-write"
+    },
+    "start_empty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "decided_by"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 500
+        },
+        "decided_by": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._:-]{0,63}$"
+        }
+      },
+      "description": "starting the incoming provider empty, as a recorded decision instead of a migration"
+    },
+    "credentials_revoked": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/secret"
+      },
+      "description": "the outgoing provider's issued credentials, revoked; gates decommission-check"
+    }
+  },
+  "not": {
+    "required": [
+      "migration",
+      "start_empty"
+    ]
+  },
+  "$defs": {
+    "module_id": {
+      "type": "string",
+      "maxLength": 48,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "instance": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "slot": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "description": "a slot name as the site selection keys it (object-store, not cap:object-store)"
+    },
+    "secret": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^secret:[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:/[a-z][a-z0-9_-]*)+$(?!\\n)"
+    },
+    "slot_instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "instance"
+      ],
+      "properties": {
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "instance": {
+          "$ref": "#/$defs/instance"
+        }
+      }
+    },
+    "selection_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "instance",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "instance": {
+          "$ref": "#/$defs/instance"
+        },
+        "from": {
+          "$ref": "#/$defs/module_id"
+        },
+        "to": {
+          "$ref": "#/$defs/module_id"
+        }
+      }
+    },
+    "check": {
+      "enum": [
+        "holds",
+        "fails",
+        "not-asked"
+      ]
+    },
+    "dependant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "module",
+        "kind",
+        "relation",
+        "slot",
+        "instance",
+        "checks",
+        "verdict"
+      ],
+      "properties": {
+        "module": {
+          "$ref": "#/$defs/module_id"
+        },
+        "kind": {
+          "enum": [
+            "core",
+            "feature",
+            "provider"
+          ]
+        },
+        "relation": {
+          "enum": [
+            "requires",
+            "prefers"
+          ]
+        },
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "instance": {
+          "$ref": "#/$defs/instance"
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "features",
+            "formats"
+          ],
+          "properties": {
+            "features": {
+              "$ref": "#/$defs/check"
+            },
+            "formats": {
+              "$ref": "#/$defs/check"
+            }
+          }
+        },
+        "verdict": {
+          "enum": [
+            "holds",
+            "falls-back",
+            "blocks"
+          ],
+          "description": "holds: every check holds; blocks: a requirement fails; falls-back: a preference fails and the module uses its declared fallback"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      }
+    }
+  }
+}

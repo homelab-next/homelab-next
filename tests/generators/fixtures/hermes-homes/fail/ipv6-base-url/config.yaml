@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# fails A-14: the engine by a documentation address (RFC 3849)
+model:
+  default: main-reasoner-a
+  base_url: http://[2001:db8::10]/v1

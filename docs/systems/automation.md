@@ -1,6 +1,8 @@
 ---
 title: automation
 type: system
+summary: automation provides the automation capability (stackstorm), owned by platform-team.
+summary_generated: true
 service: automation
 capability: automation
 impl: stackstorm
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.automation`
+- Registry row (Veritas, ADR-0028): `services.automation`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

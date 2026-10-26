@@ -1,3 +1,7 @@
+---
+summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
+summary_of: outline:sha256:95558752767c387b
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
 
@@ -72,7 +76,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | ids, `(node, vmid)` and ips are unique | |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
-| `capability` is one of the sixteen in `docs/interfaces.md` | |
+| `capability` is one of the eighteen in `docs/interfaces.md` | |
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
@@ -80,6 +84,74 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
+| with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
+
+### Node capacity and pools
+
+`_nodes.yml` may say what each hypervisor holds, and `hnx guests validate` then refuses a guest set
+that does not fit and prints what each node's guests use (`hv-1: 5 guests, cores 20/28, memory
+38/56 GiB, fast 352/900 GB`). Both blocks are optional; a node without them asks nothing.
+
+```yaml
+nodes:
+  hv-1:
+    capacity:
+      threads: 256            # logical CPUs the hypervisor schedules
+      memory_mb: 1048576
+      reserve: {threads: 8, memory_mb: 131072}   # the hypervisor itself and its ZFS ARC
+      cpu_overcommit: 2       # guest vCPUs per remaining thread (1-16; default 1)
+    pools:                    # the names guests' disks use (resources.disks[].pool)
+      fast:  {size_gb: 7000, media: nvme}
+      write: {size_gb: 3500, media: ssd}
+      bulk:  {size_gb: 30000, media: hdd}
+```
+
+Memory is never overcommitted: a guest's `size_mb` is its ceiling (for a container, its hard
+limit), and `balloon_min_mb` is not counted, since ballooning only lends memory back. A physical
+host (`kind: host`) draws nothing from a node. When any node declares capacity or pools, a guest
+placed on a node `_nodes.yml` does not list is refused, so a typo cannot escape the check.
+`media` is informational. (The guest schema's `status` note that generators do not read it still holds; validation does.) Pool sizes are what guests may allocate (after redundancy: a raidz2 of five 10 TB disks
+gives about 30 TB), so thin provisioning and snapshots are left out, deliberately: the check is
+for planning, not for what `zfs list` shows on the day.
+
+### Node mirror
+
+A switch mirror ([network model](network-model.md#mirror-ports-13)) copies what crosses the
+switch, so a network sensor on it never sees two guests of one hypervisor talking over its bridge.
+A node can copy that traffic to a NIC of its own, cabled to the sensor's second capture port:
+
+```yaml
+nodes:
+  hv-1:
+    mirror:
+      to: enp65s0f1             # carries nothing else: no address, not a bridge port
+      bridges: [vmbr0]          # the bridges whose guests are mirrored
+```
+
+`hnx guests render --target node-mirror` writes `mirror/<node>/hnx-mirror.sh` with a systemd
+service and timer. The script puts a `tc` matchall filter on the ingress of every guest port of
+each bridge (`fwpr<vmid>p<n>` with the NIC firewall on, `tap<vmid>i<n>` and `veth<vmid>i<n>`
+without), mirroring to `to`. Each frame a guest sends enters the bridge through one port, so it is
+copied once, whether it goes to another guest or leaves the host; the node's own NICs are not
+mirrored, since what arrives from the switch is the switch mirror's. Guest ports come and go with
+their guests, so the timer re-runs the script every 15 seconds (a guest's first seconds can go
+unmirrored); `hnx-mirror.sh --remove` takes the filters off. A matchall filter cannot be changed
+in place, so a run keeps a filter that already mirrors to `to` and deletes and re-adds any other at
+its priority; a port that fails (a guest stopping mid-run) is reported and the others are still
+mirrored. The script refuses a capture NIC that is missing, a bridge or bond port, or has an IPv4
+address, and a bridge that is not a Linux bridge (an Open vSwitch bridge is not supported), before
+it changes anything; it turns IPv6, ARP and multicast off on the capture NIC so it stays silent.
+The unit runs with only `CAP_NET_ADMIN`.
+
+Know what the sensor then sees: every guest on the listed bridges, in every zone, mgmt included,
+with guest-to-outside traffic on both capture ports (once from the node, once from the switch).
+The copies are untagged, so tell zones apart by subnet. It does **not** see a frame the Proxmox
+firewall drops (with the NIC firewall on, the copy is taken after it, on `fwpr`), nor what the node
+itself sends into the bridge (its own address on it, routed traffic), so a guest's conversation with
+the node is half visible. Frames larger than the capture NIC's MTU are dropped: give it at least the
+bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would flood every guest's
+traffic onto the network. Interface names are checked (Linux names,
+at most 15 characters), and a mirroring node's name must be one a guest can name.
 
 The model does not import a site package. It reads zones through a small protocol:
 
@@ -107,6 +179,7 @@ have a zones file. Tests can also pass a stub.
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
+| `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -454,8 +527,9 @@ proxy, monitoring, firewall matrix) then see the guests.
 
 `hnx guests plan DIR --site SITE --target T --against PREVIOUS_RENDER [--exit-code]` renders
 fresh and prints a unified diff against a directory holding the previous render, with a
-`N to add, N to change, N to remove` summary. With `--exit-code` it exits 2 when something would
-change. Swapping the hypervisor stack is: render a second target from the same files and compare.
+`N to add, N to change, N to remove` summary. With `--exit-code` it exits 3 when something would
+change, as `hnx site plan --exit-code` does (2 is an input that cannot be read). Swapping the
+hypervisor stack is: render a second target from the same files and compare.
 
 ## SERVER (not implemented)
 

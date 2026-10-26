@@ -23,7 +23,7 @@ import sys
 from homelabnext.registry.models import RoleTable, RoleTableError
 
 from . import serving
-from .store import StoreError, bindings_problems, check_disk, load
+from .store import StoreError, StoreUnreadable, bindings_problems, check_disk, load
 
 
 def main(argv: list[str]) -> int:
@@ -43,6 +43,9 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     try:
         store = load(args.store)
+    except StoreUnreadable as exc:
+        print(f"models: {exc}", file=sys.stderr)
+        return 2
     except StoreError as exc:
         print(f"models: {args.store}: {exc}", file=sys.stderr)
         return 1

@@ -1,3 +1,7 @@
+---
+summary: Products live only in provider modules filling slots from a slot registry; optional missions are feature modules.
+summary_of: outline:sha256:e2334f5f35796d84
+---
 # ADR-0027: Build the lab from provider, feature and core modules, each declared by one manifest
 
 - **Status:** proposed
@@ -70,8 +74,12 @@ says what selecting someone else's module grants it.
    round-trip check, and X-07 becomes slot-keyed. A removal never touches another module's data.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
    providers per slot as instances, `none` or `pass-through` where the registry allows, placement,
-   lane-to-orchestration-instance bindings, real configuration values and the grants. Consumers
+   lane-to-orchestration-instance bindings, real configuration values, the grants, and the
+   site's **network scope** (trusted, target and excluded addresses: the one place a selection
+   holds addresses; a module declares the parts it reads and its reader fails closed). Consumers
    resolve a slot with `provider_for(slot, instance)` from the selection, never a product name.
+   The public repository holds the selection schema, fictional profiles in the documentation
+   ranges and the enforcement, never a real scope.
 10. **Supply chain**: a module declares its origin (in-tree, a pinned git commit or a hashed
     archive); the overlay pins a fetched module's tree digest and keeps its reviews keyed by it, and
     manifests join the review policy with a human tier for credentials, control planes, data grants
@@ -114,9 +122,12 @@ loader: nothing reads a manifest at deploy time.
 **Specified, not implemented** (described in [modules](../modules.md#specified-not-implemented-the-follow-ups),
 with no schema, generator or check in any form):
 
-1. capability descriptor 1.1 (the slot registry; `examples/modules/slots.yml` is draft data only);
-2. swap record 1.2 (no schema; `legs`, `selection_diff` and the dependants report are undefined,
-   and no swap has been driven through it);
+1. capability descriptor 1.1 (the slot registry): its fields and rules are now the draft schema
+   `platform/slot` 1.0, against which `examples/modules/slots.yml` is validated; the descriptor
+   itself stays 1.0 until acceptance;
+2. swap record 1.2: its additions (`legs`, `selection_diff`, the dependants report) are now the
+   draft schema `platform/module_swap` 1.0 with its rules, and the documented swap runs through
+   them in a test; the record and the swap kit stay 1.1 until acceptance;
 3. `platform/interface` 1.0 as a record, and gate-interface ownership;
 4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
    remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;

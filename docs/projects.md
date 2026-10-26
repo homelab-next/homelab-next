@@ -1,3 +1,7 @@
+---
+summary: 'Projects as the sixteenth capability: the model and board rules, the Markdown reference, hub page, events, links to strategy records, the OpenProject adapter.'
+summary_of: outline:sha256:d051baa570de47de
+---
 # Projects: project management as a capability
 
 `projects` is the sixteenth capability (ADR-0020): projects, their ordered steps and one-off
@@ -128,7 +132,8 @@ work linked to an objective into a reading for a **MOP** of that objective. Comp
 activity, so a MOE follows the doctrine rule `activity_never_moe` (passed as `doctrine=`, the
 shipped doctrine by default): `error` refuses it, `warn` reads it with a warning, `off` reads it.
 Nothing here ever changes an objective's status: achievement is a reviewed transition in the
-strategy repository.
+strategy repository (for a real lab, the private overlay's `lab/strategy/`: part of Veritas,
+[ADR-0028](adr/0028-veritas-single-source-of-truth.md)).
 
 ## OpenProject
 

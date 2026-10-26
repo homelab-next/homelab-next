@@ -60,6 +60,8 @@ actions:
   - {action: proposal.file, tier: write, handler: builtin/lane, lane: proposals, requires_approval: false}
   - {action: service.status, tier: read, handler: handlers/service-status.sh, requires_approval: false}
   - {action: service.restart, tier: execute, handler: handlers/service-restart.sh, requires_approval: true}
+  # dns.lookup, dhcp.leases and hypervisor.guests (manifest.yml) are stand-ins answering fixed
+  # fictional data, so a production manifest does not carry them
 grants:
   - profile: profile:triage
     actions: [memory.write, finding.write, proposal.file, service.status, service.restart]

@@ -20,7 +20,8 @@ SSH (TCP 22) to the listed zones is the whole default.  These are errors: a dest
 not a zone of the site (``*``, ``any``, ``autogroup:...`` included: there is no wildcard
 destination); a zone listed twice; an exception without a reason, for a zone the deploy does not
 reach, or for port 22 (already allowed); a tag that is a zone tag (``tag:zone-...``, which the
-nodes advertise); no owner; an owner that is a tag.  Tailscale's ``tagOwners`` accepts users,
+nodes advertise); no owner; an owner that is a tag; a control character (a line break) in any
+value.  Tailscale's ``tagOwners`` accepts users,
 ``group:``, ``autogroup:`` and tags, but a tag owner lets every node carrying that tag apply the
 deploy tag to itself (a zone tag owner: any node of that zone becomes the deploy), so the owners
 are people only: a user login (``name@domain``), a ``group:`` or an admin autogroup
@@ -66,7 +67,11 @@ def deploy_problems(doc: Mapping[str, Any]) -> list[str]:
     w = "tailnet.deploy"
     if not isinstance(dep, Mapping):
         return [f"{w}: must be a mapping"]
-    out: list[str] = []
+    from homelabnext.generators.safe import control_char_paths
+
+    # every value is one line: a reason is written into the policy file's // comment header, and
+    # a line break there would end the comment and put raw text into the policy
+    out: list[str] = [f"{w}/{p}: values must be a single line" for p in control_char_paths(dep)]
     known = set(_zone_ids(doc))
     tag = dep.get("tag", DEFAULT_TAG)
     if not isinstance(tag, str) or not TAG_RE.match(tag):

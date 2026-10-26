@@ -11,6 +11,7 @@ A rule is small and declarative::
         budget: 12                  # max nodes this rule includes, 1..50
         max_chars: 4000             # per included node (the pack's section cap), 200..20000
         require_reviews: [agent_check, audit]   # optional, for lessons/runbooks/criteria
+        detail: summary             # optional: full (default) | summary | outline
 
 Seeds are always grants: ``capabilities`` are the profile's granted ``cap:`` ids, ``mcp`` its
 granted MCP servers, ``services`` the registry services that provide a granted capability (found
@@ -21,6 +22,14 @@ is not granted, and a rule that seeds from a grant set the profile does not hold
 (:class:`~homelabnext.agent.errors.IncludeViolation`).  It is called by the compiler, by
 :func:`~homelabnext.agent.compiler.verify_profile` and again when a pack is built, so a profile
 edited after compiling (digest recomputed or not) cannot seed from an ungranted thing either.
+
+``detail`` is how much of each included node the pack carries (ADR-0032's levels): ``full`` (the
+default: the whole record or page, as before), ``summary`` (level 0: id, kind, title, path and the
+summary, with where it came from) or ``outline`` (the summary and the heading outline with sizes,
+so the agent can open one section through the MCP ``section`` tool).  Only a non-``full`` detail is
+written to the normalised rule, so a profile that never names it keeps its digest.  A node several
+rules include is carried at the richest detail any of them asks.  Grants, exclusions, ranking and
+budgets do not depend on it.
 
 Rules add knowledge; they never add a grant, a tool or a broker action.  The normalised form
 writes every default, so the profile digest pins the whole rule.
@@ -37,7 +46,10 @@ from .errors import IncludeViolation, SpecError
 INCLUDE_FROM = ("capabilities", "mcp", "services", "task")
 KNOWLEDGE_KINDS = ("adr", "check", "doc", "inv", "lesson", "runbook", "schema")
 REVIEW_TIERS = ("agent_check", "audit", "human")
-RULE_KEYS = frozenset({"from", "only", "kinds", "depth", "budget", "max_chars", "require_reviews"})
+DETAILS = ("full", "summary", "outline")  # least to most reading; `full` is the default
+RULE_KEYS = frozenset(
+    {"from", "only", "kinds", "depth", "budget", "max_chars", "require_reviews", "detail"}
+)
 DEFAULTS = {"depth": 1, "budget": 12, "max_chars": 4000}
 LIMITS = {"depth": (1, 3), "budget": (1, 50), "max_chars": (200, 20000)}
 
@@ -90,6 +102,12 @@ def normalise_include(raw: Any, grants: Mapping[str, Any]) -> list[dict[str, Any
             "kinds": _names(rule, "kinds", KNOWLEDGE_KINDS, where),
             **{k: _int(rule, k, where) for k in ("depth", "budget", "max_chars")},
         }
+        if "detail" in rule:
+            detail = rule["detail"]
+            if detail not in DETAILS:
+                raise SpecError(f"{where}: detail must be one of {list(DETAILS)} (got {detail!r})")
+            if detail != "full":  # the default is not written: existing digests stay as they are
+                norm["detail"] = detail
         if "require_reviews" in rule:
             from homelabnext.reviews import normalize_role  # (reviews imports this package)
 

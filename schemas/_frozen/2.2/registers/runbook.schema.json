@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/runbook/2.2",
+  "title": "Runbook",
+  "description": "An ordered checklist in which every step carries its own verify. Answers 'what is the correct way to do this' before starting. 2.0 (ADR-0019): a runbook is identified by its `uid` (a UUIDv7 created with it) and names its `type`; the numbered `id` (and the LL-NEW placeholder a hook used to allocate) is gone, and the number it is shown with is computed from its place among its siblings (`order`, then creation). 2.1 (additive): `lessons` names lessons by uid, as every record link does (ADR-0019); a 2.0 document's numbered `LL-NNN` codes still validate, so 2.0 stays readable, but a record holding one is refused by the record validation (homelabnext.registers.schema) and is migrated by `hnx records assign-uids`. 2.2 (additive, ADR-0032): an optional `summary`, one reviewed line of at most 160 characters, the level 0 that context_for serves.",
+  "type": "object",
+  "properties": {
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A canonical UUIDv7: the record's identity, never changed."
+    },
+    "type": {
+      "const": "runbook"
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional sort key among its siblings."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff\\ufff9-\\ufffb]*$(?!\\n)",
+      "description": "Optional (ADR-0032): the record's level 0, one reviewed line of at most 160 characters; context_for serves it instead of the content. The pattern refuses control characters (C0, DEL, C1) and the common invisible format characters (soft hyphen, U+061C, U+180E, zero-width and direction marks U+200B-U+200F, line and paragraph separators and bidi embeddings U+2028-U+202E, U+2060-U+206F, the BOM, U+FFF9-U+FFFB); `(?!\\n)` keeps a validator whose `$` matches before a final newline (Python's) from accepting one. `hnx registers summaries` and the record validation are authoritative: they refuse every character of the Unicode categories Cc, Cf, Zl, Zp and Cs and surrounding whitespace, and count a record without a summary as a warning."
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "when": {
+      "type": "string",
+      "minLength": 3,
+      "description": "Trigger: when to open this runbook."
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 3
+          },
+          "verify": {
+            "type": "string",
+            "minLength": 3
+          },
+          "rollback": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "required": [
+          "n",
+          "text",
+          "verify"
+        ]
+      },
+      "minItems": 1
+    },
+    "lessons": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^LL-\\d{3,}$",
+            "deprecated": true,
+            "description": "2.0: a numbered lesson code, before uids; readable, never written (a record holding one is refused)."
+          },
+          {
+            "$ref": "#/$defs/uid"
+          }
+        ]
+      },
+      "description": "2.1: the lessons the runbook was written from, by uid (ADR-0019)."
+    }
+  },
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "systems",
+    "steps"
+  ],
+  "$defs": {
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A record uid: a canonical UUIDv7 (lowercase, version 7), created with the record and never changed (ADR-0019)."
+    }
+  }
+}

@@ -44,7 +44,9 @@ READ_ONLY_ALLOWLIST = {
     "invariants_status",
     "lessons_due",
     "list_capabilities",
+    "outline",
     "related",
+    "section",
     "terms",
 }
 
@@ -109,7 +111,7 @@ def test_unknown_tool_and_bad_arguments_are_refused(cat):
 
 def test_list_capabilities_matches_the_capability_model(cat):
     caps = {c["name"]: c for c in _call(cat, "list_capabilities")["capabilities"]}
-    assert len(caps) == 16
+    assert len(caps) == 18
     ctx = caps["context"]
     assert (ctx["operations"], ctx["must"], ctx["should"]) == (4, 13, 3)
     assert ctx["implementations"]["fake"] == "FakeContextStore"
@@ -331,6 +333,7 @@ def test_context_for_returns_scoped_hits_with_content_and_digests(cat):
         paths=["conformance/protocols/context.py"],
         allowed=["cap:", "doc:docs/"],
         budget=5,
+        detail="full",
     )
     assert out["scope"] == ["cap:", "doc:docs/"] and out["scoped_by"] is None
     assert "cap:context" in out["seeds"]
@@ -546,7 +549,9 @@ def test_dump_drops_trailing_items_to_fit_and_says_so():
 
 def test_hit_content_is_capped_with_its_full_digest(cat, monkeypatch):
     monkeypatch.setattr(catalog_mod, "MAX_HIT_CONTENT_CHARS", 50)
-    out = cat.context_for("context", allowed=["doc:docs/capabilities/context.md"], budget=1)
+    out = cat.context_for(
+        "context", allowed=["doc:docs/capabilities/context.md"], budget=1, detail="full"
+    )
     (h,) = out["hits"]
     full = (ROOT / "docs" / "capabilities" / "context.md").read_text(encoding="utf-8")
     assert h["content"] == full[:50] and h["content_truncated"] is True
@@ -561,6 +566,12 @@ def test_every_tool_result_fits_the_cap(cat):
         ("find_services", {}),
         ("related", {"ids_or_paths": ["doc:README.md"], "budget": 200, "depth": 3}),
         ("context_for", {"task_text": "the lab", "allowed": ["doc:"], "budget": 200}),
+        (
+            "context_for",
+            {"task_text": "the lab", "allowed": ["doc:"], "budget": 200, "detail": "full"},
+        ),
+        ("outline", {"id_or_path": "README.md", "allowed": ["doc:"]}),
+        ("section", {"id_or_path": "docs/mcp.md", "heading": "tools", "allowed": ["doc:"]}),
         ("invariants_status", {}),
         ("terms", {}),
     ]:
@@ -645,6 +656,20 @@ def test_sdk_server_lists_exactly_the_read_only_tools(cat):
                 assert hints["openWorldHint"] is False
             ctx = next(t for t in tools if t.name == "context_for")
             assert set(_schema(ctx)["required"]) == {"task_text", "allowed"}
+            assert _schema(ctx)["properties"]["detail"]["default"] == "summary"
+            sec = next(t for t in tools if t.name == "section")
+            assert set(_schema(sec)["required"]) == {"id_or_path", "heading", "allowed"}
+            ok = await s.call_tool(
+                "outline", {"id_or_path": "docs/mcp.md", "allowed": ["doc:docs/"]}
+            )
+            assert not _is_error(ok)
+            assert ok.content[0].text == cat.call(
+                "outline", {"id_or_path": "docs/mcp.md", "allowed": ["doc:docs/"]}
+            )
+            bad = await s.call_tool(
+                "section", {"id_or_path": "docs/mcp.md", "heading": "x", "allowed": ["doc:"]}
+            )
+            assert _is_error(bad) and "unknown heading" in bad.content[0].text
             ok = await s.call_tool("get_contract", {"capability": "context"})
             assert not _is_error(ok)
             assert ok.content[0].text == cat.call("get_contract", {"capability": "context"})

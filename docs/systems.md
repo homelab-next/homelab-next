@@ -1,3 +1,7 @@
+---
+summary: 'Per-system SOP pages: one operator page per registry service, how a page is built and generated, the check that keeps them current, and reviews.'
+summary_of: outline:sha256:371d8606436dd2e2
+---
 # Per-system SOP pages
 
 Every service in the registry gets one operator page: what it does, how to use it, how to tell it
@@ -20,7 +24,8 @@ hnx docs systems template                                       # print the blan
   `docs/systems/<service>.events/` (see "Reviews" below).
 * Nine fixed sections: what it does; inputs; outputs with formats; how to use it; how to verify it
   is healthy; failure modes; depends on / depended on by; credentials and access (secret-store
-  names only, never values); source of truth.
+  names only, never values); source of truth (the `hnx:gen` blocks come from Veritas,
+  [ADR-0028](adr/0028-veritas-single-source-of-truth.md)).
 * Machine-known facts sit in `<!-- hnx:gen:NAME -->` blocks that `generate` rewrites. Human text
   sits in `<!-- hnx:todo:NAME -->` blocks that `generate` never touches. Replace the
   `TODO(human)` line inside the block with prose.

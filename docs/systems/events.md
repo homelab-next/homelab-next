@@ -1,6 +1,8 @@
 ---
 title: events
 type: system
+summary: events provides the events capability (nats), owned by data-team.
+summary_generated: true
 service: events
 capability: events
 impl: nats
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.events`
+- Registry row (Veritas, ADR-0028): `services.events`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -12,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from tests import shard_report
 from tests import suite_policy as sp
 
 ROOT = str(Path(__file__).resolve().parents[2])
@@ -59,6 +62,95 @@ def test_skip_reasons():
 def test_check_quarantine(kwargs, problem):
     got = sp.check_quarantine(kwargs, TODAY, 90)
     assert (got is None) if problem is None else (problem in got), got
+
+
+@pytest.mark.parametrize(
+    ("env", "want"),
+    [
+        ({}, set()),
+        ({"HNX_REQUIRE_TOOLS": " zizmor , nats-server ,"}, {"zizmor", "nats-server"}),
+        ({"HNX_REQUIRE_GO": "1"}, {"go"}),  # the older switch still works
+        ({"HNX_REQUIRE_GO": "0", "HNX_REQUIRE_TOOLS": "docker"}, {"docker"}),
+        ({"HNX_REQUIRE_GO": "1", "HNX_REQUIRE_TOOLS": "go,actionlint"}, {"go", "actionlint"}),
+    ],
+)
+def test_required_tools(env, want):
+    assert sp.required_tools(env) == want
+
+
+@pytest.mark.parametrize(
+    ("env", "outcome", "why"),
+    [
+        ({}, pytest.skip.Exception, "hnx-fake-lint is not installed"),
+        ({"HNX_REQUIRE_TOOLS": "other"}, pytest.skip.Exception, "hnx-fake-lint is not installed"),
+        (
+            {"HNX_REQUIRE_TOOLS": "hnx-fake-lint"},
+            pytest.fail.Exception,
+            "HNX_REQUIRE_TOOLS requires",
+        ),
+    ],
+)
+def test_require_tool_skips_or_fails(monkeypatch, tmp_path, env, outcome, why):
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing here
+    monkeypatch.delenv("HNX_REQUIRE_TOOLS", raising=False)
+    monkeypatch.delenv("HNX_REQUIRE_GO", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(outcome, match=why):
+        sp.require_tool("hnx-fake-lint")
+
+
+def test_require_tool_returns_the_path_and_honours_its_availability_check(monkeypatch, tmp_path):
+    tool = tmp_path / "hnx-fake-lint"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("HNX_REQUIRE_TOOLS", "hnx-fake-lint")
+    assert sp.require_tool("hnx-fake-lint") == str(tool)
+    with pytest.raises(pytest.fail.Exception):  # on PATH but not usable (docker without compose)
+        sp.require_tool("hnx-fake-lint", lambda: False)
+
+
+def test_a_required_tools_skip_is_a_failure_end_to_end(tmp_path):
+    _project(
+        tmp_path,
+        a__test_tools="""
+            from tests.suite_policy import require_tool
+
+            def test_needs_lint():
+                require_tool("hnx-fake-lint")
+
+            def test_needs_other():
+                require_tool("hnx-fake-other")
+        """,
+    )
+    proc = _pytest(tmp_path, env={"HNX_REQUIRE_TOOLS": "hnx-fake-lint"})
+    assert proc.returncode == 1, proc.stdout
+    assert "HNX_REQUIRE_TOOLS requires it" in proc.stdout
+    assert "1 failed, 1 skipped" in proc.stdout
+    assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
+
+
+CI_REQUIRED = ("actionlint", "zizmor", "nats-server", "docker", "go")
+
+
+def test_the_tools_ci_requires_are_only_skipped_through_the_helper():
+    """A skip that names one of these tools in its own words is outside the HNX_REQUIRE_TOOLS
+    contract (CI could not turn it into a failure): it must go through require_tool."""
+    tools = "|".join(map(re.escape, CI_REQUIRED))
+    own = re.compile(
+        rf"(?:pytest\.skip\(|reason=)\s*f?[\"'][^\"']*\b(?:{tools})\b[^\"']*\bnot "
+        r"(?:installed|available)\b"
+    )
+    offenders = []
+    for base in ("tests", "tools/tests", "conformance"):
+        for f in sorted((Path(ROOT) / base).rglob("*.py")):
+            if f.name == "suite_policy.py" or f.name == "test_suite_policy.py":
+                continue
+            for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if own.search(line):
+                    offenders.append(f"{f.relative_to(ROOT)}:{n}: {line.strip()}")
+    assert offenders == []
 
 
 def _project(tmp_path, ini_budgets="", **files):
@@ -213,3 +305,128 @@ def test_this_suite_is_configured():
     assert sp.parse_budgets(ini["suite_budgets"])
     assert ini["skip_reasons"]
     assert (Path(ROOT) / "conftest.py").read_text().count("tests.suite_policy") == 1
+
+
+@pytest.mark.parametrize("text", ["0/3", "4/3", "1/0", "3", "a/b", "1/2/3", ""])
+def test_parse_shard_refuses(text):
+    with pytest.raises(ValueError):
+        shard_report.parse_shard(text)
+
+
+def test_select_spreads_the_tests_over_the_shards_whatever_their_order():
+    ids = [f"tests/x/test_{k // 10}.py::test_{k}" for k in range(400)]
+    picks = [shard_report.select(ids, i, 4) for i in (1, 2, 3, 4)]
+    assert all(sum(col) == 1 for col in zip(*picks, strict=True))  # each test in exactly one
+    assert all(70 < sum(p) < 130 for p in picks), [sum(p) for p in picks]
+    # by node id, not position: another collection order keeps every test in its shard
+    assert shard_report.select(ids[::-1], 2, 4) == picks[1][::-1]
+    assert shard_report.parse_shard("2/3") == (2, 3)
+    assert shard_report.select(ids, 1, 1) == [True] * 400
+
+
+SHARDED = {
+    f"{suite}__test_{suite}_{name}": "".join(f"def test_{k}():\n    pass\n\n" for k in range(5))
+    for suite in ("a", "b")
+    for name in ("one", "two")
+}
+
+
+def _shards(tmp_path, count, *extra, **project):
+    (tmp_path / "p").mkdir()
+    _project(tmp_path / "p", **project)
+    reports = tmp_path / "reports"
+    reports.mkdir(exist_ok=True)
+    procs = [
+        _pytest(
+            tmp_path / "p", f"--shard={i}/{count}", f"--shard-report={reports}/{i}.json", *extra
+        )
+        for i in range(1, count + 1)
+    ]
+    return procs, reports
+
+
+def _merge(*argv):
+    proc = subprocess.run(
+        [sys.executable, "-m", "tests.shard_report", *map(str, argv)],
+        capture_output=True, text=True, cwd=ROOT, check=False,
+    )  # fmt: skip
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_shards_run_every_test_once_end_to_end(tmp_path):
+    procs, reports = _shards(tmp_path, 3, "-k", "not test_4", **SHARDED)
+    assert all(p.returncode == 0 for p in procs), [p.stdout for p in procs]
+    ran = [re.findall(r"^PASSED (\S+)", p.stdout, re.M) for p in procs]
+    assert sorted(n for r in ran for n in r) == sorted(
+        f"{s}/test_{s}_{n}.py::test_{k}" for s in "ab" for n in ("one", "two") for k in range(4)
+    )  # -k dropped test_4 before the split, and no test ran twice
+    assert all(ran), [len(r) for r in ran]
+    rc, out = _merge(reports, "--groups", "{}.{}".format(*sys.version_info[:2]))
+    assert rc == 0, out
+    assert "3 shards" in out and "  a\n" in out
+    rc, out = _merge(reports, "--groups", "3.11,3.12,3.13,3.14")
+    assert rc == 1 and "expected" in out
+
+
+def test_the_merge_refuses_shards_that_do_not_add_up(tmp_path):
+    _, reports = _shards(tmp_path, 3, **SHARDED)
+    data = {i: json.loads((reports / f"{i}.json").read_text()) for i in (1, 2, 3)}
+
+    def merged(**changes):
+        for i, change in changes.items():
+            (reports / f"{i[1:]}.json").write_text(json.dumps({**data[int(i[1:])], **change}))
+        try:
+            return _merge(reports)
+        finally:
+            for i in (1, 2, 3):
+                (reports / f"{i}.json").write_text(json.dumps(data[i]))
+
+    assert _merge(reports)[0] == 0
+    one = data[1]["selected"]
+    cases = [
+        ({"s2": {"selected": data[2]["selected"] + one[:1]}}, "not each of the 20"),
+        ({"s2": {"selected": data[2]["selected"][1:]}}, "ran 19 tests"),
+        ({"s3": {"shard": 2}}, "missing [3], reported twice [2]"),
+        ({"s3": {"of": 4}}, "disagree on how many"),
+        ({"s1": {"collected_sha256": "0" * 64}}, "did not collect the same tests"),
+        ({"s1": {"exitstatus": 1}}, "shard 1/3 exited 1"),
+        ({"s1": {"exitstatus": "0"}}, "shard 1/3 exited 0"),
+        ({"s1": {"ran": data[1]["ran"][1:]}}, "shard 1/3 ran"),
+        ({"s1": {"collected": None}}, "never finished collecting"),
+        ({"s2": {"default_budget": 1.0}}, "different budgets"),
+        ({"s1": {"times": {"a": 61.0}}}, "a: 6"),  # over 60s only once the shards are summed
+        ({"s1": {"times": {"a": float("nan")}}}, "a: nan"),
+        ({"s1": {"format": 0}}, "format 0"),
+    ]
+    for changes, problem in cases:
+        rc, out = merged(**changes)
+        assert rc == 1 and problem in out, (changes, out)
+    (reports / "bad.json").write_text("{")
+    assert _merge(reports)[0] == 2
+    assert _merge(tmp_path / "nowhere")[0] == 2
+
+
+def test_each_shard_keeps_the_budget_on_its_share_and_the_merge_on_the_sum(tmp_path):
+    slow = "import time\n\n" + "".join(
+        f"def test_{k}():\n    time.sleep(0.2)\n\n" for k in range(6)
+    )
+    procs, reports = _shards(tmp_path, 2, ini_budgets="slow = 0.8", slow__test_slow=slow)
+    assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]  # 3 x 0.2s each
+    rc, out = _merge(reports)
+    assert rc == 1 and "over all shards > budget 0.8s" in out, out
+
+
+def test_a_test_dropped_after_the_split_is_not_reported_as_run(tmp_path):
+    # a later trylast hook (a conftest registers after the plugin) drops a kept test
+    late = """
+        import pytest
+
+        @pytest.hookimpl(trylast=True)
+        def pytest_collection_modifyitems(items):
+            items[:] = [i for i in items if not i.nodeid.endswith("test_3")]
+    """
+    tests = "".join(f"def test_{k}():\n    pass\n\n" for k in range(4))
+    procs, reports = _shards(tmp_path, 2, sub__conftest=late, sub__test_sub=tests)
+    assert [p.returncode for p in procs] == [0, 0], [p.stdout for p in procs]
+    rc, out = _merge(reports)
+    assert rc == 1 and "shard 1/2 ran 2 of the 3 tests it kept" in out, out

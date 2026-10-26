@@ -6,6 +6,9 @@
 # and `make gateway-check` fails on drift or on a local-only role that could reach a cloud model.
 # Roles, bindings and limits come from the role table; keys from the agent profiles (one per
 # profile, named after it); this file adds only where each backend is and which secret holds what.
+# the gateway's identity: every key it declares is tagged with it, and provisioning deletes
+# only keys with this tag that the spec no longer declares (docs/llm-gateway.md)
+name: lab-in-a-box
 roles: ../../../../schemas/platform/examples/model_roles.valid.json
 profiles:
   - ../../../../schemas/agent/examples/profile.*.json

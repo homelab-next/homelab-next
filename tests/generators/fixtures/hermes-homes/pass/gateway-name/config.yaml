@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# passes A-14: the gateway by name and a role alias
+model:
+  default: main-reasoner-a
+  base_url: https://llm-gateway.example.internal/v1
+  context_length: 131072

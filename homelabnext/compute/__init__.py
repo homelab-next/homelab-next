@@ -8,6 +8,7 @@ from .loader import load_fleet, load_guests, load_keys, load_nodes, load_policie
 from .model import (
     KNOWN_CAPABILITIES,
     ComputeError,
+    ComputeUnreadable,
     Fleet,
     Guest,
     Problem,
@@ -24,6 +25,7 @@ __all__ = [
     "KNOWN_CAPABILITIES",
     "TARGETS",
     "ComputeError",
+    "ComputeUnreadable",
     "Fleet",
     "Guest",
     "MappingZones",

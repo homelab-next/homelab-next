@@ -1,3 +1,7 @@
+---
+summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
+summary_of: outline:sha256:33202966b99c8753
+---
 # Site / network model
 
 One document, `site.yml`, describes the network of a site in vendor-neutral terms: zones (VLANs and
@@ -34,7 +38,7 @@ authentication is a `secret:<name>` reference to an entry in the secret store.
 | `site` | `id`, `domain`, `timezone` (UTC unless there is a reason) |
 | `zones[]` | `id`, `purpose`, `vlan_id`, `subnet`, `gateway`, optional `dhcp.range`, `dns.resolvers`, `egress`, `tags` |
 | `router` | `id`, `model` (the adapter), `mgmt_endpoint` (a `svc:` reference), optional `tls_pin`, `auth.reads` / `auth.writes` as `{mode, secret_ref}`, `power` (1.1) |
-| `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access or trunk, ports and ranges), `power` (1.1) |
+| `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access, trunk or mirror (1.3), ports and ranges), `power` (1.1) |
 | `edge[]` (1.1) | the uplink chain, outermost first: `{id, kind: internet \| modem \| ont \| router \| firewall \| switch \| other, model, power}`; an entry whose `id` is the router's or a switch's is that device |
 | `power` (1.1) | `ups[]` (`id`, the logical id everything names; `model`, `monitored_by: nut \| snmp \| usb \| none`, `nut_name` (what the power monitor queries), `serial`, `mac` only for a UPS with a network card) and `default` (the power of a device that declares none) |
 | `tailnet` (1.2) | `deploy`: the CI deploy tag's tailnet access, `{tag, owners, zones, exceptions}` (see [Deploy access](#deploy-access-12)) |
@@ -61,6 +65,9 @@ pattern's `$` match before a trailing newline, so a pattern alone does not keep 
 * Every `zone:` and `svc:` reference resolves, against the site and the registry respectively.
   Registry zones must exist in the site with the same CIDR.
 * Switch ports are not assigned twice; VLANs named on ports are zones; the uplink is a trunk.
+* A mirror port has `mirror_from` and no VLAN of its own; its sources are assigned on the same
+  switch, listed once, are not mirror ports, and each is copied to one mirror port only. On a `unifi` switch a
+  mirror port has exactly one source ([mirror ports](#mirror-ports-13)).
 * No two `zone_to_zone` rules cover the same pair; deny rules apply to the whole pair; ports need
   tcp or udp.
 * A URL, or an IP literal outside the fields that define addressing, is rejected: use a reference.
@@ -122,6 +129,29 @@ owners are people, never a tag (a user login, a `group:`, or `autogroup:admin`, 
 to itself, so a zone tag owner would make any node of the zone the deploy. `hnx guests render ... --target tailscale-acl` renders it
 ([compute model](compute-model.md#bound-products)), with policy `tests` Tailscale runs on every
 change.
+
+### Mirror ports (1.3)
+
+A network sensor (Suricata, Zeek) on its own machine listens on a switch port that receives a copy
+of other ports' traffic: a SPAN or mirror port. It is declared on the switch like any other port:
+
+```yaml
+port_assignments:
+  - {ports: [1], kind: trunk, vlans: [10, 20, 30, 40, 50]}   # the uplink to the router
+  - {ports: [9], kind: mirror, mirror_from: [1]}             # the sensor's capture NIC
+```
+
+Mirroring the uplink shows the sensor every packet that crosses the router, between zones and to
+the internet; traffic between two hosts of one zone on one switch never reaches it. The mirror port
+carries no VLAN, so the sensor's capture interface has no address; give the sensor a second NIC on
+an access port for its management and its event output.
+
+A mirror whose sources carry a management zone or a one-way zone is a warning: the copy takes that
+traffic out of the isolation the firewall gives it, so whatever is on the mirror port sees it. That
+is usually the point (a sensor on the uplink), but keep the sensor's capture NIC out of every zone
+and the machine physically secure. The UniFi dry run renders the mirror as a port override with
+`op_mode: mirror` and `mirror_port_idx` (the source) and no port profile. The field names are the
+controller's; that the destination's override names the source is checked on the server.
 
 ### One-way zones
 

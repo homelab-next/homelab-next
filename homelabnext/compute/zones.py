@@ -13,7 +13,7 @@ import yaml
 
 from homelabnext import sops
 
-from .model import ComputeError, ZoneFlow, ZoneInfo, ZoneLookup
+from .model import ComputeError, ComputeUnreadable, ZoneFlow, ZoneInfo, ZoneLookup
 
 
 class MappingZones:
@@ -44,7 +44,7 @@ def load_zones_file(path: str | Path) -> tuple[ZoneLookup, str | None]:
     try:
         doc = yaml.safe_load(sops.read_text(path))
     except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-        raise ComputeError(f"cannot read site file {path}: {exc}") from exc
+        raise ComputeUnreadable(f"cannot read site file {path}: {exc}") from exc
     if not isinstance(doc, dict) or not isinstance(doc.get("zones"), list):
         raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
     zones = MappingZones(zone_from_mapping(z) for z in doc["zones"])
@@ -91,6 +91,14 @@ class SiteAdapter:
         return None if found is None else self._convert(found)
 
 
+def _site_error(exc: Exception) -> ComputeError:
+    """The network loader's error as a compute error, keeping "cannot read" apart from "invalid"."""
+    from homelabnext.network.loader import SiteUnreadable
+
+    cls = ComputeUnreadable if isinstance(exc, SiteUnreadable) else ComputeError
+    return cls(str(exc))
+
+
 def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
     """Read zones and the domain through the network model's own loader.
 
@@ -103,7 +111,7 @@ def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
     try:
         doc = load_site(path)
     except SiteError as exc:
-        raise ComputeError(str(exc)) from exc
+        raise _site_error(exc) from exc
     zones = doc.get("zones")
     if not isinstance(zones, list):
         raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
@@ -214,7 +222,7 @@ def site_power(path: str | Path) -> dict[str, Any] | None:
     try:
         doc = load_site(path)
     except SiteError as exc:
-        raise ComputeError(str(exc)) from exc
+        raise _site_error(exc) from exc
     return facts(doc) if isinstance(doc, Mapping) else None
 
 
@@ -225,7 +233,7 @@ def site_flows(path: str | Path) -> tuple[ZoneFlow, ...]:
     try:
         doc = load_site(path)
     except SiteError as exc:
-        raise ComputeError(str(exc)) from exc
+        raise _site_error(exc) from exc
     return flows_from_site(doc) if isinstance(doc, Mapping) else ()
 
 
@@ -240,7 +248,7 @@ def site_deploy(path: str | Path) -> dict[str, Any] | None:
     try:
         doc = load_site(path)
     except SiteError as exc:
-        raise ComputeError(str(exc)) from exc
+        raise _site_error(exc) from exc
     if not isinstance(doc, Mapping):
         return None
     problems = deploy_problems(doc)
