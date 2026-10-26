@@ -1,0 +1,211 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Hypervisor-side traffic mirror for a network sensor (``_nodes.yml`` ``mirror``).
+
+A switch mirror (site 1.3) copies what crosses the switch.  Two guests on one hypervisor talk over
+its bridge and never reach the switch, so a sensor on the switch's mirror port is blind to them.
+A node that declares ``mirror: {to: <nic>, bridges: [...]}`` gets, under ``mirror/<node>/``:
+
+* ``hnx-mirror.sh``: puts a ``tc`` matchall filter on the ingress of every guest port of each
+  listed bridge, mirroring the frame to ``to``.  Every frame a guest sends enters the bridge
+  through exactly one port, so each guest frame is copied once, whether it goes to another guest
+  or out of the host.  Guest ports are the ones Proxmox names after the vmid: ``fwpr<vmid>p<n>``
+  (NIC firewall on), ``tap<vmid>i<n>`` (a VM) and ``veth<vmid>i<n>`` (a container).  The node's
+  own NICs are never mirrored; inbound traffic from the switch is the switch mirror's to see.
+  A matchall filter cannot be changed in place, so a correct filter is kept and any other one at
+  the script's priority is deleted and added again.  A port that fails is reported and the rest
+  are still mirrored (exit 1).  ``--remove`` takes the filters off again.  The script refuses a
+  ``to`` that is missing, a bridge or bond port, or has an IPv4 address, and a bridge that is not
+  a Linux bridge (an OVS bridge is not supported); it turns IPv6, ARP and multicast off on ``to``.
+* ``hnx-mirror.service`` and ``hnx-mirror.timer``: guest ports appear when a guest starts, so the
+  script runs every 15 seconds; a guest's first seconds after it starts can go unmirrored.
+
+Install the three files (``/usr/local/sbin/hnx-mirror.sh``, ``/etc/systemd/system/``), then
+``systemctl enable --now hnx-mirror.timer``.  ``mirror/README.md`` lists what each node mirrors.
+"""
+
+from __future__ import annotations
+
+import re
+
+from homelabnext.compute.model import ComputeError, Fleet
+from homelabnext.generators.safe import checked
+
+from ._text import HEADER
+
+#: the filter's priority: fixed, so a re-run replaces it and ``--remove`` finds it
+PREF = 49152
+SCRIPT_PATH = "/usr/local/sbin/hnx-mirror.sh"
+#: the guest schema's placement.node pattern: the node name becomes a directory of the render
+NODE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+
+
+def script(node: str, to: str, bridges: list[str]) -> str:
+    to = checked(to, f"node {node}: mirror.to", "shell")
+    words = " ".join(checked(b, f"node {node}: mirror.bridges", "shell") for b in bridges)
+    L = [
+        "#!/bin/sh",
+        f"# {HEADER}",
+        f"# Node {node}: copy every frame a guest sends into {words} to {to}.",
+        "# Idempotent; hnx-mirror.timer runs it every 15 seconds.  --remove takes the filters off.",
+        "set -eu",
+        f'TO="{to}"',
+        f'BRIDGES="{words}"',
+        f"PREF={PREF}",
+        "SYS=/sys/class/net",
+        "IPV6=/proc/sys/net/ipv6/conf",
+        "status=0",
+        "",
+        "digits() {",
+        "  case \"$1\" in '' | *[!0-9]*) return 1 ;; esac",
+        "}",
+        "",
+        "# a port Proxmox names after a guest: fwpr<vmid>p<n>, tap<vmid>i<n> or veth<vmid>i<n>",
+        "guest_port() {",
+        '  case "$1" in',
+        '    fwpr*) rest="${1#fwpr}" sep=p ;;',
+        '    tap*) rest="${1#tap}" sep=i ;;',
+        '    veth*) rest="${1#veth}" sep=i ;;',
+        "    *) return 1 ;;",
+        "  esac",
+        '  vmid="${rest%%"$sep"*}"',
+        '  [ "$vmid" != "$rest" ] && digits "$vmid" && digits "${rest#*"$sep"}"',
+        "}",
+        "",
+        'remove=""',
+        'if [ "${1:-}" = "--remove" ]; then',
+        "  remove=1",
+        'elif [ "$#" -gt 0 ]; then',
+        '  echo "usage: $0 [--remove]" >&2',
+        "  exit 2",
+        "fi",
+        'if [ -z "$remove" ]; then',
+        '  if [ ! -d "$SYS/$TO" ]; then',
+        '    echo "hnx-mirror: capture NIC $TO does not exist" >&2',
+        "    exit 1",
+        "  fi",
+        '  if [ -e "$SYS/$TO/master" ]; then',
+        '    echo "hnx-mirror: $TO is a port of a bridge or bond; the capture NIC carries nothing else" >&2',
+        "    exit 1",
+        "  fi",
+        '  if [ -n "$(ip -4 -o addr show dev "$TO")" ]; then',
+        '    echo "hnx-mirror: $TO has an IPv4 address; the capture NIC carries nothing else" >&2',
+        "    exit 1",
+        "  fi",
+        "  # silent on the wire: no IPv6 link-local, no ARP, no multicast joins of its own",
+        '  if [ -w "$IPV6/$TO/disable_ipv6" ]; then',
+        '    echo 1 >"$IPV6/$TO/disable_ipv6"',
+        "  fi",
+        '  ip link set dev "$TO" arp off multicast off up',
+        "fi",
+        "for br in $BRIDGES; do",
+        '  if [ ! -d "$SYS/$br/brif" ]; then',
+        '    echo "hnx-mirror: $br is not a Linux bridge" >&2',
+        "    exit 1",
+        "  fi",
+        "done",
+        "for br in $BRIDGES; do",
+        '  for p in "$SYS/$br/brif"/*; do',
+        '    [ -e "$p" ] || continue',
+        '    port="${p##*/}"',
+        '    guest_port "$port" || continue',
+        '    if [ -n "$remove" ]; then',
+        '      tc filter del dev "$port" ingress pref "$PREF" 2>/dev/null || true',
+        "      continue",
+        "    fi",
+        "    # a matchall filter cannot be changed in place: keep a correct one, else delete and add",
+        '    cur="$(tc filter show dev "$port" ingress pref "$PREF" 2>/dev/null)" || cur=""',
+        '    case "$cur" in',
+        '      *"to device $TO)"*) continue ;;',
+        "    esac",
+        '    if [ -n "$cur" ]; then',
+        '      tc filter del dev "$port" ingress pref "$PREF" 2>/dev/null || true',
+        "    fi",
+        '    tc qdisc add dev "$port" clsact 2>/dev/null || true',
+        '    if ! tc filter add dev "$port" ingress pref "$PREF" handle 1 matchall \\',
+        '      action mirred egress mirror dev "$TO"; then',
+        "      # a guest port can vanish mid-pass: say so and mirror the rest",
+        '      echo "hnx-mirror: could not mirror $port" >&2',
+        "      status=1",
+        "    fi",
+        "  done",
+        "done",
+        'exit "$status"',
+    ]
+    return "\n".join(L) + "\n"
+
+
+def service(node: str) -> str:
+    return "\n".join(
+        [
+            f"# {HEADER}",
+            "[Unit]",
+            f"Description=Mirror the guests of {checked(node, 'node', 'systemd')} to the network sensor",
+            "After=network-online.target",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            f"ExecStart={SCRIPT_PATH}",
+            "NoNewPrivileges=yes",
+            "CapabilityBoundingSet=CAP_NET_ADMIN",
+            "ProtectSystem=strict",
+            "ProtectHome=yes",
+            "PrivateTmp=yes",
+            "",
+        ]
+    )
+
+
+def timer(node: str) -> str:
+    return "\n".join(
+        [
+            f"# {HEADER}",
+            "[Unit]",
+            f"Description=Keep the guests of {checked(node, 'node', 'systemd')} mirrored as they start",
+            "",
+            "[Timer]",
+            "OnBootSec=30s",
+            "OnCalendar=*:*:0/15",
+            "AccuracySec=1s",
+            "",
+            "[Install]",
+            "WantedBy=timers.target",
+            "",
+        ]
+    )
+
+
+def readme(mirrors: dict[str, dict]) -> str:
+    L = [f"<!-- {HEADER} -->", "# Hypervisor mirrors", ""]
+    if not mirrors:
+        L.append("No node declares a mirror in `_nodes.yml`.")
+    else:
+        L += [
+            "Each node below copies every frame its guests send into the listed bridges to its",
+            "capture NIC. Install `hnx-mirror.sh` as `" + SCRIPT_PATH + "` and the two units",
+            "under `/etc/systemd/system/`, then `systemctl enable --now hnx-mirror.timer`.",
+            "",
+            "| Node | Bridges | Capture NIC |",
+            "|---|---|---|",
+        ]
+        for node, m in mirrors.items():
+            br = ", ".join(f"`{checked(b, 'bridge', 'markdown')}`" for b in m["bridges"])
+            L.append(
+                f"| `{checked(node, 'node', 'markdown')}` | {br} "
+                f"| `{checked(m['to'], 'mirror.to', 'markdown')}` |"
+            )
+    return "\n".join(L) + "\n"
+
+
+def render(fleet: Fleet) -> dict[str, str]:
+    mirrors = {n: spec["mirror"] for n, spec in sorted(fleet.nodes.items()) if "mirror" in spec}
+    for node in mirrors:
+        if not NODE_RE.match(node):
+            raise ComputeError(
+                f"node {node!r}: a mirroring node's name must be one a guest can name"
+            )
+    out = {"mirror/README.md": readme(mirrors)}
+    for node, m in mirrors.items():
+        out[f"mirror/{node}/hnx-mirror.sh"] = script(node, m["to"], m["bridges"])
+        out[f"mirror/{node}/hnx-mirror.service"] = service(node)
+        out[f"mirror/{node}/hnx-mirror.timer"] = timer(node)
+    return out
