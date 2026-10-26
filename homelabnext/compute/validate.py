@@ -6,7 +6,11 @@ from __future__ import annotations
 import ipaddress
 from typing import Any
 
-from .model import Fleet, Guest, Problem, ZoneInfo, allowed_groups
+from .model import Fleet, Guest, Problem, ZoneInfo, allowed_groups, group_for_capability
+
+#: capabilities whose guests run model weights or model-written code: their outbound traffic is
+#: default-deny (docs/compute-model.md, "Model runtimes")
+MODEL_RUNTIMES: tuple[str, ...] = ("cap:inference", "cap:codemode-executor")
 
 
 def _known_caps() -> frozenset[str]:
@@ -164,6 +168,58 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
+def model_runtime(g: Guest) -> str | None:
+    """The model runtime capability the guest's capability, or one of its inventory groups,
+    names (one of :data:`MODEL_RUNTIMES`), or None: it serves no model and runs no model-written
+    code."""
+    for c in MODEL_RUNTIMES:
+        if g.capability == c or group_for_capability(c) in g.groups:
+            return c
+    return None
+
+
+def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
+    """A model runtime's outbound traffic is default-deny: ``policy_out`` DROP or REJECT (the
+    guest firewall then also logs what it drops), and, with a baseline set that defines the
+    control, ``egress-filter`` among its controls.  A model's own reasoning is no boundary: a model
+    asked to write a detection rule has tried to upload a file to a cloud bucket while its trace
+    said it would call no tool."""
+    runtime = model_runtime(g)
+    if runtime is None or g.raw.get("status") == "retired":
+        return []
+    why = f"{runtime} runs models or model-written code"
+    out: list[Problem] = []
+    if g.kind in ("vm", "lxc") and not g.nic_firewall:
+        if not g.firewall_exemption:  # filtered elsewhere (a libvirt host) is a recorded decision
+            out.append(
+                Problem(
+                    g.id,
+                    f"{why}: its NIC firewall is off with no network.firewall_exemption saying "
+                    "where its egress is filtered",
+                )
+            )
+    elif g.kind in ("vm", "lxc"):
+        policy = (g.raw.get("firewall_rules") or {}).get("policy_out", "ACCEPT")
+        if policy == "ACCEPT":
+            out.append(
+                Problem(
+                    g.id,
+                    f"{why}: firewall_rules.policy_out must be DROP or REJECT, with outbound_allow "
+                    "naming what it needs (resolver, time, model store, gateway)",
+                )
+            )
+    bs = fleet.baselines
+    if bs is not None and "egress-filter" in bs.controls and g.baseline:
+        from .baselines import resolve
+
+        r = resolve(g, bs)
+        if r.exemption is None and "egress-filter" not in r.controls:
+            out.append(
+                Problem(g.id, f"{why}: its baselines must include egress-filter (or not remove it)")
+            )
+    return out
+
+
 def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
     """Return every semantic problem in the fleet (empty list = valid).
 
@@ -196,6 +252,7 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         out += _check_guest(g, fleet)
         if require_baselines or g.baseline:
             out += guest_problems(g, fleet.baselines)
+        out += _model_runtime_problems(g, fleet)
     out += _power(fleet)
     out += _capacity(fleet)
     return out

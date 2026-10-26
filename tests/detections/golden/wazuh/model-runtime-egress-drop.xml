@@ -1,0 +1,8 @@
+<!-- det:model-runtime-egress-drop -->
+<rule id="900009" level="8">
+  <if_group>hnx_generic</if_group>
+  <field name="labels.hnx_runtime" type="pcre2">(?i)^model$</field>
+  <field name="message" type="pcre2">(?i)hnx\-egress\-drop:\ </field>
+  <description>A model runtime's default-deny egress filter dropped a connection</description>
+  <mitre><id>T1567.002</id></mitre>
+</rule>

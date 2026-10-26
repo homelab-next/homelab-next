@@ -1,0 +1,8 @@
+<!-- det:model-runtime-object-store-lookup -->
+<rule id="900010" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="labels.hnx_runtime" type="pcre2">(?i)^model$</field>
+  <field name="dns.question.name" type="pcre2">(?:(?i)\.aliyuncs\.com$)|(?:(?i)\.amazonaws\.com$)|(?:(?i)\.blob\.core\.windows\.net$)|(?:(?i)\.storage\.googleapis\.com$)|(?:(?i)\.r2\.cloudflarestorage\.com$)|(?:(?i)\.backblazeb2\.com$)|(?:(?i)\.digitaloceanspaces\.com$)|(?:(?i)\.wasabisys\.com$)|(?:(?i)\.myqcloud\.com$)|(?:(?i)\.myhuaweicloud\.com$)</field>
+  <description>A model runtime looked up a public cloud object store</description>
+  <mitre><id>T1567.002</id></mitre>
+</rule>

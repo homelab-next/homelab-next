@@ -1,0 +1,11 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "public-address",
+  "description": "an ordinary outside address",
+  "event": {
+    "destination": {
+      "ip": "203.0.113.80"
+    }
+  }
+}

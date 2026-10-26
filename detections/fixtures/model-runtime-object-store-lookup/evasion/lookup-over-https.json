@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "lookup-over-https",
+  "description": "a model runtime resolves the name over DNS over HTTPS",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "url": {
+      "domain": "dns.example.net"
+    }
+  },
+  "note": "DoH to an allowed resolver is HTTPS, not a DNS event; the request rule or the egress drop catches the connection"
+}

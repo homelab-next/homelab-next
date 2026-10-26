@@ -1,0 +1,7 @@
+<!-- det:cloud-metadata-probe -->
+<rule id="900007" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="destination.ip" type="pcre2">(?i)^169\.254\.169\.254$</field>
+  <description>A lab host tried to reach the link-local cloud instance metadata service</description>
+  <mitre><id>T1552.005</id></mitre>
+</rule>

@@ -97,7 +97,10 @@ def test_flag_off_with_exemption_is_accepted(tmp_path):
     d = fleet_dir(
         tmp_path,
         "infer-core",
-        lambda x: x["network"].update(firewall="disabled", firewall_exemption=EXEMPT),
+        lambda x: (
+            x["network"].update(firewall="disabled", firewall_exemption=EXEMPT),
+            x.pop("firewall_rules", None),
+        ),
     )
     f = load_fleet(d, STUB)
     assert "firewall = false" in render(f, "terraform-proxmox")["vm-infer-core.tf"]
@@ -365,3 +368,78 @@ def test_the_inventory_carries_the_same_rules_for_the_guests_own_firewall(good, 
         "inbound_allow": [],
         "outbound_allow": [],
     }
+
+
+# ---------------------------------------------------------------- model runtimes: default-deny egress
+ACCEPTS = "firewall_rules.policy_out must be DROP or REJECT"
+
+
+def test_a_model_runtime_with_open_egress_is_refused(tmp_path):
+    d = fleet_dir(tmp_path, "infer-core", lambda x: x["firewall_rules"].update(policy_out="ACCEPT"))
+    assert f"guest:infer-core: cap:inference runs models or model-written code: {ACCEPTS}" in (
+        problems(d)
+    )
+
+
+def test_a_model_runtime_without_firewall_rules_is_refused(tmp_path):
+    d = fleet_dir(tmp_path, "infer-core", lambda x: x.pop("firewall_rules"))
+    assert ACCEPTS in problems(d)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda x: x.update(capability="cap:codemode-executor"),
+        lambda x: x.update(capability_groups=["cap_inference"]),
+        lambda x: x.update(capability_groups=["cap_codemode_executor"]),
+    ],
+    ids=["codemode-executor", "inference-group", "executor-group"],
+)
+def test_every_model_runtime_is_held_to_it(tmp_path, edit):
+    d = fleet_dir(tmp_path, "idp-core", edit)  # idp-core: no firewall_rules, so ACCEPT
+    msg = problems(d)
+    assert "guest:idp-core: cap:" in msg and ACCEPTS in msg and "cap:idp runs" not in msg
+
+
+def test_a_model_runtime_filtered_elsewhere_with_the_exemption_is_accepted(tmp_path):
+    # bus-core's NIC firewall is off with an exemption naming where it is filtered
+    d = fleet_dir(tmp_path, "bus-core", lambda x: x.update(capability="cap:codemode-executor"))
+    assert load_fleet(d, STUB).guests
+
+
+def test_a_model_runtime_filtered_elsewhere_needs_the_exemption_saying_so(tmp_path):
+    def off(doc):
+        doc["network"].update(firewall="disabled")
+        doc["network"].pop("firewall_exemption", None)
+        doc.pop("firewall_rules")
+
+    nodes = "nodes:\n  hv-a: {firewall: disabled}\n"  # no node rule asks for an exemption
+    msg = problems(fleet_dir(tmp_path, "infer-core", off, nodes))
+    assert "NIC firewall is off with no network.firewall_exemption" in msg
+
+
+def test_a_model_runtime_must_resolve_egress_filter_when_the_set_defines_it(tmp_path):
+    d = fleet_dir(tmp_path)
+    p = d / "_baselines.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["controls"]["egress-filter"] = {
+        "layer": "network",
+        "description": "Outbound traffic only to listed destinations.",
+        "role": None,
+        "verify": "a connection to an unlisted outside address is refused",
+    }
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert "cap:inference runs models or model-written code: its baselines must include" in (
+        problems(d)
+    )
+    g = d / "infer-core.yml"
+    guest = yaml.safe_load(g.read_text())
+    guest["baseline"]["add"] = ["egress-filter"]
+    g.write_text(yaml.safe_dump(guest, sort_keys=False))
+    assert load_fleet(d, STUB).guests
+
+
+def test_a_guest_that_runs_no_model_keeps_its_own_egress_policy(good):
+    assert any(
+        g.capability != "cap:inference" and not g.raw.get("firewall_rules") for g in good.guests
+    )

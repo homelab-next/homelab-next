@@ -1,0 +1,12 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "drop-on-other-host",
+  "description": "a drop on a host that runs no model",
+  "event": {
+    "labels": {
+      "hnx_runtime": "none"
+    },
+    "message": "hnx-egress-drop: IN= OUT=eth0 SRC=192.0.2.30 DST=203.0.113.80 PROTO=TCP DPT=443"
+  }
+}

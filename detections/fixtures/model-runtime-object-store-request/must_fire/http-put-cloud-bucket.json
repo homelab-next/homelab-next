@@ -1,0 +1,19 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "http-put-cloud-bucket",
+  "description": "a model runtime sends a PUT to a cloud bucket",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "url": {
+      "domain": "example-bucket.oss-cn-beijing.aliyuncs.com"
+    },
+    "http": {
+      "request": {
+        "method": "PUT"
+      }
+    }
+  }
+}

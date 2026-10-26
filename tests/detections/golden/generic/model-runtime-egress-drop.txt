@@ -1,0 +1,5 @@
+-- det:model-runtime-egress-drop
+-- title: A model runtime's default-deny egress filter dropped a connection
+-- level: medium
+-- tags: attack.exfiltration, attack.t1567.002
+WHERE ((labels.hnx_runtime = "model") AND (message ~contains "hnx-egress-drop: "))

@@ -2,10 +2,10 @@
   "schema": "homelabnext.detections.attack_coverage/v1",
   "counted_from": "rules whose must_fire and must_not_fire fixtures all pass",
   "summary": {
-    "rules_total": 6,
-    "rules_counted": 6,
-    "techniques_covered": 6,
-    "tactics_covered": 5
+    "rules_total": 11,
+    "rules_counted": 11,
+    "techniques_covered": 8,
+    "tactics_covered": 7
   },
   "techniques": {
     "T1059.001": {
@@ -56,11 +56,36 @@
         "persistence",
         "privilege-escalation"
       ]
+    },
+    "T1552.005": {
+      "rules": [
+        "det:cloud-metadata-probe",
+        "det:cloud-metadata-refused"
+      ],
+      "tactics": [
+        "credential-access"
+      ]
+    },
+    "T1567.002": {
+      "rules": [
+        "det:model-runtime-egress-drop",
+        "det:model-runtime-object-store-lookup",
+        "det:model-runtime-object-store-request"
+      ],
+      "tactics": [
+        "exfiltration"
+      ]
     }
   },
   "tactics": {
+    "credential-access": [
+      "T1552.005"
+    ],
     "execution": [
       "T1059.001"
+    ],
+    "exfiltration": [
+      "T1567.002"
     ],
     "impact": [
       "T1486"
@@ -84,8 +109,28 @@
       "evasion": "read-only-recon.json"
     },
     {
+      "rule": "det:cloud-metadata-probe",
+      "evasion": "metadata-by-name.json"
+    },
+    {
+      "rule": "det:cloud-metadata-refused",
+      "evasion": "host-without-the-firewall.json"
+    },
+    {
       "rule": "det:mass-file-rename-ransom-extension",
       "evasion": "random-extension.json"
+    },
+    {
+      "rule": "det:model-runtime-egress-drop",
+      "evasion": "over-an-allowed-destination.json"
+    },
+    {
+      "rule": "det:model-runtime-object-store-lookup",
+      "evasion": "lookup-over-https.json"
+    },
+    {
+      "rule": "det:model-runtime-object-store-request",
+      "evasion": "bucket-by-address.json"
     },
     {
       "rule": "det:new-service-creation",

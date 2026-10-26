@@ -27,6 +27,11 @@ table inet {{ nftables_host_table }} {
 	}
 	chain output {
 		type filter hook output priority filter; policy {{ 'accept' if nftables_host_firewall.policy_out == 'ACCEPT' else 'drop' }};
+		# cloud instance metadata: refused whatever the policy, before any allow can match
+		ip daddr { {{ nftables_host_refused_v4 | join(', ') }} } limit rate 6/minute burst 6 packets log prefix "{{ nftables_host_log_refused }}" level warn
+		ip daddr { {{ nftables_host_refused_v4 | join(', ') }} } drop comment "homelabnext-refused-destination"
+		ip6 daddr { {{ nftables_host_refused_v6 | join(', ') }} } limit rate 6/minute burst 6 packets log prefix "{{ nftables_host_log_refused }}" level warn
+		ip6 daddr { {{ nftables_host_refused_v6 | join(', ') }} } drop comment "homelabnext-refused-destination"
 {% if nftables_host_firewall.policy_out != 'ACCEPT' %}
 		ct state established,related accept
 		oif "lo" accept
@@ -34,6 +39,7 @@ table inet {{ nftables_host_table }} {
 {% for r in nftables_host_firewall.outbound_allow | default([]) %}
 		{{ rule(r, 'daddr') }}
 {% endfor %}
+		limit rate 10/minute burst 20 packets log prefix "{{ nftables_host_log_dropped }}" level warn
 {% if nftables_host_firewall.policy_out == 'REJECT' %}
 		reject with icmpx type admin-prohibited
 {% endif %}

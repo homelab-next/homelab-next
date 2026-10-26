@@ -1,0 +1,5 @@
+-- det:model-runtime-object-store-lookup
+-- title: A model runtime looked up a public cloud object store
+-- level: high
+-- tags: attack.exfiltration, attack.t1567.002
+WHERE ((labels.hnx_runtime = "model") AND ((dns.question.name ~endswith ".aliyuncs.com" OR dns.question.name ~endswith ".amazonaws.com" OR dns.question.name ~endswith ".blob.core.windows.net" OR dns.question.name ~endswith ".storage.googleapis.com" OR dns.question.name ~endswith ".r2.cloudflarestorage.com" OR dns.question.name ~endswith ".backblazeb2.com" OR dns.question.name ~endswith ".digitaloceanspaces.com" OR dns.question.name ~endswith ".wasabisys.com" OR dns.question.name ~endswith ".myqcloud.com" OR dns.question.name ~endswith ".myhuaweicloud.com")))

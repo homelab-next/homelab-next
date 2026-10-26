@@ -8,6 +8,20 @@
     <description>Cloud API key used from a network not seen before for that key</description>
     <mitre><id>T1078.004</id></mitre>
   </rule>
+  <!-- det:cloud-metadata-probe -->
+  <rule id="900007" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="destination.ip" type="pcre2">(?i)^169\.254\.169\.254$</field>
+    <description>A lab host tried to reach the link-local cloud instance metadata service</description>
+    <mitre><id>T1552.005</id></mitre>
+  </rule>
+  <!-- det:cloud-metadata-refused -->
+  <rule id="900008" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="message" type="pcre2">(?i)hnx\-egress\-refused:\ </field>
+    <description>A guest firewall refused a connection to a cloud instance metadata service</description>
+    <mitre><id>T1552.005</id></mitre>
+  </rule>
   <!-- det:mass-file-rename-ransom-extension -->
   <rule id="900002" level="12">
     <if_group>hnx_generic</if_group>
@@ -15,6 +29,30 @@
     <field name="file.new_path" type="pcre2">(?:(?i)\.locked$)|(?:(?i)\.encrypted$)|(?:(?i)\.crypt$)</field>
     <description>File renamed to a typical ransomware extension</description>
     <mitre><id>T1486</id></mitre>
+  </rule>
+  <!-- det:model-runtime-egress-drop -->
+  <rule id="900009" level="8">
+    <if_group>hnx_generic</if_group>
+    <field name="labels.hnx_runtime" type="pcre2">(?i)^model$</field>
+    <field name="message" type="pcre2">(?i)hnx\-egress\-drop:\ </field>
+    <description>A model runtime's default-deny egress filter dropped a connection</description>
+    <mitre><id>T1567.002</id></mitre>
+  </rule>
+  <!-- det:model-runtime-object-store-lookup -->
+  <rule id="900010" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="labels.hnx_runtime" type="pcre2">(?i)^model$</field>
+    <field name="dns.question.name" type="pcre2">(?:(?i)\.aliyuncs\.com$)|(?:(?i)\.amazonaws\.com$)|(?:(?i)\.blob\.core\.windows\.net$)|(?:(?i)\.storage\.googleapis\.com$)|(?:(?i)\.r2\.cloudflarestorage\.com$)|(?:(?i)\.backblazeb2\.com$)|(?:(?i)\.digitaloceanspaces\.com$)|(?:(?i)\.wasabisys\.com$)|(?:(?i)\.myqcloud\.com$)|(?:(?i)\.myhuaweicloud\.com$)</field>
+    <description>A model runtime looked up a public cloud object store</description>
+    <mitre><id>T1567.002</id></mitre>
+  </rule>
+  <!-- det:model-runtime-object-store-request -->
+  <rule id="900011" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="labels.hnx_runtime" type="pcre2">(?i)^model$</field>
+    <field name="url.domain" type="pcre2">(?:(?i)\.aliyuncs\.com$)|(?:(?i)\.amazonaws\.com$)|(?:(?i)\.blob\.core\.windows\.net$)|(?:(?i)\.storage\.googleapis\.com$)|(?:(?i)\.r2\.cloudflarestorage\.com$)|(?:(?i)\.backblazeb2\.com$)|(?:(?i)\.digitaloceanspaces\.com$)|(?:(?i)\.wasabisys\.com$)|(?:(?i)\.myqcloud\.com$)|(?:(?i)\.myhuaweicloud\.com$)</field>
+    <description>A model runtime requested a public cloud object store</description>
+    <mitre><id>T1567.002</id></mitre>
   </rule>
   <!-- det:new-service-creation -->
   <rule id="900003" level="8">

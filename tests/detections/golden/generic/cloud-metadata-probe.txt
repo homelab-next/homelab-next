@@ -1,0 +1,5 @@
+-- det:cloud-metadata-probe
+-- title: A lab host tried to reach the link-local cloud instance metadata service
+-- level: high
+-- tags: attack.credential_access, attack.t1552.005
+WHERE (destination.ip = "169.254.169.254")

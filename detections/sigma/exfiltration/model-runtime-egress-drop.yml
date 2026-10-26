@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+title: A model runtime's default-deny egress filter dropped a connection
+det: det:model-runtime-egress-drop
+description: >
+  The guest firewall (role nftables_host, controls host-firewall and egress-filter) logs every
+  outbound packet it drops with the prefix "hnx-egress-drop: ", rate-limited. On a guest that
+  serves models or runs model-written code, a drop is a connection the model's output asked for
+  that nobody listed: the attempt itself is the finding, whatever the model's reasoning said.
+  Expects the pipeline to label the guest's runtime (labels.hnx_runtime).
+status: experimental
+logsource: {product: linux, service: kernel}
+detection:
+  selection_runtime:
+    Runtime: model
+  selection_drop:
+    Message|contains: 'hnx-egress-drop: '
+  condition: selection_runtime and selection_drop
+level: medium
+tags: [attack.exfiltration, attack.t1567.002]
+falsepositives: [A destination the runtime needs that its outbound_allow does not list yet]

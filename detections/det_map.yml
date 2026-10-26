@@ -4,7 +4,12 @@ schema: homelabnext.detections.det_map/v1
 engine_numbers_live_here_only: true
 entries:
   det:cloud-api-key-new-asn: 900001
+  det:cloud-metadata-probe: 900007
+  det:cloud-metadata-refused: 900008
   det:mass-file-rename-ransom-extension: 900002
+  det:model-runtime-egress-drop: 900009
+  det:model-runtime-object-store-lookup: 900010
+  det:model-runtime-object-store-request: 900011
   det:new-service-creation: 900003
   det:ssh-authorized-key-added: 900004
   det:suspicious-encoded-powershell: 900005

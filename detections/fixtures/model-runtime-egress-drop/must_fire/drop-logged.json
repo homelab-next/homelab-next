@@ -1,0 +1,12 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "drop-logged",
+  "description": "the egress filter of a model runtime drops a packet",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "message": "hnx-egress-drop: IN= OUT=eth0 SRC=198.51.100.130 DST=203.0.113.80 PROTO=TCP DPT=443"
+  }
+}

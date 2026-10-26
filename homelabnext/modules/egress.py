@@ -71,7 +71,7 @@ from homelabnext.modules import limits
 from homelabnext.modules.rules import _hosts, _placed, selected
 from homelabnext.modules.scope import EMBEDDED_V4, ScopeMissing, _part_networks, _v6
 
-__all__ = ["NOT_INTERNET", "PROTOCOLS", "RELOAD_S", "EgressError", "render", "write"]
+__all__ = ["METADATA", "NOT_INTERNET", "PROTOCOLS", "RELOAD_S", "EgressError", "render", "write"]
 
 Doc = dict[str, Any]
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -127,6 +127,18 @@ NOT_INTERNET: tuple[Network, ...] = (
 )
 
 
+#: cloud instance metadata services (the link-local one most clouds use, Alibaba Cloud's, and the
+#: IPv6 one): never a lab host's address.  Each sits in a NOT_INTERNET range, so no role reaches
+#: one over ``internet``; refusing them as host addresses keeps a slot or ``svc:`` allow from
+#: naming one.  The guest firewall (role nftables_host, vars/main.yml) refuses the same addresses
+#: on every guest; a test keeps the two lists equal.
+METADATA: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...] = (
+    ipaddress.IPv4Address(0xA9FE_A9FE),
+    ipaddress.IPv4Address(0x6464_64C8),
+    _v6((0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254), 128).network_address,
+)
+
+
 class EgressError(Exception):
     """The selection cannot be turned into egress policy (exit 1 for a CLI)."""
 
@@ -163,6 +175,8 @@ def _address(host: str, a: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address
         raise EgressError(f"host {host}: {a} embeds an IPv4 address; write the IPv4 address")
     if addr.is_unspecified or addr.is_loopback or addr.is_multicast:
         raise EgressError(f"host {host}: {a} is not a host's own address")
+    if addr in METADATA:
+        raise EgressError(f"host {host}: {a} is a cloud metadata service, never a lab host")
     return addr
 
 

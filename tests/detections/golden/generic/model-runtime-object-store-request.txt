@@ -1,0 +1,5 @@
+-- det:model-runtime-object-store-request
+-- title: A model runtime requested a public cloud object store
+-- level: high
+-- tags: attack.exfiltration, attack.t1567.002
+WHERE ((labels.hnx_runtime = "model") AND ((url.domain ~endswith ".aliyuncs.com" OR url.domain ~endswith ".amazonaws.com" OR url.domain ~endswith ".blob.core.windows.net" OR url.domain ~endswith ".storage.googleapis.com" OR url.domain ~endswith ".r2.cloudflarestorage.com" OR url.domain ~endswith ".backblazeb2.com" OR url.domain ~endswith ".digitaloceanspaces.com" OR url.domain ~endswith ".wasabisys.com" OR url.domain ~endswith ".myqcloud.com" OR url.domain ~endswith ".myhuaweicloud.com")))

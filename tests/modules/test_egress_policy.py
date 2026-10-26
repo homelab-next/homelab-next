@@ -11,6 +11,7 @@ import json
 import re
 from pathlib import Path
 
+import jinja2
 import pytest
 import yaml
 
@@ -277,6 +278,28 @@ def test_internet_is_global_unicast_and_never_a_lab_host():
     for special in specials:
         assert not internet(special), special
     assert internet(str(ipaddress.ip_address(0x0808_0808)))  # a public address
+
+
+@pytest.mark.parametrize("addr", [str(a) for a in eg.METADATA])
+def test_a_cloud_metadata_service_is_never_a_hosts_address(addr):
+    site = copy.deepcopy(SITES["small-lab"])
+    site["hosts"]["data"]["addresses"] = [addr]
+    with pytest.raises(eg.EgressError, match="cloud metadata service"):
+        render(site)
+
+
+def test_the_metadata_services_are_never_the_internet_and_match_the_guest_firewall():
+    """No role reaches one over ``internet``, and the guest firewall refuses the same list."""
+    for addr in eg.METADATA:
+        assert any(addr in n for n in eg.NOT_INTERNET), addr
+    role_vars = yaml.safe_load(
+        (ROOT / "ansible/roles/nftables_host/vars/main.yml").read_text(encoding="utf-8")
+    )
+    guest = [
+        jinja2.Template(t).render()
+        for t in [*role_vars["nftables_host_refused_v4"], *role_vars["nftables_host_refused_v6"]]
+    ]
+    assert sorted(map(ipaddress.ip_address, guest), key=str) == sorted(eg.METADATA, key=str)
 
 
 def test_not_internet_holds_no_global_address():

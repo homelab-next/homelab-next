@@ -10,3 +10,11 @@ fields:
   KeyType: cloud.credential.type
   NewAsnForKey: cloud.credential.first_seen_asn
   CloudApiAction: cloud.api.action
+  # set by the pipeline on an event whose host or source address is a guest that serves models or
+  # runs model-written code (cap:inference, cap:codemode-executor): "model"; the enrichment itself
+  # is the pipeline's, as first_seen_asn is
+  Runtime: labels.hnx_runtime
+  DnsQueryName: dns.question.name
+  UrlDomain: url.domain
+  DestinationIp: destination.ip
+  Message: message

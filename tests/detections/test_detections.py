@@ -58,10 +58,10 @@ def rule_text(cond="sel", sel="    Image|endswith: '\\x.exe'"):
 
 
 # ---- shipped content
-def test_six_rules_across_tactics():
+def test_eleven_rules_across_tactics():
     rules = load_rules(DET)
-    assert len(rules) == 6
-    assert len({r.path.parent.name for r in rules}) >= 5
+    assert len(rules) == 11
+    assert len({r.path.parent.name for r in rules}) >= 7
     assert all(r.attack_techniques for r in rules)
 
 
@@ -71,7 +71,7 @@ def test_runner_all_green_and_evasions_reported():
     text = rep.render()
     assert "EVADED" in text and "RESULT: ok" in text
     evaded = [r for rr in rep.rules for r in rr.evaded]
-    assert len(evaded) == 7  # documented gaps; never failures
+    assert len(evaded) == 12  # documented gaps; never failures
 
 
 def test_repo_lint_clean_and_map_current():
@@ -272,7 +272,7 @@ def test_wazuh_bundle_wellformed_golden():
     text = be.bundle(arts)
     golden("wazuh/_bundle.xml", text)
     root = ET.fromstring(text)
-    assert len(root.findall("rule")) == 6
+    assert len(root.findall("rule")) == 11
 
 
 def test_wazuh_rejects_inexpressible_and_missing_id(tmp_path):
