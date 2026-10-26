@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/export_manifest/1.0",
+  "x-draft": "ADR-0027 (proposed): the manifest a stateful slot's export writes and its import_ is held to (follow-up 7); not frozen, may change before acceptance, when the slot protocols gain export and import_",
+  "title": "Export manifest",
+  "description": "What a stateful slot's export wrote (ADR-0027, proposed; docs/modules.md, 'Import validation'): the slot and its export format, every file's relative path, size and sha256, and the totals. An importer holds the tree to it exactly: no file missing or extra, every size and digest equal, no link or special file. The rules a schema cannot state (paths unique case-insensitively, no file under another file, totals equal to the sums, the importer's limits, the tree itself) are in homelabnext.modules.importcheck.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "slot",
+    "format",
+    "files",
+    "totals"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "slot": {
+      "description": "the stateful slot the export is of (a slot registry key)",
+      "type": "string",
+      "maxLength": 48,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "format": {
+      "description": "one of the slot's export_formats",
+      "type": "string",
+      "maxLength": 48,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "bytes"
+      ],
+      "properties": {
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "description": "relative POSIX path: no leading '/', no empty, '.' or '..' segment, no backslash or control character",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*/$)[^\\\\\\x00-\\x1f\\x7f]+$(?!\\n)"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$(?!\\n)"
+        }
+      }
+    }
+  }
+}
