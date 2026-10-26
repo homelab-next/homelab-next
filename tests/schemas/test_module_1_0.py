@@ -449,6 +449,25 @@ def _ag(d):
 
 
 MODULE_DEFECTS = {
+    "a gate interface its owner does not consume": (
+        "publishing",
+        lambda d: d.pop("prefers"),
+        "a gate interface is owned by its consumer",
+    ),
+    "a gate interface defined by its producer": (
+        "publishing",
+        lambda d: d.setdefault("provides", {}).__setitem__(
+            "interfaces",
+            [
+                {
+                    "interface": "publishable-output",
+                    "version": "1.0",
+                    "via": {"cap": "cap:object-store", "prefix": "publishing/out/"},
+                }
+            ],
+        ),
+        "a producer never defines the gate interface",
+    ),
     "a module reading addresses without exclude.offensive": (
         "external-collector",
         lambda d: d["requires"].__setitem__("scope", [{"part": "trusted.wan"}]),

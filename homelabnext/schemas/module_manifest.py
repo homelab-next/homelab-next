@@ -13,6 +13,7 @@ examples.
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -482,10 +483,14 @@ def _defs() -> dict[str, Any]:
                     256,
                 ),
                 "schema_id": ref("schema_id"),
+                "gate": {
+                    "type": "boolean",
+                    "description": "A gate interface: the consumer's gate validates every item (publishable-output, sample-handoff), so the consumer owns it. The owner of a gate interface consumes it (requires or prefers it) and never provides it: a producer cannot define what its own output is checked against.",
+                },
                 "description": text(300),
             },
             ["id", "version", "kind", "description"],
-            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface.",
+            "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface (gate: true).",
             oneOf=[{"required": ["schema"]}, {"required": ["schema_id"]}],
         ),
         "interface_provided": obj(
@@ -1190,6 +1195,45 @@ def module_schema() -> dict[str, Any]:
     }
 
 
+def _refs(node: Any) -> set[str]:
+    """The ``#/$defs/<name>`` names ``node`` refers to, directly."""
+    out: set[str] = set()
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            r = n.get("$ref")
+            if isinstance(r, str) and r.startswith("#/$defs/"):
+                out.add(r[len("#/$defs/") :])
+            stack += list(n.values())
+        elif isinstance(n, list):
+            stack += n
+    return out
+
+
+def interface_schema() -> dict[str, Any]:
+    """``platform/interface`` 1.0: one interface definition as a standalone record, the same shape
+    a manifest's ``interfaces:`` entries have (one source: the module schema's definition)."""
+    defs = module_schema()["$defs"]
+    body = copy.deepcopy(defs["interface_definition"])
+    need, todo = set(), list(_refs(body))
+    while todo:
+        name = todo.pop()
+        if name not in need:
+            need.add(name)
+            todo += list(_refs(defs[name]))
+    body.pop("description", None)
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": BASE + "platform/interface/1.0",
+        "x-draft": "ADR-0027 (proposed): an interface definition as a standalone record (follow-up 3); not frozen, may change before acceptance",
+        "title": "Interface definition",
+        "description": "One interface a module owns (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a JSON Schema in the owner, or a shipped schema id), and whether it is a gate. Defined once, in the owner's manifest (its interfaces: entries have exactly this shape); a provider references it, never redefines it. The rules a schema cannot state (one owner per id across every manifest, a gate interface owned by a consumer that never provides it, the schema's $id in the owner's namespace) are in homelabnext.modules.rules.",
+        **body,
+        "$defs": {k: copy.deepcopy(defs[k]) for k in sorted(need)},
+    }
+
+
 def lake_table_schema() -> dict[str, Any]:
     retention = {"type": "integer", "minimum": 1, "maximum": 3650}
     return {
@@ -1462,5 +1506,6 @@ def render() -> dict[str, str]:
     return {
         "schemas/platform/module.schema.json": _dump(module_schema()),
         "schemas/platform/lake_table.schema.json": _dump(lake_table_schema()),
+        "schemas/platform/interface.schema.json": _dump(interface_schema()),
         "schemas/platform/module_selection.schema.json": _dump(module_selection_schema()),
     }

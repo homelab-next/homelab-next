@@ -229,7 +229,16 @@ def module_problems(
         p = i["via"].get("prefix")
         if p and not p.startswith(mid + "/"):
             out.append(f"interface {i['interface']}: prefix starts with {mid}/")
+    provided_ids = {i["interface"] for i in doc.get("provides", {}).get("interfaces", [])}
     for i in doc.get("interfaces", []):
+        if i.get("gate"):  # a gate interface is owned by the consumer whose gate checks it
+            if i["id"] not in _consumed_interfaces(doc):
+                out.append(f"interface {i['id']}: a gate interface is owned by its consumer")
+            if i["id"] in provided_ids:
+                out.append(
+                    f"interface {i['id']}: a producer never defines the gate interface it is "
+                    "checked against"
+                )
         if "schema" in i:
             try:
                 sid = str(load(mod_dir / i["schema"]).get("$id", ""))

@@ -614,6 +614,23 @@ def render(root: Path) -> dict[str, str]:
         lake,
         "A module's lake table, as examples/modules/external-collector/lake/sessions.table.yml.",
     )
+    for owner in ("publishing", "example-sandbox"):
+        doc = yaml.safe_load((ex / owner / "module.yml").read_text(encoding="utf-8"))
+        (iface,) = doc["interfaces"]
+        out[f"schemas/platform/examples/interface.{iface['id']}.yml"] = _dump(
+            iface, f"A gate interface, as examples/modules/{owner}/module.yml defines it."
+        )
+    iface = yaml.safe_load((ex / "publishing" / "module.yml").read_text(encoding="utf-8"))[
+        "interfaces"
+    ][0]
+    for name, mutate, comment in (
+        ("no-item-schema", lambda d: d.pop("schema"), "An interface names its item schema."),
+        ("unknown-kind", lambda d: d.__setitem__("kind", "queue"), "An interface kind is one of four."),
+        ("gate-not-boolean", lambda d: d.__setitem__("gate", "yes"), "gate is true or false."),
+    ):
+        d = copy.deepcopy(iface)
+        mutate(d)
+        out[f"schemas/platform/negative/interface.{name}.yml"] = _dump(d, comment)
     bad = dict(lake)
     bad.pop("freshness")
     out["schemas/platform/negative/lake_table.without-freshness.yml"] = _dump(

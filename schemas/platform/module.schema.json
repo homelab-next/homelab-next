@@ -1229,13 +1229,17 @@
         "schema_id": {
           "$ref": "#/$defs/schema_id"
         },
+        "gate": {
+          "type": "boolean",
+          "description": "A gate interface: the consumer's gate validates every item (publishable-output, sample-handoff), so the consumer owns it. The owner of a gate interface consumes it (requires or prefers it) and never provides it: a producer cannot define what its own output is checked against."
+        },
         "description": {
           "type": "string",
           "minLength": 1,
           "maxLength": 300
         }
       },
-      "description": "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface.",
+      "description": "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface (gate: true).",
       "oneOf": [
         {
           "required": [
