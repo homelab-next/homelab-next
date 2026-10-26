@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/module_lock/1.0",
+  "x-draft": "ADR-0027 (proposed): the overlay's lab/modules.lock (follow-up 5); not frozen, may change before acceptance, when the loader reads it",
+  "title": "Module lock",
+  "description": "The overlay's pins for fetched modules (ADR-0027, proposed; docs/modules.md, 'Supply chain'): per module id, its origin (exactly the manifest's: git with a full commit, or archive with a sha256), its tree digest (sha256 over every file of the module directory, code and roles included; homelabnext.modules.supply.tree_digest) and the reviews of that tree. Reviews never live in a module: they are the overlay's, each counting only while its digest is a prefix of the pinned tree, against the review policy's module-provider, module-feature or module-core requirement in state locked. In-tree modules are reviewed by this repository's pull requests and are never locked. The rules a schema cannot state (the origin equals the manifest's, the directory still has the digest, the reviews meet the policy, the author does not review their own module) are in homelabnext.modules.supply.lock_problems.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "modules"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "modules": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 48,
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "origin": {
+      "description": "A fetched origin, exactly the module manifest's.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url",
+            "commit"
+          ],
+          "properties": {
+            "kind": {
+              "const": "git"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 300,
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
+            },
+            "commit": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$(?!\\n)",
+              "description": "A full commit id: 40 hex (sha1 repositories) or 64 hex (sha256)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url",
+            "sha256"
+          ],
+          "properties": {
+            "kind": {
+              "const": "archive"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 300,
+              "pattern": "^https://[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$(?!\\n)"
+            },
+            "sha256": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$(?!\\n)"
+            }
+          }
+        }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tree",
+        "reviews"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)",
+          "description": "The module directory's tree digest (`hnx reviews digest <module dir>`)."
+        },
+        "reviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/review"
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by",
+        "kind",
+        "role",
+        "date",
+        "verdict",
+        "digest"
+      ],
+      "description": "One review, in the shape of homelabnext.reviews.",
+      "properties": {
+        "by": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+$(?!\\n)"
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "human"
+          ]
+        },
+        "role": {
+          "enum": [
+            "check",
+            "audit",
+            "approve"
+          ]
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$(?!\\n)"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "changes",
+            "reject"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "description": "The full pinned tree: a prefix is not enough for a module review.",
+          "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^[^\\n]*$(?!\\n)"
+        }
+      }
+    }
+  }
+}

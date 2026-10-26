@@ -63,6 +63,7 @@ EXPECTED = {
     "platform/module_selection.schema.json",
     "platform/slot.schema.json",
     "platform/module_swap.schema.json",
+    "platform/module_lock.schema.json",
     "platform/export_manifest.schema.json",
     "platform/model_serving.schema.json",
     "ocsf/authentication.v1.json",

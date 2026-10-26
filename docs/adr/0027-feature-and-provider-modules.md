@@ -130,8 +130,13 @@ with no schema, generator or check in any form):
    them in a test; the record and the swap kit stay 1.1 until acceptance;
 3. `platform/interface` 1.0 as a record, and gate-interface ownership;
 4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
-   remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;
-5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
+   remote-admin, cloud-bound model roles and `grants.shared_config`, and the per-field review tier
+   for in-tree manifests (the review-policy module kinds came with follow-up 5, for fetched
+   modules, with a flat tier);
+5. the supply chain: implemented (`homelabnext.modules.supply`: the tree digest, the draft schema
+   `platform/module_lock` 1.0 for `lab/modules.lock`, and reviews keyed by the digest against the
+   new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader will
+   run the check;
 6. the egress generator: implemented (`homelabnext.modules.egress`: an nftables ruleset per lab
    host that lets each module role's slice open connections only to its DNS, its required and
    preferred slots, its `svc:` targets and, when declared, global unicast outside the lab;
