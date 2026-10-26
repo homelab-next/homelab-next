@@ -526,9 +526,44 @@ refused ("... remove the grant"). So **a grant lands in the same overlay change 
 version (its pin in the lock, or the checkout for an in-tree module) that first uses it, and is
 deleted with the version that stops using it**; unselecting a module means deleting its grants. A
 `svc:` target is checked even before the rows are read: a selected slot, an instance, or a name
-bound to a selected feature or core module (whose rows then decide). **The egress generator is specified, not implemented**: nothing renders the declared egress
-into host and unit network policy (`IPAddressDeny`/allow lists, nftables) yet, so today egress is
-declared and checked against grants, not enforced on the wire. **Publishing is the only egress
+bound to a selected feature or core module (whose rows then decide). **The egress generator** (follow-up 6): `homelabnext.modules.egress.render(site, modules, rows,
+units)` turns it into an nftables ruleset per lab host that limits the connections a module role's
+processes open. A socket in a role's slice (the `hnx-<id_>-<role_>.slice` of
+[footprint limits](#footprint-and-resources), matched as `socket cgroupv2 level 3`) jumps to the
+role's chain, which accepts:
+
+- DNS to the selected `dns` instances (their rows' ports, or udp and tcp 53);
+- each slot the module requires or prefers, and a preference's fallback only when the preferred
+  slot is not selected: the provider's rows at their placed host's addresses and ports, or every
+  port of its placed hosts when it has no row (address-granular: give the provider rows to narrow
+  it); a provider with no host role runs outside the lab and is reached only over `internet`;
+- each `svc:` target (a feature or core module's row, a slot or an instance);
+- with `internet`, global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
+  so the role resolves through the lab's resolvers): every special-purpose range (private, shared, loopback,
+  link-local, documentation, benchmarking, multicast, reserved, NAT64 and the other
+  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader) and every
+  host's `addresses` are never the internet.
+
+It logs and drops the rest; an `isolated` role reaches nothing, and any other socket in
+`hnx.slice` is dropped. Hosts carry their own `addresses` in the selection
+(`hosts.<name>.addresses`: one address each, private, documentation ranges in a public example; a
+stand-in, like `capacity`, until the loader reads them from the guest records and the network
+model). Every address, port, protocol and name is checked before it reaches the ruleset.
+`hnx-egress.service` loads it only on the unified cgroup v2 hierarchy with every role slice's
+cgroup present, before `network-pre.target`; the module's fleet units start only after it, and
+`hnx-egress.timer` reloads it every 30 seconds, because nftables resolves a cgroup once (a
+restarted role slice falls under the `hnx.slice` drop until then). A failed load keeps the policy
+already loaded; before the first successful load at boot `hnx.slice` is unfiltered, so watch the
+service for failure. Requirements are the module's, not a role's: every role of a module reaches
+the slots the module requires, authority slots included.
+
+**What it does not cover**: connections the module accepts (inbound is the network model's and the
+edge's; replies pass as established); loopback, so modules on one host reach each other's local
+services; containers with their own network namespace (forwarded, not output from a socket in the
+slice); a process with root or `CAP_NET_ADMIN`, which can change the ruleset or its own cgroup;
+flows established before a change; DNS over HTTPS from a role with `internet` (it is HTTPS on
+443, which this layer cannot tell apart); and DNS as a channel through the lab's resolver. Place modules
+that must not reach each other on different hosts, and run them unprivileged. **Publishing is the only egress
 for published content** because the overlay says so, not because publishing says so: only a module
 in `grants.publish` may require, prefer or fall back to `cap:static-hosting`, and the core criterion
 `core-modules/egress-publish-grant` checks it (deferred until the loader exists; the contract tests
@@ -960,7 +995,8 @@ listed as deferred.
    `grants.shared_config` (the rule refuses edge and idp config outright), and the review-policy
    kinds `module-provider`, `module-feature`, `module-core`.
 5. **Supply chain**: the `lab/modules.lock` format, the tree digest, and reviews keyed by it.
-6. **The egress generator**: rendering declared egress into host and unit network policy.
+6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing)); the
+   loader will run it.
 7. **Import validation**: implemented as a library, a draft schema and the `migration` suite (see
    [`data:` and lifecycle safety](#data-and-lifecycle-safety)); no provider proves it until its
    slot protocol gains `export` and `import_`.

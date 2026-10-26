@@ -132,7 +132,12 @@ with no schema, generator or check in any form):
 4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
    remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;
 5. the supply chain: `lab/modules.lock`, the tree digest and digest-keyed reviews;
-6. the egress generator (declared egress as host and unit network policy);
+6. the egress generator: implemented (`homelabnext.modules.egress`: an nftables ruleset per lab
+   host that lets each module role's slice open connections only to its DNS, its required and
+   preferred slots, its `svc:` targets and, when declared, global unicast outside the lab;
+   isolated roles reach nothing; inbound, loopback, containers in their own network namespace and
+   root processes are not covered); hosts carry `addresses` in the selection, and the loader
+   will run it;
 7. import validation: the MUST is implemented as a library (`homelabnext.modules.importcheck`),
    the draft schema `platform/export_manifest` 1.0 and the extended `migration` suite. Beyond
    traversal, links and oversize trees it also refuses hard links, other filesystems and mount

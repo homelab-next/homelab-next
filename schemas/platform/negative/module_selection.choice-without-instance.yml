@@ -4,6 +4,8 @@ profile: single-box
 hosts:
   box:
     kind: host
+    addresses:
+    - 192.0.2.10
     capacity:
       cpu: 16
       memory_mb: 16384

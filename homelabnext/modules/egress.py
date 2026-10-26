@@ -1,0 +1,569 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Declared egress as network policy (ADR-0027 follow-up 6; docs/modules.md, "Egress and
+publishing").
+
+A module reaches the slots it requires or prefers, and beyond them only what its ``egress:``
+declares per host role (``svc:<service>``, ``internet``; ``external`` marks a role outside the
+lab), each internet or authority target granted by the overlay (:mod:`.rules` checks the grants).
+This module turns that into an nftables ruleset per lab host that limits the connections a
+module role's processes open.  :func:`render` returns, per placed host (``<host>/``):
+
+* ``hnx-egress.nft``: table ``inet hnx_egress`` with an ``output`` chain.  Invalid packets are
+  dropped, replies (established, related) and loopback pass, and a socket in a module role's slice
+  (:mod:`.limits` names it, ``hnx-<id_>-<role_>.slice``, matched as ``socket cgroupv2 level 3``)
+  jumps to that role's chain, which accepts:
+
+  - DNS (udp and tcp 53) to the hosts of every selected ``dns`` instance (its rows' ports when its
+    provider contributes rows);
+  - each slot the module requires or prefers, and a preference's fallback when the preferred slot
+    is not selected: the selected instance's provider rows for that slot at their placed host's
+    addresses and ports, or every port of the provider's placed hosts when it contributes no row
+    (address-granular: give the provider rows to narrow it).  A provider with no host role runs
+    outside the lab and is reached only over ``internet``;
+  - each ``svc:`` target: the row of that name (a selected feature or core module's) at its placed
+    host's addresses and port, or a slot or instance name as above;
+  - ``internet``: global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
+    so the role resolves through the lab's resolvers), and never a lab host: every special-purpose range (private,
+    shared, loopback, link-local, documentation, benchmarking, multicast, reserved, NAT64 and the
+    other IPv4-embedding IPv6 prefixes), ``scope.trusted.nets`` and every host's ``addresses`` are
+    excluded;
+
+  and logs (rate-limited) and drops the rest.  An ``isolated`` role gets an empty chain.  Any
+  other socket in ``hnx.slice`` is dropped too; nothing outside ``hnx.slice`` is touched.  The file
+  deletes and recreates the table in one transaction, so loading it again is idempotent, and a
+  failed load keeps the table already loaded.
+* ``hnx-egress.service`` and ``hnx-egress.timer``: the service refuses to load unless the host runs
+  the unified cgroup v2 hierarchy and every role slice's cgroup exists (it starts them first), and
+  orders itself before ``network-pre.target``; the timer reloads every 30 seconds, because nftables
+  resolves a cgroup path once.  A role slice stopped and started in between falls under the
+  ``hnx.slice`` drop (fails closed); if ``hnx.slice`` itself is recreated, its sockets are not
+  filtered until that reload, and neither are they before the first successful load at boot (the
+  README says how to watch for a failed load).
+* ``hnx-<name>.service.d/50-hnx-egress.conf``: each of the module's fleet units starts only after
+  the policy loaded (``Requires=`` and ``After=`` the service).
+
+**What it does not cover** (the README repeats it): connections the module accepts (inbound is the
+network model's and the edge's); loopback, so modules on one host reach each other's local
+services; traffic of containers with their own network namespace (it is forwarded, not output
+from a socket in the slice); a process with root or ``CAP_NET_ADMIN``, which can change the
+ruleset or its own cgroup; flows already established when the policy changes; DNS over HTTPS
+from a role with ``internet`` (it is HTTPS on 443); and DNS itself as a channel through the lab's
+resolver.  Place modules that must not reach each other on different
+hosts, and run them unprivileged.
+
+Every input is checked before it reaches the ruleset: addresses are strings parsed by
+:mod:`ipaddress` (no scope id, no IPv4-embedding form) and printed back, ``scope.trusted.nets``
+goes through the strict scope reader, ports are integers, protocols are the registry's, and every
+name matches the slug pattern.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import re
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from homelabnext.generators.fleet_units import PREFIX as UNIT_PREFIX
+from homelabnext.modules import limits
+from homelabnext.modules.rules import _hosts, _placed, selected
+from homelabnext.modules.scope import EMBEDDED_V4, ScopeMissing, _part_networks, _v6
+
+__all__ = ["NOT_INTERNET", "PROTOCOLS", "RELOAD_S", "EgressError", "render", "write"]
+
+Doc = dict[str, Any]
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+_NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+HEADER = "# Generated by homelabnext.modules.egress from the site selection. Do not edit.\n"
+RELOAD_S = 30
+#: DNS over TLS (tcp) and DNS over QUIC (udp): never to the internet, so a role with internet
+#: egress still resolves through the lab's resolvers
+ENCRYPTED_DNS_PORT = 853
+#: the registry's protocols (platform/service ``protocol``) and the transport each one uses
+PROTOCOLS: dict[str, tuple[str, ...]] = {
+    "http": ("tcp",),
+    "https": ("tcp",),
+    "grpc": ("tcp",),
+    "tcp": ("tcp",),
+    "udp": ("udp",),
+    "postgres": ("tcp",),
+    "nats": ("tcp",),
+    "dns": ("udp", "tcp"),
+    "ssh": ("tcp",),
+}
+#: never "the internet" (the IANA special-purpose registries), built from integers like
+#: :mod:`.scope`'s tables so no address literal is in the source
+NOT_INTERNET: tuple[Network, ...] = (
+    *(
+        ipaddress.ip_network(n)
+        for n in (
+            (0x0000_0000, 8),  # this network
+            (0x0A00_0000, 8),  # private
+            (0x6440_0000, 10),  # shared (CGNAT)
+            (0x7F00_0000, 8),  # loopback
+            (0xA9FE_0000, 16),  # link-local
+            (0xAC10_0000, 12),  # private
+            (0xC000_0000, 24),  # IETF protocol assignments
+            (0xC000_0200, 24),  # documentation
+            (0xC0A8_0000, 16),  # private
+            (0xC612_0000, 15),  # benchmarking
+            (0xC633_6400, 24),  # documentation
+            (0xCB00_7100, 24),  # documentation
+            (0xE000_0000, 4),  # multicast
+            (0xF000_0000, 4),  # reserved, broadcast included
+        )
+    ),
+    *EMBEDDED_V4,  # ::/96 (:: and ::1), mapped, translated, both NAT64 prefixes
+    _v6((0x100,), 64),  # discard-only
+    _v6((0x2001,), 23),  # IETF protocol assignments (Teredo, ORCHID, ...)
+    _v6((0x2001, 0xDB8), 32),  # documentation
+    _v6((0x2002,), 16),  # 6to4
+    _v6((0x3FFF,), 20),  # documentation
+    _v6((0xFC00,), 7),  # unique local
+    _v6((0xFE80,), 10),  # link-local
+    _v6((0xFF00,), 8),  # multicast
+)
+
+
+class EgressError(Exception):
+    """The selection cannot be turned into egress policy (exit 1 for a CLI)."""
+
+
+@dataclass(frozen=True)
+class Allow:
+    family: str  # ip | ip6
+    addr: str  # a host address, as ipaddress prints it
+    proto: str | None  # tcp | udp | None (any)
+    port: int | None
+
+
+def _checked(kind: str, value: Any) -> str:
+    if not isinstance(value, str) or not _NAME.match(value):
+        raise EgressError(f"{kind} {value!r:.80} is not a lower-case name joined by '-'")
+    return value
+
+
+def _address(host: str, a: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """One of a host's addresses: a string, one address (no prefix or a full-length one), no
+    scope id, not an IPv4-embedding IPv6 form, not unspecified, loopback or multicast."""
+    try:
+        if not isinstance(a, str):  # ipaddress reads an integer as an address
+            raise TypeError(a)
+        net = ipaddress.ip_network(a, strict=True)
+    except (TypeError, ValueError):
+        raise EgressError(f"host {host}: {a!r:.80} is not an address") from None
+    if net.num_addresses != 1:
+        raise EgressError(f"host {host}: {a} is a network, not one address")
+    addr = net.network_address
+    if getattr(addr, "scope_id", None) or "%" in a:
+        raise EgressError(f"host {host}: {a!r:.80} carries a scope id")
+    if addr.version == 6 and any(addr in n for n in EMBEDDED_V4):
+        raise EgressError(f"host {host}: {a} embeds an IPv4 address; write the IPv4 address")
+    if addr.is_unspecified or addr.is_loopback or addr.is_multicast:
+        raise EgressError(f"host {host}: {a} is not a host's own address")
+    return addr
+
+
+def _protos(where: str, protocol: Any) -> tuple[str, ...]:
+    if protocol not in PROTOCOLS:
+        raise EgressError(f"{where}: protocol {protocol!r:.40} is not a registry protocol")
+    return PROTOCOLS[protocol]
+
+
+def _port(where: str, port: Any) -> int:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise EgressError(f"{where}: port {port!r:.40} is not 1-65535")
+    return port
+
+
+def _allow(addr, proto: str | None, port: int | None) -> Allow:
+    return Allow("ip" if addr.version == 4 else "ip6", str(addr), proto, port)
+
+
+class _Site:
+    """The selection, read once: who is placed where, every host's addresses and every row."""
+
+    def __init__(self, site: Doc, mods: dict[str, Doc], rows: Callable[[str], dict[str, Doc]]):
+        self.site = site
+        try:
+            self.sel = selected(site, mods)
+            self.placed = _placed(site, self.sel)
+            self.choices: dict[str, list[Doc]] = {
+                s: c for s, c in site.get("slots", {}).items() if isinstance(c, list)
+            }
+            for cs in self.choices.values():
+                for c in cs:
+                    _checked("provider", c["provider"])
+                    _checked("instance", c["instance"])
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise EgressError(f"the selection cannot be read: {exc!r:.120}") from None
+        hosts = site.get("hosts")
+        if not isinstance(hosts, dict):
+            raise EgressError("the selection has no hosts")
+        self.addresses: dict[str, list] = {}
+        for name, h in hosts.items():
+            raw = h.get("addresses") if isinstance(h, dict) else None
+            if raw is None:
+                continue
+            if not isinstance(raw, list):
+                raise EgressError(f"host {name}: addresses must be a list")
+            self.addresses[name] = [_address(name, a) for a in raw]
+        #: (module, instance) -> {host role: host}; a feature or core module's under instance None
+        self.where: dict[tuple[str, str | None], dict[str, str]] = {}
+        for mod, inst, role, _h, host in self.placed:
+            self.where.setdefault((mod, inst), {})[role] = host
+        # a provider instance's placement may sit on another slot's entry of the same instance
+        for cs in self.choices.values():
+            for c in cs:
+                key = (c["provider"], c["instance"])
+                self.where.setdefault(key, {})
+        self.rows = {m: rows(m) or {} for m in self.sel}
+
+    def host_addresses(self, where: str, host: str) -> list:
+        got = self.addresses.get(host)
+        if not got:
+            raise EgressError(f"{where}: host {host} has no addresses (hosts.{host}.addresses)")
+        return got
+
+    def _row_allows(self, where: str, mod: str, inst: str | None, row: Any) -> list[Allow]:
+        if not isinstance(row, dict):
+            raise EgressError(f"{where}: a row of {mod} is not a mapping")
+        role = row.get("host")
+        host = self.where.get((mod, inst), {}).get(role) if isinstance(role, str) else None
+        if host is None:
+            raise EgressError(
+                f"{where}: row of {mod} runs on host role {role!r:.40}, which is not placed"
+            )
+        port = _port(where, row.get("port"))
+        return [
+            _allow(a, proto, port)
+            for a in self.host_addresses(where, host)
+            for proto in _protos(where, row.get("protocol"))
+        ]
+
+    def slot(
+        self, where: str, slot: str, instance: str | None = None, *, dns: bool = False
+    ) -> list[Allow]:
+        """What reaching ``slot`` (one instance, or every selected one) allows.  ``dns``: a
+        provider without rows is reached on port 53 only."""
+        out: list[Allow] = []
+        for c in self.choices.get(slot, []):
+            if instance and c["instance"] != instance:
+                continue
+            prov, inst = c["provider"], c["instance"]
+            rows = [
+                r for r in self.rows.get(prov, {}).values()
+                if isinstance(r, dict) and r.get("capability") == slot
+            ]  # fmt: skip
+            if rows:
+                for r in rows:
+                    out += self._row_allows(where, prov, inst, r)
+                continue
+            if not _hosts(self.sel[prov]):
+                continue  # runs outside the lab: reached only over the internet
+            hosts = self.where.get((prov, inst), {})
+            if not hosts:
+                raise EgressError(
+                    f"{where}: {slot} instance {inst} of {prov} is not placed anywhere"
+                )
+            for host in sorted(set(hosts.values())):
+                for a in self.host_addresses(where, host):
+                    if dns:
+                        out += [_allow(a, "udp", 53), _allow(a, "tcp", 53)]
+                    else:
+                        out.append(_allow(a, None, None))
+        return out
+
+    def service(self, where: str, name: str) -> list[Allow]:
+        if name in self.choices:
+            return self.slot(where, name)
+        for slot, cs in self.choices.items():
+            if any(c["instance"] == name for c in cs):
+                return self.slot(where, slot, name)
+        for mod in sorted(self.rows):
+            row = self.rows[mod].get(name)
+            if row is not None and self.sel[mod]["kind"] != "provider":
+                return self._row_allows(where, mod, None, row)
+        raise EgressError(f"{where}: svc:{name} is no selected slot, instance or row")
+
+    def not_internet(self) -> tuple[list[str], list[str]]:
+        """The never-internet sets, merged per family so no element overlaps another."""
+        try:
+            trusted = _part_networks(self.site, "trusted.nets")
+        except ScopeMissing as exc:
+            if "missing" not in str(exc):
+                raise EgressError(str(exc)) from None
+            trusted = []
+        nets: list[Network] = [*NOT_INTERNET, *trusted]
+        for addrs in self.addresses.values():
+            nets += [ipaddress.ip_network(a) for a in addrs]
+        v4 = [n for n in nets if n.version == 4]
+        v6 = [n for n in nets if n.version == 6]
+        return (
+            [str(n) for n in ipaddress.collapse_addresses(v4)],
+            [str(n) for n in ipaddress.collapse_addresses(v6)],
+        )
+
+
+def _role_policy(s: _Site, mod: str, role: str) -> tuple[list[Allow], bool]:
+    m = s.sel[mod]
+    where = f"{mod}/{role}"
+    if _hosts(m)[role].get("exposure") == "isolated":
+        return [], False  # an isolated role has no route to the lab and no egress: nothing
+    allows = s.slot(where, "dns", dns=True) if "dns" in s.choices else []
+    asks: list[tuple[str, str | None]] = []
+    for r in m.get("requires", {}).get("capabilities", []):
+        asks.append((str(r.get("cap", "")).removeprefix("cap:"), r.get("instance")))
+    for p in m.get("prefers", {}).get("capabilities", []):
+        slot = str(p.get("cap", "")).removeprefix("cap:")
+        if slot in s.choices:
+            asks.append((slot, p.get("instance")))
+        elif to := p.get("fallback", {}).get("to"):  # the fallback only stands in for it
+            asks.append((str(to).removeprefix("cap:"), None))
+    for slot, instance in asks:
+        if slot in s.choices:
+            allows += s.slot(where, slot, instance)
+    internet = False
+    eg = m.get("egress", "none")
+    for e in eg if isinstance(eg, list) else []:
+        if not isinstance(e, dict) or e.get("host") != role:
+            continue
+        for t in e.get("to", []):
+            if t == "internet":
+                internet = True
+            elif t == "external":
+                continue
+            elif isinstance(t, str) and t.startswith("svc:"):
+                allows += s.service(where, _checked("service", t[4:]))
+            else:
+                raise EgressError(
+                    f"{where}: egress target {t!r:.80} is not svc:<name>, internet or external"
+                )
+    every_port = {(a.family, a.addr) for a in allows if a.proto is None}
+    kept = {a for a in allows if a.proto is None or (a.family, a.addr) not in every_port}
+    return sorted(kept, key=lambda a: (a.family, a.addr, a.proto or "", a.port or 0)), internet
+
+
+def _chain(mod: str, role: str) -> str:
+    return "m_" + mod.replace("-", "_") + "__" + role.replace("-", "_")
+
+
+def _cgroup(mod: str, role: str) -> str:
+    return f"hnx.slice/{limits.slice_name(mod)}/{limits.slice_name(mod, role)}"
+
+
+def _rule(a: Allow) -> str:
+    out = f"{a.family} daddr {a.addr}"
+    if a.proto:
+        out += f" {a.proto} dport {a.port}"
+    return out + " accept"
+
+
+def _set(name: str, kind: str, elements: list[str]) -> list[str]:
+    return [
+        f"  set {name} {{",
+        f"    type {kind}; flags interval",
+        f"    elements = {{ {', '.join(elements)} }}",
+        "  }",
+    ]
+
+
+def _nft(host: str, roles: list[tuple[str, str, list[Allow], bool]], lab4, lab6) -> str:
+    out = [
+        "#!/usr/sbin/nft -f",
+        HEADER.rstrip("\n"),
+        f"# Egress of the module roles placed on {host}: each may open connections only to what",
+        "# it declared. Loaded (idempotently) by hnx-egress.service and hnx-egress.timer.",
+        "table inet hnx_egress",
+        "delete table inet hnx_egress",
+        "table inet hnx_egress {",
+        *_set("not_internet4", "ipv4_addr", lab4),
+        *_set("not_internet6", "ipv6_addr", lab6),
+        "  chain output {",
+        "    type filter hook output priority filter; policy accept;",
+        "    ct state invalid drop",
+        "    ct state established,related accept",
+        '    oifname "lo" accept',
+    ]
+    for mod, role, _a, _i in roles:
+        out.append(f'    socket cgroupv2 level 3 "{_cgroup(mod, role)}" jump {_chain(mod, role)}')
+    out += [
+        '    socket cgroupv2 level 1 "hnx.slice" limit rate 10/minute log prefix "hnx-egress hnx.slice " drop',
+        '    socket cgroupv2 level 1 "hnx.slice" drop',
+        "  }",
+    ]
+    for mod, role, allows, internet in roles:
+        out.append(f"  chain {_chain(mod, role)} {{")
+        out += [f"    {_rule(a)}" for a in allows]
+        if internet:
+            # DNS over TLS and over QUIC to a resolver outside the lab: lookups go through the
+            # lab's own resolvers (DNS over HTTPS is HTTPS on 443 and cannot be told apart)
+            dot = f"    meta l4proto {{ tcp, udp }} th dport {ENCRYPTED_DNS_PORT}"
+            out += [
+                f'{dot} limit rate 10/minute log prefix "hnx-egress {mod}/{role} dot " drop',
+                f"{dot} drop",
+                "    ip daddr != @not_internet4 accept",
+                "    ip6 daddr != @not_internet6 accept",
+            ]
+        out += [
+            f'    limit rate 10/minute log prefix "hnx-egress {mod}/{role} " drop',
+            "    drop",
+            "  }",
+        ]
+    out.append("}")
+    return "\n".join(out) + "\n"
+
+
+def _service(cgroups: Iterable[str], slices: Iterable[str]) -> str:
+    deps = " ".join(sorted(slices))
+    checks = "".join(f"ExecStartPre=/usr/bin/test -d /sys/fs/cgroup/{c}\n" for c in sorted(cgroups))
+    return (
+        HEADER
+        + "[Unit]\n"
+        + "Description=hnx module egress policy (nftables)\n"
+        + "DefaultDependencies=no\n"
+        + f"Requires={deps}\n"
+        + f"After={deps}\n"
+        + "Before=network-pre.target shutdown.target\n"
+        + "Wants=network-pre.target\n"
+        + "Conflicts=shutdown.target\n"
+        + "\n[Service]\n"
+        + "Type=oneshot\n"
+        + "# the unified cgroup v2 hierarchy, and every role slice's cgroup, or nothing loads\n"
+        + "ExecStartPre=/usr/bin/test -f /sys/fs/cgroup/cgroup.controllers\n"
+        + checks
+        + "ExecStart=/usr/sbin/nft -f /etc/hnx/egress/hnx-egress.nft\n"
+        + "CapabilityBoundingSet=CAP_NET_ADMIN\n"
+        + "AmbientCapabilities=CAP_NET_ADMIN\n"
+        + "NoNewPrivileges=yes\n"
+        + "RestrictAddressFamilies=AF_NETLINK AF_UNIX\n"
+        + "ProtectSystem=strict\n"
+        + "ProtectHome=yes\n"
+        + "PrivateTmp=yes\n"
+        + "PrivateDevices=yes\n"
+        + "ProtectKernelTunables=yes\n"
+        + "MemoryDenyWriteExecute=yes\n"
+        + "\n[Install]\n"
+        + "WantedBy=sysinit.target\n"
+    )
+
+
+def _timer() -> str:
+    return (
+        HEADER
+        + "[Unit]\n"
+        + "Description=Reload the hnx module egress policy (a restarted slice is a new cgroup)\n"
+        + "\n[Timer]\n"
+        + f"OnActiveSec={RELOAD_S}s\n"
+        + f"OnUnitActiveSec={RELOAD_S}s\n"
+        + "AccuracySec=1s\n"
+        + "RandomizedDelaySec=0\n"
+        + "Unit=hnx-egress.service\n"
+        + "\n[Install]\n"
+        + "WantedBy=timers.target\n"
+    )
+
+
+def _unit_dropin() -> str:
+    return (
+        HEADER
+        + "[Unit]\n"
+        + "# start only once the module egress policy is loaded\n"
+        + "Requires=hnx-egress.service\n"
+        + "After=hnx-egress.service\n"
+    )
+
+
+def render(
+    site: Doc,
+    mods: dict[str, Doc],
+    rows: Callable[[str], dict[str, Doc]],
+    units: Callable[[str], set[str]] | None = None,
+) -> dict[str, str]:
+    """``{relative path: content}`` for every lab host a module role is placed on, plus
+    ``README.md``.  ``rows(module)`` returns a module's contributed service rows (required);
+    ``units(module)`` its fleet unit names, which then start only after the policy loads."""
+    s = _Site(site, mods, rows)
+    lab4, lab6 = s.not_internet()
+    per_host: dict[str, list[tuple[str, str, list[Allow], bool]]] = {}
+    placed_on: dict[str, set[str]] = {}
+    for mod, _inst, role, h, host in s.placed:
+        _checked("module id", mod)
+        _checked("host role", role)
+        _checked("host", host)
+        if h is None:
+            raise EgressError(f"{mod}: placement names {role}, not one of its host roles")
+        hdoc = site["hosts"].get(host)
+        if not isinstance(hdoc, dict):
+            raise EgressError(f"{mod}: placed on unknown host {host!r:.80}")
+        if hdoc.get("kind") == "external":
+            continue
+        placed_on.setdefault(mod, set()).add(host)
+        if any(r[:2] == (mod, role) for r in per_host.get(host, [])):
+            continue  # two instances of one provider share the role's slice and its policy
+        if role not in _hosts(s.sel[mod]):
+            raise EgressError(f"{mod}: {role} is not one of its host roles")
+        allows, internet = _role_policy(s, mod, role)
+        per_host.setdefault(host, []).append((mod, role, allows, internet))
+    files: dict[str, str] = {}
+    for host, roles in sorted(per_host.items()):
+        roles.sort(key=lambda r: r[:2])
+        files[f"{host}/hnx-egress.nft"] = _nft(host, roles, lab4, lab6)
+        files[f"{host}/hnx-egress.service"] = _service(
+            (_cgroup(m, r) for m, r, _a, _i in roles),
+            (limits.slice_name(m, r) for m, r, _a, _i in roles),
+        )
+        files[f"{host}/hnx-egress.timer"] = _timer()
+    for mod in sorted(placed_on):
+        for u in sorted(units(mod)) if units else []:
+            _checked("unit", u)
+            for host in sorted(placed_on[mod]):
+                files[f"{host}/{UNIT_PREFIX}{u}.service.d/50-hnx-egress.conf"] = _unit_dropin()
+    files["README.md"] = _readme(per_host)
+    return dict(sorted(files.items()))
+
+
+def _readme(per_host) -> str:
+    out = [
+        "<!-- Generated by homelabnext.modules.egress from the site selection. Do not edit. -->",
+        "# Module egress",
+        "",
+        "Each module role placed on a lab host may open connections only to what it declared:",
+        "DNS, the slots it requires or prefers, its `svc:` targets and, when granted, global",
+        "unicast addresses outside the lab. Install per host, after the module limits (the role",
+        "slices): `hnx-egress.nft` as `/etc/hnx/egress/hnx-egress.nft` (owned by root, mode 0644,",
+        "its directory 0755 root), the service, timer and drop-ins under `/etc/systemd/system/`,",
+        "then `systemctl daemon-reload` and `systemctl enable --now hnx-egress.service",
+        "hnx-egress.timer`. It needs the unified cgroup v2 hierarchy and refuses to load",
+        "without it or without a role slice; a failed load keeps the policy already loaded, and at",
+        "boot leaves `hnx.slice` unfiltered: watch `systemctl is-failed hnx-egress.service`. It",
+        f"reloads every {RELOAD_S} seconds (a restarted slice is a new cgroup).",
+        "",
+        "Not covered: inbound connections; loopback (modules on one host reach each other's local",
+        "services); containers with their own network namespace; a process with root or",
+        "CAP_NET_ADMIN; flows established before a change; DNS over HTTPS from a role with",
+        "internet egress (HTTPS on 443; DNS over TLS and QUIC, port 853, are dropped); DNS as a",
+        "channel through the resolver.",
+        "Place modules that must not reach each other on different hosts, and run them",
+        "unprivileged.",
+        "",
+        "| Host | Module | Host role | May reach |",
+        "|---|---|---|---|",
+    ]
+    for host in sorted(per_host):
+        for mod, role, allows, internet in per_host[host]:
+            reach = [
+                f"{a.addr} {f'{a.proto}/{a.port}' if a.proto else '(all ports)'}" for a in allows
+            ]
+            if internet:
+                reach.append("the internet")
+            out.append(f"| {host} | {mod} | {role} | {', '.join(reach) or 'nothing'} |")
+    if not per_host:
+        out.append("| - | - | - | - |")
+    return "\n".join(out) + "\n"
+
+
+def write(files: dict[str, str], out: Path) -> None:
+    limits.write(files, out)

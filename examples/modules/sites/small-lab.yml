@@ -6,11 +6,13 @@ profile: small-lab
 hosts:
   core:
     kind: host
+    addresses: [192.0.2.10]
     capacity: {cpu: 16, memory_mb: 32768, disk_gb: 2000, gpu_memory_mb: 16384}
     resources: [{name: gpu0, kind: gpu}]
     headroom: {memory_mb: 4096}
   data:
     kind: vm
+    addresses: [192.0.2.11, 2001:db8:20::11]
     capacity: {cpu: 8, memory_mb: 16384, disk_gb: 4000}
     headroom: {memory_mb: 2048}
   collector-edge:

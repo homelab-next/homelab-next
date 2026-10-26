@@ -1349,6 +1349,14 @@ def module_selection_schema() -> dict[str, Any]:
                 obj({"name": pat(SLUG, None, 32), "kind": pat(SLUG, None, 32)}, ["name", "kind"])
             ),
             "headroom": obj({"memory_mb": {"type": "integer", "minimum": 0}}),
+            "addresses": arr(
+                {
+                    "allOf": [ref("scope_entry"), {"not": {"pattern": "/(?!(?:32|128)$)"}}],
+                    "description": "One address: no prefix, or a full-length one (/32, /128).",
+                },
+                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity, until the loader reads them from the guest records and the network model (and refuses a mismatch). Private: documentation ranges in a public example.",
+                1,
+            ),
         },
         ["kind", "capacity"],
         "A site host; capacity stands in for its platform/guest resources.",
