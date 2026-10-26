@@ -26,6 +26,7 @@ hosts:
   siem-1:       {address: 192.0.2.70,    zone: services, role: siem}
   sensor-1:     {address: 192.0.2.71,    zone: services, role: sensor}
   hub-1:        {address: 192.0.2.75,    zone: services, role: status}
+  vault-1:      {address: 192.0.2.76,    zone: services, role: passwords}
   bus-1:        {address: 192.0.2.140,   zone: data,     role: events}
   store-1:      {address: 192.0.2.141,   zone: data,     role: storage}
   proxy-1:      {address: 198.51.100.10, zone: edge,     role: edge}
@@ -207,3 +208,14 @@ services:
     version: "4.5"
     tls: none
     description: The time source for every host without internet (certificates and logs need a clock).
+  password-manager:
+    capability: password-manager
+    impl: vaultwarden
+    host: vault-1
+    protocol: https
+    port: 443
+    health: {kind: http, path: /alive, expect_status: 200}
+    owner: platform-team
+    version: "1.32"
+    tls: internal
+    description: The people's copy of the lab's credentials (hnx secrets seed --vaultwarden); OpenBao stays the source of truth. Back it up off the lab.

@@ -61,13 +61,14 @@ Guest-to-internet traffic therefore arrives on both NICs. What neither copy show
     zone transfer).
   - the IDS (`network-sensor`) and the DFIR server (`dfir`) on `sensor-1`.
   - `detonation` on `detonation-1`.
-  - the bus, the object store, the SIEM, the IdP, the edge proxy and the status hub on `main-1`'s
-    guests.
+  - the bus, the object store, the SIEM, the IdP, the edge proxy, the status hub and Vaultwarden
+    (`password-manager`, the people's copy of the credentials `hnx secrets seed --vaultwarden`
+    writes; [private overlay](private-overlay.md)) on `main-1`'s guests.
   - `dns-upstream`, `apt-cache` and `ntp` on `egress-1`, in the edge. Only the edge has the
     internet. The resolvers forward through `egress-1`, and every other host installs packages and
     keeps time through it. Without it, a first boot cannot resolve, update or trust a certificate.
 - **`guests/`**: one file per machine and per guest.
-  - Eight guests run on `main-1`, each with its inbound firewall rules (SSH from `mgmt` plus its
+  - Nine guests run on `main-1`, each with its inbound firewall rules (SSH from `mgmt` plus its
     own service ports). A rule open to another zone is only useful if the site lets that zone
     through, and the test checks every one.
   - The three VMs carry a `cloudinit` deploy account for Ansible.
@@ -92,7 +93,7 @@ done
 - the mirror on port 4 copies `mgmt` and `sandbox` traffic.
 
 `hnx guests validate` prints what `main-1`'s guests use:
-`main-1: 8 guests, cores 34/496, memory 56/864 GiB, ...`.
+`main-1: 9 guests, cores 36/496, memory 57/864 GiB, ...`.
 
 ## Make it yours
 
@@ -152,6 +153,9 @@ gap.
 - **Zone transfers.** Both resolvers answer TCP/53 to every zone. In Technitium, allow zone
   transfer (and NOTIFY) to `dns-2` only. The `zonefile` adapter renders the records as a zone file
   to import into the primary; after that the primary owns the zone, and the secondary copies it.
+- **Vaultwarden is on the lab.** Back it up off the lab, and keep the break-glass material
+  (OpenBao's unseal keys, the age identity) somewhere the lab does not host as well: when `main-1`
+  is down, so is `vault-1`.
 - **The console pin.** Replace the placeholder with the certificate's SHA-256 before applying
   anything to the router.
 

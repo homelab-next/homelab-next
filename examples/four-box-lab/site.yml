@@ -120,6 +120,7 @@ firewall:
     # identity and the published consoles
     - {from: [zone:services, zone:edge], to: svc:idp, action: allow}
     - {from: [zone:mgmt, zone:edge], to: svc:status-hub, action: allow}
+    - {from: zone:edge, to: svc:password-manager, action: allow, notes: "published through proxy-1"}
     # every host's agents: the SIEM (1514 events, 1515 enrolment) and the DFIR server
     - {from: [zone:mgmt, zone:data, zone:edge], to: svc:detections, action: allow, ports: [1514, 1515]}
     - {from: [zone:data, zone:edge], to: svc:dfir, action: allow}

@@ -52,7 +52,7 @@ def test_the_site_validates_with_only_the_two_expected_warnings(site_doc, regist
 def test_the_guests_validate_and_fit_the_one_node(fleet):
     assert validate_fleet(fleet) == []
     [line] = usage_lines(fleet)
-    assert line.startswith("main-1: 8 guests,")
+    assert line.startswith("main-1: 9 guests,")
 
 
 def test_the_registry_and_the_guests_agree_on_every_address(fleet, registry):
@@ -91,7 +91,7 @@ def test_main_1_mirrors_its_guests_to_its_spare_nic(fleet):
 def test_every_rendered_guest_lets_ssh_in_from_mgmt_only(fleet):
     files = render(fleet, "firewall-rules")
     rules = {k: v for k, v in files.items() if k.endswith(".fw")}
-    assert len(rules) == 8
+    assert len(rules) == 9
     for name, text in rules.items():
         assert "IN ACCEPT -p tcp -dport 22 -source 192.0.2.0/26" in text, name
         assert "policy_in: DROP" in text, name
@@ -208,6 +208,7 @@ def test_the_edge_reaches_only_what_it_publishes_and_its_agents(ir, registry):
         ("dns-2", 53),
         ("idp-1", 9443),
         ("hub-1", 8090),
+        ("vault-1", 443),
         ("siem-1", 1514),
         ("siem-1", 1515),
         ("sensor-1", 8000),
