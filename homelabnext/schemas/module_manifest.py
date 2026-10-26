@@ -363,7 +363,7 @@ def _defs() -> dict[str, Any]:
                 ),
             },
             ["cpu", "memory_mb", "disk_gb"],
-            "What the module places on one host role. A site sums every footprint on a host over cpu, memory, disk and GPU memory against the host's capacity less its headroom, and the generated units and guests take them as limits (MemoryMax, CPUQuota), never as hints.",
+            "What the module places on one host role. A site sums every footprint on a host over cpu, memory, disk and GPU memory against the host's capacity less its headroom, and the generated slices take them as limits (CPUQuota, MemoryMax, a disk cap on the data root: homelabnext.modules.limits), never as hints.",
         ),
         "requirement_host": obj(
             {
