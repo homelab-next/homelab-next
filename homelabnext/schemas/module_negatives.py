@@ -481,6 +481,11 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["config"]["edge_region"].__setitem__("default", "vault:kv/data/x"),
         "A string default carries no reference of any scheme.",
     ),
+    "requires-scope-unknown-part": (
+        F,
+        lambda d: d["requires"]["scope"][0].__setitem__("part", "trusted.wans"),
+        "A module requires a scope part the selection defines, never a new one.",
+    ),
     "string-config-address-literal": (
         F,
         _add_config(
@@ -519,6 +524,10 @@ def _rename(key: str, new: str) -> Callable[[Doc], None]:
     return lambda d: d.__setitem__(new, d.pop(key))
 
 
+#: documentation-range scope entries the selection negatives plant
+MALFORMED_CIDR = "198.51.100.0/33"  # no-raw-endpoint: allow a documentation-range negative
+DOC_NET = "192.0.2.0/24"  # no-raw-endpoint: allow a documentation-range negative
+
 #: selection negative name -> (base site profile, mutation, comment)
 SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
     "grants-misspelt": (
@@ -542,6 +551,21 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
             "lanes"
         ].pop("real"),
         "Every agent's real lane is bound.",
+    ),
+    "scope-empty-list": (
+        "full",
+        lambda d: d["scope"]["trusted"].__setitem__("wan", []),
+        "A scope part is a non-empty list: an empty one would read as no trusted addresses.",
+    ),
+    "scope-malformed-cidr": (
+        "full",
+        lambda d: d["scope"]["target"].__setitem__(0, MALFORMED_CIDR),
+        "A scope entry is an address or a CIDR network.",
+    ),
+    "scope-unknown-part": (
+        "full",
+        lambda d: d["scope"]["trusted"].__setitem__("lan", [DOC_NET]),
+        "A misspelt scope part is refused, never read as an extra list nobody reads.",
     ),
 }
 

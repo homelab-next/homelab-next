@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/registers/lesson/2.1",
+  "title": "Lesson (post-incident learning)",
+  "description": "Separates contributing factors (conditions that enabled the problem) from the root cause (why those conditions existed). A lesson needs a preventive control and a falsifiable verification; graded statuses need control_installed_at. 2.0 (ADR-0019): a lesson is identified by its `uid` (a UUIDv7 created with it) and names its `type`; the numbered `id` (and the LL-NEW placeholder a hook used to allocate) is gone, and the number it is shown with is computed from its place among its siblings (`order`, then creation). 2.1 (additive, ADR-0032): an optional `summary`, one reviewed line of at most 160 characters, the level 0 that context_for serves.",
+  "type": "object",
+  "properties": {
+    "uid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+      "description": "A canonical UUIDv7: the record's identity, never changed."
+    },
+    "type": {
+      "const": "lesson"
+    },
+    "order": {
+      "type": "number",
+      "description": "Optional sort key among its siblings."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff\\ufff9-\\ufffb]*$(?!\\n)",
+      "description": "Optional (ADR-0032): the record's level 0, one reviewed line of at most 160 characters; context_for serves it instead of the content. The pattern refuses control characters (C0, DEL, C1) and the common invisible format characters (soft hyphen, U+061C, U+180E, zero-width and direction marks U+200B-U+200F, line and paragraph separators and bidi embeddings U+2028-U+202E, U+2060-U+206F, the BOM, U+FFF9-U+FFFB); `(?!\\n)` keeps a validator whose `$` matches before a final newline (Python's) from accepting one. `hnx registers summaries` and the record validation are authoritative: they refuse every character of the Unicode categories Cc, Cf, Zl, Zp and Cs and surrounding whitespace, and count a record without a summary as a warning."
+    },
+    "date": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date"
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "recurrences": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "enum": [
+        "controlled",
+        "partial",
+        "open",
+        "retired",
+        "grandfathered"
+      ]
+    },
+    "symptom": {
+      "type": "string",
+      "minLength": 10,
+      "description": "What an observer sees; the lookup key."
+    },
+    "contributing_factors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3
+      },
+      "minItems": 1
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Why the contributing conditions existed. A person or a single command is not a root cause."
+    },
+    "corrective_action": {
+      "type": "string",
+      "minLength": 3
+    },
+    "preventive_control": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Must change what is possible or what is detectable."
+    },
+    "verification": {
+      "type": "string",
+      "minLength": 10,
+      "description": "A falsifiable test of the control."
+    },
+    "control_installed_at": {
+      "type": "string",
+      "pattern": "^(\\d{4}-\\d{2}-\\d{2}|unknown)$"
+    },
+    "retired_by": {
+      "type": "string",
+      "minLength": 3
+    }
+  },
+  "required": [
+    "uid",
+    "type",
+    "title",
+    "date",
+    "systems",
+    "recurrences",
+    "status",
+    "symptom",
+    "contributing_factors",
+    "root_cause",
+    "corrective_action",
+    "preventive_control",
+    "verification"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "controlled",
+              "partial"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "control_installed_at"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "retired"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "retired_by"
+        ]
+      }
+    }
+  ]
+}

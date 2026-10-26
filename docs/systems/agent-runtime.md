@@ -1,6 +1,9 @@
 ---
 title: agent-runtime
 type: system
+summary: agent-runtime provides the agent-runtime capability (orchestrator), owned
+  by ml-team.
+summary_generated: true
 service: agent-runtime
 capability: agent-runtime
 impl: orchestrator
@@ -47,7 +50,7 @@ author: unknown
 
 <!-- hnx:gen:outputs -->
 - Metrics: `/metrics`
-- MCP server `agent-runtime` (sse, `/sse`): exec, read; owner platform-team; active; catalog record `mcp/agent-runtime.yml`
+- MCP server `agent-runtime` (sse, `/sse`): read; owner platform-team; active; catalog record `mcp/agent-runtime.yml`
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->

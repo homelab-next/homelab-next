@@ -206,7 +206,10 @@ def test_record_command_validates_notes_and_detects_tampering(ws, capsys):
     code, _, err = run(capsys, "record", p)
     assert code == 1 and "INVALID" in err
     code, _, err = run(capsys, "status", ws / "missing.json")
-    assert code == 1
+    assert code == 2 and "cannot read swap record" in err  # an I/O error, not an invalid record
+    (ws / "garbled.json").write_text("{not json")
+    code, _, err = run(capsys, "status", ws / "garbled.json")
+    assert code == 2 and "is not valid JSON" in err and "INVALID" not in err
 
 
 def test_start_errors(ws, capsys):

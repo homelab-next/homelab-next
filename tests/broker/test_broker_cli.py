@@ -18,7 +18,7 @@ EXAMPLE = ROOT / "examples" / "broker" / "manifest.yml"
 
 def test_validate_passes_on_the_example_and_fails_on_a_tampered_copy(tmp_path, capsys):
     assert hnx(["broker", "validate", str(EXAMPLE)]) == 0
-    assert "ok (5 actions, 3 lanes)" in capsys.readouterr().out
+    assert "ok (8 actions, 3 lanes)" in capsys.readouterr().out
     shutil.copytree(EXAMPLE.parent, tmp_path / "ex")
     h = tmp_path / "ex" / "handlers" / "service-restart.sh"
     h.write_text(h.read_text() + "\n# edited\n")
@@ -32,6 +32,18 @@ def test_validate_unreadable_and_non_mapping(tmp_path, capsys):
     (tmp_path / "list.yml").write_text("- a\n")
     assert main(["validate", str(tmp_path / "list.yml")]) == 1
     capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    "name, data",
+    [("bad.yml", b"a: [1,\n"), ("bad.json", b"{not json"), ("bin.yml", b"\xff\xfe: x\n")],
+)
+def test_validate_a_malformed_manifest_is_exit_2_without_a_traceback(tmp_path, capsys, name, data):
+    (tmp_path / name).write_bytes(data)
+    assert main(["validate", str(tmp_path / name)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"hnx broker validate: cannot read {tmp_path / name}: ")
+    assert "Traceback" not in err
 
 
 def test_validate_shows_lane_usage_and_warns_near_the_quota(tmp_path, capsys):
@@ -136,6 +148,8 @@ def test_text_output_cancel_and_deny(broker, tmp_path):
         "service.restart",
         "--as",
         "profile:triage",
+        "--target",
+        "svc:queue",
         "--params",
         '{"grace_s": 1}',
         as_json=False,

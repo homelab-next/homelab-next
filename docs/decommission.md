@@ -1,3 +1,7 @@
+---
+summary: 'The read-only decommission audit: hnx decommission check, its statuses, the planes it inspects, adapters and fakes, and a positive control.'
+summary_of: outline:sha256:faeb417c12770f09
+---
 # Decommission audit
 
 Building a guest has a path; tearing one down needs one too, or each remnant (a dead firewall

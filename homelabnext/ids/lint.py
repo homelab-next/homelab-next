@@ -31,7 +31,7 @@ _ID_START_RE = re.compile(r"^(?:" + "|".join(BODY_PATTERNS) + r"):")
 
 _DOC_NETS = [
     ipaddress.ip_network(n)
-    for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
+    for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32", "3fff::/20")
 ]
 
 
@@ -52,6 +52,11 @@ def _is_doc_ip(token: str) -> bool:
     except ValueError:
         return False
     return any(ip in net for net in _DOC_NETS)
+
+
+#: the documentation ranges (RFC 5737, RFC 3849, RFC 9637), the same set tools/leak_scan.py
+#: tolerates, for every check that tolerates only them
+DOCUMENTATION_NETS = tuple(_DOC_NETS)
 
 
 def _ip_tokens(text: str) -> Iterator[str]:

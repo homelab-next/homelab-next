@@ -4,7 +4,7 @@
 id: http
 description: Fetches pages from outside the lab (http).
 owner: security-team
-status: active
+status: draft
 origin:
   kind: package
   ecosystem: npm
@@ -18,9 +18,7 @@ runtime: agent-local
 egress: [internet]
 data_tier: cloud-allowed
 tools:
-- {name: request, classes: [egress], approval: false}
+- {name: request, classes: [egress, send], approval: false}
+acts_via: direct
+direct_reason: 'Sends any HTTP request itself (any method); no shipped profile holds it: an effect goes through the broker (ADR-0030).'
 author: agent:example-builder
-reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:7e6e9226e1a7'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:7e6e9226e1a7'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:7e6e9226e1a7'}

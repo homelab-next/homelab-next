@@ -1,3 +1,7 @@
+---
+summary: 'Workflows as code: the YAML workflow pack, what hnx workflows validate checks, and deploying only pinned digests from passing commits.'
+summary_of: outline:sha256:0c85f2e735295c33
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Workflows as code
 

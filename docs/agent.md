@@ -1,3 +1,7 @@
+---
+summary: Agent profiles compiled under a policy ceiling, schemas, the context-pack assembler, session access block, include rules, keyring, memory and broker contracts.
+summary_of: outline:sha256:ca0a11d4adcc627e
+---
 # Agent profiles, context packs and the broker contracts
 
 Vendor-neutral building blocks for running agents under least privilege. Everything here is
@@ -26,7 +30,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/pregate_output` | `ok` / `degraded` / `stale` / `failed`, with per-source ages; a non-ok status needs a reason |
 | `agent/report_result` | `pack_id`, cites, unknowns, memory updates, optional structured `output`; `ok` needs at least one cite, `deferred` is how a job reports it did nothing |
 | `agent/handoff` | reader -> actor handoff: reader, actor, `output_schema`, the actions the actor may take and how their params bind to the output (G-04) |
-| `agent/golden_task` | the existing `homelabnext.golden` suite format, described unchanged |
+| `agent/golden_task` | the `homelabnext.golden` suite format; 1.1 adds the tool-using suites of the Code Mode golden harness (`modes`, `grant`, `max_turns`, a task's `fixtures`, `inject`, `checks`; [codemode](codemode.md#cm-6-golden-suites)) |
 | `agent/prompt_template` | trusted `system`/`instructions`, slots each declaring `trust`; untrusted slots render only fenced |
 | `agent/injection_corpus` | versioned injection cases: payload, canary or forbidden tool, fake-model markers |
 | `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
@@ -36,7 +40,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`),
+All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.3, additive: the review tier `audit` in `include.require_reviews`; 1.4, additive: `include.detail`),
 `agent/report_result` (1.1, additive: `output`),
 `agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
 1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
@@ -145,8 +149,9 @@ through allowlisted broker actions (G-04).
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
   table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
   its own is refused (it would class servers by hand and skip the catalog's status and data-tier
-  rules), and so is one whose `reader_forbidden` leaves out a class the packaged table forbids (a
-  table may forbid a reader more, never less).
+  rules), and so is one whose `reader_forbidden` or `broker_only` leaves out a class the packaged
+  table lists, or that classes one of the packaged table's capabilities or tiers without a class
+  the packaged table gives it (`cap:dns: [read]`): a table may forbid more, never less.
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
@@ -197,6 +202,53 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   broker_manifest=)`: schema, closed `output_schema`, every reference constrained, the reader
   passes the G-03 rule, the actor has `reads_untrusted: false`, every action is in the broker
   manifest and granted to the actor at its tier. Tests: `tests/agent/test_agent_handoff.py`.
+
+### Actors act only through the broker (G-13)
+
+Every agent action goes through the broker ([ADR-0030](adr/0030-agents-act-only-through-the-broker.md)),
+where it is allowlisted, approved against the
+request digest and audited. The reader rule above keeps acting grants from readers; this rule,
+`actors-act-via-broker` (`homelabnext.agent.readers.broker_problems`), applies to **every**
+profile, reader or not, and to every context manifest's tools. `tool_classes.yml` lists the
+acting classes, `broker_only: [exec, file-write, send, credential]` (`send`: chat, mail, a
+notification, an HTTP request; reading the web stays `egress`); a profile may hold a grant in
+one of them only through the broker:
+
+- **MCP servers.** A granted server with an acting tool is refused unless it is the broker's own
+  front: its record says `acts_via: broker` and is structurally that front, fixed in code (id
+  `hnx-broker`, first-party `homelabnext/broker/mcp_tools.py`, exactly the tools that module
+  registers, [[mcp]]), with the reviews its status needs for its current content. No other
+  record can claim `broker`. The one exception
+  is a **direct** server: its record says `acts_via: direct` with a `direct_reason` and carries a
+  current human `approve` review, and the ceiling policy's entry for the profile lists it in
+  `direct_mcp` (the policy owner's exception per profile and server, like `internet_mcp`; a spec's
+  own ceiling cannot make it, and without a policy no direct server passes). A review line is
+  text an author can write: the real control is a human's review of the pull request that adds
+  the record and the `direct_mcp` line (CODEOWNERS on the catalog, the ceiling policies and the
+  class table). The shipped catalog's direct servers (`ssh`, `shell`, `ansible`, `kubernetes`,
+  `vault`, `filesystem`, `git`, `github`, `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are
+  unreviewed drafts that no profile can hold.
+- **Capabilities.** Judged failing closed: a capability the table does not class is refused, and
+  the table classes every capability the registry, the conformance contracts, `capabilities.yml`
+  and the module slots name. No acting capability but `cap:broker`: `cap:hypervisor`,
+  `cap:secrets`, `cap:idp`, `cap:orchestration`, `cap:object-store`, `cap:notify` and the
+  registry's acting aliases (`cap:automation`, `cap:agent-runtime`, `cap:records-db`, `cap:dns`,
+  `cap:edge-proxy`, `cap:dataflow`, `cap:backup`...) are refused outright.
+- **Tiers.** `execute` and `privileged` need `cap:broker`.
+
+`compile_profile` raises `BrokerViolation` (after the catalog check, whatever the ceiling allows);
+`verify_profile` judges a compiled profile with the policy's `direct_mcp`; `hnx agent lint` runs
+both rules (`--rule readers-cannot-act|actors-act-via-broker` runs one and prints its own count,
+`--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the tree
+serving both); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
+a module contributes no acting record and gives its own agent no acting grant) refuse the same.
+Checklist G-13 runs the lint with `--rule actors-act-via-broker` and the ceiling policy,
+G-03 with `--rule readers-cannot-act`, and G-04's observable runs the broker rule before its tests.
+
+So an actor that must change something holds `hnx-broker` and `cap:broker` and asks for a named
+broker action (`broker_call`, `broker_submit`); its `tier` bounds which actions the manifest
+grants it. An overlay that granted a direct acting server fails lint, `verify`, compile and render
+after the upgrade until the grant becomes a broker action or a reviewed exception.
 
 ## Context-pack assembler
 
@@ -313,6 +365,7 @@ include:
     budget: 12                  # max nodes this rule includes, 1..50 (default 12)
     max_chars: 4000             # per node, the pack's section cap (default 4000)
     require_reviews: [agent_check, audit]           # optional
+    detail: full                # full (default) | summary | outline (ADR-0032)
 ```
 
 - **Seeds are grants.** `capabilities` seeds from the granted `cap:` ids, `mcp` from the granted
@@ -349,10 +402,40 @@ include:
   escaped like every volatile section. Order is `related` rank (distance, edge weight, id). Over
   `budget_chars`, knowledge is dropped first, lowest rank first, before any other section, and
   each drop is in `truncations`. The `knowledge-` prefix is reserved for manifests.
+- **Detail (levels).** A rule's `detail` says how much of each included node the pack carries.
+  `full` (the default) is the whole content, exactly as above, and is never written to the
+  normalised rule, so a profile that does not use `detail` keeps its digest and its packs stay
+  byte-identical. `summary` carries level 0 only: the header, then `summary: <text>` (the authored
+  front-matter `summary:`, else the first paragraph, else for a node built from attributes the
+  derived line, the same text the MCP `context_for` serves; `summary_source` is `authored`,
+  `generated` for a page whose generator marked it `summary_generated: true`, `first-paragraph`,
+  `synthesized` or `none`). The file is read as the context store reads it (undecodable bytes
+  replaced; a file over its size cap is the node's attributes), so slugs and digests match what
+  MCP serves. `outline` adds the heading outline,
+  one line per heading with its level, title, `slug=`, `path=` and `chars=`, so the agent can open
+  one section with the MCP `section` tool, and an `outline_digest:` line holding the bare digest
+  that tool takes (the header's `content digest:` keeps its `sha256:` prefix); a node that is not
+  Markdown, or is built from attributes, says it has no headings. An outline longer than the
+  rule's `max_chars` stops at the last whole heading that fits and says how many it left out. A
+  node with no summary at all keeps its title line, reads `(no summary)` and records
+  `summary_source: none`: it never falls back to the full text. A node several rules include is
+  carried at the richest detail any of them asks, with the `max_chars` of the rules at that detail only. Grant filtering, exclusions, ranking and `budget`
+  do not depend on `detail`, and `max_chars` caps what is emitted, so a summary fits where the
+  full text would be cut.
 - **Auditable.** The pack's `knowledge` block records the profile and graph digests, the
   normalised rules, each rule's seeds, every included id with its rank, path, review tiers and
   content digest, and every exclusion with its rule and reason. Same profile, same checkout and
   same task give a byte-identical pack. A pack built without a selection has no `knowledge` key.
+  Whatever the detail, `digest` is the digest of the FULL content the pack read, so a run still
+  says exactly which version of the content it referred to; a `summary` or `outline` node also
+  records its `detail`, `summary_source` and `content_chars` (a `full` node carries none of the
+  three). A leveled node is read as the context store reads it, so for a file with undecodable
+  bytes, an empty file, or one over the store's size cap, `digest` and `content_chars` are those of
+  the served text (the replaced text, or the node's attributes). The record then also carries
+  `file_digest`, the digest of the file's own bytes (and the header a `file digest:` line), so an
+  edit to such a file still changes what the record names. It is absent when the served text is
+  the file exactly. If a `full` rule includes a node it cannot read strictly, the node is excluded
+  (`content unreadable`) whatever other rules say.
 
 ```
 hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \
@@ -436,13 +519,15 @@ slots:
   section name. It then renders the template with its own `example` values and checks that each
   untrusted value sits between exactly one opener and one closer and nowhere in the system message.
 
-Shipped templates: `alert-triage-summariser`, `cti-article-extractor`, `phishing-report-triage`.
+Shipped templates: `alert-triage-summariser`, `cti-article-extractor`, `phishing-report-triage`, and
+`agent-tool-result`, which hands one tool's result back to a tool-using agent (the Code Mode golden
+suites, [codemode](codemode.md#cm-6-golden-suites)).
 As with every pack, fencing is a structural guarantee about the text, not about the model; what
 an agent can *do* is bounded by its profile and the broker.
 
 ## Injection corpus and eval (G-02)
 
-`homelabnext/agent/prompts/injection/corpus.yml` (`schemas/agent/injection_corpus`) holds 45
+`homelabnext/agent/prompts/injection/corpus.yml` (`schemas/agent/injection_corpus`) holds 53
 synthetic cases in nine categories: direct override, fake fence closing, role/system
 impersonation, tool-call smuggling, data exfiltration, encoded instructions (base64, hex, ROT13,
 zero-width, homoglyph), multilingual, markdown/HTML hiding and nested quoting. Each case has a
@@ -451,9 +536,11 @@ or a **forbidden tool** (any call-shaped mention, `"name": "<tool>"` or `<tool>(
 verbatim echo included: output that looks like a call is a hazard to whatever parses it).
 
 `hnx agent injection run` places every case into every untrusted slot of every template
-(45 x 6 = 270 runs), renders, calls the model through the same `completer(messages, params)`
+(53 x 7 = 371 runs), renders, calls the model through the same `completer(messages, params)`
 adapter as the golden suites, and fails on any instruction-follow, any error, or a payload the
-slot cap truncated (an untested case is not a pass).
+slot cap truncated (an untested case is not a pass). The Code Mode golden suites also place every
+case inside a broker result a tool-using agent reads, in classic MCP mode and in Code Mode
+(`hnx golden codemode`, [codemode](codemode.md#cm-6-golden-suites)).
 
 **What CI proves, and what it does not.** CI runs against `FakeInjectionModel`, a deterministic
 fake that recognises every corpus instruction by the case's `markers` after undoing the
@@ -534,7 +621,7 @@ hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
                [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
                [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
-hnx agent lint [PATH ...] [--classes FILE]
+hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker] [--policy POLICY.yml]
 hnx agent prompts lint [TEMPLATE|DIR ...]
 hnx agent prompts render TEMPLATE [--values VALUES.yml]
 hnx agent injection run [--fake fence|naive | --role ROLE --registry R --roles T] [--out F] [--check GOLDEN]
@@ -542,9 +629,10 @@ hnx agent injection check-report REPORT
 ```
 
 `LIBRARY.yml` is `{parts: {<logical id>: <path relative to the file>}}`; paths may not escape its
-directory. `compile` exits 1 on a missing part, ceiling, reader, include or budget violation; `verify` exits 1 on
-any problem, including a reader holding an acting grant and a digest that is not the one in the
-lock; `lint` exits 1 on any reader problem or when it finds no profile. `pack` prints the
+directory. `compile` exits 1 on a missing part, ceiling, reader, broker, include or budget violation; `verify` exits 1 on
+any problem, including a reader holding an acting grant, a profile acting other than through the
+broker and a digest that is not the one in the lock; `lint` exits 1 on any reader or broker
+problem or when it finds no profile. `pack` prints the
 hash and status on stderr and exits 0 when ready, **3 when deferred**, 1 on invalid input.
 Install the extra with `pip install 'homelabnext[agent]'`.
 
@@ -554,5 +642,7 @@ Install the extra with `pip install 'homelabnext[agent]'`.
 hash seeds), ceiling and budget rejection, missing-id errors, truncation and tier reporting,
 deferral, report validation, linked knowledge (grant filtering, inactive records, review
 filters, budget by rank, pack determinism, a reader gaining no grant), schema examples and negatives, the reader rule (refusal per class,
-passing reader and actor, tampered profile, lint), the screener evaluation set, the golden-suite compatibility check,
+passing reader and actor, tampered profile, lint), the broker rule (`tests/agent/test_agent_broker_only.py`: every acting grant
+outside the broker refused, the direct exception's three conditions, the gap analysis' rogue actor through verify, lint and
+render), the screener evaluation set, the golden-suite compatibility check,
 and the broker decision table.

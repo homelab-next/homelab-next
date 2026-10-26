@@ -18,23 +18,44 @@ not anchored).  Each pattern names a legitimate, visible cause: an optional extr
 is absent, the platform cannot run the test.  Any other skip -- including one with no reason -- is
 turned into a failure.  ``xfail`` and ``-m`` deselection are not skips.
 
+**Required tools.**  A test that needs an external tool asks for it through one helper,
+:func:`require_tool` (``go_toolchain`` and the docker and linter checks use it): it returns the
+tool's path, or skips with ``"<tool> is not installed"`` (a registered skip reason).  Where the
+environment says the tool must be there, the helper fails the test instead of skipping, so a
+broken install cannot pass as a skip.  ``HNX_REQUIRE_TOOLS`` names the required tools
+(comma-separated, e.g. ``actionlint,zizmor,nats-server,docker,go``); ``HNX_REQUIRE_GO=1``, the
+older switch for Go, still means ``go``.  The decision is made by the helper from the tool's
+name, not by reading the wording of a skip afterwards: a test that skips for a tool on its own
+(its own ``skipif``, an early return) is outside the contract, so every such test goes through
+the helper (``tests/gates/test_suite_policy.py`` checks the tools CI requires).
+
 **Quarantine.**  ``@pytest.mark.quarantine(owner="team-or-handle", until="YYYY-MM-DD",
 reason="...")`` lets a known-flaky test keep running without breaking the build (it becomes a
 non-strict ``xfail``) for a bounded time.  The owner, the date and the reason are required; a date
 in the past fails the test ("quarantine expired"), and a date more than ``quarantine_max_days``
 (default 90) ahead is refused, so a quarantine cannot be parked forever.  ``HNX_TODAY``
 (``YYYY-MM-DD``) overrides today's date for the plugin's own tests.
+
+**Shards.**  ``--shard I/N`` runs the I-th of N parts of the collected tests (by node id hash), and
+``--shard-report FILE`` writes what the shard collected, ran and timed; CI runs the suite as N such
+jobs and ``python -m tests.shard_report`` proves from their reports that together they ran every
+test once and that each suite's summed time is within its budget (``tests/shard_report.py``).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from collections.abc import Iterable
+import shutil
+import sys
+from collections.abc import Callable, Iterable
 from datetime import date
 from pathlib import Path
 
 import pytest
+
+from tests import shard_report
 
 QUARANTINE = "quarantine"
 _STATE = pytest.StashKey[dict]()
@@ -50,6 +71,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--suite-times", action="store_true", help="print the per-suite time against its budget"
     )
+    parser.addoption("--shard", metavar="I/N", help="run every N-th collected test from the I-th")
+    parser.addoption("--shard-report", metavar="FILE", help="write this shard's report (JSON)")
 
 
 def _today() -> date:
@@ -114,6 +137,11 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{QUARANTINE}(owner, until, reason): known-flaky test, runs as non-strict xfail until "
         "the date (tests/suite_policy.py)",
     )
+    shard = config.getoption("shard")
+    try:
+        index, count = shard_report.parse_shard(shard) if shard else (1, 1)
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
     default = float(config.getini("suite_budget_default"))
     scale = float(os.environ.get("HNX_SUITE_BUDGET_SCALE", "1") or "1")
     config.stash[_STATE] = {
@@ -125,12 +153,47 @@ def pytest_configure(config: pytest.Config) -> None:
         "times": {},
         "over": [],
         "quarantined": [],
+        "shard": (index, count),
+        "collected": None,
+        "selected": [],
+        "ran": [],
     }
     config.pluginmanager.register(_Timer(config), "hnx-suite-timer")
+    config.pluginmanager.register(_Shard(config), "hnx-shard")
 
 
 def _state(config: pytest.Config) -> dict:
     return config.stash[_STATE]
+
+
+def required_tools(env: dict[str, str] | None = None) -> set[str]:
+    """The tools the environment requires: ``HNX_REQUIRE_TOOLS`` (comma-separated), plus ``go``
+    when ``HNX_REQUIRE_GO=1``."""
+    env = os.environ if env is None else env
+    tools = {t.strip() for t in env.get("HNX_REQUIRE_TOOLS", "").split(",") if t.strip()}
+    if env.get("HNX_REQUIRE_GO") == "1":
+        tools.add("go")
+    return tools
+
+
+def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
+    """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
+    PATH).  Missing: skip with ``"<name> is not installed"``, or fail when the environment
+    requires the tool (:func:`required_tools`)."""
+    path = shutil.which(name)
+    ok = (path is not None) if available is None else bool(path and available())
+    if ok:
+        return path or name
+    if name in required_tools():
+        switch = (
+            "HNX_REQUIRE_GO=1"
+            if name == "go" and os.environ.get("HNX_REQUIRE_GO") == "1"
+            else "HNX_REQUIRE_TOOLS"
+        )
+        pytest.fail(
+            f"{name} is not on PATH (or not usable), and {switch} requires it", pytrace=False
+        )
+    pytest.skip(f"{name} is not installed")
 
 
 def _silent_skip(config: pytest.Config, rep) -> None:
@@ -202,6 +265,28 @@ class _Timer:
         st = _state(self.config)
         suite = suite_of(Path(str(report.fspath)), self.config.rootpath)
         st["times"][suite] = st["times"].get(suite, 0.0) + float(report.duration or 0.0)
+        if report.when == "setup":
+            st["ran"].append(report.nodeid)
+
+
+class _Shard:
+    """Keeps this shard's tests (a plugin object, so it can run after the other collection hooks)."""
+
+    def __init__(self, config: pytest.Config):
+        self.config = config
+
+    @pytest.hookimpl(trylast=True)  # after -m, -k and --deselect have dropped theirs
+    def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
+        st = _state(self.config)
+        index, count = st["shard"]
+        nodeids = [item.nodeid for item in items]
+        keep = shard_report.select(nodeids, index, count)
+        st["collected"] = nodeids
+        st["selected"] = [n for n, k in zip(nodeids, keep, strict=True) if k]
+        dropped = [item for item, k in zip(items, keep, strict=True) if not k]
+        if dropped:
+            self.config.hook.pytest_deselected(items=dropped)
+            items[:] = [item for item, k in zip(items, keep, strict=True) if k]
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -214,6 +299,22 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
     ]
     if st["over"] and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    out = session.config.getoption("shard_report")
+    if out:
+        index, count = st["shard"]
+        data = shard_report.report(
+            group="{}.{}".format(*sys.version_info[:2]),
+            index=index,
+            count=count,
+            collected=st["collected"],
+            selected=st["selected"],
+            ran=st["ran"],
+            times=st["times"],
+            budgets={suite: secs * st["scale"] for suite, secs in st["budgets"].items()},
+            default_budget=st["default"] * st["scale"],
+            exitstatus=int(session.exitstatus),
+        )
+        Path(out).write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config: pytest.Config) -> None:

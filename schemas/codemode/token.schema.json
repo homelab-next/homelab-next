@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/codemode/token/1.0",
+  "x-draft": "ADR-0031 (proposed): the runner landed with CM-5b; not frozen, may change before acceptance",
+  "title": "Code Mode capability token claims",
+  "description": "The claims of the capability token the broker issues for one execution, bound to the codemode.execute request that started it (request_id), the program (code_digest) and the sandbox instance that holds it (sandbox_id). The broker accepts it only from that sandbox, only for the listed actions (each still checked against the actor's own grants, so the token narrows and never widens them), up to max_calls calls and only before expires_at; the cap is the execution's, in total across all its runs: a resume's token carries what is left of the first run's max_calls, never a fresh one; codemode actions are never listed, so a program cannot start another execution with a fresh budget. Each run of an execution, its start and every resume, gets a fresh token bound to that run's codemode.execute request_id; only a paused execution is resumed, and a spent token_id is refused. The token carries no credential for any lab system; handlers resolve their own secrets.",
+  "type": "object",
+  "properties": {
+    "token_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "execution_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "request_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "code_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "sandbox_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "actor": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "issuer": {
+      "const": "svc:broker"
+    },
+    "audience": {
+      "const": "svc:broker"
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+        "not": {
+          "pattern": "^codemode\\."
+        }
+      },
+      "minItems": 1,
+      "maxItems": 200,
+      "uniqueItems": true
+    },
+    "max_calls": {
+      "description": "The calls this token may make: the execution's cap less the calls its earlier runs made (the cap is per execution, in total across its runs).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "issued_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    },
+    "expires_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "token_id",
+    "execution_id",
+    "request_id",
+    "code_digest",
+    "sandbox_id",
+    "actor",
+    "issuer",
+    "audience",
+    "actions",
+    "max_calls",
+    "issued_at",
+    "expires_at"
+  ],
+  "additionalProperties": false
+}

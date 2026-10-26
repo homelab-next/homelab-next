@@ -1,6 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-# The hypervisors of the fictional harbor lab: whether each enforces guest firewalls, and which
-# UPS feeds it (its guests inherit that).
+# The hypervisors of the fictional harbor lab: whether each enforces guest firewalls, which UPS
+# feeds it (its guests inherit that), and what it holds: logical CPU threads and memory less a
+# reserve for the hypervisor and its ZFS ARC, how many guest vCPUs it may place per thread, and the
+# storage pools a guest's disks may name. `hnx guests validate` refuses a guest set that does not
+# fit and prints what each node's guests use. hv-1 also copies its guests' traffic to a network
+# sensor (`mirror`, rendered by `hnx guests render --target node-mirror`).
 nodes:
-  hv-1: {firewall: enabled, power: {ups: ups-a}}
-  hv-2: {firewall: enabled, power: {ups: ups-b}}
+  hv-1:
+    firewall: enabled
+    power: {ups: ups-a}
+    capacity: {threads: 16, memory_mb: 65536, reserve: {threads: 2, memory_mb: 8192}, cpu_overcommit: 2}
+    pools:
+      fast: {size_gb: 900, media: nvme}
+    mirror: {to: enp3s0f1, bridges: [vmbr0]}
+  hv-2:
+    firewall: enabled
+    power: {ups: ups-b}
+    capacity: {threads: 16, memory_mb: 65536, reserve: {threads: 2, memory_mb: 8192}, cpu_overcommit: 2}
+    pools:
+      fast: {size_gb: 900, media: nvme}

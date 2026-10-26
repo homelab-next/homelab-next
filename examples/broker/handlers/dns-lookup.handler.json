@@ -1,0 +1,44 @@
+{
+  "action": "dns.lookup",
+  "audit": true,
+  "description": "Resolve one service's name to its addresses (read only, stand-in).",
+  "handler": "handlers/dns-lookup.sh",
+  "handler_digest": "sha256:ab7893d974852d4ae1c01d3cd374fa77c45ee308aec25b7230bea04e92dd128f",
+  "idempotent": true,
+  "max_output_bytes": 65536,
+  "params_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "requires_approval": false,
+  "result_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "addresses": {
+        "description": "the addresses the name resolves to",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "name": {
+        "description": "the name looked up",
+        "type": "string"
+      },
+      "service": {
+        "description": "the target the lookup is for",
+        "type": "string"
+      }
+    },
+    "required": [
+      "service",
+      "name",
+      "addresses"
+    ],
+    "type": "object"
+  },
+  "target": "required",
+  "tier": "read",
+  "timeout_s": 10
+}

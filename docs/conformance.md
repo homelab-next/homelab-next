@@ -1,3 +1,7 @@
+---
+summary: 'The conformance harness: one suite per capability run against any target, how mutants prove a suite can fail, adding a suite, and the X-10 exporter.'
+summary_of: outline:sha256:5819bc2ce0631c58
+---
 # Conformance harness
 
 A capability is *replaceable* when a stranger can prove a replacement honours the same contract
@@ -23,13 +27,16 @@ fake, the target-file adapters with their product limits, and the integration st
 ## Running
 
 ```bash
-hnx conform list                      # the sixteen capabilities (also: hnx conform --list)
-hnx conform list --all                # plus the extended suites (backup, dns, edge)
+hnx conform list                      # the eighteen capabilities (also: hnx conform --list)
+hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens,
+                                      # orchestration-features)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
 hnx conform run object-store --target staging      # a real service, see "Targets" below
-hnx conform mutants                   # prove every suite catches its broken fakes
+hnx conform mutants                   # prove every core suite catches its broken fakes
+hnx conform mutants broker-tokens     # an extended suite's, named ("all" is the core ones)
+hnx conform mutants --all             # every suite's mutants, the extended ones too
 hnx conform report --json             # capabilities without a passing test
 python -m pytest -q conformance       # the same checks under pytest, one test per check
 HNX_CONFORM_TARGET=staging python -m pytest conformance/object-store
@@ -76,13 +83,23 @@ def _(store):  # the subject: any implementation of the Protocol
 * **Features.** Optional abilities are a set of names on the subject or in the target file, of
   two kinds.  *Product* features (`streaming`, `embeddings`, `wildcards`, `metadata`) describe
   what the implementation offers: a check with `requires=[...]` is skipped, not failed, when one
-  is absent.  *Test hooks* (`clock-control`, `fault-injection`) only let the suite reach a state:
+  is absent.  *Test hooks* (`clock-control`, `fault-injection`, `approval-control`: an
+  approver's decision on a pending request, `decide_request(request_id, verdict)`) only let the
+  suite reach a state:
   a `must` check that needs an undeclared hook is **`untested`**, which fails the capability like
-  a failure, so not declaring a hook is never a way around a MUST.  Security properties do not
+  a failure, so not declaring a hook is never a way around a MUST.  The product decides first: a
+  check that needs both a product feature and a hook skips when the product feature is absent
+  (a target without `admission` has no capacity for a killed worker to leak), and is
+  `untested` only when the product is there and the hook is not.  Security properties do not
   hide behind a hook at all: token and lease expiry use `tick()` when the subject has it and
   otherwise wait in real time (a one-second ttl).  Skips never count as a pass of anything.
 * **Waivers.** A target may waive a `should` check with a written reason; the report shows it.
-* Each suite has 6 to 16 checks, at least six of them `must`.
+* Each suite has 6 to 24 checks, at least six of them `must`: one check per clause of the
+  Protocol docstring, so a suite says something and a failure names what broke.  The ceiling
+  keeps a suite one readable file and a run against a real service short; a contract with more
+  clauses than that is two capabilities.  Do not fold a second clause into an existing check to
+  stay under it: a check named for redaction that also fails when a deferred run is broken sends
+  the reader to the wrong place.
 * Errors are the Protocol's own exception types.  An adapter translates its client library's
   errors into them; that translation is part of what is being proved.
 
@@ -128,7 +145,7 @@ failure.  From Python: `homelabnext.conform.run("object-store", {"adapter": "pkg
 
 ## The capabilities
 
-The sixteen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
+The eighteen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
 (lake, notify, records, detections, context, projects) reuse it; the rest are the Protocols in
 `conformance/protocols/`.
 
@@ -150,10 +167,22 @@ The sixteen names are fixed by `docs/interfaces.md`.  Contracts that already hav
 | `detections` | `DetectionTarget` | must-fire fire, must-not-fire stay silent, deterministic, no mutation |
 | `context` | `ContextStore` | mandatory exact scope (nothing outside it as a hit, snippet, error or relation path), inactive records excluded, relation outranks keywords, deterministic order with ties by id, budget prefix, re-index replaces, delete removes, hostile text, byte-exact content and digest |
 | `projects` | `ProjectStore` | the board rules (a step belongs to an open project, a project closes in the same write as its last step and stays closed, a finished item carries a result, blocks hold), UUIDv7 uids, idempotent create by external key, optimistic versions (a stale one conflicts, every change adds one), a complete change feed, links that resolve, no cycles; also proved on OpenProject over a recorded fake (`tests/projects`) |
+| `codemode-executor` | `CodeExecutor` | one program per fresh sandbox (ADR-0031 decision 5), in the vocabulary of `schemas/codemode`: no connection or name lookup but the broker endpoint (served where the executor declares, `broker_bind`), no caller environment, files or token in the sandbox environment, CPU, resident-memory, wall-clock and output caps end the run as `limit` naming the cap, the call cap refuses a call as `call-cap-reached`, nothing survives into the next run, an oversized value comes back as a truncated prefix of its pinned JSON, errors are `{kind, message}` with a bounded single-line message, a denial's reason reaches the program, a pending call pauses the run however the program catches it, programs over 65536 characters or not UTF-8 text are refused; the client-side pause and call cap are behaviour, the broker's refusal on the token (CM-5) is the enforcement; checks hold their programs per language and a declared language without one is untested; the reference fake forks each run from a warm process and puts it behind an audit hook, test-only and not a boundary |
+| `codemode-runner` | `CodemodeRunner` | the handler of `codemode.execute` (ADR-0031 decisions 2, 6, 7 and 10), asked through the broker as an agent: a result that is the `schemas/codemode/execution_result` (the actor, the program's code digest, every call with its request ids, printed output as single lines), a broker refusal reaching the program as `broker.Denied` with the broker's reason and recorded as a denied call (with request ids once the broker built the request, none for a token refusal), a `journal_step` record of every call the broker answered with a request id, a submit pausing the run with `pending` naming it and nothing sent after, a resume answering journalled steps from the journal (`replayed`) and running the paused request by its id without sending a journalled step again, a resume refusing a call that differs from the journal's, a denied pause told to the program as `request-denied`, and the broker's `call-cap-reached` ending the run `limit` (`calls`); proved over the fake broker and the reference service (`broker-reference`), with the forking test executor |
 
-Extended suites (listed with `--all`, not among the sixteen): `backup` (immutable snapshots,
-verified restores, retention), `dns` (zone semantics the registry's aliases rely on) and `edge`
-(reverse-proxy routing and forward-auth hygiene).
+Extended suites (listed with `--all`, not among the eighteen): `backup` (immutable snapshots,
+verified restores, retention), `dns` (zone semantics the registry's aliases rely on), `edge`
+(reverse-proxy routing and forward-auth hygiene), `broker-tokens` (the broker's Code Mode tokens)
+and `orchestration-features`. The last one holds the optional features of the `orchestration`
+contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
+shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
+exclusive), local-only jobs never re-run on cloud, and a run list with each run once in its
+state. Each of its checks requires its own feature, so a target that declares none of them skips
+the suite ([orchestration-controller.md](orchestration-controller.md)). It is a suite of its own
+because the `orchestration` suite would reach the 24-check ceiling with these checks. Its priority check is a
+`should` (ordering is observable only while one slot is free), so its defect, a queue served first
+come first served, is pinned by a test (`tests/conform/test_conform_orchestration_features.py`)
+rather than registered as a mutant.
 
 ## Proving the suite can fail: mutants
 
@@ -171,11 +200,74 @@ MUTANTS = {
 }
 ```
 
-`hnx conform mutants` and `tests/conform/test_mutants.py` assert each mutant is caught **by that
-check**, so a regression in a suite shows up as a named check, not as silence.  The named check
-must be a `must` that always executes (no `requires`, not `skippable`): a mutant caught only by a
+`hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all`
+for every suite) and
+`tests/conform_sweeps/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
+caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `broker-tokens`, `codemode-executor`,
+`codemode-runner`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
+must be a `must` that always executes against the mutant (not `skippable`, and every feature it
+`requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
+mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a
 check that can skip proves nothing about a target on which it skips, and the report counts it as
 not caught.  Each conformance gap fixed in a suite ships with the mutant that reproduces it.
+
+**Model the Protocol's clauses, not only the defects you expect.**  A suite that pins only what
+its own mutants model passes anything else: a review wrote sixteen defects, each breaking one
+sentence of a Protocol docstring, and every one passed its suite - a broker whose `submit` skipped
+the allowlist (anyone could queue any command and run it as its owner), an event bus whose stale
+`ack` swallowed the live redelivery's `nack` (the reference fake itself did this), records whose
+`approve` overturned a denial, secrets that read version `0` as the latest or deleted only the
+newest version, an identity provider that matched scopes as substrings, an object store whose
+`delete` reached every bucket.  So, when writing or reviewing a suite:
+
+* walk the Protocol docstring sentence by sentence and name the check that fails a subject
+  breaking it;
+* a second way into the same operation (the broker's `submit`/`run` next to `call`) gets every
+  gate the first one has;
+* probe the boundary values the type allows, not only the obvious bad one (version `0` and `-1`
+  as well as `9`; a `nan` or `inf` ttl as well as `-5`);
+* write state twice before checking it is all gone, write it again after deleting it, and change
+  what the caller handed over after the call (and what a call handed back);
+* name the error a refusal raises, and check that each way in leaves the audit record the
+  Protocol promises, refused or not;
+* a clause about concurrency (records: "a decision is atomic") is checked with
+  `conformance.suites._util.interleavings`: an unpaused run finds the lines of the subject's own
+  package (wherever it is installed) and a few of the other source it calls; then, for each line,
+  one operation is stopped before it and the other runs whole in between.  The same schedules run
+  every time, and a wait only decides when to resume a paused operation, never a verdict.  It
+  catches a check-then-act window inside one operation; it cannot catch a race that needs both
+  operations preempted (a lock file taken by check-then-create), one behind a network call, or
+  one in code it does not trace, so such a check is a `should` that says so, and a run with
+  nothing to pause at is "could not judge", not a pass.
+
+A second review of the tightened suites found seventeen more (a broker that kept the caller's
+argument mapping and so ran what was changed after validation, a stale `term` that dead-lettered
+the live redelivery, a namesake that replaced an approved note, a secret history revived by a
+`put` after `delete`, a space-delimited scope claim that turned `"read admin"` into `admin`, a
+flat `bucket+key` namespace), and a verify pass of those fixes thirteen more (WorkQueue retention,
+a dead-letter list in client memory, a crash loop the reference fake never dead-lettered, a
+cached lease shared between holders, a scope gate reading the unverified payload, form-decoded
+and case-folded keys, a dotted flat key space, redaction by a name guess, a refusal echoing the
+value it refused) plus six racy records deciders.  Each plausible defect is registered in its suite's `MUTANTS`, the one table of
+broken fake -> the check that must fail it; `tests/conform_sweeps/test_conform_protocol_mutants.py`
+keeps the record, by name, of which ones review found.
+
+### How to review a suite
+
+A review writes subjects that break one clause of the Protocol each and runs them through the
+suite.  An escape is a finding, but not every escape is worth a check.  **The stopping rule:** an
+escaped mutant ranks above a nit only if it models a behaviour that a real adapter for that
+product class plausibly ships - name the product, the configuration or the common pattern it
+models (JetStream's WorkQueue retention, a case-insensitive filesystem under a directory store,
+an HTTP front end that form-decodes keys, a logging filter that redacts by name).  A contrived
+mutant - one that breaks the clause in a way no implementation would by accident - is a nit:
+note it, and do not grow the suite for it.  Only plausible mutants are registered in `MUTANTS`.
+
+Judged contrived in the verify pass, and so not registered: a provider that compares scopes after
+NFKC normalisation (the scope grammar is now printable ASCII, so `scope-enforced` refuses the
+fullwidth form anyway), and a `Denied` that carries the refused request as an attribute (already
+caught).  The records deciders it wrote are plausible, but `decide-is-atomic` is a `should`, so
+they are pinned by tests rather than as `must` mutants.
 
 The suites cover the protocol, not the handler behind it.  The broker's `ArgSpec` checks the
 shape of arguments, not their content: a validated `str` is still untrusted caller input, and the
@@ -196,12 +288,12 @@ A capability has a **passing test** when its suite exists, executes at least six
 failing `must` check, and (on the `fake` target) catches every one of its mutants.  Capabilities
 named in `capabilities.yml` but lacking a suite are listed too.
 
-`capabilities.yml` at the repository root is the list of capabilities this tree declares (the sixteen
+`capabilities.yml` at the repository root is the list of capabilities this tree declares (the eighteen
 names, one per line under `capabilities:`).  The exporter and invariants X-04 and X-10 read it, so a
 deployment that adds a capability adds it there and must then ship its suite, or the report and the
 invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
-falls back to the built-in sixteen).  `make conform-check` (`tools/conform_coverage.py`) runs
-`hnx conform list` and `hnx conform report --json` and fails if any of the sixteen lacks a passing
+falls back to the built-in eighteen).  `make conform-check` (`tools/conform_coverage.py`) runs
+`hnx conform list` and `hnx conform report --json` and fails if any of the eighteen lacks a passing
 test; `make conform` runs every suite against the built-in fakes, and the nightly workflow runs
 `hnx conform run all` after the lab-in-a-box smoke.
 
@@ -223,7 +315,7 @@ Set `HNX_CONFORM_TARGET` to run the invariant against a real target.
 2. **Fake.** Add `conformance/fakes/<name>.py`: an in-memory implementation with a `features`
    set, injected clocks, no network.  Add the broken twin(s) next to it.
 3. **Suite.** Add `conformance/suites/<name_with_underscores>.py` with `SUITE`, `make_fake()` and
-   `MUTANTS`: 6 to 16 checks, at least six `must`, each with an id (`kebab-case`), a one-line
+   `MUTANTS`: 6 to 24 checks, at least six `must`, each with an id (`kebab-case`), a one-line
    summary and a precise assertion message.  Test errors and negative cases, not only the happy
    path.
 4. **Wire it.** Add the name to `CAPABILITIES` (core, only by changing `docs/interfaces.md`) or to

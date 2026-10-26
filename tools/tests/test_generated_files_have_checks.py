@@ -49,12 +49,17 @@ DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/terms.md", "test:tests/agent/test_agent_terms.py"),
     ("detections/det_map.yml", "ci:homelabnext.detections map --check"),
     ("examples/keyring/keyring.json", "ci:agent keyring check"),
+    ("examples/codemode/*/*", "ci:codemode gen --check"),
     ("examples/mcp/clients/*/*", "ci:make mcp-check"),
     (
         "compose/lab-in-a-box/config/llm-gateway/litellm/*",
         "test:tests/generators/test_llm_gateway.py",
     ),
     ("examples/model-serving/gateway/*/*", "test:tests/models/test_serving_plan.py"),
+    (
+        "examples/llm-orchestrator-gateway/gateway/*/*",
+        "test:tests/generators/test_agent_homes.py",
+    ),
     ("examples/model-serving/vllm_server/*", "test:tests/models/test_serving_plan.py"),
     ("workflows/stackstorm/*", "test:tests/workflows/test_workflows_st2.py"),
 )

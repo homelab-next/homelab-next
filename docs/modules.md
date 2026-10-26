@@ -1,3 +1,7 @@
+---
+summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
+summary_of: outline:sha256:8fb4a1a1873e95c0
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
 
@@ -46,7 +50,8 @@ what it needs, what it offers and every entry it adds to a registry the core bui
 | **interface** | Something a module offers *other modules* (a sample handoff, a publishable output). Defined once, by its owner; providers reference it. |
 | **interchange format** | The neutral format at a boundary (OCSF, Sigma, CloudEvents, the S3 API, STIX, SARIF, ...). |
 | **bundle** | Feature modules a site installs together (the SOC bundle), each still removable. |
-| **site selection** | The overlay's `lab/modules.yml`: providers per slot, placement, lane bindings, real values, and the **grants** a module cannot give itself. |
+| **site selection** | The overlay's `lab/modules.yml`: providers per slot, placement, lane bindings, real values, the **grants** a module cannot give itself, and the site's network **scope**. |
+| **scope** | The site's addresses, in the selection's `scope:` block only: what is trusted (the lab's WAN, its networks, the operator's tooling), what may be targeted, and what is excluded. Private; public examples use documentation ranges. |
 
 "Pack" is not used: it already means a workflow pack and an agent context pack. The status hub's
 `module` field on a status source (a tile grouping) becomes `group` in service 2.7 (below).
@@ -74,7 +79,7 @@ equals a shipped one is an **error**, never a silent override. The loader puts o
 
 ## The manifest at a glance
 
-```yaml
+```text
 manifest_version: "1.0"           # the schema version (const)
 id: external-collector            # == directory name; never a reserved id; core-* only for kind core
 kind: feature                     # provider | feature | core
@@ -86,7 +91,7 @@ licence: {kind, spdx|expires, tier, renewal}       # provider only
 credentials: [{secret, identity, holder, purpose}] # provider only; holder: provider|consumers|granted
 control_plane: [{kind, reader, description}]       # provider only
 identifiers: [{kind, name, on_remove}]
-requires:  {capabilities, model_roles, interfaces, hosts}     # hard
+requires:  {capabilities, model_roles, interfaces, hosts, scope}   # hard
 prefers:   {capabilities, interfaces}                         # soft, each with a fallback
 interfaces: [{id, version, kind, schema|schema_id, description}]  # interfaces this module OWNS
 provides:  {slots: {<slot>: {...}}, interfaces: [{interface, version, via}]}
@@ -169,12 +174,18 @@ the approval gate reading classifier fields, the notify digest reading the detec
 core modules as their packages migrate. `core-modules` (the loader's own manifest) owns the criteria
 that guard rules no module may contribute about itself.
 
-## The slot registry (capability descriptor 1.1, a prerequisite; specified, not implemented)
+## The slot registry (a draft schema; capability descriptor 1.1 when accepted)
 
 Every slot has a descriptor; `examples/modules/slots.yml` is the draft data for the slots the
-examples use, and the contract-test rules read it. `platform/capability` 1.1 itself is **not
-written**: there is no schema for these fields, and `schemas/platform/capability.schema.json` is
-still 1.0. Fields it would add:
+examples use, and the contract-test rules read it. The fields and their rules are a draft schema
+of their own, `platform/slot` 1.0 (`schemas/platform/slot.schema.json`, `x-draft`): every
+`slots.yml` entry validates against it, each contract names a real protocol file, and the
+privileged set is pinned to the six trust roots named below, each with a conformance suite.
+`platform/capability` stays 1.0 until the ADR is accepted: 1.0 allows undeclared keys, so adding
+these fields' rules to it would refuse a 1.0 descriptor that happened to carry one, which is not
+an additive change. Capability descriptor 1.1 takes them then (a deliberate, documented break, or
+2.0). A `stage` slot need not declare `formats` unless it is `pass_through`, which must pass
+something (non-empty `in` and `out`). The fields:
 
 | Field | Meaning | What it makes computable |
 |---|---|---|
@@ -197,6 +208,7 @@ is subsumed by the providers' and core modules' `requires`.
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
 | `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
+| `scope` | `{part, purpose}` | a part of the selection's [network scope](#the-network-scope) (`trusted.wan`, `trusted.nets`, `trusted.tooling`, `target`, `exclude.unattended_mutation`, `exclude.offensive`); the module reads those addresses from the selection, never from its own config. `requires` only: a module that reads scope has no fallback for it |
 
 A `prefers` entry names a `fallback`: `behaviour`, optionally a lighter slot `to`, and optionally
 `data` overrides. **A dataset bound to a preferred slot moves with the fallback**: a dataset's `via`
@@ -322,7 +334,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | agents | an agent's profile | the overlay's `CeilingPolicy` (CODEOWNERS); compiled **only** with a policy | policy owner |
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
-| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration; edge or idp only with `grants.shared_config` | overlay owner |
+| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config` | overlay owner |
 | egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
@@ -430,7 +442,8 @@ that slot's round trip").
   fictional. A key named like a credential (`password`, `token`, `secret`, `key`, `credential`,
   `api_key`, `private_key`) **must** be `type: secret`, whose default is a `secret:<id>/...` name. A
   string default carries no `<scheme>:` reference in any case (`secret:`, `SECRET:`, `vault:`) and no
-  address literal. A path default is relative, without `..`. An enum default is a string, one of its
+  address literal: a module that needs addresses requires a part of the site's
+  [network scope](#the-network-scope) instead. A path default is relative, without `..`. An enum default is a string, one of its
   `values` (loader).
 - `credentials[].holder`: `provider` (only the provider's roles read it), `consumers` (a template:
   the provider issues one credential **per consumer** at bind time, never shared, so a swap revokes
@@ -511,7 +524,7 @@ fills the slot, an agent key exists, a grant is allowed, a config value is the m
 loader rule. Its own schema, beside the site model (profiles validate without a network model, and the selection
 changes far more often than the site). Shape, as in the three profiles:
 
-```yaml
+```text
 profile: full
 hosts:      {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}
 slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}
@@ -522,6 +535,7 @@ grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external
              internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
              public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:edge|cap:idp]},
              units: {<module>: [<unit>]}}
+scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
 ```
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
@@ -533,6 +547,170 @@ by guest id instead of re-declaring. A multi-slot provider is placed once per in
 consumer resolves a slot with **`provider_for(slot, instance)`** from the selection (today
 `homelabnext/broker/cli.py` reads a conformance target file instead). Model choice stays one line in
 the role table.
+
+### The network scope
+
+The site's addresses live in one place: the selection's `scope:` block, in the **private** overlay
+(`lab/modules.yml`; seal the file with SOPS if its WAN addresses would hurt in a leak, as
+[private overlay](private-overlay.md) describes for `lab/site.yml`). The public repository carries
+only the schema, the enforcement and fictional examples in the documentation ranges (RFC 5737's
+`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, RFC 3849's `2001:db8::/32` and RFC 9637's <!-- no-raw-endpoint: allow documentation ranges -->
+`3fff::/20`).
+
+```yaml
+scope:
+  trusted:
+    wan: [203.0.113.32/29]                  # the lab's own public addresses (no-raw-endpoint: allow a documentation range)
+    nets: [192.0.2.0/24, "2001:db8:30::/48"]  # its internal networks (no-raw-endpoint: allow a documentation range)
+    tooling: [192.0.2.240/28]               # where the operator's own tooling runs from (no-raw-endpoint: allow a documentation range)
+  target: [198.51.100.0/24, 192.0.2.0/24]   # what assessment tooling may touch (no-raw-endpoint: allow a documentation range)
+  exclude:
+    unattended_mutation: [192.0.2.1/32]     # no unattended job changes these (no-raw-endpoint: allow a documentation range)
+    offensive: [192.0.2.0/28]               # never the target of offensive tooling; [] = none (no-raw-endpoint: allow a documentation range)
+```
+
+- **Entries.** Each part is a list of IPv4 or IPv6 addresses or CIDR networks. Quote an IPv6
+  entry: YAML 1.1 reads an unquoted all-digit value such as `1:20:30` as a number. The schema and
+  the loader match one pattern (`ENTRY_PATTERN` in `homelabnext/modules/scope.py`, from which the
+  schema's `scope` object is generated): no zone id, no whitespace, no leading zeros, no IPv4
+  written inside or embedded in IPv6 (mapped, compatible, NAT64; an IPv4 target is never inside an
+  IPv6 network, so such an exclusion would exclude nothing), no IPv4 host bits. The loader
+  (`scope_problems`, `parse_entry`) adds what a pattern cannot say: IPv6 host bits, `/0`, any
+  network touching the unspecified, loopback, link-local, multicast or reserved blocks, a network
+  listed twice, and in `trusted.*` a network broader than **/8 (IPv4) or /32 (IPv6)**: trusting
+  more is a blind spot, not the lab. `target` has no floor. `trusted.wan` also refuses private,
+  shared (RFC 6598) and unique-local space: the internet never sees the lab as one of those, so it
+  is a typo for `trusted.nets`. It reports a wrong-typed or unknown part itself, without relying on
+  the schema.
+- **Empty and absent.** A part is non-empty, except an exclusion: `exclude.*: []` means "nothing
+  excluded". An absent part is never read as empty: a module that requires it is refused.
+- **Declared reads.** A module declares the parts it reads (`requires.scope`), and
+  `homelabnext.modules.scope.scope_networks(site, module, part)`, the reader a module is meant to
+  call, raises `ScopeUndeclared` for any other part; an absent, empty (unless an exclusion) or
+  malformed part raises `ScopeMissing`, never an empty list. The API is **cooperative**: nothing
+  stops code from reading `site["scope"]` or the low-level `_part_networks` directly, or from
+  passing a module dict with an edited `requires`. What enforces the declaration today is review
+  of the module's code and the loader's rule that every declared part is present; there is no
+  sandbox between a module and the selection. The external data collector requires `trusted.wan`,
+  so sessions from the lab's own WAN are dropped instead of reported, without a list of its own.
+  It does not read `trusted.tooling`: the operator's own scanners and runners seen from outside are
+  recorded like any other source (a site that wants one dropped lists it under `trusted.wan`).
+- **Modules that read addresses.** The manifest has no "offensive", "mutating" or "acts on"
+  marker, so the loader keys the rule on what a manifest declares, and fails closed: a module that
+  requires any address part (`target` or any `trusted.*` part) must also require
+  `exclude.offensive`, and `exclude.unattended_mutation` too unless it is attended. A module is
+  **unattended unless every contribution kind it uses is inert** (`INERT_CONTRIBUTIONS`: docs,
+  detections, lake tables, status sources, notify pairs); a service, a workflow pack, an MCP
+  server, an invariant, an entry point, a preflight hook, a role, shared config, a scheduler job
+  and every agent (each has a calendar or a trigger) can run with no human present, and a test ties
+  the classification to the `platform/module` schema so a new kind counts as executable. The
+  external data collector only filters on `trusted.wan`, but the manifest cannot say so, so it
+  declares both exclusions and a site may set them to `[]`. A module acts only on
+  `effective_targets(site, module)`: `target` minus those exclusions, per IP version; when the
+  exclusions leave nothing it raises `ScopeMissing` ("nothing left after the exclusions"), never
+  an empty list, which a caller could read as "unrestricted".
+- **Addresses live here.** A module config default refuses an address literal (the schema's
+  pattern, a dotted quad or `::`). A selection's string-valued config value (every type but
+  `integer`, `duration_s` and `boolean`) refuses a site address (`address_literals`): an IPv6, hex
+  or zero-padded address; any IPv4 address with a port, a prefix length, in brackets or in a URL,
+  including an `inet_aton` short form there (`http://10.1/` is the octets 10, 0, 0, 1 and <!-- no-raw-endpoint: allow inet_aton short forms -->
+  `10.20.5:8080` is 10, 20, 0, 5); and a plain dotted quad or 8 to 10 digit integer only when it is private or shared
+  space. Let through: a plain global dotted quad and a plain short form (they read the same as a
+  version), and unspecified, loopback, link-local, multicast, reserved and documentation addresses
+  (bind addresses such as `0.0.0.0` and `[::]:8080`, labels such as `cafe::beef`). **Not scanned:**
+  `integer`, `duration_s` and `boolean` keys. Their value is a number by schema, and any integer of
+  2^24 or more is also an IPv4 address, so scanning them would refuse ordinary sizes; a module
+  that reads an address out of an integer key is a defect in that module. An **external
+  endpoint** (a public resolver, an NTP server) is a hostname or a `svc:` reference, never a
+  literal; it is not part of the scope.
+- **The public gate.** `tools/private_leak_check.py public` places the rule by **location**, not
+  by format:
+  - A site scope block may sit only at `SCOPE_BLOCK_PATHS`: the example site profiles
+    (`examples/modules/sites/*.yml`) and the generated selection examples and negatives
+    (`schemas/platform/{examples,negative}/module_selection.*.yml`). There the file is parsed
+    strictly, after a size and depth bound (larger or deeper is refused before any parser sees
+    it), every entry must be a string naming a documentation network (`scope-address`), the shape
+    is the selection's with `scope` at the top level only (`scope-shape`: an unknown part, a key
+    twice, an anchor or alias), and a file the parse refuses fails (`scope-unparsed`).
+  - Everywhere, in **every file** the scanner reads (any suffix; CRLF and CR line ends are
+    normalised first), two rules run and either one fails the file (`scope-address`):
+    - **the parse pass:** a file that parses as JSON, TOML or YAML (by content, whatever the
+      suffix; YAML only within the size and depth bounds) has every scalar, keys included, judged
+      under any key whose resolved value is `scope` in any case, at any depth. An alias-spelled key,
+      `? scope` with a comment, a CRLF `[scope]` header and a flow dedented anywhere are ordinary
+      mappings here;
+    - **the raw rule:** the raw text under every `scope` key is tokenised. A key is `scope` in
+      any case, quoted or not: `scope:`, `[scope]`, `[[scope]]`, a dotted `scope.x` key followed
+      by its own `:` or `=` (an attribute access or a call such as `scope.get(` is none), an
+      assignment to a Python subscript such as `site["scope"]["target"]` (never a `==`
+      comparison), a comment before the colon, the Markdown spellings `` `scope`: ``, `**scope**:`, `_scope_:`
+      and a table row whose first cell is `scope`, and `scope =` at a line's start (TOML, INI)
+      or spaced inside a TOML inline table. A call's keyword argument (`fixture(scope="module")`)
+      and an HTML or XML attribute (`<th scope="row">`) are never keys. Keys are found again after
+      decoding `\x`, `\u`, `\U`, escaped line breaks and HTML character references. The rule also
+      reads what does not parse: Markdown prose and fences of any indent, length or info string,
+      and each cell and textual output of a Jupyter notebook, joined from its per-line strings
+      (both rules run on it). What a key holds is over-read: the rest of its line, every line
+      indented deeper than the key's column, a value on the first later line with content, a
+      quoted scalar or flow collection opened there through its close, and for a TOML header
+      everything to the next header. A key's column is its first non-blank character, so an
+      indented `scope = x` holds only the lines deeper than itself. A quoted or flow value on the key's line with nothing deeper
+      is exactly that value, so the rest of a minified line is another key's. A YAML alias is
+      followed to its anchor's last real definition (more than 256 aliases is itself a finding),
+      and a value tagged as YAML binary fails.
+    - **cost:** flow closers, anchors, TOML headers and line ends are indexed in one pass and no
+      line is re-read per key. `test_the_raw_rule_grows_linearly` times ten shapes (among them
+      the ones earlier versions were quadratic on) at n, 4n and 16n in CPU time
+      (`time.process_time`, best of five, so a busy runner's other processes do not count) and
+      allows at most 8x per 4x step; a quadratic shape grows 16x.
+
+    An address-like token is an IPv6 address, a dotted quad in any numeric spelling, an integer
+    of 2^24 or more in any YAML, TOML or C spelling, and an `inet_aton` short form of two or three
+    parts that cannot be a version or a decimal: a hex part or a part over 255 (`81.2.17806`,
+    `0x51.0x2458e`, also `1.300` or `3.14159`), or one in an address context (a prefix length such
+    as `10.20/16`, a port, after `//` or `@`). Every other short form (`1.0`, `24.04`, `0.05`,
+    `1.0.3`, and a bare `10.20`) is ignored, and a reading inside 0/8 never counts. Loopback,
+    unspecified and link-local addresses name no site and are let through in both families, and
+    an IPv6 form inside `::/96` is judged by its embedded IPv4 address, so `::` (a Python
+    `[::-1]` slice, a C++ `Foo::bar`) is in 0/8; an IPv4-compatible or mapped form of a real
+    address is still refused. The price of the integer and dotted-quad rules: an epoch, a byte
+    size or a `YYYYMMDD` integer of 2^24 or more, and a four-part version (`1.0.0.0`), under a
+    scope key are refused too. A page may show a block's shape with documentation addresses, so a doc-only block
+    outside the allowlist is not judged for shape. A case variant of an allowlisted path is
+    refused (`scope-shape`).
+  - **Threat model.** The gate defends against an **accidental** commit of a real address in any
+    ordinary format (YAML, JSON, TOML, Markdown, CRLF line ends, escapes, integer, hex,
+    zero-padded and short spellings), and fails closed on what it cannot read. A **deliberately
+    obfuscating** author is out of scope for a text gate and is review's to catch. Known non-goals:
+    a hostname that resolves to the address it spells (`81-2-69-142.sslip.io`, `*.nip.io`), <!-- no-raw-endpoint: allow a non-goal example -->
+    percent-encoded or ideographic dots, named HTML entities, Markdown backslash escapes or
+    emphasis inside a number, and numbers spelt in words. Carriers no loader in this project
+    reads as a scope are non-goals too: environment variables (`SCOPE_TARGET=` in `.env` or a
+    shell), a CSV or TSV column headed `scope`, INI sections such as `[scope:lab]`, XML
+    `<scope>` and HCL `scope {` blocks, YAML behind `//` comments or `>` blockquotes, a Markdown
+    heading or bullet `scope` with the address on a later bullet, a TOML multi-line string inside
+    a Markdown fence, and a notebook output that prints a scope's value without its key.
+  - Parse-only layouts and the bounds. A few layouts only the parse pass reads (a YAML key
+    spelled by an alias); in a YAML file over 256 KiB, or one nested deeper than the bounds
+    anywhere, the parse pass does not run, so the raw rule alone judges it.
+  - Not covered either: an address that is not under a scope key (a sibling key, plain prose) is
+    `tools/leak_scan.py`'s, which ignores zero-padded and integer spellings; an integer below
+    2^24 (it names no host); a version-like short form outside private space; a file the scanner
+    cannot read as text (binary, over 5 MB), which `leak_scan` itself fails on.
+- This block is the site's **network** scope. It is not `homelabnext.scope` ([scope guard](scope.md)),
+  which keeps writer tools off scratch targets by registry id.
+
+**Specified, not implemented**:
+
+- **Dynamic WAN sources.** `trusted.wan` may list `{source: <name>}` instead of a network: a WAN
+  from DHCP or CGNAT, or a delegated IPv6 prefix that changes. The schema accepts it so freezing the
+  shape later is additive; the loader refuses it ("dynamic WAN sources are specified, not
+  implemented") until a reader resolves a source.
+- **A module that reads `target`.** No example module does yet; the rule above and
+  `effective_targets` are ready for the first one.
+- **Acting on names.** A module that acts on hostnames or `svc:` references is outside the
+  network scope: the scope holds networks only, and the manifest cannot say a module acts on a
+  name (nor that it only filters on a part, an `acts_on` marker), so no rule here covers it.
 
 ## What the loader checks
 
@@ -557,7 +735,9 @@ Specified here, applied to the examples by `homelabnext/modules/rules.py`:
    (the list above); no data prefix or records write prefix overlap.
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
-   values are declared keys, and a secret value is the module's own or granted; required core slots
+   values are declared keys, carry no site address, and a secret value is the module's own or
+   granted; the scope block parses strictly, and every part a selected module requires is present
+   and non-empty (an exclusion may be `[]`); required core slots
    selected; instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
@@ -591,12 +771,35 @@ adapters or routes):
    target, not only a guest) clean.
 7. **Close** with an ADR reference.
 
-### Swap record 1.2 (specified, not implemented)
+### Swap record 1.2 (draft: `platform/module_swap` 1.0)
 
-No schema, no swap-kit change and no test drives a swap through it; `platform/swap_record` is 1.1.
-The table is the change list for that work. `legs`, `selection_diff` and the shape of
-`dependants.report` are not defined yet. The swap above is the design, not a demonstrated run.
+What 1.2 adds to the record is the draft schema `platform/module_swap` 1.0, with its rules in
+`homelabnext/modules/swap.py`; `platform/swap_record` stays 1.1 (its steps, gates and hash-chained
+log are unchanged) until the ADR is accepted and the two are folded together. The swap kit
+(`hnx swap`) still drives 1.1 records: no live swap has run through 1.2.
 
+* **`dependants.report`**: one entry per selected module that requires or prefers a moving slot
+  instance (a requirement naming another instance is not one; one naming none is), core modules
+  included: `{module, kind, relation, slot, instance, checks: {features, formats}, verdict,
+  reasons}`. Each check is `holds`, `fails` or `not-asked` against what the **incoming** provider
+  offers for the slot; a failed requirement `blocks`, a failed preference `falls-back`.
+  `dependants.blocked` lists the blocking modules, and a non-empty list refuses the cutover. The
+  report is recomputed from the manifests and the site and compared, never trusted as written.
+* **`route.selection_diff`**: `[{slot, instance, from, to}]`, exactly one line per moving slot
+  instance from the outgoing to the incoming module, for a swap with no network route.
+  `apply_selection_diff` is its cutover: it runs the cutover gate first, so only the record's
+  checked diff is applied, and refuses a line that does not read `from`, so a diff cannot be
+  applied twice or to another selection.
+* **`legs`**: `[{instance, order}]`, every instance of the swap once, orders 1..n.
+* The site checked against is the selection the swap **starts** from: each moving instance is
+  served by the outgoing module there. `migration.format` is one both providers migrate the slot
+  in, its import count equals the boundary count and it rejected nothing, and it never comes with
+  `start_empty`; `credentials_revoked` names only the outgoing provider's credentials.
+* Three gates: `module_swap_problems` (the record holds), `cutover_problems` (it holds, no
+  dependant blocks, and the data either moved or the swap starts empty by decision) and
+  `decommission_problems` (against the selection after the cutover: once the outgoing module
+  serves nothing, every credential it issued is revoked; while it still serves another instance,
+  its credentials stay, since revoking them would break that instance).
 
 | Change from 1.1 | Why |
 |---|---|
@@ -609,6 +812,16 @@ The table is the change list for that work. `legs`, `selection_diff` and the sha
 | `meaning_changes: [{field, before, after}]` | a feed move changed what a rule id meant |
 | `credentials_revoked: [secret:...]` gating `decommission-check` | the old provider's issued credentials go |
 | `legs: [{instance, order}]` | the DNS swap's two-leg cutover across instances |
+
+`tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
+these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission.
+
+What the draft leaves out, on purpose: the contract version a dependant requires is the slot's,
+not the provider's, so it is not re-checked; a dependant that reaches the slot only through an
+interface is not seen (as in `rules.dependants`); one record migrates in one format, so a swap of
+several slots that migrate in different formats is one record per format; a `holder: consumers`
+credential is the template of the keys the store issues, so revoking it stands for those keys;
+and `meaning_changes` is recorded, never checked.
 
 Model-role rebinds go through the same record with `{slot: cap:inference, role}`, golden evaluations
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
@@ -635,8 +848,8 @@ Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
 
 | Record | Change | State |
 |---|---|---|
-| `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | specified, not implemented (draft data in `examples/modules/slots.yml`) |
-| `platform/swap_record` 1.2 | above | specified, not implemented |
+| `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
+| `platform/swap_record` 1.2 | above | **draft schema** `platform/module_swap` 1.0 holds the additions and their rules; the record stays 1.1 until acceptance |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
 | `platform/interface` 1.0 | the owned interface record (today inline in the owner's manifest) | specified, not implemented |
 | `platform/lake_table` 1.0 | owner, schema, retention, maintenance, freshness | **draft schema** |
@@ -689,9 +902,10 @@ Everything below is described on this page and exists in no form yet: no schema,
 check, not even a contract-test rule. Each is a follow-up before the ADR can be accepted, or is
 listed as deferred.
 
-1. **Capability descriptor 1.1** (the slot registry as a schema; `slots.yml` is draft data).
-2. **Swap record 1.2**, with `legs`, `selection_diff` and `dependants.report` defined, and one swap
-   driven through it end to end in a test.
+1. **Capability descriptor 1.1**: the fields and rules exist as the draft `platform/slot` 1.0, and `slots.yml` is validated against it; folding them into the descriptor waits for acceptance.
+2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
+   `platform/module_swap` 1.0 and one swap is driven through its rules end to end in a test;
+   folding it into the swap record and the swap kit (`hnx swap`) waits for acceptance.
 3. **`platform/interface` 1.0** as a standalone record, and a `gate` marker so a gate interface
    defined by its producer is refused.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
@@ -710,8 +924,8 @@ listed as deferred.
 
 ## Open questions
 
-The operator answered the twelve questions of the first draft provisionally (2026-10-23); this draft
-applies those answers, and the operator may override any of them.
+The operator answered the twelve questions of the first draft provisionally (2026-10-23), and
+question 13 since; this draft applies those answers, and the operator may override any of them.
 
 | # | Question | Provisional answer, as applied |
 |---|---|---|
@@ -727,6 +941,7 @@ applies those answers, and the operator may override any of them.
 | 10 | Where modules live | **`modules/<id>/`** and overlay **`lab/modules/<id>/`**, `hnx_modules` namespace package, no shadowing |
 | 11 | Licence probes | **warn at 30 days, page the owner at 7, red on expiry** |
 | 12 | Reviews | manifests **join the review policy**; human approval for credentials, control plane, data grants, egress and privileged slots |
+| 13 | Where the site's network scope lives | in the **private overlay's selection** (`scope:` in `lab/modules.yml`); the public repository holds the schema, documentation-range examples and the enforcement ([the network scope](#the-network-scope); decided 2026-10-23) |
 
 Still open:
 

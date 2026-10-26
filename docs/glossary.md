@@ -1,8 +1,12 @@
+---
+summary: Glossary of the project's terms, such as capability, seam, contract, fake and conformance, each defined in a short entry.
+summary_of: outline:sha256:050f5dfb3c4eafcd
+---
 # Glossary
 
 **Capability.** A job the platform needs done, named independently of the product that does it
 (`lake-query`, `notify`, `detections`). Each capability has a contract, a fake and a conformance
-test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth and `projects` (project management) the sixteenth; the list is in `docs/interfaces.md` section 3.
+test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth, `projects` (project management) the sixteenth, `codemode-executor` (the Code Mode sandbox, ADR-0031) the seventeenth and `codemode-runner` (its runner, the handler of `codemode.execute`) the eighteenth; the list is in `docs/interfaces.md` section 3.
 
 **Seam.** The boundary between a capability and the consumers of it. A product can be replaced
 without touching consumers if, and only if, the seam has a testable contract.

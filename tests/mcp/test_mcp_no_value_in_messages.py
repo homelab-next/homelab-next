@@ -148,8 +148,8 @@ def test_import_reports_never_the_value(tmp_path, capsys, entry):
 
 
 def _reasons(cat: Path) -> None:
-    """A deprecated and a retired record whose free-text reason carries the fake secret, and
-    notes deprecated too (a server a reader may hold, so render reaches its note)."""
+    """Two retired records whose free-text reason carries the fake secret, and notes deprecated
+    with it too (a server a reader may hold, so render reaches its note)."""
     why = f"moved; the old key was {FAKE}"
     _edit(cat, "terminal", lambda r: r.update(reason=why))
     _edit(cat, "docker", lambda r: r.update(reason=why))
@@ -174,7 +174,8 @@ def test_check_grants_never_print_a_reason_or_an_unknown_grant_name(tmp_path, ca
     )
     text = _assert_clean(capsys)
     for phrase in ("names an unknown MCP server (mcp entry 4)", "unknown capability (capabilities "
-                   "entry 2)", "'docker', which is retired", "'terminal', which is deprecated",
+                   "entry 2)", "'docker', which is retired", "'terminal', which is retired",
+                   "'notes', which is deprecated",
                    "a profile whose id is not an id", "its data_tier is not local-only"):  # fmt: skip
         assert phrase in text, phrase
 

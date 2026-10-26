@@ -1,6 +1,9 @@
 ---
 title: lake-catalog
 type: system
+summary: lake-catalog provides the lake-catalog capability (lakekeeper), owned by
+  data-team.
+summary_generated: true
 service: lake-catalog
 capability: lake-catalog
 impl: lakekeeper

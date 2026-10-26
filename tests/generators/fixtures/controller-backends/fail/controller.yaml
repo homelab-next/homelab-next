@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+backends:
+  local:
+    name: vllm-a
+    max_context: 32768          # mdl:main-reasoner-a says 131072
+  local_fallback:
+    name: vllm-b                # its home names mdl:main-reasoner-a, bound to svc:vllm-a
+    max_context: 131072
+  additional:
+    - name: vllm-c              # not a svc: of the gateway spec
+      max_context: 65536
+    - name: vllm-d              # its home names the engine model id, not a role
+      max_context: 32768
+    - name: vllm-e              # its home's role is bound to svc:vllm-a as well
+      max_context: 131072
+    - name: vllm-f              # its home's base_url is the engine, not the gateway
+      max_context: 65536
+    - name: vllm-g              # its home's context_length is past its role's 32768
+      max_context: 32768

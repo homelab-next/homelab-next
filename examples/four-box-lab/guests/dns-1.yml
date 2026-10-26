@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:dns-1
+description: "The primary resolver, authoritative for the lab's zone."
+kind: lxc
+provisioning: terraform
+placement: {node: main-1, vmid: 105}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 1024}
+  disks: [{name: rootfs, size_gb: 8, pool: fast}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: mgmt, ip: 192.0.2.5}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: dns-udp-mgmt, proto: udp, ports: "53", source: "zone:mgmt"}
+    - {name: dns-tcp-mgmt, proto: tcp, ports: "53", source: "zone:mgmt"}
+    - {name: dns-udp-services, proto: udp, ports: "53", source: "zone:services"}
+    - {name: dns-tcp-services, proto: tcp, ports: "53", source: "zone:services"}
+    - {name: dns-udp-data, proto: udp, ports: "53", source: "zone:data"}
+    - {name: dns-tcp-data, proto: tcp, ports: "53", source: "zone:data"}
+    - {name: dns-udp-edge, proto: udp, ports: "53", source: "zone:edge"}
+    - {name: dns-tcp-edge, proto: tcp, ports: "53", source: "zone:edge"}
+capability: cap:context
+tags: [prod]
+owners: {primary: platform-team}

@@ -1,6 +1,8 @@
 ---
 title: events
 type: system
+summary: events provides the events capability (nats), owned by data-team.
+summary_generated: true
 service: events
 capability: events
 impl: nats

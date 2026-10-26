@@ -45,7 +45,7 @@ from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
 
-from .model import ComputeError, Guest, Problem, allowed_groups
+from .model import ComputeUnreadable, Guest, Problem, allowed_groups
 
 BASELINES_FILE = "_baselines.yml"
 #: how a control's role reaches a guest (baseline set 1.1): on the guest, or on a central host
@@ -253,7 +253,7 @@ def load_baselines(
     try:
         doc = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueKeyStrDateLoader)
     except (OSError, yaml.YAMLError) as exc:
-        raise ComputeError(f"cannot read baseline set {p}: {exc}") from exc
+        raise ComputeUnreadable(f"cannot read baseline set {p}: {exc}") from exc
     where = p.name
     out = [Problem(where, f"unsafe: {m}") for m in control_char_paths(doc)]
     validator = jsonschema.Draft202012Validator(schema())

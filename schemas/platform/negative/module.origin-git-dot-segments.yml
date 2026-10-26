@@ -63,6 +63,14 @@ requires:
     roles:
     - role:external_collector_receiver
     purpose: receives batches, writes the lake and the object store
+  scope:
+  - part: trusted.wan
+    purpose: sessions from the lab's own public addresses are dropped, so the lab never reports itself;
+      the addresses come from the site's scope block, never from this module's config
+  - part: exclude.offensive
+    purpose: required of every module that reads addresses (it acts on none; a site may set [])
+  - part: exclude.unattended_mutation
+    purpose: required of every module that runs unattended and reads addresses (it changes none)
 prefers:
   capabilities:
   - cap: cap:lake-catalog

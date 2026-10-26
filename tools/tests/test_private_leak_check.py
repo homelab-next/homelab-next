@@ -68,6 +68,18 @@ SOPS_META = (
     "    version: 3.9.0\n"
 )
 SOPS_FILE = f"wan:\n    address: {enc()}\n    port_unencrypted: 51820\n" + SOPS_META
+SOPS_JSON = json.dumps(  # what `sops --input-type binary` writes, under any file name
+    {
+        "data": enc(b"[Interface]"),
+        "sops": {
+            "age": [{"recipient": "age1fake", "enc": "x"}],
+            "lastmodified": "2026-10-21T00:00:00Z",
+            "mac": enc(b"fake-mac"),
+            "version": "3.9.0",
+        },
+    }
+)
+SOPS_DOTENV = f"WG_KEY={enc()}\nsops_mac={enc(b'fake-mac')}\nsops_version=3.9.0\n"
 
 
 def overlay(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -495,6 +507,11 @@ def test_public_tree_with_only_the_skeleton_passes(tmp_path):
         ("ansible/inventory/production/hosts.yml", "all: {}\n", "overlay-path"),
         (".sops.yaml", SOPS_RULES, "sops-config"),
         ("examples/thing.yml", SOPS_FILE, "ciphertext"),
+        # sops writes any format under any name: the check reads content, not the suffix
+        ("conf/wg0.conf.enc", SOPS_JSON, "ciphertext"),
+        ("conf/secrets.toml", SOPS_JSON, "ciphertext"),
+        ("conf/app.secret", SOPS_FILE, "ciphertext"),
+        ("conf/app.conf", SOPS_DOTENV, "ciphertext"),
         ("keys/ops.agekey", "x\n", "key-file"),
     ],
 )
@@ -505,6 +522,658 @@ def test_public_tree_with_private_material_fails(tmp_path, rel, text, rule):
     p.write_text(text)
     assert rule in rules(plc.check_public(root))
     assert run("public", str(root)).returncode == 1
+
+
+#: non-documentation networks, assembled at run time so this file stays clean under the scanner
+PRIVATE_NET = ".".join(("10", "20", "0", "0")) + "/16"
+PUBLIC_HOST = ".".join(("8", "8", "4", "4"))
+PUBLIC_V4 = ".".join(("81", "2", "69", "142"))
+#: the same public address as an integer and in hex (what inet_aton also reads)
+PUBLIC_INT = str(int.from_bytes(bytes(int(o) for o in PUBLIC_V4.split(".")), "big"))
+PUBLIC_HEX = hex(int(PUBLIC_INT))
+#: zero-padded octets: a person reads decimal, inet_aton reads octal
+PADDED = ".".join(f"{int(o):03d}" for o in PUBLIC_V4.split("."))
+EVERYTHING = ".".join(("0",) * 4) + "/0"
+EVERYTHING_V6 = ":" * 2 + "/0"
+DOC = "192.0.2"  # a three-part documentation prefix (no four-part literal in this source)
+DOC3 = "203.0.113"
+#: the public address in the other spellings a YAML 1.1 loader, TOML or int() reads
+PUBLIC_FLOAT = PUBLIC_INT + ".0"
+PUBLIC_BIN = bin(int(PUBLIC_INT))
+PUBLIC_OCT = "0o" + oct(int(PUBLIC_INT))[2:]
+PUBLIC_UNDERSCORED = f"{int(PUBLIC_INT):_}"
+FULLWIDTH = "".join(chr(0xFF10 + int(c)) if c.isdigit() else c for c in PUBLIC_V4)
+#: inet_aton short form of a private address (the octets 10, 0, 0, 20; a person reads the 10.20/16 prefix)
+SHORT_PRIVATE = ".".join(("10", "20"))
+#: NAT64 local-use (RFC 6052 /48 layout) embedding the public address, with a documentation tail
+NAT64_LOCAL = ":".join(("64", "ff9b", "1", "5102", "45", "8e00", "c000", "201"))
+#: the public address as inet_aton short forms no version takes (a part over 255, hex parts)
+SHORT_GLOBAL = "81.2." + str(69 * 256 + 142)
+SHORT_HEX = "0x51.0x" + format(2 * 65536 + 69 * 256 + 142, "x")
+SHORT_TWO = "81." + str(2 * 65536 + 69 * 256 + 142)
+#: an allowlisted path (SCOPE_BLOCK_PATHS): a site block there is parsed strictly
+#: special-use addresses that name no site (VERIFY4 SF2), assembled
+LOOPBACK = ".".join(("127", "0", "0", "1"))
+UNSPECIFIED = ".".join(("0",) * 4)
+METADATA = ".".join(("169", "254", "169", "254"))
+#: the public address in the deprecated IPv4-compatible form (::/96, no ffff)
+COMPAT_REAL = ":" * 2 + f"{int(PUBLIC_INT) >> 16:x}:{int(PUBLIC_INT) & 0xFFFF:x}"
+SITE = "examples/modules/sites/probe.yml"
+
+TQ = "'" * 3
+
+
+def notebook(kind: str, source: list[str], outputs: list | None = None) -> str:
+    """A one-cell Jupyter notebook as written to disk (one JSON string per line)."""
+    cell = {"cell_type": kind, "metadata": {}, "source": source}
+    if kind == "code":
+        cell["outputs"] = outputs or []
+    return json.dumps(
+        {"cells": [cell], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}, indent=1
+    )
+
+
+#: a non-documentation address under a scope key, in every shape and spelling: refused at
+#: EVERY path, whatever the file is called and whatever the block around it looks like
+ADDRESS_CASES = {
+    "plain": f"scope:\n  trusted:\n    wan: [{PUBLIC_HOST}/32]\n",
+    "private": f"scope:\n  target: [{DOC}.0/24, {PRIVATE_NET}]\n",
+    "everything": f"scope:\n  target: ['{EVERYTHING}']\n",
+    "everything v6": f"scope:\n  exclude:\n    offensive: ['{EVERYTHING_V6}']\n",
+    "widened": f"scope:\n  target: [{DOC}.0/16]\n",
+    "misspelt part": f"scope:\n  trusted:\n    lan: [{PRIVATE_NET}]\n",
+    "malformed real": f"scope:\n  target: ['{PRIVATE_NET.replace('/16', '/33')}']\n",
+    "json": f'{{"profile": "x", "scope": {{"target": ["{PRIVATE_NET}"]}}}}\n',
+    "zero-padded": f"scope:\n  trusted:\n    wan: ['{PADDED}/32']\n",
+    "integer string": f"scope:\n  trusted:\n    wan: ['{PUBLIC_INT}']\n",
+    "yaml int": f"scope:\n  trusted:\n    wan: [{PUBLIC_INT}]\n",
+    "hex string": f"scope:\n  trusted:\n    wan: ['{PUBLIC_HEX}']\n",
+    "yaml hex int": f"scope:\n  trusted:\n    wan: [{PUBLIC_HEX}]\n",
+    "yaml float": f"scope:\n  target: [{PUBLIC_FLOAT}]\n",
+    "yaml binary": f"scope:\n  target: [{PUBLIC_BIN}]\n",
+    "octal": f"scope:\n  target: [{PUBLIC_OCT}]\n",
+    "underscored": f"scope:\n  target: [{PUBLIC_UNDERSCORED}]\n",
+    "fullwidth digits": f"scope:\n  target: ['{FULLWIDTH}']\n",
+    "inet_aton short form with a prefix": f"scope:\n  target: ['{SHORT_PRIVATE}/16']\n",
+    "short form in a url": f"scope: http://{SHORT_PRIVATE}.5/\n",
+    "space before prefix": f"scope:\n  target: ['{PUBLIC_V4} /32']\n",
+    "mapped real": f"scope:\n  target: ['::ffff:{PUBLIC_V4}']\n",
+    "nat64 local-use": f"scope:\n  target: ['{NAT64_LOCAL}']\n",  # N4
+    "prefix length that is an address": f"scope:\n  target: ['{DOC}.1/{PUBLIC_INT}']\n",  # N5
+    "flow style": f"{{scope: {{target: ['{EVERYTHING}']}}}}\n",
+    "single-quoted key": f"'scope':\n  target: ['{EVERYTHING}']\n",
+    "explicit key": f"? scope\n: target: ['{EVERYTHING}']\n",
+    "complex key": f"? [scope]\n: target: ['{PADDED}/32']\n",
+    "tab before colon": f"scope\t:\n  target: ['{EVERYTHING}']\n",
+    "byte-order mark": f"\ufeffscope:\n  target: ['{EVERYTHING}']\n",
+    "json escaped key": '{"\\u0073cope": {"target": ["' + EVERYTHING + '"]}}\n',
+    "yaml escaped key": f"\"\\x73cope\":\n  target: ['{EVERYTHING}']\n",
+    "escaped line break in the key": f"? \"sco\\\n  pe\"\n: trusted:\n    wan: ['{PADDED}/32']\n",  # N1
+    "escaped value": 'scope:\n  target: ["\\x38\\x31.'
+    + ".".join(PUBLIC_V4.split(".")[1:])
+    + '"]\n',
+    "html character reference": "scope: &#56;" + PUBLIC_V4[1:] + "\n",
+    "custom tag elsewhere": f"x: !vault |\n  abc\nscope:\n  target: ['{EVERYTHING}']\n",
+    "custom tag and padding": f"x: !Ref y\nscope:\n  trusted:\n    wan: ['{PADDED}']\n",
+    "a binary value": "scope:\n  target: [!" + "!binary 'UQJFjg==']\n",  # split: this source
+    "merge key": f"base: &b\n  scope:\n    target: ['{EVERYTHING}']\n<<: *b\n",
+    "alias to an anchor outside": f"x: &x ['{PADDED}/32']\nscope:\n  target: *x\n",
+    "duplicate scope key": (
+        f"scope:\n  target: ['{EVERYTHING}']\nscope:\n  target: [{DOC}.0/24]\n"
+    ),
+    "duplicate part": f"scope:\n  target: [{DOC}.0/24]\n  target: [{PRIVATE_NET}]\n",
+    "json duplicate key": (
+        f'{{"scope": {{"target": ["{DOC}.0/24"], "target": ["{EVERYTHING}"]}}}}\n'
+    ),
+    "upper-case key": f"Scope:\n  target: ['{EVERYTHING}']\n",
+    "nested": f"site:\n  scope:\n    target: ['{EVERYTHING}']\n",
+    "a scope list": f"scope: [{PRIVATE_NET}]\n",
+    "second document": f"a: 1\n---\nscope:\n  target: ['{EVERYTHING}']\n",
+    "address as a key": f"scope:\n  target:\n    '{PUBLIC_V4}': x\n",
+    # SF1: under a scope key that is not a site block, at any depth
+    "schema examples": (
+        f"properties:\n  scope:\n    type: object\n    examples:\n    - target: ['{PADDED}/32']\n"
+    ),
+    "schema default": (
+        '{"properties": {"scope": {"type": "object", "default": {"trusted": {"wan": ["'
+        + PADDED
+        + '/32"]}}}}}\n'
+    ),
+    "schema const": f"scope:\n  const: '{PADDED}'\n",
+    "selectors' hosts": f"scope:\n  hosts: ['{PADDED}']\n",
+    "a parameter's env": f"scope:\n  env: {{WAN: '{PADDED}'}}\n",
+    "deep in another document's mapping": f"scope:\n  hosts:\n    a:\n      b: ['{PADDED}']\n",
+    "a list of blocks": f"scope:\n- target: ['{PADDED}/32']\n",
+    "a list of blocks, everything": f"scope:\n- target: ['{EVERYTHING}']\n",
+    "toml": f'[scope]\ntarget = ["{EVERYTHING}"]\n',
+    "toml array of tables": f'[[scope]]\ntarget = ["{PADDED}/32"]\n',
+    "toml dotted key": f'scope.trusted.wan = ["{PADDED}/32"]\n',
+    "free text": f"scope: 'wan is {PADDED}'\n",  # N9
+    # SF2: Markdown, judged on raw text: any fence, any indent, any info string, or none
+    "markdown fence": f"# x\n\n```yaml\nscope:\n  target: ['{EVERYTHING}']\n```\n",
+    "markdown untagged fence": f"```\nscope:\n  target: ['{EVERYTHING}']\n```\n",
+    "markdown indented fence": f"- step\n\n   ```yaml\n   scope:\n     target: ['{PADDED}/32']\n   ```\n",
+    "markdown longer closing fence": (
+        f"```\ntext\n`````\n\n```yaml\nscope:\n  target: ['{PADDED}/32']\n```\n"
+    ),
+    "markdown fence with a bad line": f"```\nscope:\n  target: ['{PADDED}/32']\n\tbad: [\n```\n",
+    "markdown text fence": f"```text\nscope:\n  target: ['{PADDED}/32']\n```\n",
+    "markdown tilde fence": f"~~~yaml\nscope:\n  target: ['{PADDED}/32']\n~~~\n",
+    "markdown html": f"<pre>\nscope:\n  target: ['{PADDED}/32']\n</pre>\n",
+    "markdown prose": f"The lab's scope: {PADDED} and nothing else.\n",
+    # VERIFY4 SF1: an indented `scope =` key still holds its value and its deeper lines
+    "indented ini key": f"[site]\n  scope = {PADDED}/32\n",
+    "indented ini value on the next deeper line": f"[site]\n  scope =\n      {PADDED}/32\n",
+    "indented toml key": f'[site]\n  scope = ["{PRIVATE_NET}"]\n',
+    # VERIFY4 SF2: special-use addresses are let through, and never shield a real one
+    "ipv4-compatible real": f"scope:\n  target: ['{COMPAT_REAL}']\n",
+    "loopback beside a real address": f"scope:\n  bind: {LOOPBACK}\n  wan: [{PUBLIC_V4}]\n",
+    "mapped loopback beside a real address": (
+        f"scope:\n  bind: '::ffff:{LOOPBACK}'\n  wan: ['{PADDED}/32']\n"
+    ),
+    # VERIFY4 SF3: a Python subscript assignment, this repository's own test idiom
+    "subscript, short form": f'site["scope"]["target"] = ["{SHORT_PRIVATE}/16"]\n',
+    "subscript, zero-padded": f'site["scope"]["trusted"]["wan"] = ["{PADDED}/32"]\n',
+    "subscript, integer": f"site['scope']['trusted']['wan'] = [{PUBLIC_INT}]\n",
+    "subscript, augmented": f'site["scope"]["target"] += ["{PADDED}/32"]\n',
+    "subscript, multi-line": f'site["scope"] = {{\n    "target": ["{PRIVATE_NET}"],\n}}\n',
+    # VERIFY4 N1: a dotted key needs its `:` or `=`, and every spelling of one still has it
+    "yaml dotted key": f"scope.trusted.wan: ['{PADDED}/32']\n",
+    "markdown dotted key": f"`scope.trusted.wan`: {PADDED}\n",
+    "toml spaced dotted key": f'scope . trusted . wan = ["{PADDED}/32"]\n',
+    "toml quoted dotted key": f'scope."trusted".wan = ["{PADDED}/32"]\n',
+    "attribute assignment": f'self.scope.target = ["{PRIVATE_NET}"]\n',
+    "indexed dotted key": f"helm upgrade x . --set scope.target[0]={SHORT_PRIVATE}/16\n",
+    # VERIFY2 B1: loader-valid layouts the raw locator alone missed (the parse pass reads them)
+    "toml header, CRLF": f'[scope]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
+    "toml array of tables, CRLF": f'[[scope]]\r\ntarget = ["{PRIVATE_NET}"]\r\n',
+    "yaml, CR only": f"scope:\r  target:\r  - '{PRIVATE_NET}'\r",
+    "explicit key with a comment": (
+        f'? scope  # the lab\n: trusted:\n    nets: ["{PRIVATE_NET}"]\n'
+    ),
+    "flow continued dedented": f'site:\n  scope:\n    target: [\n "{PRIVATE_NET}"]\n',
+    "key spelled by an alias": f'labels: [&k scope]\n*k :\n  target: ["{PRIVATE_NET}"]\n',
+    "alias key, alias value": f"k: &k scope\nv: &v {{target: ['{PADDED}/32']}}\n*k : *v\n",
+    "json value on the next line": '{"scope":\n{"target": ["' + PADDED + '/32"]}}\n',
+    "json value dedented": '  {"scope":\n{"target": ["' + PADDED + '/32"]}}\n',
+    "flow mapping, key and value on later lines": f"{{\nscope\n:\n['{PADDED}/32']}}\n",
+    "double-quoted value continued at column 0": f'scope: "wan\n{PADDED}"\n',
+    # VERIFY2 B1/SF3: anchors are real definitions, the last one before the alias
+    "anchor redefined": f"d: &a ['{DOC}.0/24']\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a comment": f"# see &a below\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a string": f"n: 'x &a y'\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n",
+    "anchor decoy in a block scalar": (
+        f"n: |\n  &a\nr: &a ['{PADDED}/32']\nscope:\n  target: *a\n"
+    ),
+    "the 257th alias": (
+        "".join(f"d{i}: &a{i} 1\n" for i in range(260))
+        + f"real: &zz ['{PADDED}/32']\nscope:\n  target: ["
+        + ", ".join(f"*a{i}" for i in range(260))
+        + ", *zz]\n"
+    ),
+    # VERIFY2 SF2: inet_aton short forms that cannot be a version
+    "short form, a part over 255": f"scope:\n  target: ['{SHORT_GLOBAL}']\n",
+    "short form, hex parts": f"scope:\n  target: ['{SHORT_HEX}']\n",
+    "short form, two parts": f"scope:\n  target: ['{SHORT_TWO}']\n",
+    # VERIFY3 SF3: Markdown spellings of the key, and a CIDR short form leak_scan does not see
+    "markdown backtick key": f"- `scope`: `{PRIVATE_NET}`\n",
+    "markdown bold key": f"- **scope**: {SHORT_PRIVATE}/16\n",
+    "markdown underscore key": f"_scope_: {SHORT_PRIVATE}/16\n",
+    "markdown table row": f"| key | value |\n|---|---|\n| scope | {SHORT_PRIVATE}/16 |\n",
+    "markdown table row, code": f"| `scope` | `{SHORT_PRIVATE}/16` |\n",
+    # VERIFY3 SF4: a notebook stores each line of a cell as its own JSON string
+    "notebook code cell": notebook(
+        "code",
+        [
+            "x = yaml.safe_load(" + TQ + "\n",
+            "scope:\n",
+            "  target:\n",
+            f"  - {PADDED}/32\n",
+            TQ + ")\n",
+        ],
+    ),
+    "notebook markdown cell": notebook(
+        "markdown", ["```yaml\n", "scope:\n", "  target:\n", f"  - {SHORT_PRIVATE}/16\n", "```\n"]
+    ),
+    "notebook output": notebook(
+        "code",
+        ["print(sel)"],
+        [{"output_type": "stream", "text": ["{'scope':\n", f" {{'target': ['{PADDED}/32']}}}}\n"]}],
+    ),
+}
+
+#: a site block in the wrong shape, holding documentation addresses only (or none): refused at
+#: an allowlisted path, where the strict parse judges every leaf; elsewhere it shows no address,
+#: so the location rule lets it through (a public page may show a scope block's shape)
+SHAPE_CASES = {
+    "not an address": "scope:\n  target: [not-an-address]\n",
+    "a bool": "scope:\n  target: [true]\n",
+    "a float": "scope:\n  target: [1.5]\n",
+    "tagged entry": f"scope:\n  target: [!ip '{DOC}.0/24']\n",
+    "json with comments": f'// c\n{{"scope": {{"target": ["{DOC}.0/24"]}}}}\n',
+    "misspelt top-level part": f"scope:\n  targets: [{DOC}.0/24]\n",
+    "upper-case key": f"Scope:\n  target: [{DOC}.0/24]\n",
+    "nested": f"site:\n  scope:\n    target: [{DOC}.0/24]\n",
+    "unparseable": "scope: [unclosed\n",
+    "self alias": "scope:\n  target: &a [*a]\n",
+    "alias into scope": f"a: &x {{target: [{DOC}.0/24]}}\nscope: *x\n",
+    "documentation address, prefix beyond three digits": f"scope:\n  target: ['{DOC}.1/0033']\n",
+    "too deep to parse": "scope:\n  target: " + "[" * 100 + "]" * 100 + "\n",  # N3
+}
+
+#: where a file holding a scope key may sit: every one is read (N2: any suffix, none at all)
+ANYWHERE = (
+    "examples/site.yml",
+    "examples/site.yml.tpl",
+    "examples/site.yaml.dist",
+    "examples/site.jsonc",
+    "examples/site.yml.bak",
+    "examples/modules",
+    "docs/guide.md",
+    "notes.txt",
+)
+
+
+def _plant(tmp_path: Path, rel: str, text: str) -> Path:
+    root = public_tree(tmp_path)
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return root
+
+
+SCOPE_RULES = {"scope-address", "scope-shape", "scope-unparsed"}
+
+
+@pytest.mark.parametrize("case", sorted(ADDRESS_CASES))
+def test_a_real_address_under_a_scope_key_fails_wherever_it_is(case):
+    """Negative: a non-documentation address under any scope key, in any spelling, fails in every
+    file at every path; at an allowlisted path the strict parse also judges it."""
+    text = ADDRESS_CASES[case]
+    for rel in ANYWHERE:
+        found = plc.scope_findings(rel, text)
+        assert "scope-address" in rules(found), (case, rel)
+        assert rules(found) <= SCOPE_RULES, (case, rel)
+    found = plc.scope_findings(SITE, text)
+    assert found and rules(found) <= SCOPE_RULES, case
+
+
+@needs_skeleton
+@pytest.mark.parametrize("case", ["zero-padded", "markdown indented fence", "schema examples"])
+@pytest.mark.parametrize("rel", ["notes.txt", "examples/modules", SITE])
+def test_the_public_check_reads_every_file(tmp_path, case, rel):
+    """N2: check_public hands every file the scanner reads to the scope check, any suffix."""
+    root = _plant(tmp_path, rel, ADDRESS_CASES[case])
+    assert "scope-address" in rules(plc.check_public(root))
+    assert run("public", str(root)).returncode == 1
+
+
+@pytest.mark.parametrize("case", sorted(SHAPE_CASES))
+def test_a_wrong_shape_fails_at_an_allowlisted_path(case):
+    """Negative: at an allowlisted path every leaf is judged, any shape the strict parse cannot
+    judge is a finding, and a file too deep or too large is refused before any parser sees it."""
+    found = plc.scope_findings(SITE, SHAPE_CASES[case])
+    assert found and rules(found) <= SCOPE_RULES, case
+
+
+@pytest.mark.parametrize("case", sorted(SHAPE_CASES))
+def test_a_wrong_shape_without_an_address_is_not_judged_elsewhere(case):
+    """The location rule: outside the allowlist only addresses are judged, so a page showing a
+    block's shape with documentation addresses (or none) passes."""
+    for rel in ANYWHERE:
+        assert plc.scope_findings(rel, SHAPE_CASES[case]) == [], (case, rel)
+
+
+#: site blocks in the selection's shape with documentation networks only: pass everywhere
+PASSING_SITE_BLOCKS = [
+    f"scope:\n  trusted:\n    wan: [{DOC3}.7/32]\n    nets: [{DOC}.0/24, 2001:db8::/48]\n",
+    "scope:\n  target: [" + "198.51.100" + ".0/33]\n",  # the generated negative's malformed entry
+    f"scope:\n  target: ['::ffff:{DOC}.1']\n",  # a mapped documentation address
+    "scope:\n  target: ['3fff::/20']\n",  # RFC 9637
+    "scope:\n  target: ['2001:db8::1e8']\n",  # a hex group is not a number
+    f"scope:\n  target: [{DOC}.0/24]\n  exclude:\n    offensive: []\n",  # nothing excluded
+    "scope:\n  trusted:\n    wan: [{source: wan-dhcp}]\n",  # a dynamic source names nothing
+    "scope:\n  trusted:\n    wan:\n",  # null: no value
+]
+#: other documents' scope keys, and text near a scope key that names no address: pass outside
+#: the allowlist (at an allowlisted path a scope key is the selection's, so these are shapes)
+PASSING_ELSEWHERE = [
+    "scope: analyst\n",  # a record's scope
+    "scope:\n  capabilities: [cap:monitoring]\n",  # a customization's selectors
+    'scope: {"type": "object", "properties": {"target": {"type": "array"}}, "maxItems": 6}\n',
+    "parameters:\n  scope: {env: RECORDS_SCOPE, default: '{profile}'}\n",  # an MCP parameter
+    "scope: {since: 1.0, versions: [1.2, 16.4, 2.1.0]}\n",  # versions, not short forms
+    'note: "\\x38\\x31.' + PUBLIC_V4.split(".", 1)[1] + '"\n',  # an escape outside any scope
+    "x: !vault |\n  abc\ny: [broken\n",  # no scope here: hygiene's finding, not this one's
+    f"scope: x\nother: {PADDED}\n",  # a sibling of the scope key, not under it
+    # VERIFY3 SF2: a keyword argument or an HTML attribute is no scope key, and a bare short
+    # form that can be a version or a decimal is never an address (literals split: this source
+    # is scanned too)
+    "@pytest.fixture(scope='module', params=[0." + "05, 0.1])\n",
+    '@pytest.fixture(scope="module")\n' + '@pytest.fixture(scope="session")\n',
+    "run(scope='x', timeout=1." + "500)\n",
+    '        scope=g.raw.get("scope"),\n        timeout=0.' + "05,\n",
+    '<th scope="row">1.' + '300</th><th scope="col">24.' + "04</th>\n",
+    '{"scope": "read", "ratio": 0.' + '05, "iat": 1' + "700000000}\n",
+    "scope:\n  ubuntu: 24."
+    + "04\n  ratio: 0."
+    + "05\n  v: 1.0."
+    + "3\n  bare: "
+    + SHORT_PRIVATE
+    + "\n",
+    "The scope: we cut latency by 0." + "05 s.\n",
+    # VERIFY4 SF1: an indented `scope =` holds the lines deeper than the key, not the rest of
+    # its enclosing block (the column is the key's first character, not its line's start)
+    "def f(x):\n    scope = x.scope\n    if scope:\n        pass\n    return 17" + "00000000\n",
+    "[server]\n  scope = 'local'\n  since = 17" + "00000000\n",
+    # VERIFY4 SF2: loopback, unspecified and link-local name no site; `::` in code (a slice, a
+    # C++ or Ruby scope operator) is judged by its embedded IPv4 address, which is in 0/8
+    "scope = sorted(nets)[" + "::-1]\n",
+    'top = scope.get("nets", [])[' + "::2]\n",
+    "scope = Foo<T>" + "::bar()\nscope = " + ":" * 2 + "Account.find(1)\n",
+    f'scope = {{"type": "http", "client": ("{LOOPBACK}", 51234)}}\n',  # an ASGI test scope
+    f"scope:\n  bind: {LOOPBACK}\n  any: {UNSPECIFIED}:9090\n  metadata: {METADATA}\n"
+    + "  v6: '["
+    + ":" * 2
+    + "1]:9090'\n  wild: '["
+    + ":" * 2
+    + "]:80'\n  ll: 'fe80"
+    + "::1%eth0'\n"
+    + f"  mapped: '::ffff:{LOOPBACK}'\n",
+    # VERIFY4 SF3: a comparison is no assignment
+    'assert site["scope"]["n"] == 17' + "00000000\n",
+    # VERIFY4 N1: an attribute access or a method call is no dotted key
+    'scope.set_extra("max_body", 10' + "4857600)\n",
+    'limit = scope.get("limit", 26' + "8435456)\nif scope.x == 17" + "00000000:\n    pass\n",
+]
+
+
+@pytest.mark.parametrize("text", PASSING_SITE_BLOCKS)
+def test_a_site_block_with_documentation_ranges_passes_everywhere(text):
+    for rel in (SITE, *ANYWHERE):
+        assert plc.scope_findings(rel, text) == [], rel
+
+
+@pytest.mark.parametrize("text", PASSING_ELSEWHERE)
+def test_a_scope_key_naming_no_address_passes_outside_the_allowlist(text):
+    for rel in ANYWHERE:
+        assert plc.scope_findings(rel, text) == [], rel
+
+
+@needs_skeleton
+def test_a_public_tree_with_documentation_scope_blocks_passes(tmp_path):
+    root = _plant(tmp_path, SITE, PASSING_SITE_BLOCKS[0])
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text(PASSING_SITE_BLOCKS[0] + PASSING_ELSEWHERE[4])
+    assert plc.check_public(root) == []
+
+
+@pytest.mark.parametrize(
+    ("rel", "allowed"),
+    [
+        ("examples/modules/sites/full.yml", True),
+        ("schemas/platform/examples/module_selection.full.yml", True),
+        ("schemas/platform/negative/module_selection.scope-empty-list.yml", True),
+        ("examples/modules/sites/sub/full.yml", False),
+        ("examples/modules/sites/full.yml.bak", False),
+        ("examples/modules/sites/full.yaml", False),
+        ("schemas/platform/examples/module.feature.yml", False),
+        ("lab/modules.yml", False),
+    ],
+)
+def test_the_allowlist_is_exact_paths(rel, allowed):
+    assert plc.scope_block_path(rel) is allowed
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "examples/Modules/sites/full.yml",
+        "examples/modules/sites/full.YML",
+        "EXAMPLES/modules/sites/x.yml",
+    ],
+)
+def test_a_case_variant_of_an_allowlisted_path_is_refused(rel):
+    """N1: a case-insensitive file system would load it as a site profile."""
+    assert not plc.scope_block_path(rel)
+    assert "scope-shape" in rules(plc.scope_findings(rel, PASSING_SITE_BLOCKS[0]))
+
+
+@pytest.mark.parametrize("text", ["scope:\n  target: ['1." + "300']\n", "scope: [0x1." + "0x2]\n"])
+def test_a_short_form_that_is_no_version_is_judged_strictly(text):
+    """SF2: only plain decimal parts of at most 255 read as a version."""
+    assert "scope-address" in rules(plc.scope_findings("x.yml", text))
+
+
+def test_every_allowlist_entry_names_files_that_exist():
+    for glob in plc.SCOPE_BLOCK_PATHS:
+        assert list(ROOT.glob(glob)), glob
+
+
+def test_an_alias_shape_is_never_expanded(monkeypatch):
+    """S8: a self-alias and a billion-laughs shape (10**9 leaves by value) are answered from one
+    pass over the composed nodes: the leaf check runs a handful of times, not once per leaf."""
+    calls = []
+    real = plc._documentation_leaf
+    monkeypatch.setattr(plc, "_documentation_leaf", lambda n: calls.append(1) or real(n))
+    laughs = "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+    for i in range(1, 9):
+        prev, cur = chr(96 + i), chr(97 + i)
+        laughs += f"{cur}: &{cur} [" + ", ".join([f"*{prev}"] * 10) + "]\n"
+    laughs += "scope:\n  target: [*i, *i]\n"
+    for text in ("scope:\n  target: &a [*a]\n", laughs):
+        assert "scope-shape" in rules(plc.scope_findings(SITE, text))
+    assert len(calls) < 50
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scope:\n  target: " + "[" * 100_000 + "]" * 100_000 + "\n",
+        "scope:\n" + "".join(" " * (2 * i) + "a:\n" for i in range(1, 80)),
+        "scope:\n  target:\n  " + "- " * 200 + "x\n",
+        "scope:\n  target: [" + ", ".join([f"{DOC}.1"] * 60_000) + "]\n",
+    ],
+    ids=["deep flow", "deep indent", "block indicators", "large"],
+)
+def test_a_deep_or_large_allowlisted_file_is_refused_before_parsing(text):
+    """N3: libyaml's C composer segfaults on deep nesting; the strict parse bounds depth and size
+    first and refuses what is over the limit, so no file can take the gate down."""
+    # in a child process: a parser crash (the segfault this guards against) fails this test
+    # instead of taking the whole test run down with it
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import private_leak_check as plc; "
+        "print(sorted({f.rule for f in plc.scope_findings(sys.argv[2], sys.stdin.read())}))"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code, str(TOOL.parent), SITE],
+        input=text,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, (r.returncode, r.stderr[-300:])
+    assert "scope-unparsed" in r.stdout
+
+
+@needs_skeleton
+def test_a_deeply_nested_file_fails_the_command_cleanly(tmp_path):
+    root = _plant(tmp_path, SITE, "scope:\n  target: " + "[" * 100_000 + "]" * 100_000 + "\n")
+    r = run("public", str(root))
+    assert r.returncode == 1, (r.returncode, r.stderr[-300:])
+    assert "scope-unparsed" in r.stdout
+
+
+def test_the_scope_check_never_crashes_open(monkeypatch):
+    def boom(*_a, **_k):
+        raise RecursionError
+
+    monkeypatch.setattr(plc, "_raw_findings", boom)
+    assert rules(plc.scope_findings("docs/x.md", "scope: x\n")) == {"scope-unparsed"}
+
+
+#: (file, text at size n): every shape VERIFY2 and VERIFY3 found quadratic, and the earlier
+#: ones; each must grow about linearly
+LINEAR_SHAPES = {
+    "unclosed flows": ("x.yml", lambda n: "scope: [\n" * n),
+    "nested closed flows": ("x.yml", lambda n: "scope: [" * n + "]" * n + "\n"),
+    "indented keys": ("x.yml", lambda n: "".join("  " * (i % 20) + "scope:\n" for i in range(n))),
+    "one closed flow per line": ("x.yml", lambda n: "scope: [x]\n" * n),
+    "TOML tables leaving an array open": ("x.toml", lambda n: "[scope]\nx = [\n" * n),
+    "list items starting with the key": (
+        "x.yml",
+        lambda n: "".join(f"- scope: read\n  id: {i}\n" for i in range(n)),
+    ),
+    "minified JSON, one line": (
+        "x.json",
+        lambda n: "[" + ",".join(f'{{"scope":"a","id":{i}}}' for i in range(n)) + "]",
+    ),
+    "dotted paths that never assign": ("x.py", lambda n: "scope." * n + "\n"),
+    "subscripts that never assign": ("x.py", lambda n: '["scope"]' * n + "\n"),
+    "one-line HTML with entities": (
+        "x.html",
+        lambda n: "".join(
+            '<th scope="row">Tom &amp; Jerry</th><td>a &nbsp; b</td>' for _ in range(n)
+        ),
+    ),
+}
+
+
+class _CpuCap:
+    """Fail a call that uses more than ``seconds`` of this process's CPU time (``ITIMER_PROF``,
+    so other processes on a busy runner do not count): a superlinear rule fails in seconds
+    instead of running for minutes, as it would where this test runs against a quadratic parent
+    (``tools/fix_has_test.py --prove``).  The timer raises a ``BaseException`` so the gate's
+    fail-closed ``except Exception`` cannot swallow it, and leaving the block turns it into an
+    assertion.  A no-op without ``setitimer`` or off the main thread."""
+
+    class Exceeded(BaseException):
+        pass
+
+    def __init__(self, seconds: float, what: str) -> None:
+        import signal
+        import threading
+
+        self.signal, self.seconds, self.what = signal, seconds, what
+        self.armed = hasattr(signal, "setitimer") and (
+            threading.current_thread() is threading.main_thread()
+        )
+        self.old = None
+
+    def _stop(self, signum, frame):
+        raise _CpuCap.Exceeded
+
+    def __enter__(self) -> _CpuCap:
+        if self.armed:
+            self.old = self.signal.signal(self.signal.SIGPROF, self._stop)
+            self.signal.setitimer(self.signal.ITIMER_PROF, self.seconds)
+        return self
+
+    def __exit__(self, kind: object, *_: object) -> bool:
+        if self.armed:
+            self.signal.setitimer(self.signal.ITIMER_PROF, 0)
+            self.signal.signal(self.signal.SIGPROF, self.old)
+        if kind is _CpuCap.Exceeded:
+            raise AssertionError(f"{self.what}: more than {self.seconds:.2f} s of CPU in one call")
+        return False
+
+
+@pytest.mark.parametrize("shape", sorted(LINEAR_SHAPES))
+def test_the_raw_rule_grows_linearly(shape):
+    """VERIFY3 SF1: a ratio, not an absolute bound.  Time at n, 4n and 16n; each 4x step may
+    cost at most 8x (plus a small floor for timer noise), so a quadratic shape (16x a step)
+    fails.  VERIFY4 SF4: the time is this process's CPU time (``time.process_time``), best of
+    five, not wall clock: a busy runner's other processes and CPU steal moved wall-clock ratios
+    by 7x and failed this test on noise alone."""
+    import gc
+    import time
+
+    rel, make = LINEAR_SHAPES[shape]
+
+    def timed(n: int, cap: float) -> float:
+        text = make(n)
+        best = float("inf")
+        gc.collect()
+        gc.disable()  # the collector's full passes grow with live objects: noise, not the rule
+        try:
+            for _ in range(5):
+                t0 = time.process_time()
+                with _CpuCap(cap, f"{shape} at n={n}"):
+                    plc.scope_findings(rel, text)
+                best = min(best, time.process_time() - t0)
+        finally:
+            gc.enable()
+        return best
+
+    # each step is capped at a generous multiple of the last, so a superlinear shape fails at
+    # the first step it blows up instead of running the larger sizes
+    t1 = timed(2_000, 2.0)
+    t4 = timed(8_000, 20 * t1 + 1.0)
+    assert t4 <= 8 * t1 + 0.1, (shape, t1, t4)
+    t16 = timed(32_000, 20 * t4 + 1.0)
+    assert t16 <= 8 * t4 + 0.1, (shape, t4, t16)
+
+
+@needs_skeleton
+def test_the_one_exemption_is_one_exact_location_in_one_file(tmp_path):
+    """N6: the generated misspelt-part negative passes only at its own path and only for its own
+    misspelt key, matched exactly; what that key holds is still read."""
+    rel = "schemas/platform/negative/module_selection.scope-unknown-part.yml"
+    assert [k[0] for k in plc.SCOPE_EXEMPT] == [rel]
+    text = (ROOT / rel).read_text()
+    root = public_tree(tmp_path)
+    (root / rel).parent.mkdir(parents=True)
+    (root / rel).write_text(text)
+    assert plc.check_public(root) == []
+    copy = root / "examples" / "modules" / "sites" / "copy.yml"
+    copy.parent.mkdir(parents=True)
+    copy.write_text(text)
+    assert rules(plc.check_public(root)) == {"scope-shape"}
+    copy.unlink()
+    (root / rel).write_text(text.replace("    lan:\n", "    'lan: x':\n"))
+    assert rules(plc.check_public(root)) == {"scope-shape"}
+    (root / rel).write_text(text.replace(f"lan:\n    - {DOC}.0/24", f"lan:\n    - {PRIVATE_NET}"))
+    assert rules(plc.check_public(root)) == {"scope-address"}
+
+
+def test_the_example_sites_carry_a_scope_block_the_check_reads():
+    """The check is not vacuous on this tree: every example site has a scope block it parses
+    strictly, and a planted non-documentation address fails it."""
+    sites = sorted((ROOT / "examples" / "modules" / "sites").glob("*.yml"))
+    assert sites
+    for p in sites:
+        rel = p.relative_to(ROOT).as_posix()
+        text = p.read_text()
+        assert plc.scope_block_path(rel)
+        assert plc.scope_findings(rel, text) == []
+        planted = text.replace("203.0.113.", "198.18.0.", 1)
+        assert rules(plc.scope_findings(rel, planted)) == {"scope-address"}, p
+
+
+@needs_skeleton
+@pytest.mark.parametrize("edit", ["delete", "empty", "narrow"])
+def test_the_change_that_adds_a_private_path_cannot_switch_the_rule_off(tmp_path, edit):
+    root = public_tree(tmp_path)
+    (root / "lab").mkdir()
+    (root / "lab" / "hosts.yml").write_text("all: {}\n")
+    m = root / "examples" / "private-overlay" / ".hnx-private-overlay.yml"
+    if edit == "delete":
+        m.unlink()
+    else:
+        keep = ": []\n" if edit == "empty" else ":\n  - ansible/inventory/production/\n"
+        text = m.read_text()
+        listed = ":\n  - lab/\n  - ansible/inventory/production/\n"
+        assert listed in text
+        m.write_text(text.replace(listed, keep))
+    found = plc.check_public(root)
+    assert any(f.rule == "overlay-path" and f.path == "lab/hosts.yml" for f in found), found
+    if edit != "delete":  # a marker that leaves out a pinned path is a finding of its own
+        assert "private-paths" in rules(found)
+
+
+@needs_skeleton
+def test_the_skeleton_marker_names_every_pinned_private_path():
+    declared = plc.read_marker(SKELETON / ".hnx-private-overlay.yml")["private_paths"]
+    assert set(plc.PRIVATE_PATHS) <= {p.rstrip("/") + "/" for p in declared}
 
 
 @needs_skeleton

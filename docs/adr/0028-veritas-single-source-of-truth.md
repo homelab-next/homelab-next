@@ -1,3 +1,7 @@
+---
+summary: 'Veritas names the single source of truth: authored files a generator or gate reads as the standard or copy source; every other copy is generated or checked.'
+summary_of: outline:sha256:2d17b354386bbaa7
+---
 # ADR-0028: Veritas: the single source of truth
 
 - **Status:** accepted (the name and its two rules; see Consequences)
@@ -124,8 +128,10 @@ file.
    | Module schemas, examples and negatives, every file `python -m homelabnext.schemas` writes: `schemas/platform/{module,lake_table,module_selection}.schema.json`, `schemas/platform/{examples,negative}/{module,module_selection,lake_table}.*` | `homelabnext/schemas/`, the example modules `examples/modules/*/module.yml`, the site profiles `examples/modules/sites/` and the module lake tables `examples/modules/*/lake/` | `python -m homelabnext.schemas --check` (CI) |
    | MCP client configs, `examples/mcp/clients/*/` | the MCP catalog, the render specs `examples/mcp/clients/*.yml`, the profiles | `make mcp-check` (CI) |
    | Agent keyring, `examples/keyring/keyring.json` | the files `examples/keyring/sources.yml` names: the registry, the agent profiles, the broker manifest | `hnx agent keyring check` (CI) |
+   | Code Mode stubs and search index, `examples/codemode/<profile>/{types.d.ts,stubs.pyi,search.json}` (ADR-0031) | the example broker manifest `examples/broker/manifest.yml` and its handler documents | `hnx codemode gen --check` (`make gates`, CI) |
    | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/{litellm,bifrost}/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
    | LLM gateway config, `examples/model-serving/gateway/{litellm,bifrost}/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
+   | LLM gateway config, `examples/llm-orchestrator-gateway/gateway/{litellm,bifrost}/` | the example's role table and `gateway.yml` (whose `controller:` block also holds the controller's backends and homes to them) | pytest `tests/generators/test_agent_homes.py` (CI); `make gateway-check` (`make check`) |
    | vLLM instances, `examples/model-serving/vllm_server/instances.yml` | `examples/model-serving/serving.yml`, the model store, the role table | `hnx models serving check` (`make models-check`); pytest `tests/models/test_serving_plan.py` (CI) |
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |
@@ -139,7 +145,7 @@ file.
    | Knowledge graph | the whole repository | never committed (`docs/graph.md`); `hnx graph check` checks integrity (CI) |
    | Maps (ADR-0018) | the site, guest, registry, dataflow models | never committed: rendered on request; goldens pin the renderer |
    | Registry artefacts (the registry's eleven generators: DNS zones, Caddy sites with the `hnx_forward_auth` snippet, scrape and probe targets, firewall matrix, ...) | the registry | never committed here: `hnx registry generate`, `hnx registry check REGISTRY DIR` compares an output directory; goldens in `tests/generators/golden/` |
-   | Guest renders (`hnx guests render`, nine targets: terraform-proxmox, libvirt, cloudinit, inventory, registry-hosts, backup-jobs, firewall-rules, baseline-playbook, tailscale-acl) | the guests (with their nodes, policies, keys and baselines) and the site | never committed here; a site that commits a render (for example its inventory) owns the drift check; goldens in `tests/compute/golden/` |
+   | Guest renders (`hnx guests render`, ten targets: terraform-proxmox, libvirt, cloudinit, inventory, registry-hosts, backup-jobs, firewall-rules, baseline-playbook, tailscale-acl, node-mirror) | the guests (with their nodes, policies, keys and baselines) and the site | never committed here; a site that commits a render (for example its inventory) owns the drift check; goldens in `tests/compute/golden/` |
 
 7. **Records.** Strategy records are Veritas: ADR-0020 decision 5 makes "the strategy repository"
    their source of truth, which for a real lab is the overlay's `lab/strategy/` (ADR-0021; the

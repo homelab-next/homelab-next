@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.modules.scope import (
+    ScopeMissing,
+    address_literals,
+    manifest_scope_problems,
+    scope_networks,
+    scope_problems,
+)
 
 Doc = dict[str, Any]
 
@@ -137,6 +144,7 @@ def module_problems(
         out.append("kind core: a core module lives in the public modules/ tree")
     if doc.get("replaced_by") == mid:
         out.append("replaced_by names the module itself")
+    out += manifest_scope_problems(doc)
     roles = _roles(doc)
     for r in roles:
         if not _named(r[5:], mid, "_"):
@@ -290,6 +298,7 @@ def module_problems(
             out.append(f"{e['file']}: MCP record id starts with {mid}")
         if rec.get("capabilities") and doc["kind"] != "provider":
             out.append(f"{e['file']}: only a provider's MCP record fronts a slot")
+    out += broker_rule_problems(doc, mod_dir, load)
     plugins = {ep["name"] for ep in eps if ep["group"] == "homelabnext.invariants.checks"}
     for e in c.get("invariants", []):
         for cr in load(mod_dir / e["file"])["criteria"]:
@@ -357,6 +366,83 @@ def module_problems(
             out.append(
                 f"shared_config {sc_['target']}: needs an overlay grant (grants.shared_config)"
             )
+    return out
+
+
+def broker_rule_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
+    """Actors act only through the broker (checklist G-13, ADR-0030), for what a module
+    contributes.  A module contributes no authority (ADR-0027, "contributes (never authority)"):
+    its effects are contributed as broker actions (the broker manifest and handlers), never as an
+    MCP tool or a grant.  So a contributed MCP record has no acting tool (a ``broker_only``
+    class) and declares no ``acts_via`` at all (``broker`` is only the broker's own front;
+    ``direct`` is an exception only the overlay's own catalog and ceiling policy make), and a
+    contributed agent's spec holds no acting grant: no acting MCP server (the broker's front
+    included), no acting capability (``cap:broker`` included) and no acting tier.  The overlay
+    that selects the module may grant its agent the broker in its own ceiling policy and spec."""
+    from homelabnext.agent.readers import broker_problems, default_classes
+    from homelabnext.mcp import servers
+
+    c = doc.get("contributes", {})
+    if not c.get("mcp_servers") and not c.get("agents"):
+        return []
+    classes = default_classes()
+    only = set(classes.broker_only)
+    records: dict[str, Doc] = {}
+    out: list[str] = []
+    for e in c.get("mcp_servers", []):
+        rec = load(mod_dir / e["file"])
+        records[rec["id"]] = rec
+        acting = sorted(
+            str(t.get("name")) for t in rec.get("tools") or () if set(t.get("classes") or ()) & only
+        )
+        if acting:
+            out.append(
+                f"{e['file']}: MCP record tool(s) {', '.join(acting)} act: a module contributes "
+                "no authority (ADR-0027); its effects are broker actions, never an MCP tool"
+            )
+        if "acts_via" in rec:
+            out.append(
+                f"{e['file']}: MCP record declares acts_via: a module's record never does (broker "
+                "is only the broker's own front; a direct exception is only the overlay's)"
+            )
+        # its classes are floored as the catalog check floors them: a run_command classed read
+        # is an acting tool declared down, not a reading one
+        out += servers.floor_problems(rec, e["file"], only)
+
+    def acts(sid: str) -> bool:
+        return any(set(t.get("classes") or ()) & only for t in records[sid].get("tools") or ())
+
+    for a in _agents(doc):
+        key = a["key"]
+        spec = load(mod_dir / a["spec"])
+        who = str(spec.get("id"))
+        mcp = [m for m in spec.get("mcp") or [] if m not in records]
+        caps = list(spec.get("capabilities") or [])
+        grants = {"mcp": mcp, "capabilities": caps, "tier": spec.get("tier")}
+        out += [f"agent {key}: {p}" for p in broker_problems(grants, classes, who)]
+        for m in sorted(set(mcp)):
+            if set(classes.classify("mcp", m) or ()) & only and not broker_problems(
+                {"mcp": [m]}, classes, who
+            ):
+                out.append(f"agent {key}: spec grants acting MCP server {m!r}: a module grants "
+                           "its own agent no acting tool (ADR-0027)")  # fmt: skip
+        if "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds cap:broker: a module grants its own agent no "
+                       "acting capability (ADR-0027)")  # fmt: skip
+        tier = classes.classify("tiers", str(spec.get("tier"))) if spec.get("tier") else None
+        if tier and set(tier) & only and "cap:broker" in caps:
+            out.append(f"agent {key}: spec holds an acting tier: a module grants its own agent "
+                       "no acting tier (ADR-0027)")  # fmt: skip
+        for sid in sorted({m for m in spec.get("mcp") or [] if m in records and acts(m)}):
+            out.append(f"agent {key}: spec grants the module's acting MCP record {sid}")
+        for t in a.get("tools", []):
+            sid, _, name = t.partition(".")
+            rec = records.get(sid)
+            if rec is not None and any(
+                x.get("name") == name and set(x.get("classes") or ()) & only
+                for x in rec.get("tools") or ()
+            ):
+                out.append(f"agent {key}: tool {t} acts: a module's agent holds no acting tool")
     return out
 
 
@@ -577,6 +663,16 @@ def site_problems(
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units)
     out += _config_problems(site, sel, grants)
+    out += scope_problems(site)
+    for m in sel.values():
+        for need in m["requires"].get("scope", []):
+            try:
+                scope_networks(site, m, need["part"])
+            except ScopeMissing:
+                out.append(
+                    f"{m['id']}: requires scope.{need['part']}, which the site leaves missing, "
+                    "empty or unusable (its reader fails closed)"
+                )
     authority = {s for s, d in slots.items() if d.get("privileged")} | set(AUTHORITY_SLOTS)
     authority |= {c["instance"] for cap, cs in ch.items() if cap[4:] in authority for c in cs}
     #: registry services an egress svc: target can name: every selected slot, every instance, and
@@ -798,9 +894,10 @@ def _binding_problems(site: Doc, mods: dict[str, Doc], sel: dict[str, Doc]) -> l
 
 
 def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
-    """A selection's config values: declared keys only, and a secret-typed value is a secret in
-    the module's own namespace or one granted to it in grants.secrets (the same rule as a
-    manifest default, so an overlay value cannot read another module's secret)."""
+    """A selection's config values: declared keys only, no address literal (the scope block is the
+    one place for addresses), and a secret-typed value is a secret in the module's own namespace
+    or one granted to it in grants.secrets (the same rule as a manifest default, so an overlay
+    value cannot read another module's secret)."""
     places = [
         (f"{sec}.{mid}", mid, b.get("config", {}))
         for sec in SECTION.values()
@@ -818,6 +915,23 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
         for k, v in cfg.items():
             if k not in spec:
                 out.append(f"{where}.config.{k}: the module declares no such key")
+                continue
+            literal = None
+            # not scanned: integer, duration_s and boolean keys.  Their value is a number by
+            # schema, and any integer of 2**24 or more is also an IPv4 address (a byte count of
+            # 170000000 reads as one in 10/8), so scanning them would refuse ordinary sizes; a module
+            # that reads an address out of an integer key is a defect in that module
+            # (docs/modules.md, "The network scope")
+            if spec[k]["type"] not in ("integer", "duration_s", "boolean"):
+                text = str(v) if isinstance(v, int) and not isinstance(v, bool) else v
+                literal = address_literals(text) if isinstance(text, str) else None
+            if literal:
+                out.append(
+                    f"{where}.config.{k}: an address literal ({literal[0]}): a lab address "
+                    "belongs in the selection's scope block, which the module requires; an "
+                    "external endpoint (a resolver, an NTP server) is a hostname or a svc: "
+                    "reference"
+                )
                 continue
             secretish = isinstance(v, str) and v.lower().startswith("secret:")
             if spec[k]["type"] != "secret":

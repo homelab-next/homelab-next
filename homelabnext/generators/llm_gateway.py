@@ -12,7 +12,8 @@ which secret holds each key, and any extra non-agent keys.  From those three thi
   environment reference only;
 * ``litellm/keys.json``    - the virtual keys to create (``/key/generate`` bodies; LiteLLM keeps
   keys in Postgres, not in the config file), each naming the environment variable holding the
-  key, never the key;
+  key, never the key, and each tagged ``metadata["hnx-managed"]`` so provisioning can delete the
+  keys of profiles later removed from the spec;
 * ``bifrost/config.json``  - providers (one per backend, role -> model id as key aliases), virtual
   keys, per-role rate limits and budgets, routing rules for ordered bindings and fallbacks;
 * ``bifrost/pricing.json``, ``bifrost/model-parameters.json`` - empty local datasheets: Bifrost
@@ -41,7 +42,14 @@ Rules enforced at render time (a violation raises :class:`GatewaySpecError`, not
 
 :func:`audit` re-checks the *rendered* files (``hnx gen gateway --check`` runs it on what is on
 disk), so a hand edit that adds a cloud fallback to a local-only role fails the check even though
-the generator would never write it.
+the generator would never write it; it also fails a key in ``keys.json`` without the
+``hnx-managed`` tag or with a duplicate alias, since provisioning prunes by that tag.  With a
+``controller:`` block (the orchestration controller's config and the ``HERMES_HOME`` of each of
+its backends) ``--check`` also holds the controller's backend list to the spec and the role table
+(:func:`homelabnext.generators.agent_homes.controller_problems`): every backend ``name`` is a
+``svc:`` of the spec, its home's ``model.default`` is a role bound to it, and its ``max_context``
+is that role's ``max_context_tokens``.  ``hnx gen gateway homes`` checks that a home names no IP
+address and no engine model id (invariant A-14).
 """
 
 from __future__ import annotations
@@ -53,7 +61,7 @@ import ipaddress
 import json
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,6 +74,8 @@ from homelabnext.models.store import ProblemsError
 from homelabnext.registry.model import secret_env_name
 from homelabnext.registry.models import RoleTable, RoleTableError
 
+from . import agent_homes
+from .agent_homes import ControllerRef, controller_problems, parse_controller
 from .core import MARKER, check_tree, write_tree
 
 __all__ = [
@@ -86,6 +96,15 @@ ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
+#: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
+#: whose alias the spec no longer declares, and never touches an untagged one
+MANAGED = "hnx-managed"
+#: the telemetry reader (docs/orchestration-telemetry.md): its key's alias, the one route it may
+#: call, LiteLLM's view-only admin role, and the model name that blocks every model
+READER_ALIAS = "telemetry-reader"
+READER_ROUTES = ("/spend/logs/v2",)
+READER_ROLE = "proxy_admin_viewer"
+NO_MODELS = "no-default-models"
 #: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
 #: API domains of hosted model providers: no service domain or local host may sit under one, so a
@@ -165,6 +184,19 @@ class Spec:
     service_domain: str = "svc.example.internal"
     #: hosts that resolved through a registry service in a non-cloud zone
     registry_hosts: frozenset[str] = frozenset()
+    #: this gateway's identity: the value of every key's ``metadata["hnx-managed"]`` tag, which
+    #: provisioning prunes by (unnamed: keys are tagged ``true`` and never pruned)
+    name: str = ""
+    #: the orchestration controller whose backends sit behind this gateway (``--check`` holds its
+    #: backend list and homes to the spec); None when the spec has no ``controller:`` block
+    controller: ControllerRef | None = None
+    #: the telemetry reader's key (``telemetry_reader.key``, a secret reference), or None
+    telemetry_reader: str | None = None
+
+    @property
+    def reader_user(self) -> str:
+        """The LiteLLM user that owns the telemetry reader's key."""
+        return f"hnx-{READER_ALIAS}-{self.name}" if self.name else f"hnx-{READER_ALIAS}"
 
 
 def internal_host(spec: Spec, host: str) -> bool:
@@ -306,8 +338,15 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     _one_line("spec", dict(doc), problems)
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
-        "backends", "local_only", "keys", "bifrost", "serving",
+        "backends", "local_only", "keys", "bifrost", "serving", "name", "controller",
+        "telemetry_reader",
     }  # fmt: skip
+    spec_name = doc.get("name", "")
+    if spec_name != "" and not (isinstance(spec_name, str) and SLUG_RE.match(spec_name)):
+        problems.append(
+            f"name {spec_name!r} must be a lower-case slug (it tags this gateway's keys)"
+        )
+        spec_name = ""
     for k in sorted(set(doc) - known):
         problems.append(f"unknown key {k!r}")
 
@@ -521,11 +560,27 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
 
     master_key = _secret("master_key", doc.get("master_key"), problems)
     database_url = _secret("database_url", doc.get("database_url"), problems)
-    problems += _secret_collisions(
-        keys, master_key, database_url, backends, {"bifrost.admin_password": admin_password}
-    )
+    reader = None
+    raw_reader = doc.get("telemetry_reader")
+    if raw_reader is not None:
+        if not isinstance(raw_reader, Mapping) or set(raw_reader) != {"key"}:
+            problems.append(
+                "telemetry_reader takes key (a secret: reference for the spend-log reader's key)"
+            )
+        else:
+            reader = _secret("telemetry_reader.key", raw_reader["key"], problems)
+        if READER_ALIAS in {k.name for k in keys}:
+            problems.append(f"key name {READER_ALIAS!r} is the telemetry reader's; rename the key")
+    controller = None
+    if doc.get("controller") is not None:
+        controller = parse_controller(doc["controller"], base, problems)
+    others = {"bifrost.admin_password": admin_password}
+    if reader is not None:
+        others["telemetry_reader.key"] = reader
+    problems += _secret_collisions(keys, master_key, database_url, backends, others)
 
     spec = Spec(
+        name=spec_name,
         source=source,
         table=table,
         backends=backends,
@@ -539,6 +594,8 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         bifrost_admin_password=admin_password,
         service_domain=service_domain,
         registry_hosts=frozenset(registry_hosts),
+        controller=controller,
+        telemetry_reader=reader,
     )
     if not problems:
         problems += locality_problems(spec)
@@ -811,7 +868,11 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             "key_alias": k.name,
             "key_env": secret_env_name(k.secret),
             "models": sorted(_allowed(spec, k)),
-            "metadata": {"owner": k.owner or k.name, "data_tier": k.data_tier},
+            "metadata": {
+                "owner": k.owner or k.name,
+                "data_tier": k.data_tier,
+                MANAGED: spec.name or True,
+            },
             **(
                 {"rpm_limit": _per_minute(k.max_requests, k.window_s)}
                 if k.max_requests and k.window_s
@@ -825,7 +886,24 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
         }
         for k in sorted(spec.keys, key=lambda k: k.name)
     ]
-    return head + body, json.dumps({"keys": keys}, indent=2) + "\n"
+    doc_keys: dict[str, Any] = {"managed_by": spec.name} if spec.name else {}
+    if spec.telemetry_reader is not None:
+        # a view-only admin that may call no model, owning one key restricted to the spend-log
+        # route (docs/orchestration-telemetry.md): three locks, each enough on its own
+        doc_keys["users"] = [
+            {"user_id": spec.reader_user, "user_role": READER_ROLE, "models": [NO_MODELS]}
+        ]
+        keys.append(
+            {
+                "key_alias": READER_ALIAS,
+                "key_env": secret_env_name(spec.telemetry_reader),
+                "user_id": spec.reader_user,
+                "models": [NO_MODELS],
+                "allowed_routes": list(READER_ROUTES),
+                "metadata": {"owner": "telemetry", MANAGED: spec.name or True},
+            }
+        )
+    return head + body, json.dumps(doc_keys | {"keys": keys}, indent=2) + "\n"
 
 
 def _allowed(spec: Spec, key: Key) -> set[str]:
@@ -1076,6 +1154,98 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
     bf = files.get("bifrost/config.json")
     if bf is not None:
         problems += [f"bifrost/config.json: {p}" for p in _audit_bifrost(bf, hosts, strict, spec)]
+    kj = files.get("litellm/keys.json")
+    if kj is not None:
+        problems += [f"litellm/keys.json: {p}" for p in _audit_keys(kj, spec.name)]
+    return problems
+
+
+def _audit_keys(text: str, name: str = "") -> list[str]:
+    """Every key is tagged ``hnx-managed`` with this gateway's ``name`` (what provisioning prunes
+    by; ``true`` for an unnamed spec), ``managed_by`` says the same, and aliases are unique."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = None
+    keys = doc.get("keys") if isinstance(doc, dict) else None
+    if not isinstance(keys, list):
+        return ["not a JSON object with a keys list"]
+    problems, seen = [], set()
+    want: Any = name or True
+    if doc.get("managed_by", "") != name:
+        problems.append(f"managed_by is {doc.get('managed_by')!r}, the spec's name is {name!r}")
+    for k in keys:
+        alias = k.get("key_alias") if isinstance(k, Mapping) else None
+        if not alias:
+            problems.append("a key has no key_alias")
+            continue
+        if alias in seen:
+            problems.append(f"key {alias} is declared twice")
+        seen.add(alias)
+        tag = (k.get("metadata") or {}).get(MANAGED)
+        if tag != want or type(tag) is not type(want):
+            problems.append(
+                f"key {alias} is not tagged metadata.{MANAGED}={want!r}: provisioning would "
+                "never delete it once its profile is removed"
+            )
+    return problems + grant_problems(doc)
+
+
+#: key fields that widen what a key may do beyond its declared models, which no generated key
+#: carries: LiteLLM's key_type rewrites allowed_routes after the body is read (llm_api,
+#: management), a team turns off the user's model block, and permissions open spend routes
+_WIDENING = ("key_type", "team_id", "permissions")
+_ALL_MODELS = ("all-proxy-models", "*")
+_READER_FIELDS = {"key_alias", "key_env", "user_id", "models", "allowed_routes", "metadata"}
+
+
+def grant_problems(doc: Any) -> list[str]:
+    """What in a keys file would grant more than the gateway spec declares (empty = nothing).
+    :func:`provision_litellm` refuses a file with any, so a hand-edited or stale file cannot
+    create an admin or an unrestricted key on the proxy."""
+    if not isinstance(doc, Mapping):
+        return ["not a JSON object"]
+    keys = doc.get("keys") if isinstance(doc.get("keys"), list) else []
+    problems: list[str] = []
+    users = doc.get("users", [])
+    good_users = set()
+    for u in users if isinstance(users, list) else [None]:
+        if not (
+            isinstance(u, Mapping)
+            and set(u) == {"user_id", "user_role", "models"}
+            and isinstance(u["user_id"], str)
+            and u["user_role"] == READER_ROLE
+            and u["models"] == [NO_MODELS]
+        ):
+            problems.append(
+                f"users: each user is the telemetry reader ({READER_ROLE}, models "
+                f"[{NO_MODELS!r}]), got {u!r}"
+            )
+            continue
+        good_users.add(u["user_id"])
+    for k in keys:
+        if not isinstance(k, Mapping):
+            continue
+        alias = k.get("key_alias")
+        for name in _WIDENING:
+            if name in k:
+                problems.append(f"key {alias}: {name} widens what the key may do")
+        models = k.get("models")
+        if isinstance(models, list) and any(m in _ALL_MODELS for m in models):
+            problems.append(f"key {alias}: models names every model")
+        reader = alias == READER_ALIAS or "user_id" in k or "allowed_routes" in k
+        if reader and not (
+            alias == READER_ALIAS
+            and set(k) == _READER_FIELDS
+            and k["allowed_routes"] == list(READER_ROUTES)
+            and k["models"] == [NO_MODELS]
+            and k["user_id"] in good_users
+        ):
+            problems.append(
+                f"key {alias}: only the telemetry reader has a user or allowed_routes; it has "
+                f"exactly {sorted(_READER_FIELDS)}, routes {list(READER_ROUTES)}, models "
+                f"[{NO_MODELS!r}] and a user of users"
+            )
     return problems
 
 
@@ -1190,6 +1360,10 @@ def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
 
 
 # ---------------------------------------------------------------------------- provisioning
+#: ``/key/list`` page size (LiteLLM's maximum)
+_PAGE = 100
+
+
 def provision_litellm(
     keys_doc: Mapping[str, Any],
     base_url: str,
@@ -1197,6 +1371,9 @@ def provision_litellm(
     *,
     environ: Mapping[str, str],
     allow_plaintext: bool = False,
+    prune: bool = True,
+    dry_run: bool = False,
+    emit: Callable[[str], None] | None = None,
 ) -> list[str]:
     """Create, update or rotate every key of ``litellm/keys.json`` on a running LiteLLM proxy.
 
@@ -1211,6 +1388,16 @@ def provision_litellm(
       so it stops working, and the new value is created;
     * the alias is unknown: the key is created.
 
+    Then (``prune``, the default) every key on the proxy whose ``metadata["hnx-managed"]`` equals
+    this file's ``managed_by`` (the gateway spec's ``name``) and whose alias the file no longer
+    declares is deleted: a profile removed from the spec must not leave a working key behind.
+    Keys tagged by another gateway spec, or not at all, are never touched; a file without
+    ``managed_by`` (an unnamed spec) prunes nothing, and one that declares no keys refuses to.
+    Untagged keys whose alias the file does not declare are listed (a key made before the tag
+    existed has to be deleted by hand once).  ``dry_run`` sends no write and says what would
+    change.  Each line is passed to ``emit`` as it happens, so a failure part-way still shows
+    what was done.
+
     Idempotent.  Returns one line per key.
     """
     import urllib.error
@@ -1220,6 +1407,23 @@ def provision_litellm(
     from homelabnext._http import check_plaintext, safe_urlopen
 
     check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
+    declared_keys = keys_doc.get("keys") if isinstance(keys_doc, Mapping) else None
+    if not isinstance(declared_keys, list) or not all(
+        isinstance(k, Mapping) and k.get("key_alias") for k in declared_keys
+    ):
+        raise GatewaySpecError(
+            "keys file: not an object with a list of keys, each with a key_alias"
+        )
+    granted = grant_problems(keys_doc)
+    if granted:
+        raise GatewaySpecError("keys file grants more than a gateway spec declares", granted)
+    identity = keys_doc.get("managed_by")
+    out: list[str] = []
+
+    def say(line: str) -> None:
+        out.append(line)
+        if emit is not None:
+            emit(line)
 
     def call(path: str, body: dict | None = None) -> tuple[int, str]:
         req = urllib.request.Request(
@@ -1234,9 +1438,13 @@ def provision_litellm(
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(4096).decode("utf-8", "replace")
 
-    def ok(alias: str, what: str, status: int, text: str) -> None:
+    def ok(alias: str, what: str, status: int, text: str, kind: str = "key") -> None:
         if status != 200:
-            raise GatewaySpecError(f"key {alias}: {what}: HTTP {status}: {text[:200]}")
+            raise GatewaySpecError(f"{kind} {alias}: {what}: HTTP {status}: {text[:200]}")
+
+    def write(alias: str, path: str, body: dict, kind: str = "key") -> None:
+        if not dry_run:
+            ok(alias, path, *call(path, body), kind=kind)
 
     def tokens_of(alias: str) -> list[str]:
         q = urllib.parse.urlencode({"key_alias": alias, "return_full_object": "true"})
@@ -1246,18 +1454,37 @@ def provision_litellm(
             listed = json.loads(text).get("keys") or []
         except (ValueError, AttributeError):
             raise GatewaySpecError(f"key {alias}: /key/list: not a key list") from None
-        out = []
+        found = []
         for item in listed:  # tokens, or full objects with return_full_object
             if isinstance(item, Mapping):
                 if item.get("key_alias") not in (None, alias):
                     continue  # a substring match from an older proxy: not this key
                 item = item.get("token")
             if isinstance(item, str) and item:
-                out.append(item)
-        return out
+                found.append(item)
+        return found
 
-    out = []
-    for k in keys_doc.get("keys") or []:
+    would = "would be " if dry_run else ""
+    users = keys_doc.get("users", [])
+    if not isinstance(users, list) or not all(
+        isinstance(u, Mapping) and isinstance(u.get("user_id"), str) and u["user_id"] for u in users
+    ):
+        raise GatewaySpecError("keys file: users must be a list of objects with a user_id")
+    for u in users:
+        uid = u["user_id"]
+        q = urllib.parse.urlencode({"user_id": uid})
+        status, text = call(f"/user/info?{q}")
+        fields = {kk: v for kk, v in u.items() if kk != "user_id"}
+        if status == 404:  # LiteLLM answers an unknown user_id with 404
+            # auto_create_key false: /user/new would otherwise mint a key nothing declares
+            write(uid, "/user/new", {"user_id": uid, **fields, "auto_create_key": False}, "user")
+            verb = "created"
+        else:
+            ok(uid, "/user/info", status, text, kind="user")
+            write(uid, "/user/update", {"user_id": uid, **fields}, "user")
+            verb = "updated"
+        say(f"user {uid}: {would}{verb} ({u.get('user_role')})")
+    for k in declared_keys:
         alias = k["key_alias"]
         value = environ.get(k["key_env"], "")
         if not value:
@@ -1267,15 +1494,79 @@ def provision_litellm(
         existing = tokens_of(alias)
         stale = [t for t in existing if t != digest]
         if stale:  # rotated (or duplicated): the old value must stop working before the new one
-            ok(alias, "/key/delete", *call("/key/delete", {"keys": stale}))
+            write(alias, "/key/delete", {"keys": stale})
         if digest in existing:
-            ok(alias, "/key/update", *call("/key/update", params | {"key": digest}))
+            write(alias, "/key/update", params | {"key": digest})
             verb = "rotated" if stale else "updated"
         else:
-            ok(alias, "/key/generate", *call("/key/generate", params | {"key": value}))
+            write(alias, "/key/generate", params | {"key": value})
             verb = "rotated" if stale else "created"
-        out.append(f"key {alias}: {verb} ({', '.join(k['models'])})")
+        grant = (
+            f"routes {', '.join(k['allowed_routes'])}"
+            if k.get("allowed_routes")
+            else ", ".join(k["models"])
+        )
+        say(f"key {alias}: {would}{verb} ({grant})")
+    if not prune:
+        return out
+    declared = {k["key_alias"] for k in declared_keys}
+    if not declared:
+        say("prune refused: the keys file declares no keys (a wrong or empty file must not delete)")
+        return out
+    if not isinstance(identity, str) or not identity:
+        say("prune skipped: the keys file has no managed_by (give the gateway spec a name)")
+        return out
+    mine, untagged = _listed_keys(call, ok, identity)
+    for alias, tokens in sorted(mine.items()):
+        if alias not in declared:
+            write(alias, "/key/delete", {"keys": sorted(tokens)})
+            say(f"key {alias}: {would}deleted (no longer declared by {identity})")
+    left = sorted(a for a in untagged if a not in declared)
+    if left:
+        say(
+            f"{len(left)} untagged key(s) whose alias this file does not declare were left alone "
+            f"(delete by hand if they belonged to a removed profile): {', '.join(left)}"
+        )
     return out
+
+
+def _listed_keys(call: Any, ok: Any, identity: str) -> tuple[dict[str, set[str]], set[str]]:
+    """Over every ``/key/list`` page: alias -> tokens of the keys tagged with ``identity``, and
+    the aliases of keys carrying no :data:`MANAGED` tag at all."""
+    import urllib.parse
+
+    mine: dict[str, set[str]] = {}
+    untagged: set[str] = set()
+    page, pages = 1, 1
+    while page <= pages:
+        q = urllib.parse.urlencode({"return_full_object": "true", "page": page, "size": _PAGE})
+        status, text = call(f"/key/list?{q}")
+        ok("*", "/key/list", status, text)
+        try:
+            doc = json.loads(text)
+            listed = doc.get("keys") or []
+            pages = int(doc.get("total_pages") or 1)
+        except (ValueError, AttributeError, TypeError):
+            raise GatewaySpecError("/key/list: not a key list") from None
+        for item in listed:
+            if not isinstance(item, Mapping):
+                continue  # a bare token carries no metadata: not provably anyone's
+            meta = item.get("metadata")
+            if isinstance(meta, str):  # some versions return the JSON column as text
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = None
+            meta = meta if isinstance(meta, Mapping) else {}
+            token, alias = item.get("token"), item.get("key_alias")
+            if not (token and alias):
+                continue
+            if meta.get(MANAGED) == identity:
+                mine.setdefault(str(alias), set()).add(str(token))
+            elif MANAGED not in meta:
+                untagged.add(str(alias))
+        page += 1
+    return mine, untagged
 
 
 # ---------------------------------------------------------------------------- CLI
@@ -1289,6 +1580,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     rd.add_argument("spec")
     rd.add_argument("out_dir")
     rd.add_argument("--check", action="store_true", help="fail on drift or an audit finding")
+    hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
+    agent_homes.add_arguments(hm)
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
     pv.add_argument("keys")
     pv.add_argument("--endpoint-env", default="HNX_ENDPOINT_LLM_GATEWAY")
@@ -1296,7 +1589,15 @@ def main(argv: Iterable[str] | None = None) -> int:
     pv.add_argument(
         "--allow-plaintext", action="store_true", help="send the master key over http (lab only)"
     )
+    pv.add_argument(
+        "--keep-undeclared",
+        action="store_true",
+        help=f"do not delete this gateway's {MANAGED} keys whose alias the file no longer declares",
+    )
+    pv.add_argument("--dry-run", action="store_true", help="send no write; print what would change")
     args = ap.parse_args(list(argv) if argv is not None else None)
+    if args.cmd == "homes":
+        return agent_homes.run(args)
     if args.cmd == "provision":
         import os
 
@@ -1306,11 +1607,16 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 2
         try:
             doc = json.loads(Path(args.keys).read_text(encoding="utf-8"))
-            lines = provision_litellm(
-                doc, url, master, environ=os.environ, allow_plaintext=args.allow_plaintext
+            provision_litellm(
+                doc,
+                url,
+                master,
+                environ=os.environ,
+                allow_plaintext=args.allow_plaintext,
+                prune=not args.keep_undeclared,
+                dry_run=args.dry_run,
+                emit=lambda line: print(line, flush=True),
             )
-            for line in lines:
-                print(line)
         except (OSError, ValueError) as exc:
             print(f"gateway: {exc}", file=sys.stderr)
             return 1
@@ -1331,11 +1637,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             rel: (out / rel).read_text(encoding="utf-8") for rel in files if (out / rel).is_file()
         }
         problems += audit(on_disk, spec)
+        problems += controller_problems(spec)
         for p in problems:
             print(f"gateway: {p}", file=sys.stderr)
         if problems:
             return 1
-        print(f"gateway: {len(files)} files match {args.spec} and pass the locality audit")
+        also = " and the controller's backends agree with it" if spec.controller else ""
+        print(f"gateway: {len(files)} files match {args.spec} and pass the locality audit{also}")
         return 0
     res = write_tree(out, files)
     print(f"gateway: wrote {len(res.written)}, unchanged {len(res.unchanged)} in {out}")

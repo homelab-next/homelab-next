@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:store-1
+description: "Object storage for evidence, samples and backup staging."
+kind: vm
+provisioning: terraform
+placement: {node: main-1, vmid: 141}
+resources:
+  cpu: {cores: 4}
+  memory: {size_mb: 8192}
+  disks: [{name: rootfs, size_gb: 2000, pool: bulk}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+# the deploy account Ansible logs in as: passwordless sudo is the explicit opt-in for automation
+cloudinit: {user: ansible, ssh_authorized_keys: [operator], sudo: nopasswd}
+network: {zone: data, ip: 192.0.2.141}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: s3-services, proto: tcp, ports: "9000", source: "zone:services"}
+capability: cap:object-store
+tags: [prod]
+owners: {primary: platform-team}

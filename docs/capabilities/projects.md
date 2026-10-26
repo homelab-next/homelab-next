@@ -1,6 +1,8 @@
 ---
 title: projects
 type: capability
+summary: Projects, steps and one-off tasks under the board rules; uid links, versions, a change feed.
+summary_generated: true
 capability: projects
 protocol: 'conformance.protocols.projects:ProjectStore'
 generated_by: hnx docs capabilities generate

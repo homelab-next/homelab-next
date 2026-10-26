@@ -666,7 +666,7 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
         "services": {
             "edge-proxy": {**svc, "capability": "edge-proxy", "impl": "caddy", "protocol": "https",
                            "port": 443, "health": {"kind": "tcp"}, "upstreams": ["status-hub"],
-                           "version": "0.0.0", "tls": "public"},
+                           "version": "2.11.7", "tls": "public"},
             "idp": {**svc, "capability": "idp", "impl": "authentik", "protocol": "https",
                     "port": 9443, "health": {"kind": "tcp"}, "version": "0.0.0", "tls": "internal"},
             "status-hub": {**svc, "capability": "status-hub", "impl": "homelabnext",

@@ -1,3 +1,7 @@
+---
+summary: 'The public repo and the private overlay: what lives where, how hnx finds private data, encryption, bootstrapping a server, the runner, reviews and deploys.'
+summary_of: outline:sha256:0553d9b74b8038f4
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
 
@@ -46,7 +50,7 @@ reverse guard (below) fails its CI if any part of an overlay is committed to it.
 |---|---|---|
 | Code, schemas, roles, the `hnx_secret` lookup, tools | public | plain text, Apache-2.0 |
 | A complete fictional lab, the overlay skeleton | public `examples/` | plain text, documentation values only |
-| Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs | private `lab/` | plain text under the repository's access control |
+| Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs, the module selection with the site's network scope (`lab/modules.yml`, [modules](modules.md#the-network-scope)) | private `lab/` | plain text under the repository's access control |
 | Real data that would hurt if the private repository leaked (WAN addresses, peer details) | private `lab/sealed/` | SOPS + age, one file at a time |
 | Inventory variables that must stay confidential and no role takes as a reference | private `ansible/inventory/*/group_vars/*/vault.yml` | ansible-vault |
 | Credentials (passwords, tokens, API keys, enrollment secrets), and the vault password | OpenBao | referenced in git as `secret:<name>`; the deploy reads them by name through its AppRole |
@@ -156,7 +160,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    the unseal key shares and the initial root token go to the password manager and to paper,
    split as you decided, never into a repository, a chat or an Actions secret. Unseal, create the
    KV v2 mount (`secret/`), write the lab's credentials under the names the registry and roles use
-   (`secret:<name>` maps to `secret/data/<name>`), then revoke the root token.
+   (`secret:<name>` maps to `secret/data/<name>`) with `hnx secrets seed`
+   ([Seeding the credentials](#seeding-the-credentials)), then revoke the root token.
 4. **An identity for the deploy.** Create an AppRole for the deploy with a policy that can read
    only the paths the deploy needs (and the vault password at `secret/data/ansible/vault-password`
    if you keep it there), for example:
@@ -210,6 +215,74 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
    `gh workflow run deploy.yml --ref main` (or *Run workflow* in the Actions tab), and watch the
    run. The runbook walks through each check.
+
+### Seeding the credentials
+
+`hnx secrets` creates every credential the lab names, so step 3 is not a hand-typed list. Point it
+at the overlay and at the roles you deploy (not at `examples/`, whose fictional modules name
+secrets your lab does not have):
+
+```sh
+# every secret:<name> they name, and how each gets its value
+hnx secrets plan lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml
+
+# as the operator, while the root (or an admin) token is still valid
+export BAO_ADDR="https://<openbao>:8200" BAO_CACERT=ca.pem BAO_TOKEN=...
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --dry-run
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --ask \
+  --from-file mcp/ssh-key=keys/mcp-ssh
+```
+
+`lab/secrets.yml` (start from `examples/private-overlay/lab/secrets.yml`) says how each name gets
+its value, by the first rule whose glob matches the name. `also:` adds names no file holds (the
+deploy's vault password is a workflow variable).
+
+| Kind | Value |
+|---|---|
+| `password` | letters, digits, `-` and `_` (20 to 128 characters) |
+| `token` | URL-safe base64 of N random bytes, with an optional fixed `prefix` (LiteLLM keys start with `sk-`) |
+| `hex` | N random bytes as hex |
+| `external` | issued elsewhere (a Tailscale auth key, an API key, a database URL, a private key): never generated. `--ask` prompts for each one that is missing, `--from-file NAME=FILE` reads one from a file (multi-line values); otherwise it is listed with its `how` |
+| `unclassified` | no rule matches: listed by `plan`, never generated. A value made up for a key another system issues would only fail later, and a later run could not replace it. Add a rule |
+
+How `seed` writes:
+
+* **Never over an existing value.** It writes only where OpenBao has none, and each write is a
+  check-and-set at version 0, so an existing credential is never overwritten, not even by a second
+  run at the same moment. The mount must be KV version 2: version 1 ignores check-and-set, so
+  `seed` refuses it before writing anything.
+* **Only what is new.** A secret whose current version is deleted is reported, not replaced. Run
+  `seed` again after adding a role, and only the new names are created.
+* **It asks first.** It says how many secrets it will write and asks (`--yes` off a terminal).
+* **Exit codes.** It exits 0 once every name has a value, 3 while some still need one (an external
+  not given, an unclassified name), 1 on an error, and 2 on a usage error.
+* **Values stay out of sight.** They exist only in memory and in the HTTPS request; the output
+  names secrets and outcomes, never a value.
+* **Seeding only stores the value.** Where a service must also know it (the SIEM's enrolment
+  password, the directory's bind account, the UPS monitor's password), the role sets it from the
+  same name, or you set it in that service's console from the value in OpenBao.
+
+**Vaultwarden.** With `--vaultwarden`, each secret the spec's `vaultwarden.include` covers is also
+stored as a login item named `secret:<name>`, in the spec's folder (created if missing). That
+includes secrets that already existed, which are read from OpenBao. First point the Bitwarden CLI
+at the server and unlock it:
+
+```sh
+bw config server "https://<vaultwarden>" && bw login
+export BW_SESSION="$(bw unlock --raw)"
+hnx secrets seed lab ansible ../homelab-next/ansible/roles --spec lab/secrets.yml --vaultwarden
+```
+
+The item reaches `bw` on its standard input, never on a command line, and `bw` runs with only the
+environment it needs (never `BAO_TOKEN`). An item that already exists is left as it is, and a
+`--dry-run` creates nothing there either.
+
+* **OpenBao stays the source of truth.** The deploy never reads Vaultwarden, and a value rotated
+  in OpenBao is not updated there (delete the item and seed again).
+* **Break-glass material is not seeded.** OpenBao's unseal keys and root-token recovery, and the
+  operator's age identity, go into Vaultwarden by hand. They also need a copy off the lab (paper,
+  or a password manager the lab does not host): a Vaultwarden on the lab is down exactly when you
+  need them. The Bitwarden apps' offline copy of the vault helps, but it does not replace that.
 
 ### Tailscale: the deploy tag, least access
 
@@ -401,7 +474,10 @@ Every secret is referenced only in the `env:` or `with:` of the step that needs 
 `run:` script as an expression (that is how a value ends up in a shell command line), and nothing
 turns on `set -x` or step debug logging. `tests/overlay/` lints the templates by the same rules as
 this repository's own workflows, and runs `actionlint` and zizmor (`zizmor --offline`; checked
-with 1.31.1) over them when those tools are installed (the tests skip otherwise).
+with 1.31.1) over them when those tools are installed (the tests skip otherwise). CI's
+`external-tools` job installs both at pinned versions with verified checksums and requires them
+(`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
+push.
 
 `checks.yml` runs on every pull request with no secret and no Environment: it only runs the
 private leak check, so a pull request's code never sees a credential.
@@ -411,7 +487,7 @@ private leak check, so a pull request's code never sees a credential.
 | Where | Command | Fails on |
 |---|---|---|
 | private overlay CI | `python hnx/tools/private_leak_check.py private .` | a credential value in plain text (the `secret` patterns of `tools/leak_scan.py`, after masking well-formed ciphertext only); a sealed file (under `lab/sealed/`, the marker's `sealed_paths` or a `.sops.yaml` rule) not encrypted throughout; a `.sops.yaml` that narrows the sealed paths; a vault file that is not header plus hex; a file it could not scan and no `allow_unscanned` glob names; a committed decryption key (an age identity file, a vault password file) |
-| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under the skeleton's `private_paths` (`lab/`, `ansible/inventory/production/`); a `.sops.yaml`; any SOPS-encrypted file; a key file |
+| public repository, `make check` and CI | `python tools/private_leak_check.py public .` | an overlay marker outside the fictional skeleton (or a skeleton marker that stops saying `fictional: true`); a file under `lab/` or `ansible/inventory/production/` (pinned in the tool, so neither editing nor deleting the skeleton marker switches them off) or under a further path the skeleton's `private_paths` adds; a skeleton marker whose `private_paths` drops a pinned path; a `.sops.yaml`; any SOPS-encrypted file, whatever its name or extension; a key file; a site's network scope in public git: in any file, an address-like token outside the documentation ranges under a `scope` key (at any depth; judged both on a parse of any file that is JSON, TOML or YAML and on the raw text, so Markdown prose and fences count too; an accidental commit is the threat model, deliberate obfuscation is review's), and at the few paths where a scope block may sit (the example site profiles, the generated selection examples and negatives) an entry that is not a documentation network, a block out of the selection's shape, or a file too large, too deep or malformed to parse ([modules](modules.md#the-network-scope) lists what it does not cover) |
 | public repository | `tools/leak_scan.py` (F-18, F-05) | private addresses, names, e-mails, keys and tokens, including an age identity |
 
 Real addresses and host names are allowed in the private check (that is what the overlay is for);

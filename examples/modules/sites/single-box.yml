@@ -51,3 +51,13 @@ core:
 grants:
   egress:
     external-collector: {edge: [external]}  # an external host is egress: it runs outside the lab
+# The site's network scope (documentation ranges only in a public example; the real one is in the
+# private overlay's lab/modules.yml). The collector requires trusted.wan, and both exclusions,
+# as every module that reads addresses and runs unattended must: [] means nothing is excluded.
+scope:
+  trusted:
+    wan: [203.0.113.7/32]
+    nets: [192.0.2.0/24]
+  exclude:
+    unattended_mutation: []
+    offensive: []

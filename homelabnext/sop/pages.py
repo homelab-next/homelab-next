@@ -171,6 +171,16 @@ def _gen_blocks(reg: Registry, s: Service, catalog: Any = None) -> dict[str, str
     return gen
 
 
+def system_summary(s: Service) -> str:
+    """The page's level-0 summary (ADR-0032), derived only from the registry row: what the service
+    is for, what implements it and who owns it.  One line of at most 160 characters."""
+    from homelabnext.context.levels import clean, cut
+
+    impl = f" ({s.impl})" if s.impl else ""
+    owner = f", owned by {s.owner}" if s.owner else ""
+    return cut(clean(f"{s.name} provides the {s.capability} capability{impl}{owner}."))
+
+
 def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
     if s is None:
         return {
@@ -184,6 +194,8 @@ def _front(reg: Registry, s: Service | None) -> dict[str, Any]:
     return {
         "title": s.name,
         "type": "system",
+        "summary": system_summary(s),
+        "summary_generated": True,
         "service": s.name,
         "capability": s.capability,
         "impl": s.impl or None,
@@ -325,6 +337,9 @@ def _unfilled(text: str) -> int:
 
 
 _MACHINE_KEYS = frozenset(_front_blank()) | {
+    "summary",
+    "summary_generated",
+    "summary_of",
     "impl",
     "owner",
     "host",
