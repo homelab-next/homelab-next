@@ -2,7 +2,7 @@
 # MCP catalog record (schemas/platform/mcp_server.schema.json, docs/mcp-catalog.md). Fictional,
 # like every example: the package, image and hash values name nothing real.
 id: notes
-description: 'A notes store, one instance per agent: each reads the store and writes only under its own prefix.'
+description: 'Notes in the records API, one instance per agent: each reads the notes and writes notes only under its own prefix, through the API, which validates them (no file is written).'
 owner: platform-team
 status: active
 origin:
@@ -19,7 +19,7 @@ runtime: agent-local
 env:
   NOTES_TOKEN: secret:mcp/notes-token
 settings:
-  NOTES_ROOT: /srv/notes
+  NOTES_ROOT: notes/
 timeout: 120
 parameters:
   writable:
@@ -33,13 +33,14 @@ parameters:
     enum: [read, write]
     default: write
 instance: notes-{profile}-{lane}
-egress: none
+egress: ['svc:records-db']
 data_tier: local-only
+capabilities: ['cap:records']
 tools:
 - {name: read_note, classes: [read], approval: false}
 - {name: write_note, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:9d23999286fb'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:9d23999286fb'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:9d23999286fb'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:8ecda50375ad'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:8ecda50375ad'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:8ecda50375ad'}

@@ -12,6 +12,7 @@ A record file::
     uid: 0199d5a0-...               # the key (a UUIDv7, ADR-0019); the file is <uid>.md
     type: lesson                    # lesson | runbook
     title: ...
+    summary: ...                    # optional: one reviewed line, <= 160 chars (ADR-0032)
     order: 2                        # optional: the sort key among its siblings (display order)
     kind: pitfall                   # pitfall | practice, each with its lifecycle (schema.py)
     status: controlled
@@ -132,8 +133,8 @@ SECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 FRONT_ORDER = {
     "lessons": (
-        *("uid", "type", "title", "order", "kind", "status", "date", "author", "systems"),
-        "applies_to",
+        *("uid", "type", "title", "summary", "order", "kind", "status", "date", "author"),
+        *("systems", "applies_to"),
         *("recurrences", "review_by", "retired_on", "retired_by", "incorporated_into"),
         *("superseded_by", "verification", "related", "reviews"),
     ),
@@ -141,6 +142,7 @@ FRONT_ORDER = {
         "uid",
         "type",
         "title",
+        "summary",
         "order",
         "systems",
         "last_reviewed",

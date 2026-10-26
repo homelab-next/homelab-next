@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# a direct_reason only with acts_via: direct
+id: shell
+description: Runs shell commands on the agent's host.
+owner: platform-team
+status: active
+origin:
+  kind: package
+  ecosystem: npm
+  package: '@example/mcp-shell'
+  version: 1.4.2
+  sha256: e1e7a430ca8aa6f862e6519bd82840c81214edd2cbbcfc113fe4da687839b28f
+  bins:
+  - mcp-shell
+transport:
+  type: stdio
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- name: run_command
+  classes:
+  - exec
+  approval: false
+acts_via: broker
+direct_reason: Runs commands itself; no shipped profile holds it, agents run commands through the broker.
+author: agent:example-builder

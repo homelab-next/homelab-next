@@ -1,8 +1,12 @@
+---
+summary: Glossary of the project's terms, such as capability, seam, contract, fake and conformance, each defined in a short entry.
+summary_of: outline:sha256:050f5dfb3c4eafcd
+---
 # Glossary
 
 **Capability.** A job the platform needs done, named independently of the product that does it
 (`lake-query`, `notify`, `detections`). Each capability has a contract, a fake and a conformance
-test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth and `projects` (project management) the sixteenth; the list is in `docs/interfaces.md` section 3.
+test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth, `projects` (project management) the sixteenth, `codemode-executor` (the Code Mode sandbox, ADR-0031) the seventeenth and `codemode-runner` (its runner, the handler of `codemode.execute`) the eighteenth; the list is in `docs/interfaces.md` section 3.
 
 **Seam.** The boundary between a capability and the consumers of it. A product can be replaced
 without touching consumers if, and only if, the seam has a testable contract.
@@ -22,6 +26,16 @@ test, shadow run, parity window, cutover by registry change, rollback window, de
 **Service registry.** `services.yml`: one hand-written file of facts about each service. Generators
 turn it into DNS records, proxy sites, monitors, scrape targets and documents. It is data, never a
 running service (ADR-0002).
+
+**Veritas.** The project's single source of truth
+([ADR-0028](adr/0028-veritas-single-source-of-truth.md)): every authored file that a generator or a
+gate reads as the standard or as a source it copies from. Its public tier is this repository's
+contracts and gates (schemas with `schemas/_frozen/`, capability protocols, conformance suites,
+schema generators, `tools/` gates and their configuration), profiles, Sigma rules, workflow packs,
+prompt templates and fictional examples; its private tier is one site's overlay (registry, site
+facts, guests, records, inventory, module selection, secret names; the values stay in the secret
+store). Every other copy is generated from it or checked against it; a hand-edited copy is drift.
+It is not yet compared with what actually runs.
 
 **Capability alias.** `<capability>.svc.example.internal`; the only address a consumer uses.
 

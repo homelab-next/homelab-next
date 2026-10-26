@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Code Mode's search and describe tools (mcp_server 1.2, ADR-0031): read tools in the codemode
+# class; running a program is the broker action codemode.execute, not a tool here (fictional).
+id: hnx-codemode
+description: Search and describe the broker actions the calling profile may compose into a program.
+owner: platform-team
+status: active
+origin:
+  kind: first-party
+  path: homelabnext/codemode/mcp_tools.py
+transport:
+  type: stdio
+  bin: hnx
+  entry: codemode-mcp
+  args: [--index, /etc/hnx/codemode, --socket, /run/hnx-broker/broker.sock]
+runtime: agent-local
+egress: none
+data_tier: local-only
+tools:
+- {name: codemode_describe, classes: [read, codemode], approval: false}
+- {name: codemode_search, classes: [read, codemode], approval: false}
+author: agent:example-builder

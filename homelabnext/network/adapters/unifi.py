@@ -10,7 +10,12 @@ This adapter only builds the JSON documents a UniFi-class controller would need 
 
 The shapes follow the controller's legacy REST object names (``networkconf``, ``firewallrule``,
 ``portconf``).  Golden files pin *our rendering* of those shapes; whether a given controller
-version accepts every field is verified on the server, not here.  Objects that refer to each
+version accepts every field is verified on the server, not here.
+
+A mirror port renders as a port override with ``op_mode: mirror`` and ``mirror_port_idx`` (the
+source port) and no profile. The field names are the controller's (``DevicePortOverrides`` in
+go-unifi, generated from the controller's field definitions); that the destination port's
+override names the source follows the controller UI and is checked on the server.  Objects that refer to each
 other use ``${network:<name>}`` placeholders, resolved to controller ids at apply time.
 """
 
@@ -175,6 +180,19 @@ class UnifiAdapter(Adapter):
         ports: list[dict] = []
         for sw in ir.switches:
             for p in sw.ports:
+                if p.kind == "mirror":
+                    # validate allows unifi exactly one source per mirror port
+                    ports.append(
+                        {
+                            "name": f"{sw.id}/{p.port}",
+                            "device": sw.id,
+                            "device_mac": sw.mac,
+                            "port_idx": p.port,
+                            "op_mode": "mirror",
+                            "mirror_port_idx": p.mirror_from[0],
+                        }
+                    )
+                    continue
                 if p.kind == "access":
                     pname = f"{PREFIX}access-{zone_of[p.native_vlan]}"
                     profiles.setdefault(

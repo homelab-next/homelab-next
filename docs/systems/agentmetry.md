@@ -1,6 +1,8 @@
 ---
 title: agentmetry
 type: system
+summary: agentmetry provides the agent-audit capability (agentmetry), owned by platform-team.
+summary_generated: true
 service: agentmetry
 capability: agent-audit
 impl: agentmetry
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.agentmetry`
+- Registry row (Veritas, ADR-0028): `services.agentmetry`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:egress-1
+description: "The way out for the zones without internet: the upstream resolver, the package cache and the time source."
+kind: lxc
+provisioning: terraform
+placement: {node: main-1, vmid: 151}
+resources:
+  cpu: {cores: 2}
+  memory: {size_mb: 2048}
+  disks: [{name: rootfs, size_gb: 64, pool: write}]
+image: {logical: debian-12-standard, kind: tarball, os_type: debian}
+network: {zone: edge, ip: 198.51.100.11}
+firewall_rules:
+  inbound_allow:
+    - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
+    - {name: dns-udp-resolvers, proto: udp, ports: "53", source: "192.0.2.4/31"}
+    - {name: dns-tcp-resolvers, proto: tcp, ports: "53", source: "192.0.2.4/31"}
+    - {name: apt-mgmt, proto: tcp, ports: "3142", source: "zone:mgmt"}
+    - {name: apt-services, proto: tcp, ports: "3142", source: "zone:services"}
+    - {name: apt-data, proto: tcp, ports: "3142", source: "zone:data"}
+    - {name: apt-edge, proto: tcp, ports: "3142", source: "zone:edge"}
+    - {name: ntp-mgmt, proto: udp, ports: "123", source: "zone:mgmt"}
+    - {name: ntp-services, proto: udp, ports: "123", source: "zone:services"}
+    - {name: ntp-data, proto: udp, ports: "123", source: "zone:data"}
+    - {name: ntp-edge, proto: udp, ports: "123", source: "zone:edge"}
+capability: cap:context
+capability_groups: [cap_edge]
+tags: [prod]
+owners: {primary: platform-team}

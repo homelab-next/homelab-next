@@ -1,6 +1,8 @@
 ---
 title: cases
 type: capability
+summary: Alerts, dismissal with a reason, promotion to cases, notes and the status machine.
+summary_generated: true
 capability: cases
 protocol: 'conformance.protocols.cases:CaseStore'
 generated_by: hnx docs capabilities generate

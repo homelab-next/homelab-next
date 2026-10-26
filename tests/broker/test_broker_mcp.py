@@ -123,7 +123,8 @@ def test_tools_end_to_end_in_memory(running, tmp_path):
             bad = await s.call_tool("memory_write", {"name": "../../x.md", "content": "x"})
             assert _is_error(bad) and "refused (lane-name-invalid)" in bad.content[0].text
             bad = await s.call_tool(
-                "broker_call", {"action": "service.restart", "params": {"grace_s": 1}}
+                "broker_call",
+                {"action": "service.restart", "params": {"grace_s": 1}, "target": "svc:queue"},
             )
             assert _is_error(bad) and "approval-required" in bad.content[0].text
 
@@ -144,7 +145,10 @@ def test_tools_end_to_end_in_memory(running, tmp_path):
             assert st["state"] == "done"
 
             other = _json(
-                await s.call_tool("broker_submit", {"action": "service.status", "params": {}})
+                await s.call_tool(
+                    "broker_submit",
+                    {"action": "service.status", "params": {}, "target": "svc:queue"},
+                )
             )
             assert (
                 _json(await s.call_tool("broker_cancel", {"request_id": other["request_id"]}))[

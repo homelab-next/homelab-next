@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx site``: validate, plan and render the site / network model.
 
-Exit codes: 0 success, 1 invalid site or registry, 2 usage error / unknown or deferred adapter,
-3 ``plan --exit-code`` found changes.  Nothing here contacts a device.
+Exit codes: 0 success, 1 invalid site or registry, 2 usage error / unknown or deferred adapter /
+a site or registry file that cannot be read or parsed, 3 ``plan --exit-code`` found changes.  Nothing here contacts a device.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from . import adapters
 from .adapters.base import AdapterError, UnknownAdapter
 from .ir import build_ir
-from .loader import SiteError, load_registry, load_site
+from .loader import SiteError, SiteUnreadable, load_registry, load_site
 from .plan import compute_plan, write_rendered
 from .validate import validate
 
@@ -94,6 +94,9 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         return int(exc.code or 0) if isinstance(exc.code, int) or exc.code is None else EXIT_USAGE
     try:
         return _run(args, out, err)
+    except SiteUnreadable as exc:
+        print(f"hnx site: {exc}", file=err)
+        return EXIT_USAGE
     except SiteError as exc:
         print(f"hnx site: {exc}", file=err)
         return EXIT_INVALID

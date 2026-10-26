@@ -17,7 +17,7 @@ from conformance.fakes.ntfy_api import FakeNtfy
 from conformance.fakes.openbao_api import FakeOpenBao
 from conformance.protocols.events import EventBus, EventsError
 from conformance.protocols.notify import NotifyTarget
-from conformance.protocols.secrets import SecretNotFound, SecretStore
+from conformance.protocols.secrets import LeaseError, SecretNotFound, SecretStore
 from conformance.suites import events as events_suite
 from conformance.suites import notify as notify_suite
 from conformance.suites import secrets as secrets_suite
@@ -53,7 +53,13 @@ def test_events_suite_passes_over_the_jetstream_wire():
 
 def test_events_suite_catches_a_server_that_drops_dlq_advisories():
     results = run_checks(events_suite.SUITE, lambda: _bus(FakeJetStreamWire(drop_advisories=True)))
-    assert _failing(results) == ["dlq-after-max-deliver", "term-dead-letters-immediately"]
+    # every check that reads the dead letters: the advisory is the only way a dead letter is seen
+    assert sorted(_failing(results)) == [
+        "dead-letters-survive-reopen",
+        "dlq-after-max-deliver",
+        "term-dead-letters-immediately",
+        "unsettled-deliveries-count-toward-max-deliver",
+    ]
 
 
 def test_bus_maps_onto_streams_consumers_and_acked_settlements():
@@ -236,6 +242,50 @@ def test_versions_reads_and_listing_map_onto_kv_v2(openbao):
     s.delete("a/x")
     with pytest.raises(SecretNotFound):
         s.delete("a/x")
+    s.close()
+
+
+def test_version_zero_and_negative_versions_are_absent_not_latest(openbao):
+    """KV v2 answers ``?version=0`` with the latest version; the Protocol numbers versions from
+    1, so the adapter refuses 0 and negative versions itself, before any request."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    s.put("a/x", {"k": "2"})
+    sent = len(openbao.requests)
+    for v in (0, -1, -2):
+        with pytest.raises(SecretNotFound):
+            s.get("a/x", version=v)
+    assert len(openbao.requests) == sent, "a non-positive version reached the server"
+    assert dict(s.get("a/x", version=1).data) == {"k": "1"}
+    s.close()
+
+
+def test_a_version_that_is_not_an_int_is_absent_not_coerced(openbao):
+    """``int(version)`` read True as 1, 1.9 as 1 and "2" as 2 (one request each), and raised a
+    raw ValueError/OverflowError for nan/inf.  Anything but an int is refused as absent, before
+    any request, as the reference fake does."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    s.put("a/x", {"k": "2"})
+    sent = len(openbao.requests)
+    for v in (True, False, 1.0, 1.9, "2", float("nan"), float("inf"), "zq-caller-object"):
+        with pytest.raises(SecretNotFound) as info:
+            s.get("a/x", version=v)
+        assert "zq-caller-object" not in str(info.value), "the error echoed the caller's object"
+    assert len(openbao.requests) == sent, "a version that is not an int reached the server"
+    s.close()
+
+
+def test_a_lease_ttl_that_never_ends_is_refused_before_any_policy_is_written(openbao):
+    """``lease(path, inf)`` raised a raw OverflowError from ``math.ceil`` after the lease ACL
+    policy was already written; ``nan`` was refused only by accident of comparison."""
+    s = bao.make()
+    s.put("a/x", {"k": "1"})
+    sent = len(openbao.requests)
+    for ttl in (float("inf"), float("nan"), float("-inf")):
+        with pytest.raises(LeaseError):
+            s.lease("a/x", ttl)
+    assert openbao.policies == {} and len(openbao.requests) == sent, "a refused lease wrote"
     s.close()
 
 

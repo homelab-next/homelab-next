@@ -4,6 +4,7 @@ approvals flow, durable single-use approvals across processes, and the audit tra
 
 from __future__ import annotations
 
+import contextlib
 import json
 import multiprocessing
 import re
@@ -85,7 +86,13 @@ def test_factory_gives_each_check_a_private_state_dir():
 
 def test_example_manifest_validates():
     manifest, docs = load_manifest(EXAMPLE)
-    assert {d["action"] for d in docs} == {"service.status", "service.restart"}
+    assert {d["action"] for d in docs} == {
+        "service.status",
+        "service.restart",
+        "dns.lookup",
+        "dhcp.leases",
+        "hypervisor.guests",
+    }
     assert schema_errors("broker", "manifest", manifest) == []
 
 
@@ -243,7 +250,7 @@ def test_handler_tampered_after_load_is_refused_at_run_time(tmp_path):
     h = path.parent / "handlers" / "service-status.sh"
     h.write_text(h.read_text() + "echo tampered\n")
     with pytest.raises(Denied) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-digest-mismatch"
     assert _audit_ok(svc)[-1]["reason"] == "handler-digest-mismatch"
 
@@ -260,14 +267,14 @@ def test_failing_and_slow_handlers_are_contained(tmp_path):
     doc_path.write_text(json.dumps(doc))
     svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
     with pytest.raises(BrokerError) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-failed" and "internal-detail" not in str(info.value)
     h.write_text("#!/bin/sh\nsleep 30\n")
     doc["handler_digest"], doc["timeout_s"] = file_digest(h), 1
     doc_path.write_text(json.dumps(doc))
     svc = BrokerService.from_manifest(path, tmp_path / "state", clock=Clock())
     with pytest.raises(BrokerError) as info:
-        svc.call("profile:reader", "service.status", {})
+        svc.call("profile:reader", "service.status", {}, target="svc:queue")
     assert info.value.reason == "handler-timeout"
 
 
@@ -282,7 +289,7 @@ def test_approval_flow_end_to_end(tmp_path):
     clock = Clock()
     svc = _svc(tmp_path, clock)
     with pytest.raises(Denied) as info:  # needs approval: call refuses, submit is the way
-        svc.call(AGENT, "service.restart", {"grace_s": 30})
+        svc.call(AGENT, "service.restart", {"grace_s": 30}, target="svc:queue")
     assert info.value.reason == "approval-required"
     rid = _restart(svc)
     assert svc.status(AGENT, rid).state == "pending"
@@ -899,6 +906,77 @@ def test_secret_arguments_never_reach_disk(tmp_path):
     assert info.value.reason == "secret-args-lost"
 
 
+def test_unnamed_argument_values_never_reach_the_audit_trail(tmp_path):
+    """Redaction is the default: a misspelt secret argument (refused as invalid) and any argument
+    of a command nobody registered (refused as denied) are audited by name only, called or
+    submitted.  The trail used to hold both values in the clear."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "fake-typo-value-7e3c"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op in (svc.call, svc.submit):
+        with pytest.raises(InvalidArguments):
+            op("ops", "ops.rotate", {"user": "svc", "pasword": secret})
+        with pytest.raises(Denied):
+            op("ops", "ops.rotat", {"password": secret})
+    docs = _audit_ok(svc)
+    assert [(d["operation"], d["outcome"]) for d in docs] == [
+        ("call", "invalid"),
+        ("call", "denied"),
+        ("submit", "invalid"),
+        ("submit", "denied"),
+    ]
+    assert docs[0]["args"] == {"user": "svc", "pasword": "<redacted>"}, docs[0]["args"]
+    assert docs[1]["args"] == {"password": "<redacted>"}, docs[1]["args"]
+    for p in (tmp_path / "state").rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(), p
+
+
+def test_a_refused_request_digest_does_not_reveal_an_unnamed_argument(tmp_path):
+    """The audit view redacted an unnamed argument, but the request digest on the same record
+    hashed its clear value, unkeyed, next to every other input it covers (action, actor, the
+    argument's name): a wordlist recovered it.  The digest keys it like a declared secret."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    secret = "hunter2"
+    spec = {"user": ArgSpec("str"), "password": ArgSpec("str", secret=True)}
+    svc.register("ops.rotate", lambda **kw: "ok", spec)
+    svc.allow("ops", ["ops.rotate"])
+    for op, command, args in (
+        (svc.call, "ops.rotate", {"user": "svc", "pasword": secret}),
+        (svc.submit, "ops.rotat", {"password": secret}),
+        (svc.call, "ops.rotate", {"user": "svc", "password": secret}),
+    ):
+        with contextlib.suppress(BrokerError):
+            op("ops", command, args)
+    words = ["password", "letmein", "123456", secret, "qwerty"]
+    docs = _audit_ok(svc)
+    assert {d["outcome"] for d in docs} >= {"invalid", "denied", "ok"}
+    for d in docs:
+        if not d.get("request_digest"):
+            continue
+        for guess in words:
+            params = {k: (guess if v == "<redacted>" else v) for k, v in d["args"].items()}
+            req = {"action": d["action"], "actor": d["caller"], "params": params}
+            assert request_digest(req) != d["request_digest"], (d["outcome"], d["args"])
+
+
+def test_submit_keeps_the_arguments_it_checked(tmp_path):
+    """The mapping a caller passed to submit is copied before it is checked: changing it
+    afterwards changes nothing that runs."""
+    svc = BrokerService(tmp_path / "state", clock=Clock())
+    got = []
+    svc.register("ops.echo", lambda **kw: got.append(kw) or "ok", {"name": ArgSpec("str")})
+    svc.allow("ops", ["ops.echo"])
+    given = {"name": "x"}
+    rid = svc.submit("ops", "ops.echo", given)
+    given["name"] = 5
+    given["extra"] = "--force"
+    assert svc.run("ops", rid) == "ok"
+    assert got == [{"name": "x"}], got
+
+
 def test_registering_over_a_manifest_action_is_refused(tmp_path):
     svc = _svc(tmp_path)
     with pytest.raises(ValueError):
@@ -1031,7 +1109,9 @@ def test_recent_decisions_read_the_decisions_index_not_the_trail(tmp_path, monke
     """The hub's recent approve/deny query walked the whole audit trail newest first until it
     found its rows, so a trail an agent filled with refusals made the Approvals page time out."""
     svc = _svc(tmp_path)
-    rids = [svc.submit(AGENT, "service.restart", {"grace_s": 5}) for _ in range(3)]
+    rids = [
+        svc.submit(AGENT, "service.restart", {"grace_s": 5}, target="svc:queue") for _ in range(3)
+    ]
     svc.approve(rids[0], "sso:operator-one")
     svc.deny(rids[1], "sso:operator-one")
     for i in range(30):  # the noise: refusals far outnumber decisions
@@ -1525,3 +1605,48 @@ def test_a_handler_swapped_for_a_symlink_after_load_is_refused_at_run(tmp_path):
         svc.run(AGENT, rid)
     assert info.value.reason == "handler-path-escape"
     assert svc.audit_documents(reason="handler-path-escape")
+
+
+def test_a_malformed_result_schema_is_refused_with_its_reason(tmp_path):
+    path = _copy_example(tmp_path)
+    doc_path = path.parent / "handlers" / "service-status.handler.json"
+    doc = json.loads(doc_path.read_text())
+    assert validate_manifest(load_yaml(path), path.parent)[1] == []
+    for bad, needle in (
+        ({"type": "nonsense"}, "result_schema"),
+        (["not", "an", "object"], "result_schema"),
+    ):
+        doc["result_schema"] = bad
+        doc_path.write_text(json.dumps(doc))
+        problems = validate_manifest(load_yaml(path), path.parent)[1]
+        assert any(needle in p and "service-status.handler.json" in p for p in problems), problems
+
+
+def test_a_result_schema_is_not_enforced_at_call_time(tmp_path):
+    path = _copy_example(tmp_path)
+    doc_path = path.parent / "handlers" / "service-status.handler.json"
+    doc = json.loads(doc_path.read_text())
+    doc["result_schema"] = {"type": "object", "properties": {"state": {"type": "integer"}}}
+    doc_path.write_text(json.dumps(doc))
+    assert validate_manifest(load_yaml(path), path.parent)[1] == []
+
+
+def test_a_required_target_is_enforced_and_audited(tmp_path):
+    """Handler 1.3: an action whose handler declares target: required is refused, and audited,
+    without one (it fails closed: the handler would report on no target)."""
+    svc = BrokerService.from_manifest(_copy_example(tmp_path), tmp_path / "state", clock=Clock())
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {})
+    assert info.value.reason == "target-required"
+    assert svc.audit_documents(reason="target-required")
+    assert svc.call("profile:reader", "service.status", {}, target="svc:queue")
+    # a lane takes no target, so none is required of it
+    svc.call(AGENT, "memory.write", {"name": "t.md", "content": "x"})
+
+
+@pytest.mark.parametrize("target", ["svc:dns\n", "svc:dns\r\n", " svc:dns", "svc:DNS"])
+def test_a_target_is_matched_whole(tmp_path, target):
+    svc = BrokerService.from_manifest(_copy_example(tmp_path), tmp_path / "state", clock=Clock())
+    with pytest.raises(InvalidArguments) as info:
+        svc.call("profile:reader", "service.status", {}, target=target)
+    assert info.value.reason == "invalid-target"

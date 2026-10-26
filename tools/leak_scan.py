@@ -5,8 +5,8 @@
 #   kind: check
 #   purpose: Fail when the tree, a commit range or stdin carries a private identifier or a secret shape.
 #   owner: maintainers
-#   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan, script:private-leak-check]
-#   invariant: [F-05, F-18]
+#   trigger: [ci:ci/leak-scan, ci:ci/packaging, ci:release/build, make:leak-scan, make:leak-scan-history, make:secret-scan, pre-commit:leak-scan, pre-commit:secret-scan, script:coverage-floor, script:private-leak-check]
+#   invariant: [F-05, F-18, Q-06]
 #   inputs: paths, --history RANGE, --stdin or --check-authors RANGE; optional HNX_DENYLIST file
 #   outputs: one line per hit
 #   exit:

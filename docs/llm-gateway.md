@@ -1,3 +1,7 @@
+---
+summary: 'The LLM gateway where a model role becomes a backend and model id: generated config, the locality rule, lab-in-a-box, conformance and running LiteLLM.'
+summary_of: outline:sha256:57e2025448d5c133
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # LLM gateway
 
@@ -29,7 +33,21 @@ inputs:
 hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and bifrost/ under OUT_DIR
 hnx gen gateway render SPEC OUT_DIR --check    # drift check and locality audit (make gateway-check)
 hnx gen gateway provision OUT_DIR/litellm/keys.json   # create LiteLLM keys on a running proxy
+hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or an engine model id (A-14)
 ```
+
+A spec may declare the orchestration telemetry's spend-log reader (`telemetry_reader:`, its key's
+secret): LiteLLM then gets a spend-viewer user and one key confined to `/spend/logs/v2`
+([orchestration telemetry](orchestration-telemetry.md), "LiteLLM: the spend-log API with a viewer
+key").
+
+A spec may also name the orchestration controller in front of it (`controller:`, its config, the
+gateway's `base_url` as the homes name it, and one `HERMES_HOME` per local backend). `--check` then
+also fails when a controller backend is not a `svc:` of the spec, its home's `model.default` is not
+a role bound to it alone, its `max_context` is not that role's `max_context_tokens`, its home's
+`model.base_url` is not the gateway's, its home's `model.context_length` is set and not a whole
+number of tokens up to the role's `max_context_tokens`, or that role has no `max_context_tokens`
+([orchestration-controller.md](orchestration-controller.md), "Checks").
 
 It writes:
 
@@ -47,6 +65,20 @@ It writes:
   (`/key/generate`), updates it in place by its token when the value is unchanged (`/key/update`),
   or, when the secret was rotated, deletes the old key by its token first, so the old value stops
   working, and creates the new one. Each key names the environment variable that holds its value, never the value.
+  The spec's `name` (a slug) is the gateway's identity: `keys.json` carries it as `managed_by` and
+  every key as `metadata: {"hnx-managed": "<name>"}`. After the declared keys, `provision` lists
+  every key on the proxy (all `/key/list` pages) and deletes each key tagged with **this** name
+  whose alias the file no longer declares, so a profile removed from the spec does not leave a
+  working key behind. Keys tagged by another gateway spec on the same proxy (another site, staging
+  beside production) and keys without the tag are never touched. A file that declares no keys
+  refuses to prune, one that does not parse is refused outright, and an unnamed spec tags its keys
+  `true` and prunes nothing. `--dry-run` sends no write and prints what would change;
+  `--keep-undeclared` skips the deletion; each line is printed as it happens.
+  **One-time cleanup:** a key provisioned before the tag existed gets it on its next `provision`,
+  but one whose profile was removed before then carries no tag and is never deleted by
+  `provision`. Its alias is listed ("untagged key(s) ... left alone"): delete it by hand once
+  (`/key/delete` with its token). `--check` fails a key whose tag is not the spec's name, a
+  `managed_by` that differs from it, and an alias declared twice.
 - **`bifrost/config.json`**. There is one custom OpenAI-compatible provider per local backend
   (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
   (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules

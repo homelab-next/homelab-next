@@ -6,6 +6,11 @@
                            reproduce exactly).  Exit 0 pass, 1 fail.
 ``hnx golden pins report`` (re)generate the evaluation report: against the deterministic fake by
                            default, or live (``--registry``) through the model-role resolver.
+``hnx golden codemode``    the Code Mode golden suites (CM-6): every task in classic MCP mode and
+                           in Code Mode, the G-02 corpus inside tool results, against the scripted
+                           fake model behind the fake inference server and the fake broker world;
+                           ``--check REPORT`` fails unless the committed report is current and
+                           passing, ``--out REPORT`` (re)writes it.  Exit 0 pass, 1 fail.
 """
 
 from __future__ import annotations
@@ -37,9 +42,23 @@ def main(argv: list[str]) -> int:
     pins.add_argument("--report", required=True, help="evaluation report (JSON)")
     pins.add_argument("--suite", action="append", type=Path, help="golden suite (repeatable)")
     pins.add_argument("--registry", help="report: run live against this service registry")
+    cm = sub.add_parser(
+        "codemode", help="Code Mode vs classic MCP mode suites against the fakes (CM-6)"
+    )
+    cm.add_argument("--suite", action="append", type=Path, help="tool-using suite (repeatable)")
+    cm.add_argument("--fake", choices=("fence", "naive"), default="fence")
+    out = cm.add_mutually_exclusive_group()
+    out.add_argument("--out", type=Path, help="write the report here")
+    out.add_argument("--check", type=Path, help="fail unless this committed report is current")
+    cm.add_argument(
+        "--in-process", action="store_true", help="call the fake model directly, not over HTTP"
+    )
+    cm.add_argument("--json", action="store_true", help="print the report as JSON")
     args = ap.parse_args(argv)
     if args.cmd == "pins":
         return _pins(args)
+    if args.cmd == "codemode":
+        return _codemode(args)
     suite = load_suite(args.suite)
     role = args.role or suite.role
     if not role:
@@ -83,6 +102,47 @@ def _pins(args: argparse.Namespace) -> int:
         print(f"golden pins: {p}")
     print(f"golden pins: {len(table.roles)} role(s), {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _codemode(args: argparse.Namespace) -> int:
+    from .agentic import HarnessError, check_report, render_report
+    from .fakes import DEFAULT_SUITES, ScriptError, fake_report
+    from .tasks import TaskError
+
+    if (args.check or args.out) and args.fake != "fence":
+        print(
+            "golden codemode: --check and --out are for the fence fake's report (the committed "
+            "one); run --fake naive alone",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        rep = fake_report(
+            args.suite or DEFAULT_SUITES, fake=args.fake, via_server=not args.in_process
+        )
+    except (HarnessError, ScriptError, TaskError, OSError) as exc:
+        print(f"golden codemode: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(rep, indent=2, sort_keys=True))
+    else:
+        print(render_report(rep), end="")
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(rep, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"golden codemode: wrote {args.out}")
+    if args.check:
+        try:
+            stored = json.loads(args.check.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"golden codemode: cannot read {args.check}: {exc}", file=sys.stderr)
+            return 1
+        problems = check_report(stored, rep)
+        for p in problems:
+            print(f"golden codemode: {p}")
+        print(f"golden codemode: {args.check}: {len(problems)} problem(s)")
+        return 1 if problems else 0
+    return 0 if rep["summary"]["ok"] else 1
 
 
 def _live(registry: str, table: RoleTable):  # pragma: no cover - needs a real model server

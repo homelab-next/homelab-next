@@ -18,9 +18,18 @@ from __future__ import annotations
 from functools import cache
 from pathlib import Path
 
+from homelabnext.context.levels import generated_summary_lines
+
 TERMS_SECTION = "terms"
 SOURCE = Path(__file__).with_name("terms.md")
 DOC = Path("docs") / "terms.md"
+#: written here, not in docs/terms.md: text in that page becomes the context pack's `terms`
+#: section, and this line is only the page's L0 summary (marked generated, since this module
+#: writes the page)
+SUMMARY = (
+    "What the project's words mean and its scope: our activity and how we use threat "
+    "vocabulary, shared by every agent and reader."
+)
 _SPDX = "<!-- SPDX-License-Identifier: Apache-2.0 -->\n"
 _GENERATED = (
     "<!-- generated from homelabnext/agent/terms.md by `hnx agent terms --write`; "
@@ -51,7 +60,15 @@ def terms_section() -> dict:
 
 def render_doc() -> str:
     """``docs/terms.md``: the source with a generated-file note."""
-    return _SPDX + _GENERATED + "\n" + terms_text()
+    return (
+        "---\n"
+        + generated_summary_lines(SUMMARY)
+        + "\n---\n"
+        + _SPDX
+        + _GENERATED
+        + "\n"
+        + terms_text()
+    )
 
 
 def check_doc(path: Path | str = DOC) -> list[str]:

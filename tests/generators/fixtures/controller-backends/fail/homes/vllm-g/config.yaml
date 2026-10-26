@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+model:
+  default: main-reasoner-g
+  base_url: https://LLM-Gateway.example.internal:443/v1/
+  context_length: 131072

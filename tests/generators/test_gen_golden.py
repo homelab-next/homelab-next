@@ -215,8 +215,10 @@ def test_caddy_only_public_hosts_and_forward_auth():
 
 def test_forward_auth_strips_every_client_sent_identity_header_first():
     """Caddy 2.9.0-2.11.1 keep a client-sent header when the IdP's answer omits it: a client
-    could send its own X-Authentik-Username or -Groups and the service would trust it."""
-    from homelabnext.generators.builtin import FORWARD_AUTH_HEADERS, IDENTITY_HEADER_PREFIX
+    could send its own X-Authentik-Username or -Groups and the service would trust it.  A
+    CGI-style upstream folds - and _ alike, so the mixed X-Authentik_Groups counts too: a prefix
+    wildcard per spelling (-X-Authentik-*, -X_Authentik_*) misses it, *authentik* does not."""
+    from homelabnext.generators.builtin import FORWARD_AUTH_HEADERS, IDENTITY_HEADER_MARK
 
     text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
     snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
@@ -224,17 +226,29 @@ def test_forward_auth_strips_every_client_sent_identity_header_first():
     [copy] = [ln for ln in lines if ln.startswith("copy_headers ")]
     copied = copy.split()[1:]
     assert copied == list(FORWARD_AUTH_HEADERS)
-    assert all(h.startswith(IDENTITY_HEADER_PREFIX) for h in copied), "one prefix covers them"
+    assert all(IDENTITY_HEADER_MARK in h.lower() for h in copied), "one contains-wildcard covers"
     auth_at = next(i for i, ln in enumerate(lines) if ln.startswith("forward_auth "))
-    strips = {ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")}
-    assert f"-{IDENTITY_HEADER_PREFIX}*" in strips
-    # and its underscore spelling, which Caddy <= 2.11.1 passes and CGI-style upstreams fold
-    assert f"-{IDENTITY_HEADER_PREFIX.replace('-', '_')}*" in strips
-    assert {f"-{h}" for h in copied} <= strips, "every copied header is deleted before auth"
+    strips = [ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")]
+    assert strips == [f"-*{IDENTITY_HEADER_MARK}*"]
     # in one route, so they run in the order written (forward_auth sorts before request_header)
     route_at = lines.index("route {")
     assert route_at < min(i for i, ln in enumerate(lines) if ln.startswith("request_header"))
     assert snippet.count("{") == snippet.count("}") + 1  # balanced but for the snippet's own
+
+
+def test_every_forward_auth_site_strips_identity_headers_at_site_level_first():
+    """A path that never reaches the snippet's route (a handle beside it, a matcher on a route)
+    must not carry a client's identity headers either: Caddy sorts a site-level request_header
+    before every handle and route, so the site deletes them before anything else runs."""
+    from homelabnext.generators.builtin import IDENTITY_HEADER_MARK
+
+    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    sites = [b for b in text.split("\n\n") if "import hnx_forward_auth" in b]
+    assert len(sites) == 2  # dashboards, status-hub
+    for site in sites:
+        lines = [ln.strip() for ln in site.splitlines()[1:] if not ln.strip().startswith("#")]
+        assert lines[0] == f"request_header -*{IDENTITY_HEADER_MARK}*", site
+        assert lines[1] == "import hnx_forward_auth"
 
 
 def test_docs_page_lists_dependants():

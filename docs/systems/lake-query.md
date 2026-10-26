@@ -1,6 +1,8 @@
 ---
 title: lake-query
 type: system
+summary: lake-query provides the lake-query capability (trino), owned by data-team.
+summary_generated: true
 service: lake-query
 capability: lake-query
 impl: trino
@@ -101,7 +103,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.lake-query`
+- Registry row (Veritas, ADR-0028): `services.lake-query`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

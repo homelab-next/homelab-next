@@ -1,3 +1,7 @@
+---
+summary: 'What the project''s words mean and its scope: our activity and how we use threat vocabulary, shared by every agent and reader.'
+summary_generated: true
+---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- generated from homelabnext/agent/terms.md by `hnx agent terms --write`; edit that file, not this page -->
 

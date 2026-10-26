@@ -1,3 +1,7 @@
+---
+summary: 'Scripts: what counts as one, the hnx-script header, how triggers are discovered, the checks that keep the catalog true and the reviewed allowlist.'
+summary_of: outline:sha256:d0de77449dc463b3
+---
 # Scripts: header, catalog and the checks that keep it true
 
 Every script in the tree carries a small machine-readable header. The headers generate the
@@ -29,6 +33,7 @@ A script is a file that is executed as a program rather than imported:
   | `tests/`, `tools/tests/` | test code: pytest imports it |
   | `conformance/` | suites, protocols and fakes the suites import |
   | `ansible/plugins/` | Ansible loads plugins; nothing executes them |
+  | `examples/codemode/*/prelude.py` | a profile's generated Code Mode runtime prelude (`hnx codemode gen`): source the runner rebuilds and its executor runs inside a program's sandbox, never a file run |
   | `conftest.py`, `setup.py` | pytest configuration and the build backend's hook |
 
 * **plus** any file in those classes that something runs as a program. A fake under

@@ -40,6 +40,7 @@ CLASS_LEVEL = {
     "record-write": "write",
     "file-write": "write",
     "egress": "execute",
+    "send": "execute",
     "exec": "execute",
     "credential": "privileged",
 }

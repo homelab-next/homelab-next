@@ -11,4 +11,4 @@ COPY compose/lab-in-a-box/fakes/fake_cases.py /app/fake_cases.py
 COPY compose/lab-in-a-box/fakes/lab_init.py /app/lab_init.py
 USER 10001
 EXPOSE 8000
-CMD ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--allow-any-host", "--port", "8000"]

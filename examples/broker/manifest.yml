@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Example broker manifest (schemas/broker/manifest 1.5): one agent profile with three write lanes,
-# a read-only status action and an approval-gated restart.  Walkthrough: docs/broker.md.
+# a read-only status action, an approval-gated restart and three read-only lookups (a service's
+# name, a DHCP server's leases, a hypervisor node's guests).  Walkthrough: docs/broker.md.
 #   hnx broker validate examples/broker/manifest.yml
 # dev_identity: true lets the CLI's asserted --as identity drive it, for the walkthrough only; a
 # deployment authenticates callers on the socket instead (manifest.production.yml).
@@ -14,6 +15,9 @@ approvers:
 handler_docs:
   - handlers/service-status.handler.json
   - handlers/service-restart.handler.json
+  - handlers/dns-lookup.handler.json
+  - handlers/dhcp-leases.handler.json
+  - handlers/hypervisor-guests.handler.json
 lanes:
   # the agent's own memory: <data-root>/memory/<profile>/<name>.md, never overwritten
   - name: memory
@@ -44,9 +48,16 @@ actions:
   - {action: proposal.file, tier: write, handler: builtin/lane, lane: proposals, requires_approval: false}
   - {action: service.status, tier: read, handler: handlers/service-status.sh, requires_approval: false}
   - {action: service.restart, tier: execute, handler: handlers/service-restart.sh, requires_approval: true}
+  # read actions for a correlation (a name, its lease, the guest holding it): stand-in
+  # handlers answering fixed fictional data, for the walkthrough and the Code Mode goldens only;
+  # granted to profile:triage alone (the production example does not carry them)
+  - {action: dns.lookup, tier: read, handler: handlers/dns-lookup.sh, requires_approval: false}
+  - {action: dhcp.leases, tier: read, handler: handlers/dhcp-leases.sh, requires_approval: false}
+  - {action: hypervisor.guests, tier: read, handler: handlers/hypervisor-guests.sh, requires_approval: false}
 grants:
   - profile: profile:triage
-    actions: [memory.write, finding.write, proposal.file, service.status, service.restart]
+    actions: [memory.write, finding.write, proposal.file, service.status, service.restart,
+              dns.lookup, dhcp.leases, hypervisor.guests]
     max_tier: execute
   - profile: profile:reader
     actions: [service.status]

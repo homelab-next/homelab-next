@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:detonation-1
+display_name: Detonation box
+description: "Runs anything that might be malicious, alone in the one-way zone; reports leave only through the bus."
+kind: host
+provisioning: host-only
+placement: {node: detonation-1}
+network: {zone: sandbox, ip: 203.0.113.20}
+capability: cap:detections
+capability_groups: [cap_siem]
+power: {ups: ups-a}
+tags: [lab]
+owners: {primary: platform-team}

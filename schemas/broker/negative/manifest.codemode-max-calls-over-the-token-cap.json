@@ -1,0 +1,56 @@
+{
+  "actions": [
+    {
+      "action": "dhcp.lease",
+      "handler": "handlers/dhcp-lease.sh",
+      "requires_approval": false,
+      "tier": "read"
+    },
+    {
+      "action": "codemode.execute",
+      "handler": "handlers/codemode-execute.sh",
+      "requires_approval": false,
+      "tier": "write"
+    }
+  ],
+  "callers": [
+    {
+      "profile": "profile:triage",
+      "user": "hnx-agent-triage"
+    }
+  ],
+  "codemode": {
+    "default_wall_s": 60,
+    "max_calls": 500,
+    "max_live_tokens_per_actor": 4,
+    "runners": [
+      {
+        "service": "svc:codemode-runner",
+        "user": "hnx-codemode"
+      }
+    ],
+    "sandboxes": [
+      {
+        "user": "hnx-sandbox"
+      },
+      {
+        "sandbox_id": "sandbox-01",
+        "uid": 3101
+      }
+    ],
+    "ttl_margin_s": 10
+  },
+  "default": "deny",
+  "grants": [
+    {
+      "actions": [
+        "codemode.execute",
+        "dhcp.lease"
+      ],
+      "max_tier": "write",
+      "profile": "profile:triage"
+    }
+  ],
+  "manifest_id": "lab-broker-codemode",
+  "mode": "enforce"
+}

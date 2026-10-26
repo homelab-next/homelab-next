@@ -21,9 +21,12 @@ get to decide that it was not tested.
 
 Features are of two kinds.  *Product* features (``streaming``, ``wildcards``, ...) describe what
 the implementation offers; a check needing one is skipped when it is absent.  *Test hooks*
-(:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``) only let the suite reach a state; a
-``must`` check that needs an undeclared hook is ``untested``, which fails like a failure - not
-declaring a hook cannot be a way around a MUST.
+(:data:`TEST_HOOKS`: ``clock-control``, ``fault-injection``, ``approval-control``) only let the
+suite reach a state; a ``must`` check that needs an undeclared hook is ``untested``, which fails
+like a failure - not declaring a hook cannot be a way around a MUST.  The product decides first:
+a check that also needs a product feature the target does not declare is skipped, hook or no
+hook, because there is nothing to test (a target without ``admission`` has no capacity for a
+fault to leak).
 
 Severity follows RFC 2119 loosely: ``must`` is part of the contract (a failure fails the
 capability and the exit code); ``should`` is expected behaviour whose absence is reported but
@@ -52,7 +55,7 @@ __all__ = [
 SEVERITIES = ("must", "should")
 STATUSES = ("pass", "fail", "skip", "waived", "untested")
 #: features that are harness hooks rather than product abilities (see the module docstring)
-TEST_HOOKS = frozenset({"clock-control", "fault-injection"})
+TEST_HOOKS = frozenset({"clock-control", "fault-injection", "approval-control"})
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
 
@@ -122,7 +125,12 @@ class CheckSpec:
     @property
     def can_skip(self) -> bool:
         """True when this check can end without executing (a mutant must not rely on it)."""
-        return self.skippable or bool(self.requires)
+        return self.can_skip_with(())
+
+    def can_skip_with(self, features: Iterable[str]) -> bool:
+        """True when this check can end without executing against a subject that declares
+        ``features``: it is skippable, or it requires something not among them."""
+        return self.skippable or not set(self.requires) <= set(features)
 
 
 @dataclass
@@ -132,7 +140,7 @@ class Suite:
     name: str
     summary: str
     protocol: str = ""  # dotted path of the Protocol the subject implements
-    tier: str = "core"  # core: one of the sixteen capabilities; extended: additional suites
+    tier: str = "core"  # core: one of the eighteen capabilities; extended: additional suites
     _specs: dict[str, CheckSpec] = field(default_factory=dict, init=False, repr=False)
 
     def check(
@@ -176,6 +184,15 @@ class Suite:
             have = set(getattr(subject, "features", ())) | set(features or ())
             missing = [r for r in spec.requires if r not in have]
             hooks = [r for r in missing if r in TEST_HOOKS]
+            product = [r for r in missing if r not in TEST_HOOKS]
+            if product:  # nothing to test: the hook question does not arise
+                return CheckResult(
+                    spec.id,
+                    True,
+                    f"skipped: target does not declare feature(s) {', '.join(product)}",
+                    spec.severity,
+                    "skip",
+                )
             if hooks and spec.severity == "must":
                 return CheckResult(
                     spec.id,
@@ -233,13 +250,19 @@ def _foreign_skip(spec: CheckSpec, sk: Skip) -> str | None:
 class Mutant:
     """A deliberately defective subject.  The suite MUST fail the check named in ``fails``.
 
-    That check must be one that always executes (no ``requires``, not ``skippable``): a mutant
-    caught only by a check that can skip proves nothing about a target on which it skips.
+    That check must be one that always executes against the mutant (not ``skippable``, and every
+    feature it ``requires`` among ``features``): a mutant caught only by a check that can skip
+    proves nothing about a target on which it skips.  ``features`` are what the mutant's factory
+    supports (product features and test hooks alike); the mutant is run with them declared.
     """
 
     factory: Callable[[], Any]
     fails: str
     description: str
+    features: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "features", frozenset(self.features))
 
 
 def run_checks(

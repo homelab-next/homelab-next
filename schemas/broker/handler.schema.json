@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/handler/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/broker/handler/1.3",
   "title": "Broker handler",
-  "description": "Declares one handler implementation: which action it serves, its tier, where it lives and the digest of its content. A handler that mutates (execute, privileged) must require approval; every handler is audited. 1.1 adds, additively, argv (fixed arguments; the request's params arrive as JSON on stdin, never on the command line), secrets (names of secrets the broker resolves at run time and hands to this handler only, as environment variables) and max_output_bytes (stdout and stderr cap each).",
+  "description": "Declares one handler implementation: which action it serves, its tier, where it lives and the digest of its content. A handler that mutates (execute, privileged) must require approval; every handler is audited. 1.1 adds, additively, argv (fixed arguments; the request's params arrive as JSON on stdin, never on the command line), secrets (names of secrets the broker resolves at run time and hands to this handler only, as environment variables) and max_output_bytes (stdout and stderr cap each). 1.2 adds, additively, result_schema (a JSON Schema object describing the handler's output once decoded as JSON; the Code Mode generator types the method's result from it, the broker does not check output against it). 1.3 adds, additively, target (required or optional: whether a request for the action names the svc: target it is about, which the broker hands the handler as HNX_BROKER_TARGET; absent, the action takes none). The Code Mode generator gives the action's method a target parameter from it; the broker refuses a request without one for an action that requires it (target-required).",
   "type": "object",
   "properties": {
     "action": {
@@ -65,6 +65,16 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 16777216
+    },
+    "result_schema": {
+      "type": "object"
+    },
+    "target": {
+      "enum": [
+        "required",
+        "optional"
+      ],
+      "description": "Whether a request for this action names the svc: target it is about (HNX_BROKER_TARGET for the handler): required or optional. Absent: the action takes no target. The Code Mode generator gives the method a target parameter from it; the broker refuses a request for a required-target action that names none (target-required, audited), and admits a target on an action that takes none, as before."
     }
   },
   "required": [

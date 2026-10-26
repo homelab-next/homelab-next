@@ -1,6 +1,8 @@
 ---
 title: dashboards
 type: system
+summary: dashboards provides the dashboards capability (grafana), owned by platform-team.
+summary_generated: true
 service: dashboards
 capability: dashboards
 impl: grafana
@@ -102,7 +104,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row: `services.dashboards`
+- Registry row (Veritas, ADR-0028): `services.dashboards`
 - Backup: job `daily-core`
 <!-- /hnx:gen -->
 

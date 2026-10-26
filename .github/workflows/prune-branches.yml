@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+name: prune-branches
+
+# Deletes the branches whose work is over, by hand from the Actions tab: a branch goes only when
+# its tip is the head of a merged or closed pull request from this repository and no open pull
+# request uses it. The default branch, protected branches, branches with an open pull request,
+# branches with commits after their pull request closed, and branches that never had one are
+# kept (tools/prune_branches.py decides; its tests pin each case). The run summary lists both.
+# A deleted branch of a pull request can be restored from that pull request's page. Runs only
+# from the default branch, so only reviewed code holds the write token.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted, and delete nothing"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: prune-branches
+  cancel-in-progress: false
+
+# Action pins below are full commit SHAs; the trailing comment names the release.
+
+jobs:
+  prune:
+    # only the default branch's reviewed code runs with the write token
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # deleting a branch is a write to its ref
+      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: decide and delete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$REPO/branches?per_page=100" > "$RUNNER_TEMP/branches.json"
+          gh api --paginate --slurp "repos/$REPO/pulls?state=all&per_page=100" > "$RUNNER_TEMP/pulls.json"
+          python3 tools/prune_branches.py "$RUNNER_TEMP/branches.json" "$RUNNER_TEMP/pulls.json" \
+            --default "$DEFAULT_BRANCH" --repo "$REPO" --keep "$RUNNER_TEMP/kept.tsv" \
+            > "$RUNNER_TEMP/delete.txt"
+          : > "$RUNNER_TEMP/deleted.txt"
+          : > "$RUNNER_TEMP/failed.txt"
+          failed=0
+          # a live delete only on an explicit false: anything else (an odd dispatch) is a dry run.
+          # The lists are read a few seconds before the deletes, and the API has no
+          # compare-and-delete: a pull request reopened in between loses its branch (restorable)
+          if [ "$DRY_RUN" = "false" ]; then
+            while IFS= read -r branch; do
+              [ -n "$branch" ] || continue
+              ref=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$branch")
+              if gh api -X DELETE "repos/$REPO/git/refs/heads/$ref" --silent; then
+                echo "$branch" >> "$RUNNER_TEMP/deleted.txt"
+              else
+                echo "::warning::could not delete $branch"
+                echo "$branch" >> "$RUNNER_TEMP/failed.txt"
+                failed=1
+              fi
+            done < "$RUNNER_TEMP/delete.txt"
+          fi
+          {
+            if [ "$DRY_RUN" = "false" ]; then
+              echo "## Deleted"
+              echo
+              awk '{ printf "- %c%s%c\n", 96, $0, 96 }' "$RUNNER_TEMP/deleted.txt"
+              if [ -s "$RUNNER_TEMP/failed.txt" ]; then
+                echo
+                echo "## Could not delete"
+                echo
+                awk '{ printf "- %c%s%c\n", 96, $0, 96 }' "$RUNNER_TEMP/failed.txt"
+              fi
+            else
+              echo "## Would delete (dry run)"
+              echo
+              awk '{ printf "- %c%s%c\n", 96, $0, 96 }' "$RUNNER_TEMP/delete.txt"
+            fi
+            echo
+            echo "## Kept"
+            echo
+            awk -F '\t' '{ printf "- %c%s%c: %s\n", 96, $1, 96, $2 }' "$RUNNER_TEMP/kept.tsv"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"

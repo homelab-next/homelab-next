@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from homelabnext.context.levels import front_matter
+
 ADR_DIR = Path(__file__).resolve().parents[2] / "docs" / "adr"
 HEADINGS = ["Status", "Context", "Decision", "Consequences", "Alternatives"]
 STATUSES = {"proposed", "accepted", "rejected"}
@@ -29,7 +31,9 @@ def test_sequential_adrs_apart_from_reserved_numbers():
 
 @pytest.mark.parametrize("path", ADRS, ids=lambda p: p.name[:4])
 def test_adr_has_five_headings_and_status(path: Path):
-    text = path.read_text()
+    raw = path.read_text()
+    # a leading front-matter block (the L0 summary) is not the log
+    text = raw[front_matter(raw)[1] :]
     assert re.match(rf"# ADR-{path.name[:4]}: \S", text), "title must be '# ADR-NNNN: ...'"
     status = re.search(r"^- \*\*Status:\*\* (.+)$", text, re.M)
     assert status, "missing Status line"
@@ -41,6 +45,17 @@ def test_adr_has_five_headings_and_status(path: Path):
     for name in HEADINGS[1:]:
         body = text.split(f"## {name}\n", 1)[1].split("\n## ", 1)[0]
         assert len(body.strip()) > 40, f"{name} is empty"
+
+
+def test_every_adr_and_the_template_carry_an_l0_summary():
+    """ADR-0032: an ADR opens with front-matter whose summary passes the lint, before its title;
+    the template shows it, so a new ADR starts with one."""
+    from homelabnext.context.levels import check_summary
+
+    for path in [*ADRS, ADR_DIR / "_template.md"]:
+        fm, body = front_matter(path.read_text())
+        assert fm and check_summary(fm.get("summary")) is None, path.name
+        assert path.read_text()[body:].startswith("# ADR-"), path.name
 
 
 def test_negative_missing_heading_is_detected():
