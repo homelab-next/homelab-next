@@ -97,3 +97,21 @@ requirements:
       - {role: approve, kind: human}
     deprecated: []  # still grantable while profiles move off it
     retired: []     # not grantable
+  # fetched modules (docs/modules.md, "Supply chain"): reviews live in the overlay's
+  # lab/modules.lock, keyed by the module's tree digest (`hnx reviews digest <module dir>`). A
+  # module is code that runs as root on its hosts, so every kind is a human's to approve
+  module-provider:
+    locked:         # fills a slot: the core runs its adapter
+      - {role: check, kind: agent}
+      - {role: audit, kind: agent}
+      - {role: approve, kind: human}
+  module-feature:
+    locked:         # credentials, data grants and egress come with it
+      - {role: check, kind: agent}
+      - {role: audit, kind: agent}
+      - {role: approve, kind: human}
+  module-core:
+    locked:         # always installed: staff agents and the core's own consumers
+      - {role: check, kind: agent}
+      - {role: audit, kind: agent}
+      - {role: approve, kind: human}

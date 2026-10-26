@@ -104,6 +104,10 @@ ARTEFACT_STATES: dict[str, tuple[str, ...]] = {
     "rfi": ("open", "answered", "expired", "no-find"),
     # the MCP catalog's server records (homelabnext.mcp.servers, docs/mcp-catalog.md)
     "mcp-server": ("draft", "active", "deprecated", "retired"),
+    # fetched modules, pinned in the overlay's lab/modules.lock (homelabnext.modules.supply)
+    "module-provider": ("locked",),
+    "module-feature": ("locked",),
+    "module-core": ("locked",),
 }
 UNKNOWN_AUTHOR = "unknown"
 
@@ -422,9 +426,14 @@ def missing_message(who: str, state: str, ev: Evaluation, digest: str) -> str:
 
 
 def file_digest(path) -> str:
-    """The digest a reviewer stamps for ``path``: a register or strategy record, an MCP catalog
-    record (``<catalog>/mcp/<id>.yml``), or a docs/systems page."""
+    """The digest a reviewer stamps for ``path``: a module directory (its tree digest, what
+    ``lab/modules.lock`` pins), a register or strategy record, an MCP catalog record
+    (``<catalog>/mcp/<id>.yml``), or a docs/systems page."""
     p = pathlib.Path(path)
+    if p.is_dir() and (p / "module.yml").is_file():
+        from homelabnext.modules.supply import tree_digest
+
+        return tree_digest(p)
     text = p.read_text(encoding="utf-8")
     from homelabnext.strategy.records import file_digest as strategy_digest
 
