@@ -1,0 +1,7 @@
+{
+  "stage": null,
+  "contract": "secrets.py",
+  "stateful": true,
+  "required_in_core": true,
+  "privileged": true
+}

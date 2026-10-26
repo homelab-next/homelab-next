@@ -23,6 +23,7 @@ DRAFTS = {
     "platform/module.schema.json",
     "platform/lake_table.schema.json",
     "platform/module_selection.schema.json",
+    "platform/slot.schema.json",
     "codemode/execution_request.schema.json",
     "codemode/execution_result.schema.json",
     "codemode/token.schema.json",
