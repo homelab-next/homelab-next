@@ -202,7 +202,7 @@ MUTANTS = {
 
 `hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all`
 for every suite) and
-`tests/conform/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
+`tests/conform_sweeps/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
 caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `broker-tokens`, `codemode-executor`,
 `codemode-runner`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
@@ -249,7 +249,7 @@ a dead-letter list in client memory, a crash loop the reference fake never dead-
 cached lease shared between holders, a scope gate reading the unverified payload, form-decoded
 and case-folded keys, a dotted flat key space, redaction by a name guess, a refusal echoing the
 value it refused) plus six racy records deciders.  Each plausible defect is registered in its suite's `MUTANTS`, the one table of
-broken fake -> the check that must fail it; `tests/conform/test_conform_protocol_mutants.py`
+broken fake -> the check that must fail it; `tests/conform_sweeps/test_conform_protocol_mutants.py`
 keeps the record, by name, of which ones review found.
 
 ### How to review a suite

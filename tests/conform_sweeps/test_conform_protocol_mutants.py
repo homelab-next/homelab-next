@@ -4,7 +4,7 @@
 Each name below is a deliberately broken fake that breaks one clause of its Protocol docstring
 and used to pass its whole suite: the suites pinned only the defects their own mutants modelled.
 Every one is registered in its suite's ``MUTANTS``, which is the single table of what each fake
-breaks and which check must fail it; ``tests/conform/test_conform_mutants.py`` (and ``hnx conform
+breaks and which check must fail it; ``tests/conform_sweeps/test_conform_mutants.py`` (and ``hnx conform
 mutants``) prove each is caught by that check.  This file only keeps the record: a mutant dropped
 from ``MUTANTS`` - and with it the proof - fails here by name.
 """

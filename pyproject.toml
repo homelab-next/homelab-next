@@ -130,7 +130,12 @@ suite_budgets = [
   # per-file stats became one module call; 1200 since main's own CI measured 1085s and 1096s
   # (2026-10-24/25), over 1080 with no test changed
   "tests/roles = 1200",
-  "tools/tests = 240",  # the gate tools run pytest, git and builds in subprocesses
+  "tools/tests = 240",
+  # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
+  # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a
+  # test of its module, and the merge sums every shard's time: 34.2 s in four shards (2026-10-25),
+  # 61.0 s in six (2026-10-26, over the 60 s default); 90 is 1.5x that
+  "tests/golden = 90",  # the gate tools run pytest, git and builds in subprocesses
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
@@ -139,31 +144,19 @@ suite_budgets = [
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
-  # every suite against its fake, each registered mutant through its whole suite, the report and
-  # X-10 over all of them, the lab adapters over their stand-ins and records' interleaving check
-  # (both wait in real time).  main runs it under the 60s default on CI; on a loaded 4-core box
-  # this branch measured +11% CPU (54s vs 49s) and +9-39% wall over main, the excess mostly those
-  # waits: 90 is 1.5x the default it would otherwise sit at; 100 since CI measured 90.3s once the
-  # orchestration suite reached 17 checks; 125 since the codemode-executor suite, whose checks run
-  # real programs (0.45s a suite run, about 3.5s for a report over it and its seven mutants,
-  # about 12s across this directory): main measured 99.4s on a loaded local box and this branch
-  # about 110s there, against 90.3s for main on CI; 140 since the codemode-runner suite (eight
-  # checks running real programs through a broker, eight mutants, and the executor suite's
-  # sixteenth check): A/B on one local 4-core box, two runs each, main 119.1s and 116.2s, this
-  # branch 128.1s and 128.2s (+10.5s). Of that, the runner suite's runs are about 2s; the rest is
-  # its eight mutants, each a whole-suite run (about 0.6s each), the report and X-10 runs that
-  # now include it, the broker-reference target, and the executor suite's new check and mutant
-  # in every run of that suite; 130 would leave under 2s over the branch's own measurement; 150
-  # since the executor suite's stubs-reach-the-broker check (two programs, in the fake's run and
-  # in each of its nine mutants', the report and X-10) and the runner suite's ninth check and
-  # mutant: A/B on one local 4-core box, two runs each, interleaved, main 122.0s and 120.5s,
-  # this branch 126.2s and 127.7s (+5.7s, 4.7%); main at about 132s on CI would put the branch
-  # near 138s, under 2s inside 140. Remeasured after the review fixes (the executor suite's
-  # prelude-failure probe and its mutant, the runner suite's flood and foreign-line probes and
-  # its tenth mutant), same box, interleaved: main 126.5s and 127.8s, this branch 136.2s and
-  # 141.3s (+11.6s), past 140 locally, so 150 stays (145 would leave under 4s); splitting the
-  # mutant sweeps out of this budget is proposed in docs/codemode.md instead of further raises
-  "tests/conform = 150",
+  # every suite against its fake, the lab adapters over their stand-ins and records' interleaving
+  # check (both wait in real time), the codemode suites' real programs, and the CLI report over
+  # every suite and mutant. Until 2026-10-26 this
+  # suite also held the mutant sweeps and was raised from 60 to 150 in five steps as they grew;
+  # without them it measured 84.1s on a local 4-core box (2026-10-26), where it took 136s with
+  # them, so 110 leaves it the headroom it had and the sweeps no longer push it
+  "tests/conform = 110",
+  # the sweeps: each registered mutant through its whole suite (test_conform_mutants.py, the
+  # protocol mutants) and X-10 end to end over every suite (the CLI report tests, one of which
+  # also runs every suite and mutant once, stay in tests/conform). They grow with
+  # every check and mutant, so this budget is the one to raise as they do: 50.0s on the same box
+  # (2026-10-26), 75 is 1.5x that
+  "tests/conform_sweeps = 75",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed

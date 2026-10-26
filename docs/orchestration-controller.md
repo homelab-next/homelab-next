@@ -290,7 +290,7 @@ local-only moves to a cloud backend that satisfies the job's constraints.
 | `list-runs` | `runs(state=...)` | **Built**: `runs-lists-every-run-once-in-its-state`. Succeeded, failed after a retry, cancelled, queued and running runs each appear exactly once in their current state. A repeated key and a retry add no row, and `runs(state=s)` returns only runs in `s` (mutant `row-per-attempt`). |
 
 Each MUST check has a mutant that it catches and no other check catches
-(`orchestration-features` is in `ONLY_ITS_OWN` of `tests/conform/test_conform_mutants.py`).
+(`orchestration-features` is in `ONLY_ITS_OWN` of `tests/conform_sweeps/test_conform_mutants.py`).
 
 The `llm_orchestrator` adapter declares `priority` and none of the others. The job API takes a
 priority from 1 to 100 and admits the lowest number first, then submit order (`handlers.go:97-111`
