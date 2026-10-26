@@ -210,6 +210,12 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
 
     switch_ids: set[str] = set()
     macs: dict[str, str] = {}
+    # zones whose traffic a mirror port should not copy silently: management, and one-way zones
+    sensitive = {
+        z["vlan_id"]: z["id"]
+        for z in zone_ids.values()
+        if z.get("purpose") == "management" or z["egress"].get("one_way")
+    }
     for sw in doc.get("switches", []):
         sid = sw["id"]
         if sid in switch_ids:
@@ -225,6 +231,7 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         seen_ports: dict[int, int] = {}
         trunk_ports: set[int] = set()
         mirrors: list[tuple[str, list[int], list[int]]] = []  # (where, ports, sources)
+        port_vlans: dict[int, list[int]] = {}
         for n, pa in enumerate(sw["port_assignments"]):
             where = f"switch {sid} port_assignments[{n}]"
             try:
@@ -240,6 +247,7 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
                 seen_ports[p] = n
                 if pa["kind"] == "trunk":
                     trunk_ports.add(p)
+                port_vlans[p] = ([pa["vlan"]] if "vlan" in pa else []) + list(pa.get("vlans", []))
             if pa["kind"] == "mirror":
                 if "vlan" in pa or "vlans" in pa:
                     r.error(f"{where}: a mirror port carries no vlan or vlans of its own")
@@ -259,6 +267,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         mirror_ports = {p for _, ports, _ in mirrors for p in ports}
         copied_to: dict[int, str] = {}
         for where, ports, sources in mirrors:
+            if len(set(sources)) != len(sources):
+                r.error(f"{where}: mirror_from lists a port twice")
             # a SPAN session copies sources to ONE destination; UniFi (the one switch adapter)
             # takes a single source port per destination port
             if sw["model"] == "unifi" and (len(ports) != 1 or len(sources) != 1):
@@ -274,6 +284,14 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
                 if src in copied_to and copied_to[src] != where:
                     r.error(f"{where}: port {src} is already mirrored by {copied_to[src]}")
                 copied_to[src] = where
+            # a copy of these zones' traffic leaves the isolation the firewall gives them: say so
+            seen = {v for src in sources for v in port_vlans.get(src, []) if v in sensitive}
+            if seen:
+                names = ", ".join(sorted(sensitive[v] for v in seen))
+                r.warn(
+                    f"{where}: the mirror copies the traffic of {names} (management or one-way) "
+                    "to its port; keep that port's sensor out of every zone and physically secure"
+                )
         up = sw.get("uplink_port")
         if up is not None and up not in trunk_ports:
             r.error(f"switch {sid}: uplink_port {up} is not assigned as a trunk")

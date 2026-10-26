@@ -66,7 +66,7 @@ pattern's `$` match before a trailing newline, so a pattern alone does not keep 
   Registry zones must exist in the site with the same CIDR.
 * Switch ports are not assigned twice; VLANs named on ports are zones; the uplink is a trunk.
 * A mirror port has `mirror_from` and no VLAN of its own; its sources are assigned on the same
-  switch, are not mirror ports, and each is copied to one mirror port only. On a `unifi` switch a
+  switch, listed once, are not mirror ports, and each is copied to one mirror port only. On a `unifi` switch a
   mirror port has exactly one source ([mirror ports](#mirror-ports-13)).
 * No two `zone_to_zone` rules cover the same pair; deny rules apply to the whole pair; ports need
   tcp or udp.
@@ -144,9 +144,14 @@ port_assignments:
 Mirroring the uplink shows the sensor every packet that crosses the router, between zones and to
 the internet; traffic between two hosts of one zone on one switch never reaches it. The mirror port
 carries no VLAN, so the sensor's capture interface has no address; give the sensor a second NIC on
-an access port for its management and its event output. The UniFi dry run renders the mirror as a
-port override with `op_mode: mirror` and `op_mirror_from_idx` and no port profile; those field names
-are the first thing to check against the controller.
+an access port for its management and its event output.
+
+A mirror whose sources carry a management zone or a one-way zone is a warning: the copy takes that
+traffic out of the isolation the firewall gives it, so whatever is on the mirror port sees it. That
+is usually the point (a sensor on the uplink), but keep the sensor's capture NIC out of every zone
+and the machine physically secure. The UniFi dry run renders the mirror as a port override with
+`op_mode: mirror` and `mirror_port_idx` (the source) and no port profile. The field names are the
+controller's; that the destination's override names the source is checked on the server.
 
 ### One-way zones
 
@@ -197,8 +202,7 @@ It builds the documents a UniFi-class controller would be sent. It makes no netw
 credential (`controller.json` carries `secret:` reference names only), and has no apply. Objects
 refer to one another with `${network:<name>}` placeholders that are resolved to controller ids at
 apply time. The golden files pin *our rendering* of the documented object shapes; whether a given
-controller version accepts every field is checked on the server; the mirror override's fields are the
-least certain. **SERVER-only:** reading the
+controller version accepts every field is checked on the server. **SERVER-only:** reading the
 controller state, resolving ids, and writing the objects.
 
 ### OPNsense is deferred

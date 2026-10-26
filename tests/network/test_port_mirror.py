@@ -49,7 +49,7 @@ def test_unifi_renders_a_mirror_override_and_no_profile(mdoc, registry):
         "device_mac": "00:00:5e:00:53:10",
         "port_idx": 9,
         "op_mode": "mirror",
-        "op_mirror_from_idx": 1,
+        "mirror_port_idx": 1,
     }
     profiles = json.loads(out["port-profiles.json"])["objects"]
     assert not [p for p in profiles if "mirror" in p["name"]]
@@ -91,6 +91,15 @@ def _reversed_source_range(d):
     _mirror(d)["mirror_from"] = ["4-2"]
 
 
+def _source_listed_twice(d):
+    d["switches"][0]["model"] = "linux"
+    _mirror(d)["mirror_from"] = [2, "2-3"]
+
+
+def _range_crosses_unassigned(d):
+    _pas(d).append({"ports": [10], "kind": "mirror", "mirror_from": ["8-11"]})
+
+
 def _unifi_two_sources(d):
     _mirror(d)["mirror_from"] = [1, 2]
 
@@ -112,6 +121,8 @@ CASES = [
     (_source_is_itself, "mirror_from port 9 is itself a mirror port"),
     (_source_is_another_mirror, "mirror_from port 9 is itself a mirror port"),
     (_source_mirrored_twice, "port 1 is already mirrored"),
+    (_source_listed_twice, "mirror_from lists a port twice"),
+    (_range_crosses_unassigned, "mirror_from port 11 is not assigned"),
     (_reversed_source_range, "mirror_from: bad port range"),
     (_unifi_two_sources, "one source port to one port"),
     (_unifi_two_destinations, "one source port to one port"),
@@ -134,3 +145,19 @@ def test_other_models_may_mirror_several_sources_to_one_port(mdoc, registry):
     assert validate(mdoc, registry).ok, validate(mdoc, registry).errors
     port = next(p for p in build_ir(mdoc, registry).switches[0].ports if p.port == 9)
     assert port.mirror_from == (1, 2, 3)
+
+
+def test_a_mirror_of_management_or_one_way_zones_warns_and_names_them(mdoc, registry):
+    """The example mirrors the uplink, which carries mgmt and the one-way sandbox: allowed (that is
+    the sensor's job) but said, so a debug mirror cannot copy those zones unnoticed."""
+    rep = validate(mdoc, registry)
+    assert rep.ok, rep.errors
+    [w] = [w for w in rep.warnings if "the mirror copies" in w]
+    assert "mgmt, sandbox" in w
+
+
+def test_a_mirror_of_an_ordinary_access_port_does_not_warn(mdoc, registry):
+    _mirror(mdoc)["mirror_from"] = [2]  # an access port in data
+    rep = validate(mdoc, registry)
+    assert rep.ok, rep.errors
+    assert not [w for w in rep.warnings if "the mirror copies" in w]
