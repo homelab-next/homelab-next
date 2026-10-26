@@ -125,8 +125,9 @@ with no schema, generator or check in any form):
 1. capability descriptor 1.1 (the slot registry): its fields and rules are now the draft schema
    `platform/slot` 1.0, against which `examples/modules/slots.yml` is validated; the descriptor
    itself stays 1.0 until acceptance;
-2. swap record 1.2 (no schema; `legs`, `selection_diff` and the dependants report are undefined,
-   and no swap has been driven through it);
+2. swap record 1.2: its additions (`legs`, `selection_diff`, the dependants report) are now the
+   draft schema `platform/module_swap` 1.0 with its rules, and the documented swap runs through
+   them in a test; the record and the swap kit stay 1.1 until acceptance;
 3. `platform/interface` 1.0 as a record, and gate-interface ownership;
 4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
    remote-admin, cloud-bound model roles, `grants.shared_config`, and the review-policy module kinds;
