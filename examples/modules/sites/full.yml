@@ -11,19 +11,23 @@ profile: full
 hosts:
   data-core:
     kind: vm
+    addresses: [192.0.2.10]
     capacity: {cpu: 16, memory_mb: 32768, disk_gb: 8000}
     headroom: {memory_mb: 4096}
   detect-core:
     kind: vm
+    addresses: [192.0.2.11]
     capacity: {cpu: 8, memory_mb: 16384, disk_gb: 2000}
     headroom: {memory_mb: 2048}
   sandbox-core:
     kind: vm
+    addresses: [192.0.2.12]
     isolated: true
     capacity: {cpu: 8, memory_mb: 16384, disk_gb: 500}
     headroom: {memory_mb: 2048}
   runtime-core:
     kind: vm
+    addresses: [192.0.2.13, 2001:db8:30::13]
     capacity: {cpu: 8, memory_mb: 8192, disk_gb: 200, gpu_memory_mb: 8192}
     resources: [{name: gpu0, kind: gpu}]
     headroom: {memory_mb: 1024}

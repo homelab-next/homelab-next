@@ -137,7 +137,12 @@ with no schema, generator or check in any form):
    `platform/module_lock` 1.0 for `lab/modules.lock`, and reviews keyed by the digest against the
    new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader will
    run the check;
-6. the egress generator (declared egress as host and unit network policy);
+6. the egress generator: implemented (`homelabnext.modules.egress`: an nftables ruleset per lab
+   host that lets each module role's slice open connections only to its DNS, its required and
+   preferred slots, its `svc:` targets and, when declared, global unicast outside the lab;
+   isolated roles reach nothing; inbound, loopback, containers in their own network namespace and
+   root processes are not covered); hosts carry `addresses` in the selection, and the loader
+   will run it;
 7. import validation: the MUST is implemented as a library (`homelabnext.modules.importcheck`),
    the draft schema `platform/export_manifest` 1.0 and the extended `migration` suite. Beyond
    traversal, links and oversize trees it also refuses hard links, other filesystems and mount

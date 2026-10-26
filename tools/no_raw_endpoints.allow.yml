@@ -93,3 +93,5 @@ allow:
     reason: fictional lab data in the documentation address ranges, used as audit fixtures
   - path: "docs/decommission.md"
     reason: prose example using a documentation address
+  - path: "tests/modules/test_egress_policy.py"
+    reason: the example sites' documentation addresses (RFC 5737, RFC 3849) as the rendered ruleset names them
