@@ -426,29 +426,42 @@ slot instance it lives in; files and path defaults are relative to the module's 
 - Removal exports first (`export_first`, default true); `false` needs a `discard_reason`. A removal
   deletes only the module's own namespaced data, never another module's (the namespaces cannot
   overlap).
-- **Import validation** (follow-up 7, implemented as a library and a suite): an export is a tree
-  plus an export manifest (draft schema `platform/export_manifest` 1.0: slot, format, every file's
-  path, size and sha256, and the totals). Each slot's `import_` MUST refuse, before changing
-  anything, a manifest path that traverses (`..`, absolute, backslash, control character, a repeat
-  compared case-insensitively), a symbolic link or special file anywhere in the tree (the root
-  included), a file with a second hard link, an entry on another filesystem or a mount point inside
-  the tree, a missing or unlisted file, a size or sha256 that differs, and a tree over its limits or
-  the caller's tighter ones; it never follows a link while reading.
-  `homelabnext.modules.importcheck` implements it through one `O_NOFOLLOW` descriptor of the root:
-  `check_tree` names the problems (at most 100) without reading content, and every file is opened
-  from its parent's descriptor and re-checked on its own, so a file or directory swapped for a link
-  after the check is refused. `copy_tree` streams a verified tree into a new directory that appears
-  complete or not at all; `read_tree` does the same in memory, for small trees. The manifest is the
-  outgoing provider's own claim: the check proves the tree is safe to read and is what the manifest
-  says, not where it came from. The extended
-  conformance suite `migration` (`conformance/protocols/migration.py`) states the MUST, five
-  deliberately broken importers prove its checks, and it runs once per stateful slot of the slot
-  registry against the reference importer. A real provider proves it when its slot protocol gains
-  `export` and `import_` (below); the format-specific parse stays the slot's own suite.
+- **Import validation** (follow-up 7, implemented as a library and a suite; no provider proves it
+  yet): an export is a tree plus an export manifest (draft schema `platform/export_manifest` 1.0:
+  slot, format, every file's path, size and sha256, and the totals; `manifest_sha256` is its digest
+  over canonical JSON, what a swap record's `export_manifest_sha256` names). Each slot's `import_`
+  MUST refuse, before changing anything:
+  - a manifest path that traverses (`..`, absolute, backslash, control character), is not NFC, or
+    repeats or crosses a file when compared case-insensitively (so a case-folding target cannot
+    merge two entries);
+  - a symbolic link or special file anywhere in the tree, the root included;
+  - a file with a second hard link (an exporter writes fresh files, not a `cp -al` or
+    `rsync --link-dest` tree);
+  - an entry on another filesystem or a mount point inside the tree (read from
+    `/proc/self/mountinfo`; an unreadable mount table refuses, so the check fails closed);
+  - a missing or unlisted file (unlisted empty directories are allowed), a size or sha256 that
+    differs, and a tree over its limits or the caller's tighter ones (`Limits.tighten`; the
+    library's defaults are a backstop, and a provider sets its own for its slot).
+
+  It never follows a link while reading. `homelabnext.modules.importcheck` implements it through
+  one `O_NOFOLLOW` descriptor of the root: `check_tree` names the problems (at most 100) without
+  reading content, and every file is opened from its parent's descriptor and re-checked on its
+  own, so a file or directory swapped for a link after the check is refused. An importer stages
+  before it applies: `copy_tree` streams a verified tree into a new directory, flushed to disk and
+  renamed into place only when complete, and `read_tree` does the same in memory for small trees;
+  `iter_tree` streams, so applying its files as they come would leave a partial import. The
+  manifest is the outgoing provider's own claim: the check proves the tree is safe to read and is
+  what the manifest says, not where it came from. The extended conformance suite `migration`
+  (`conformance/protocols/migration.py`) states the MUST; five deliberately broken importers, one
+  defect each, are each caught by exactly the check that names it. **No provider proves it yet**:
+  no slot protocol has `export` and `import_` (below), so the suite runs only the reference
+  importer, labelled as each stateful slot (a harness self-check), and the test's
+  `MIGRATION_PROOF` table records, per stateful slot, what proves it, so a new stateful slot cannot
+  arrive without that decision. The format-specific parse stays the slot's own suite.
 - "Start empty" after a swap is a recorded decision with a reason (swap record 1.2).
 
-Slot-level export/import (rule 3): each stateful slot's protocol gains `export(dest) -> manifest`
-and `import_(src)` in the slot's export formats with a MUST round-trip check; role interface 1.1
+Slot-level export/import (rule 3): each stateful slot's protocol gains `export(dest, fmt) ->
+manifest` and `import_(src, manifest, limits=None)` (the shape of `conformance/protocols/migration.py`) in the slot's export formats with a MUST round-trip check; role interface 1.1
 adds `tasks/import.yml`; X-07 becomes slot-keyed ("every selected provider of a stateful slot passes
 that slot's round trip").
 
@@ -931,7 +944,7 @@ listed as deferred.
 5. **Supply chain**: the `lab/modules.lock` format, the tree digest, and reviews keyed by it.
 6. **The egress generator**: rendering declared egress into host and unit network policy.
 7. **Import validation**: implemented as a library, a draft schema and the `migration` suite (see
-   [`data:` and lifecycle safety](#data-and-lifecycle-safety)); each provider proves it once its
+   [`data:` and lifecycle safety](#data-and-lifecycle-safety)); no provider proves it until its
    slot protocol gains `export` and `import_`.
 8. **Footprint limits**: generating `MemoryMax`, `CPUQuota` and disk quotas from footprints.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the

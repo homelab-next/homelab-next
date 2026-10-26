@@ -174,7 +174,8 @@ Extended suites (listed with `--all`, not among the eighteen): `backup` (immutab
 verified restores, retention), `dns` (zone semantics the registry's aliases rely on), `edge`
 (reverse-proxy routing and forward-auth hygiene), `broker-tokens` (the broker's Code Mode tokens),
 `migration` (a stateful slot's export and its validated `import_`: the import MUST of ADR-0027
-follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)) and `orchestration-features`. The last one holds the optional features of the `orchestration`
+follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)) and
+`orchestration-features`. The last one holds the optional features of the `orchestration`
 contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
 shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
 exclusive), local-only jobs never re-run on cloud, and a run list with each run once in its

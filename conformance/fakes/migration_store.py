@@ -2,12 +2,15 @@
 """In-memory stateful slot (``migration`` fake) and its import defects.
 
 The fake holds ``{path: bytes}``, exports it as a plain tree and imports through
-:func:`homelabnext.modules.importcheck.iter_tree`.  Each defective subclass replaces that read with
-a hand-rolled one that skips exactly one part of the MUST.
+:func:`homelabnext.modules.importcheck.read_tree` (all or nothing).  Each defective subclass
+replaces that read with a hand-rolled one that skips exactly one part of the MUST and keeps the
+rest (every file it reads is still held to its manifest digest), so the suite catches it with the
+one check that names the defect.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -22,12 +25,6 @@ from homelabnext.modules.importcheck import (
 )
 
 SEED = {"records/one.md": b"# one\n", "records/two.md": b"# two\n", "index.json": b"{}\n"}
-
-
-def tighter(own: Limits, asked: Limits | None) -> Limits:
-    if asked is None:
-        return own
-    return Limits(**{k: min(getattr(own, k), getattr(asked, k)) for k in own.__dataclass_fields__})
 
 
 class FakeMigratable:
@@ -59,35 +56,42 @@ class FakeMigratable:
         return iter_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
 
     def import_(self, src: Path, manifest: Mapping[str, Any], limits: Limits | None = None) -> int:
-        staged = dict(self._read(Path(src), manifest, tighter(self.limits, limits)))
+        staged = dict(self._read(Path(src), manifest, self.limits.tighten(limits)))
         self._data = staged  # only after every file was read and verified
         return len(staged)
 
 
+def _checked(problems: list[str], skip) -> None:
+    kept = [p for p in problems if not skip(p)]
+    if kept:
+        raise ImportRefused(kept)
+
+
 def _naive(src: Path, manifest: Mapping[str, Any]) -> Iterator[tuple[str, bytes]]:
+    """Plain ``open`` (follows links, takes any path), but each file still held to its digest."""
     for f in manifest["files"]:
         with open(os.path.join(src, f["path"]), "rb") as fh:
-            yield f["path"], fh.read()
+            body = fh.read()
+        if hashlib.sha256(body).hexdigest() != f["sha256"]:
+            raise ImportRefused([f"{f['path']!r} does not match its sha256"])
+        yield f["path"], body
 
 
 class FollowsLinks(FakeMigratable):
-    """Checks everything except the kind of each entry, then reads with ``open``."""
+    """Checks everything except whether an entry inside the tree is a link, then uses ``open``."""
 
     def _read(self, src, manifest, limits):
-        problems = [
-            p
-            for p in check_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
-            if "symbolic link" not in p
-        ]
-        if problems:
-            raise ImportRefused(problems)
+        problems = check_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
+        _checked(problems, lambda p: p.endswith(" is a symbolic link"))
         return _naive(src, manifest)
 
 
 class TrustsPaths(FakeMigratable):
-    """Reads the manifest's paths as given: no tree check at all."""
+    """Checks everything except the manifest's paths, then opens them as written."""
 
     def _read(self, src, manifest, limits):
+        problems = check_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
+        _checked(problems, lambda p: "'..'" in p)
         return _naive(src, manifest)
 
 
@@ -102,18 +106,20 @@ class ImportsUnlisted(FakeMigratable):
     """Checks the listed files, but imports every regular file it finds."""
 
     def _read(self, src, manifest, limits):
-        problems = [
-            p
-            for p in check_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
-            if "not in the manifest" not in p
-        ]
-        if problems:
-            raise ImportRefused(problems)
+        problems = check_tree(src, manifest, limits, slot=self.slot, formats=self.export_formats)
+        _checked(problems, lambda p: p.endswith(" is not in the manifest"))
+        listed = {f["path"]: f["sha256"] for f in manifest["files"]}
+        out = []
         for top, _dirs, names in os.walk(src):
             for n in sorted(names):
                 full = os.path.join(top, n)
+                rel = os.path.relpath(full, src).replace(os.sep, "/")
                 with open(full, "rb") as fh:
-                    yield os.path.relpath(full, src).replace(os.sep, "/"), fh.read()
+                    body = fh.read()
+                if rel in listed and hashlib.sha256(body).hexdigest() != listed[rel]:
+                    raise ImportRefused([f"{rel!r} does not match its sha256"])
+                out.append((rel, body))
+        return iter(out)
 
 
 class WritesAsItReads(FakeMigratable):
@@ -121,7 +127,7 @@ class WritesAsItReads(FakeMigratable):
 
     def import_(self, src, manifest, limits=None):
         n = 0
-        for rel, body in self._read(Path(src), manifest, tighter(self.limits, limits)):
+        for rel, body in self._read(Path(src), manifest, self.limits.tighten(limits)):
             self._data[rel] = body
             n += 1
         return n

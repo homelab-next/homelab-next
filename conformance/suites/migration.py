@@ -207,14 +207,19 @@ def _(m):
     _refuses(m, "a wrong sha256", plant)
 
 
-@SUITE.check("refuses-over-caller-limits", "a tree over the caller's tighter limits is refused")
+@SUITE.check(
+    "refuses-over-caller-limits",
+    "a tree over the caller's tighter limits (files, bytes per file, bytes in all) is refused",
+)
 def _(m):
     def plant(base):
-        files = {f"f{i}.txt": b"x\n" for i in range(4)}
+        files = {f"f{i}.txt": b"0123456789\n" for i in range(4)}
         _tree(base / "tree", files)
         return base / "tree", _manifest(m, [_entry(k, v) for k, v in files.items()])
 
     _refuses(m, "four files with a limit of three", plant, Limits(max_files=3))
+    _refuses(m, "an 11-byte file with a limit of 10", plant, Limits(max_file_bytes=10))
+    _refuses(m, "44 bytes with a limit of 40", plant, Limits(max_bytes=40))
 
 
 @SUITE.check(

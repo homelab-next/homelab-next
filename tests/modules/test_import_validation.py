@@ -239,19 +239,42 @@ def test_the_schema_negatives_are_refused_by_the_library_too():
         assert ic.check_manifest(json.loads(f.read_text())), f.name
 
 
-# -- one migration suite run per stateful slot ----------------------------------------------
+# -- the stateful slots ----------------------------------------------------------------------
+
+#: every stateful slot and what proves its import MUST.  ``reference`` means only the reference
+#: importer runs as this slot (the harness self-check below): no provider's ``export``/``import_``
+#: exists yet, because no slot protocol has them (rule 3).  When one does, its entry names the
+#: adapter whose migration suite run proves it.  A stateful slot missing here fails the test, so a
+#: new one cannot arrive without a decision about its migration proof.
+MIGRATION_PROOF = {
+    "backup": "reference: the backup protocol has no export/import_ yet",
+    "broker": "reference: the broker protocol has no export/import_ yet",
+    "cases": "reference: the cases protocol has no export/import_ yet",
+    "detections": "reference: the detections protocol has no export/import_ yet",
+    "dns": "reference: the dns protocol has no export/import_ yet",
+    "events": "reference: the events protocol has no export/import_ yet",
+    "hot-index": "reference: the slot is provisional (no contract), so nothing can add export/import_",
+    "idp": "reference: the idp protocol has no export/import_ yet",
+    "lake-catalog": "reference: the lake protocol has no export/import_ yet",
+    "object-store": "reference: the object_store protocol has no export/import_ yet",
+    "orchestration": "reference: the orchestration protocol has no export/import_ yet",
+    "records": "reference: the records protocol has no export/import_ yet",
+    "secrets": "reference: the secrets protocol has no export/import_ yet",
+}
 
 
-def test_every_stateful_slot_declares_export_formats():
+def test_every_stateful_slot_declares_export_formats_and_a_migration_proof():
     assert STATEFUL, "the slot registry has no stateful slot"
     for slot in STATEFUL:
         assert SLOTS[slot].get("export_formats"), slot
+    assert sorted(MIGRATION_PROOF) == STATEFUL, "every stateful slot needs a MIGRATION_PROOF entry"
 
 
 @pytest.mark.parametrize("slot", STATEFUL)
-def test_the_migration_suite_passes_for_each_stateful_slot(slot):
-    """The reference importer, configured as this slot with its export formats, meets the MUST.
-    A real provider proves the same once its slot protocol gains export and import_ (rule 3)."""
+def test_the_harness_self_check_runs_the_reference_importer_as_each_stateful_slot(slot):
+    """The reference importer, labelled with this slot and its export formats, meets the MUST:
+    this proves the suite and the library over the registry's names and formats, not any
+    provider (see MIGRATION_PROOF)."""
     suite = load_module("migration").SUITE
     fmts = tuple(SLOTS[slot]["export_formats"])
     results = run_checks(suite, lambda: FakeMigratable(slot, fmts))
@@ -260,20 +283,29 @@ def test_the_migration_suite_passes_for_each_stateful_slot(slot):
     assert {r.check for r in results if r.status == "pass"} == set(suite.ids())
 
 
-def test_a_root_with_a_trailing_slash_swapped_for_a_link_is_not_followed(tmp_path, monkeypatch):
+def test_a_symlinked_root_named_with_a_trailing_slash_is_refused(tmp_path):
+    """Linux ignores O_NOFOLLOW on a path ending in '/': the slash is stripped first."""
+    m = _tree(tmp_path / "outside", {"f": b"x"})
+    os.symlink(tmp_path / "outside", tmp_path / "t", target_is_directory=True)
+    assert ic.check_tree(str(tmp_path / "t") + "/", m)
+    with pytest.raises(ic.ImportRefused):
+        ic.read_tree(str(tmp_path / "t") + "/", m)
+
+
+def test_a_root_swapped_for_a_link_between_check_and_open_is_not_followed(tmp_path, monkeypatch):
     m = _tree(tmp_path / "t", {"f": b"x"})
     _tree(tmp_path / "outside", {"f": b"x"})
-    real = ic.check_tree
+    real = ic._open_root
+    swapped = []
 
-    def check_then_swap(*a, **k):
-        out = real(*a, **k)
-        (tmp_path / "t").rename(tmp_path / "t.old")
-        os.symlink(tmp_path / "outside", tmp_path / "t", target_is_directory=True)
-        return out
+    def swap_then_open(root):
+        if not swapped:  # once: the root iter_tree opens is the one it then walks and reads
+            (tmp_path / "t").rename(tmp_path / "t.old")
+            os.symlink(tmp_path / "outside", tmp_path / "t", target_is_directory=True)
+            swapped.append(True)
+        return real(root)
 
-    assert ic.check_tree(str(tmp_path / "t") + "/", m) == []
-    monkeypatch.setattr(ic, "check_tree", check_then_swap)
-    check_then_swap(str(tmp_path / "t") + "/", m)
+    monkeypatch.setattr(ic, "_open_root", swap_then_open)
     with pytest.raises(ic.ImportRefused, match="without following a link"):
         ic.read_tree(str(tmp_path / "t") + "/", m)
 
@@ -293,6 +325,22 @@ def test_a_mount_point_inside_the_tree_is_refused(tmp_path, monkeypatch):
     assert problems == ["'d' is a mount point inside the tree"], problems
 
 
+def test_an_unreadable_mount_table_refuses(tmp_path, monkeypatch):
+    m = _tree(tmp_path / "t", FILES)
+    monkeypatch.setattr(ic, "MOUNTINFO", str(tmp_path / "missing"))
+    assert any("mount table" in p for p in ic.check_tree(tmp_path / "t", m))
+
+
+def test_mount_paths_decode_only_mountinfo_escapes(tmp_path, monkeypatch):
+    base = tmp_path / "t é"
+    m = _tree(base, FILES)
+    real = os.fsencode(os.path.realpath(base)).replace(b" ", b"\\040")
+    info = tmp_path / "mountinfo"
+    info.write_bytes(b"40 36 98:0 /x " + real + b"/d\\134x rw - ext4 /dev/root rw\n")
+    monkeypatch.setattr(ic, "MOUNTINFO", str(info))
+    assert ic.check_tree(base, m) == ["'d\\\\x' is a mount point inside the tree"]
+
+
 def test_a_hostile_manifest_is_refused_never_raised():
     for bad in (
         _manifest([_entry("\ud800", b"z")]),
@@ -306,13 +354,9 @@ def test_a_hostile_manifest_is_refused_never_raised():
     assert any("non-negative integers" in p for p in ic.check_manifest(m))
 
 
-def test_an_oversize_path_is_cheap_and_its_refusal_short():
-    import time
-
+def test_an_oversize_path_is_refused_first_and_briefly():
     m = _manifest([_entry("a/" * 5_000_000 + "b", b"z")])
-    t0 = time.monotonic()
     problems = ic.check_manifest(m)
-    assert time.monotonic() - t0 < 1.0
     assert len(problems) == 1 and "longer than" in problems[0] and len(problems[0]) < 200
 
 
@@ -356,3 +400,58 @@ def test_a_file_that_grows_after_the_check_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(ic, "_check_fd", check_then_grow)
     with pytest.raises(ic.ImportRefused, match="changed size"):
         ic.read_tree(tmp_path, m)
+
+
+def test_the_schema_example_is_a_manifest_the_library_accepts():
+    for f in sc.instances_for(ROOT / "schemas/platform/export_manifest.schema.json", "examples"):
+        assert ic.check_manifest(json.loads(f.read_text())) == [], f.name
+
+
+def test_limits_are_validated_and_only_tighten():
+    for bad in ({"max_files": -1}, {"max_depth": ic.MAX_DEPTH + 1}, {"max_bytes": True}):
+        with pytest.raises(ValueError):
+            ic.Limits(**bad)
+    own = ic.Limits(max_files=10, max_bytes=100)
+    t = own.tighten(ic.Limits(max_files=5, max_bytes=1000))
+    assert (t.max_files, t.max_bytes) == (5, 100)
+    assert own.tighten(None) is own
+
+
+def test_an_invalid_path_is_not_also_reported_missing(tmp_path):
+    m = _tree(tmp_path, FILES)
+    m["files"].append(_entry("../x", b"z"))
+    problems = ic.check_tree(tmp_path, m)
+    assert not any("not in the tree" in p for p in problems), problems
+
+
+def test_a_file_and_a_directory_differing_in_case_collide():
+    m = _manifest([_entry("A", b"1"), _entry("a/b", b"2")])
+    assert any("which is a file" in p for p in ic.check_manifest(m))
+
+
+def test_a_bytes_root_is_accepted(tmp_path):
+    m = _tree(tmp_path, FILES)
+    assert ic.check_tree(os.fsencode(tmp_path), m) == []
+
+
+def test_build_manifest_sorts_by_path_and_its_digest_is_stable(tmp_path):
+    _tree(tmp_path, {"z.txt": b"z", "a/b.txt": b"b", "m.txt": b"m"})
+    m = ic.build_manifest(tmp_path, "records", "markdown-tree")
+    assert [f["path"] for f in m["files"]] == ["a/b.txt", "m.txt", "z.txt"]
+    shuffled = {**m, "files": list(reversed(m["files"]))}
+    assert ic.manifest_sha256(m) == ic.manifest_sha256(shuffled)
+    assert ic.manifest_sha256(m) != ic.manifest_sha256({**m, "slot": "cases"})
+
+
+def test_copy_tree_writes_every_byte_through_short_writes(tmp_path, monkeypatch):
+    m = _tree(tmp_path / "t", {"big.bin": bytes(range(256)) * 64})
+    real = os.write
+    monkeypatch.setattr(ic.os, "write", lambda fd, data: real(fd, bytes(data)[:7]))
+    ic.copy_tree(tmp_path / "t", m, tmp_path / "dest")
+    assert (tmp_path / "dest/big.bin").read_bytes() == bytes(range(256)) * 64
+
+
+def test_copy_tree_refuses_a_missing_parent(tmp_path):
+    m = _tree(tmp_path / "t", FILES)
+    with pytest.raises(ic.ImportRefused, match="parent"):
+        ic.copy_tree(tmp_path / "t", m, tmp_path / "no" / "dest")

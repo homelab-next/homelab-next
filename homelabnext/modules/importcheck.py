@@ -32,7 +32,9 @@ Linux only (the lab's hosts are Linux; the mount-point check reads ``/proc/self/
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -45,6 +47,7 @@ from typing import Any
 __all__ = [
     "DEFAULT_LIMITS",
     "MANIFEST_VERSION",
+    "MAX_DEPTH",
     "MAX_PROBLEMS",
     "ImportRefused",
     "Limits",
@@ -53,12 +56,15 @@ __all__ = [
     "check_tree",
     "copy_tree",
     "iter_tree",
+    "manifest_sha256",
     "read_tree",
 ]
 
 MANIFEST_VERSION = "1.0"
 #: a refusal names at most this many problems, then how many more there were
 MAX_PROBLEMS = 100
+#: the deepest tree any Limits may allow (the walk recurses once per level)
+MAX_DEPTH = 256
 _HEX = frozenset("0123456789abcdef")
 _CHUNK = 1 << 20
 #: where the mount table is read (a module attribute so tests can point it at a fixture)
@@ -78,15 +84,35 @@ class ImportRefused(Exception):
 
 @dataclass(frozen=True)
 class Limits:
-    """The importer's ceilings.  The manifest may ask for less, never for more.  ``read_tree``
-    and ``iter_tree`` hold a file (``read_tree``: the tree) in memory, so callers of those pass
-    limits that fit; ``copy_tree`` streams and needs only the disk."""
+    """The importer's ceilings.  The defaults are a backstop: a provider sets its own for its
+    slot, and a caller may only tighten them (:meth:`tighten`).  ``read_tree`` and ``iter_tree``
+    hold a file (``read_tree``: the tree) in memory, so callers of those pass limits that fit;
+    ``copy_tree`` streams and needs only the disk."""
 
     max_files: int = 100_000
     max_bytes: int = 64 << 30
     max_file_bytes: int = 8 << 30
     max_depth: int = 32
+    #: bytes of the UTF-8 path (the schema's maxLength counts characters: this is stricter)
     max_path_len: int = 1024
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                raise ValueError(f"Limits.{name} must be a non-negative integer, got {v!r}")
+        if self.max_depth > MAX_DEPTH:
+            raise ValueError(f"Limits.max_depth must be at most {MAX_DEPTH}")
+
+    def tighten(self, other: Limits | None) -> Limits:
+        """The stricter of the two, field by field (``None``: these limits)."""
+        if other is None:
+            return self
+        if not isinstance(other, Limits):
+            raise TypeError("tighten() takes Limits")
+        return Limits(
+            **{k: min(getattr(self, k), getattr(other, k)) for k in self.__dataclass_fields__}
+        )
 
 
 DEFAULT_LIMITS = Limits()
@@ -203,13 +229,13 @@ def _manifest_problems(manifest, limits, slot, formats) -> list[str]:
         else:
             seen[key] = p
             paths.add(p)
+    folded = {p.casefold(): p for p in paths}
     for p in sorted(paths):
         parts = p.split("/")
         for n in range(1, len(parts)):
-            if "/".join(parts[:n]) in paths:
-                out.append(
-                    f"path {_show(p)} is under {_show('/'.join(parts[:n]))}, which is a file"
-                )
+            above = folded.get("/".join(parts[:n]).casefold())
+            if above is not None:
+                out.append(f"path {_show(p)} is under {_show(above)}, which is a file")
                 break
     totals = manifest.get("totals")
     if not isinstance(totals, Mapping) or set(totals) != {"files", "bytes"}:
@@ -241,28 +267,33 @@ def _entry_kind(mode: int) -> str:
 def _open_root(root: str | Path) -> int:
     """The root's descriptor, never through a link (a trailing ``/`` would make Linux ignore
     ``O_NOFOLLOW``, so it is stripped)."""
-    path = os.fspath(root)
+    path = os.fsdecode(root)
     stripped = path.rstrip("/") or "/"
     return os.open(stripped, _DIR)
 
 
-def _mounts_under(root_fd: int) -> list[str]:
-    """Mount points strictly inside the root (bind mounts included), from mountinfo."""
+_OCTAL = re.compile(rb"\\([0-7]{3})")
+
+
+def _mounts_under(root_fd: int) -> list[str] | None:
+    """Mount points strictly inside the root (bind mounts included), from mountinfo; ``None``
+    when the mount table cannot be read (the caller refuses: this check fails closed)."""
     try:
-        here = os.readlink(f"/proc/self/fd/{root_fd}")
-        with open(MOUNTINFO, encoding="utf-8", errors="surrogateescape") as fh:
+        here = os.fsencode(os.readlink(f"/proc/self/fd/{root_fd}"))
+        with open(MOUNTINFO, "rb") as fh:
             lines = fh.read().splitlines()
     except OSError:
-        return []
-    prefix = here.rstrip("/") + "/"
+        return None
+    prefix = here.rstrip(b"/") + b"/"
     out = []
     for line in lines:
-        fields = line.split(" ")
+        fields = line.split(b" ")
         if len(fields) < 5:
             continue
-        point = fields[4].encode("utf-8", "surrogateescape").decode("unicode_escape", "replace")
+        # mountinfo escapes space, tab, newline and backslash as \ooo; nothing else
+        point = _OCTAL.sub(lambda m: bytes([int(m.group(1), 8)]), fields[4])
         if point.startswith(prefix):
-            out.append(point[len(prefix) :])
+            out.append(os.fsdecode(point[len(prefix) :]))
     return sorted(out)
 
 
@@ -336,11 +367,18 @@ def _check_fd(root_fd: int, manifest: Any, limits: Limits, slot, formats) -> lis
     wanted = {
         f["path"]: f.get("size")
         for f in (listed if isinstance(listed, list) else [])
-        if isinstance(f, Mapping) and isinstance(f.get("path"), str)
+        if isinstance(f, Mapping)
+        and isinstance(f.get("path"), str)
+        and not _path_problems(f["path"], limits)  # an invalid path is already refused
     }
     root_st = os.fstat(root_fd)
     walk = _Walk(limits, wanted, root_st.st_dev, set(), [])
-    for point in _mounts_under(root_fd):
+    points = _mounts_under(root_fd)
+    if points is None:
+        walk.out.append(
+            f"the mount table ({MOUNTINFO}) cannot be read, so mounts inside the tree cannot be ruled out"
+        )
+    for point in points or []:
         walk.out.append(f"{_show(point)} is a mount point inside the tree")
     try:
         complete = _scan(walk, root_fd, "", 0)
@@ -363,7 +401,7 @@ def check_tree(
 ) -> list[str]:
     """Every reason ``root`` may not be imported against ``manifest``, without reading content."""
     try:
-        st = os.lstat(os.fspath(root).rstrip("/") or "/")
+        st = os.lstat(os.fsdecode(root).rstrip("/") or "/")
     except OSError as exc:
         return [
             *check_manifest(manifest, limits, slot=slot, formats=formats),
@@ -471,9 +509,10 @@ def iter_tree(
     formats: tuple[str, ...] | list[str] | None = None,
 ) -> Iterator[tuple[str, bytes]]:
     """Check the tree, then yield ``(path, content)`` in manifest order, each file verified on its
-    open descriptor.  Raises :class:`ImportRefused` before the first yield when the check fails,
-    and on the file that fails the read; a caller that applies files as they come must stage them,
-    or a late refusal leaves a partial import (``read_tree`` and ``copy_tree`` do)."""
+    open descriptor.  A generator: the first ``next()`` raises :class:`ImportRefused` when the
+    check fails, and a later one on the file that fails its read.  **Streaming**: a caller that
+    applies files as they come leaves a partial import on a late refusal, so it must stage them
+    (``read_tree`` and ``copy_tree`` do)."""
     root_fd, dev = _checked_root(root, manifest, limits, slot, formats)
     try:
         for f in manifest["files"]:
@@ -500,6 +539,24 @@ def read_tree(
     return dict(iter_tree(root, manifest, limits, slot=slot, formats=formats))
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """``os.write`` until every byte is written (a short write is not a success)."""
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError("short write")
+        view = view[n:]
+
+
+def _fsync_dir(path: str | Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def copy_tree(
     root: str | Path,
     manifest: Mapping[str, Any],
@@ -510,12 +567,18 @@ def copy_tree(
     formats: tuple[str, ...] | list[str] | None = None,
 ) -> int:
     """Check the tree, then stream every file into a new directory ``dest`` (which must not
-    exist; its parent is the importer's own), verifying each on the way.  The copy is built beside
-    ``dest`` and renamed into place only when every file verified, so ``dest`` appears complete or
-    not at all.  Returns the number of files copied."""
+    exist; its parent is the importer's own and must exist), verifying each on the way.  The copy
+    is built beside ``dest``, every file and directory flushed to disk, and renamed into place only
+    when every file verified, so no partially built ``dest`` ever appears, a crash included.  The
+    rename does not refuse a ``dest`` someone creates empty in between (a race only the importer's
+    own directory admits).  Returns the number of files copied."""
     dest = Path(dest)
     if os.path.lexists(dest):
         raise ImportRefused([f"the destination {_show(str(dest))} already exists"])
+    if not dest.parent.is_dir():
+        raise ImportRefused(
+            [f"the destination's parent {_show(str(dest.parent))} is not a directory"]
+        )
     root_fd, dev = _checked_root(root, manifest, limits, slot, formats)
     staging = Path(tempfile.mkdtemp(prefix=f".{dest.name}.", dir=dest.parent))
     try:
@@ -529,13 +592,17 @@ def copy_tree(
                 )
                 try:
                     _stream(
-                        fd, f["path"], f["size"], f["sha256"], lambda b, o=out_fd: os.write(o, b)
+                        fd, f["path"], f["size"], f["sha256"], lambda b, o=out_fd: _write_all(o, b)
                     )
+                    os.fsync(out_fd)
                 finally:
                     os.close(out_fd)
             finally:
                 os.close(fd)
+        for top, _dirs, _names in os.walk(staging, topdown=False):
+            _fsync_dir(top)
         os.rename(staging, dest)
+        _fsync_dir(dest.parent)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -547,8 +614,10 @@ def copy_tree(
 def build_manifest(
     root: str | Path, slot: str, fmt: str, limits: Limits = DEFAULT_LIMITS
 ) -> dict[str, Any]:
-    """The export side: the manifest of ``root`` as it is.  Refuses (:class:`ImportRefused`) a
-    tree it could not import itself, so an exporter never writes what its peer must refuse."""
+    """The export side: the manifest of ``root`` as it is, files sorted by path.  Refuses
+    (:class:`ImportRefused`) a tree it could not import itself, so an exporter never writes what
+    its peer must refuse (a file with a second hard link included: export fresh files, not a
+    ``cp -al`` or ``rsync --link-dest`` tree)."""
     root = Path(root)
     files = []
     for top, dirs, names in os.walk(root, followlinks=False):
@@ -573,6 +642,7 @@ def build_manifest(
             finally:
                 os.close(fd)
             files.append({"path": rel, "size": size, "sha256": h.hexdigest()})
+    files.sort(key=lambda f: f["path"])
     manifest = {
         "schema_version": MANIFEST_VERSION,
         "slot": slot,
@@ -584,3 +654,12 @@ def build_manifest(
     if problems:
         raise ImportRefused(problems)
     return manifest
+
+
+def manifest_sha256(manifest: Mapping[str, Any]) -> str:
+    """The manifest's digest over canonical JSON (sorted keys, no spaces, files sorted by path):
+    what a swap record's ``export_manifest_sha256`` names."""
+    doc = dict(manifest)
+    doc["files"] = sorted(doc.get("files", []), key=lambda f: f["path"])
+    canon = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()

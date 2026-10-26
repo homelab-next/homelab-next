@@ -15,9 +15,12 @@ docs/modules.md, "Import validation"):
 * it refuses **before it changes anything**: after a refusal an export is what it was before;
 * it never follows a link while reading, even one that appears after its check.
 
-:mod:`homelabnext.modules.importcheck` implements all of this (:func:`~homelabnext.modules.
-importcheck.iter_tree`); an adapter that reads through it and parses the yielded bytes in its own
-format meets the MUST.  The format-specific parse (a zone file, parquet) is the slot's own suite.
+:mod:`homelabnext.modules.importcheck` implements the checks.  An adapter meets the MUST when
+it reads through it **and stages before it applies**: ``copy_tree`` (a verified copy that appears
+whole or not at all) or ``read_tree`` (in memory), then parses the staged files in its own format;
+``iter_tree`` streams, so applying its files as they come leaves a partial import on a late
+refusal.  Callers' ``limits`` are combined with the adapter's own by ``Limits.tighten``.  The
+format-specific parse (a zone file, parquet) is the slot's own suite.
 """
 
 from __future__ import annotations
