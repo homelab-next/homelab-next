@@ -196,10 +196,11 @@ SCHEMA_GENERATOR_GLOBS = (
     "schemas/platform/module.schema.json",
     "schemas/platform/lake_table.schema.json",
     "schemas/platform/module_selection.schema.json",
+    "schemas/platform/interface.schema.json",
     *(
         f"schemas/platform/{d}/{n}.*"
         for d in ("examples", "negative")
-        for n in ("module", "module_selection", "lake_table")
+        for n in ("module", "module_selection", "lake_table", "interface")
     ),
 )
 

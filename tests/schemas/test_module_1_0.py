@@ -449,6 +449,62 @@ def _ag(d):
 
 
 MODULE_DEFECTS = {
+    "a gate interface its owner does not consume": (
+        "publishing",
+        lambda d: d["prefers"].__setitem__("interfaces", []),
+        "interface publishable-output: a gate interface; its owner requires or prefers it with gate: true",
+    ),
+    "a gate interface its owner consumes without the gate marker": (
+        "publishing",
+        lambda d: d["prefers"]["interfaces"][0].pop("gate"),
+        "interface publishable-output: a gate interface; its owner requires or prefers it with gate: true",
+    ),
+    "a gate interface its owner consumes with gate: false": (
+        "publishing",
+        lambda d: d["prefers"]["interfaces"][0].__setitem__("gate", False),
+        "interface publishable-output: a gate interface; its owner requires or prefers it with gate: true",
+    ),
+    "a gate interface defined by its producer": (
+        "publishing",
+        lambda d: d.setdefault("provides", {}).__setitem__(
+            "interfaces",
+            [
+                {
+                    "interface": "publishable-output",
+                    "version": "1.0",
+                    "via": {"cap": "cap:object-store", "prefix": "publishing/out/"},
+                }
+            ],
+        ),
+        "interface publishable-output: a gate interface its owner also provides",
+    ),
+    "a gate on an interface the module does not own": (
+        "external-collector",
+        lambda d: (
+            d.setdefault("prefers", {})
+            .setdefault("interfaces", [])
+            .append(
+                {
+                    "interface": "publishable-output",
+                    "version": "1.0",
+                    "gate": True,
+                    "purpose": "x",
+                    "fallback": {"behaviour": "x"},
+                }
+            )
+        ),
+        "interface publishable-output: consumed with gate: true but not defined here",
+    ),
+    "a gate on an interface whose definition is not a gate": (
+        "publishing",
+        lambda d: d["interfaces"][0].pop("gate"),
+        "interface publishable-output 1.0: consumed with gate: true, so its definition says gate: true",
+    ),
+    "a core module that owns a gate it does not consume": (
+        "publishing",
+        lambda d: (d.__setitem__("kind", "core"), d["prefers"].__setitem__("interfaces", [])),
+        "interface publishable-output: a gate interface; its owner requires or prefers it with gate: true",
+    ),
     "a module reading addresses without exclude.offensive": (
         "external-collector",
         lambda d: d["requires"].__setitem__("scope", [{"part": "trusted.wan"}]),
@@ -895,6 +951,131 @@ def test_identifiers_and_write_prefixes_are_unique_across_modules():
         "write prefix findings/external-collector/x/ (example-sandbox) overlaps "
         "findings/external-collector/ (external-collector)" in probs
     )
+
+
+def test_a_gate_is_owned_by_the_module_that_gates_on_it():
+    """Negative, across manifests: a producer cannot take over the interface a gate checks, by
+    defining it with or without gate: true; the gate consumer must own it."""
+    mods = copy.deepcopy(MODULES)
+    taken = copy.deepcopy(mods["publishing"]["interfaces"][0])
+    taken.pop("gate")
+    mods["external-collector"]["interfaces"] = [taken]
+    mods["publishing"]["interfaces"] = []
+    probs = mr.tree_problems(mods)
+    assert (
+        "publishing: gates on interface publishable-output, which ['external-collector'] defines"
+        in probs
+    )
+    mods["external-collector"]["interfaces"][0]["gate"] = True
+    probs = mr.tree_problems(mods)
+    assert (
+        "publishing: gates on interface publishable-output, which ['external-collector'] defines"
+        in probs
+    )
+    assert "external-collector: provides interface publishable-output, a gate it owns" in probs
+
+
+def test_a_gate_whose_definition_is_not_a_gate_is_refused_across_manifests():
+    mods = copy.deepcopy(MODULES)
+    mods["publishing"]["interfaces"][0].pop("gate")
+    assert (
+        "publishing: gates on interface publishable-output, whose definition lacks gate: true"
+        in mr.tree_problems(mods)
+    )
+
+
+def _two_versions(first_gate, second_gate):
+    mods = copy.deepcopy(MODULES)
+    v1 = mods["publishing"]["interfaces"][0]
+    v2 = {**copy.deepcopy(v1), "version": "1.1"}
+    for d, g in ((v1, first_gate), (v2, second_gate)):
+        if g is None:
+            d.pop("gate", None)
+        else:
+            d["gate"] = g
+    mods["publishing"]["interfaces"].append(v2)
+    return mods
+
+
+@pytest.mark.parametrize("first,second", [(None, True), (True, None), (False, True), (True, False)])
+def test_every_version_of_a_gate_interface_is_marked_whatever_the_order(first, second):
+    """Negative: gate ownership is per id, every version; an unmarked version is refused in
+    either order, by the module rules and across manifests."""
+    mods = _two_versions(first, second)
+    doc = mods["publishing"]
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    bad = "1.0" if first is not True else "1.1"
+    assert any(
+        p.startswith(f"interface publishable-output {bad}: consumed with gate: true") for p in probs
+    ), probs
+    assert (
+        "interface publishable-output: gate: true on some versions only; every version of a gate "
+        "says it" in mr.tree_problems(mods)
+    )
+
+
+def test_an_unconsumed_version_mix_is_refused_too():
+    mods = _two_versions(None, True)
+    doc = mods["publishing"]
+    doc["prefers"]["interfaces"][0].pop("gate")
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    assert (
+        "interface publishable-output 1.0: another version is a gate, so every version says "
+        "gate: true" in probs
+    )
+
+
+def test_every_version_marked_is_accepted():
+    mods = _two_versions(True, True)
+    doc = mods["publishing"]
+    probs = mr.module_problems(doc, MODULES_DIR / "publishing", SLOTS, load, ROOTS)
+    assert not [p for p in probs if "gate" in p], probs
+    assert not [p for p in mr.tree_problems(mods) if "gate" in p]
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {},
+        {"requires": None, "prefers": {"interfaces": None}},
+        {"requires": {"interfaces": ["x", {"gate": True}, {"interface": 5, "gate": True}]}},
+        {"prefers": {"interfaces": [{"interface": "a", "gate": "yes"}]}},
+        [],
+    ],
+)
+def test_reading_gated_interfaces_tolerates_a_malformed_manifest(doc):
+    assert mr._gated_interfaces(doc) == set()
+
+
+def test_a_producer_may_own_and_provide_an_interface_that_is_not_a_gate():
+    """Positive: without gate (or with gate: false) owning and providing is ordinary."""
+    for gate in (None, False):
+        doc = copy.deepcopy(MODULES["external-collector"])
+        own = {
+            "id": "collector-feed",
+            "version": "1.0",
+            "kind": "object-prefix",
+            "schema_id": "https://homelab-next.invalid/schemas/platform/sidecar/1.0",
+            "description": "x",
+        }
+        if gate is not None:
+            own["gate"] = gate
+        doc["interfaces"] = [own]
+        doc["provides"]["interfaces"].append(
+            {
+                "interface": "collector-feed",
+                "version": "1.0",
+                "via": {
+                    "cap": "cap:object-store",
+                    "instance": "samples",
+                    "prefix": "external-collector/feed/",
+                },
+            }
+        )
+        probs = mr.module_problems(doc, MODULES_DIR / "external-collector", SLOTS, load, ROOTS)
+        assert not [p for p in probs if "collector-feed" in p], probs
+        mods = {**copy.deepcopy(MODULES), "external-collector": doc}
+        assert not [p for p in mr.tree_problems(mods) if "collector-feed" in p]
 
 
 def test_an_interface_with_no_owner_is_refused():
