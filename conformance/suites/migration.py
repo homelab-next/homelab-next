@@ -40,7 +40,7 @@ BODY = {"a.txt": b"alpha\n", "b/c.txt": b"charlie\n"}
 @contextlib.contextmanager
 def _tmp() -> Iterator[Path]:
     # a short base: an AF_UNIX socket path must fit in 108 bytes
-    base = "/tmp" if os.path.isdir("/tmp") else None
+    base = "/tmp" if os.access("/tmp", os.W_OK | os.X_OK) else None
     with tempfile.TemporaryDirectory(prefix="hnx-mig-", dir=base) as d:
         yield Path(d)
 
