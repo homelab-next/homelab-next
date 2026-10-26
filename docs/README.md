@@ -14,7 +14,8 @@ relate.
 The sections, order and grouping below are authored; the description after each link is
 generated from that page's front-matter `summary:` (`hnx docs index generate`, checked by
 `hnx docs index check` in `make gates` and CI), so the index cannot drift from the pages. To change
-a description, change the page's summary.
+a description, change the page's summary. The [ADR log](adr/README.md)'s one-line column is
+generated and checked the same way.
 
 ## Choosing and integrating a tool
 
@@ -83,7 +84,7 @@ The generated pages are checked in `make check` and CI:
 ```
 hnx docs capabilities check                                # docs/capabilities/ is current
 hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
-hnx docs index check                                       # docs/README.md descriptions match page summaries
+hnx docs index check docs/README.md docs/adr/README.md    # index and ADR log descriptions match page summaries
 hnx scripts catalog --check                                # docs/scripts/catalog.* is current
 hnx graph check                                            # no dangling edge or duplicate id
 ```
