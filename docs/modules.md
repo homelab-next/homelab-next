@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:4c3f45a233280c05
+summary_of: outline:sha256:8fb4a1a1873e95c0
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -771,12 +771,35 @@ adapters or routes):
    target, not only a guest) clean.
 7. **Close** with an ADR reference.
 
-### Swap record 1.2 (specified, not implemented)
+### Swap record 1.2 (draft: `platform/module_swap` 1.0)
 
-No schema, no swap-kit change and no test drives a swap through it; `platform/swap_record` is 1.1.
-The table is the change list for that work. `legs`, `selection_diff` and the shape of
-`dependants.report` are not defined yet. The swap above is the design, not a demonstrated run.
+What 1.2 adds to the record is the draft schema `platform/module_swap` 1.0, with its rules in
+`homelabnext/modules/swap.py`; `platform/swap_record` stays 1.1 (its steps, gates and hash-chained
+log are unchanged) until the ADR is accepted and the two are folded together. The swap kit
+(`hnx swap`) still drives 1.1 records: no live swap has run through 1.2.
 
+* **`dependants.report`**: one entry per selected module that requires or prefers a moving slot
+  instance (a requirement naming another instance is not one; one naming none is), core modules
+  included: `{module, kind, relation, slot, instance, checks: {features, formats}, verdict,
+  reasons}`. Each check is `holds`, `fails` or `not-asked` against what the **incoming** provider
+  offers for the slot; a failed requirement `blocks`, a failed preference `falls-back`.
+  `dependants.blocked` lists the blocking modules, and a non-empty list refuses the cutover. The
+  report is recomputed from the manifests and the site and compared, never trusted as written.
+* **`route.selection_diff`**: `[{slot, instance, from, to}]`, exactly one line per moving slot
+  instance from the outgoing to the incoming module, for a swap with no network route.
+  `apply_selection_diff` is its cutover: it runs the cutover gate first, so only the record's
+  checked diff is applied, and refuses a line that does not read `from`, so a diff cannot be
+  applied twice or to another selection.
+* **`legs`**: `[{instance, order}]`, every instance of the swap once, orders 1..n.
+* The site checked against is the selection the swap **starts** from: each moving instance is
+  served by the outgoing module there. `migration.format` is one both providers migrate the slot
+  in, its import count equals the boundary count and it rejected nothing, and it never comes with
+  `start_empty`; `credentials_revoked` names only the outgoing provider's credentials.
+* Three gates: `module_swap_problems` (the record holds), `cutover_problems` (it holds, no
+  dependant blocks, and the data either moved or the swap starts empty by decision) and
+  `decommission_problems` (against the selection after the cutover: once the outgoing module
+  serves nothing, every credential it issued is revoked; while it still serves another instance,
+  its credentials stay, since revoking them would break that instance).
 
 | Change from 1.1 | Why |
 |---|---|
@@ -789,6 +812,16 @@ The table is the change list for that work. `legs`, `selection_diff` and the sha
 | `meaning_changes: [{field, before, after}]` | a feed move changed what a rule id meant |
 | `credentials_revoked: [secret:...]` gating `decommission-check` | the old provider's issued credentials go |
 | `legs: [{instance, order}]` | the DNS swap's two-leg cutover across instances |
+
+`tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
+these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission.
+
+What the draft leaves out, on purpose: the contract version a dependant requires is the slot's,
+not the provider's, so it is not re-checked; a dependant that reaches the slot only through an
+interface is not seen (as in `rules.dependants`); one record migrates in one format, so a swap of
+several slots that migrate in different formats is one record per format; a `holder: consumers`
+credential is the template of the keys the store issues, so revoking it stands for those keys;
+and `meaning_changes` is recorded, never checked.
 
 Model-role rebinds go through the same record with `{slot: cap:inference, role}`, golden evaluations
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
@@ -816,7 +849,7 @@ Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
 | Record | Change | State |
 |---|---|---|
 | `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
-| `platform/swap_record` 1.2 | above | specified, not implemented |
+| `platform/swap_record` 1.2 | above | **draft schema** `platform/module_swap` 1.0 holds the additions and their rules; the record stays 1.1 until acceptance |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
 | `platform/interface` 1.0 | the owned interface record (today inline in the owner's manifest) | specified, not implemented |
 | `platform/lake_table` 1.0 | owner, schema, retention, maintenance, freshness | **draft schema** |
@@ -870,8 +903,9 @@ check, not even a contract-test rule. Each is a follow-up before the ADR can be 
 listed as deferred.
 
 1. **Capability descriptor 1.1**: the fields and rules exist as the draft `platform/slot` 1.0, and `slots.yml` is validated against it; folding them into the descriptor waits for acceptance.
-2. **Swap record 1.2**, with `legs`, `selection_diff` and `dependants.report` defined, and one swap
-   driven through it end to end in a test.
+2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
+   `platform/module_swap` 1.0 and one swap is driven through its rules end to end in a test;
+   folding it into the swap record and the swap kit (`hnx swap`) waits for acceptance.
 3. **`platform/interface` 1.0** as a standalone record, and a `gate` marker so a gate interface
    defined by its producer is refused.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
