@@ -122,7 +122,9 @@ loader: nothing reads a manifest at deploy time.
 **Specified, not implemented** (described in [modules](../modules.md#specified-not-implemented-the-follow-ups),
 with no schema, generator or check in any form):
 
-1. capability descriptor 1.1 (the slot registry; `examples/modules/slots.yml` is draft data only);
+1. capability descriptor 1.1 (the slot registry): its fields and rules are now the draft schema
+   `platform/slot` 1.0, against which `examples/modules/slots.yml` is validated; the descriptor
+   itself stays 1.0 until acceptance;
 2. swap record 1.2 (no schema; `legs`, `selection_diff` and the dependants report are undefined,
    and no swap has been driven through it);
 3. `platform/interface` 1.0 as a record, and gate-interface ownership;
