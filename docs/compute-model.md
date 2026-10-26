@@ -135,12 +135,22 @@ without), mirroring to `to`. Each frame a guest sends enters the bridge through 
 copied once, whether it goes to another guest or leaves the host; the node's own NICs are not
 mirrored, since what arrives from the switch is the switch mirror's. Guest ports come and go with
 their guests, so the timer re-runs the script every 15 seconds (a guest's first seconds can go
-unmirrored); `hnx-mirror.sh --remove` takes the filters off. The script refuses a capture NIC that
-is missing or is a bridge port, and a bridge that does not exist.
+unmirrored); `hnx-mirror.sh --remove` takes the filters off. A matchall filter cannot be changed
+in place, so a run keeps a filter that already mirrors to `to` and deletes and re-adds any other at
+its priority; a port that fails (a guest stopping mid-run) is reported and the others are still
+mirrored. The script refuses a capture NIC that is missing, a bridge or bond port, or has an IPv4
+address, and a bridge that is not a Linux bridge (an Open vSwitch bridge is not supported), before
+it changes anything; it turns IPv6, ARP and multicast off on the capture NIC so it stays silent.
+The unit runs with only `CAP_NET_ADMIN`.
 
 Know what the sensor then sees: every guest on the listed bridges, in every zone, mgmt included,
 with guest-to-outside traffic on both capture ports (once from the node, once from the switch).
-The copies are untagged, so tell zones apart by subnet. Interface names are checked (Linux names,
+The copies are untagged, so tell zones apart by subnet. It does **not** see a frame the Proxmox
+firewall drops (with the NIC firewall on, the copy is taken after it, on `fwpr`), nor what the node
+itself sends into the bridge (its own address on it, routed traffic), so a guest's conversation with
+the node is half visible. Frames larger than the capture NIC's MTU are dropped: give it at least the
+bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would flood every guest's
+traffic onto the network. Interface names are checked (Linux names,
 at most 15 characters), and a mirroring node's name must be one a guest can name.
 
 The model does not import a site package. It reads zones through a small protocol:

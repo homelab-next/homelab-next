@@ -215,6 +215,8 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
         raise ComputeError(f"{where}.bridges: a bridge is listed twice")
     if to in bridges:
         raise ComputeError(f"{where}: to {to!r} is one of the bridges it copies")
+    if to == "lo":
+        raise ComputeError(f"{where}.to: the loopback interface cannot carry a mirror")
     return {"to": to, "bridges": list(bridges)}
 
 
