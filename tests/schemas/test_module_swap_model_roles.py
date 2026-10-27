@@ -95,8 +95,12 @@ def _swap(report: dict) -> dict:
     return swap
 
 
-def _evidence(*reports: dict, after: RoleTable = AFTER, store=STORE) -> ms.ModelEvidence:
-    return ms.ModelEvidence(before=BEFORE, after=after, reports=reports, store=store)
+def _evidence(
+    *reports: dict, after: RoleTable = AFTER, store=STORE, live: bool = True
+) -> ms.ModelEvidence:
+    return ms.ModelEvidence(
+        before=BEFORE, after=after, reports=reports, store=store, require_live=live
+    )
 
 
 def test_the_example_rebinds_the_shipped_binding_to_the_store_entry():
@@ -123,8 +127,16 @@ def test_a_rebind_may_name_the_new_binding_by_its_store_entry(reports):
 
 
 def test_without_a_store_a_pinned_rebind_resolves_in_the_tables_alone(reports):
+    """Only where the policy does not require live: live evidence comes with the store."""
     swap = _swap(reports["live"])
-    assert ms.model_role_problems(swap, _evidence(reports["live"], store=None)) == []
+    swap["model_roles"][0]["evaluation"]["require_live"] = False
+    assert ms.model_role_problems(swap, _evidence(reports["live"], store=None, live=False)) == []
+
+
+def test_live_evidence_needs_the_store(reports):
+    swap = _swap(reports["live"])
+    (p,) = ms.model_role_problems(swap, _evidence(reports["live"], store=None))
+    assert p.endswith("live evidence is required, and no model store is given")
 
 
 def test_the_record_with_legs_needs_their_evidence(reports):
@@ -165,15 +177,62 @@ def test_without_require_live_a_fake_report_still_meets_the_pins_check_guard(rep
     not the shipped example; the leg applies the same guard, so dropping the flag is no way out."""
     swap = _swap(reports["fake"])
     swap["model_roles"][0]["evaluation"]["require_live"] = False
-    (p,) = ms.model_role_problems(swap, _evidence(reports["fake"]))
+    (p,) = ms.model_role_problems(swap, _evidence(reports["fake"], live=False))
     assert "every egress canary in the report ran against the fake" in p
+
+
+def test_the_record_cannot_waive_the_policy_live_requirement(reports):
+    swap = _swap(reports["fake"])
+    swap["model_roles"][0]["evaluation"]["require_live"] = False
+    p = ms.model_role_problems(swap, _evidence(reports["fake"]))
+    assert p and all("a live run is required" in x for x in p)
+
+
+def test_the_record_may_ask_for_live_where_the_policy_does_not(reports):
+    swap = _swap(reports["fake"])
+    p = ms.model_role_problems(swap, _evidence(reports["fake"], live=False))
+    assert p and all("a live run is required" in x for x in p)
+
+
+@pytest.fixture(scope="module")
+def mixed() -> tuple[dict, RoleTable]:
+    """A table with a second role rebound too, so its canary entries can be live while the
+    rebound role's new binding ran against the fake: the all-fake guard does not trip."""
+    doc = json.loads(ROLES.read_text(encoding="utf-8"))
+    doc["roles"]["fast-classifier"]["bindings"] = [
+        {"backend": "svc:inference", "model_id": ENTRY.served_model_name,
+         "version": ENTRY.revision, "digest": ENTRY.digest}
+    ]  # fmt: skip
+    after = RoleTable.from_dict(doc)
+
+    def canary(role, binding):
+        return benign_model, ("fake" if role == "fast-classifier" else "live")
+
+    report = gp.run_eval(
+        after, gp.DEFAULT_SUITES, gp.fake_factory, model_name="fake-golden", canary_factory=canary
+    )
+    return report, after
+
+
+def test_a_fake_new_binding_in_an_otherwise_live_report_is_refused(mixed):
+    report, after = mixed
+    assert gp.fake_canary_on_a_real_table(report, after) is None
+    swap = _swap(report)
+    swap["model_roles"][0]["evaluation"]["require_live"] = False
+    (p,) = ms.model_role_problems(swap, _evidence(report, after=after, live=False))
+    assert "the new binding's egress canary ran against the 'fake' model" in p
 
 
 def test_an_unknown_role_is_refused(reports):
     swap = _swap(reports["live"])
     swap["model_roles"][0]["role"] = "mdl:no-such-role"
-    (p,) = ms.model_role_problems(swap, _evidence(reports["live"]))
-    assert p.startswith("model_roles mdl:no-such-role: no model role 'no-such-role'")
+    p = ms.model_role_problems(swap, _evidence(reports["live"]))
+    assert p == [
+        p[0],
+        "mdl:fast-classifier: its bindings differ between the role tables, and no model_roles "
+        "leg rebinds it",
+    ]
+    assert p[0].startswith("model_roles mdl:no-such-role: no model role 'no-such-role'")
 
 
 @pytest.mark.parametrize(
@@ -224,6 +283,96 @@ def test_a_leg_that_rebinds_nothing_is_refused(reports):
     swap["model_roles"][0]["to"] = swap["model_roles"][0]["from"]
     models = ms.ModelEvidence(before=BEFORE, after=BEFORE, reports=[reports["old"]], store=None)
     assert ms.model_role_problems(swap, models) == [
-        "model_roles mdl:fast-classifier: the old and new binding are the same pin; "
+        "model_roles mdl:fast-classifier: the role's bindings are the same in both tables; "
         "nothing is rebound"
     ]
+
+
+def test_a_changed_role_without_a_leg_is_refused(reports):
+    swap = _swap(reports["live"])
+    del swap["model_roles"]
+    assert ms.model_role_problems(swap, _evidence(reports["live"])) == [
+        "mdl:fast-classifier: its bindings differ between the role tables, and no model_roles "
+        "leg rebinds it"
+    ]
+    assert ms.module_swap_problems(swap, _modules(), SITE, models=_evidence(reports["live"]))
+
+
+@pytest.mark.parametrize("legs", [[], None, {}, "mdl:fast-classifier"])
+def test_model_roles_present_but_not_legs_is_refused(reports, legs):
+    swap = _swap(reports["live"])
+    swap["model_roles"] = legs
+    assert ms.model_role_problems(swap, _evidence(reports["live"])) == [
+        "model_roles must be a non-empty list of legs, or absent"
+    ]
+
+
+def test_an_inference_swap_without_evidence_is_refused(reports):
+    swap = _swap(reports["live"])
+    del swap["model_roles"]
+    assert ms.module_swap_problems(swap, _modules(), SITE) == [
+        "the swap moves the inference slot, and no model evidence is given: the role tables "
+        "before and after it are what show which model roles it rebinds"
+    ]
+
+
+def test_an_inference_swap_that_rebinds_nothing_holds_with_its_evidence(reports):
+    swap = _swap(reports["old"])
+    del swap["model_roles"]
+    models = ms.ModelEvidence(before=BEFORE, after=BEFORE, store=STORE)
+    assert ms.module_swap_problems(swap, _modules(), SITE, models=models) == []
+
+
+@pytest.mark.parametrize("role", ["mdl:fast-classifier", "fast-classifier"])
+def test_a_second_leg_for_the_role_is_refused(reports, role):
+    swap = _swap(reports["live"])
+    second = copy.deepcopy(swap["model_roles"][0])
+    second["role"] = role
+    swap["model_roles"].append(second)
+    p = ms.model_role_problems(swap, _evidence(reports["live"]))
+    assert p == [f"model_roles {role}: the role is rebound by more than one leg"]
+
+
+def test_a_role_only_one_table_has_is_refused(reports):
+    doc = json.loads(ROLES.read_text(encoding="utf-8"))
+    doc["roles"]["fast-classifier"]["bindings"] = AFTER.pins()["fast-classifier"]
+    doc["roles"]["extra-role"] = copy.deepcopy(doc["roles"]["fast-classifier"])
+    doc["roles"]["extra-role"].pop("fallback", None)
+    after = RoleTable.from_dict(doc)
+    p = ms.model_role_problems(_swap(reports["live"]), _evidence(reports["live"], after=after))
+    assert p[0].startswith("mdl:extra-role is only in the role table after")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "needle"),
+    [
+        (lambda leg: leg.update(to={"pin": leg["to"]["pin"], "store_entry": ENTRY.id}),
+         "to must be exactly one of {pin} or {store_entry}"),
+        (lambda leg: leg.update({"from": {"pin": "not-a-digest"}}),
+         "from names no pin digest or store entry id"),
+        (lambda leg: leg.pop("role"), "a leg's role must be a string"),
+        (lambda leg: leg.update(evaluation={"report": 1}), "evaluation must name its report"),
+        (lambda leg: leg["evaluation"].update(require_live="yes"),
+         "evaluation.require_live must be a boolean"),
+    ],
+)  # fmt: skip
+def test_a_malformed_leg_is_refused_by_name(reports, mutate, needle):
+    swap = _swap(reports["live"])
+    mutate(swap["model_roles"][0])
+    p = ms.model_role_problems(swap, _evidence(reports["live"]))
+    assert p[0] == f"model_roles[0]: {needle}" or p[0].startswith(f"model_roles[0]: {needle}")
+
+
+def test_a_leg_that_is_not_a_mapping_is_refused(reports):
+    swap = _swap(reports["live"])
+    swap["model_roles"] = ["mdl:fast-classifier"]
+    p = ms.model_role_problems(swap, _evidence(reports["live"]))
+    assert p[0] == "model_roles[0]: a leg must be a mapping"
+
+
+def test_a_report_that_is_not_a_mapping_is_refused(reports):
+    junk = ["not", "a", "report"]
+    swap = _swap(reports["live"])
+    swap["model_roles"][0]["evaluation"]["report"] = gp.report_digest(junk)
+    p = ms.model_role_problems(swap, _evidence(junk))
+    assert any("not a " in x and "report" in x for x in p)

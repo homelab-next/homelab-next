@@ -493,7 +493,7 @@
             "require_live": {
               "type": "boolean",
               "default": false,
-              "description": "the new table's canary entries must have run live (pins check --require-live)"
+              "description": "the new table's canary entries must have run live (pins check --require-live); the record may ask for live, never waive it: the checker's policy requires live by default, and the new binding's entry must be live unless the table after is the shipped example"
             }
           }
         }

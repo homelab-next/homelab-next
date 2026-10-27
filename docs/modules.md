@@ -1041,26 +1041,39 @@ and `meaning_changes` is recorded, never checked.
   (`cap:inference`, written as the record writes every slot). `from` and `to` each name one binding
   of the role, as `{pin}` (the pin digest its canary entry records) or `{store_entry}` (a model
   store entry: the role's one binding serving that entry's model id and digest).
-  `model_role_problems` checks each leg against `ModelEvidence`: the role table the swap starts
-  from, the table after the rebind, the evaluation reports and, optionally, the model store. The
-  instance is one the swap moves and each role has one leg; the role is in both tables; the old
-  binding is one of the starting table's, the new one is the later table's and differs from it, and
-  with a store the new binding resolves to an entry. `evaluation.report` is the digest
+  `model_role_problems` checks the legs against `ModelEvidence`: the role table the swap starts
+  from, the table after the rebind, the evaluation reports and the model store. Every role whose
+  bindings differ between the two tables has exactly one leg (`mdl:x` and `x` are one role), no
+  unchanged role has one, and a role only one table has is refused. The instance is one the swap
+  moves; the old binding is one of the starting table's, the new one is the later table's and
+  differs from it, the role's other bindings are unchanged, and the new binding resolves to a store
+  entry. `from` is best named by `pin`, since an outgoing model may have left the store. `evaluation.report` is the digest
   (`homelabnext.golden.pins.report_digest`, canonical JSON) of the report for the table after the
   rebind. That report must be supplied and must pass `hnx golden pins check` against that table:
   it is not stale, so it was run for the new binding, and every binding has a canary entry, the new
-  one included. With `require_live` it is checked as `--require-live`; without it, the check
-  applies the guard that refuses an all-fake report on a table other than the shipped example.
-  `module_swap_problems` (and so the cutover gate and `apply_selection_diff`) takes the evidence as
-  `models=`, and a record with legs and no evidence is refused, never passed.
+  one included. How live is policy, held by the evidence and not the record:
+  `ModelEvidence.require_live` (default on) checks it as `--require-live` and requires the store. A
+  leg's `require_live: true` turns it on for that leg, and `false` waives nothing. With the policy
+  off, the all-fake guard of `pins check` still applies, and the new binding's own entry must have
+  run live unless the table after is the shipped example. `module_swap_problems` (and so the
+  cutover gate and `apply_selection_diff`) takes the evidence as `models=`. A swap that moves the
+  `inference` slot without it is refused, legs or none, because only the two tables show which
+  roles it rebinds; so is a record with legs and no evidence. A malformed leg is refused by name.
+
+  The evidence is the caller's and trusted as given. Nothing yet reads the two role tables from the
+  commits the swap moves between: a loader that does is a follow-up. A report's `live` is its claim,
+  checked for shape and pins, not for provenance. Nothing ties the new binding's `svc:` backend to
+  the incoming provider module either (also a follow-up).
 
 `tests/schemas/test_module_swap_model_roles.py` drives one inference swap through these rules. It
 rebinds `mdl:fast-classifier` from the shipped example's binding to a model-store entry and refuses:
 
-- a report that is missing, or that was produced for the old binding;
-- a fake canary entry where live is required;
-- an unknown role;
-- an unresolvable binding.
+- a report that is missing, not a report, or produced for the old binding;
+- a fake canary entry where live is required, and a fake entry for the new binding in an otherwise
+  live report;
+- a changed role with no leg, a leg for an unchanged role, and a second leg for one role;
+- an unknown role, a malformed leg, and an unresolvable binding;
+- an inference swap with no evidence.
 
 Golden evaluations stand as conformance here. **Calibration refit is not enforced**: the record has
 no field for it, and none is added until there is a refit artefact to check. A rebind that keeps
