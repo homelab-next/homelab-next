@@ -12,6 +12,14 @@ checks").
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
     empty: a render never mixes with stale files from an earlier one.
 
+``hnx modules review-tier --base REV [--json]``
+    the review tier of every in-tree manifest the working tree changes against ``REV``
+    (:mod:`homelabnext.modules.review_tier`): human-approve for credentials, control-plane
+    readers, egress, an agent's data grants, a privileged slot, the module's id, kind or origin,
+    a new or removed module, and anything it cannot read; owner otherwise.  The approval is the
+    pull request's code-owner review, so it fails when a manifest with a human-approve change has
+    no CODEOWNERS owner.  In CI, ``REV`` is the pull request's base.
+
 Defaults follow the overlay layout: with ``--overlay DIR`` the site is ``DIR/lab/modules.yml``,
 the lock ``DIR/lab/modules.lock``, the review policy ``DIR/lab/review-policy.yml``, the role table
 ``DIR/lab/model_roles.json`` and the core registry ``DIR/lab/services.yml`` when they exist;
@@ -90,10 +98,92 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--running", type=Path, help="what runs (platform/module_inventory)")
         else:
             p.add_argument("--out", type=Path, required=True, help="a new or empty directory")
+    t = sub.add_parser("review-tier", help="the review tier of each manifest changed since a base")
+    t.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
+    t.add_argument("--base", required=True, help="the commit to compare with")
+    t.add_argument("--slots", type=Path, help="the slot registry (draft)")
+    t.add_argument("--json", action="store_true")
     return ap
 
 
+def _review_tier(args: argparse.Namespace) -> int:
+    """Print each changed manifest's tier and its fields; fail (1) when a human-approve manifest
+    has no code owner, since the code-owner review is the human approval."""
+    import os
+
+    from homelabnext.modules import review_tier as rt
+
+    root = _root(args.root)
+    if not args.base.strip():
+        raise ld.LoaderError("--base needs a commit (an empty value would skip the check)")
+    slots_path = _given(args.slots, "--slots") or root / "examples" / "modules" / "slots.yml"
+    try:
+        priv = rt.privileged_slots(ld.load_input(slots_path))
+    except ld.Unreadable:
+        priv = None  # fail closed: every slot change is human-approve
+    keys = rt.schema_keys(
+        json.loads(paths.schema_file("platform", "module.schema.json").read_text())
+    )
+    try:
+        changed = rt.changed_manifests(root, args.base)
+    except ValueError as exc:
+        raise ld.LoaderError(str(exc)) from None
+    owners_file, rules = rt.load_codeowners(root)
+    results, problems = [], []
+    for path, old, new in changed:
+        if isinstance(old, str) or isinstance(new, str):
+            why = old if isinstance(old, str) else new
+            changes = [rt.Change("module", rt.HUMAN, f"{why} (fail closed)")]
+        else:
+            changes = rt.classify(old, new, keys, priv)
+        tier = rt.tier_of(changes)
+        if tier is None:
+            continue
+        owners = rt.codeowners_for(rules, path)
+        results.append(
+            {
+                "path": path,
+                "tier": tier,
+                "owners": owners,
+                "changes": [{"field": c.field, "tier": c.tier, "why": c.why} for c in changes],
+            }
+        )
+        if tier == rt.HUMAN and not owners:
+            problems.append(
+                f"{path}: a human-approve change, and no CODEOWNERS owner "
+                f"({owners_file or 'no CODEOWNERS file'}) whose review approves it"
+            )
+    if args.json:
+        print(json.dumps({"manifests": results, "problems": problems}, indent=2))
+    else:
+        for r in results:
+            print(f"{r['path']}: {r['tier']} (owners: {' '.join(r['owners']) or 'none'})")
+            for c in r["changes"]:
+                print(f"  {c['tier']}: {c['field']}: {c['why']}")
+        for p in problems:
+            print(p)
+        human = sum(r["tier"] == rt.HUMAN for r in results)
+        print(
+            f"hnx modules review-tier: {len(results)} changed manifest(s), {human} human-approve, "
+            f"{len(problems)} problem(s)"
+        )
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary and results:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(
+                "### Module manifest review tiers\n\n| manifest | tier | fields |\n|---|---|---|\n"
+            )
+            for r in results:
+                fields = ", ".join(
+                    f"`{c['field']}`" for c in r["changes"] if c["tier"] == r["tier"]
+                )
+                fh.write(f"| `{r['path']}` | {r['tier']} | {fields} |\n")
+    return 1 if problems else 0
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.cmd == "review-tier":
+        return _review_tier(args)
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
