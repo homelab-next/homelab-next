@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Synthetic example site for HomelabNext. Everything here is fictional: addresses come from the
-# RFC 5737 documentation ranges, names live under example.internal, secrets are referenced by
-# name only. It pairs with services.yml in this directory (the registry it resolves against).
+# RFC 5737 and RFC 3849 documentation ranges, names live under example.internal, secrets are
+# referenced by name only. It pairs with services.yml in this directory (the registry it resolves
+# against).
 site_version: 1
 
 site:
@@ -32,6 +33,8 @@ zones:
     purpose: inference
     vlan_id: 30
     subnet: 192.0.2.128/26
+    # its IPv6 prefix (site 1.4): a guest's IPv6 extra address is held against it
+    subnet6: 2001:db8:0:82::/64
     gateway: 192.0.2.129
     dhcp: {range: [192.0.2.160, 192.0.2.190], lease_hours: 24}
     dns: {resolvers: [svc:dns]}

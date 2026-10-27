@@ -107,13 +107,18 @@ example table and then the rule. They show that a self-set label changes nothing
   fails open for a runtime seen from an address the table lacks.
 - **Only the addresses the guest model names.** A guest's `network.ip` and its
   `network.extra_addresses` (guest 1.6: a second interface, a macvlan or bridge address its
-  containers use, a unique-local IPv6 address, each with a `why`) are labelled alike, so a
+  containers use, its IPv6 address, each with a `why`) are labelled alike, so a
   runtime that sends from any address written there is still a runtime. Validation holds each
-  extra address to one that names this guest and no other wherever a collector sees it: canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, a unique-local or documentation address only; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not one any guest already names.
-- **IPv6 is checked by range only.** The site model gives a zone no IPv6 prefix, so nothing
-  says which guest owns an IPv6 address: a global one (a SLAAC address included) is refused, and
-  a unique-local or documentation one is accepted with no ownership check beyond "no other guest
-  names it". Review an IPv6 extra address as you would a new `network.ip`.
+  extra address to one that names this guest and no other wherever a collector sees it: canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not one any guest already names.
+- **IPv6 is held against the zone's prefix.** A zone may give its IPv6 prefix (`subnet6`, site
+  1.4, a /48 to a /64), and then an IPv6 extra address of a guest in it must sit inside that
+  prefix, global (a SLAAC address included) or not, and not be the prefix itself (the
+  subnet-router anycast address); an address inside another zone's prefix is that zone's.
+  Without a `subnet6` on its zone, a global IPv6 address is refused (nothing says whose it is)
+  and a unique-local or documentation one is accepted with no ownership check beyond "no other
+  guest names it and no zone's prefix holds it": review it as you would a new `network.ip`. A
+  SLAAC address is only stable while the interface keeps its identifier (EUI-64 or a stable
+  privacy address); a temporary privacy address changes and cannot be listed.
 - **First come, first named.** Two guests naming one address is refused on whichever sorts
   second, and nothing ties an extra address to the guest's owner: review a guest file that adds
   one (CODEOWNERS) the way you review a change of `network.ip`, since claiming an address labels

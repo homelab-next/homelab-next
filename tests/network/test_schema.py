@@ -19,6 +19,7 @@ EXPECT = {
     "secret-ref-is-literal": "secret_ref",
     "vlan-out-of-range": "vlan_id",
     "subnet-not-cidr": "subnet",
+    "subnet6-not-lower-case": "subnet6",
     "extra-field": "wifi_password",
     "no-router": "router",
     "no-zones": "zones",
@@ -57,5 +58,5 @@ def test_negative_is_rejected_for_the_intended_reason(label):
 
 def test_schema_id_and_version():
     s = schema()
-    assert s["$id"].endswith("/platform/site/1.3")
+    assert s["$id"].endswith("/platform/site/1.4")
     assert json.dumps(s)  # serialisable

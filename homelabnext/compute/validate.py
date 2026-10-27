@@ -143,9 +143,10 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
 #: falls inside a zone's subnet; nothing else outside the guest's own zone, since the site model
 #: says who holds an address only by zone.
 OVERLAY_V4: tuple[ipaddress.IPv4Network, ...] = (ipaddress.IPv4Network((0x6440_0000, 10)),)
-#: the IPv6 ranges an extra address may come from: unique-local and documentation.  The site model
-#: gives a zone no IPv6 prefix, so nothing says which guest owns one of these (operator review),
-#: and a global IPv6 address (SLAAC included) cannot be checked against any zone: refused.
+#: the IPv6 ranges an extra address may come from when the guest's zone has no ``subnet6`` (site
+#: 1.4): unique-local and documentation, and only outside every zone's prefix.  Nothing says which
+#: guest owns one of these (operator review); a global IPv6 address (SLAAC included) needs the
+#: zone's prefix to be held against, so without one it is refused.
 UNOWNED_V6: tuple[ipaddress.IPv6Network, ...] = (
     ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
     ipaddress.IPv6Network((0x2001_0DB8 << 96, 32)),  # documentation
@@ -228,13 +229,10 @@ def _extra_address_problem(
         own = next((z for z in zones if z.id == g.zone), None)
         if (own is None or ip not in own.network) and not any(ip in n for n in OVERLAY_V4):
             return None, f"is outside zone {g.zone}'s subnet (and in no zone-less overlay range)"
-    elif not any(ip in n for n in UNOWNED_V6):
-        if ip.is_global:
-            return None, (
-                "is a global IPv6 address; the site model gives no zone an IPv6 prefix to hold "
-                "it against, so only unique-local or documentation IPv6 is accepted"
-            )
-        return None, "is a special-purpose IPv6 address, not a unique-local or documentation one"
+    else:
+        why = _ipv6_ownership_problem(ip, g, zones)
+        if why is not None:
+            return None, why
     for z in zones:
         if ip.version != 4 or ip not in z.network:
             continue
@@ -250,6 +248,46 @@ def _extra_address_problem(
     if holder is not None and fleet.fqdn(g) not in fleet.site_addresses.get(str(ip), ()):
         return None, f"is {holder}, not this guest's"
     return str(ip), None
+
+
+def _ipv6_ownership_problem(
+    ip: ipaddress.IPv6Address, g: Guest, zones: list[ZoneInfo]
+) -> str | None:
+    """Why the IPv6 extra address ``ip`` is not this guest's to name, or None.
+
+    Every zone's ``subnet6`` must read as ``hnx site validate`` requires it (otherwise no IPv6
+    address can be held against the zones, and it is refused); the address must not be inside
+    another zone's prefix; with a prefix on the guest's own zone it must be inside it (and not its
+    subnet-router anycast address, the prefix with no host part); without one, only unique-local
+    or documentation IPv6 (:data:`UNOWNED_V6`) is accepted."""
+    from homelabnext.network.validate import subnet6_problem
+
+    prefixes: dict[str, ipaddress.IPv6Network] = {}
+    for z in zones:
+        if not z.subnet6:
+            continue
+        net6, bad = subnet6_problem(z.subnet6)
+        if net6 is None:
+            return f"cannot be held against zone {z.id}: its subnet6 {z.subnet6!r} {bad}"
+        prefixes[z.id] = net6
+    other = next((zid for zid, n in prefixes.items() if zid != g.zone and ip in n), None)
+    if other is not None:
+        return f"is inside zone {other}'s IPv6 prefix, not zone {g.zone}'s"
+    own = prefixes.get(g.zone)
+    if own is not None:
+        if ip not in own:
+            return f"is outside zone {g.zone}'s IPv6 prefix {own} (subnet6)"
+        if ip == own.network_address:
+            return f"is zone {g.zone}'s subnet-router anycast address (the prefix {own} itself)"
+        return None
+    if any(ip in n for n in UNOWNED_V6):
+        return None
+    if ip.is_global:
+        return (
+            f"is a global IPv6 address and zone {g.zone} gives no IPv6 prefix (subnet6, site "
+            "1.4) to hold it against; add one, or use a unique-local or documentation address"
+        )
+    return "is a special-purpose IPv6 address, not a unique-local or documentation one"
 
 
 def _check_extra_addresses(

@@ -1,6 +1,6 @@
 ---
 summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
-summary_of: outline:sha256:33202966b99c8753
+summary_of: outline:sha256:032d47f118c8a720
 ---
 # Site / network model
 
@@ -60,6 +60,8 @@ Adapters write line-oriented configs, and Python's `re`, which the schema valida
 pattern's `$` match before a trailing newline, so a pattern alone does not keep `"lan\n"` out.
 
 * VLAN ids are unique; subnets are valid, large enough and do not overlap.
+* A zone's `subnet6` (1.4) is one canonical IPv6 prefix, a /48 to a /64, that names that zone
+  only ([IPv6 prefixes](#ipv6-prefixes-14)); no two overlap.
 * The gateway is a usable address inside its subnet; a DHCP range is ordered, inside the subnet and
   excludes the gateway and every statically addressed registry host.
 * Every `zone:` and `svc:` reference resolves, against the site and the registry respectively.
@@ -152,6 +154,31 @@ is usually the point (a sensor on the uplink), but keep the sensor's capture NIC
 and the machine physically secure. The UniFi dry run renders the mirror as a port override with
 `op_mode: mirror` and `mirror_port_idx` (the source) and no port profile. The field names are the
 controller's; that the destination's override names the source is checked on the server.
+
+### IPv6 prefixes (1.4)
+
+A zone may give its IPv6 prefix:
+
+```yaml
+zones:
+  - id: compute
+    subnet6: 2001:db8:0:82::/64   # beside its subnet (IPv4), which it does not replace
+```
+
+It is what a guest's IPv6 `network.extra_addresses` is held against
+([compute model](compute-model.md)): an IPv6 address a guest in the zone sends from (its SLAAC
+address, say) must sit inside its own zone's prefix and in no other zone's, so the log pipeline's
+runtime table labels it as that guest's and no other's ([log pipeline](log-pipeline.md)). Without
+a `subnet6` a global IPv6 address names no zone and is refused there.
+
+`hnx site validate` requires the prefix in its canonical form (lower case, compressed, no host
+bits), a /48 to a /64, and none of: link-local, multicast, loopback or unspecified, and a range
+that writes an IPv4 address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo),
+where the address a collector sees is the IPv4 one. Two zones' prefixes may not overlap.
+
+Nothing is configured from it yet: the router and switch adapters, the guests' firewall renders
+(`zone:` references) and the egress policy still speak IPv4 only, so a `zone:` allow does not
+reach the zone's IPv6 hosts (an allow that is missing, never one too wide).
 
 ### One-way zones
 
