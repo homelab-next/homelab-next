@@ -7,11 +7,12 @@ description: >
   model store. An open-weight model has been reported (2026-10) to list /tmp, read the resolver
   configuration and attempt an HTTP PUT of a file to a cloud bucket while asked to write a
   detection rule. The egress filter refuses the connection; this rule says it was attempted.
-  Inert until the pipeline labels a model runtime's events (labels.hnx_runtime: model), which
-  no shipped enrichment does yet. Each endpoint is listed with and without the root's trailing
+  The pipeline labels a model runtime's events (labels.hnx_runtime: model) from the guest
+  model, by the address the collector saw (docs/log-pipeline.md); the event's own label is
+  never kept. Each endpoint is listed with and without the root's trailing
   dot; the list is the same in det:model-runtime-object-store-lookup and
   det:model-runtime-object-store-request.
-status: unsupported  # inert: nothing sets labels.hnx_runtime yet (docs/compute-model.md)
+status: experimental
 logsource: {category: dns}
 detection:
   selection_runtime:

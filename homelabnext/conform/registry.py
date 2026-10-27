@@ -56,6 +56,7 @@ EXTENDED: tuple[str, ...] = (
     "broker-tokens",
     "orchestration-features",
     "migration",
+    "log-pipeline",
 )
 
 

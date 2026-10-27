@@ -1,0 +1,19 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "no-observed-address",
+  "description": "the collector saw no address; the event's own host fields name the runtime",
+  "observed": null,
+  "event": {
+    "message": "hnx-egress-drop: IN= OUT=eth0 PROTO=TCP DPT=443",
+    "host": {
+      "ip": "192.0.2.140"
+    },
+    "labels": {
+      "hnx_runtime": "model"
+    }
+  },
+  "label": null,
+  "rule": "model-runtime-egress-drop",
+  "fires": false
+}

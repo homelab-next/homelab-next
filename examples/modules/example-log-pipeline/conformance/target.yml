@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the log-pipeline suite runs
+# through the module's own adapter, which loads the runtime table the suite hands it.
+#   hnx conform run log-pipeline --target examples/modules/example-log-pipeline/conformance/target.yml
+name: example-log-pipeline
+capabilities:
+  log-pipeline:
+    adapter: hnx_modules.example_log_pipeline.log_pipeline:make
+    config: {}

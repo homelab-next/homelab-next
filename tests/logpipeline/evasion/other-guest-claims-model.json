@@ -1,0 +1,20 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "other-guest-claims-model",
+  "description": "a guest that runs no model labels itself model to raise a false alarm",
+  "observed": "192.0.2.20",
+  "event": {
+    "dns": {
+      "question": {
+        "name": "example-bucket.oss-cn-beijing.aliyuncs.com"
+      }
+    },
+    "labels": {
+      "hnx_runtime": "model"
+    }
+  },
+  "label": "none",
+  "rule": "model-runtime-object-store-lookup",
+  "fires": false
+}

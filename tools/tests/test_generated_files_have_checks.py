@@ -62,6 +62,10 @@ DERIVED: tuple[tuple[str, str], ...] = (
     ),
     ("examples/model-serving/vllm_server/*", "test:tests/models/test_serving_plan.py"),
     ("workflows/stackstorm/*", "test:tests/workflows/test_workflows_st2.py"),
+    (
+        "examples/log-pipeline/runtime-labels.json",
+        "ci:--target runtime-labels --against examples/log-pipeline",
+    ),
 )
 
 

@@ -29,7 +29,7 @@ fake, the target-file adapters with their product limits, and the integration st
 ```bash
 hnx conform list                      # the eighteen capabilities (also: hnx conform --list)
 hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens,
-                                      # orchestration-features, migration)
+                                      # orchestration-features, migration, log-pipeline)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
@@ -174,7 +174,9 @@ Extended suites (listed with `--all`, not among the eighteen): `backup` (immutab
 verified restores, retention), `dns` (zone semantics the registry's aliases rely on), `edge`
 (reverse-proxy routing and forward-auth hygiene), `broker-tokens` (the broker's Code Mode tokens),
 `migration` (a stateful slot's export and its validated `import_`: the import MUST of ADR-0027
-follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)) and
+follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)), `log-pipeline` (the runtime
+label the model-runtime detections match, from the guest model's table and the observed address,
+never the event's own; see [log pipeline](log-pipeline.md)) and
 `orchestration-features`. The last one holds the optional features of the `orchestration`
 contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
 shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
@@ -206,7 +208,7 @@ MUTANTS = {
 for every suite) and
 `tests/conform_sweeps/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
 caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `broker-tokens`, `codemode-executor`,
-`codemode-runner`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
+`codemode-runner`, `log-pipeline`, `migration`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
 `requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
 mutant's factory supports, and the mutant runs with those declared): a mutant caught only by a
