@@ -13,7 +13,10 @@ other change needs only the **owner**.  Everything fails closed: a new, removed,
 unreadable or linked manifest or file, a key the module schema (as of the base commit) does not
 define, a list it cannot key, keys it cannot compare, and, without a readable slot registry at
 both the base and the head, every slot change are human-approve.  A change to what decides the
-tier (the slot registry, the module schema, CODEOWNERS, this module) is human-approve too.
+tier (the slot registry, the module schema, CODEOWNERS, this module) is human-approve too, and so
+is a change to what vouches for a model a swap rebinds to (:data:`EVIDENCE`, :data:`EVIDENCE_DIRS`:
+the model store, the evaluation reports and the golden suites, which the swap check reads from the
+base, so vetting a model is its own reviewed change).
 
 The approval itself is the pull request's code-owner review: :func:`review` reads CODEOWNERS **as
 of the base commit** (the rules GitHub applies to the pull request) and reports a problem for every
@@ -24,7 +27,6 @@ authenticates a reviewer.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -32,8 +34,11 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.modules import loader as ld
+from homelabnext.modules import swap_evidence as _se
 
 __all__ = [
+    "EVIDENCE",
+    "EVIDENCE_DIRS",
     "GOVERNANCE",
     "HUMAN",
     "OWNER",
@@ -95,9 +100,16 @@ GOVERNANCE = (
     SCHEMA,
     *CODEOWNERS_PATHS,
     "homelabnext/modules/review_tier.py",
-    "tools/schema_check.py",  # the base rule --ci-base takes
+    "homelabnext/gitbase.py",  # the base rule --ci-base takes
+    "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
 )
+#: what vouches for a model in a swap (homelabnext.modules.swap_evidence reads each from the base,
+#: so a change here is the vetting step that a later rebind relies on): the model store, the
+#: evaluation reports and the golden suites they are checked with
+EVIDENCE = (_se.STORE, *_se.REPORTS, *_se.SUITES)
+#: directories whose every file vouches the same way: the live reports of proposed tables
+EVIDENCE_DIRS = (_se.EVALS,)
 #: git's empty tree, the base of a root commit
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -570,29 +582,6 @@ def _show(root: Path, base: str, rel: str) -> bytes | None:
     return r.stdout if r.returncode == 0 else None
 
 
-def _linked(root: Path, rel: str) -> bool:
-    """True when any component of ``rel`` under ``root`` is a symbolic link."""
-    cur = root
-    for part in rel.split("/"):
-        cur = cur / part
-        if cur.is_symlink():
-            return True
-    return False
-
-
-def _head(root: Path, rel: str) -> bytes | str | None:
-    """The working-tree bytes, None when absent, or why it cannot be read."""
-    if _linked(root, rel):
-        return "a symbolic link on its path"
-    p = root / rel
-    if not os.path.lexists(p):
-        return None
-    try:
-        return ld.read_bytes(p, follow=False)
-    except (ld.Unreadable, OSError) as exc:
-        return f"cannot be read ({exc})"
-
-
 def _version(data: bytes | str | None, *, json_doc: bool = False) -> tuple[Any, str | None]:
     """(the parsed document or None, why it cannot be read or None)."""
     if isinstance(data, str):
@@ -608,7 +597,7 @@ def changed_paths(root: Path, base: str) -> list[str]:
     changes against ``base`` (a rename is a removal and an addition), untracked files included."""
     if _git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{tree}}").returncode:
         raise ValueError(f"--base {base}: not a commit here")
-    spec = [*MODULE_ROOTS, *GOVERNANCE]
+    spec = [*MODULE_ROOTS, *GOVERNANCE, *EVIDENCE, *EVIDENCE_DIRS]
     r = _git(root, "diff", "--no-renames", "--name-only", "-z", base, "--", *spec)
     if r.returncode:
         raise ValueError(f"git diff against {base} failed")
@@ -634,7 +623,7 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
     # itself); the slot registry also as of the head, so neither side can drop a privileged slot
     keys = schema_keys(_version(_show(root, base, SCHEMA), json_doc=True)[0])
     base_slots, _ = _version(_show(root, base, SLOTS))
-    head_slots, _ = _version(_head(root, SLOTS))
+    head_slots, _ = _version(ld.read_tree_file(root, SLOTS))
     bp, hp = privileged_slots(base_slots), privileged_slots(head_slots)
     priv = None if bp is None or hp is None else bp | hp
     rules: list[tuple[str, list[str]]] = []
@@ -654,6 +643,10 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
         if rel in GOVERNANCE:
             results[rel] = Result(rel, [Change(rel, HUMAN, "decides the review tier itself")])
             continue
+        if rel in EVIDENCE or any(rel.startswith(d + "/") for d in EVIDENCE_DIRS):
+            why = "vouches for a model a later swap rebinds to (read from the base)"
+            results[rel] = Result(rel, [Change(rel, HUMAN, why)])
+            continue
         d = _module_dir(rel)
         if d is None:
             results[rel] = Result(
@@ -664,7 +657,7 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
     for d, rels in modules.items():
         mpath = f"{d}/module.yml"
         old, old_err = _version(_show(root, base, mpath))
-        new, new_err = _version(_head(root, mpath))
+        new, new_err = _version(ld.read_tree_file(root, mpath))
         changes: list[Change] = []
         if mpath in rels:
             if old_err or new_err:
@@ -682,7 +675,7 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
             if rel == mpath:
                 continue
             inner = rel[len(d) + 1 :]
-            if _linked(root, rel):
+            if ld.path_has_symlink(root, rel):
                 changes.append(Change(f"file:{inner}", HUMAN, "a symbolic link on its path"))
             else:
                 changes.append(

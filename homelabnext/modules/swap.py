@@ -18,17 +18,19 @@ role, its outgoing and incoming binding (by pin digest or by model-store entry) 
 evaluation report for the role table after the rebind.  :func:`model_role_problems` checks the
 legs against :class:`ModelEvidence` (both role tables, the reports, the store): every role whose
 bindings differ between the tables has exactly one leg and no other role has one, each binding
-resolves, and the report is the one pinned and passes ``hnx golden pins check`` against the new
+resolves on the backend the incoming provider serves (``svc:<instance>`` of the leg's moving
+instance), and the report is the one pinned and passes ``hnx golden pins check`` against the new
 table, canary entry of the new binding included.  How live that check is, and whether a store is
 needed, is the evidence's policy (live and a store by default); a leg may ask for live, never
 waive it.  A swap that moves ``inference`` is refused without evidence, legs or none: the two
 tables are what show which roles it rebinds.
 
-The evidence is assembled by the caller and trusted as given: nothing here reads the tables from
-the commits a swap moves between (a loader that does is a follow-up), and a report's ``live`` is
-the report's claim, checked for shape, not provenance.  Nothing ties a new binding's backend to
-the incoming provider module either.  Calibration refit is not a field of the record, so it is
-not enforced.
+These functions check the evidence they are given.  :mod:`homelabnext.modules.swap_evidence`
+builds it from the repository (``hnx modules swap-check``): the table before from the base commit,
+the table after from the working tree, the store and the reports from where the repository keeps
+them, and live as policy; a caller that assembles its own evidence is trusted with it.  A report's
+``live`` is the report's claim, checked for shape, not provenance.  Calibration refit is not a
+field of the record, so it is not enforced.
 """
 
 from __future__ import annotations
@@ -199,8 +201,9 @@ def _leg_problem(leg: Any) -> str:
 def _binding(
     ref: Doc, table: RoleTable, role: str, store: Store | None
 ) -> tuple[Binding | None, str]:
-    """The one binding of ``role`` in ``table`` a leg's ``from`` or ``to`` names, or ``(None, why)``.
-    A ``from`` is best named by ``pin``: an outgoing model may since have left the store."""
+    """The one binding of ``role`` in ``table`` a leg's ``from`` or ``to`` names, or
+    ``(None, why)``.  A ``from`` is best named by ``pin``: an outgoing model may since have left
+    the store."""
     bindings = table.get(role).bindings
     if "pin" in ref:
         hit = [b for b in bindings if _pin_of(b) == ref["pin"]]
@@ -256,8 +259,11 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
     role whose bindings differ between the tables has exactly one leg, which rebinds exactly that
     binding, and no unchanged role has one; the role is in both tables, the old binding is one of
     the table the swap starts from, the new one resolves in the table after it (and in the store)
-    and differs, and the report the leg pins passes ``pins check`` against the table after, live
-    as :class:`ModelEvidence` says (and the fake-canary guard of ``pins check`` either way)."""
+    and differs, its backend is the instance the leg moves (``svc:<instance>``, the row the swap
+    renames the incoming provider's to; inferred from the name, no manifest is read), and the
+    report the leg pins passes ``pins check`` against the table after, live as
+    :class:`ModelEvidence` says (and the fake-canary guard of ``pins check`` either way).  So a
+    leg cannot add a binding on another backend, a fallback included."""
     legs = swap.get("model_roles", [])
     if not isinstance(legs, list) or ("model_roles" in swap and not legs):
         return ["model_roles must be a non-empty list of legs, or absent"]
@@ -307,6 +313,12 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
                 f"{where}: the new binding does not resolve in the role table after: {why_new}"
             )
             continue
+        if new.backend != leg["instance"]:
+            out.append(
+                f"{where}: the new binding's backend svc:{new.backend} is not the instance the leg "
+                f"moves (svc:{leg['instance']}): a leg rebinds onto the row the swap renames "
+                f"{swap.get('to_module')!r}'s to, never onto another backend"
+            )
         if old is not None and _pin_of(old) == _pin_of(new):
             out.append(f"{where}: the old and new binding are the same pin; nothing is rebound")
         elif old is not None:

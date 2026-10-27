@@ -407,11 +407,14 @@ without a readable slot registry at both ends, every slot change are human-appro
 that decide the tier are read **as of the base commit**: the module schema; the slot registry (the
 union of the base's and the head's privileged slots, so neither side can drop one); and
 CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
-(`tools/schema_check.py`, `.github/workflows/ci.yml`) is itself human-approve.
+(`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
+human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
+the evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2").
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
-the job summary in CI, where `--ci-base` takes the base by `tools/schema_check.py --ci-base`'s
-rule). The human approval is the pull request's **code-owner review**: the command fails when a
+the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;
+`--ci-base` takes the base by `homelabnext.gitbase.ci_base`, the rule `tools/schema_check.py
+--ci-base` takes). The human approval is the pull request's **code-owner review**: the command fails when a
 human-approve change has no valid owner (`@user`, `@org/team` or an email) in CODEOWNERS as of
 the base, matched by GitHub's rules (the last matching line wins, `*` within a segment, `**`
 across them, no character classes). It does not read approvals, so the guarantee is only as
@@ -1060,10 +1063,62 @@ and `meaning_changes` is recorded, never checked.
   `inference` slot without it is refused, legs or none, because only the two tables show which
   roles it rebinds; so is a record with legs and no evidence. A malformed leg is refused by name.
 
-  The evidence is the caller's and trusted as given. Nothing yet reads the two role tables from the
-  commits the swap moves between: a loader that does is a follow-up. A report's `live` is its claim,
-  checked for shape and pins, not for provenance. Nothing ties the new binding's `svc:` backend to
-  the incoming provider module either (also a follow-up).
+  The new binding's backend is the instance the leg moves: `svc:<instance>`, the service row the
+  incoming provider's row is renamed to at bind time (see the naming table). The rule reads the
+  name; no manifest is consulted. A leg that rebinds a model onto any other backend is refused, and
+  so is one that adds a binding on another backend beside the old one (a fallback included).
+
+  **`hnx modules swap-check RECORD --site FILE --base REV | --ci-base`** builds the evidence from
+  the repository rather than taking it from a caller (`homelabnext.modules.swap_evidence`), and
+  **everything that vouches for the new model is read from the base commit, never from the
+  change**: the role table before, the model store (`examples/model-serving/model_store.json`),
+  the evaluation reports (`examples/model_roles.eval.json` and every `*.json` directly under
+  `examples/model-evals/`, at most 64; a leg pins the one it means by digest) and the golden suites
+  the report is checked with (`homelabnext/golden/examples/classifier_smoke.yml`). Each is a
+  regular blob at the base, not a symbolic link and not over the loader's size cap. Only the table
+  after comes from the working tree (`--roles`, default `examples/model_roles.json`; read like every
+  loader input: no symbolic link on its path, the root included, a regular file, capped, opened
+  without blocking). The base is resolved once to a commit (`git rev-parse --verify
+  --end-of-options REV^{commit}`), so an option-like value or a tree is refused. Live evidence is
+  required: that is policy, never the record's. The record validates against
+  `platform/module_swap`, then `module_swap_problems` runs against the discovered manifests
+  (`--examples`) and the site. An input it cannot read is exit 2, never "no change"; git that cannot
+  run is exit 100. `--report` adds a report for a local run; CI never passes one. `--overlay` is
+  refused: the evidence is read at the repository's fixed paths, so an overlay's swap is checked
+  from the overlay's own checkout (`--root`) with its tables at those paths. `make swap-check
+  RECORD=... SITE=... [BASE=...]` runs it; it is not part of `make gates`, because the tree holds no
+  swap record of its own to check.
+
+  **Vetting, then rebinding.** Since the base holds the evidence, a model reaches a role in two
+  changes. The first adds its store entry and the live report for the proposed table (`make
+  models-eval`, copied to `examples/model-evals/<name>.json`); `hnx modules review-tier` rates the
+  store, the reports, the report directory and the golden suites human-approve, so a code owner
+  reviews the vetting. The second changes the role table and adds the swap record. A change cannot
+  vouch for itself: a store entry or a live report in the same change counts for nothing.
+
+  **`hnx modules swap-gate --base REV | --ci-base`** (`make swap-gate`) is the CI gate. When the
+  role table differs from the base's, at least one swap record added or changed under
+  `examples/swaps/` (JSON or YAML; untracked ones count, a record already on the base does not)
+  must cover it: each must validate and its `model_roles` legs must hold against the base's
+  evidence, live required, which also means a leg for every role the change rebinds. An unchanged
+  table passes. The module, site and migration rules are `swap-check`'s, which needs a site. A
+  rebind within one provider module has no record type of its own, so for now any change to the
+  example role table goes through a swap record.
+
+  **What runs the gate.** The `--ci-base` rule is the package's (`homelabnext.gitbase.ci_base`;
+  `tools/schema_check.py` re-exports it), so no CLI loads a file from the checkout to find its
+  base. The package itself is still whatever is installed, and in a pull request's CI run that is
+  the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
+  base commit's own code**: a detached worktree of the base, imported with `python -P` (the
+  checkout's own package never on the path, which the job asserts), reading the change only as data
+  (`--root`). A pull request run still takes the workflow file and the dependency constraints from
+  the change, so this rests on both being human-approve (`.github/workflows/ci.yml` is governance,
+  `constraints/` is in CODEOWNERS); `pull_request_target` is never used. Until a base carries
+  `swap-gate` (the change that adds it), the job runs the change's own and says so.
+
+  What none of this proves: a report's `live` is the claim of whoever ran it, now one a code owner
+  reviewed, not one checked for provenance; and a library caller that assembles its own
+  `ModelEvidence` is trusted with it.
 
 `tests/schemas/test_module_swap_model_roles.py` drives one inference swap through these rules. It
 rebinds `mdl:fast-classifier` from the shipped example's binding to a model-store entry and refuses:
@@ -1072,6 +1127,7 @@ rebinds `mdl:fast-classifier` from the shipped example's binding to a model-stor
 - a fake canary entry where live is required, and a fake entry for the new binding in an otherwise
   live report;
 - a changed role with no leg, a leg for an unchanged role, and a second leg for one role;
+- a new binding on a backend the swap does not install;
 - an unknown role, a malformed leg, and an unresolvable binding;
 - an inference swap with no evidence.
 

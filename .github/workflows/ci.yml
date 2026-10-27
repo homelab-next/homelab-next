@@ -355,16 +355,76 @@ jobs:
           done
           python -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
             --running schemas/platform/examples/module_inventory.small-lab.yml
-      - name: each changed module path's review tier, and a code owner (as of the base) for every human-approve one (ADR-0027 follow-up 4)
-        env:
-          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
-          HNX_PUSH_BEFORE: ${{ github.event.before }}
-        run: python -m homelabnext.cli modules review-tier --ci-base
       - name: hnx entry point
         run: |
           hnx --help
           hnx registry validate examples/services.yml
           hnx custom check
+
+  # The gates a change must not be able to argue its way past run the BASE's code, never the
+  # change's: the checker is the base commit's homelabnext (a detached worktree of the same clone,
+  # imported from there with python -P so the checkout's own package is never on the path), and it
+  # reads the change's working tree only as data (--root).  The base rule is the same as
+  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the
+  # thing being avoided.  A pull_request run still takes this workflow file (and the constraints
+  # its dependencies come from) from the change, so the guarantee rests on both being
+  # human-approve (CODEOWNERS, hnx modules review-tier); the privileged pull-request trigger is never
+  # used.  Bootstrap: a base whose code has no swap-gate yet runs the change's own and says so.
+  trusted-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # the base commit
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: core  # the checker's own imports (YAML, JSON Schema); the project itself is not installed
+          install-project: "false"
+      - name: the base commit, checked out apart as the checker
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          commit() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
+          if [ "$EVENT" = pull_request ]; then
+            base=$(commit "$PR_BASE") || { echo "the pull request's base $PR_BASE is not readable"; exit 1; }
+          elif [ "$EVENT" = push ]; then
+            if [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = 0000000000000000000000000000000000000000 ] \
+              || ! base=$(commit "$PUSH_BEFORE"); then
+              base=$(commit HEAD^) || { echo "no base: a root commit or a shallow checkout"; exit 1; }
+            fi
+          else
+            echo "event $EVENT: only push and pull_request have a base rule"; exit 1
+          fi
+          git worktree add --detach "$RUNNER_TEMP/base" "$base"
+          cd "$RUNNER_TEMP/base"
+          got=$(PYTHONPATH="$PWD" python -P -c 'import homelabnext; print(homelabnext.__file__)')
+          case "$got" in "$PWD"/*) ;; *) echo "the checker imports $got, not the base's"; exit 1;; esac
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+          echo "checker: the base commit $base"
+      - name: each changed module path's review tier, and a code owner (as of the base) for every human-approve one (ADR-0027 follow-up 4), by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          cd "$RUNNER_TEMP/base"
+          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules review-tier --root "$GITHUB_WORKSPACE" --base "$BASE"
+      - name: a role-table change is covered by a swap record whose legs hold against the base's evidence (docs/modules.md, "Swap record 1.2"), by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          checker="$RUNNER_TEMP/base"
+          if ! grep -q '"swap-gate"' "$checker/homelabnext/modules/cli.py"; then
+            echo "::notice::bootstrap: the base has no swap-gate yet; running this change's own"
+            checker="$GITHUB_WORKSPACE"
+          fi
+          cd "$checker"
+          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
 
   # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
   # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state

@@ -78,7 +78,9 @@ __all__ = [
     "load_input",
     "load_json",
     "load_yaml",
+    "path_has_symlink",
     "read_bytes",
+    "read_tree_file",
     "running_problems",
 ]
 
@@ -194,6 +196,33 @@ def read_bytes(path: str | Path, *, follow: bool = True) -> bytes:
         return b"".join(chunks)
     finally:
         os.close(fd)
+
+
+def path_has_symlink(root: str | Path, rel: str) -> bool:
+    """True when ``root`` itself, or any component of ``rel`` under it, is a symbolic link."""
+    cur = Path(root)
+    if cur.is_symlink():
+        return True
+    for part in rel.split("/"):
+        cur = cur / part
+        if cur.is_symlink():
+            return True
+    return False
+
+
+def read_tree_file(root: str | Path, rel: str) -> bytes | str | None:
+    """The working-tree bytes of ``rel`` under ``root`` (read like :func:`read_bytes` with
+    ``follow=False``), None when it is absent, or why it cannot be read: a symbolic link anywhere
+    on its path, or a file :func:`read_bytes` refuses."""
+    if path_has_symlink(root, rel):
+        return "a symbolic link on its path"
+    p = Path(root) / rel
+    if not os.path.lexists(p):
+        return None
+    try:
+        return read_bytes(p, follow=False)
+    except (Unreadable, OSError) as exc:
+        return f"cannot be read ({exc})"
 
 
 class _Loader(UniqueKeyLoader):

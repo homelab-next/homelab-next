@@ -517,10 +517,15 @@ What it does not do:
   still names its static suffix.
 - A module swap's model-role leg (`model_roles`, `docs/modules.md`, "Swap record 1.2") pins the
   report for the rebound table. Every role whose binding the swap changes needs a leg, and the leg
-  holds only when the report passes this check, live by the checker's default policy. That is
-  still only the draft record's rules: the role tables and reports are supplied by the caller (no
-  loader reads them from git yet), no live swap runs through 1.2, and a rebind within one provider
-  module is checked by the pin gate alone.
+  holds only when the report passes this check, live by the checker's default policy, and the new
+  binding is on the instance the leg moves. `hnx modules swap-check` reads that evidence from the
+  repository, and everything that vouches for the new model from the base commit: the role table
+  before, the store, these reports (`examples/model-evals/` holds the live report of a proposed
+  table) and the golden suites; only the table after is the working tree's. So vetting a model
+  (its store entry and its live report, human-approve) is one change and the rebind a later one.
+  `hnx modules swap-gate` makes CI refuse a role-table change that no swap record in the change
+  covers. That is still only the draft record's rules: no live swap runs through 1.2, a report's
+  `live` is a reviewed claim, and a rebind within one provider module has no record of its own.
 
 ### Baselines and defense layers
 
