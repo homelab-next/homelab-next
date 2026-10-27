@@ -2,7 +2,8 @@
 """``hnx modules``: the module loader (ADR-0027 follow-up 9; docs/modules.md, "What the loader
 checks").
 
-``hnx modules check [--overlay DIR] [--examples] [--site FILE] [--running FILE] [--deploy] [--json]``
+``hnx modules check [--overlay DIR] [--examples] [--site FILE] [--running FILE] [--keyring FILE]
+[--mcp-catalog DIR] [--deploy] [--json]``
     discover the manifests (the public ``modules/``, with ``--examples`` the fictional
     ``examples/modules/`` as a fixture root, and an overlay's ``lab/modules/``), and run every
     rule: per manifest, across manifests, per site, the supply chain and, with ``--running``, the
@@ -51,10 +52,16 @@ checks").
 
 For ``check`` and ``render``, defaults follow the overlay layout: with ``--overlay DIR`` the site
 is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
-``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json`` and the core registry
-``DIR/lab/services.yml`` when they exist; otherwise the repository's examples
-(``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.  The slot registry is the draft
-``examples/modules/slots.yml``.  A path given on the command line must exist.
+``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json``, the core registry
+``DIR/lab/services.yml`` when they exist, otherwise the repository's examples
+(``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.
+The core's own names (:class:`homelabnext.modules.loader.CoreNames`) are read from the registry,
+the MCP catalog, the keyring's agent principals, the OCSF tables and the core's notify pairs.
+With ``--overlay`` the catalog is ``DIR/lab/mcp/`` and the keyring ``DIR/lab/keyring/keyring.json``,
+and a missing one is a problem unless ``--mcp-catalog`` or ``--keyring`` names it (an example
+never answers for a lab); without, they are the catalog beside the registry and the example
+keyring, each fallback a note.  With ``--json`` the notes also go to stderr.  The slot registry
+is the draft ``examples/modules/slots.yml``.  A path given on the command line must exist.
 
 Exit: 0 clean, 1 problems, 2 usage or an input that cannot be read, 100 an internal error.
 """
@@ -106,6 +113,77 @@ def _existing(path: Path | None) -> Path | None:
     return path if path is not None and path.is_file() else None
 
 
+def _core(
+    args: argparse.Namespace,
+    root: Path,
+    lab: Path | None,
+    services: Path,
+    budget: ld.Budget,
+    notes: list[str],
+) -> tuple[ld.CoreNames, list[ld.Problem]]:
+    """The core's names from the sources it already has (:func:`ld.core_names`): the registry,
+    its MCP catalog, the keyring, the OCSF tables and the core's notify pairs.
+
+    With ``--overlay``, the MCP catalog (``lab/mcp/``) and the keyring
+    (``lab/keyring/keyring.json``) are the overlay's: one that is missing is a ``registry``
+    problem unless it is given (``--mcp-catalog``, ``--keyring``), since the repository's
+    examples would answer for a lab they do not describe.  Without one, the catalog beside the
+    core registry (``mcp/``) and the example keyring are used, each fallback a note, and a missing
+    source is a note: never a silently smaller set."""
+    from homelabnext.lake.tables import CORE_NAMESPACE
+    from homelabnext.notify.core_pairs import CORE_PAIRS
+
+    problems: list[ld.Problem] = []
+    catalog = args.mcp_catalog or (lab / "mcp" if lab is not None else services.parent / "mcp")
+    mcp: list[tuple[str, Any]] = []
+    if catalog.exists() or catalog.is_symlink():
+        mcp, problems = ld.core_mcp_records(catalog, budget)
+    elif lab is not None:
+        problems.append(
+            ld.Problem(
+                "registry",
+                f"the overlay has no MCP catalog ({_shown_path(catalog, root)}): give "
+                "--mcp-catalog, or the core's MCP server ids cannot be compared",
+            )
+        )
+    else:
+        notes.append(
+            f"no MCP catalog beside the core registry ({_shown_path(catalog, root)}): the core's "
+            "MCP server ids were not compared"
+        )
+    keyring_path = args.keyring
+    if keyring_path is None and lab is not None:
+        keyring_path = _existing(lab / "keyring" / "keyring.json")
+        if keyring_path is None:
+            problems.append(
+                ld.Problem(
+                    "registry",
+                    "the overlay has no keyring (lab/keyring/keyring.json): give --keyring, or "
+                    "the core's agent keys cannot be compared",
+                )
+            )
+    elif keyring_path is None:
+        keyring_path = _existing(root / "examples" / "keyring" / "keyring.json")
+        if keyring_path is not None:
+            notes.append(
+                f"the keyring is the repository's example ({_shown_path(keyring_path, root)})"
+            )
+        else:
+            notes.append("no keyring: the core's agent keys were not compared")
+    keyring = _read(keyring_path, "keyring", budget) if keyring_path is not None else None
+    tables, found = ld.core_table_names(paths.ocsf_dir(), budget)
+    problems += found
+    core, found = ld.core_names(
+        _read(services, "core registry", budget),
+        mcp=mcp,
+        keyring=keyring,
+        tables=tables,
+        table_namespace=CORE_NAMESPACE,
+        pairs=CORE_PAIRS,
+    )
+    return core, [*problems, *found]
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="hnx modules", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -120,6 +198,8 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--slots", type=Path, help="the slot registry (draft)")
         p.add_argument("--roles", type=Path, help="the model role table")
         p.add_argument("--services", type=Path, help="the core service registry")
+        p.add_argument("--keyring", type=Path, help="the generated keyring (its agent principals)")
+        p.add_argument("--mcp-catalog", type=Path, help="the core MCP catalog directory")
         p.add_argument("--lock", type=Path, help="lab/modules.lock")
         p.add_argument("--review-policy", type=Path, help="the review policy")
         p.add_argument("--json", action="store_true")
@@ -377,7 +457,16 @@ def _run(args: argparse.Namespace) -> int:
         raise ld.LoaderError("--deploy needs --overlay (the lab the deploy applies)")
     if deploy and args.examples:
         raise ld.LoaderError("--deploy refuses --examples (a deploy never loads the fixtures)")
-    for flag in ("site", "slots", "roles", "services", "lock", "review_policy"):
+    for flag in (
+        "site",
+        "slots",
+        "roles",
+        "services",
+        "keyring",
+        "mcp_catalog",
+        "lock",
+        "review_policy",
+    ):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
     if args.cmd == "render" and (args.out.exists() or args.out.is_symlink()):
@@ -426,7 +515,7 @@ def _run(args: argparse.Namespace) -> int:
         notes.append(
             f"the core registry is the repository's example ({_shown_path(services, root)})"
         )
-    core, registry_problems = ld.core_names(_read(services, "core registry", budget))
+    core, registry_problems = _core(args, root, lab, services, budget, notes)
     site_path = args.site or _existing(lab and lab / "modules.yml")
     lock_path = args.lock or _existing(lab and lab / "modules.lock")
     policy_path = args.review_policy or _existing(lab and lab / "review-policy.yml")
@@ -474,6 +563,8 @@ def _run(args: argparse.Namespace) -> int:
         if error:
             doc["error"] = error
         print(json.dumps(doc, indent=2))
+        for n in notes:  # the report is JSON on stdout; what was not checked also on stderr
+            print(f"note: {n}", file=sys.stderr)
     else:
         for p in found:
             print(p)

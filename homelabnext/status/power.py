@@ -34,12 +34,12 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import power as pw
+from homelabnext.notify.core_pairs import UPS_ON_BATTERY
 
 from .model import SourceSpec
 
 PREFIX = "status-power"
-ON_BATTERY_TITLE = "UPS on battery"
-RECOVERY_TITLE = "UPS back on line power"
+ON_BATTERY_TITLE, RECOVERY_TITLE = UPS_ON_BATTERY
 
 
 class PowerError(ValueError):

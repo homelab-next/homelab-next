@@ -132,6 +132,7 @@ from conformance.protocols.broker import (
 )
 from homelabnext.agent.schemas import schema_errors
 from homelabnext.generators.safe import CONTROL_RE
+from homelabnext.notify.core_pairs import BROKER_APPROVAL, BROKER_LANE_QUOTA
 
 from . import (
     DEFAULT_APPROVAL_TTL_S,
@@ -195,7 +196,7 @@ EMPTY_MANIFEST = {
     "actions": [],
     "grants": [],
 }
-APPROVAL_TITLE = "Broker approval needed"
+APPROVAL_TITLE, APPROVAL_CLEARED = BROKER_APPROVAL
 #: decide()'s reason for a request's latest approval -> the approval_state pending() reports
 _APPROVAL_STATES = {
     "approved": "valid",
@@ -203,10 +204,8 @@ _APPROVAL_STATES = {
     "approval-replayed": "consumed",
     "approval-denied": "denied",
 }
-APPROVAL_CLEARED = "Broker approval settled"
 #: the operator's notice that an agent's writes into a lane are being refused for its quota
-LANE_QUOTA_TITLE = "Broker lane quota reached"
-LANE_QUOTA_CLEARED = "Broker lane quota cleared"
+LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED = BROKER_LANE_QUOTA
 #: the least time between two lane-quota notices for one actor and lane (s)
 LANE_NOTICE_INTERVAL_S = 900.0
 _SUMMARY_BYTES = 1024

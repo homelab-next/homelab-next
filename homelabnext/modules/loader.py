@@ -16,16 +16,20 @@ rules need, so no rule is skipped because a caller forgot an argument:
    have a record type are validated against it (:data:`VALIDATED_KINDS`); the others are
    checked for containment only, and the report says which.  Then
    :func:`homelabnext.modules.rules.module_problems`.
-3. **Across manifests**: :func:`~homelabnext.modules.rules.tree_problems`, and no module id or
-   feature or core service row that is one of the core's own names (:class:`CoreNames`).
+3. **Across manifests**: :func:`~homelabnext.modules.rules.tree_problems`, and no module id,
+   feature or core service row, MCP server id, agent key, table, table namespace or notify pair
+   title that is one of the core's own names (:class:`CoreNames`).
 4. **Per site** (with a selection): the selection validates against ``platform/module_selection``,
    then :func:`~homelabnext.modules.rules.site_problems` with the rows, units, privileged units and
    model roles built here, no provider instance that takes a core service name for another
-   capability, and :func:`homelabnext.modules.supply.lock_problems` for the selected modules (a
+   capability, one declaration per notify pair problem title and a recovery that names no other
+   title (:func:`pair_problems`), and
+   :func:`homelabnext.modules.supply.lock_problems` for the selected modules (a
    fetched module without a lock is refused; an in-tree-only site needs none).
 5. **Two-way, against what runs** (with an inventory, ``platform/module_inventory``): every
    running unit, service row, MCP server, agent and table bound to a module id is declared by
-   that module, which the site selects, and every declared one runs.
+   that module, which the site selects, and every declared one runs; with the inventory's
+   ``notify_pairs``, the same for the running notifier's recovery pairs, compared by both titles.
 
 What was not checked is a note in the report, never a pass.  Every file is read the same way
 (:func:`read_bytes`): opened without blocking, a regular file only, at most :data:`MAX_BYTES`;
@@ -41,7 +45,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,15 +76,19 @@ __all__ = [
     "Unreadable",
     "check",
     "contributed_files",
+    "core_mcp_records",
     "core_names",
+    "core_table_names",
     "discover",
     "inputs",
     "load_input",
     "load_json",
     "load_yaml",
+    "pair_problems",
     "path_has_symlink",
     "read_bytes",
     "read_tree_file",
+    "running_pair_problems",
     "running_problems",
 ]
 
@@ -91,6 +99,9 @@ MAX_BYTES = 1_000_000  # no input needs more: the largest example (services.yml)
 #: dense YAML runs at well under a megabyte a second, so these bound the run's time)
 MODULE_BYTES = 2_000_000
 RUN_BYTES = 8_000_000
+#: the most entries a core catalog directory (the MCP catalog, the OCSF tables) may hold: a larger
+#: one is refused, never read in part (the core's are a few dozen)
+MAX_CATALOG_FILES = 1_000
 #: files a fixture root's modules may name without shipping (the fictional examples carry no
 #: Ansible): never exempt for the public tree or an overlay
 FIXTURE_UNSHIPPED = ("roles/", "playbooks/")
@@ -148,13 +159,30 @@ class Tree:
 
 @dataclass(frozen=True)
 class CoreNames:
-    """Names the core itself uses, which no module may take: the reserved ids
-    (:data:`homelabnext.schemas.module_manifest.RESERVED_IDS`) and the service rows of the core
-    registry (``services.yml``), each with its capability.  The core keeps no list of its own
-    units, agent keys, MCP ids or tables, so those are not compared."""
+    """Names the core itself uses, which no module may take, each read from a source the core
+    already has (:func:`core_names`), never from a list kept for this check:
+
+    * ``ids``: the reserved ids (:data:`homelabnext.schemas.module_manifest.RESERVED_IDS`);
+    * ``rows``: the service rows of the core registry (``services.yml``), each with its capability;
+    * ``mcp_servers``: the ids of the core's MCP catalog (``mcp/`` beside the registry);
+    * ``agents``: the agent keys of the keyring's agent principals (``profile:<key>``), the
+      generated map of every principal (``hnx agent keyring build``);
+    * ``tables`` and ``table_namespace``: the core's OCSF tables (``schemas/ocsf``) and the lake
+      namespace they live in (:data:`homelabnext.lake.tables.CORE_NAMESPACE`);
+    * ``pairs``: the core's own notify pairs, problem title to recovery title
+      (:data:`homelabnext.notify.core_pairs.CORE_PAIRS`, the list the core registers from).
+
+    The core's own units have no source to read (no fleet_units spec of the core's is in the
+    repository), so they are not compared; a module's units carry its id, which a core name
+    never is."""
 
     ids: frozenset[str] = frozenset(RESERVED_IDS)
     rows: Mapping[str, str] = field(default_factory=dict)  # row name -> capability
+    mcp_servers: frozenset[str] = frozenset()
+    agents: frozenset[str] = frozenset()
+    tables: frozenset[str] = frozenset()  # table:<namespace>.<name>
+    table_namespace: str | None = None
+    pairs: Mapping[str, str] = field(default_factory=dict)  # problem title -> recovery title
 
 
 @dataclass
@@ -603,29 +631,194 @@ def inputs(tree: Tree, load=None) -> Inputs:
     return Inputs(rows, units, priv)
 
 
-def core_names(services: Any) -> tuple[CoreNames, list[Problem]]:
-    """The core's names from its service registry (``services.yml``; None: the reserved ids
-    only), and the problems of a registry whose ``services`` is not a mapping of rows."""
-    if services is None:
-        return CoreNames(), []
-    rows = services.get("services") if isinstance(services, dict) else None
-    if not isinstance(rows, dict):
-        return CoreNames(), [Problem("registry", "services is not a mapping of row name to row")]
-    out, names = [], {}
-    for k, v in rows.items():
-        if not isinstance(k, str) or not isinstance(v, dict):
-            out.append(Problem("registry", f"service row {_shown(k)} is not a named mapping"))
+def core_names(
+    services: Any,
+    *,
+    mcp: Iterable[tuple[str, Any]] | None = None,
+    keyring: Any = None,
+    tables: Iterable[str] | None = None,
+    table_namespace: str | None = None,
+    pairs: Mapping[str, str] | None = None,
+) -> tuple[CoreNames, list[Problem]]:
+    """The core's names from the sources it already has: its service registry (``services.yml``;
+    None: the reserved ids only), its MCP catalog's records (``(file name, record)``, as
+    :func:`core_mcp_records` reads them), the keyring (its agent principals) and the names of its
+    OCSF tables in ``table_namespace``, and its notify pairs (problem title to recovery title).  A
+    source that is malformed is a ``registry`` problem,
+    never a silently smaller set."""
+    out: list[Problem] = []
+    names: dict[str, str] = {}
+    if services is not None:
+        rows = services.get("services") if isinstance(services, dict) else None
+        if not isinstance(rows, dict):
+            out.append(Problem("registry", "services is not a mapping of row name to row"))
+        else:
+            for k, v in rows.items():
+                if not isinstance(k, str) or not isinstance(v, dict):
+                    out.append(
+                        Problem("registry", f"service row {_shown(k)} is not a named mapping")
+                    )
+                    continue
+                names[k] = str(v.get("capability", ""))
+    mcp_ids: set[str] = set()
+    for fname, rec in mcp or ():
+        # the id as the catalog's own loader takes it: the record's, else the file's stem; the
+        # catalog's integrity check requires the two to agree
+        stem = Path(fname).stem
+        if not isinstance(rec, dict):
+            out.append(Problem("registry", f"mcp/{_shown(fname)}: a record must be a mapping"))
             continue
-        names[k] = str(v.get("capability", ""))
-    return CoreNames(rows=names), out
+        sid = rec.get("id")
+        if sid is not None and (not isinstance(sid, str) or not sid):
+            out.append(Problem("registry", f"mcp/{_shown(fname)}: an id that is not a string"))
+            continue
+        sid = sid or stem
+        if sid != stem:
+            why = f"mcp/{_shown(fname)}: id {_shown(sid)} is not the file name"
+            out.append(Problem("registry", why))
+        mcp_ids.add(sid)
+    agents: set[str] = set()
+    if keyring is not None:
+        principals = keyring.get("principals") if isinstance(keyring, dict) else None
+        if not isinstance(principals, list):
+            out.append(Problem("registry", "the keyring's principals is not a list"))
+        else:
+            for p in principals:
+                name = p.get("principal") if isinstance(p, dict) else None
+                if not isinstance(name, str):
+                    out.append(Problem("registry", "a keyring principal without a name"))
+                    continue
+                if p.get("kind") == "agent" and name.startswith("profile:"):
+                    agents.add(name.removeprefix("profile:"))
+    core_tables = frozenset(f"table:{table_namespace}.{t}" for t in tables or ())
+    return (
+        CoreNames(
+            rows=names,
+            mcp_servers=frozenset(mcp_ids),
+            agents=frozenset(agents),
+            tables=core_tables if table_namespace else frozenset(),
+            table_namespace=table_namespace,
+            pairs=dict(pairs or {}),
+        ),
+        out,
+    )
 
 
-def _core_problems(tree: Tree, ins: Inputs, core: CoreNames) -> list[Problem]:
+def _catalog(directory: str | Path, what: str) -> tuple[list[Path], list[Problem]]:
+    """The entries of a core catalog directory, sorted by name: a directory that is a symbolic
+    link, is missing or holds more than :data:`MAX_CATALOG_FILES` entries is a ``registry``
+    problem (nothing of it is read)."""
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        return [], [Problem("registry", f"{what} {root.name}/ is not a directory")]
+    entries: list[Path] = []
+    for f in root.iterdir():
+        entries.append(f)
+        if len(entries) > MAX_CATALOG_FILES:
+            why = f"{what} {root.name}/ holds over {MAX_CATALOG_FILES} entries"
+            return [], [Problem("registry", why)]
+    return sorted(entries, key=lambda p: p.name), []
+
+
+def _catalog_read(f: Path, budget: Budget | None) -> bytes:
+    data = read_bytes(f, follow=False)
+    if budget is not None:
+        budget.charge("inputs", len(data))
+    return data
+
+
+def core_mcp_records(
+    directory: str | Path, budget: Budget | None = None
+) -> tuple[list[tuple[str, Any]], list[Problem]]:
+    """The core MCP catalog's records (every ``*.yml`` in ``directory``), each read like any
+    other input (:func:`read_bytes` without following a final link, charged to ``budget``).  A
+    record that cannot be read, another record-like file (``*.yaml``, ``*.json``, any case: the
+    catalog's own loader, :func:`homelabnext.mcp.servers.load`, refuses them too), or a directory
+    that is a symbolic link, missing or over :data:`MAX_CATALOG_FILES` entries is a ``registry``
+    problem."""
+    entries, out = _catalog(directory, "the MCP catalog")
+    recs: list[tuple[str, Any]] = []
+    for f in entries:
+        if f.suffix != ".yml":
+            if f.suffix.lower() in (".yml", ".yaml", ".json"):
+                why = f"mcp/{_shown(f.name)}: a record file is <id>.yml; this one is not read"
+                out.append(Problem("registry", why))
+            continue
+        try:
+            recs.append((f.name, parse_yaml(_decoded(_catalog_read(f, budget)))))
+        except Unreadable as exc:
+            out.append(Problem("registry", f"mcp/{_shown(f.name)}: {exc}"))
+    return recs, out
+
+
+def core_table_names(
+    directory: str | Path, budget: Budget | None = None
+) -> tuple[list[str], list[Problem]]:
+    """The names of the core's OCSF tables: every ``*.v*.json`` subset in ``directory`` (as
+    :func:`homelabnext.lake.tables.load_schemas` reads them), each read like any other input.  A
+    subset that cannot be read or parsed, or a directory that is a symbolic link, missing, over
+    :data:`MAX_CATALOG_FILES` entries or without a subset, is a ``registry`` problem."""
+    from homelabnext.lake.errors import LakeError
+    from homelabnext.lake.tables import schema_from_json
+
+    entries, out = _catalog(directory, "the OCSF tables")
+    names: list[str] = []
+    for f in entries:
+        if not (f.suffix == ".json" and ".v" in f.stem):
+            continue
+        try:
+            doc = json.loads(_decoded(_catalog_read(f, budget)))
+            names.append(schema_from_json(doc).name)
+        except (Unreadable, ValueError, LakeError, KeyError, TypeError, AttributeError) as exc:
+            out.append(Problem("registry", f"ocsf/{_shown(f.name)}: {exc}"))
+    if not names and not out:
+        out.append(Problem("registry", "the OCSF tables: no subset (*.v*.json)"))
+    return sorted(names), out
+
+
+def _module_tables(m: Doc, d: Path, load) -> set[str]:
+    """The tables a module names as its own: its ``data`` tables and its lake table records."""
+    out = {x["table"] for x in m.get("data", []) if "table" in x}
+    for e in m.get("contributes", {}).get("lake_tables", []):
+        try:
+            rec = load(d / e["file"])
+        except Unreadable:
+            continue  # a record that cannot be read fails where the rules load it
+        if isinstance(rec, dict) and isinstance(rec.get("id"), str):
+            out.add(rec["id"])
+    return out
+
+
+def _core_problems(tree: Tree, ins: Inputs, core: CoreNames, load=None) -> list[Problem]:
+    load = load or module_reader(tree)
     out = []
     for n in sorted(tree.mods):
+        m, d = tree.mods[n], tree.dirs[n]
         if n in core.rows:
             out.append(Problem(n, "the module id is a core service name"))
-        if tree.mods[n]["kind"] == "provider":
+        if core.table_namespace and mr.us(n) == core.table_namespace:
+            out.append(
+                Problem(n, f"the module's table namespace is the core's ({core.table_namespace})")
+            )
+        out += [
+            Problem(n, f"MCP server {i} is a core MCP server id")
+            for i in sorted(mr._mcp_ids(m, d, load) & core.mcp_servers)
+        ]
+        out += [
+            Problem(n, f"agent {k} is a core agent key")
+            for k in sorted({a["key"] for a in mr._agents(m)} & core.agents)
+        ]
+        out += [
+            Problem(n, f"table {t} is a core table")
+            for t in sorted(_module_tables(m, d, load) & core.tables)
+        ]
+        core_titles = {*core.pairs, *core.pairs.values()}
+        for pr in _pairs(m):
+            for which in ("problem", "recovery"):
+                if pr[which] in core_titles:
+                    why = f"notify pair {_title(pr['problem'])}: its {which} title is a core title"
+                    out.append(Problem(n, why))
+        if m["kind"] == "provider":
             continue
         out += [
             Problem(n, f"service row {r} is a core service name")
@@ -679,12 +872,93 @@ def _bound_to(kind: str, name: str, ids: set[str]) -> str | None:
     return mr._owner(name, ids, "-")
 
 
+def _title(text: str) -> str:
+    """A notify title as it is printed: always quoted (a title has spaces and colons), with every
+    control character escaped."""
+    return repr(str(text))
+
+
+def _pairs(m: Doc) -> list[Doc]:
+    return m.get("contributes", {}).get("notify_pairs", [])
+
+
+def pair_problems(sel: Mapping[str, Doc]) -> list[Problem]:
+    """The notifier keys its pairs by problem title (:class:`homelabnext.notify.core.Notifier`),
+    so across the selected modules a problem title is declared once.  Every title names one
+    thing: a recovery is not its own problem's title, another pair's problem title, or another
+    pair's recovery (so a recovery page always says which alert cleared).  The core's own titles
+    are refused per module (:class:`CoreNames`)."""
+    seen: dict[str, str] = {}
+    problems = {pr["problem"] for m in sel.values() for pr in _pairs(m)}
+    recoveries: dict[str, tuple[str, str]] = {}  # recovery -> (module, problem)
+    out = []
+    for n in sorted(sel):
+        for pr in _pairs(sel[n]):
+            title, rec = pr["problem"], pr["recovery"]
+            what = f"notify pair {_title(title)}"
+            if rec == title:
+                out.append(Problem(n, f"{what}: the recovery is its own title"))
+            elif rec in problems:
+                out.append(Problem(n, f"{what}: the recovery {_title(rec)} is a problem title"))
+            if title in seen:
+                other = seen[title]
+                why = f"{what} is also declared by {other}"
+                out.append(Problem(n, why if other != n else f"{what} twice"))
+                continue
+            seen[title] = n
+            if rec in recoveries and rec != title:
+                other, ptitle = recoveries[rec]
+                why = f"{what}: the recovery {_title(rec)} is also {other}'s for {_title(ptitle)}"
+                out.append(Problem(n, why))
+            recoveries.setdefault(rec, (n, title))
+    return out
+
+
+def running_pair_problems(tree: Tree, sel: Mapping[str, Doc], running: list[Doc]) -> list[Problem]:
+    """The running notifier's pairs (``{problem, recovery, module?}``) against the selected
+    modules' declared ones, compared exactly (both titles): a pair bound to a module is declared
+    by that module, which the site selects, with the same recovery; every declared pair runs.  A
+    pair bound to no module is the core's and is not judged here."""
+    declared = {n: {p["problem"]: p["recovery"] for p in _pairs(m)} for n, m in sel.items()}
+    out = []
+    seen: set[tuple[str, str]] = set()
+    titles: set[str] = set()
+    for r in running:
+        title, mid = r["problem"], r.get("module")
+        what = f"notify pair {_title(title)}"
+        if title in titles:
+            out.append(Problem("running", f"{what} runs twice (the notifier holds one per title)"))
+        titles.add(title)
+        if mid is None:
+            continue
+        seen.add((mid, title))
+        if mid not in tree.mods:
+            out.append(Problem("running", f"{what} runs for {mid}, which is no module"))
+        elif mid not in sel:
+            out.append(Problem("running", f"{what} runs for {mid}, which the site does not select"))
+        elif title not in declared[mid]:
+            out.append(Problem("running", f"{what} runs but {mid} declares no such pair"))
+        elif r["recovery"] != declared[mid][title]:
+            why = (
+                f"{what} runs with recovery {_title(r['recovery'])} but {mid} declares "
+                f"{_title(declared[mid][title])}"
+            )
+            out.append(Problem("running", why))
+    for n in sorted(declared):
+        for title in sorted(declared[n]):
+            if (n, title) not in seen:
+                why = f"notify pair {_title(title)} ({n}) is declared but not running"
+                out.append(Problem("running", why))
+    return out
+
+
 def running_problems(
     tree: Tree, ins: Inputs, site: Doc, sel: Mapping[str, Doc], inventory: Doc, load=None
 ) -> list[Problem]:
     """Every running name bound to a module id is declared by that module, which the site
     selects; every declared name runs.  A name bound to no module id is the core's and is not
-    judged here.  A kind the inventory names in ``not_gathered`` is not compared."""
+    judged here.  A kind the inventory names in ``not_gathered`` is not compared.  With the
+    inventory's ``notify_pairs``, the same for recovery pairs (:func:`running_pair_problems`)."""
     declared = _declared(tree, ins, site, sel, load or module_reader(tree))
     ids = set(tree.mods)
     skipped = set(inventory.get("not_gathered", []))
@@ -705,6 +979,8 @@ def running_problems(
         for name in sorted(set(declared[kind]) - running):
             why = f"{kind} {name} ({declared[kind][name]}) is declared but not running"
             out.append(Problem("running", why))
+    if isinstance(inventory.get("notify_pairs"), list):
+        out += running_pair_problems(tree, sel, inventory["notify_pairs"])
     return out
 
 
@@ -781,7 +1057,7 @@ def check(
     vtree = Tree(valid, {n: tree.dirs[n] for n in valid}, {n: tree.origin[n] for n in valid})
     ins = inputs(vtree, load)
     problems += [Problem("modules", p) for p in mr.tree_problems(valid, vtree.dirs, load)]
-    problems += _core_problems(vtree, ins, core)
+    problems += _core_problems(vtree, ins, core, load)
     if not tree.mods:
         notes.append("no module manifests were found under the given roots")
     if site is None:
@@ -805,6 +1081,7 @@ def check(
         sel = mr.selected(site, valid)
     except KeyError:
         return Report(sorted(set(problems)), notes)  # site_problems reported it
+    problems += pair_problems(sel)
     fetched = [n for n, m in sel.items() if m.get("origin", {}).get("kind") != "in-tree"]
     if lock is not None or fetched:
         the_lock = lock
@@ -829,6 +1106,10 @@ def check(
                     "the inventory does not report "
                     + ", ".join(skipped)
                     + ": not compared (not_gathered)"
+                )
+            if "notify_pairs" not in inventory:
+                notes.append(
+                    "the inventory names no notify_pairs: the recovery pairs were not compared"
                 )
     return Report(sorted(set(problems)), notes)
 

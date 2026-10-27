@@ -162,13 +162,15 @@ with no schema, generator or check in any form):
 9. the loader: implemented (`homelabnext.modules.loader`, `hnx modules check|render`, in `make
    gates` and CI over the example lab): discovery with the overlay-shadowing refusal, schema
    validation before any rule, every rule with every input, uniqueness against the core's own
-   names, the supply chain, and the two-way check against an inventory of what runs (the draft
-   `platform/module_inventory` 1.0); the private overlay's deploy workflow runs it at deploy time
-   (`hnx modules check --deploy`, refusing the repository's examples in place of a lab input)
-   before anything changes on a host, and again after the deploy against the fleet units gathered
-   from the hosts (role `module_census`, `hnx modules gather`). Not done: it has not run at a real
-   lab's deploy yet; service rows, MCP servers, agents and tables are not gathered from the hosts;
-   recovery pairs; and the core's own units and agent keys;
+   names (its registry rows, MCP catalog ids, keyring agent keys, OCSF tables and notify pair
+   titles), the supply chain, and the two-way check against an inventory of what runs (the draft
+   `platform/module_inventory` 1.0), recovery pairs included; the private overlay's deploy
+   workflow runs it at deploy time (`hnx modules check --deploy`, refusing the repository's
+   examples in place of a lab input) before anything changes on a host, and again after the
+   deploy against the fleet units gathered from the hosts (role `module_census`, `hnx modules
+   gather`). Not done: it has not run at a real lab's deploy yet; service rows, MCP servers,
+   agents, tables and recovery pairs are not gathered from the hosts; and the core's own units,
+   which have no source;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks.
 
