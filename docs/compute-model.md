@@ -80,9 +80,9 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
-| `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
+| `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; on vm/lxc only with the flag on, on a host only when its baselines resolve `host-firewall` or `egress-filter` (a host's rules reach its own `nftables_host` ruleset, never a hypervisor file) | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
-| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is not ACCEPT, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
+| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. A physical one (`kind: host`) has `policy_out: DROP` or `REJECT`, no internet `outbound_allow`, and baselines that resolve `egress-filter`, which the set must define; no exemption stands in for it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is DROP or REJECT where it states one, a host only when it carries `firewall_rules`, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
@@ -320,8 +320,8 @@ reasoning is not a security boundary, and an agent's network should be default-d
 
 What is enforced:
 
-- **Default-deny egress, to the lab only.** Validation refuses a model runtime (a `vm` or `lxc`)
-  whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
+- **Default-deny egress, to the lab only.** Validation refuses a model runtime (a `vm`, `lxc` or
+  physical `host`) whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
   reaches the internet: `any`, a `/0`, or any network not inside the never-internet ranges
   (`homelabnext.modules.egress.NOT_INTERNET`), a `zone:` destination judged by its subnet in the
   site model. No guest's `outbound_allow` may hold a cloud metadata address either, since the
@@ -330,6 +330,24 @@ What is enforced:
   the internet is reached through the gateway, never directly. The example lab's `infer-core`
   runs the `model-runtime` baseline (`server` plus `egress-filter` and the stricter
   `os-hardening`; add `network-sensor` where the lab has a sensor host), and with a set that defines `egress-filter` the guest must resolve it.
+- **Physical model runtimes.** A `kind: host` model runtime (a GPU box outside any hypervisor)
+  has no NIC firewall, so its own `nftables_host` ruleset is all that filters it. It states its
+  outbound policy and allow list in `firewall_rules` like a guest (the inventory carries them as
+  `hnx_firewall`; no `<vmid>.fw` file is rendered for a host), and validation refuses it unless
+  `policy_out` is `DROP` or `REJECT`, no `outbound_allow` reaches the internet, and its baselines
+  resolve `egress-filter`, a control the baseline set must define. Neither a baseline exemption
+  nor a `filtered_by` pointer stands in for it. Any host's `firewall_rules` need its baselines to
+  resolve `host-firewall` or `egress-filter`, since nothing else enforces them (fixture:
+  `tests/compute/physical/gpu-1.yml`).
+- **Serving roles open no egress.** `vllm_server` runs with the hub offline and reads weights only
+  from the local store; `model_store` fetches hub entries, and on a host whose `policy_out` is
+  `DROP` or `REJECT` it refuses to fetch without `model_store_hf_endpoint`
+  (`model_store_require_mirror`), because the public hub can never be an allow there. The role
+  checks only that the endpoint is an https URL and not one of the public hub's own hosts
+  (`huggingface.co`, `hf.co` and their subdomains); whether it is really the lab's mirror is
+  for `outbound_allow` to decide, and an endpoint it does not reach fails at fetch time. List the
+  mirror (and any registry the host pulls from) in `outbound_allow` as the lab destination it is,
+  as the example's `model-store` rule does.
 - **Filtered elsewhere is a pointer, not prose.** A model runtime whose NIC firewall is off needs a
   `firewall_exemption` with `filtered_by` (guest 1.5) and a `review_by` date that has not passed
   (judged against `HNX_TODAY` when set, else today). A guest pointer must name a guest that
@@ -346,7 +364,16 @@ What is enforced:
   flows included, and logs `hnx-egress-refused: ` (rate-limited, 6 a minute); no
   `outbound_allow` can reopen them. A forward chain at priority `filter - 10`, ahead of a
   container engine's own forward chains, drops the same addresses for forwarded traffic, such as
-  a container bridge or a containerised executor. A module host can never name one as its
+  a container bridge or a containerised executor.
+- **Containers held to the same allow list.** On a guest that needs `egress-filter`, that forward
+  chain is default-deny too (policy drop, and a drop there is final whatever the container
+  engine's later chains accept): after the metadata refusal it accepts only established flows,
+  connections the host itself translated in (a published port, `ct status dnat`), traffic between
+  the host's own bridges (`nftables_host_forward_local`, empty by default, so list the bridge
+  subnets where containers talk to each other across the host) and the same `outbound_allow`
+  destinations as the output chain, then logs `hnx-egress-drop: ` (and rejects with `REJECT`).
+  A containerised executor's connection to a public bucket is dropped there, not just the
+  host's own. A module host can never name one as its
   address (`homelabnext.modules.egress.METADATA`; a test keeps the two lists equal).
 - **Detection.** `det:cloud-metadata-probe` (a flow to a link-local metadata address, from any
   host a sensor sees) and `det:cloud-metadata-refused` (any refusal) fire today.
@@ -366,14 +393,22 @@ What is not enforced:
   the `model-runtime` baseline and `policy_out: DROP` yourself. `cap:codemode-runner` is not a
   model runtime: it runs pinned code that relays a program's calls to the broker, and the program
   itself runs in the executor (`docs/codemode.md`, CM-5b).
-- A physical host (`kind: host`) carries no `firewall_rules`, so a GPU box serving models outside
-  a hypervisor is not checked (validation has no warning channel to flag it): filter it upstream
-  (the network model) or give it `nftables_host` input by hand.
+- A physical model runtime's only outbound filter is its own ruleset: nothing the model states
+  sits upstream of it, so someone with root on the box can still flush the table (the
+  `hnx-egress-drop: ` logs just stop; the role's `health` hook is what notices: with
+  `egress-filter` among the guest's controls it fails unless input, output and forward all
+  default to drop, and without it it checks input only).
+- A retired model runtime, physical or not, is held to none of this: it runs nothing. Set it
+  back to `planned` or `active` and every check applies again.
+- "Lab" means the never-internet ranges, so any RFC 1918 private address passes as a lab
+  destination, as it does on a guest: an allow to a private range the lab does not own is not
+  caught.
 - A guest without `host-firewall` or `egress-filter` gets no metadata refusal on the guest; the
   hypervisor's firewall files do not carry it.
-- Forwarded traffic is refused only for the metadata addresses: the forward chain does not apply
-  a model runtime's default-deny to its containers, and a container engine's own accept rules for
-  its bridges still decide the rest.
+- On a guest without `egress-filter`, forwarded traffic is refused only for the metadata
+  addresses, and a container engine's own accept rules for its bridges still decide the rest. With
+  it, a published port's connections are accepted whatever the inbound rules say (the forward
+  chain sees them after the engine's translation), as they were before.
 - An allowed destination used as a relay (the gateway, a package mirror), DNS over HTTPS to an
   allowed resolver, and DNS itself through the lab's resolver are not stopped by an address list.
 - Weights are pinned by digest in the model store (`hnx models store check`); what a model does
@@ -636,7 +671,7 @@ owed (a pending marker) until a later run succeeds.
 | `central-auth` | `sssd_ldap` | guest | sssd against the identity provider's LDAP outpost by logical id, LDAPS only (`ldap_tls_reqcert = demand`), Authentik's layout by default, `simple_allow_groups`; the bind credential by secret reference in a 0600 sssd.conf checked with `sssctl config-check`; the break-glass account must exist in the local files, passwd must resolve `files` first, and sssd filters that name | `sssctl domain-status --online` and the break-glass check | the bind credential is on disk (sssd needs it); MFA is the identity provider's (a code with the password on the outpost) |
 | `os-hardening` | `os_hardening` | guest | CIS-lite, each item named in the required `os_hardening_items`: kernel settings (pointer and dmesg restrictions, ptrace, protected links, no setuid dumps, redirects and source routes off; forwarding untouched), unused filesystem modules refused, desktop and print services masked, file modes, no core dumps; no reboot | the live kernel settings and file modes | a module already loaded stays loaded until a reboot; its verify is the host-assessment audit |
 | `host-assessment` | `lynis` | guest | a daily `lynis audit system` on an OnCalendar timer, report to the state directory; optionally files the summary through the broker's `finding.write` lane (`lynis_broker_socket`, needs the `hnx` command and a broker identity on the guest). On the same timer, a **package integrity sweep**: `dpkg --verify` (`debsums -s` only where dpkg has no `--verify`) flags package-owned files whose digest differs (the `5` column) or that are missing; conffiles (attribute `c`) are left out by default (`lynis_dpkg_verify_include_conffiles`; administrators edit them, and file-integrity and host-audit watch them), files dpkg's own `path-exclude` never unpacked are not missing, and `lynis_dpkg_verify_allow` accepts paths or packages with a reason; the result goes to an owner-only `dpkg-verify.json` beside the report, and a change in the set of findings is alerted state-diffed through `lynis_notify` (none, notify, mail, auto, as for needrestart). Why: it catches tampered package binaries and libraries cheaply | the run is fresh, hardening index at least `lynis_min_hardening_index` (the server baseline sets 60), at most `lynis_max_warnings` (0) warnings and the integrity sweep found at most `lynis_dpkg_verify_max_findings` (0) unaccepted files (health prints the counts) | the distribution's Lynis lags upstream; the integrity sweep's MD5 sums live on the host itself, so it is a cheap tripwire, not proof: whoever can replace a binary can rewrite its sum |
-| `host-firewall`, `egress-filter` | `nftables_host` | guest | one `inet homelabnext` table in /etc/nftables.conf (no `flush ruleset`: a container engine's tables stay), from the guest model's own `firewall_rules`, which the inventory carries as `hnx_firewall` with zones resolved by the hypervisor rules' resolver; inbound drop, established and loopback, ICMP errors and neighbour discovery, a management SSH rule from `nftables_host_ssh_sources`, then the guest's rules; outbound from `policy_out`, after a first drop (logged `hnx-egress-refused: `) of the cloud metadata addresses that no policy or allow reopens, and with DROP or REJECT a rate-limited `hnx-egress-drop: ` log line before the policy (REJECT ends in a reject); a forward chain at priority `filter - 10` drops the same metadata addresses for forwarded (container bridge) traffic and accepts the rest; checked with `nft -c` (the tests use the real nft), load owed until `nft -f` succeeds; with egress-filter (from `hnx_controls`) an ACCEPT `policy_out` is refused | `nft -j list table`: input policy drop, and output drop with egress-filter | IPv4 rules only (the guest schema's CIDRs); refuses to run beside pve-firewall, ufw or firewalld (the example hypervisor removes the control with that reason) |
+| `host-firewall`, `egress-filter` | `nftables_host` | guest | one `inet homelabnext` table in /etc/nftables.conf (no `flush ruleset`: a container engine's tables stay), from the guest model's own `firewall_rules`, which the inventory carries as `hnx_firewall` with zones resolved by the hypervisor rules' resolver; inbound drop, established and loopback, ICMP errors and neighbour discovery, a management SSH rule from `nftables_host_ssh_sources`, then the guest's rules; outbound from `policy_out`, after a first drop (logged `hnx-egress-refused: `) of the cloud metadata addresses that no policy or allow reopens, and with DROP or REJECT a rate-limited `hnx-egress-drop: ` log line before the policy (REJECT ends in a reject); a forward chain at priority `filter - 10` drops the same metadata addresses for forwarded (container bridge) traffic and accepts the rest, or with egress-filter holds it to the same `outbound_allow` (policy drop; established flows, published ports and `nftables_host_forward_local` bridge-to-bridge traffic accepted); checked with `nft -c` (the tests use the real nft), load owed until `nft -f` succeeds; with egress-filter (from `hnx_controls`) an ACCEPT `policy_out` is refused | `nft -j list table`: input policy drop, and output and forward drop with egress-filter | IPv4 rules only (the guest schema's CIDRs); refuses to run beside pve-firewall, ufw or firewalld (the example hypervisor removes the control with that reason) |
 | `log-forward` | `rsyslog_forward` | guest | every message as RFC 5424 over TCP with TLS (gtls, `x509/name`, the receiver's registry name as the peer) to the log pipeline's receiver by logical id, through a disk-assisted queue; checked with `rsyslogd -N1`; rsyslog over Fluent Bit because it is in every Debian-family main archive and speaks syslog over TLS natively | rsyslog is active | arrival at the lake is the pipeline's ingest audit, not this hook |
 | `host-audit` | `auditd` | guest | keyed rule groups (`hnx-identity`, `-privilege`, `-sshd`, `-modules`, `-time`; required `auditd_rule_groups`), loaded with `augenrules --load` when the file or `augenrules --check` says so; size rotation in auditd.conf, re-read on SIGHUP (the unit refuses a manual stop); the SIEM agent reads the audit log | auditing enabled and every chosen key loaded | 64-bit syscall rules only |
 | `package-scan` | `trivy` | guest | the vendor apt repository (`https://get.trivy.dev/deb generic main`), its key pinned by fingerprint; a daily `trivy rootfs` at or above the required `trivy_severity` (server: HIGH, sensitive: MEDIUM), a CycloneDX SBOM, running container images with `trivy_scan_containers` (container-host), `trivy_skip_db_update` / `trivy_db_repository` for an offline lab; `trivy_version` empty = newest, set = pinned and held | the run is fresh and reported at most `trivy_max_findings` (0) | the vulnerability database comes from the vendor unless mirrored |

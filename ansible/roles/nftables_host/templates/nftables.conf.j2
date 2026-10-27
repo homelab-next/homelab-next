@@ -27,13 +27,31 @@ table inet {{ nftables_host_table }} {
 	}
 	# forwarded traffic (a container bridge, a containerised executor): the metadata services are
 	# refused here too, at a priority ahead of a container engine's own forward chains, whose
-	# accept rules for their bridges this table does not replace
+	# accept rules for their bridges this table does not replace. Where the guest needs
+	# egress-filter, a container's traffic leaving the host is held to the output chain's rules: a
+	# drop here is final, whatever the engine's chains would accept after it.
 	chain forward {
-		type filter hook forward priority filter - 10; policy accept;
+		type filter hook forward priority filter - 10; policy {{ 'drop' if nftables_host_require_egress | bool else 'accept' }};
 		ip daddr { {{ nftables_host_refused_v4 | join(', ') }} } limit rate 6/minute burst 6 packets log prefix "{{ nftables_host_log_refused }}" level warn
 		ip daddr { {{ nftables_host_refused_v4 | join(', ') }} } drop comment "homelabnext-refused-destination"
 		ip6 daddr { {{ nftables_host_refused_v6 | join(', ') }} } limit rate 6/minute burst 6 packets log prefix "{{ nftables_host_log_refused }}" level warn
 		ip6 daddr { {{ nftables_host_refused_v6 | join(', ') }} } drop comment "homelabnext-refused-destination"
+{% if nftables_host_require_egress | bool %}
+		ct state established,related accept
+		ct state invalid drop
+		# a connection the host itself translated in (a published port) is inbound, not egress
+		ct status dnat accept comment "homelabnext-published-port"
+{% if nftables_host_forward_local | length > 0 %}
+		ip saddr { {{ nftables_host_forward_local | join(', ') }} } ip daddr { {{ nftables_host_forward_local | join(', ') }} } accept comment "homelabnext-bridge-local"
+{% endif %}
+{% for r in nftables_host_firewall.outbound_allow | default([]) %}
+		{{ rule(r, 'daddr') }}
+{% endfor %}
+		limit rate 10/minute burst 20 packets log prefix "{{ nftables_host_log_dropped }}" level warn
+{% if nftables_host_firewall.policy_out == 'REJECT' %}
+		reject with icmpx type admin-prohibited
+{% endif %}
+{% endif %}
 	}
 	chain output {
 		type filter hook output priority filter; policy {{ 'accept' if nftables_host_firewall.policy_out == 'ACCEPT' else 'drop' }};
