@@ -109,20 +109,29 @@ modules-check:
 
 # each module path the working tree changes against BASE (default origin/main): its review tier,
 # and a valid CODEOWNERS owner (as of BASE) for every human-approve one (ADR-0027 follow-up 4);
-# not part of gates, which has no base to compare with (CI runs it with --ci-base)
+# not part of gates, which has no base to compare with (CI runs it in job trusted-gates, with the
+# base's own code)
 .PHONY: modules-review-tier
 BASE ?= origin/main
 modules-review-tier:
-	$(PY) -m homelabnext.cli modules review-tier --base $(BASE)
+	$(PY) -m homelabnext.cli modules review-tier --base "$(BASE)"
 
 # a swap record 1.2 against BASE (default origin/main) and the working tree: the record, the
 # manifests and the site it starts from, with the model evidence read from the repository (the
-# role table at BASE and in the working tree, the model store, the evaluation reports). Not part
-# of gates: the tree holds no swap record of its own to check (the schema examples are fictional)
+# role table after from the working tree; the table before, the model store, the evaluation
+# reports and the golden suites from BASE). Not part of gates: the tree holds no swap record of
+# its own to check (the schema examples are fictional)
 .PHONY: swap-check
 swap-check:
 	@test -n "$(RECORD)" -a -n "$(SITE)" || { echo "usage: make swap-check RECORD=<swap record> SITE=<site> [BASE=<rev>]"; exit 2; }
-	$(PY) -m homelabnext.cli modules swap-check $(RECORD) --site $(SITE) --base $(BASE) --examples
+	$(PY) -m homelabnext.cli modules swap-check "$(RECORD)" --site "$(SITE)" --base "$(BASE)" --examples
+
+# the role table against BASE (default origin/main): a change must be covered by a swap record
+# under examples/swaps/ whose legs hold against BASE's evidence. Not part of gates, which has no
+# base to compare with (CI runs it in job trusted-gates, with the base's own code)
+.PHONY: swap-gate
+swap-gate:
+	$(PY) -m homelabnext.cli modules swap-gate --base "$(BASE)"
 
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it
@@ -199,7 +208,8 @@ models-report:
 	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
 
 # LIVE, never in CI: the same evaluation against the real pinned models through the resolver.
-# Keep build/models/eval.json with the model change.
+# To vet a model for a swap, commit build/models/eval.json as examples/model-evals/<name>.json in
+# its own change, before the change that rebinds it (docs/modules.md, "Swap record 1.2").
 models-eval:
 	@test -n "$(REGISTRY)" || { echo "usage: make models-eval REGISTRY=<services.yml> [MODEL_ROLES=<roles.json>]"; exit 2; }
 	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --registry $(REGISTRY) --report build/models/eval.json

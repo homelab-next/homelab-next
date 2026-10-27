@@ -635,6 +635,26 @@ def test_what_the_check_rests_on_is_governance(repo, capsys, path):
     assert _by_path(out) == {path: rt.HUMAN}
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "examples/model-serving/model_store.json",
+        "examples/model_roles.eval.json",
+        "examples/model-evals/candidate.json",
+        "homelabnext/golden/examples/classifier_smoke.yml",
+    ],
+)
+def test_what_vouches_for_a_model_is_human_approve(repo, capsys, path):
+    """The swap check reads the store, the reports and the suites from the base, so the change
+    that adds them is the vetting step, and a human approves it."""
+    f = repo / path
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{}\n")
+    _, out = _run(repo, capsys)
+    assert _by_path(out) == {path: rt.HUMAN}
+    assert "vouches for a model" in out["manifests"][0]["changes"][0]["why"]
+
+
 def test_the_schema_is_read_as_of_the_base(repo, capsys):
     """S2: a pull request that adds a key to the schema still has its use judged undefined."""
     schema = json.loads((repo / rt.SCHEMA).read_text())
@@ -730,6 +750,26 @@ def test_ci_base_takes_the_pull_requests_base(repo, capsys, monkeypatch):
     assert rc == 0 and _by_path(out)["modules/external-collector/module.yml"] == rt.OWNER
     monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
     assert mcli.main(["review-tier", "--root", str(repo), "--ci-base"]) == 2
+
+
+def test_ci_base_runs_no_code_from_the_checkout(repo, capsys, monkeypatch, tmp_path):
+    """The base rule is the package's: a tools/schema_check.py in the checkout is never loaded,
+    so a change cannot pick its own base."""
+    ran = tmp_path / "ran"
+    (repo / "tools").mkdir(exist_ok=True)
+    (repo / "tools" / "schema_check.py").write_text(
+        f"open({str(ran)!r}, 'w').write('x')\ndef ci_base(*args):\n    return 'HEAD', 'forged'\n"
+    )
+    _commit(repo)
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("HNX_PR_BASE", base)
+    _change(repo, lambda d: d.update(title="changed"))
+    assert mcli.main(["review-tier", "--root", str(repo), "--ci-base", "--json"]) == 0
+    assert not ran.exists()
+    assert f"base {base} (the pull request's base)" in capsys.readouterr().err
 
 
 def test_a_root_commit_compares_with_the_empty_tree(tmp_path, capsys, monkeypatch):

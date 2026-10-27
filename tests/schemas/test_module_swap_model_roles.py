@@ -281,6 +281,28 @@ def test_a_leg_on_an_instance_the_swap_does_not_move_is_refused(reports):
     assert "backend svc:inference is not the instance the leg moves (svc:other" in backend
 
 
+def test_a_fallback_on_another_backend_is_refused():
+    """A leg cannot add a binding on a backend other than the instance it moves, even one kept
+    beside the old binding as a fallback."""
+    doc = json.loads(ROLES.read_text(encoding="utf-8"))
+    old = doc["roles"]["fast-classifier"]["bindings"][0]
+    fallback = {
+        "backend": "svc:elsewhere",
+        "model_id": ENTRY.served_model_name,
+        "version": ENTRY.revision,
+        "digest": ENTRY.digest,
+    }
+    doc["roles"]["fast-classifier"]["bindings"] = [old, fallback]
+    after = RoleTable.from_dict(doc)
+    report = gp.run_eval(
+        after, gp.DEFAULT_SUITES, gp.fake_factory, model_name="fake-golden", canary_factory=_live
+    )
+    swap = _swap(report)
+    swap["model_roles"][0]["to"] = {"pin": ms._pin_of(after.get("fast-classifier").bindings[1])}
+    p = ms.model_role_problems(swap, _evidence(report, after=after))
+    assert any("backend svc:elsewhere is not the instance the leg moves" in x for x in p), p
+
+
 def test_a_rebind_onto_a_backend_the_swap_does_not_install_is_refused():
     """The new binding's model is in the store and its report passes, but it is served by
     another backend: the incoming provider (other-inference) does not serve it."""
@@ -293,8 +315,8 @@ def test_a_rebind_onto_a_backend_the_swap_does_not_install_is_refused():
     (p,) = ms.model_role_problems(swap, _evidence(report, after=after))
     assert p == (
         "model_roles mdl:fast-classifier: the new binding's backend svc:elsewhere is not the "
-        "instance the leg moves (svc:inference, served by 'other-inference' after the swap): a "
-        "rebind lands on a backend the incoming provider serves"
+        "instance the leg moves (svc:inference): a leg rebinds onto the row the swap renames "
+        "'other-inference''s to, never onto another backend"
     )
     assert ms.module_swap_problems(swap, _modules(), SITE, models=_evidence(report, after=after))
 

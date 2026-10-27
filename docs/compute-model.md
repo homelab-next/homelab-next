@@ -518,11 +518,14 @@ What it does not do:
 - A module swap's model-role leg (`model_roles`, `docs/modules.md`, "Swap record 1.2") pins the
   report for the rebound table. Every role whose binding the swap changes needs a leg, and the leg
   holds only when the report passes this check, live by the checker's default policy, and the new
-  binding is served by the backend the incoming provider installs. `hnx modules swap-check` reads
-  that evidence from the repository: the role table before from the base commit, the one after
-  from the working tree, the store and these reports from where they are kept. That is still only
-  the draft record's rules: no live swap runs through 1.2, a report's `live` is its claim, and a
-  rebind within one provider module is checked by the pin gate alone.
+  binding is on the instance the leg moves. `hnx modules swap-check` reads that evidence from the
+  repository, and everything that vouches for the new model from the base commit: the role table
+  before, the store, these reports (`examples/model-evals/` holds the live report of a proposed
+  table) and the golden suites; only the table after is the working tree's. So vetting a model
+  (its store entry and its live report, human-approve) is one change and the rebind a later one.
+  `hnx modules swap-gate` makes CI refuse a role-table change that no swap record in the change
+  covers. That is still only the draft record's rules: no live swap runs through 1.2, a report's
+  `live` is a reviewed claim, and a rebind within one provider module has no record of its own.
 
 ### Baselines and defense layers
 

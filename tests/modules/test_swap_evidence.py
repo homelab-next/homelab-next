@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A swap's model evidence read from the repository (``homelabnext.modules.swap_evidence``,
-``hnx modules swap-check``): the role table before from the base commit, the one after from the
-working tree, the store and the reports from where the repository keeps them; a table missing at
-the base, a symbolic link at either end and a doctored table after are refused."""
+``hnx modules swap-check`` and ``swap-gate``): the role table after from the working tree, and
+everything that vouches for the new model (the table before, the store, the reports, the suites)
+from the base commit, so a change cannot vouch for itself; a base that is not a commit, a table
+missing at the base, a symbolic link at either end, a doctored table after and an uncovered
+role-table change are refused."""
 
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ BEFORE = RoleTable.load(ROLES)
     for e in STORE.entries.values()
     if e.served_model_name == BEFORE.get("fast-classifier").bindings[0].model_id
 )
+CANDIDATE = f"{se.EVALS}/fast-classifier.json"
 
 
 def _rebound_doc(digest: str = ENTRY.digest) -> dict:
@@ -62,7 +65,7 @@ def report() -> dict:
     )
 
 
-def _git(root: Path, *args: str) -> None:
+def _git(root: Path, *args: str) -> str:
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "t",
@@ -70,12 +73,14 @@ def _git(root: Path, *args: str) -> None:
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@example.invalid",
     }
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env)
+    r = subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env)
+    return r.stdout.decode().strip()
 
 
-def _commit(root: Path) -> None:
+def _commit(root: Path) -> str:
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "c")
+    return _git(root, "rev-parse", "HEAD")
 
 
 def _write(root: Path, rel: str, doc) -> Path:
@@ -85,18 +90,26 @@ def _write(root: Path, rel: str, doc) -> Path:
     return p
 
 
+def _base_files(root: Path, *, store: bool = True) -> None:
+    (root / "examples" / "model-serving").mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROLES, root / se.ROLES)
+    if store:
+        shutil.copy(STORE_FILE, root / se.STORE)
+    for rel, src in zip(se.SUITES, gp.DEFAULT_SUITES, strict=True):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(src, root / rel)
+
+
 @pytest.fixture
 def repo(tmp_path, report) -> Path:
-    """The base commit holds the shipped role table and store; the working tree rebinds
-    ``mdl:fast-classifier`` to the store entry and keeps the live report for the table after."""
+    """The base commit holds the shipped role table, the store and the live report for the table
+    after (the vetting change); the working tree rebinds ``mdl:fast-classifier``."""
     root = tmp_path / "repo"
-    (root / "examples" / "model-serving").mkdir(parents=True)
-    shutil.copy(ROLES, root / se.ROLES)
-    shutil.copy(STORE_FILE, root / se.STORE)
+    _base_files(root)
+    _write(root, CANDIDATE, report)
     _git(root, "init", "-q")
     _commit(root)
     _write(root, se.ROLES, _rebound_doc())
-    _write(root, se.REPORTS[1], report)
     return root
 
 
@@ -106,13 +119,68 @@ def _swap(report: dict) -> dict:
     return swap
 
 
-def test_the_tables_come_from_the_base_and_the_working_tree(repo, report):
+def test_the_suites_are_the_golden_defaults():
+    assert [Path(r).name for r in se.SUITES] == [p.name for p in gp.DEFAULT_SUITES]
+    for rel, p in zip(se.SUITES, gp.DEFAULT_SUITES, strict=True):
+        assert (ROOT / rel).read_bytes() == p.read_bytes()
+
+
+def test_the_evidence_is_the_bases_and_the_table_after_the_working_trees(repo, report):
     ev = se.from_git(repo, "HEAD")
     assert ev.before.pins() == BEFORE.pins()
     assert ev.after.pins() == AFTER.pins()
     assert ev.require_live and ev.store is not None
     assert gp.report_digest(report) in {gp.report_digest(r) for r in ev.reports}
     assert ms.model_role_problems(_swap(report), ev) == []
+
+
+def test_a_change_cannot_vouch_for_itself(tmp_path, report):
+    """A forged live report and a doctored store in the working tree count for nothing: the base
+    has neither the store entry nor the report, so the leg is refused."""
+    root = tmp_path / "repo"
+    _base_files(root)
+    base_store = json.loads(STORE_FILE.read_text(encoding="utf-8"))
+    del base_store["models"][ENTRY.id]
+    _write(root, se.STORE, base_store)
+    _git(root, "init", "-q")
+    _commit(root)
+    _write(root, se.ROLES, _rebound_doc())
+    shutil.copy(STORE_FILE, root / se.STORE)  # the doctored store, with the entry
+    _write(root, CANDIDATE, report)  # the forged live report
+    _write(root, se.REPORTS[0], report)
+    p = ms.model_role_problems(_swap(report), se.from_git(root, "HEAD"))
+    assert any("does not resolve in the model store" in x for x in p), p
+    assert any("is not supplied" in x for x in p), p
+
+
+def test_the_store_must_be_on_the_base(tmp_path):
+    root = tmp_path / "repo"
+    _base_files(root, store=False)
+    _git(root, "init", "-q")
+    _commit(root)
+    shutil.copy(STORE_FILE, root / se.STORE)
+    _write(root, se.ROLES, _rebound_doc())
+    with pytest.raises(se.EvidenceError, match=r"model_store\.json is not in .*the base's"):
+        se.from_git(root, "HEAD")
+    assert se.from_git(root, "HEAD", store=None).store is None
+
+
+def test_the_suites_are_read_at_the_base(repo):
+    """A suite edited in the working tree is not the one the report is checked with."""
+    (repo / se.SUITES[0]).write_text("edited: true\n", encoding="utf-8")
+    ev = se.from_git(repo, "HEAD")
+    assert [p.read_bytes() for p in ev.suites] == [p.read_bytes() for p in gp.DEFAULT_SUITES]
+
+
+def test_the_suites_directory_goes_with_the_evidence(repo):
+    ev = se.from_git(repo, "HEAD")
+    d = ev.suites[0].parent.parent
+    assert d.is_dir()
+    del ev
+    import gc
+
+    gc.collect()
+    assert not d.exists()
 
 
 def test_a_table_missing_at_the_base_is_refused(tmp_path):
@@ -122,14 +190,28 @@ def test_a_table_missing_at_the_base_is_refused(tmp_path):
     _git(root, "init", "-q")
     _commit(root)
     _write(root, se.ROLES, _rebound_doc())
-    with pytest.raises(se.EvidenceError, match="is not in HEAD: the table before the swap"):
+    with pytest.raises(se.EvidenceError, match=r"is not in .*: the evidence is the base's"):
         se.from_git(root, "HEAD", store=None)
 
 
-def test_a_base_that_is_no_commit_is_refused(repo):
-    for base in ("", "no-such-ref", "HEAD~5"):
-        with pytest.raises(se.EvidenceError, match="not a commit here"):
-            se.from_git(repo, base)
+@pytest.mark.parametrize(
+    "base",
+    ["no-such-ref", "HEAD~5", "-h", "--all", "--upload-pack=touch", "HEAD^{tree}", "HEAD:examples"],
+)
+def test_a_base_that_is_no_commit_is_refused(repo, base):
+    with pytest.raises(se.EvidenceError, match="not a commit here"):
+        se.from_git(repo, base)
+
+
+def test_an_empty_base_is_refused(repo):
+    for base in ("", " "):
+        with pytest.raises(se.EvidenceError, match="needs a commit"):
+            se.resolve_base(repo, base)
+
+
+def test_the_base_is_resolved_to_a_commit_once(repo):
+    sha = se.resolve_base(repo, "HEAD")
+    assert len(sha) == 40 and sha == _git(repo, "rev-parse", "HEAD")
 
 
 def test_a_path_outside_the_repository_is_refused(repo):
@@ -153,25 +235,46 @@ def test_a_directory_link_on_the_path_is_refused(repo, tmp_path):
         se.read_head(repo, se.ROLES)
 
 
-def test_a_symbolic_link_at_the_base_is_refused(tmp_path):
-    root = tmp_path / "repo"
-    _write(root, "real.json", json.loads(ROLES.read_text(encoding="utf-8")))
-    (root / "examples").mkdir()
-    (root / se.ROLES).symlink_to("../real.json")
-    _git(root, "init", "-q")
-    _commit(root)
-    with pytest.raises(se.EvidenceError, match="at HEAD: a symbolic link"):
-        se.read_base(root, "HEAD", se.ROLES)
+def test_a_linked_root_is_refused(repo, tmp_path):
+    link = tmp_path / "link"
+    link.symlink_to(repo)
+    with pytest.raises(se.EvidenceError, match="a symbolic link on its path"):
+        se.read_head(link, se.ROLES)
 
 
-def test_an_oversized_table_at_the_base_is_refused(tmp_path, monkeypatch):
+def test_a_fifo_table_is_refused_without_blocking(repo):
+    (repo / se.ROLES).unlink()
+    os.mkfifo(repo / se.ROLES)
+    with pytest.raises(se.EvidenceError, match="not a regular file"):
+        se.from_git(repo, "HEAD")
+
+
+@pytest.mark.parametrize("rel", [se.ROLES, se.STORE])
+def test_a_symbolic_link_at_the_base_is_refused(tmp_path, rel):
     root = tmp_path / "repo"
-    _write(root, se.ROLES, json.loads(ROLES.read_text(encoding="utf-8")))
+    _base_files(root)
+    _write(root, "real.json", json.loads((root / rel).read_text(encoding="utf-8")))
+    (root / rel).unlink()
+    (root / rel).symlink_to(os.path.relpath(root / "real.json", (root / rel).parent))
     _git(root, "init", "-q")
     _commit(root)
+    with pytest.raises(se.EvidenceError, match=r"at [0-9a-f]{12}: a symbolic link"):
+        se.read_base(root, "HEAD", rel)
+
+
+@pytest.mark.parametrize("rel", [se.ROLES, se.STORE])
+def test_an_oversized_file_at_the_base_is_refused(repo, monkeypatch, rel):
     monkeypatch.setattr(se.ld, "MAX_BYTES", 64)
     with pytest.raises(se.EvidenceError, match="over 64 bytes"):
-        se.read_base(root, "HEAD", se.ROLES)
+        se.read_base(repo, "HEAD", rel)
+
+
+def test_too_many_candidate_reports_are_refused(repo, monkeypatch, report):
+    _write(repo, f"{se.EVALS}/second.json", report)
+    _commit(repo)
+    monkeypatch.setattr(se, "MAX_EVALS", 1)
+    with pytest.raises(se.EvidenceError, match="over 1 reports"):
+        se.from_git(repo, "HEAD")
 
 
 def test_a_doctored_table_after_is_caught(repo, report):
@@ -182,13 +285,6 @@ def test_a_doctored_table_after_is_caught(repo, report):
     assert any("the new binding does not resolve in the role table after" in x for x in p)
 
 
-def test_the_store_must_be_in_the_working_tree(repo):
-    (repo / se.STORE).unlink()
-    with pytest.raises(se.EvidenceError, match=r"model_store\.json: not in the working tree"):
-        se.from_git(repo, "HEAD")
-    assert se.from_git(repo, "HEAD", store=None).store is None
-
-
 def test_the_policy_not_the_record_decides_live(repo, report):
     swap = _swap(report)
     swap["model_roles"][0]["evaluation"]["require_live"] = False
@@ -196,7 +292,17 @@ def test_the_policy_not_the_record_decides_live(repo, report):
     assert ms.model_role_problems(swap, se.from_git(repo, "HEAD")) == []
 
 
-# ------------------------------------------------------------------------------- the CLI
+def test_an_extra_report_is_read_but_never_through_a_link(repo, report, tmp_path):
+    extra = _write(tmp_path, "extra.json", report)
+    ev = se.from_git(repo, "HEAD", extra_reports=[extra])
+    assert len(ev.reports) == 2
+    link = tmp_path / "link.json"
+    link.symlink_to(extra)
+    with pytest.raises(se.EvidenceError, match="a symbolic link"):
+        se.from_git(repo, "HEAD", extra_reports=[link])
+
+
+# ------------------------------------------------------------------------------- swap-check
 
 
 @pytest.fixture
@@ -213,9 +319,9 @@ def checkout(repo) -> Path:
     return repo
 
 
-def _cli(root: Path, record: Path, capsys, *extra: str) -> tuple[int, dict | str]:
+def _cli(root: Path, record: Path, capsys, *extra: str, base=("--base", "HEAD")):
     rc = mcli.main(
-        ["swap-check", str(record), "--root", str(root), "--examples", "--base", "HEAD",
+        ["swap-check", str(record), "--root", str(root), "--examples", *base,
          "--site", str(root / "examples/modules/sites/full.yml"), "--json", *extra]
     )  # fmt: skip
     out = capsys.readouterr()
@@ -226,6 +332,18 @@ def test_the_cli_checks_a_rebind_end_to_end(checkout, report, capsys, tmp_path):
     record = _write(tmp_path, "swap.json", _swap(report))
     rc, out = _cli(checkout, record, capsys)
     assert (rc, out["problems"], out["evidence"]) == (0, [], True)
+
+
+def test_the_cli_takes_the_ci_base(checkout, report, capsys, tmp_path, monkeypatch):
+    base = _git(checkout, "rev-parse", "HEAD")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("HNX_PR_BASE", base)
+    record = _write(tmp_path, "swap.json", _swap(report))
+    rc, out = _cli(checkout, record, capsys, base=("--ci-base",))
+    assert (rc, out["problems"], out["base"]) == (0, [], base)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    rc, err = _cli(checkout, record, capsys, base=("--ci-base",))
+    assert rc == 2 and "only push and pull_request have a base rule" in err
 
 
 def test_the_cli_refuses_a_doctored_table_after(checkout, report, capsys, tmp_path):
@@ -251,3 +369,86 @@ def test_the_cli_refuses_a_record_the_schema_refuses(checkout, report, capsys, t
     del swap["to_module"]
     rc, out = _cli(checkout, _write(tmp_path, "swap.json", swap), capsys)
     assert rc == 1 and any(p.startswith("record: ") for p in out["problems"])
+
+
+def test_the_cli_refuses_an_overlay(checkout, report, capsys, tmp_path):
+    record = _write(tmp_path, "swap.json", _swap(report))
+    rc, err = _cli(checkout, record, capsys, "--overlay", str(tmp_path))
+    assert rc == 2 and "--overlay: swap-check reads" in err
+
+
+def test_the_cli_refuses_an_option_as_the_base(checkout, report, capsys, tmp_path):
+    record = _write(tmp_path, "swap.json", _swap(report))
+    rc, err = _cli(checkout, record, capsys, base=("--base=--upload-pack=touch",))
+    assert rc == 2 and "not a commit here" in err
+
+
+@pytest.mark.parametrize("fault", [subprocess.TimeoutExpired("git", 60), FileNotFoundError("git")])
+def test_git_that_cannot_run_is_could_not_check(checkout, report, capsys, tmp_path, monkeypatch,
+                                                fault):  # fmt: skip
+    def run(*args, **kwargs):
+        raise fault
+
+    monkeypatch.setattr(se.subprocess, "run", run)
+    rc, err = _cli(checkout, _write(tmp_path, "swap.json", _swap(report)), capsys)
+    assert rc == 100 and "internal error" in err
+
+
+# ------------------------------------------------------------------------------- swap-gate
+
+
+def _gate(root: Path, capsys, base: str = "HEAD") -> tuple[int, dict]:
+    rc = mcli.main(["swap-gate", "--root", str(root), "--base", base, "--json"])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_an_unchanged_role_table_passes_the_gate(repo, capsys):
+    _write(repo, se.ROLES, json.loads(ROLES.read_text(encoding="utf-8")))
+    rc, out = _gate(repo, capsys)
+    assert (rc, out["problems"]) == (0, []) and "unchanged" in out["decided"]
+
+
+def test_an_uncovered_role_table_change_fails_the_gate(repo, capsys):
+    rc, out = _gate(repo, capsys)
+    assert rc == 1
+    (p,) = out["problems"]
+    assert "roles: fast-classifier" in p and f"no swap record under {se.SWAPS}/" in p
+
+
+def test_a_record_in_the_change_covers_it(repo, report, capsys):
+    _write(repo, f"{se.SWAPS}/fast-classifier.json", _swap(report))
+    rc, out = _gate(repo, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+def test_a_record_that_does_not_hold_fails_the_gate(repo, report, capsys):
+    swap = _swap(report)
+    swap["model_roles"][0]["evaluation"]["report"] = "sha256:" + "2" * 64
+    _write(repo, f"{se.SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and any("is not supplied" in p for p in out["problems"])
+
+
+def test_a_record_the_schema_refuses_fails_the_gate(repo, report, capsys):
+    swap = _swap(report)
+    del swap["route"]
+    _write(repo, f"{se.SWAPS}/fast-classifier.json", swap)
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and all(": record: " in p for p in out["problems"])
+
+
+def test_a_record_already_on_the_base_covers_nothing(repo, report, capsys):
+    """Only a record the change adds or edits counts: one committed earlier covered that change."""
+    _write(repo, se.ROLES, json.loads(ROLES.read_text(encoding="utf-8")))
+    _write(repo, f"{se.SWAPS}/fast-classifier.json", _swap(report))
+    _commit(repo)
+    _write(repo, se.ROLES, _rebound_doc())
+    assert se.changed_records(repo, "HEAD") == []
+    assert _gate(repo, capsys)[0] == 1
+
+
+def test_a_linked_record_fails_the_gate(repo, report, capsys, tmp_path):
+    (repo / se.SWAPS).mkdir(parents=True)
+    (repo / se.SWAPS / "x.json").symlink_to(_write(tmp_path, "x.json", _swap(report)))
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and any("a symbolic link on its path" in p for p in out["problems"])

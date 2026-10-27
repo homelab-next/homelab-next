@@ -201,8 +201,9 @@ def _leg_problem(leg: Any) -> str:
 def _binding(
     ref: Doc, table: RoleTable, role: str, store: Store | None
 ) -> tuple[Binding | None, str]:
-    """The one binding of ``role`` in ``table`` a leg's ``from`` or ``to`` names, or ``(None, why)``.
-    A ``from`` is best named by ``pin``: an outgoing model may since have left the store."""
+    """The one binding of ``role`` in ``table`` a leg's ``from`` or ``to`` names, or
+    ``(None, why)``.  A ``from`` is best named by ``pin``: an outgoing model may since have left
+    the store."""
     bindings = table.get(role).bindings
     if "pin" in ref:
         hit = [b for b in bindings if _pin_of(b) == ref["pin"]]
@@ -258,9 +259,11 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
     role whose bindings differ between the tables has exactly one leg, which rebinds exactly that
     binding, and no unchanged role has one; the role is in both tables, the old binding is one of
     the table the swap starts from, the new one resolves in the table after it (and in the store)
-    and differs, its backend is the instance the leg moves (``svc:<instance>``, which the incoming
-    provider serves after the swap), and the report the leg pins passes ``pins check`` against the table after, live
-    as :class:`ModelEvidence` says (and the fake-canary guard of ``pins check`` either way)."""
+    and differs, its backend is the instance the leg moves (``svc:<instance>``, the row the swap
+    renames the incoming provider's to; inferred from the name, no manifest is read), and the
+    report the leg pins passes ``pins check`` against the table after, live as
+    :class:`ModelEvidence` says (and the fake-canary guard of ``pins check`` either way).  So a
+    leg cannot add a binding on another backend, a fallback included."""
     legs = swap.get("model_roles", [])
     if not isinstance(legs, list) or ("model_roles" in swap and not legs):
         return ["model_roles must be a non-empty list of legs, or absent"]
@@ -313,8 +316,8 @@ def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
         if new.backend != leg["instance"]:
             out.append(
                 f"{where}: the new binding's backend svc:{new.backend} is not the instance the leg "
-                f"moves (svc:{leg['instance']}, served by {swap.get('to_module')!r} after the "
-                "swap): a rebind lands on a backend the incoming provider serves"
+                f"moves (svc:{leg['instance']}): a leg rebinds onto the row the swap renames "
+                f"{swap.get('to_module')!r}'s to, never onto another backend"
             )
         if old is not None and _pin_of(old) == _pin_of(new):
             out.append(f"{where}: the old and new binding are the same pin; nothing is rebound")
