@@ -20,8 +20,12 @@ FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("guest.1_6.*.yml"))
 
 
 def test_version_is_1_6_and_frozen():
+    """Validates exactly what the frozen 1.6 does; a description may be reworded (site 1.4 gave
+    zones an IPv6 prefix, which extra_addresses' description now names) without a new version."""
+    from test_schema_evolution import _validation_only
+
     assert CURRENT["$id"].endswith("/platform/guest/1.6")
-    assert CURRENT == FROZEN_16
+    assert _validation_only(CURRENT) == _validation_only(FROZEN_16)
     assert sc.is_additive(FROZEN_15, CURRENT) == []
 
 

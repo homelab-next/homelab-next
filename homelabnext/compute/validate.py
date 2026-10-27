@@ -143,14 +143,21 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
 #: falls inside a zone's subnet; nothing else outside the guest's own zone, since the site model
 #: says who holds an address only by zone.
 OVERLAY_V4: tuple[ipaddress.IPv4Network, ...] = (ipaddress.IPv4Network((0x6440_0000, 10)),)
-#: the IPv6 ranges an extra address may come from: unique-local and documentation.  The site model
-#: gives a zone no IPv6 prefix, so nothing says which guest owns one of these (operator review),
-#: and a global IPv6 address (SLAAC included) cannot be checked against any zone: refused.
+#: the IPv6 ranges an extra address may come from when the guest's zone has no ``subnet6`` (site
+#: 1.4): unique-local and documentation, and only outside every zone's prefix.  Nothing says which
+#: guest owns one of these (operator review); a global IPv6 address (SLAAC included) needs the
+#: zone's prefix to be held against, so without one it is refused.
 UNOWNED_V6: tuple[ipaddress.IPv6Network, ...] = (
     ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
     ipaddress.IPv6Network((0x2001_0DB8 << 96, 32)),  # documentation
     ipaddress.IPv6Network((0x3FFF << 112, 20)),  # documentation
 )
+
+
+#: RFC 2526's reserved subnet anycast interface identifiers: the top 128 of a /64, in EUI-64
+#: form (the universal/local bit clear, so the identifier starts 0xfdff) and not
+ANYCAST_EUI64 = 0xFDFF_FFFF_FFFF_FF80
+ANYCAST_TOP = 0xFFFF_FFFF_FFFF_FF80
 
 
 def _known_zones(fleet: Fleet) -> tuple[list[ZoneInfo], list[str]]:
@@ -167,14 +174,18 @@ def _known_zones(fleet: Fleet) -> tuple[list[ZoneInfo], list[str]]:
         if z is not None and z.id not in found:
             found[z.id] = z
             missing.append(z.id)
-    out = []
-    for z in found.values():
-        try:
-            z.network  # noqa: B018 - a bad subnet is _check_network's problem, not one to raise here
-        except ValueError:
-            continue
-        out.append(z)
-    return out, sorted(set(missing))
+    # every zone, a bad subnet or subnet6 included: the IPv4 checks skip a subnet that does not
+    # read (_net4; it is _check_network's problem), the IPv6 ones refuse to hold an address
+    # against a zone list one of whose zones does not read
+    return list(found.values()), sorted(set(missing))
+
+
+def _net4(z: ZoneInfo) -> ipaddress.IPv4Network | None:
+    """The zone's IPv4 subnet, or None when it does not read (``_check_network`` reports it)."""
+    try:
+        return z.network
+    except ValueError:
+        return None
 
 
 def _taken_addresses(fleet: Fleet) -> dict[str, str]:
@@ -221,24 +232,23 @@ def _extra_address_problem(
         return None, "is link-local, so it names no one guest beyond its own link"
     if ip.version == 4 and int(ip) >> 24 == 0:
         return None, "is in this-network (0.0.0.0/8)"
+    nets4 = {z.id: n for z in zones if (n := _net4(z)) is not None}
     if ip.version == 4:
-        other = next((z for z in zones if z.id != g.zone and ip in z.network), None)
+        other = next((zid for zid, n in nets4.items() if zid != g.zone and ip in n), None)
         if other is not None:
-            return None, f"is inside zone {other.id}'s subnet, not zone {g.zone}'s"
-        own = next((z for z in zones if z.id == g.zone), None)
-        if (own is None or ip not in own.network) and not any(ip in n for n in OVERLAY_V4):
+            return None, f"is inside zone {other}'s subnet, not zone {g.zone}'s"
+        own = nets4.get(g.zone)
+        if (own is None or ip not in own) and not any(ip in n for n in OVERLAY_V4):
             return None, f"is outside zone {g.zone}'s subnet (and in no zone-less overlay range)"
-    elif not any(ip in n for n in UNOWNED_V6):
-        if ip.is_global:
-            return None, (
-                "is a global IPv6 address; the site model gives no zone an IPv6 prefix to hold "
-                "it against, so only unique-local or documentation IPv6 is accepted"
-            )
-        return None, "is a special-purpose IPv6 address, not a unique-local or documentation one"
+    else:
+        why = _ipv6_ownership_problem(ip, g, zones)
+        if why is not None:
+            return None, why
     for z in zones:
-        if ip.version != 4 or ip not in z.network:
+        net = nets4.get(z.id)
+        if ip.version != 4 or net is None or ip not in net:
             continue
-        if ip in (z.network.network_address, z.network.broadcast_address):
+        if ip in (net.network_address, net.broadcast_address):
             return None, f"is zone {z.id}'s network or broadcast address"
         if z.gateway and str(ip) == z.gateway:
             return None, f"is zone {z.id}'s gateway, which every guest it routes leaves by"
@@ -250,6 +260,55 @@ def _extra_address_problem(
     if holder is not None and fleet.fqdn(g) not in fleet.site_addresses.get(str(ip), ()):
         return None, f"is {holder}, not this guest's"
     return str(ip), None
+
+
+def _ipv6_ownership_problem(
+    ip: ipaddress.IPv6Address, g: Guest, zones: list[ZoneInfo]
+) -> str | None:
+    """Why the IPv6 extra address ``ip`` is not this guest's to name, or None.
+
+    Every zone must read: its ``subnet`` and, when it gives one, its ``subnet6`` as ``hnx site
+    validate`` requires it (otherwise no IPv6 address can be held against the zones, and it is
+    refused, however the zone that does not read is used); the guest's own zone must be one of
+    them; the address must not be an anycast address of its /64 (the subnet-router one, with no
+    host part, or one RFC 2526 reserves at its top); it must not be inside another zone's prefix;
+    with a prefix on the guest's own zone it must be inside it; without one, only unique-local or
+    documentation IPv6 (:data:`UNOWNED_V6`) is accepted."""
+    from homelabnext.network.validate import subnet6_problem
+
+    prefixes: dict[str, ipaddress.IPv6Network] = {}
+    for z in zones:
+        if _net4(z) is None:
+            return f"cannot be held against zone {z.id}: its subnet {z.subnet!r} does not read"
+        if z.subnet6 is None:  # absent; any other value, falsy or not, must read as a prefix
+            continue
+        net6, bad = subnet6_problem(z.subnet6)
+        if net6 is None:
+            return f"cannot be held against zone {z.id}: its subnet6 {z.subnet6!r} {bad}"
+        prefixes[z.id] = net6
+    if g.zone not in {z.id for z in zones}:
+        return f"cannot be held against zone {g.zone}: it is not in the site model"
+    iid = int(ip) & (1 << 64) - 1  # the interface identifier: the low 64 bits
+    if iid == 0:
+        return "is the subnet-router anycast address of its /64 (no host part)"
+    if iid >= ANYCAST_EUI64 and (iid <= ANYCAST_EUI64 | 0x7F or iid >= ANYCAST_TOP):
+        return "is an anycast address RFC 2526 reserves at the top of its /64"
+    other = next((zid for zid, n in prefixes.items() if zid != g.zone and ip in n), None)
+    if other is not None:
+        return f"is inside zone {other}'s IPv6 prefix, not zone {g.zone}'s"
+    own = prefixes.get(g.zone)
+    if own is not None:
+        if ip not in own:
+            return f"is outside zone {g.zone}'s IPv6 prefix {own} (subnet6)"
+        return None
+    if any(ip in n for n in UNOWNED_V6):
+        return None
+    if ip.is_global:
+        return (
+            f"is a global IPv6 address and zone {g.zone} gives no IPv6 prefix (subnet6, site "
+            "1.4) to hold it against; add one, or use a unique-local or documentation address"
+        )
+    return "is a special-purpose IPv6 address, not a unique-local or documentation one"
 
 
 def _check_extra_addresses(

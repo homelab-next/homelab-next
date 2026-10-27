@@ -22,7 +22,7 @@ from .loader import schema
 
 #: Field paths where an IPv4 literal is legitimate (everything else must be a reference).
 _IP_FIELDS = (
-    re.compile(r"^zones\[\d+\]\.(subnet|gateway|dhcp\.range\[\d+\])$"),
+    re.compile(r"^zones\[\d+\]\.(subnet|subnet6|gateway|dhcp\.range\[\d+\])$"),
     re.compile(r"^dns\.records\.static\[\d+\]\.value$"),
 )
 _IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w])")
@@ -47,6 +47,55 @@ class Report:
     def render(self) -> str:
         lines = [f"error: {e}" for e in self.errors] + [f"warning: {w}" for w in self.warnings]
         return "\n".join(lines)
+
+
+#: the IPv6 space a zone's prefix may come from: unique-local, global unicast and documentation
+ZONE_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
+    ipaddress.IPv6Network((0x2000 << 112, 3)),  # global unicast (holds 2001:db8::/32, 3fff::/20)
+)
+#: ...less the IETF protocol assignments (benchmarking, ORCHID, AMT, Teredo and the rest), which
+#: no zone is numbered from
+SPECIAL_V6: tuple[ipaddress.IPv6Network, ...] = (ipaddress.IPv6Network((0x2001 << 112, 23)),)
+
+
+def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
+    """``(prefix, None)`` for a zone's ``subnet6`` (site 1.4), else ``(None, why)``.
+
+    A guest's IPv6 extra address is held against it (``homelabnext.compute.validate``), so it must
+    be one prefix that names this zone only: canonical (no host bits, lower case, compressed), a
+    /48 to a /64, not link-local, multicast, loopback, unspecified or one that writes an IPv4
+    address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo), where the address
+    a collector sees is the IPv4 one, and from the space zones are numbered from
+    (:data:`ZONE_V6` less :data:`SPECIAL_V6`)."""
+    from homelabnext.modules.scope import EMBEDDED_V4
+
+    try:
+        net = ipaddress.ip_network(str(raw), strict=True)
+    except ValueError as exc:
+        return None, f"is not an IPv6 prefix without host bits: {exc}"
+    if net.version != 6:
+        return None, "is not an IPv6 prefix"
+    if str(net) != raw:
+        return None, f"is not in its canonical form; write {net}"
+    if not 48 <= net.prefixlen <= 64:
+        return None, f"is a /{net.prefixlen}; a zone's IPv6 prefix is a /48 to a /64"
+    addr = net.network_address
+    if addr.is_link_local or addr.is_multicast or addr.is_loopback or addr.is_unspecified:
+        return None, "is link-local, multicast, loopback or unspecified"
+    embedding = (
+        *EMBEDDED_V4,
+        ipaddress.IPv6Network((0x2002 << 112, 16)),  # 6to4
+        ipaddress.IPv6Network((0x2001_0000 << 96, 32)),  # Teredo
+    )
+    if any(net.overlaps(e) for e in embedding):
+        return None, "embeds IPv4 addresses (mapped, compatible, translated, NAT64, 6to4, Teredo)"
+    if any(net.subnet_of(s) for s in SPECIAL_V6) or not any(net.subnet_of(a) for a in ZONE_V6):
+        return None, (
+            "is not unique-local (fc00::/7), global unicast (2000::/3, less the IETF protocol "
+            "assignments 2001::/23) or documentation space"
+        )
+    return net, None  # type: ignore[return-value]
 
 
 def schema_problems(doc: Any) -> list[str]:
@@ -143,6 +192,18 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         for b in ids[i + 1 :]:
             if nets[a].overlaps(nets[b]):
                 r.error(f"zones {a} and {b}: subnets {nets[a]} and {nets[b]} overlap")
+    nets6: dict[str, ipaddress.IPv6Network] = {}
+    for zid, z in zone_ids.items():
+        if "subnet6" not in z:
+            continue
+        net6, why = subnet6_problem(z["subnet6"])
+        if net6 is None:
+            r.error(f"zone {zid}: subnet6 {z['subnet6']!r} {why}")
+            continue
+        clash = next((o for o, n in nets6.items() if n.overlaps(net6)), None)
+        if clash is not None:
+            r.error(f"zones {clash} and {zid}: subnet6 {nets6[clash]} and {net6} overlap")
+        nets6[zid] = net6
 
     for zid, net in nets.items():
         z = zone_ids[zid]

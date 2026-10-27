@@ -79,6 +79,8 @@ class ZoneInfo:
     #: the site model's ``egress.internet`` for the zone (``allow`` or ``deny``, enforced by the
     #: router); None when the source does not say
     internet: str | None = None
+    #: the site model's ``subnet6`` (site 1.4): the zone's IPv6 prefix, or None when it gives none
+    subnet6: str | None = None
 
     @property
     def network(self) -> ipaddress.IPv4Network:
