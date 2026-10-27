@@ -60,8 +60,8 @@ Adapters write line-oriented configs, and Python's `re`, which the schema valida
 pattern's `$` match before a trailing newline, so a pattern alone does not keep `"lan\n"` out.
 
 * VLAN ids are unique; subnets are valid, large enough and do not overlap.
-* A zone's `subnet6` (1.4) is one canonical IPv6 prefix, a /48 to a /64, that names that zone
-  only ([IPv6 prefixes](#ipv6-prefixes-14)); no two overlap.
+* A zone's `subnet6` (1.4) is one canonical IPv6 prefix, a /48 to a /64, with no zone id
+  (`%scope`), that names that zone only ([IPv6 prefixes](#ipv6-prefixes-14)); no two overlap.
 * The gateway is a usable address inside its subnet; a DHCP range is ordered, inside the subnet and
   excludes the gateway and every statically addressed registry host.
 * Every `zone:` and `svc:` reference resolves, against the site and the registry respectively.

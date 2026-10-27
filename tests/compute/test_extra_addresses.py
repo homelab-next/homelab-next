@@ -501,3 +501,33 @@ def test_a_guest_of_a_zone_the_site_lacks_names_no_ipv6_address():
         ipaddress.IPv6Address(ULA), SimpleNamespace(zone="nowhere"), zones
     )
     assert why == "cannot be held against zone nowhere: it is not in the site model"
+
+
+def test_a_prefix_with_a_zone_id_holds_no_ipv6_address(tmp_path):
+    """Python reads ``2001:db8:0:82::%eth0/64`` as a prefix carrying a zone id and writes it back
+    unchanged, so the canonical-form check alone let it through; open_site never runs the site
+    schema that would refuse the ``%``."""
+    site = _site(tmp_path, [EXTRA])
+    _subnet6(site, "compute", "2001:db8:0:82::%eth0/64")
+    with pytest.raises(ComputeError, match=r"cannot be held against zone compute: .*zone id"):
+        _load(site)
+
+
+@pytest.mark.parametrize("address", [f"{EXTRA}%eth0", f"{EXTRA}%1"])
+def test_an_extra_address_with_a_zone_id_is_refused_as_well_as_its_bare_form(address):
+    """The schema refuses the ``%`` at load, and the check refuses it too, so a caller that skips
+    the schema cannot name one address twice (``2001:db8::1`` and ``2001:db8::1%x`` compare
+    unequal) or put a zone id in a table key."""
+    from homelabnext.compute.validate import (
+        _extra_address_problem,
+        _known_zones,
+        _taken_addresses,
+    )
+
+    fleet = _load(MINIMAL)
+    g = next(g for g in fleet.sorted() if g.id == "guest:infer-core")
+    zones, _ = _known_zones(fleet)
+    taken = _taken_addresses(fleet)
+    assert _extra_address_problem(EXTRA, g, zones, taken, fleet) == (EXTRA, None)
+    key, why = _extra_address_problem(address, g, zones, taken, fleet)
+    assert key is None and "zone id" in why

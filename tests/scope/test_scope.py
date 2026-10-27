@@ -360,7 +360,7 @@ def test_an_out_of_scope_guest_is_out_in_every_spelling_of_every_address(tmp_pat
     spelling of every address (network.ip, an extra address, IPv4 inside IPv6, hex, octal, an
     integer) must resolve to the guest and be denied as it."""
     g = ScopeGuard(targets_from_fleet(_out_of_scope_fleet(tmp_path)), ScopePolicy(unknown=unknown))
-    for ref in (*SPELLINGS, "2001:db8::82", "2001:db8:0:0:0:0:0:82"):
+    for ref in (*SPELLINGS, "2001:db8::82", "2001:db8:0:0:0:0:0:82", "2001:db8::82%eth0"):
         d = g.in_scope(ref)
         assert (d.allow, d.code, d.canonical) == (False, "explicit-out", "guest:infer-core"), ref
 
@@ -376,6 +376,7 @@ def test_an_odd_spelling_that_names_nothing_is_denied_even_under_unknown_allow(t
         str(nobody),
         _v6(0x64_FF9B_0001 << 80 | V4),  # NAT64 local-use: no one IPv4 reading, never resolved
         "2001:db8:0:0:0:0:0:99",
+        "2001:db8::99%eth0",  # a zone id names the link, not the host
     ):
         d = g.in_scope(ref)
         assert (d.allow, d.code) == (False, "unknown-target"), ref

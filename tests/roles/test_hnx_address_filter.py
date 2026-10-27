@@ -70,6 +70,7 @@ def test_sound_rows_have_no_problems():
         ("0.0.0.0", "unspecified"),
         (METADATA, "cloud metadata"),
         ("2001:db8::5", "is not IPv4"),
+        ("2001:db8::5%eth0", "zone id"),
         (None, "is not a string"),
     ],
 )
@@ -102,6 +103,10 @@ def test_the_ip_is_a_plain_ipv4_address(ip, why):
         ("198.51.100.0", "network or broadcast address"),
         ("198.51.100.255", "network or broadcast address"),
         (5, "is not a string"),
+        # a zone id: Python parses it into the address and writes it back unchanged, and the
+        # address with it compares unequal to the one without (one address named twice)
+        (f"{ULA}%eth0", "zone id"),
+        ("2001:db8::5%1", "zone id"),
     ],
 )
 def test_an_extra_address_is_the_guests_own(extra, why):
@@ -197,7 +202,13 @@ def test_an_anycast_address_of_its_64_is_never_an_extra_address(extra, why):
         (a(0x2001_0002 << 96, v6=True) + "/48", "IETF protocol assignments"),  # benchmarking
         (a(0xFE80 << 112, v6=True) + "/64", "not unique-local or global unicast"),
         (a(0xFF00 << 112, v6=True) + "/64", "not unique-local or global unicast"),
+        (PREFIX6.replace("/", "%eth0/"), "zone id"),
+        ("2001:db8:0:28::%1/64", "zone id"),
+        ("", "without host bits"),
         (64, "is not a string"),
+        (None, "is not a string"),
+        (True, "is not a string"),
+        ([PREFIX6], "is not a string"),
     ],
 )
 def test_the_subnet6_is_a_zone_prefix(subnet6, why):
@@ -206,6 +217,33 @@ def test_the_subnet6_is_a_zone_prefix(subnet6, why):
     # an unusable prefix holds no IPv6 extra address; the IPv4 one is still held to the subnet
     assert any(f"{ULA!r} cannot be held against the row's unusable subnet6" in m for m in msgs)
     assert not any("198.51.100.51" in m for m in msgs), msgs
+
+
+@pytest.mark.parametrize(
+    "extra", [IN_PREFIX6.upper(), str(ipaddress.IPv6Address(IN_PREFIX6).exploded)]
+)
+def test_an_extra_inside_the_prefix_must_still_be_written_canonically(extra):
+    (msg,) = problems([{**ZONED6, "extra_addresses": [extra]}])
+    assert f"canonical form ({IN_PREFIX6})" in msg, msg
+
+
+def test_the_last_identifier_below_each_anycast_block_is_an_address():
+    base = 0x2600 << 112
+    for iid in (0xFDFF_FFFF_FFFF_FF7F, 0xFFFF_FFFF_FFFF_FF7F, 1):
+        assert problems([{**ZONED6, "extra_addresses": [a(base | iid, v6=True)]}]) == []
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "2001:db8:0:28::/64",
+        a(0x3FFF_0000_0028 << 80, v6=True) + "/48",  # 3fff::/20, documentation (RFC 9637)
+        a(0xFD00_0000_0028 << 80, v6=True) + "/48",  # unique-local
+    ],
+)
+def test_documentation_and_unique_local_prefixes_are_zone_prefixes(prefix):
+    inside = a(int(ipaddress.IPv6Network(prefix).network_address) | 5, v6=True)
+    assert problems([{**ZONED, "subnet6": prefix, "extra_addresses": [inside]}]) == []
 
 
 def test_an_unusable_ipv4_subnet_holds_no_ipv6_extra_either():

@@ -14,7 +14,7 @@ The addresses are parsed, never pattern-matched, and held to the guest model's o
 generator's rows:
 
 * every address is in its canonical form (IPv4 dotted quad without leading zeros, IPv6 lower case
-  and compressed), and never loopback, unspecified, multicast, reserved, link-local, this-network
+  and compressed, with no zone id ``%scope``), and never loopback, unspecified, multicast, reserved, link-local, this-network
   (0.0.0.0/8) or a cloud metadata address;
 * ``ip`` is IPv4, and inside ``subnet`` when the row gives one;
 * ``subnet`` is a canonical IPv4 network of /8 to /30 that holds ``ip``; one that reaches beyond
@@ -22,7 +22,7 @@ generator's rows:
 * an IPv4 extra address is inside ``subnet`` (never its network or broadcast address) or in the
   shared range a zone-less overlay such as a tailnet uses; a row without ``subnet`` (hand-written)
   may name only private, shared or documentation addresses;
-* ``subnet6`` is a canonical IPv6 prefix of /48 to /64 from the space zones are numbered from
+* ``subnet6`` is a canonical IPv6 prefix (no zone id) of /48 to /64 from the space zones are numbered from
   (unique-local, or global unicast less the IETF protocol assignments 2001::/23), never one that
   writes IPv4 inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo);
 * an IPv6 extra address never writes around an IPv4 one and is never an anycast address of its /64
@@ -74,8 +74,8 @@ EMBEDDED_V4 = (
 ZONE_V6 = (_v6((0xFC00,), 7), _v6((0x2000,), 3))
 SPECIAL_V6 = _v6((0x2001,), 23)
 PREFIX_EMBEDS_V4 = (*EMBEDDED_V4, _v6((0x2002,), 16), _v6((0x2001, 0), 32))  # ... 6to4, Teredo
-#: RFC 2526's reserved subnet anycast interface identifiers: the top 128 of a /64, in EUI-64 form
-#: (starting 0xfdff) and not
+#: RFC 2526's reserved subnet anycast interface identifiers, the top 128 of a /64: written in
+#: EUI-64 form (the identifier starts 0xfdff) and in the form a non-EUI-64 identifier takes (all ones)
 ANYCAST_EUI64 = 0xFDFF_FFFF_FFFF_FF80
 ANYCAST_TOP = 0xFFFF_FFFF_FFFF_FF80
 METADATA = frozenset(
@@ -93,6 +93,8 @@ def _address(raw: Any) -> tuple[Address | None, str | None]:
     """The parsed address, or why ``raw`` is not one this module accepts anywhere."""
     if not isinstance(raw, str):
         return None, "is not a string"
+    if "%" in raw:
+        return None, "names an IPv6 zone id (%scope), which is a link, not part of an address"
     try:
         ip = ipaddress.ip_address(raw)
     except ValueError:
@@ -135,6 +137,8 @@ def _subnet(raw: Any, ip: Address | None) -> tuple[ipaddress.IPv4Network | None,
 def _subnet6(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
     if not isinstance(raw, str):
         return None, "is not a string"
+    if "%" in raw:
+        return None, "names an IPv6 zone id (%scope), which a prefix never carries"
     try:
         net = ipaddress.IPv6Network(raw)  # strict: no host bits
     except ValueError:

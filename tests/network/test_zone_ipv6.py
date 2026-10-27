@@ -67,6 +67,9 @@ def test_a_canonical_48_to_64_is_a_prefix(prefix):
     [
         ("2001:db8:0:82::1/64", "host bits"),
         ("2001:db8:0:82:0::/64", "canonical form; write 2001:db8:0:82::/64"),
+        # Python parses a zone id into a prefix and writes it back unchanged
+        ("2001:db8:0:82::%eth0/64", "zone id"),
+        ("2001:db8:0:82::%1/64", "zone id"),
         ("2001:db8::/32", "is a /32"),
         ("2001:db8:0:82::/96", "is a /96"),
         ("192.0.2.0/24", "is not an IPv6 prefix"),  # no-raw-endpoint: allow an IPv4 prefix, refused

@@ -10,8 +10,9 @@ by id, which the product enrolls (a sensor's monitored addresses, a scanner's ta
 that names other addresses it sends from (``network.extra_addresses``, guest 1.6) carries them as
 ``extra_addresses: [...]`` after ``ip``, so a sensor counts them as its own, and its zone's IPv4
 ``subnet`` after ``zone`` (and its IPv6 ``subnet6``, site 1.4, when the zone gives one), so the
-role can hold each one to the guest's own zone as validation did; a guest whose baselines set inputs of that role (``with:``, baseline set 1.2) carries them
-as ``settings: {<role>_<input>: value}`` in its row.  A per-guest control's settings are host
+role can hold each one to the guest's own zone as validation did; a guest whose baselines set
+inputs of that role (``with:``, baseline set 1.2) carries them as ``settings: {<role>_<input>:
+value}`` in its row.  A per-guest control's settings are host
 variables (the ``inventory`` target writes them), so its play names only the role.
 
 A control whose ``role`` is null has no product yet: it is written as a commented block that names

@@ -48,7 +48,8 @@ the guest hostname, FQDN, address, `vmid:<n>`, any registered alias, and (option
 `homelabnext.ids` resolver. Case and a trailing dot are normalised, and an address is put in its
 one canonical spelling: IPv6 compressed; an IPv4 address written inside IPv6 (IPv4-compatible,
 IPv4-mapped, IPv4-translated, NAT64's RFC 6052 well-known prefix) as that IPv4 address; an IPv4
-address in hex, octal, integer or short dotted form (what `inet_aton` accepts) as its dotted quad.
+address in hex, octal, integer or short dotted form (what `inet_aton` accepts) as its dotted quad;
+an IPv6 address with a zone id (`%eth0`, which names the link, not the host) without it.
 A guest's targets carry every address it has (`network.ip` and its `network.extra_addresses`). A
 reference that resolves to nothing is denied (`unknown-target`); one that matches two different
 targets is denied (`ambiguous-target`) even under `unknown: allow`, and so is an address in any

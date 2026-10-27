@@ -93,17 +93,30 @@ model's own rules with `ansible/plugins/filter/hnx_address.py`:
 {{ suricata_enroll_guests | hnx_enroll_address_problems }}   {# [] or one message per problem #}
 ```
 
-Every address is parsed, never pattern-matched: canonical, never loopback, link-local,
-multicast, reserved, a cloud metadata address or IPv4 written inside IPv6; `ip` IPv4; an extra
+Every address is parsed, never pattern-matched: canonical (no IPv6 zone id `%scope`), never
+loopback, link-local, multicast, reserved, a cloud metadata address or IPv4 written inside IPv6;
+`ip` IPv4; an extra
 address inside the row's `subnet` (the guest's zone, which the baseline playbook carries) or the
 shared range a tailnet uses, and, in a hand-written row with no `subnet`, private, shared or
 documentation space only; an IPv6 extra never an anycast address of its /64 (the subnet-router
 one, or one RFC 2526 reserves at its top), and inside the row's `subnet6` (the zone's IPv6 prefix,
 site 1.4, carried when the zone gives one; itself held to the site's prefix rules: canonical, a /48
-to a /64, unique-local or global unicast, never one that writes IPv4 inside IPv6), else
-unique-local or documentation. An unusable `subnet` holds no extra address, and an unusable
-`subnet6` no IPv6 one. `ansible.cfg` names
-`plugins/filter` beside `plugins/lookup` (and a private overlay's names the checkout's).
+to a /64, unique-local or global unicast less the IETF protocol assignments 2001::/23, never one
+that writes IPv4 inside IPv6), else unique-local or documentation. An unusable `subnet` holds no
+extra address, and an unusable `subnet6` no IPv6 one. `ansible.cfg` names `plugins/filter`
+beside `plugins/lookup` (and a private overlay's names the checkout's).
+
+The filter re-implements those rules with the standard library (the controller need not have
+`homelabnext` installed); `tests/roles/test_hnx_address_parity.py` runs one corpus through both and
+fails on any difference, so a hand-written row is never held to looser rules than the generator's.
+What one row cannot show it cannot check: whether another zone's subnet or prefix holds the
+address, or whether two zones' prefixes overlap. And a row's `subnet` and `subnet6` are a sanity
+check, not proof that the zone owns them: the filter trusts the row to name its own zone. IPv4
+caps a `subnet` that reaches public space at a /24; IPv6 has no such cap, since the site model
+numbers a zone from a /48 to a /64 of global space, so a hand-written row may claim a public /48
+and have the sensor count the addresses in it as its own. Rows that carry a global `subnet6`
+should come from the baseline playbook, where `hnx site validate` and guest validation stand
+behind them.
 
 ## 5. Capability inventory groups
 
