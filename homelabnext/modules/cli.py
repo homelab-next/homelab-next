@@ -133,7 +133,9 @@ def _core(
     strict: bool = True,
 ) -> tuple[ld.CoreNames, list[ld.Problem]]:
     """The core's names from the sources it already has (:func:`ld.core_names`): the registry,
-    its MCP catalog, the keyring, the OCSF tables and the core's notify pairs.
+    its MCP catalog, the keyring, the OCSF tables, the core's notify pairs and its own fleet units
+    (read from ``ansible/roles`` under the root and the generators, :func:`ld.core_units`; a
+    deploy without them is a ``registry`` problem).
 
     With ``--overlay``, the MCP catalog (``lab/mcp/``) and the keyring
     (``lab/keyring/keyring.json``) are the overlay's: one that is missing is a ``registry``
@@ -188,6 +190,20 @@ def _core(
     keyring = _read(keyring_path, "keyring", budget) if keyring_path is not None else None
     tables, found = ld.core_table_names(paths.ocsf_dir(), budget)
     problems += found
+    units = None
+    roles_dir = root / "ansible" / "roles"
+    if roles_dir.exists() or roles_dir.is_symlink():
+        names, families, found = ld.core_units(roles_dir, budget)
+        problems += found
+        units = (names, families)
+    elif getattr(args, "deploy", False):
+        why = "the core's roles (ansible/roles under --root) are missing: its units cannot be read"
+        problems.append(ld.Problem("registry", why))
+    else:
+        notes.append(
+            "no ansible/roles under the root: the core's own units were not read, so a running "
+            "unit bound to no module is not judged"
+        )
     core, found = ld.core_names(
         _read(services, "core registry", budget),
         mcp=mcp,
@@ -195,6 +211,7 @@ def _core(
         tables=tables,
         table_namespace=CORE_NAMESPACE,
         pairs=CORE_PAIRS,
+        units=units,
     )
     return core, [*problems, *found]
 

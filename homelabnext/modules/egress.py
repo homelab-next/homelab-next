@@ -73,6 +73,10 @@ from homelabnext.modules.scope import EMBEDDED_V4, ScopeMissing, _part_networks,
 
 __all__ = ["METADATA", "NOT_INTERNET", "PROTOCOLS", "RELOAD_S", "EgressError", "render", "write"]
 
+#: the core fleet unit this generator writes on every host it places a module on (``hnx-egress``
+#: service and timer): one of the core's own units (:func:`homelabnext.modules.loader.core_units`)
+UNIT = "egress"
+
 Doc = dict[str, Any]
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 _NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
@@ -528,11 +532,11 @@ def render(
     for host, roles in sorted(per_host.items()):
         roles.sort(key=lambda r: r[:2])
         files[f"{host}/hnx-egress.nft"] = _nft(host, roles, lab4, lab6)
-        files[f"{host}/hnx-egress.service"] = _service(
+        files[f"{host}/{UNIT_PREFIX}{UNIT}.service"] = _service(
             (_cgroup(m, r) for m, r, _a, _i in roles),
             (limits.slice_name(m, r) for m, r, _a, _i in roles),
         )
-        files[f"{host}/hnx-egress.timer"] = _timer()
+        files[f"{host}/{UNIT_PREFIX}{UNIT}.timer"] = _timer()
     for mod in sorted(placed_on):
         for u in sorted(units(mod)) if units else []:
             _checked("unit", u)

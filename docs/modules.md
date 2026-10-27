@@ -956,9 +956,15 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    (`mcp/`) and the example keyring are used, each said in a note, and a missing one is a note.
    The catalogs are read like any other input, at most 1,000 entries each. Exact names only: a
    lookalike with a core name as its prefix (`<core name>-tools`) is a module's own name, as a
-   service row's is. The core's own units have no source: no fleet_units spec of the core's is in
-   the repository, so they are not compared (a module's units carry its id, which no core name
-   is).
+   service row's is. The core's own fleet units are read from what installs them, never from a
+   list kept for the check: every unit file a core role's tasks install (a `dest:` naming
+   `hnx-<name>.service`, `.timer` or `.{{ item }}`, and `hnx-<prefix>-{{ ... }}.service`, a family
+   with one unit per instance) and the units the core's generators write (the egress and mirror
+   generators' `UNIT`), read from `ansible/roles` under `--root` (the pinned checkout). A module
+   unit named like one of them is refused. A test scans every role file and the package for a
+   unit name the loader does not read, so a role that installs one some other way fails the
+   build. Without `ansible/roles` under the root the core's units are not read (a note; under
+   `--deploy` a `registry` problem).
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
    values are declared keys, carry no site address, and a secret value is the module's own or
@@ -1041,12 +1047,16 @@ present, so a broken link never reads as "no modules"), `hnx` checks an empty se
 rules and the supply chain have nothing to judge, the inputs that only judge selected modules (the
 role table, the registry, the MCP catalog, the keyring) are notes instead of problems, and the
 runtime check still runs, so every running unit of a module (a core module's included) is one the
-site does not select. A unit whose name is no module's (`<id>` or `<id>-...`) is the core's and is
-not judged, as for any selection. A lab with some of the three but not the others is checked as one
+site does not select. A unit whose name is no module's (`<id>` or `<id>-...`) must be one of the
+core's own (read from its roles and generators, above), as for any selection: any other `hnx-*`
+unit runs but is no module's or the core's, a problem. A unit the overlay's own roles install is
+therefore a problem unless an overlay module declares it. A lab with some of the three but not the others is checked as one
 that takes up modules: every missing input is a problem. The decision is `hnx`'s, never the
 workflow's: the step that runs it has no condition of its own.
 
-**What the census measures.** Two queries per host, both for `hnx-*` services and timers:
+**What the census measures.** Only `hnx-*` services and timers, by design: a unit under any other
+name (a package's own service, a unit the overlay names otherwise) is out of its scope, and the
+loader never sees it. Two queries per host, both for `hnx-*` services and timers:
 `systemctl list-unit-files --state=enabled` and `systemctl list-units --state=active`. A unit
 counts as running when a host reports its unit file enabled **or** reports it active, so one that
 runs without being enabled (static, `enabled-runtime`, linked, or started by another unit or by
@@ -1069,6 +1079,14 @@ is no listed host's answer, an answer written for another host, a linked or non-
 one over 1 MB fails the gather too. The role refuses a host name that is not a plain name before it
 writes anything. What a host reports is believed: a host whose root is compromised can hide a unit
 or claim one, and no census read from the host itself can rule that out.
+
+**The overlay runs the census.** The census play runs with the overlay's own Ansible configuration
+and inventory (its `ansible.cfg` names the inventory, the vault client and the SSH host keys a
+deploy needs, so the pinned checkout's cannot stand in for it). A hostile change to the overlay can
+therefore leave a host out of the play, or shadow a plugin through its configuration and forge the
+answers: the census is an alarm against drift and mistakes, not a gate against a hostile overlay,
+which already has root on every host through `site.yml`. Review of the overlay itself (its
+`ansible.cfg`, inventory and roles are its code owners') is what guards against that.
 
 ## How a swap works, end to end
 
@@ -1399,8 +1417,9 @@ listed as deferred.
    `module_census` and `hnx modules gather`; see
    [The loader at deploy time](#the-loader-at-deploy-time)). Not done: it has not run at a real
    lab's deploy yet; service rows, MCP servers, agents, tables and recovery pairs are not gathered
-   from the hosts (a gathered inventory names the first four in `not_gathered`); and the core's
-   own units have no source to compare against.
+   from the hosts (a gathered inventory names the first four in `not_gathered`). The core's own
+   units are read from its roles and generators, so a running unit that is no module's or the
+   core's is a problem.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
     the core's existing product names are a baseline that only shrinks.
 

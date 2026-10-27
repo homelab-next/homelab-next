@@ -45,8 +45,8 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
         tmp_path / "c",
         {
             "gpu-1": [
-                "hnx-lake-compact.service enabled enabled",
-                "hnx-lake-compact.timer enabled -",
+                "hnx-egress.service enabled enabled",
+                "hnx-egress.timer enabled -",
             ],
             "infer-core.example": ["hnx-external-collector-pull.timer enabled"],
             "quiet": [],
@@ -55,7 +55,7 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
     inventory, notes = census.gather(d)
     assert inventory == {
         "schema_version": "1.0",
-        "units": ["external-collector-pull", "lake-compact"],
+        "units": ["egress", "external-collector-pull"],
         "not_gathered": ["rows", "mcp_servers", "agents", "tables"],
     }
     assert notes == [
@@ -78,9 +78,9 @@ def test_a_unit_that_runs_without_being_enabled_is_counted(tmp_path):
     no enabled unit file; while it is active, list-units reports it, and the census counts it."""
     d = write_census(
         tmp_path / "c",
-        {"a": ["hnx-lake-compact.timer enabled"], "b": []},
+        {"a": ["hnx-egress.timer enabled"], "b": []},
         active={
-            "a": ["hnx-lake-compact.timer loaded active waiting Compact the lake"],
+            "a": ["hnx-egress.timer loaded active waiting Compact the lake"],
             "b": [
                 "hnx-stray.service loaded active running Started by hand",
                 # an instance, built in two parts (whole, the leak scan reads it as an address)
@@ -90,7 +90,7 @@ def test_a_unit_that_runs_without_being_enabled_is_counted(tmp_path):
         },
     )
     inventory, notes = census.gather(d)
-    assert inventory["units"] == ["lake-compact", "oneshot", "stray"]
+    assert inventory["units"] == ["egress", "oneshot", "stray"]
     assert "1 template unit(s) or instance(s)" in notes[-1]
 
 
@@ -247,7 +247,7 @@ def test_too_many_lines_are_refused(tmp_path):
 def test_a_gathered_inventory_compares_units_and_notes_the_kinds_it_does_not_report():
     tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
     site = ld.load_yaml(SMALL_LAB)
-    inventory = {"schema_version": "1.0", "units": ["external-collector-extra", "lake-compact"],
+    inventory = {"schema_version": "1.0", "units": ["external-collector-extra", "egress"],
                  "not_gathered": ["rows", "mcp_servers", "agents", "tables"]}  # fmt: skip
     slots = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
     roles = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
@@ -268,10 +268,10 @@ def test_a_gathered_inventory_compares_units_and_notes_the_kinds_it_does_not_rep
 
 
 def test_hnx_modules_gather_writes_a_new_inventory(tmp_path, capsys):
-    d = write_census(tmp_path / "c", {"a": ["hnx-lake-compact.timer enabled"]})
+    d = write_census(tmp_path / "c", {"a": ["hnx-egress.timer enabled"]})
     out = tmp_path / "inventory.json"
     assert mcli.main(["gather", str(d), "--out", str(out)]) == 0
-    assert json.loads(out.read_text())["units"] == ["lake-compact"]
+    assert json.loads(out.read_text())["units"] == ["egress"]
     assert "1 unit(s) written" in capsys.readouterr().out
     # never over an existing file, and an unreadable census is a usage error (2), not an inventory
     assert mcli.main(["gather", str(d), "--out", str(out)]) == 2
@@ -333,7 +333,7 @@ def test_a_lab_that_takes_up_no_modules_is_checked_as_an_empty_selection(tmp_pat
     over an empty selection; what only judges selected modules (the role table, the registry,
     the MCP catalog, the keyring) is a note, and the gathered census is still compared."""
     ov = overlay(tmp_path, site=False, roles=False, services=False)
-    d = write_census(tmp_path / "c", {"a": ["hnx-lake-compact.timer enabled"]})
+    d = write_census(tmp_path / "c", {"a": ["hnx-egress.timer enabled"]})
     inv = tmp_path / "inventory.json"
     assert mcli.main(["gather", str(d), "--out", str(inv)]) == 0
     capsys.readouterr()
@@ -353,7 +353,7 @@ def test_an_empty_selection_judges_every_running_unit_of_a_module():
     tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
     slots = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
     roles = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
-    inventory = {"schema_version": "1.0", "units": ["external-collector-pull", "lake-compact"],
+    inventory = {"schema_version": "1.0", "units": ["egress", "external-collector-pull"],
                  "not_gathered": ["rows", "mcp_servers", "agents", "tables"]}  # fmt: skip
     report = ld.check(
         tree, slots=slots, roles=roles, in_tree_roots=(ROOT / "modules", EXAMPLES),
@@ -393,7 +393,7 @@ def test_with_every_input_the_overlays_own_the_deploy_check_is_the_plain_check(t
     make gates runs, here over a lab whose selection names modules it does not ship (no public
     module tree exists yet, so a lab brings its own); the gathered inventory passes its schema."""
     ov = overlay(tmp_path)
-    d = write_census(tmp_path / "c", {"a": ["hnx-lake-compact.timer enabled"]})
+    d = write_census(tmp_path / "c", {"a": ["hnx-egress.timer enabled"]})
     inv = tmp_path / "inventory.json"
     assert mcli.main(["gather", str(d), "--out", str(inv)]) == 0
     capsys.readouterr()

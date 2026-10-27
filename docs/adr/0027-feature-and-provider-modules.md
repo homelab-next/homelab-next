@@ -170,8 +170,9 @@ with no schema, generator or check in any form):
    skipped) before anything changes on a host and on every pull request, and again after the
    deploy against the fleet units gathered from the hosts, enabled or active (role
    `module_census`, `hnx modules gather`). Not done: it has not run at a real lab's deploy yet; service rows, MCP servers,
-   agents, tables and recovery pairs are not gathered from the hosts; and the core's own units,
-   which have no source;
+   agents, tables and recovery pairs are not gathered from the hosts (the core's own units are
+   read from its roles and generators, so a running unit that is no module's or the core's is a
+   problem);
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks.
 
