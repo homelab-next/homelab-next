@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# An inventory kind the loader does not judge is refused, never ignored.
+schema_version: "1.0"
+units: []
+rows: []
+mcp_servers: []
+agents: []
+tables: []
+containers: [external-collector-receiver]

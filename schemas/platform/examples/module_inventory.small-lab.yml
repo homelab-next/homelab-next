@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# What runs on the fictional small-lab site (examples/modules/sites/small-lab.yml), exactly what
+# its selected modules declare: the loader's two-way check is clean against it.
+schema_version: "1.0"
+units: []
+rows: [external-collector-receiver, samples]
+mcp_servers: [external-collector-probe]
+agents: [core-staff-scorecard, external-collector-analyst]
+tables: ["table:external_collector.sessions"]

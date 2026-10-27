@@ -2,9 +2,10 @@
 """The module loader's rules (docs/modules.md, "What the loader checks"), as plain functions over
 manifests, the slot registry draft and a site selection.
 
-There is no loader yet (ADR-0027 is proposed).  This is the specification in executable form for
-the contract tests: ``tests/schemas/test_module_1_0.py`` applies it to the fictional examples and
-shows each rule refusing a planted defect.  Each function returns a list of problem strings.
+:mod:`homelabnext.modules.loader` discovers the manifests and runs these with every input they
+take (``hnx modules check``); ``tests/schemas/test_module_1_0.py`` shows each rule refusing a
+planted defect.  Each function returns a list of problem strings, and assumes schema-valid
+documents (the loader validates every manifest and selection first).
 """
 
 from __future__ import annotations

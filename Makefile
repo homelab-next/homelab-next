@@ -74,7 +74,8 @@ schemas:
 # Mode stubs and search index (examples/codemode/) match the example broker manifest (ADR-0031); the
 # Code Mode golden suites (CM-6) run every task in classic MCP mode and in Code Mode, the G-02
 # corpus inside tool results, against the scripted fake model behind the fake inference server,
-# and the committed report is current (it proves the harness, not a model: docs/codemode.md)
+# and the committed report is current (it proves the harness, not a model: docs/codemode.md); the
+# module loader loads the example lab (modules-check)
 CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
@@ -91,6 +92,17 @@ gates:
 	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
 	$(PY) -m homelabnext.cli codemode gen --check
 	$(PY) -m homelabnext.cli golden codemode --check $(CODEMODE_GOLDEN)
+	$(MAKE) modules-check
+
+# the module loader (ADR-0027 follow-up 9) over the example lab: every manifest, every profile's
+# site rules and supply chain, and what runs on small-lab against what it declares
+.PHONY: modules-check
+modules-check:
+	for site in examples/modules/sites/*.yml; do \
+	  $(PY) -m homelabnext.cli modules check --examples --site "$$site" || exit 1; \
+	done
+	$(PY) -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
+	  --running schemas/platform/examples/module_inventory.small-lab.yml
 
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it

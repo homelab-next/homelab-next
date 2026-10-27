@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """platform/module 1.0, a DRAFT (ADR-0027, proposed; docs/modules.md): the module manifest.
 
-Contract tests only; there is no loader yet. They prove the schema's own rules (each negative in
+Contract tests of the manifest and the rules (the loader itself, which runs them over discovered
+manifests, is tested in ``tests/modules/test_module_loader.py``). They prove the schema's own rules (each negative in
 ``schemas/platform/negative/module.*`` fails where its name says), that every example module in
 ``examples/modules/`` validates and meets the loader rules (``homelabnext.modules.rules``: names bound to the
 module, code and secrets in its own namespace, the slot registry's flags, owned interfaces), that
@@ -23,6 +24,7 @@ import schema_check as sc
 import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.modules import loader as ld
 from homelabnext.modules import rules as mr
 from homelabnext.modules import scope as ms
 from homelabnext.schemas.module_manifest import NEVER_SHARED
@@ -47,9 +49,9 @@ DIRS = {n: MODULES_DIR / n for n in MODULES}
 #: the fictional examples count as in-tree only because the tests say so: the rules' default
 #: public root is modules/ alone, so a loader copying the default never makes them available
 ROOTS = (MODULES_DIR,)
-ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
-UNITS = {n: mr._units(m, DIRS[n], load) for n, m in MODULES.items()}
-ROOT_UNITS = {n: mr._privileged_units(m, DIRS[n], load) for n, m in MODULES.items()}
+#: the site rules' inputs, built the loader's way from the manifests' contributed files
+_INPUTS = ld.inputs(ld.Tree(MODULES, DIRS, dict.fromkeys(MODULES, "fixture")))
+ROWS, UNITS, ROOT_UNITS = _INPUTS.rows, _INPUTS.units, _INPUTS.privileged_units
 MODEL_ROLES = json.loads((ROOT / "examples/model_roles.json").read_text())["roles"]
 
 
@@ -337,21 +339,7 @@ def test_the_slot_schema_refuses_a_registry_entry_that_breaks_a_rule(edit, where
     assert errs and any(str(e).startswith(where) for e in errs), errs
 
 
-def _contributed_files(doc):
-    c = doc.get("contributes", {})
-    for key, entries in c.items():
-        for e in entries:
-            if isinstance(e, dict):
-                for field in ("file", "charter", "spec", "context_manifest"):
-                    if field in e:
-                        yield key, e[field]
-                yield from (("prompts", f) for f in e.get("prompts", {}).values())
-    for i in doc.get("interfaces", []):
-        if "schema" in i:
-            yield "interfaces", i["schema"]
-    for e in doc.get("provides", {}).get("slots", {}).values():
-        if "conformance" in e:
-            yield "conformance", e["conformance"]["target"]
+_contributed_files = ld.contributed_files
 
 
 @pytest.mark.parametrize("name", sorted(MODULES))

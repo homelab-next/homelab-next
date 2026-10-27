@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/module_inventory/1.0",
+  "x-draft": "ADR-0027 (proposed): what runs on a site, for the loader's two-way check (follow-up 9); not frozen, may change before acceptance",
+  "title": "Module inventory",
+  "description": "What runs on a site, by kind, for the module loader's two-way check (ADR-0027, proposed; docs/modules.md, 'What the loader checks'): every running name bound to a module id (<id> or <id>-..., a table as table:<id_>.<name>) must be declared by that module, which the site selects, and every declared name must run. A name bound to no module id is the core's and is not judged by this check. The deployer writes it from the hosts (unit names without the hnx- prefix and the .service/.timer suffix, service rows by registry name, MCP server ids, agent keys, lake tables). The rules are in homelabnext.modules.loader.running_problems.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "units",
+    "rows",
+    "mcp_servers",
+    "agents",
+    "tables"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "units": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "description": "Fleet unit names that are installed and enabled."
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "description": "Service rows that answer: a feature's or core module's by row name, a provider's by the instance the site names."
+    },
+    "mcp_servers": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "description": "MCP server ids that are registered."
+    },
+    "agents": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      },
+      "description": "Agent keys that have a compiled profile and a lane."
+    },
+    "tables": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 129,
+        "pattern": "^table:[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$(?!\\n)"
+      },
+      "description": "Lake tables that exist."
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    }
+  }
+}

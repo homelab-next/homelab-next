@@ -239,6 +239,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "mcp (the codemode_search and codemode_describe tools)",
         lambda a: importlib.import_module("homelabnext.codemode.cli").main(a),
     ),
+    "modules": (
+        "the module loader (ADR-0027): check (every manifest, site, lock and runtime rule)|render "
+        "(footprint limits and egress policy for a site)",
+        lambda a: importlib.import_module("homelabnext.modules.cli").main(a),
+    ),
     "custom": (
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),

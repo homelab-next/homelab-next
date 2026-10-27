@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# A table is named table:<schema>.<name>, as a module's data entry names it.
+schema_version: "1.0"
+units: []
+rows: []
+mcp_servers: []
+agents: []
+tables: [external_collector.sessions]

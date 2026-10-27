@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every kind is listed, even when empty: a missing list would read as "nothing runs" and pass.
+schema_version: "1.0"
+units: []
+rows: []
+mcp_servers: []
+agents: []

@@ -344,6 +344,13 @@ jobs:
         run: python -m homelabnext.cli graph check
       - name: Code Mode stubs and search index match the example broker manifest (ADR-0031, CM-3)
         run: python -m homelabnext.cli codemode gen --check
+      - name: the module loader loads the example lab for every profile (ADR-0027 follow-up 9)
+        run: |
+          for site in examples/modules/sites/*.yml; do
+            python -m homelabnext.cli modules check --examples --site "$site"
+          done
+          python -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
+            --running schemas/platform/examples/module_inventory.small-lab.yml
       - name: hnx entry point
         run: |
           hnx --help
