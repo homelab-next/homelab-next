@@ -135,8 +135,9 @@ with no schema, generator or check in any form):
    `grants.upstreams` for broker, idp and remote-admin, and `grants.cloud_models` for a model role
    with a `leaves_lab` binding, model roles 1.3); the loader passes the units, rows and role table
    they read; and the per-field review tier for in-tree manifests (`hnx modules review-tier` in
-   CI classifies each changed manifest and requires a code owner for every human-approve one,
-   whose pull-request review is the approval; fetched modules keep the flat tier of follow-up 5);
+   CI classifies each changed module path and requires a valid code owner, as of the base, for
+   every human-approve one, whose pull-request review is the approval, near-vacuous while one `*`
+   owner owns everything; fetched modules keep the flat tier of follow-up 5);
 5. the supply chain: implemented (`homelabnext.modules.supply`: the tree digest, the draft schema
    `platform/module_lock` 1.0 for `lab/modules.lock`, and reviews keyed by the digest against the
    new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader runs

@@ -104,8 +104,9 @@ modules-check:
 	$(PY) -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
 	  --running schemas/platform/examples/module_inventory.small-lab.yml
 
-# each module manifest the working tree changes against BASE (default origin/main): its review
-# tier, and a CODEOWNERS owner for every human-approve one (ADR-0027 follow-up 4)
+# each module path the working tree changes against BASE (default origin/main): its review tier,
+# and a valid CODEOWNERS owner (as of BASE) for every human-approve one (ADR-0027 follow-up 4);
+# not part of gates, which has no base to compare with (CI runs it with --ci-base)
 .PHONY: modules-review-tier
 BASE ?= origin/main
 modules-review-tier:
