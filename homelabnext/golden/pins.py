@@ -39,6 +39,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from homelabnext import paths
 from homelabnext.registry.models import Binding, RoleTable, normalize_role
 
 from .report import Report
@@ -404,15 +405,21 @@ def _task_problems(t: Mapping[str, Any], failed: int) -> list[str]:
     return out
 
 
-#: the shipped example role table: its pins mark a report as the repository's own CI example
-EXAMPLE_ROLES = Path(__file__).resolve().parents[2] / "examples" / "model_roles.json"
+def _example_pins() -> Any:
+    """The shipped example role table's pins, which mark a report as the repository's own CI
+    example; None when no example table is installed (then no table is the example)."""
+    try:
+        return RoleTable.load(paths.example_file("model_roles.json")).pins()
+    except paths.ResourceNotFound:
+        return None
 
 
 def fake_canary_on_a_real_table(report: Any, table: RoleTable) -> str | None:
     """A problem when the table is not the shipped example (its pins differ) and every canary
     entry in the report ran against the fake: a real lab's check then proves nothing about its
     models, so it must check a live report with ``--require-live``.  None otherwise."""
-    if not EXAMPLE_ROLES.is_file() or RoleTable.load(EXAMPLE_ROLES).pins() == table.pins():
+    example = _example_pins()
+    if example is not None and example == table.pins():
         return None
     canary = report.get("canary") if isinstance(report, Mapping) else None
     entries = [
