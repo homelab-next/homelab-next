@@ -361,10 +361,10 @@ def module_problems(
         # the agent's model role is one the module requires, so the site's model rules (the
         # cloud-model grant above all) cover the agent's prompts too
         required_roles = {r["role"] for r in doc["requires"].get("model_roles", [])}
-        if spec.get("model_role") and spec["model_role"] not in required_roles:
+        role = spec.get("model_role")
+        if role is not None and (not isinstance(role, str) or role not in required_roles):
             out.append(
-                f"agent {key}: model role {spec['model_role']} is not one of the module's "
-                "requires.model_roles"
+                f"agent {key}: model role {role!s} is not one of the module's requires.model_roles"
             )
         if set(spec.get("capabilities", [])) != {n["cap"] for n in a.get("needs", [])}:
             out.append(f"agent {key}: needs name exactly the spec's capabilities")

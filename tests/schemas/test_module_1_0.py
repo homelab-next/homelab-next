@@ -1815,6 +1815,9 @@ def test_an_agent_model_role_is_one_the_module_requires(tmp_path):
     ) in probs, probs
     doc["requires"]["model_roles"].append({"role": "mdl:fast-classifier"})
     assert not [p for p in mr.module_problems(doc, mod, SLOTS, load, (tmp,)) if "model role" in p]
+    spec_path.write_text(yaml.safe_dump({**spec, "model_role": ["mdl:main-reasoner"]}))
+    probs = mr.module_problems(doc, mod, SLOTS, load, (tmp,))  # refused, never a crash
+    assert [p for p in probs if "is not one of the module's requires.model_roles" in p], probs
 
 
 def test_a_role_whose_prompts_can_leave_the_lab_needs_grants_cloud_models():
