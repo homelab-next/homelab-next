@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/platform/module_swap/1.0",
   "x-draft": "ADR-0027 (proposed): the module-keyed part of swap record 1.2; not frozen, may change before acceptance, when platform/swap_record takes these fields",
   "title": "Module swap",
-  "description": "What a swap record 1.2 adds to the 1.1 record (ADR-0027, proposed; docs/modules.md, 'Swap record 1.2'): the swap keyed on the outgoing and incoming provider modules and the slot instances they serve instead of a capability and two adapters; the route as an endpoint or as the selection lines that change; the cutover legs across instances; the dependants report that gates the cutover, core modules included; field meaning changes; the migration evidence or a recorded decision to start empty; and the outgoing provider's revoked credentials. The 1.1 record's steps, gates and hash-chained log are unchanged and not repeated here. Semantic rules (the report recomputed from the manifests and the site, the legs, the selection diff) are in homelabnext.modules.swap.",
+  "description": "What a swap record 1.2 adds to the 1.1 record (ADR-0027, proposed; docs/modules.md, 'Swap record 1.2'): the swap keyed on the outgoing and incoming provider modules and the slot instances they serve instead of a capability and two adapters; the route as an endpoint or as the selection lines that change; the cutover legs across instances; the dependants report that gates the cutover, core modules included; field meaning changes; the migration evidence or a recorded decision to start empty; the outgoing provider's revoked credentials; and the model roles an inference swap rebinds, with their pinned evaluation. The 1.1 record's steps, gates and hash-chained log are unchanged and not repeated here. Semantic rules (the report recomputed from the manifests and the site, the legs, the selection diff) are in homelabnext.modules.swap.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -257,6 +257,15 @@
         "$ref": "#/$defs/secret"
       },
       "description": "the outgoing provider's issued credentials, revoked; gates decommission-check"
+    },
+    "model_roles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/model_role_leg"
+      },
+      "description": "model roles the swap rebinds on a moving inference slot instance: each names the role, its outgoing and incoming binding and the pinned evaluation report for the role table after the rebind, which must pass the pin gate (hnx golden pins check) with the new binding's egress canary entry, live when require_live; checked against both role tables and the reports by homelabnext.modules.swap.model_role_problems. Calibration refit has no field here and is not enforced"
     }
   },
   "not": {
@@ -399,6 +408,93 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300
+          }
+        }
+      }
+    },
+    "binding_ref": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pin"
+          ],
+          "properties": {
+            "pin": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)",
+              "description": "the binding's pin digest (homelabnext.golden.pins.pin_digest of backend, model id, version and digest), as its canary entry records it"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "store_entry"
+          ],
+          "properties": {
+            "store_entry": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*$(?!\\n)",
+              "description": "a model store entry id; the binding is the role's one binding serving that entry's model id and digest"
+            }
+          }
+        }
+      ],
+      "description": "one binding of the role: by pin digest or by model-store entry"
+    },
+    "model_role_leg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "instance",
+        "role",
+        "from",
+        "to",
+        "evaluation"
+      ],
+      "properties": {
+        "slot": {
+          "const": "inference",
+          "description": "cap:inference, written as the record writes every slot"
+        },
+        "instance": {
+          "$ref": "#/$defs/instance"
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 68,
+          "pattern": "^mdl:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        "from": {
+          "$ref": "#/$defs/binding_ref",
+          "description": "the binding in the role table the swap starts from"
+        },
+        "to": {
+          "$ref": "#/$defs/binding_ref",
+          "description": "the binding in the role table after the rebind"
+        },
+        "evaluation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "report"
+          ],
+          "properties": {
+            "report": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$(?!\\n)",
+              "description": "homelabnext.golden.pins.report_digest of the evaluation report for the role table after the rebind"
+            },
+            "require_live": {
+              "type": "boolean",
+              "default": false,
+              "description": "the new table's canary entries must have run live (pins check --require-live)"
+            }
           }
         }
       }

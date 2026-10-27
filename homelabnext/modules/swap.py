@@ -12,15 +12,29 @@ requires or prefers a moving slot instance (core modules included) is checked ag
 **incoming** provider offers for that slot: the features it requires and the formats it reads.
 A failed requirement blocks; a failed preference falls back.  A swap document's report is never
 trusted as written: :func:`module_swap_problems` recomputes it and refuses a difference.
+
+A swap that moves the ``inference`` slot may rebind model roles: each ``model_roles`` leg names a
+role, its outgoing and incoming binding (by pin digest or by model-store entry) and the pinned
+evaluation report for the role table after the rebind.  :func:`model_role_problems` checks a leg
+against :class:`ModelEvidence` (both role tables, the reports, optionally the store): the role is
+in both tables, each binding resolves, and the report is the one pinned and passes
+``hnx golden pins check`` against the new table, canary entry of the new binding included, live
+when the leg requires it.  Calibration refit is not a field of the record, so it is not enforced.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from homelabnext.golden import pins as gp
+from homelabnext.models.store import Store, resolve_binding
 from homelabnext.modules.rules import selected
+from homelabnext.registry.models import Binding, RoleTable, UnknownRole
 
 Doc = dict[str, Any]
 
@@ -115,10 +129,112 @@ def blocked(report: list[Doc]) -> list[str]:
     return sorted({e["module"] for e in report if e["verdict"] == "blocks"})
 
 
-def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str]:
+@dataclass(frozen=True)
+class ModelEvidence:
+    """What a swap's model-role legs are checked against: the role table the swap starts from,
+    the table after the rebind, the evaluation reports a leg may pin (any number, matched by
+    :func:`homelabnext.golden.pins.report_digest`), the golden suites ``pins check`` runs with, and
+    the model store a leg naming a store entry resolves through."""
+
+    before: RoleTable
+    after: RoleTable
+    reports: Sequence[Any] = ()
+    suites: Sequence[Path] = field(default_factory=lambda: tuple(gp.DEFAULT_SUITES))
+    store: Store | None = None
+
+
+def _pin_of(b: Binding) -> str:
+    return gp.pin_digest(
+        {"backend": f"svc:{b.backend}", "model_id": b.model_id, "version": b.version,
+         "digest": b.digest}
+    )  # fmt: skip
+
+
+def _binding(
+    ref: Doc, table: RoleTable, role: str, store: Store | None
+) -> tuple[Binding | None, str]:
+    """The one binding of ``role`` in ``table`` a leg's ``from`` or ``to`` names, or ``(None, why)``."""
+    bindings = table.get(role).bindings
+    if "pin" in ref:
+        hit = [b for b in bindings if _pin_of(b) == ref["pin"]]
+        return (hit[0], "") if hit else (None, f"pin {ref['pin'][:19]}... is no binding of it")
+    if store is None:
+        return None, f"it names store entry {ref['store_entry']!r}, and no model store is given"
+    entry = store.entries.get(ref["store_entry"])
+    if entry is None:
+        return None, f"store entry {ref['store_entry']!r} is not in the model store"
+    hit = [b for b in bindings if (b.model_id, b.digest) == (entry.served_model_name, entry.digest)]
+    if len(hit) != 1:
+        return None, f"store entry {entry.id!r} is {len(hit)} bindings of it, not one"
+    return hit[0], ""
+
+
+def model_role_problems(swap: Doc, models: ModelEvidence) -> list[str]:
+    """Each ``model_roles`` leg against the role tables, the store and the pinned reports: the role
+    is in both tables, the old binding is one of the table the swap starts from, the new one
+    resolves in the table after it (and in the store, when one is given) and differs, and the
+    report the leg pins passes ``pins check`` against the table after (with ``--require-live``
+    when the leg requires live; without it, the fake-canary guard ``pins check`` applies)."""
+    out: list[str] = []
+    moving = {si["instance"] for si in swap["slots"] if si["slot"] == "inference"}
+    reports = {gp.report_digest(r): r for r in models.reports}
+    seen: set[str] = set()
+    for leg in swap.get("model_roles", []):
+        role = leg["role"]
+        where = f"model_roles {role}"
+        if leg["instance"] not in moving:
+            out.append(
+                f"{where}: inference/{leg['instance']} is not a slot instance the swap moves"
+            )
+        if role in seen:
+            out.append(f"{where}: the role is rebound by more than one leg")
+        seen.add(role)
+        try:
+            models.before.get(role)
+            models.after.get(role)
+        except UnknownRole as exc:
+            out.append(f"{where}: {exc.args[0]}")
+            continue
+        old, why_old = _binding(leg["from"], models.before, role, models.store)
+        if old is None:
+            out.append(
+                f"{where}: the old binding does not resolve in the role table before: {why_old}"
+            )
+        new, why_new = _binding(leg["to"], models.after, role, models.store)
+        if new is None:
+            out.append(
+                f"{where}: the new binding does not resolve in the role table after: {why_new}"
+            )
+            continue
+        if old is not None and _pin_of(old) == _pin_of(new):
+            out.append(f"{where}: the old and new binding are the same pin; nothing is rebound")
+        if models.store is not None:
+            entry, why = resolve_binding(models.store, new.model_id, digest=new.digest)
+            if entry is None:
+                out.append(f"{where}: the new binding does not resolve in the model store: {why}")
+        ev = leg["evaluation"]
+        report = reports.get(ev["report"])
+        if report is None:
+            out.append(
+                f"{where}: the evaluation report {ev['report'][:19]}... is not supplied; the leg's "
+                "evidence is the pinned report for the role table after the rebind"
+            )
+            continue
+        live = bool(ev.get("require_live", False))
+        found = gp.check_report(report, models.after, models.suites, require_live=live)
+        if not live and (guard := gp.fake_canary_on_a_real_table(report, models.after)):
+            found.append(guard)
+        out += [f"{where}: pins check: {p}" for p in found]
+    return out
+
+
+def module_swap_problems(
+    swap: Doc, mods: dict[str, Doc], site: Doc, *, models: ModelEvidence | None = None
+) -> list[str]:
     """The rules JSON Schema cannot say, against the manifests and the site the swap starts from.
     Each problem is one string; an empty list is a record that holds.  Whether its cutover may run
-    is :func:`cutover_problems`, which also refuses a blocking dependant."""
+    is :func:`cutover_problems`, which also refuses a blocking dependant.  A record with
+    ``model_roles`` legs needs ``models``, their evidence (:func:`model_role_problems`)."""
     out: list[str] = []
     frm, to = swap["from_module"], swap["to_module"]
     # gate modules-differ (it replaces 1.1's adapters-differ: the same adapter is normal)
@@ -205,13 +321,21 @@ def module_swap_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str
     for s in swap.get("credentials_revoked", []):
         if s not in issued:
             out.append(f"credentials_revoked names {s}, which {frm} does not issue")
+    if swap.get("model_roles"):
+        if models is None:
+            out.append("the record rebinds model roles, and no model evidence is given to check it")
+        else:
+            out += model_role_problems(swap, models)
     return out
 
 
-def cutover_problems(swap: Doc, mods: dict[str, Doc], site: Doc) -> list[str]:
-    """The cutover gate: the record holds (:func:`module_swap_problems`), no dependant blocks, and
-    the data either moved (``migration``) or the swap starts empty by a recorded decision."""
-    out = module_swap_problems(swap, mods, site)
+def cutover_problems(
+    swap: Doc, mods: dict[str, Doc], site: Doc, *, models: ModelEvidence | None = None
+) -> list[str]:
+    """The cutover gate: the record holds (:func:`module_swap_problems`, its model-role legs
+    included), no dependant blocks, and the data either moved (``migration``) or the swap starts
+    empty by a recorded decision."""
+    out = module_swap_problems(swap, mods, site, models=models)
     if out:
         return out
     stop = blocked(dependants_report(swap, mods, site))
@@ -238,12 +362,14 @@ def decommission_problems(swap: Doc, mods: dict[str, Doc], after: Doc) -> list[s
     return [f"{s} is not revoked" for s in credentials_outstanding(swap, mods)]
 
 
-def apply_selection_diff(site: Doc, swap: Doc, mods: dict[str, Doc]) -> Doc:
+def apply_selection_diff(
+    site: Doc, swap: Doc, mods: dict[str, Doc], *, models: ModelEvidence | None = None
+) -> Doc:
     """The cutover of a swap whose route is a selection diff: a copy of ``site`` with each changed
     line flipped to the incoming module.  It runs :func:`cutover_problems` first and refuses on
     any, so the diff is the record's checked one; a line that does not read ``from`` refuses, so a
     diff cannot be applied to a selection it was not checked against (the result included)."""
-    problems = cutover_problems(swap, mods, site)
+    problems = cutover_problems(swap, mods, site, models=models)
     if problems:
         raise ValueError("cutover refused: " + "; ".join(problems))
     if "selection_diff" not in swap["route"]:

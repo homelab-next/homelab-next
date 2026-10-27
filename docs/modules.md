@@ -1024,6 +1024,7 @@ log are unchanged) until the ADR is accepted and the two are folded together. Th
 | `meaning_changes: [{field, before, after}]` | a feed move changed what a rule id meant |
 | `credentials_revoked: [secret:...]` gating `decommission-check` | the old provider's issued credentials go |
 | `legs: [{instance, order}]` | the DNS swap's two-leg cutover across instances |
+| `model_roles: [{slot: inference, instance, role, from, to, evaluation}]` | a model-role rebind is gated on the pinned evaluation of the new binding, its egress canary included |
 
 `tests/schemas/test_module_swap.py` drives the swap above (the `samples` object store) through
 these rules end to end: plan, re-check, migration, cutover onto `sites/full.yml`, decommission.
@@ -1035,9 +1036,38 @@ several slots that migrate in different formats is one record per format; a `hol
 credential is the template of the keys the store issues, so revoking it stands for those keys;
 and `meaning_changes` is recorded, never checked.
 
-Model-role rebinds go through the same record with `{slot: cap:inference, role}`, golden evaluations
-as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
-open (below).
+* **`model_roles`**: the model roles a swap of the `inference` slot rebinds, one leg per role:
+  `{slot: inference, instance, role: mdl:..., from, to, evaluation: {report, require_live}}`
+  (`cap:inference`, written as the record writes every slot). `from` and `to` each name one binding
+  of the role, as `{pin}` (the pin digest its canary entry records) or `{store_entry}` (a model
+  store entry: the role's one binding serving that entry's model id and digest).
+  `model_role_problems` checks each leg against `ModelEvidence`: the role table the swap starts
+  from, the table after the rebind, the evaluation reports and, optionally, the model store. The
+  instance is one the swap moves and each role has one leg; the role is in both tables; the old
+  binding is one of the starting table's, the new one is the later table's and differs from it, and
+  with a store the new binding resolves to an entry. `evaluation.report` is the digest
+  (`homelabnext.golden.pins.report_digest`, canonical JSON) of the report for the table after the
+  rebind. That report must be supplied and must pass `hnx golden pins check` against that table:
+  it is not stale, so it was run for the new binding, and every binding has a canary entry, the new
+  one included. With `require_live` it is checked as `--require-live`; without it, the check
+  applies the guard that refuses an all-fake report on a table other than the shipped example.
+  `module_swap_problems` (and so the cutover gate and `apply_selection_diff`) takes the evidence as
+  `models=`, and a record with legs and no evidence is refused, never passed.
+
+`tests/schemas/test_module_swap_model_roles.py` drives one inference swap through these rules. It
+rebinds `mdl:fast-classifier` from the shipped example's binding to a model-store entry and refuses:
+
+- a report that is missing, or that was produced for the old binding;
+- a fake canary entry where live is required;
+- an unknown role;
+- an unresolvable binding.
+
+Golden evaluations stand as conformance here. **Calibration refit is not enforced**: the record has
+no field for it, and none is added until there is a refit artefact to check. A rebind that keeps
+the provider module is not a module swap (gate `modules-differ`): `hnx golden pins check` alone
+gates it. The swap kit (`hnx swap`) drives 1.1 records, which carry no `model_roles`, so the leg is
+checked where the rest of 1.2 is, in these rules. Downtime migrations and derived-data rebuilds
+remain open (below).
 
 ## The product-name lint (rule 1)
 

