@@ -1,0 +1,27 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "runtime-case-variant-none",
+  "description": "a model runtime spells its own label in other cases and with white space, which a back end that folds field names would read",
+  "observed": "192.0.2.140",
+  "event": {
+    "url": {
+      "domain": "storage.googleapis.com"
+    },
+    "http": {
+      "request": {
+        "method": "PUT"
+      }
+    },
+    "Labels": {
+      "HNX_RUNTIME": "none"
+    },
+    "Labels.Hnx_Runtime ": "none",
+    "labels": {
+      "hnx_runtime ": "none"
+    }
+  },
+  "label": "model",
+  "rule": "model-runtime-object-store-request",
+  "fires": true
+}

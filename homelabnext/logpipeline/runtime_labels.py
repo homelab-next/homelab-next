@@ -16,7 +16,10 @@ supplied beside the event and never read out of it.
   whatever the event said;
 * it is not, or there is none, or it does not parse: the event leaves without the label;
 * every spelling the detection engine would read as the label is replaced, the nested
-  ``labels.hnx_runtime`` and the flat ``"labels.hnx_runtime"`` key alike; nothing else changes.
+  ``labels.hnx_runtime`` and the flat ``"labels.hnx_runtime"`` key alike, and so is any spelling
+  of either that differs only in case or surrounding white space (a back end that folds field
+  names would read it); nothing else changes;
+* a record that is not an object passes through unchanged: it has nowhere to carry the label.
 
 The table is keyed by address only.  A host name in a log line is the sender's own claim, and a
 name lookup at enrichment time would make the label as good as the resolver; an address the
@@ -139,18 +142,33 @@ class RuntimeTable:
         return None if key is None else self.values.get(key)
 
 
-def enrich(event: Mapping[str, Any], observed: Any, table: RuntimeTable) -> dict[str, Any]:
+def _is(key: Any, name: str) -> bool:
+    """``key`` spells ``name`` up to case and surrounding white space."""
+    return isinstance(key, str) and key.strip().casefold() == name
+
+
+def enrich(event: Any, observed: Any, table: RuntimeTable) -> Any:
     """A copy of ``event`` whose ``hnx_runtime`` label is the table's value for ``observed``.
 
-    Any label the event arrived with, nested or as the flat dotted key, is dropped first; an
-    unknown or unparseable ``observed`` leaves the event without one.  ``labels`` that is not an
-    object is replaced only when there is a label to set (it cannot carry one as it is).
+    Any label the event arrived with is dropped first: the nested ``labels.hnx_runtime`` and the
+    flat dotted key, and every spelling of either that differs only in case or surrounding white
+    space (``Labels.HNX_RUNTIME``, ``"hnx_runtime "``), since a back end that folds field names
+    would read those as the label.  An unknown or unparseable ``observed`` leaves the event
+    without one.  ``labels`` that is not an object is replaced only when there is a label to set
+    (it cannot carry one as it is).
+
+    A record that is not an object (a JSON array, string or null) has no field to carry a label
+    and none the engine reads, so it is returned unchanged (as a copy) rather than refused: one
+    malformed record does not cost the rest of its batch.
     """
+    if not isinstance(event, Mapping):
+        return copy.deepcopy(event)
     out = copy.deepcopy(dict(event))
-    out.pop(FLAT_KEY, None)
-    labels = out.get("labels")
-    if isinstance(labels, dict):
-        labels.pop(LABEL, None)
+    for key in [k for k in out if _is(k, FLAT_KEY)]:
+        del out[key]
+    for holder in [v for k, v in out.items() if _is(k, "labels") and isinstance(v, dict)]:
+        for key in [k for k in holder if _is(k, LABEL)]:
+            del holder[key]
     value = table.lookup(observed)
     if value is not None:
         if not isinstance(out.get("labels"), dict):

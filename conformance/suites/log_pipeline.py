@@ -7,8 +7,10 @@ import copy
 import ipaddress
 
 from conformance.fakes.log_pipeline import (
+    DropsNonObjectPipeline,
     FakeLogPipeline,
     JoinsOnEventSourcePipeline,
+    KeepsCaseVariantPipeline,
     KeepsFlatKeyPipeline,
     KeepsUnknownLabelPipeline,
     MergesTablesPipeline,
@@ -135,6 +137,44 @@ def _(t):
 
 
 @SUITE.check(
+    "case-variants-dropped",
+    "a label spelled in another case or with white space, nested or flat, is removed",
+)
+def _(t):
+    event = {
+        **_dns(labels={"HNX_RUNTIME": "none", "hnx_runtime ": "none"}),
+        "Labels.HNX_Runtime": "none",
+        " labels.hnx_runtime": "none",
+        "Labels": {"Hnx_Runtime": "none"},
+    }
+    got = _one(t, event, RUNTIME)
+    _labelled(got, "model")
+    survivors = [k for k in got if _folds_to(k, FLAT_KEY)]
+    for key, labels in got.items():
+        if _folds_to(key, "labels") and isinstance(labels, dict):
+            survivors += [f"{key}.{k}" for k in labels if _folds_to(k, LABEL)]
+    assert survivors == [f"labels.{LABEL}"], f"a variant spelling of the label survived: {got!r}"
+
+
+def _folds_to(key, name):
+    return isinstance(key, str) and key.strip().casefold() == name
+
+
+@SUITE.check(
+    "non-object-passes-through",
+    "a record that is not an object comes back unchanged and costs the batch nothing",
+)
+def _(t):
+    t.load_runtimes(_table())
+    for odd in (["not", "an", "object"], "a bare string", None):
+        out = t.process([Observed(odd, RUNTIME), Observed(_dns(), RUNTIME)])
+        assert isinstance(out, list) and len(out) == 2, f"2 records in, {out!r} out"
+        assert odd in out, f"the record {odd!r} did not come back unchanged: {out!r}"
+        (labelled,) = [e for e in out if isinstance(e, dict)]
+        _labelled(labelled, "model")
+
+
+@SUITE.check(
     "ipv4-mapped-is-ipv4",
     "a dual-stack peer ::ffff:a.b.c.d is looked up as a.b.c.d",
 )
@@ -152,10 +192,19 @@ def _(t):
 
 @SUITE.check(
     "not-an-address-unlabelled",
-    "address:port, a zone id or a host name is not an address and gives no label",
+    "address:port, a zone id, a host name, a trailing dot or zero padding gives no label",
 )
 def _(t):
-    for observed in (f"{RUNTIME}:514", f"{RUNTIME_V6}%eth0", "infer-core", f" {RUNTIME}", ""):
+    zero_padded = ".".join(f"{int(o):03d}" for o in RUNTIME.split("."))
+    for observed in (
+        f"{RUNTIME}:514",
+        f"{RUNTIME_V6}%eth0",
+        "infer-core",
+        f" {RUNTIME}",
+        "",
+        f"{RUNTIME}.",
+        zero_padded,
+    ):
         _labelled(_one(t, _dns(), observed), None)
 
 
@@ -224,6 +273,16 @@ MUTANTS = {
     ),
     "keeps-flat-key": Mutant(
         KeepsFlatKeyPipeline, "flat-key-dropped", 'the flat "labels.hnx_runtime" key survives'
+    ),
+    "keeps-case-variant": Mutant(
+        KeepsCaseVariantPipeline,
+        "case-variants-dropped",
+        "a label spelled in another case survives",
+    ),
+    "drops-non-object": Mutant(
+        DropsNonObjectPipeline,
+        "non-object-passes-through",
+        "a record that is not an object is dropped from the batch",
     ),
     "no-mapped-v4": Mutant(
         NoMappedV4Pipeline, "ipv4-mapped-is-ipv4", "a dual-stack peer is never found"

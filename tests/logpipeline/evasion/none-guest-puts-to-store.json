@@ -1,0 +1,20 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "none-guest-puts-to-store",
+  "description": "a known guest that runs no model sends a PUT to a cloud bucket: the pipeline labels it none and the rule stays silent",
+  "observed": "192.0.2.20",
+  "event": {
+    "url": {
+      "domain": "storage.googleapis.com"
+    },
+    "http": {
+      "request": {
+        "method": "PUT"
+      }
+    }
+  },
+  "label": "none",
+  "rule": "model-runtime-object-store-request",
+  "fires": false
+}

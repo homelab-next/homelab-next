@@ -21,7 +21,10 @@ watched party: a runtime that wrote `hnx_runtime: none` would never alert, and a
 `model` would raise a false one. So the pipeline:
 
 1. drops whatever label the event carries, nested (`labels.hnx_runtime`) or as the flat dotted key
-   `"labels.hnx_runtime"` (the engine reads a flat key first, so leaving it would let it win);
+   `"labels.hnx_runtime"` (the engine reads a flat key first, so leaving it would let it win),
+   and any spelling of either that differs only in case or surrounding white space
+   (`Labels.HNX_RUNTIME`, `"hnx_runtime "`): this engine reads exact names, but a back end that
+   folds field names would read those as the label;
 2. looks up the **observed source**: the address the collector itself saw, never a field of the
    event body (`source.ip`, `host.name` and the like are what the runtime wrote);
 3. sets the table's value for that address, `model` or `none`; an address the table does not
@@ -33,7 +36,9 @@ written by another service about a client (a resolver's query log, a proxy's acc
 client address that service recorded. The collector supplies it beside the event. The table is
 keyed by address only: a host name in a log line is the sender's own claim.
 
-The rule for one event is `homelabnext.logpipeline.enrich(event, observed, table)`.
+The rule for one event is `homelabnext.logpipeline.enrich(event, observed, table)`. A record that
+is not an object (an array, a string, null) has nowhere to carry the label and nothing the rule
+reads, so it passes through unchanged rather than failing the batch it came in.
 
 ## The table
 
@@ -45,9 +50,12 @@ writes `runtime-labels.json` (`homelabnext.logpipeline.runtime_labels/v1`): ever
 with `model` (it is a model runtime by capability or inventory group, the same test validation
 uses for default-deny egress) or `none`, and the guest and capability for a reader. Addresses are
 canonical (IPv6 compressed and lower case) and ordered; two guests on one address is an error.
-`RuntimeTable.load` refuses any other shape, value or key. The provider loads the table at
-deploy time and again whenever the guests change; a reload replaces the table, so a guest that
-stops being a model runtime stops being labelled one.
+`RuntimeTable.load` refuses any other shape, value or key. A reload replaces the table, so a guest
+that stops being a model runtime stops being labelled one.
+
+Loading the table is the provider's job: this repository renders it and checks the example's for
+drift, but nothing here deploys it to a provider or reloads it when the guests change. A provider
+whose table is older than the guests labels by the older guests.
 
 The example lab's table, rendered from `examples/minimal/guests`, is committed at
 [`examples/log-pipeline/runtime-labels.json`](../examples/log-pipeline/runtime-labels.json);
@@ -58,25 +66,29 @@ The example lab's table, rendered from `examples/minimal/guests`, is committed a
 The contract is `conformance/protocols/log_pipeline.py` (`LogPipeline`: `load_runtimes(table)`
 and `process(records)`, each record an `Observed(event, observed)`). It is an extended suite,
 `hnx conform run log-pipeline`, against a target that names the provider's adapter (the example
-provider's is `examples/modules/example-log-pipeline/conformance/target.yml`). Its fifteen MUST
+provider's is `examples/modules/example-log-pipeline/conformance/target.yml`). Its seventeen MUST
 checks cover:
 
 - a model runtime's event is `model`, a known other guest's is `none`, whatever either said;
 - an unknown address, no address, and something that is not an address give no label;
-- the event body is never joined on, and the flat key is dropped;
+- the event body is never joined on, and the flat key and every case or white-space spelling of
+  either key are dropped;
 - an IPv4-mapped IPv6 peer is its IPv4 address, and IPv6 spellings fold to the table's key;
 - every other field leaves unchanged, the caller's records are not modified, a batch keeps its
-  order and count, and a reloaded table replaces the earlier one.
+  order and count, a record that is not an object comes back unchanged, and a reloaded table
+  replaces the earlier one.
 
-Each of its eleven mutants is caught by its named check alone.
+Each of its thirteen mutants is caught by its named check alone.
 
 The end-to-end evasion fixtures in `tests/logpipeline/evasion/` run the enrichment over the
 example table and then the rule. They show that a self-set label changes nothing:
 
-- a runtime calling itself `none`, or setting the flat key, still fires;
+- a runtime calling itself `none`, setting the flat key, or spelling either in another case,
+  still fires;
 - a runtime naming another guest as its source still fires;
 - a runtime behind a dual-stack peer still fires;
-- a guest or an unknown source calling itself `model` stays silent;
+- a guest or an unknown source calling itself `model` stays silent, and so does a known guest
+  that runs no model sending a PUT to a cloud bucket;
 - an event with no observed address stays silent whatever its host fields say.
 
 ## Limits
@@ -88,9 +100,18 @@ example table and then the rule. They show that a self-set label changes nothing
 - **The observed address is the collector's word.** A runtime with root on a shared segment can
   spoof the source of a connectionless (UDP syslog) datagram. Ship logs over TCP or TLS, where
   the peer address is the handshake's, and keep collectors off the model runtimes' zone.
-- **One address per guest.** The guest model has one address per guest. A runtime reached
-  through NAT, or seen by a collector behind a proxy that hides its peers, is labelled by the
-  address the collector sees, which may be the gateway's.
+- **Unknown is the same as `none`.** An address the table does not hold gives no label, and
+  the rules match `model` only, so to the detections an unknown source and a known guest that
+  runs no model are the same: silent. That is deliberate (labelling an unknown source `model`
+  would let anything unlisted raise the alarm, and the event's own word is not evidence), but it
+  fails open for a runtime seen from an address the table lacks.
+- **One address per guest.** The guest model has one IPv4 address per guest (the guest schema
+  refuses anything else). A runtime's second interface, an IPv6 or SLAAC address, a container's
+  NAT address, or a collector behind a proxy that hides its peers all give an address the table
+  does not hold, so those events are unlabelled and the rules stay silent; behind NAT the
+  collector may even see the gateway's address. A provider SHOULD count the events it leaves
+  unlabelled, per collector, so a rise is visible; that metric, and more than one address per
+  guest in the model, are follow-ups.
 - The example provider's adapter (`hnx_modules.example_log_pipeline.log_pipeline:make`) is part
   of the fictional product. The reference behaviour is the fake in
   `conformance/fakes/log_pipeline.py`, which applies the library rule.

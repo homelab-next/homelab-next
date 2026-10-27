@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import ipaddress
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,8 @@ def _table() -> RuntimeTable:
         ("198.51.100.130:514", None),
         ("2001:db8::5%eth0", None),
         (" 198.51.100.130", None),
+        ("198.51.100.130.", None),
+        ("198.051.100.130", None),
         ("198.51.100.0/24", None),
         ("infer-core.example.internal", None),
         ("", None),
@@ -148,6 +151,8 @@ def test_load_reports_the_path(tmp_path):
         ({"source": {"ip": "198.51.100.130"}}, "198.51.100.40", "none"),
         ({}, "::ffff:198.51.100.130", "model"),
         ({}, "2001:0db8::0005", "model"),
+        ({"labels": ["hnx_runtime", "none"]}, "198.51.100.130", "model"),
+        ({"Labels": {"HNX_RUNTIME": "model"}}, "198.51.100.40", "none"),
     ],
 )
 def test_enrich_sets_the_table_value_only(event, observed, want):
@@ -169,6 +174,32 @@ def test_enrich_changes_nothing_else_and_copies():
 
 def test_enrich_keeps_a_malformed_labels_value_when_there_is_nothing_to_set():
     assert enrich({"labels": "x"}, "203.0.113.9", _table()) == {"labels": "x"}
+    assert enrich({"labels": ["x"]}, "203.0.113.9", _table()) == {"labels": ["x"]}
+
+
+def test_enrich_drops_every_spelling_that_folds_to_the_label():
+    event = {
+        "Labels.HNX_RUNTIME": "none",
+        " labels.hnx_runtime ": "none",
+        "labels": {"HNX_Runtime": "none", "hnx_runtime\t": "none", "site": "lab-a"},
+        "LABELS": {"hnx_runtime": "none", "zone": "compute"},
+        "labelsx": {"hnx_runtime": "kept: not a labels key"},
+        "message": "hnx_runtime none",
+    }
+    out = enrich(event, "198.51.100.130", _table())
+    assert out == {
+        "labels": {"site": "lab-a", LABEL: "model"},
+        "LABELS": {"zone": "compute"},
+        "labelsx": {"hnx_runtime": "kept: not a labels key"},
+        "message": "hnx_runtime none",
+    }
+
+
+@pytest.mark.parametrize("record", [["a", "list"], "a string", None, 7])
+def test_enrich_returns_a_record_that_is_not_an_object_unchanged(record):
+    before = copy.deepcopy(record)
+    assert enrich(record, "198.51.100.130", _table()) == before
+    assert record == before
 
 
 # ---------------------------------------------------------------- the generator
@@ -190,6 +221,21 @@ def test_example_table_labels_the_model_runtime_and_nothing_else():
     models = {a for a, v in table.values.items() if v == "model"}
     assert models == {"192.0.2.140"}
     assert set(table.values.values()) == {"model", "none"}
+
+
+@pytest.mark.parametrize("bad", ["192.0.2.014", "192.0.2.140.", "192.0.2.0/24", "2001:db8::5"])
+def test_a_guest_address_the_table_cannot_key_is_refused_before_the_render(tmp_path, bad):
+    """The generator's own refusal is not the only guard: the guest schema allows a canonical
+    IPv4 address only, so a guest the table could not key never reaches the render."""
+    site = tmp_path / "minimal"
+    shutil.copytree(MINIMAL, site)
+    guest = site / "guests" / "infer-core.yml"
+    text = guest.read_text(encoding="utf-8")
+    assert "ip: 192.0.2.140" in text
+    guest.write_text(text.replace("ip: 192.0.2.140", f"ip: '{bad}'"), encoding="utf-8")
+    zones, domain = open_site(site / "site.yml")
+    with pytest.raises(ComputeError, match="network/ip"):
+        load_fleet(site / "guests", zones, domain=domain or "example.internal")
 
 
 def test_generator_refuses_two_guests_on_one_address(monkeypatch):
@@ -216,6 +262,11 @@ def test_evasion_fixture(path):
     out = enrich(fx["event"], fx["observed"], RuntimeTable.load(EXAMPLE))
     labels = out.get("labels") or {}
     assert FLAT_KEY not in out and labels.get(LABEL) == fx["label"], out
+    folded = [k for k in out if k.strip().casefold() == FLAT_KEY]
+    for key, value in out.items():
+        if key.strip().casefold() == "labels" and isinstance(value, dict):
+            folded += [f"{key}.{k}" for k in value if k.strip().casefold() == LABEL]
+    assert folded == ([f"labels.{LABEL}"] if fx["label"] else []), f"a spelling survived: {out}"
     rule = next(r for r in load_rules(DET) if r.slug == fx["rule"])
     engine = FakeGenericEngine(load_mapping(DET / "mappings" / "generic.yml"))
     assert engine.matches(rule, out) is fx["fires"], (fx["name"], out)
