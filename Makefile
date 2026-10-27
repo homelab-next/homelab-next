@@ -14,7 +14,7 @@ REGISTERS_OUT := build/registers
 .PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
 	@echo "Code Mode golden suites (CM-6; checked in gates): codemode-golden-report"
 	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
@@ -127,8 +127,12 @@ MODEL_EVAL := examples/model_roles.eval.json
 # binding resolves to an entry its engine may serve, and the generated vllm_server instances and
 # gateway config match the plan
 SERVING := examples/model-serving
+# the committed MODEL_EVAL is the fake's; an overlay with real models checks its live report with
+# `make models-check MODEL_EVAL=<live report> MODELS_CHECK_FLAGS=--require-live` (a canary entry
+# that ran against the fake then fails; docs/compute-model.md, "The egress canary")
+MODELS_CHECK_FLAGS ?=
 models-check:
-	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL)
+	$(PY) -m homelabnext.cli golden pins check --roles $(MODEL_ROLES) --report $(MODEL_EVAL) $(MODELS_CHECK_FLAGS)
 	$(PY) -m homelabnext.cli models store validate $(SERVING)/model_store.json --roles $(SERVING)/model_roles.json
 	$(PY) -m homelabnext.cli models serving check $(SERVING)/serving.yml $(SERVING)
 	$(PY) -m homelabnext.cli gen gateway render $(SERVING)/gateway.yml $(SERVING)/gateway --check

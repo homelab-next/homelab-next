@@ -69,6 +69,24 @@ def test_binding_priority_orders_candidates(make_resolver, servers):
     assert make_resolver(doc).resolve("main-reasoner").backend == "inference-small"
 
 
+def test_resolve_binding_reaches_each_binding_without_falling_back(make_resolver, servers):
+    """The egress canary runs every binding of a role, not just the first that resolves."""
+    doc = role_doc()
+    large = doc["roles"]["main-reasoner"]["bindings"][0]
+    small = dict(doc["roles"]["fast-classifier"]["bindings"][0], priority=1)
+    doc["roles"]["main-reasoner"]["bindings"].append(small)
+    r = make_resolver(doc)
+    got = [r.resolve_binding("mdl:main-reasoner", b) for b in r.table.get("main-reasoner").bindings]
+    assert [(m.model_id, m.base_url) for m in got] == [
+        (large["model_id"], servers[0].url),
+        (small["model_id"], servers[1].url),
+    ]
+    assert all(m.role == m.asked == "main-reasoner" and m.trail == () for m in got)
+    r.resolver.environ = {"HNX_ENDPOINT_INFERENCE_SMALL": servers[1].url}
+    with pytest.raises(ResolutionError):  # no fallback to another role
+        r.resolve_binding("main-reasoner", r.table.get("main-reasoner").bindings[0])
+
+
 def test_unknown_role(make_resolver):
     with pytest.raises(UnknownRole):
         make_resolver().resolve("mdl:no-such-role")
