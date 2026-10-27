@@ -400,9 +400,9 @@ What is not enforced:
   default to drop, and without it it checks input only).
 - A retired model runtime, physical or not, is held to none of this: it runs nothing. Set it
   back to `planned` or `active` and every check applies again.
-- "Lab" means the never-internet ranges, so any private address (`10.0.0.0/8`,
-  `192.168.0.0/16`, ...) passes as a lab destination, as it does on a guest: an allow to a
-  private range the lab does not own is not caught.
+- "Lab" means the never-internet ranges, so any RFC 1918 private address passes as a lab
+  destination, as it does on a guest: an allow to a private range the lab does not own is not
+  caught.
 - A guest without `host-firewall` or `egress-filter` gets no metadata refusal on the guest; the
   hypervisor's firewall files do not carry it.
 - On a guest without `egress-filter`, forwarded traffic is refused only for the metadata

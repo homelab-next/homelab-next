@@ -650,7 +650,7 @@ def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(tmp_path):
     """Where egress is required, a container's traffic leaving the host (FORWARD, which the
     output chain never sees) is default-deny too: the metadata refusal first, then established
     flows, published ports, bridge-local traffic and the same outbound_allow; nothing else."""
-    v = nft_vars(tmp_path, nftables_host_forward_local=["172.16.0.0/12"])
+    v = nft_vars(tmp_path, nftables_host_forward_local=["198.51.100.192/26"])
     r = run_role(tmp_path, "nftables_host", "config", v)
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
@@ -665,7 +665,7 @@ def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(tmp_path):
         'ct status dnat accept comment "homelabnext-published-port"',
     ]
     assert lines[7] == (
-        "ip saddr { 172.16.0.0/12 } ip daddr { 172.16.0.0/12 } "
+        "ip saddr { 198.51.100.192/26 } ip daddr { 198.51.100.192/26 } "
         'accept comment "homelabnext-bridge-local"'
     )
     assert lines[8] == 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"'
@@ -689,7 +689,7 @@ def test_nftables_host_refuses_a_bridge_local_set_that_is_not_a_cidr(tmp_path):
         nft_vars(tmp_path),
         [
             {"nftables_host_forward_local": ["any"]},
-            {"nftables_host_forward_local": ["172.16.0.0/12 accept"]},
+            {"nftables_host_forward_local": ["198.51.100.192/26 accept"]},
         ],
     )
     assert all(f and "bridge-local CIDRs" in m for f, m in results), results

@@ -910,9 +910,7 @@ def test_a_retired_physical_model_runtime_is_not_held_to_it(tmp_path):
     assert load_fleet(physical_fleet(tmp_path, retired, egress=False), STUB).guests
 
 
-@pytest.mark.parametrize(
-    ("policy", "ok"), [("ACCEPT", False), ("DROP", True), ("REJECT", True)]
-)
+@pytest.mark.parametrize(("policy", "ok"), [("ACCEPT", False), ("DROP", True), ("REJECT", True)])
 def test_a_filtered_by_host_that_states_an_open_outbound_policy_filters_nothing(
     tmp_path, policy, ok
 ):

@@ -249,9 +249,15 @@ def test_model_store_fetches_only_through_a_mirror_on_a_default_deny_host(tmp_pa
             {"model_store_fetch": False},
             {"hnx_firewall": {**deny, "policy_out": "ACCEPT"}},
             # the public hub's own hosts are never the mirror
-            {"model_store_hf_endpoint": "https://huggingface.co"},  # scrub-allow: the public hub, refused
-            {"model_store_hf_endpoint": "https://CDN.HuggingFace.co./models"},  # scrub-allow: refused
-            {"model_store_hf_endpoint": "https://hf.co/api"},  # scrub-allow: the public hub, refused
+            {
+                "model_store_hf_endpoint": "https://huggingface.co"
+            },  # scrub-allow: the public hub, refused
+            {
+                "model_store_hf_endpoint": "https://CDN.HuggingFace.co./models"
+            },  # scrub-allow: refused
+            {
+                "model_store_hf_endpoint": "https://hf.co/api"
+            },  # scrub-allow: the public hub, refused
             {"model_store_hf_endpoint": "https://nothf.co.example.internal"},
         ],
     )
