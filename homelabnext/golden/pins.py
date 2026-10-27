@@ -6,7 +6,10 @@ The **evaluation report** is a function of those pins, the golden suites and the
 and gold set the replay gate uses (:func:`inputs_of`).  It holds:
 
 * one golden-suite run per suite, against the suite's role;
-* the K-12 replay of the synthetic gold set through the change-review cascade, with its gate.
+* the K-12 replay of the synthetic gold set through the change-review cascade, with its gate;
+* the egress canary (:mod:`homelabnext.golden.canary`) for every role: a role's binding must pass
+  it, so a rebind (a changed pin) is refused until a passing canary for the new binding is
+  committed with it.
 
 ``hnx golden pins check`` fails when a binding is unpinned, when a pinned role is evaluated by
 nothing, when the stored report is **stale** (a pin, a suite, the spec or the runner changed
@@ -36,7 +39,7 @@ from .tasks import Suite, load_suite
 
 REPORT_FORMAT = "hnx-model-eval/1"
 #: Bump when the evaluation, the scorers or the fake change behaviour: it is a pinned input.
-EVAL_VERSION = 1
+EVAL_VERSION = 2
 EXAMPLES = Path(__file__).resolve().parent / "examples"
 DEFAULT_SUITES = (EXAMPLES / "classifier_smoke.yml",)
 GOLD_N, GOLD_SEED = 200, 7
@@ -106,8 +109,15 @@ def inputs_of(table: RoleTable, suite_paths: Sequence[Path]) -> dict:
             load_suite(p).name: _file_digest(p) for p in sorted(suite_paths, key=lambda p: p.name)
         },
         "decide": _decide_inputs(),
+        "canary": _canary_inputs(),
     }
     return {**pinned, "digest": _digest(pinned)}
+
+
+def _canary_inputs() -> dict:
+    from .canary import CANARY_VERSION, DEFAULT_SUITE
+
+    return {"version": CANARY_VERSION, "suite": _file_digest(DEFAULT_SUITE)}
 
 
 def coverage_problems(table: RoleTable, suites: Sequence[Suite]) -> list[str]:
@@ -144,6 +154,14 @@ def run_eval(
         completer, model_id = factory(role)
         rep: Report = run_suite(suite, completer, role=role, model_id=model_id)
         golden[suite.name] = {**rep.to_dict(), "ok": rep.ok}
+    from .canary import load_suite as load_canary
+    from .canary import run_canary
+
+    canary_suite = load_canary()
+    canary: dict[str, dict] = {}
+    for role in sorted(table.roles):
+        completer, model_id = factory(role)
+        canary[role] = run_canary(canary_suite, completer, role=role, model_id=model_id)
     cascade = demo_cascade()
     if replay_tiers:
         cascade.tiers.update(replay_tiers)
@@ -155,11 +173,15 @@ def run_eval(
         "inputs": inputs_of(table, suite_paths),
         "golden": golden,
         "replay": {"report": rep.to_dict(), "gate": g.to_dict()},
+        "canary": canary,
         "summary": {
             "suites": len(golden),
             "suites_passed": sum(v["ok"] for v in golden.values()),
             "replay_passed": g.passed,
-            "ok": all(v["ok"] for v in golden.values()) and g.passed,
+            "canary_passed": sum(c["summary"]["ok"] for c in canary.values()),
+            "ok": all(v["ok"] for v in golden.values())
+            and g.passed
+            and all(c["summary"]["ok"] for c in canary.values()),
         },
     }
 
@@ -168,7 +190,7 @@ def run_eval(
 def _stale(want: dict, have: Any) -> list[str]:
     if not isinstance(have, dict):
         return ["inputs"]
-    out = [k for k in ("eval", "suites", "decide") if have.get(k) != want[k]]
+    out = [k for k in ("eval", "suites", "decide", "canary") if have.get(k) != want[k]]
     hp = have.get("pins") if isinstance(have.get("pins"), dict) else {}
     changed = sorted(r for r in set(want["pins"]) | set(hp) if want["pins"].get(r) != hp.get(r))
     out += [f"pin mdl:{r}" for r in changed]
@@ -190,6 +212,7 @@ def check_report(report: Any, table: RoleTable, suite_paths: Sequence[Path]) -> 
             + ", ".join(stale)
             + "; rerun the evaluation (make models-report, and make models-eval live) and commit it"
         )
+    p += canary_problems(report, table)
     s = report.get("summary", {})
     if not s.get("ok"):
         p.append(
@@ -197,6 +220,23 @@ def check_report(report: Any, table: RoleTable, suite_paths: Sequence[Path]) -> 
             f"replay gate {'passed' if s.get('replay_passed') else 'failed'}"
         )
     return p
+
+
+def canary_problems(report: Mapping[str, Any], table: RoleTable) -> list[str]:
+    """Every role has an egress canary in the report, and it passed (the rebind gate)."""
+    canary = report.get("canary") if isinstance(report.get("canary"), Mapping) else {}
+    out = []
+    for role in sorted(table.roles):
+        c = canary.get(role)
+        s = c.get("summary") if isinstance(c, Mapping) else None
+        if not isinstance(s, Mapping):
+            out.append(f"mdl:{role}: no egress canary in the report; a binding must pass it")
+        elif s.get("ok") is not True:
+            out.append(
+                f"mdl:{role}: the egress canary failed {s.get('failed')}/{s.get('samples')} "
+                "samples; this binding may not be bound (hnx golden canary for the findings)"
+            )
+    return out
 
 
 def load_report(path: str | Path) -> Any:

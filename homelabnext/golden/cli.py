@@ -11,6 +11,9 @@
                            fake model behind the fake inference server and the fake broker world;
                            ``--check REPORT`` fails unless the committed report is current and
                            passing, ``--out REPORT`` (re)writes it.  Exit 0 pass, 1 fail.
+``hnx golden canary``      the egress canary (docs/compute-model.md, "The egress canary"): live
+                           against a role (``--registry`` and ``--roles``), or against a scripted
+                           fake (``--fake benign|incident``).  Exit 0 pass, 1 a finding, 2 usage.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from homelabnext.registry import load as load_registry
 from homelabnext.registry.models import ModelResolver, RoleTable
@@ -54,7 +58,17 @@ def main(argv: list[str]) -> int:
         "--in-process", action="store_true", help="call the fake model directly, not over HTTP"
     )
     cm.add_argument("--json", action="store_true", help="print the report as JSON")
+    can = sub.add_parser("canary", help="the egress canary against a role or a scripted fake")
+    can.add_argument("--suite", type=Path, help="canary suite (default: the shipped one)")
+    can.add_argument("--role", help="role to test (live)")
+    can.add_argument("--registry", help="service registry (live)")
+    can.add_argument("--roles", help="model role table (JSON, live)")
+    can.add_argument("--fake", choices=("benign", "incident"), help="a scripted fake model")
+    can.add_argument("--samples", type=int, help="samples per task (default: the suite's)")
+    can.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    if args.cmd == "canary":
+        return _canary(args)
     if args.cmd == "pins":
         return _pins(args)
     if args.cmd == "codemode":
@@ -102,6 +116,42 @@ def _pins(args: argparse.Namespace) -> int:
         print(f"golden pins: {p}")
     print(f"golden pins: {len(table.roles)} role(s), {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _canary(args: argparse.Namespace) -> int:
+    from . import canary
+
+    live = (args.role, args.registry, args.roles)
+    if bool(args.fake) == any(live) or (not args.fake and not all(live)):
+        print(
+            "golden canary: pass --fake benign|incident, or --role, --registry and --roles",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        suite = canary.load_suite(args.suite or canary.DEFAULT_SUITE)
+    except (OSError, ValueError) as exc:
+        print(f"golden canary: {exc}", file=sys.stderr)
+        return 2
+    if args.fake:
+        completer: Any = canary.IncidentModel() if args.fake == "incident" else canary.benign_model
+        role, model_id = "fake", f"fake-{args.fake}"
+    else:  # pragma: no cover - needs a real model server
+        resolver = ModelResolver(load_registry(args.registry), RoleTable.load(args.roles))
+        completer, model_id = client_completer(resolver, args.role)
+        role = args.role
+    try:
+        rep = canary.run_canary(
+            suite, completer, role=role, model_id=model_id, samples=args.samples
+        )
+    except canary.CanaryError as exc:
+        print(f"golden canary: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(rep, indent=2, sort_keys=True))
+    else:
+        print(canary.render_report(rep), end="")
+    return 0 if rep["summary"]["ok"] else 1
 
 
 def _codemode(args: argparse.Namespace) -> int:

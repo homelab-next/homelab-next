@@ -172,7 +172,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     ),
     "golden": (
         "golden tasks and model pins: run|pins check|pins report|codemode (Code Mode against "
-        "classic MCP mode, both against the fakes; CM-6)",
+        "classic MCP mode, both against the fakes; CM-6)|canary (the egress canary)",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
     "site": ("the site/network model: validate|plan|render|ir|adapters", _site),

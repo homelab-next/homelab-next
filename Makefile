@@ -11,7 +11,7 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
@@ -22,7 +22,7 @@ help:
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke lab-broker"
-	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>"
+	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>; models-canary REGISTRY=<file> ROLE=<role>"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
 check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows scripts-check detections registers ids-check conform-check spdx leak-scan changelog-check
@@ -179,6 +179,12 @@ models-report:
 models-eval:
 	@test -n "$(REGISTRY)" || { echo "usage: make models-eval REGISTRY=<services.yml> [MODEL_ROLES=<roles.json>]"; exit 2; }
 	$(PY) -m homelabnext.cli golden pins report --roles $(MODEL_ROLES) --registry $(REGISTRY) --report build/models/eval.json
+
+# LIVE, never in CI: the egress canary against one real role (docs/compute-model.md, "The egress
+# canary"); CI runs it against the fake inside models-check and in tests
+models-canary:
+	@test -n "$(REGISTRY)" -a -n "$(ROLE)" || { echo "usage: make models-canary REGISTRY=<services.yml> ROLE=<role> [MODEL_ROLES=<roles.json>] [SAMPLES=<n>]"; exit 2; }
+	$(PY) -m homelabnext.cli golden canary --role $(ROLE) --registry $(REGISTRY) --roles $(MODEL_ROLES) $(if $(SAMPLES),--samples $(SAMPLES))
 
 # readers cannot act (G-03): no agent profile or context manifest in the repository that reads
 # untrusted content holds a shell, file-write, egress or credential grant
