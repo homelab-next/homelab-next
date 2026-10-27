@@ -128,8 +128,11 @@ suite_budgets = [
   # since the serving roles (model store, vLLM, Open WebUI): about 0.85s a playbook start and 0.35s
   # a task, spread thinly over 445 tests, measured 850-920s on CI runners after model_store's
   # per-file stats became one module call; 1200 since main's own CI measured 1085s and 1096s
-  # (2026-10-24/25), over 1080 with no test changed
-  "tests/roles = 1200",
+  # (2026-10-24/25), over 1080 with no test changed; 900 since a test's first run starts beside
+  # the others of its module (rolerun.first_run, one ansible-playbook per CPU): 1194s -> 700s
+  # summed over the six shards on a 4-CPU box (2026-10-27) against CI's 1143.6s before, so about
+  # 670s on CI, and 900 is about 1.3x that
+  "tests/roles = 900",
   "tools/tests = 240",
   # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
   # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a

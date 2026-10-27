@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import calls, fake, logging_fake, run_cases, run_role
+from rolerun import calls, fake, first_run, logging_fake, run_cases, run_role
 
 from conformance.fakes.openai_server import FakeOpenAIServer
 from homelabnext.models import store as store_mod
@@ -145,11 +145,23 @@ def fetched(tmp_path: Path, fetched_store: Path) -> dict:
     return store_vars(tmp_path, manifest())
 
 
-def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(tmp_path):
+def _first(tmp_path):
     store = manifest()
     remote_tree(tmp_path, store)
     v = store_vars(tmp_path, store)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {
+        "role": "model_store",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"store": store, "v": v},
+    }
+
+
+@first_run(_first)
+def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(first):
+    r, tmp_path = first
+    store = first.setup["store"]
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     log = calls(tmp_path)
     assert len(log) == 4 and all(line.startswith("hf download ") for line in log)
@@ -190,10 +202,21 @@ def test_model_store_fetches_at_the_pinned_revision_and_the_store_check_passes(t
     assert run_role(tmp_path, "model_store", "verify", v).returncode == 0
 
 
-def test_model_store_refuses_a_download_whose_sha256_is_not_the_manifests(tmp_path):
+def _first(tmp_path):
     store = manifest()
     remote_tree(tmp_path, store, tamper="model-00002-of-00002.safetensors")
-    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
+    return {
+        "role": "model_store",
+        "tasks_from": "main",
+        "extra_vars": store_vars(tmp_path, store),
+        "setup": {"store": store},
+    }
+
+
+@first_run(_first)
+def test_model_store_refuses_a_download_whose_sha256_is_not_the_manifests(first):
+    r, tmp_path = first
+    store = first.setup["store"]
     assert r.returncode != 0
     assert "model-00002-of-00002.safetensors: sha256 differs from the manifest" in r.stdout
     # verified in staging: no byte of the bad download, nor of its good siblings, reached the store
@@ -201,20 +224,32 @@ def test_model_store_refuses_a_download_whose_sha256_is_not_the_manifests(tmp_pa
     assert not snap.exists() or not any(snap.iterdir())
 
 
-@pytest.mark.parametrize("revision", ["main", "refs/pr/1", "174d4518", "v1.0"])
-def test_model_store_refuses_a_floating_revision_before_running_anything(tmp_path, revision):
+def _floating(tmp, revision):
     store = manifest()
     store["models"]["example-4b-bf16"]["source"]["revision"] = revision
-    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
-    assert r.returncode != 0 and "must be pinned" in r.stdout
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": store_vars(tmp, store)}
+
+
+@pytest.mark.parametrize("revision", ["main", "refs/pr/1", "174d4518", "v1.0"])
+@first_run(_floating)
+def test_model_store_refuses_a_floating_revision_before_running_anything(first, revision):
+    r, tmp_path = first
+    assert r.returncode != 0 and "must be pinned" in r.stdout, revision
     assert calls(tmp_path) == []
 
 
-def test_model_store_accepts_the_pinned_example_manifest(tmp_path):
+def _first(tmp_path):
+    return {
+        "role": "model_store",
+        "tasks_from": "main",
+        "extra_vars": store_vars(tmp_path, manifest(), model_store_fetch=False),
+    }
+
+
+@first_run(_first)
+def test_model_store_accepts_the_pinned_example_manifest(first):
     """The good input for the refusals above and below (the same run for every parameter, so once)."""
-    good = run_role(
-        tmp_path, "model_store", "main", store_vars(tmp_path, manifest(), model_store_fetch=False)
-    )
+    good, _ = first
     assert good.returncode == 0, good.stdout
 
 
@@ -229,21 +264,21 @@ def test_model_store_accepts_the_pinned_example_manifest(tmp_path):
         {"model_store_fetch_ids": ["not-an-entry"]},
     ],
 )
-def test_model_store_refuses_bad_settings(tmp_path, over):
-    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, manifest(), **over))
-    assert r.returncode != 0 and "model_store: a manifest with models" in r.stdout
+@first_run(lambda tmp, over: {"role": "model_store", "tasks_from": "main",
+                               "extra_vars": store_vars(tmp, manifest(), **over)})  # fmt: skip
+def test_model_store_refuses_bad_settings(first, over):
+    r, _ = first
+    assert r.returncode != 0 and "model_store: a manifest with models" in r.stdout, over
 
 
-def test_model_store_fetches_only_through_a_mirror_on_a_default_deny_host(tmp_path):
-    """A model runtime's egress is default-deny (hnx_firewall.policy_out DROP): the role never
-    reaches for the public hub there, and opens no egress; the lab's mirror is the way in."""
+def _first(tmp_path):
     deny = {"policy_out": "DROP", "inbound_allow": [], "outbound_allow": []}
-    results = run_cases(
-        tmp_path,
-        "model_store",
-        "validate",
-        store_vars(tmp_path, manifest(), hnx_firewall=deny),
-        [
+    return {
+        "runner": run_cases,
+        "role": "model_store",
+        "tasks_from": "validate",
+        "base_vars": store_vars(tmp_path, manifest(), hnx_firewall=deny),
+        "overrides": [
             {},
             {"model_store_hf_endpoint": "https://hub-mirror.example.internal"},
             {"model_store_fetch": False},
@@ -260,21 +295,33 @@ def test_model_store_fetches_only_through_a_mirror_on_a_default_deny_host(tmp_pa
             },  # scrub-allow: the public hub, refused
             {"model_store_hf_endpoint": "https://nothf.co.example.internal"},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_model_store_fetches_only_through_a_mirror_on_a_default_deny_host(first):
+    """A model runtime's egress is default-deny (hnx_firewall.policy_out DROP): the role never
+    reaches for the public hub there, and opens no egress; the lab's mirror is the way in."""
+    results, _ = first
     assert results[0][0] and "the public hub is unreachable" in results[0][1]
     assert [failed for failed, _ in results[1:4]] == [False, False, False]
     assert all(f and "never the public hub" in m for f, m in results[4:7]), results[4:7]
     assert results[7][0] is False
 
 
-def test_model_store_refuses_a_file_path_that_leaves_its_entry(tmp_path):
+def _first(tmp_path):
     store = manifest()
     store["models"]["example-4b-bf16"]["files"][0]["path"] = "../../escape.json"
-    r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, store))
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": store_vars(tmp_path, store)}
+
+
+@first_run(_first)
+def test_model_store_refuses_a_file_path_that_leaves_its_entry(first):
+    r, _ = first
     assert r.returncode != 0 and "must be pinned" in r.stdout
 
 
-def test_model_store_passes_the_hub_token_by_reference_only(tmp_path):
+def _first(tmp_path):
     store = manifest()
     remote_tree(tmp_path, store)
     hf = logging_fake(tmp_path, "hf-env")
@@ -287,7 +334,12 @@ def test_model_store_passes_the_hub_token_by_reference_only(tmp_path):
                    model_store_fetch_ids=["example-4b-q4km"])  # fmt: skip
     v["model_store_hf_cli"] = fake(Path(hf).with_name("hf-wrap"), body)
     env = {"HNX_SECRET_MODELS_HUB_TOKEN": "hub-token-fake"}
-    r = run_role(tmp_path, "model_store", "main", v, env=env)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first)
+def test_model_store_passes_the_hub_token_by_reference_only(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "env.log").read_text() == (
         "hub-token-fake|https://hub-mirror.example.internal\n"
@@ -394,9 +446,15 @@ def test_the_rendered_instances_are_the_plans():
     assert files["vllm_server/instances.yml"] == (EXAMPLE / "vllm_server/instances.yml").read_text()
 
 
-def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
-    r = run_role(tmp_path, "vllm_server", "main", v)
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     units = sorted(p.name for p in (tmp_path / "units").iterdir())
     assert units == ["hnx-vllm-inference-large.service", "hnx-vllm-inference-triage.service"]
@@ -438,12 +496,19 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(tmp_path):
     ]
 
 
-def test_vllm_server_units_verify_the_bytes_before_every_start(tmp_path):
-    """ExecStartPre runs the installed check: the store's listing must hash to the pinned digest
-    and the model directory must match it, so Restart=on-failure never serves unverified bytes."""
+def _first(tmp_path):
     v = vllm_vars(tmp_path, vllm_server_verify_bin=str(tmp_path / "bin" / "hnx-model-verify"))
     (tmp_path / "bin").mkdir()
-    assert run_role(tmp_path, "vllm_server", "main", v).returncode == 0
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_vllm_server_units_verify_the_bytes_before_every_start(first):
+    """ExecStartPre runs the installed check: the store's listing must hash to the pinned digest
+    and the model directory must match it, so Restart=on-failure never serves unverified bytes."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     unit = (tmp_path / "units" / "hnx-vllm-inference-triage.service").read_text()
     inst = v["vllm_server_instances"][1]
     (pre,) = [x for x in unit.splitlines() if x.startswith("ExecStartPre=")]
@@ -469,27 +534,45 @@ def test_vllm_server_units_verify_the_bytes_before_every_start(tmp_path):
     assert bad.returncode == 1 and "refusing to serve" in bad.stderr
 
 
-def test_vllm_server_retires_a_unit_the_plan_no_longer_has(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
     stale = tmp_path / "units" / "hnx-vllm-gpu0.service"
     stale.write_text("[Service]\n")
-    assert run_role(tmp_path, "vllm_server", "main", v).returncode == 0
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"stale": stale}}
+
+
+@first_run(_first)
+def test_vllm_server_retires_a_unit_the_plan_no_longer_has(first):
+    r, tmp_path = first
+    stale = first.setup["stale"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert not stale.exists()
     assert "systemctl disable --now hnx-vllm-gpu0.service" in calls(tmp_path)
 
 
-def test_vllm_server_refuses_a_vllm_that_is_not_the_pinned_one(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
     logging_fake(tmp_path, "vllm", "0.30.0\n")  # the installed one is not the pin
-    r = run_role(tmp_path, "vllm_server", "main", v)
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_vllm_server_refuses_a_vllm_that_is_not_the_pinned_one(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "the pin is 0.31.0" in r.stdout
     assert not any(c.startswith("systemctl") for c in calls(tmp_path))
 
 
-def test_vllm_server_refuses_a_model_missing_from_the_store(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
     (Path(v["vllm_server_instances"][1]["model_path"]) / "config.json").unlink()
-    r = run_role(tmp_path, "vllm_server", "main", v)
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_vllm_server_refuses_a_model_missing_from_the_store(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode != 0 and "model_store fetches and verifies it" in r.stdout
     ready = run_role(tmp_path, "vllm_server", "readiness", v)
     assert ready.returncode != 0 and "example-4b-triage" in ready.stdout
@@ -529,9 +612,11 @@ def _bad(tmp_path, field, value):
         ("digest", "sha256:abc"),
     ],
 )
-def test_vllm_server_refuses_an_edited_instance(tmp_path, field, value):
-    r = run_role(tmp_path, "vllm_server", "main", _bad(tmp_path, field, value))
-    assert r.returncode != 0 and "must be what `hnx models serving render`" in r.stdout
+@first_run(lambda tmp, field, value: {"role": "vllm_server", "tasks_from": "main",
+                                      "extra_vars": _bad(tmp, field, value)})  # fmt: skip
+def test_vllm_server_refuses_an_edited_instance(first, field, value):
+    r, _ = first
+    assert r.returncode != 0 and "must be what `hnx models serving render`" in r.stdout, field
 
 
 @pytest.mark.parametrize(
@@ -544,31 +629,47 @@ def test_vllm_server_refuses_an_edited_instance(tmp_path, field, value):
         ("loopback", ZONE_ADDRESS, False),
     ],
 )
-def test_vllm_server_holds_the_listen_address_to_the_plans_exposure(
-    tmp_path, exposure, address, ok
-):
-    v = vllm_vars(tmp_path, vllm_server_exposure=exposure, vllm_server_listen_address=address)
-    r = run_role(tmp_path, "vllm_server", "main", v)
+@first_run(
+    lambda tmp, exposure, address, ok: {
+        "role": "vllm_server",
+        "tasks_from": "main",
+        "extra_vars": vllm_vars(
+            tmp, vllm_server_exposure=exposure, vllm_server_listen_address=address
+        ),
+    }
+)
+def test_vllm_server_holds_the_listen_address_to_the_plans_exposure(first, exposure, address, ok):
+    r, _ = first
     assert (r.returncode == 0) is ok, r.stdout
     if not ok:
         assert "the plan's exposure is" in r.stdout
 
 
-def test_vllm_server_refuses_two_instances_on_one_gpu_or_port(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
     v["vllm_server_instances"][1]["gpus"] = [1]
-    r = run_role(tmp_path, "vllm_server", "main", v)
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_vllm_server_refuses_two_instances_on_one_gpu_or_port(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "distinct names, ports and GPUs" in r.stdout
     v = vllm_vars(tmp_path)
     v["vllm_server_instances"][1]["port"] = 8000
     assert run_role(tmp_path, "vllm_server", "main", v).returncode != 0
 
 
-def test_vllm_server_api_key_and_p2p_settings(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path, vllm_server_api_key_ref="secret:llm-gateway/backend-key",
                   vllm_server_nccl_p2p_disable=True)  # fmt: skip
     env = {"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": "backend-key-fake"}
-    r = run_role(tmp_path, "vllm_server", "main", v, env=env)
+    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first)
+def test_vllm_server_api_key_and_p2p_settings(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert "backend-key-fake" not in r.stdout
     unit = (tmp_path / "units" / "hnx-vllm-inference-triage.service").read_text()
@@ -640,9 +741,20 @@ def test_vllm_server_health_presents_the_api_key(tmp_path):
     assert wrong.returncode != 0 and "other-key-fake" not in wrong.stdout
 
 
-def test_vllm_server_upgrade_hook(tmp_path):
+def _first(tmp_path):
     v = vllm_vars(tmp_path)
-    ok = run_role(tmp_path, "vllm_server", "upgrade", {**v, "vllm_server_target_version": "0.32.0"})
+    return {
+        "role": "vllm_server",
+        "tasks_from": "upgrade",
+        "extra_vars": {**v, "vllm_server_target_version": "0.32.0"},
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_vllm_server_upgrade_hook(first):
+    ok, tmp_path = first
+    v = first.setup["v"]
     assert ok.returncode == 0, ok.stdout
     assert (tmp_path / "state" / "pending-version").read_text() == "0.32.0\n"
     for target in ("0.30.0", "0.31.0", "latest"):
@@ -675,8 +787,18 @@ def webui_vars(tmp_path: Path, **kw) -> dict:
     return v
 
 
-def test_open_webui_points_at_the_gateway_with_its_own_key(tmp_path):
-    r = run_role(tmp_path, "open_webui", "main", webui_vars(tmp_path), env=SECRETS)
+def _first(tmp_path):
+    return {
+        "role": "open_webui",
+        "tasks_from": "main",
+        "extra_vars": webui_vars(tmp_path),
+        "env": SECRETS,
+    }
+
+
+@first_run(_first)
+def test_open_webui_points_at_the_gateway_with_its_own_key(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["open-webui"]
@@ -729,10 +851,21 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(tmp_path):
         {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
     ],
 )
-def test_open_webui_refuses_anything_but_the_gateway(tmp_path, over):
-    r = run_role(tmp_path, "open_webui", "main", webui_vars(tmp_path, **over), env=SECRETS)
-    assert r.returncode != 0 and "Open WebUI talks to the LLM" in r.stdout
+@first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
+                               "extra_vars": webui_vars(tmp, **over), "env": SECRETS})  # fmt: skip
+def test_open_webui_refuses_anything_but_the_gateway(first, over):
+    r, tmp_path = first
+    assert r.returncode != 0 and "Open WebUI talks to the LLM" in r.stdout, over
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _registry_row(tmp, row, ok):
+    reg = yaml.safe_load((ROOT / "ansible/inventory/example/registry.yml").read_text())
+    reg["services"]["gpu-01"] = row
+    (tmp / "registry.yml").write_text(yaml.safe_dump(reg))
+    v = webui_vars(tmp, open_webui_gateway_id="gpu-01",
+                   hnx_registry_file=str(tmp / "registry.yml"))  # fmt: skip
+    return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SECRETS}
 
 
 @pytest.mark.parametrize(
@@ -751,24 +884,26 @@ def test_open_webui_refuses_anything_but_the_gateway(tmp_path, over):
         ),
     ],
 )  # fmt: skip
-def test_open_webui_resolves_its_target_through_the_registry(tmp_path, row, ok):
+@first_run(_registry_row)
+def test_open_webui_resolves_its_target_through_the_registry(first, row, ok):
     """A name is not a check: gpu-01 passes the backend-name pattern, so the id is resolved and
     its registry service must be the gateway."""
-    reg = yaml.safe_load((ROOT / "ansible/inventory/example/registry.yml").read_text())
-    reg["services"]["gpu-01"] = row
-    (tmp_path / "registry.yml").write_text(yaml.safe_dump(reg))
-    v = webui_vars(tmp_path, open_webui_gateway_id="gpu-01",
-                   hnx_registry_file=str(tmp_path / "registry.yml"))  # fmt: skip
-    r = run_role(tmp_path, "open_webui", "main", v, env=SECRETS)
+    r, tmp_path = first
     assert (r.returncode == 0) is ok, r.stdout
     if not ok:
         assert "Open WebUI talks to the LLM gateway only" in r.stdout
         assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_open_webui_keeps_extra_settings_that_do_not_re_point_it(tmp_path):
+def _first(tmp_path):
     v = webui_vars(tmp_path, open_webui_extra_env={"DEFAULT_MODELS": "main-reasoner"})
-    assert run_role(tmp_path, "open_webui", "main", v, env=SECRETS).returncode == 0
+    return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@first_run(_first)
+def test_open_webui_keeps_extra_settings_that_do_not_re_point_it(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert doc["services"]["open-webui"]["environment"]["DEFAULT_MODELS"] == "main-reasoner"
 
@@ -794,9 +929,22 @@ def test_open_webui_health_reads_the_container_and_the_port(tmp_path):
     assert sick.returncode != 0 and "open-webui is running / unhealthy" in sick.stdout
 
 
-def test_open_webui_upgrade_backup_export_hooks(tmp_path):
+def _first(tmp_path):
     v = webui_vars(tmp_path)
-    assert run_role(tmp_path, "open_webui", "main", v, env=SECRETS).returncode == 0
+    return {
+        "role": "open_webui",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": SECRETS,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_open_webui_upgrade_backup_export_hooks(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     target = "ghcr.io/open-webui/open-webui:v0.11.5@sha256:" + "a" * 64
     up = run_role(tmp_path, "open_webui", "upgrade", {**v, "open_webui_target_image": target})
     assert up.returncode == 0, up.stdout + up.stderr

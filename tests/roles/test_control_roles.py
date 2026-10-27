@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from rolerun import calls, fake, last_run_vars, logging_fake, run_cases, run_role
+from rolerun import calls, fake, first_run, last_run_vars, logging_fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,9 +57,15 @@ def chrony_vars(tmp_path, **kw):
     return d
 
 
-def test_chrony_writes_the_registry_sources_checks_then_restarts_once(tmp_path):
+def _first(tmp_path):
     v = chrony_vars(tmp_path)
-    r = run_role(tmp_path, "chrony", "config", v)
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_writes_the_registry_sources_checks_then_restarts_once(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     conf = (tmp_path / "chrony.conf").read_text()
     assert "server time-01.example.internal iburst\n" in conf and "pool " not in conf
@@ -69,9 +75,16 @@ def test_chrony_writes_the_registry_sources_checks_then_restarts_once(tmp_path):
     assert again.returncode == 0 and len(calls(tmp_path)) == 2  # unchanged: no restart
 
 
-def test_chrony_never_installs_a_configuration_chronyd_rejects(tmp_path):
+def _first(tmp_path):
     v = chrony_vars(tmp_path)
-    assert run_role(tmp_path, "chrony", "config", v).returncode == 0
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_never_installs_a_configuration_chronyd_rejects(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = (tmp_path / "chrony.conf").read_text()
     r = run_role(tmp_path, "chrony", "config", {**v, "chrony_pools": ["bogus.example.internal"]})
     assert r.returncode != 0
@@ -79,29 +92,41 @@ def test_chrony_never_installs_a_configuration_chronyd_rejects(tmp_path):
     assert calls(tmp_path)[-1] == "chronyd -p -f <staged>"  # checked, never restarted
 
 
-def test_chrony_keeps_a_failed_restart_owed(tmp_path):
+def _first(tmp_path):
     v = chrony_vars(tmp_path)
     (tmp_path / "systemctl.fails").touch()
-    assert run_role(tmp_path, "chrony", "config", v).returncode != 0
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_keeps_a_failed_restart_owed(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout + r.stderr
     (tmp_path / "systemctl.fails").unlink()
     assert run_role(tmp_path, "chrony", "config", v).returncode == 0
     assert calls(tmp_path)[-1] == "systemctl restart chrony"
     assert not (tmp_path / "state" / "restart-pending").exists()
 
 
-def test_chrony_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "chrony",
-        "config",
-        chrony_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "chrony",
+        "tasks_from": "config",
+        "base_vars": chrony_vars(tmp_path),
+        "overrides": [
             {"chrony_server_ids": []},
             {"chrony_server_ids": ["Time"]},
             {"chrony_pools": ["pool.example.internal\nallow all"]},
             {"chrony_max_offset": 0},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_chrony_refuses_bad_inputs(first):
+    results, tmp_path = first
     assert all(f and "chrony: time sources are registry" in m for f, m in results), results
     assert not (tmp_path / "chrony.conf").exists()
 
@@ -113,10 +138,21 @@ CHRONY_TRACKING = [
 ]  # fmt: skip
 
 
-def test_chrony_health_reads_the_tracking_line(tmp_path):
+def _first(tmp_path):
     cases = [{"chrony_cli": fake(tmp_path / f"chronyc-{i}", f"print({line!r})\n")}
              for i, (line, _) in enumerate(CHRONY_TRACKING)]  # fmt: skip
-    results = run_cases(tmp_path, "chrony", "health", chrony_vars(tmp_path), cases)
+    return {
+        "runner": run_cases,
+        "role": "chrony",
+        "tasks_from": "health",
+        "base_vars": chrony_vars(tmp_path),
+        "overrides": cases,
+    }
+
+
+@first_run(_first)
+def test_chrony_health_reads_the_tracking_line(first):
+    results, _ = first
     assert [not f for f, _ in results] == [ok for _, ok in CHRONY_TRACKING], results
 
 
@@ -133,16 +169,28 @@ def uu_vars(tmp_path, **kw):
     return d
 
 
-@pytest.mark.skipif(shutil.which("apt-config") is None, reason="apt-config not installed")
-def test_unattended_upgrades_allows_only_the_security_origin(tmp_path):
-    """The real apt-config reads the file: #clear drops whatever the package's own file listed,
-    so the effective origins are exactly the security origin (and the opt-in extras)."""
+def _first(tmp_path):
     package_file = tmp_path / "50unattended-upgrades"
     package_file.write_text(
         'Unattended-Upgrade::Origins-Pattern { "origin=Debian,codename=${distro_codename},label=Debian"; };\n'
     )
     v = uu_vars(tmp_path, unattended_upgrades_extra_origins=["origin=Lab,label=Lab mirror"])
-    r = run_role(tmp_path, "unattended_upgrades", "config", v)
+    return {
+        "role": "unattended_upgrades",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "setup": {"package_file": package_file, "v": v},
+    }
+
+
+@pytest.mark.skipif(shutil.which("apt-config") is None, reason="apt-config not installed")
+@first_run(_first)
+def test_unattended_upgrades_allows_only_the_security_origin(first):
+    """The real apt-config reads the file: #clear drops whatever the package's own file listed,
+    so the effective origins are exactly the security origin (and the opt-in extras)."""
+    r, tmp_path = first
+    package_file = first.setup["package_file"]
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     import subprocess
 
@@ -165,9 +213,21 @@ def test_unattended_upgrades_allows_only_the_security_origin(tmp_path):
     assert 'Automatic-Reboot "false"' in (tmp_path / "52hnx").read_text()
 
 
-def test_unattended_upgrades_never_installs_a_file_apt_cannot_parse(tmp_path):
+def _first(tmp_path):
     v = uu_vars(tmp_path, unattended_upgrades_apt_config_cli=checker(tmp_path, "apt-config"))
-    assert run_role(tmp_path, "unattended_upgrades", "config", v).returncode == 0
+    return {
+        "role": "unattended_upgrades",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_installs_a_file_apt_cannot_parse(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = (tmp_path / "52hnx").read_text()
     bad = run_role(
         tmp_path, "unattended_upgrades", "config", {**v, "unattended_upgrades_blocklist": ["bogus"]}
@@ -175,13 +235,13 @@ def test_unattended_upgrades_never_installs_a_file_apt_cannot_parse(tmp_path):
     assert bad.returncode != 0 and (tmp_path / "52hnx").read_text() == good
 
 
-def test_unattended_upgrades_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "unattended_upgrades",
-        "config",
-        uu_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "unattended_upgrades",
+        "tasks_from": "config",
+        "base_vars": uu_vars(tmp_path),
+        "overrides": [
             {"unattended_upgrades_reboot_time": "3:30"},
             {"unattended_upgrades_reboot_time": "25:00"},
             {"unattended_upgrades_distribution": "Fedora"},
@@ -193,7 +253,12 @@ def test_unattended_upgrades_refuses_bad_inputs(tmp_path):
             {"unattended_upgrades_blocklist": ["linux-};"]},
             {"unattended_upgrades_mail": "root\n"},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_unattended_upgrades_refuses_bad_inputs(first):
+    results, tmp_path = first
     assert all(f and "unattended_upgrades: a reboot window" in m for f, m in results), results
     assert not (tmp_path / "52hnx").exists()
 
@@ -234,9 +299,15 @@ def osh_vars(tmp_path, **kw):
     return d
 
 
-def test_os_hardening_writes_and_applies_each_item_once(tmp_path):
+def _first(tmp_path):
     v = osh_vars(tmp_path)
-    r = run_role(tmp_path, "os_hardening", "config", v)
+    return {"role": "os_hardening", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_os_hardening_writes_and_applies_each_item_once(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "60-hardening.conf").read_text().splitlines()[1:] == [
         "fs.suid_dumpable = 0",
@@ -253,20 +324,26 @@ def test_os_hardening_writes_and_applies_each_item_once(tmp_path):
     assert len(calls(tmp_path)) == 1  # unchanged: not applied again
 
 
-def test_os_hardening_leaves_out_what_is_not_chosen(tmp_path):
+def _first(tmp_path):
     v = osh_vars(tmp_path, os_hardening_items=["core_dumps"])
-    assert run_role(tmp_path, "os_hardening", "config", v).returncode == 0
+    return {"role": "os_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_os_hardening_leaves_out_what_is_not_chosen(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     assert sorted(p.name for p in tmp_path.glob("*.conf")) == ["limits.conf"]
     assert oct((tmp_path / "shadow").stat().st_mode & 0o777) == "0o644" and calls(tmp_path) == []
 
 
-def test_os_hardening_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "os_hardening",
-        "config",
-        osh_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "os_hardening",
+        "tasks_from": "config",
+        "base_vars": osh_vars(tmp_path),
+        "overrides": [
             {"os_hardening_items": ["sysctl", "selinux"]},
             {"os_hardening_sysctl": {"kernel.dmesg_restrict\nkernel.x": 1}},
             {"os_hardening_sysctl": {"kernel.dmesg_restrict": "1\nkernel.x = 0"}},
@@ -274,19 +351,30 @@ def test_os_hardening_refuses_bad_inputs(tmp_path):
             {"os_hardening_file_modes": [{"path": "etc/shadow", "mode": "0640"}]},
             {"os_hardening_file_modes": [{"path": "/etc/shadow", "mode": "640"}]},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_os_hardening_refuses_bad_inputs(first):
+    results, tmp_path = first
     assert all(f and "os_hardening: items among" in m for f, m in results), results
     assert not list(tmp_path.glob("*.conf"))
 
 
-@pytest.mark.parametrize(("live", "ok"), [("0\n1\n", True), ("1\n1\n", False)])
-def test_os_hardening_health_compares_the_live_settings(tmp_path, live, ok):
+def _first(tmp_path, live, ok):
     v = osh_vars(
         tmp_path,
         os_hardening_sysctl_cli=fake(tmp_path / "sysctl-live", f"print({live!r}, end='')\n"),
     )
     (tmp_path / "shadow").chmod(0o640)
-    r = run_role(tmp_path, "os_hardening", "health", v)
+    return {"role": "os_hardening", "tasks_from": "health", "extra_vars": v, "setup": {"v": v}}
+
+
+@pytest.mark.parametrize(("live", "ok"), [("0\n1\n", True), ("1\n1\n", False)])
+@first_run(_first)
+def test_os_hardening_health_compares_the_live_settings(first, live, ok):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert (r.returncode == 0) is ok, r.stdout
     (tmp_path / "shadow").chmod(0o644)
     r = run_role(tmp_path, "os_hardening", "health", {**v, "os_hardening_items": ["file_modes"]})
@@ -350,9 +438,15 @@ def ssh_setup(tmp_path, groups="ansible hnx-ssh", **kw):
     return v
 
 
-def test_ssh_hardening_tests_the_drop_in_then_installs_and_reloads(tmp_path):
+def _first(tmp_path):
     v = ssh_setup(tmp_path)
-    r = run_role(tmp_path, "ssh_hardening", "config", v)
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_ssh_hardening_tests_the_drop_in_then_installs_and_reloads(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").read_text()
     assert "PasswordAuthentication no\n" in text and "AllowGroups hnx-ssh\n" in text
@@ -365,9 +459,15 @@ def test_ssh_hardening_tests_the_drop_in_then_installs_and_reloads(tmp_path):
     assert health.returncode == 0, health.stdout
 
 
-def test_ssh_hardening_takes_directory_keys_with_central_auth(tmp_path):
+def _first(tmp_path):
     v = ssh_setup(tmp_path, hnx_controls=["ssh-hardening", "central-auth"])
-    assert run_role(tmp_path, "ssh_hardening", "config", v).returncode == 0
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_ssh_hardening_takes_directory_keys_with_central_auth(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").read_text()
     assert (
         "AuthorizedKeysCommand /usr/bin/sss_ssh_authorizedkeys\nAuthorizedKeysCommandUser nobody\n"
@@ -375,30 +475,49 @@ def test_ssh_hardening_takes_directory_keys_with_central_auth(tmp_path):
     )
 
 
-def test_ssh_hardening_never_locks_out_the_ansible_account(tmp_path):
+def _first(tmp_path):
+    v = ssh_setup(tmp_path, groups="ansible users")
+    return {
+        "role": "ssh_hardening",
+        "tasks_from": "config",
+        "extra_vars": {**v, "ssh_hardening_allow_groups": ["wheel"]},
+    }
+
+
+@first_run(_first)
+def test_ssh_hardening_never_locks_out_the_ansible_account(first):
     """An AllowGroups the kept account is not in, or an account with no key, is refused before
     anything goes live: sshd keeps its old configuration and is not reloaded."""
-    v = ssh_setup(tmp_path, groups="ansible users")
-    r = run_role(
-        tmp_path, "ssh_hardening", "config", {**v, "ssh_hardening_allow_groups": ["wheel"]}
-    )
+    r, tmp_path = first
     assert r.returncode != 0 and "it would lock out" in r.stdout
     assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
     assert "systemctl reload ssh" not in calls(tmp_path)
 
 
-def test_ssh_hardening_refuses_key_only_ssh_for_an_account_without_a_key(tmp_path):
+def _first(tmp_path):
     v = ssh_setup(tmp_path)
     (tmp_path / "home" / ".ssh" / "authorized_keys").write_text("")
-    r = run_role(tmp_path, "ssh_hardening", "config", v)
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_ssh_hardening_refuses_key_only_ssh_for_an_account_without_a_key(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "key-only SSH would lock it out" in r.stdout
     assert calls(tmp_path) == []  # refused before sshd was even asked
 
 
-def test_ssh_hardening_refuses_a_drop_in_sshd_rejects_or_that_another_file_overrides(tmp_path):
+def _first(tmp_path):
     v = ssh_setup(tmp_path)
     (tmp_path / "sshd_config").write_text("bogus yes\n" + (tmp_path / "sshd_config").read_text())
-    assert run_role(tmp_path, "ssh_hardening", "config", v).returncode != 0
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_ssh_hardening_refuses_a_drop_in_sshd_rejects_or_that_another_file_overrides(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout + r.stderr
     assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
     # health reads the live effective configuration: an earlier drop-in that re-enables
     # passwords is caught
@@ -409,20 +528,25 @@ def test_ssh_hardening_refuses_a_drop_in_sshd_rejects_or_that_another_file_overr
     assert r.returncode != 0 and "not key-only" in r.stdout
 
 
-def test_ssh_hardening_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "ssh_hardening",
-        "config",
-        ssh_setup(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "ssh_hardening",
+        "tasks_from": "config",
+        "base_vars": ssh_setup(tmp_path),
+        "overrides": [
             {"ssh_hardening_keep_user": "root"},
             {"ssh_hardening_keep_user": "ansible\nPermitRootLogin yes"},
             {"ssh_hardening_allow_groups": []},
             {"ssh_hardening_allow_groups": ["hnx-ssh root"]},
             {"ssh_hardening_authorized_keys_command": "sss_ssh_authorizedkeys"},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_ssh_hardening_refuses_bad_inputs(first):
+    results, _ = first
     assert all(f and "ssh_hardening: the kept account" in m for f, m in results), results
 
 
@@ -490,9 +614,15 @@ def nft_vars(tmp_path, **kw):
     return d
 
 
-def test_nftables_host_renders_the_models_rules_checks_and_loads_once(tmp_path):
+def _first(tmp_path):
     v = nft_vars(tmp_path)
-    r = run_role(tmp_path, "nftables_host", "config", v)
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_nftables_host_renders_the_models_rules_checks_and_loads_once(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
     assert "type filter hook input priority filter; policy drop;" in text
@@ -550,11 +680,17 @@ def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
     assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"]
 
 
-def test_nftables_host_accept_egress_refuses_only_the_metadata_services(tmp_path):
+def _first(tmp_path):
     fw = {"policy_out": "ACCEPT", "inbound_allow": [], "outbound_allow": []}
     v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False,
                  nftables_host_ssh_sources=["any"])  # fmt: skip
-    assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_nftables_host_accept_egress_refuses_only_the_metadata_services(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
     out = text.split("chain output {", 1)[1]
     assert "policy accept;" in out and "\t\ttcp dport 22 accept" in text
@@ -646,12 +782,17 @@ def forward_verdict(chain: str, daddr: str) -> str:
     return re.search(r"policy (\w+);", chain).group(1)
 
 
-def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(tmp_path):
+def _first(tmp_path):
+    v = nft_vars(tmp_path, nftables_host_forward_local=["198.51.100.192/26"])
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(first):
     """Where egress is required, a container's traffic leaving the host (FORWARD, which the
     output chain never sees) is default-deny too: the metadata refusal first, then established
     flows, published ports, bridge-local traffic and the same outbound_allow; nothing else."""
-    v = nft_vars(tmp_path, nftables_host_forward_local=["198.51.100.192/26"])
-    r = run_role(tmp_path, "nftables_host", "config", v)
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
     fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
@@ -681,37 +822,49 @@ def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(tmp_path):
     assert "policy accept;" in fwd and forward_verdict(fwd, "203.0.113.10") == "accept"
 
 
-def test_nftables_host_refuses_a_bridge_local_set_that_is_not_a_cidr(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "nftables_host",
-        "config",
-        nft_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "nftables_host",
+        "tasks_from": "config",
+        "base_vars": nft_vars(tmp_path),
+        "overrides": [
             {"nftables_host_forward_local": ["any"]},
             {"nftables_host_forward_local": ["198.51.100.192/26 accept"]},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_nftables_host_refuses_a_bridge_local_set_that_is_not_a_cidr(first):
+    results, _ = first
     assert all(f and "bridge-local CIDRs" in m for f, m in results), results
 
 
-def test_nftables_host_retries_a_failed_load(tmp_path):
+def _first(tmp_path):
     v = nft_vars(tmp_path)
     (tmp_path / "nft.fails").touch()
-    assert run_role(tmp_path, "nftables_host", "config", v).returncode != 0
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_nftables_host_retries_a_failed_load(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout + r.stderr
     (tmp_path / "nft.fails").unlink()
     assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
     assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"] * 2
     assert not (tmp_path / "state" / "load-pending").exists()
 
 
-def test_nftables_host_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "nftables_host",
-        "config",
-        nft_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "nftables_host",
+        "tasks_from": "config",
+        "base_vars": nft_vars(tmp_path),
+        "overrides": [
             {"nftables_host_firewall": {**FIREWALL, "policy_out": "ACCEPT"}},  # egress required
             {"nftables_host_firewall": {**FIREWALL, "policy_out": "accept"}},
             {"nftables_host_ssh_sources": []},
@@ -741,7 +894,12 @@ def test_nftables_host_refuses_bad_inputs(tmp_path):
                 }
             },
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_nftables_host_refuses_bad_inputs(first):
+    results, tmp_path = first
     want = "nftables_host: policy_out ACCEPT, DROP or REJECT"
     assert all(f and want in m for f, m in results), results
     assert not (tmp_path / "nftables.conf").exists() and calls(tmp_path) == []
@@ -767,12 +925,19 @@ def test_nftables_host_health_reads_the_hook_policies(tmp_path):
     assert [not f for f, _ in results] == [ok for _, _, ok in NFT_POLICIES], results
 
 
+def _first(tmp_path):
+    v = nft_vars(tmp_path)
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
 @pytest.mark.skipif(
     REAL_NFT is None, reason="nft with an unprivileged network namespace is not available"
 )
-def test_nftables_host_never_installs_a_ruleset_nft_rejects(tmp_path):
-    v = nft_vars(tmp_path)
-    assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
+@first_run(_first)
+def test_nftables_host_never_installs_a_ruleset_nft_rejects(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = (tmp_path / "nftables.conf").read_text()
     port = {"name": "x", "proto": "tcp", "ports": "70000", "source": "any"}  # the shape passes
     r = run_role(tmp_path, "nftables_host", "config",
@@ -804,9 +969,21 @@ def sssd_vars(tmp_path, local=True, nsswitch="passwd: files systemd sss\n", **kw
     return d
 
 
-def test_sssd_ldap_writes_a_checked_0600_config_over_ldaps_and_restarts(tmp_path):
+def _first(tmp_path):
     v = sssd_vars(tmp_path)
-    r = run_role(tmp_path, "sssd_ldap", "config", v, SSSD_ENV)
+    return {
+        "role": "sssd_ldap",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "env": SSSD_ENV,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_sssd_ldap_writes_a_checked_0600_config_over_ldaps_and_restarts(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     conf = tmp_path / "sssd.conf"
     text = conf.read_text()
@@ -826,15 +1003,30 @@ def test_sssd_ldap_writes_a_checked_0600_config_over_ldaps_and_restarts(tmp_path
     [({"local": False}, "is not in /etc/passwd"),
      ({"nsswitch": "passwd: sss files\n"}, "does not resolve files first (sss files)")],
 )  # fmt: skip
-def test_sssd_ldap_never_takes_away_the_break_glass_account(tmp_path, kw, why):
-    r = run_role(tmp_path, "sssd_ldap", "config", sssd_vars(tmp_path, **kw), SSSD_ENV)
+@first_run(lambda tmp, kw, why: {"role": "sssd_ldap", "tasks_from": "config",
+                                  "extra_vars": sssd_vars(tmp, **kw), "env": SSSD_ENV})  # fmt: skip
+def test_sssd_ldap_never_takes_away_the_break_glass_account(first, kw, why):
+    r, tmp_path = first
     assert r.returncode != 0 and why in r.stdout
     assert not (tmp_path / "sssd.conf").exists() and calls(tmp_path) == []
 
 
-def test_sssd_ldap_never_installs_a_config_sssctl_rejects(tmp_path):
+def _first(tmp_path):
     v = sssd_vars(tmp_path)
-    assert run_role(tmp_path, "sssd_ldap", "config", v, SSSD_ENV).returncode == 0
+    return {
+        "role": "sssd_ldap",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "env": SSSD_ENV,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_sssd_ldap_never_installs_a_config_sssctl_rejects(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = (tmp_path / "sssd.conf").read_text()
     r = run_role(
         tmp_path, "sssd_ldap", "config", {**v, "sssd_ldap_allow_groups": ["bogus"]}, SSSD_ENV
@@ -843,7 +1035,7 @@ def test_sssd_ldap_never_installs_a_config_sssctl_rejects(tmp_path):
     assert BIND not in r.stdout + r.stderr
 
 
-def test_sssd_ldap_refuses_bad_inputs(tmp_path):
+def _first(tmp_path):
     cases = [
         over
         for over, _ in [
@@ -854,29 +1046,55 @@ def test_sssd_ldap_refuses_bad_inputs(tmp_path):
             ({"sssd_ldap_bind_ref": "bind-pass-fake"}, SSSD_ENV),
         ]
     ]
-    results = run_cases(tmp_path, "sssd_ldap", "config", sssd_vars(tmp_path), cases, SSSD_ENV)
+    return {
+        "runner": run_cases,
+        "role": "sssd_ldap",
+        "tasks_from": "config",
+        "base_vars": sssd_vars(tmp_path),
+        "overrides": cases,
+        "env": SSSD_ENV,
+    }
+
+
+@first_run(_first)
+def test_sssd_ldap_refuses_bad_inputs(first):
+    results, tmp_path = first
     want = "sssd_ldap: the outpost is a registry logical id"
     assert all(f and want in m for f, m in results), results
     assert not (tmp_path / "sssd.conf").exists()
 
 
-def test_sssd_ldap_refuses_a_bind_credential_with_a_line_break(tmp_path):
+def _first(tmp_path):
     env = {"HNX_SECRET_IDP_LDAP_BIND_PASSWORD": "bind-pass-fake\nldap_tls_reqcert = never"}
-    r = run_role(tmp_path, "sssd_ldap", "config", sssd_vars(tmp_path), env)
+    return {
+        "role": "sssd_ldap",
+        "tasks_from": "config",
+        "extra_vars": sssd_vars(tmp_path),
+        "env": env,
+    }
+
+
+@first_run(_first)
+def test_sssd_ldap_refuses_a_bind_credential_with_a_line_break(first):
+    r, tmp_path = first
     assert (
         r.returncode != 0 and "holds a line break" in r.stdout and "bind-pass-fake" not in r.stdout
     )
     assert not (tmp_path / "sssd.conf").exists()
 
 
+def _sssd_status(tmp, status, ok):
+    v = sssd_vars(tmp, sssd_ldap_sssctl_cli=fake(tmp / "sssctl-status", f"print({status!r})\n"))
+    return {"role": "sssd_ldap", "tasks_from": "health", "extra_vars": v}
+
+
 @pytest.mark.parametrize(
     ("status", "ok"), [("Online status: Online\n", True), ("Online status: Offline\n", False)]
 )
-def test_sssd_ldap_health(tmp_path, status, ok):
-    v = sssd_vars(
-        tmp_path, sssd_ldap_sssctl_cli=fake(tmp_path / "sssctl-status", f"print({status!r})\n")
-    )
-    assert (run_role(tmp_path, "sssd_ldap", "health", v).returncode == 0) is ok
+@first_run(_sssd_status)
+def test_sssd_ldap_health(first, status, ok):
+    r, _ = first
+    assert (r.returncode == 0) is ok, r.stdout
 
 
 # ---------------------------------------------------------------- rsyslog_forward
@@ -892,9 +1110,15 @@ def rsyslog_vars(tmp_path, **kw):
     return d
 
 
-def test_rsyslog_forward_sends_everything_over_tls_to_the_registry_receiver(tmp_path):
+def _first(tmp_path):
     v = rsyslog_vars(tmp_path)
-    r = run_role(tmp_path, "rsyslog_forward", "config", v)
+    return {"role": "rsyslog_forward", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_rsyslog_forward_sends_everything_over_tls_to_the_registry_receiver(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "60-forward.conf").read_text()
     assert (
@@ -911,9 +1135,16 @@ def test_rsyslog_forward_sends_everything_over_tls_to_the_registry_receiver(tmp_
     )
 
 
-def test_rsyslog_forward_never_installs_a_rule_rsyslogd_rejects(tmp_path):
+def _first(tmp_path):
     v = rsyslog_vars(tmp_path)
-    assert run_role(tmp_path, "rsyslog_forward", "config", v).returncode == 0
+    return {"role": "rsyslog_forward", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_rsyslog_forward_never_installs_a_rule_rsyslogd_rejects(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = (tmp_path / "60-forward.conf").read_text()
     r = run_role(
         tmp_path, "rsyslog_forward", "config", {**v, "rsyslog_forward_permitted_peer": "bogus"}
@@ -922,19 +1153,24 @@ def test_rsyslog_forward_never_installs_a_rule_rsyslogd_rejects(tmp_path):
     assert calls(tmp_path)[-1] == "rsyslogd -N1 -f <staged>"
 
 
-def test_rsyslog_forward_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "rsyslog_forward",
-        "config",
-        rsyslog_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "rsyslog_forward",
+        "tasks_from": "config",
+        "base_vars": rsyslog_vars(tmp_path),
+        "overrides": [
             {"rsyslog_forward_collector_id": "Logs"},
             {"rsyslog_forward_permitted_peer": 'logs" StreamDriverMode="0'},
             {"rsyslog_forward_selector": "*.* /dev/null\n*.*"},
             {"rsyslog_forward_queue_max_disk": "1 g"},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_rsyslog_forward_refuses_bad_inputs(first):
+    results, tmp_path = first
     assert all(f and "rsyslog_forward: the receiver is a registry" in m for f, m in results), (
         results
     )
@@ -970,10 +1206,19 @@ def disk_vars(tmp_path, doc=LSBLK, **kw):
     return d
 
 
-def test_disk_encryption_check_reports_the_volumes_without_a_crypt_layer(tmp_path):
+def _first(tmp_path):
+    return {
+        "role": "disk_encryption_check",
+        "tasks_from": "main",
+        "extra_vars": disk_vars(tmp_path),
+    }
+
+
+@first_run(_first)
+def test_disk_encryption_check_reports_the_volumes_without_a_crypt_layer(first):
     """Directly on a crypt mapping, or on LVM over one, counts; a bare disk does not; the system
     mounts, unmounted devices and accepted mounts are not data volumes to report."""
-    r = run_role(tmp_path, "disk_encryption_check", "main", disk_vars(tmp_path))
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr  # main reports, never fails or changes a disk
     report = json.loads((tmp_path / "state" / "report.json").read_text())
     assert report["unencrypted"] == [{"mountpoint": "/var/lib/docker", "device": "vdd"}]
@@ -986,9 +1231,17 @@ def test_disk_encryption_check_reports_the_volumes_without_a_crypt_layer(tmp_pat
     assert run_role(tmp_path, "disk_encryption_check", "health", ok).returncode == 0
 
 
-def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(tmp_path):
-    r = run_role(tmp_path, "disk_encryption_check", "health",
-                 disk_vars(tmp_path, disk_encryption_check_accepted={"/var/lib/docker": " "}))  # fmt: skip
+def _first(tmp_path):
+    return {
+        "role": "disk_encryption_check",
+        "tasks_from": "health",
+        "extra_vars": disk_vars(tmp_path, disk_encryption_check_accepted={"/var/lib/docker": " "}),
+    }
+
+
+@first_run(_first)
+def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(first):
+    r, _ = first
     assert r.returncode != 0 and "non-empty reason" in r.stdout
 
 
@@ -1028,10 +1281,22 @@ def leak_vars(etc, tmp_path, **kw):
     return d
 
 
-def test_config_leak_scan_uses_the_repositorys_scanner_and_never_shows_the_value(tmp_path):
+def _first(tmp_path):
     etc = leak_tree(tmp_path)
     v = leak_vars(etc, tmp_path)
-    clean = run_role(tmp_path, "config_leak_scan", "health", v)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "health",
+        "extra_vars": v,
+        "setup": {"etc": etc, "v": v},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_uses_the_repositorys_scanner_and_never_shows_the_value(first):
+    clean, tmp_path = first
+    etc = first.setup["etc"]
+    v = first.setup["v"]
     assert clean.returncode == 0, clean.stdout + clean.stderr  # host key accepted, binary skipped
     (etc / "app" / "settings.conf").write_text("listen = 8080\n" + PEM)
     r = run_role(tmp_path, "config_leak_scan", "main", v)
@@ -1048,8 +1313,17 @@ def test_config_leak_scan_uses_the_repositorys_scanner_and_never_shows_the_value
     assert "TASK [config_leak_scan : Remove the scanner]" in health.stdout
 
 
-def test_config_leak_scan_refuses_a_relative_path(tmp_path):
-    r = run_role(tmp_path, "config_leak_scan", "health", leak_vars("etc", tmp_path))
+def _first(tmp_path):
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "health",
+        "extra_vars": leak_vars("etc", tmp_path),
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_refuses_a_relative_path(first):
+    r, _ = first
     assert r.returncode != 0 and "at least one absolute path" in r.stdout
 
 
@@ -1088,7 +1362,7 @@ def drill_vars(tmp_path, records=None, **kw):
     return d
 
 
-def test_restore_drill_drills_only_the_due_guests_and_records_the_verified_restore(tmp_path):
+def _first(tmp_path):
     records = {
         "guest:bus-core": {
             "last_verified": "2026-10-01T02:00:00Z",
@@ -1099,7 +1373,18 @@ def test_restore_drill_drills_only_the_due_guests_and_records_the_verified_resto
             "snapshot": "vm/lake-core/old",
         },  # 81 days: due
     }  # edge-core: never drilled
-    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, records))
+    return {
+        "role": "restore_drill",
+        "tasks_from": "main",
+        "extra_vars": drill_vars(tmp_path, records),
+        "setup": {"records": records},
+    }
+
+
+@first_run(_first)
+def test_restore_drill_drills_only_the_due_guests_and_records_the_verified_restore(first):
+    r, tmp_path = first
+    records = first.setup["records"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert calls(tmp_path) == ["drill guest:lake-core", "drill guest:edge-core"]  # in guest order
     doc = json.loads((tmp_path / "drills.json").read_text())["guests"]
@@ -1111,10 +1396,15 @@ def test_restore_drill_drills_only_the_due_guests_and_records_the_verified_resto
     assert run_role(tmp_path, "restore_drill", "health", drill_vars(tmp_path)).returncode == 0
 
 
-def test_restore_drill_records_a_failed_or_unverified_drill_and_fails_after_trying_all(tmp_path):
+def _first(tmp_path):
     (tmp_path / "edge-core.fails").touch()
     (tmp_path / "lake-core.corrupt").touch()
-    r = run_role(tmp_path, "restore_drill", "main", drill_vars(tmp_path, {}))
+    return {"role": "restore_drill", "tasks_from": "main", "extra_vars": drill_vars(tmp_path, {})}
+
+
+@first_run(_first)
+def test_restore_drill_records_a_failed_or_unverified_drill_and_fails_after_trying_all(first):
+    r, tmp_path = first
     assert r.returncode != 0
     assert "the drill of guest:lake-core, guest:edge-core failed or did not verify" in r.stdout
     doc = json.loads((tmp_path / "drills.json").read_text())["guests"]
@@ -1123,16 +1413,20 @@ def test_restore_drill_records_a_failed_or_unverified_drill_and_fails_after_tryi
     assert doc["guest:lake-core"] == {"last_failure": NOW, "failure": "not verified"}
 
 
-@pytest.mark.parametrize(
-    ("now", "ok"), [("2026-12-29T12:00:00Z", True), ("2027-01-21T12:00:00Z", False)]
-)  # 2026-10-01 + 90 days = 2026-12-30
-def test_restore_drill_health_marks_a_drill_older_than_90_days_stale(tmp_path, now, ok):
+def _drilled_on_1_october(tmp, now, ok):
     records = {
         g["id"]: {"last_verified": "2026-10-01T02:00:00Z", "snapshot": "s"} for g in DRILL_GUESTS
     }
-    r = run_role(
-        tmp_path, "restore_drill", "health", drill_vars(tmp_path, records, restore_drill_now=now)
-    )
+    v = drill_vars(tmp, records, restore_drill_now=now)
+    return {"role": "restore_drill", "tasks_from": "health", "extra_vars": v}
+
+
+@pytest.mark.parametrize(
+    ("now", "ok"), [("2026-12-29T12:00:00Z", True), ("2027-01-21T12:00:00Z", False)]
+)  # 2026-10-01 + 90 days = 2026-12-30
+@first_run(_drilled_on_1_october)
+def test_restore_drill_health_marks_a_drill_older_than_90_days_stale(first, now, ok):
+    r, _ = first
     assert (r.returncode == 0) is ok, r.stdout
     if not ok:
         assert (
@@ -1141,15 +1435,33 @@ def test_restore_drill_health_marks_a_drill_older_than_90_days_stale(tmp_path, n
         )
 
 
-def test_restore_drill_health_fails_for_a_guest_never_drilled(tmp_path):
-    r = run_role(tmp_path, "restore_drill", "health", drill_vars(tmp_path, {}))
+def _first(tmp_path):
+    return {"role": "restore_drill", "tasks_from": "health", "extra_vars": drill_vars(tmp_path, {})}
+
+
+@first_run(_first)
+def test_restore_drill_health_fails_for_a_guest_never_drilled(first):
+    r, _ = first
     assert r.returncode != 0 and "guest:bus-core, guest:edge-core, guest:lake-core" in r.stdout
 
 
-def test_restore_drill_backup_export_and_restore_keep_the_records(tmp_path):
+def _first(tmp_path):
     records = {"guest:bus-core": {"last_verified": "2026-10-01T02:00:00Z", "snapshot": "s"}}
     v = drill_vars(tmp_path, records)
-    assert run_role(tmp_path, "restore_drill", "backup", v).returncode == 0
+    return {
+        "role": "restore_drill",
+        "tasks_from": "backup",
+        "extra_vars": v,
+        "setup": {"records": records, "v": v},
+    }
+
+
+@first_run(_first)
+def test_restore_drill_backup_export_and_restore_keep_the_records(first):
+    r, tmp_path = first
+    records = first.setup["records"]
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads((tmp_path / "backup-manifest.json").read_text())["paths"] == [
         str(tmp_path / "drills.json")
     ]
@@ -1173,20 +1485,25 @@ def test_restore_drill_backup_export_and_restore_keep_the_records(tmp_path):
     )
 
 
-def test_restore_drill_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "restore_drill",
-        "main",
-        drill_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "restore_drill",
+        "tasks_from": "main",
+        "base_vars": drill_vars(tmp_path),
+        "overrides": [
             {"restore_drill_guests": []},
             {"restore_drill_guests": [{**DRILL_GUESTS[0], "id": "bus-core"}]},
             {"restore_drill_guests": [{**DRILL_GUESTS[0], "name": "bus core; rm"}]},
             {"restore_drill_max_age_days": 10},
             {"restore_drill_now": "yesterday"},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_restore_drill_refuses_bad_inputs(first):
+    results, tmp_path = first
     assert all(f and "restore_drill: at least one guest" in m for f, m in results), results
     assert calls(tmp_path) == []
 
@@ -1215,8 +1532,7 @@ if args[0] == "commit":  # as etckeeper does with PUSH_REMOTE: commit, then push
 """
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
-def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_push(tmp_path):
+def _first(tmp_path):
     etc = tmp_path / "etc"
     etc.mkdir()
     git("init", "-q", "-b", "master", cwd=etc)
@@ -1241,7 +1557,22 @@ def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_
         "ssh://git-01.example.internal:22/etc/bus-core.git",
         cwd=etc,
     )
-    r = run_role(tmp_path, "etckeeper", "config", v)
+    return {
+        "role": "etckeeper",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "setup": {"etc": etc, "conf": conf, "v": v, "remote": remote},
+    }
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+@first_run(_first)
+def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_push(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    conf = first.setup["conf"]
+    v = first.setup["v"]
+    remote = first.setup["remote"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert (
         git("config", "--get", "remote.origin.url", cwd=etc).strip()
@@ -1258,9 +1589,14 @@ def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_
     assert r.returncode != 0 and "has uncommitted changes" in r.stdout
 
 
-def test_etckeeper_refuses_a_git_service_not_reached_over_ssh(tmp_path):
+def _first(tmp_path):
     v = {"etckeeper_remote_id": "log-collector", "etckeeper_dir": str(tmp_path)}
-    r = run_role(tmp_path, "etckeeper", "config", v)
+    return {"role": "etckeeper", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_etckeeper_refuses_a_git_service_not_reached_over_ssh(first):
+    r, _ = first
     assert r.returncode != 0 and "etckeeper: the git service is a registry logical id" in r.stdout
 
 
@@ -1286,14 +1622,20 @@ def run_scan(tmp_path):
     subprocess.run(["sh", str(tmp_path / "bin" / "scan")], check=True, capture_output=True)
 
 
-def test_scanner_units_are_oncalendar_timers_enabled_once(tmp_path):
+def _first(tmp_path):
     v = scanner_vars(
         tmp_path,
         "lynis",
         lynis_min_hardening_index=60,
         lynis_dpkg_verify=False,
     )
-    r = run_role(tmp_path, "lynis", "config", v)
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_scanner_units_are_oncalendar_timers_enabled_once(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     timer = (tmp_path / "units" / "hnx-lynis.timer").read_text()
     assert "OnCalendar=*-*-* 04:10:00 UTC\nPersistent=true\n" in timer
@@ -1315,6 +1657,14 @@ open(report, "w").write(REPORT)
 """
 
 
+def _first(tmp_path, report, ok, why):
+    cli = fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr(report)))
+    v = scanner_vars(
+        tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli
+    )
+    return {"role": "lynis", "tasks_from": "health", "extra_vars": v, "setup": {"v": v}}
+
+
 @pytest.mark.parametrize(
     ("report", "ok", "why"),
     [
@@ -1327,12 +1677,11 @@ open(report, "w").write(REPORT)
         ),
     ],
 )
-def test_lynis_run_and_health(tmp_path, report, ok, why):
-    cli = fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr(report)))
-    v = scanner_vars(
-        tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli
-    )
-    assert run_role(tmp_path, "lynis", "health", v).returncode != 0  # never ran
+@first_run(_first)
+def test_lynis_run_and_health(first, report, ok, why):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout + r.stderr  # never ran
     assert run_role(tmp_path, "lynis", "config", v).returncode == 0
     run_scan(tmp_path)
     r = run_role(tmp_path, "lynis", "health", v)
@@ -1340,7 +1689,7 @@ def test_lynis_run_and_health(tmp_path, report, ok, why):
     assert why.split("\n")[0] in r.stdout
 
 
-def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(tmp_path):
+def _first(tmp_path):
     cli = fake(
         tmp_path / "lynis-cli",
         LYNIS.replace("REPORT", repr("hardening_index=70\nwarning[]=X-1|w|\n")),
@@ -1354,7 +1703,13 @@ def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(tmp_path):
     )
     v = scanner_vars(tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli,
                      lynis_hnx_cli=hnx, lynis_broker_socket="/run/hnx-broker/broker.sock")  # fmt: skip
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     assert (tmp_path / "argv").read_text() == "broker call finding.write --socket"
     filed = json.loads((tmp_path / "filed.json").read_text())
@@ -1366,12 +1721,18 @@ def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(tmp_path):
 AIDE_PATHS = [{"path": "/etc/ssh", "rule": "p+i+n+u+g+s+m+c+sha256"}]
 
 
-def test_aide_checks_the_drop_in_in_a_test_config_before_it_goes_live(tmp_path):
+def _first(tmp_path):
     main = tmp_path / "aide.conf"
     main.write_text("database_in=file:/var/lib/aide/aide.db\n")
     v = scanner_vars(tmp_path, "aide", aide_paths=AIDE_PATHS, aide_config_file=str(main),
                      aide_dropin=str(tmp_path / "90_homelabnext"), aide_cli=checker(tmp_path, "aide"))  # fmt: skip
-    r = run_role(tmp_path, "aide", "config", v)
+    return {"role": "aide", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_aide_checks_the_drop_in_in_a_test_config_before_it_goes_live(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert (tmp_path / "90_homelabnext").read_text().splitlines()[1:] == [
         "/etc/ssh p+i+n+u+g+s+m+c+sha256"
@@ -1385,7 +1746,7 @@ def test_aide_checks_the_drop_in_in_a_test_config_before_it_goes_live(tmp_path):
     assert sorted(p.name for p in (tmp_path / "state").iterdir()) == []  # nothing staged is left
 
 
-def test_aide_refuses_bad_paths(tmp_path):
+def _first(tmp_path):
     cases = [
         {"aide_paths": paths}
         for paths in [
@@ -1395,12 +1756,22 @@ def test_aide_refuses_bad_paths(tmp_path):
         ]
     ]
     v = scanner_vars(tmp_path, "aide", aide_paths=[])
-    results = run_cases(tmp_path, "aide", "config", v, cases)
+    return {
+        "runner": run_cases,
+        "role": "aide",
+        "tasks_from": "config",
+        "base_vars": v,
+        "overrides": cases,
+    }
+
+
+@first_run(_first)
+def test_aide_refuses_bad_paths(first):
+    results, _ = first
     assert all(f and "aide: an OnCalendar schedule ending in UTC" in m for f, m in results), results
 
 
-@pytest.mark.parametrize(("rc", "ok"), [(0, True), (4, False)])
-def test_aide_health_follows_the_checks_exit_status(tmp_path, rc, ok):
+def _first(tmp_path, rc, ok):
     cli = fake(
         tmp_path / "aide-cli",
         f"import sys\nprint('changed: /etc/ssh/sshd_config')\nsys.exit({rc} if '--check' in sys.argv else 0)\n",
@@ -1408,7 +1779,15 @@ def test_aide_health_follows_the_checks_exit_status(tmp_path, rc, ok):
     v = scanner_vars(tmp_path, "aide", aide_paths=AIDE_PATHS, aide_cli=cli,
                      aide_dropin=str(tmp_path / "90_homelabnext"), aide_config_file=str(tmp_path / "aide.conf"))  # fmt: skip
     (tmp_path / "aide.conf").write_text("")
-    assert run_role(tmp_path, "aide", "config", v).returncode == 0
+    return {"role": "aide", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (4, False)])
+@first_run(_first)
+def test_aide_health_follows_the_checks_exit_status(first, rc, ok):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     r = run_role(tmp_path, "aide", "health", v)
     assert (r.returncode == 0) is ok and (ok or "the last check exited 4" in r.stdout)
@@ -1422,7 +1801,7 @@ def rk_vars(tmp_path, **kw):
                         rkhunter_default_file=str(tmp_path / "default"), **kw)  # fmt: skip
 
 
-def test_rkhunter_writes_its_settings_refreshes_after_apt_and_puts_back_a_rejected_file(tmp_path):
+def _first(tmp_path):
     # the fake config check rejects a local file that holds "bogus"
     local = str(tmp_path / "rkhunter-local.conf")
     check = fake(
@@ -1430,7 +1809,13 @@ def test_rkhunter_writes_its_settings_refreshes_after_apt_and_puts_back_a_reject
         f"import sys\nsys.exit(1 if 'bogus' in open({local!r}).read() else 0)\n",
     )
     v = rk_vars(tmp_path, rkhunter_cli=check)
-    r = run_role(tmp_path, "rkhunter", "config", v)
+    return {"role": "rkhunter", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_rkhunter_writes_its_settings_refreshes_after_apt_and_puts_back_a_rejected_file(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     local = (tmp_path / "rkhunter-local.conf").read_text()
     assert (
@@ -1445,28 +1830,40 @@ def test_rkhunter_writes_its_settings_refreshes_after_apt_and_puts_back_a_reject
     assert sorted(p.name for p in tmp_path.glob("rkhunter-local.conf*")) == ["rkhunter-local.conf"]
 
 
-def test_rkhunter_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "rkhunter",
-        "config",
-        rk_vars(tmp_path),
-        [
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "rkhunter",
+        "tasks_from": "config",
+        "base_vars": rk_vars(tmp_path),
+        "overrides": [
             {"rkhunter_whitelist": {"ALLOWHIDDENDIR": ["relative"]}},
             {"rkhunter_whitelist": {"PKGMGR": ["/x"]}},
             {"rkhunter_settings": {"PKGMGR": "DPKG\nWEB_CMD=curl"}},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_rkhunter_refuses_bad_inputs(first):
+    results, _ = first
     assert all(f and "rkhunter: an OnCalendar schedule" in m for f, m in results), results
 
 
-@pytest.mark.parametrize(("rc", "ok"), [(0, True), (1, False)])
-def test_rkhunter_health_follows_the_checks_exit_status(tmp_path, rc, ok):
+def _first(tmp_path, rc, ok):
     cli = fake(
         tmp_path / "rkhunter-cli", f"import sys\nsys.exit({rc} if '--check' in sys.argv else 0)\n"
     )
     v = rk_vars(tmp_path, rkhunter_cli=cli)
-    assert run_role(tmp_path, "rkhunter", "config", v).returncode == 0
+    return {"role": "rkhunter", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (1, False)])
+@first_run(_first)
+def test_rkhunter_health_follows_the_checks_exit_status(first, rc, ok):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     assert (run_role(tmp_path, "rkhunter", "health", v).returncode == 0) is ok
 
@@ -1503,12 +1900,25 @@ def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
     assert (run_role(tmp_path, "clamav", "health", v).returncode == 0) is ok
 
 
-def test_clamav_uses_a_private_mirror_when_set(tmp_path):
+def _first(tmp_path):
     conf = tmp_path / "freshclam.conf"
     conf.write_text("DatabaseMirror database.clamav.net\n")
     v = scanner_vars(tmp_path, "clamav", clamav_paths=["/srv"], clamav_freshclam_config=str(conf),
                      clamav_private_mirror="clamav-mirror.example.internal")  # fmt: skip
-    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    return {
+        "role": "clamav",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "setup": {"conf": conf, "v": v},
+    }
+
+
+@first_run(_first)
+def test_clamav_uses_a_private_mirror_when_set(first):
+    r, tmp_path = first
+    conf = first.setup["conf"]
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert "PrivateMirror clamav-mirror.example.internal\n" in conf.read_text()
     bad = run_role(
         tmp_path, "clamav", "config", {**v, "clamav_private_mirror": "x\nDatabaseMirror y"}
@@ -1529,17 +1939,23 @@ else:
 """
 
 
-@pytest.mark.parametrize(
-    ("vulns", "ok"), [([], True), ([{"VulnerabilityID": "CVE-2026-0001-FAKE"}], False)]
-)
-def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(tmp_path, vulns, ok):
+def _first(tmp_path, vulns, ok):
     cli = fake(
         tmp_path / "trivy-cli",
         TRIVY.replace("LOG", repr(str(tmp_path / "trivy.log"))).replace("VULNS", repr(vulns)),
     )
     v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH", trivy_cli=cli, trivy_skip_db_update=True,
                      trivy_scan_containers=False)  # fmt: skip
-    r = run_role(tmp_path, "trivy", "config", v)
+    return {"role": "trivy", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@pytest.mark.parametrize(
+    ("vulns", "ok"), [([], True), ([{"VulnerabilityID": "CVE-2026-0001-FAKE"}], False)]
+)
+@first_run(_first)
+def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(first, vulns, ok):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     runs = (tmp_path / "trivy.log").read_text().splitlines()
@@ -1556,21 +1972,26 @@ def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(tmp_path, vulns, ok)
         assert "1 finding(s) (at most 0):" in h.stdout and "CVE-2026-0001-FAKE" in h.stdout
 
 
-def test_trivy_refuses_bad_inputs(tmp_path):
+def _first(tmp_path):
     v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH")
-    results = run_cases(
-        tmp_path,
-        "trivy",
-        "config",
-        v,
-        [
+    return {
+        "runner": run_cases,
+        "role": "trivy",
+        "tasks_from": "config",
+        "base_vars": v,
+        "overrides": [
             {"trivy_severity": "high"},
             {"trivy_version": "0.60"},
             {"trivy_db_repository": "mirror db"},
             {"trivy_repository": "http://mirror.example.internal/deb"},
             {"trivy_key_fingerprints": []},
         ],
-    )
+    }
+
+
+@first_run(_first)
+def test_trivy_refuses_bad_inputs(first):
+    results, _ = first
     assert all(f and "trivy: an OnCalendar schedule" in m for f, m in results), results
 
 
@@ -1590,9 +2011,15 @@ def auditd_vars(tmp_path, **kw):
     return d
 
 
-def test_auditd_writes_the_keyed_rules_loads_them_and_rotates_the_log(tmp_path):
+def _first(tmp_path):
     v = auditd_vars(tmp_path)
-    r = run_role(tmp_path, "auditd", "config", v)
+    return {"role": "auditd", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_auditd_writes_the_keyed_rules_loads_them_and_rotates_the_log(first):
+    r, tmp_path = first
+    v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     rules = (tmp_path / "50-homelabnext.rules").read_text()
     for key in ("identity", "privilege", "sshd", "modules", "time"):
@@ -1615,9 +2042,16 @@ def test_auditd_writes_the_keyed_rules_loads_them_and_rotates_the_log(tmp_path):
     )
 
 
-def test_auditd_reloads_rules_augenrules_says_are_stale(tmp_path):
+def _first(tmp_path):
     v = auditd_vars(tmp_path)
-    assert run_role(tmp_path, "auditd", "config", v).returncode == 0
+    return {"role": "auditd", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_auditd_reloads_rules_augenrules_says_are_stale(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     stale = logging_fake(
         tmp_path, "augenrules", "/usr/sbin/augenrules: Rules have changed and should be updated\n"
     )
@@ -1635,25 +2069,45 @@ AUDIT_STATES = [
 ]  # fmt: skip
 
 
-def test_auditd_health(tmp_path):
+def _first(tmp_path):
     cases = [
         {"auditd_auditctl_cli": fake(tmp_path / f"auditctl-{i}",
                                      f"import sys\nprint({status!r} if sys.argv[1] == '-s' else {loaded!r}, end='')\n")}
         for i, (loaded, status, _) in enumerate(AUDIT_STATES)
     ]  # fmt: skip
     v = auditd_vars(tmp_path, auditd_rule_groups=["identity", "time"])
-    results = run_cases(tmp_path, "auditd", "health", v, cases)
+    return {
+        "runner": run_cases,
+        "role": "auditd",
+        "tasks_from": "health",
+        "base_vars": v,
+        "overrides": cases,
+    }
+
+
+@first_run(_first)
+def test_auditd_health(first):
+    results, _ = first
     assert [not f for f, _ in results] == [ok for _, _, ok in AUDIT_STATES], results
 
 
-def test_auditd_refuses_bad_inputs(tmp_path):
-    results = run_cases(
-        tmp_path,
-        "auditd",
-        "config",
-        auditd_vars(tmp_path),
-        [{"auditd_rule_groups": []}, {"auditd_rule_groups": ["network"]}, {"auditd_num_logs": 0}],
-    )
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "auditd",
+        "tasks_from": "config",
+        "base_vars": auditd_vars(tmp_path),
+        "overrides": [
+            {"auditd_rule_groups": []},
+            {"auditd_rule_groups": ["network"]},
+            {"auditd_num_logs": 0},
+        ],
+    }
+
+
+@first_run(_first)
+def test_auditd_refuses_bad_inputs(first):
+    results, _ = first
     assert all(f and "auditd: rule groups among" in m for f, m in results), results
 
 
@@ -1750,9 +2204,22 @@ def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(tmp_path)
     assert run_role(tmp_path, "needrestart", "health", v).returncode != 0
 
 
-def test_needrestart_leaves_a_pending_kernel_to_patching_unless_asked(tmp_path):
+def _first(tmp_path):
     v, out = nr_setup(tmp_path)
-    assert run_role(tmp_path, "needrestart", "config", v).returncode == 0
+    return {
+        "role": "needrestart",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "setup": {"v": v, "out": out},
+    }
+
+
+@first_run(_first)
+def test_needrestart_leaves_a_pending_kernel_to_patching_unless_asked(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    out = first.setup["out"]
+    assert r.returncode == 0, r.stdout + r.stderr
     out.write_text(BATCH.replace("KSTA: 1", "KSTA: 3").replace("KEXP: 6.1.0-25", "KEXP: 6.1.0-26"))
     assert (
         nr_check(tmp_path).returncode == 0 and mails(tmp_path) == []
@@ -1769,15 +2236,22 @@ def test_needrestart_leaves_a_pending_kernel_to_patching_unless_asked(tmp_path):
     assert "reboot into kernel 6.1.0-26-amd64" in mails(tmp_path)[0]
 
 
+def _auto_notify(tmp, aliases, mode):
+    v, _ = nr_setup(tmp, needrestart_notify="auto")
+    if aliases is not None:
+        (tmp / "aliases").write_text(aliases)
+    return {"role": "needrestart", "tasks_from": "config", "extra_vars": v}
+
+
 @pytest.mark.parametrize(
     ("aliases", "mode"),
     [("root: ops@example.org\n", "mail"), ("postmaster: root\n", "none"), (None, "none")],
 )
-def test_needrestart_auto_mails_only_where_root_mail_is_forwarded(tmp_path, aliases, mode):
-    v, out = nr_setup(tmp_path, needrestart_notify="auto")
-    if aliases is not None:
-        (tmp_path / "aliases").write_text(aliases)
-    assert run_role(tmp_path, "needrestart", "config", v).returncode == 0
+@first_run(_auto_notify)
+def test_needrestart_auto_mails_only_where_root_mail_is_forwarded(first, aliases, mode):
+    r, tmp_path = first
+    out = tmp_path / "nr.out"
+    assert r.returncode == 0, r.stdout
     assert f'MODE = "{mode}"' in (tmp_path / "bin" / "needrestart-check").read_text()
     out.write_text(BATCH + "NEEDRESTART-SVC: ssh.service\n")
     assert nr_check(tmp_path).returncode == 0
@@ -1836,11 +2310,24 @@ def test_needrestart_posts_to_the_notify_endpoint_and_retries_a_failed_alert(tmp
     assert "Authorization" not in headers
 
 
-def test_needrestart_refuses_bad_inputs_and_a_token_over_plain_http(tmp_path):
+def _first(tmp_path):
     v, _ = nr_setup(tmp_path)
     cases = [{"needrestart_notify": "slack"}, {"needrestart_notify_topic": "a/b"}, {"needrestart_notify_priority": 9},
              {"needrestart_notify_auth_ref": "tk_fake"}, {"needrestart_schedule": "daily"}]  # fmt: skip
-    results = run_cases(tmp_path, "needrestart", "config", v, cases)
+    return {
+        "runner": run_cases,
+        "role": "needrestart",
+        "tasks_from": "config",
+        "base_vars": v,
+        "overrides": cases,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_needrestart_refuses_bad_inputs_and_a_token_over_plain_http(first):
+    results, tmp_path = first
+    v = first.setup["v"]
     # an unknown channel is refused by the argument spec's choices, the rest by validate.yml
     assert results[0][0] and "needrestart_notify must be one of" in results[0][1]
     want = "needrestart: notify is auto, none, notify or mail"
@@ -1915,9 +2402,17 @@ def run_sweep(tmp_path):
     )
 
 
-def test_dpkg_verify_flags_digest_mismatches_and_missing_files_but_not_conffiles(tmp_path):
+def _first(tmp_path):
     v, out = sweep_setup(tmp_path, VERIFY_DIRTY)
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v, "setup": {"v": v, "out": out}}
+
+
+@first_run(_first)
+def test_dpkg_verify_flags_digest_mismatches_and_missing_files_but_not_conffiles(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    out = first.setup["out"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert (
         "ExecStart=/usr/local/libexec/homelabnext/lynis-dpkg-verify"
         in (tmp_path / "units" / "hnx-lynis.service").read_text()
@@ -1951,9 +2446,15 @@ def test_dpkg_verify_flags_digest_mismatches_and_missing_files_but_not_conffiles
     )
 
 
-def test_dpkg_verify_reports_conffiles_when_asked(tmp_path):
+def _first(tmp_path):
     v, _ = sweep_setup(tmp_path, VERIFY_DIRTY, lynis_dpkg_verify_include_conffiles=True)
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_dpkg_verify_reports_conffiles_when_asked(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     assert run_sweep(tmp_path).returncode == 0
     doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
     assert (
@@ -1962,10 +2463,17 @@ def test_dpkg_verify_reports_conffiles_when_asked(tmp_path):
     )
 
 
-def test_dpkg_verify_clean_host_and_bad_allow_entries(tmp_path):
+def _first(tmp_path):
     clean = ".M.......   /usr/bin/env\nmissing     /usr/share/doc/x/README.gz\n"
     v, _ = sweep_setup(tmp_path, clean)  # a mode difference; a doc file dpkg never unpacked
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_dpkg_verify_clean_host_and_bad_allow_entries(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert run_sweep(tmp_path).returncode == 0
     assert json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())["findings"] == []
     assert not (tmp_path / "mail.log").exists()  # nothing changed from the empty set: silent
@@ -1976,9 +2484,15 @@ def test_dpkg_verify_clean_host_and_bad_allow_entries(tmp_path):
     assert all(f for f, _ in results), results
 
 
-def test_dpkg_verify_still_reports_a_missing_file_dpkg_was_told_to_keep(tmp_path):
+def _first(tmp_path):
     v, _ = sweep_setup(tmp_path, "missing     /usr/share/doc/sudo/copyright\n")  # path-include
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_dpkg_verify_still_reports_a_missing_file_dpkg_was_told_to_keep(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
     assert run_sweep(tmp_path).returncode == 0
     doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
     assert [f["path"] for f in doc["findings"]] == ["/usr/share/doc/sudo/copyright"]

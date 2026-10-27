@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -59,8 +59,13 @@ def wazuh_vars(tmp_path, **kw):
     return d
 
 
-def test_wazuh_agent_accepts_good_inputs(tmp_path):
-    r = run_role(tmp_path, "wazuh_agent", "validate", wazuh_vars(tmp_path))
+def _first(tmp_path):
+    return {"role": "wazuh_agent", "tasks_from": "validate", "extra_vars": wazuh_vars(tmp_path)}
+
+
+@first_run(_first)
+def test_wazuh_agent_accepts_good_inputs(first):
+    r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -80,9 +85,11 @@ def test_wazuh_agent_accepts_good_inputs(tmp_path):
         {"wazuh_agent_groups": ["ok", "x,y"]},
     ],
 )
-def test_wazuh_agent_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "wazuh_agent", "validate", wazuh_vars(tmp_path, **over))
-    assert r.returncode != 0
+@first_run(lambda tmp, over: {"role": "wazuh_agent", "tasks_from": "validate",
+                               "extra_vars": wazuh_vars(tmp, **over)})  # fmt: skip
+def test_wazuh_agent_refuses_bad_inputs(first, over):
+    r, _ = first
+    assert r.returncode != 0, over
     assert "wazuh_agent: manager id" in r.stdout
 
 
@@ -93,18 +100,37 @@ def test_wazuh_agent_needs_a_manager(tmp_path):
     assert r.returncode != 0 and "wazuh_agent_manager_id" in r.stdout + r.stderr
 
 
-def test_wazuh_agent_health_reads_the_state_file(tmp_path):
+def _first(tmp_path):
     state = tmp_path / "wazuh-agentd.state"
     state.write_text("# State file\nstatus='connected'\nlast_keepalive='2026-10-20 10:00:00'\n")
-    assert run_role(tmp_path, "wazuh_agent", "health", wazuh_vars(tmp_path)).returncode == 0
+    return {
+        "role": "wazuh_agent",
+        "tasks_from": "health",
+        "extra_vars": wazuh_vars(tmp_path),
+        "setup": {"state": state},
+    }
+
+
+@first_run(_first)
+def test_wazuh_agent_health_reads_the_state_file(first):
+    r, tmp_path = first
+    state = first.setup["state"]
+    assert r.returncode == 0, r.stdout + r.stderr
     state.write_text("# State file\nstatus='disconnected'\n")
     r = run_role(tmp_path, "wazuh_agent", "health", wazuh_vars(tmp_path))
     assert r.returncode != 0 and "not connected" in r.stdout
 
 
-def test_wazuh_agent_upgrade_and_backup_hooks(tmp_path):
+def _first(tmp_path):
     v = wazuh_vars(tmp_path)
-    assert run_role(tmp_path, "wazuh_agent", "backup", v).returncode == 0
+    return {"role": "wazuh_agent", "tasks_from": "backup", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_wazuh_agent_upgrade_and_backup_hooks(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     manifest = json.loads((tmp_path / "manifest" / "backup-manifest.json").read_text())
     assert manifest["paths"] == []
     ok = run_role(tmp_path, "wazuh_agent", "upgrade", {**v, "wazuh_agent_target_version": "4.15.0"})
@@ -178,11 +204,24 @@ def key_setup(tmp_path, role, pins=None, extra_key=False):
     return v, ring, (repo / served).read_bytes()
 
 
+def _first(tmp_path, role):
+    v, ring, served = key_setup(tmp_path, role)
+    return {
+        "role": role,
+        "tasks_from": "signing_key",
+        "extra_vars": v,
+        "setup": {"v": v, "ring": ring, "served": served},
+    }
+
+
 @pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
 @pytest.mark.parametrize("role", sorted(KEY_CASES))
-def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(tmp_path, role):
-    v, ring, served = key_setup(tmp_path, role)
-    ok = run_role(tmp_path, role, "signing_key", v)
+@first_run(_first)
+def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(first, role):
+    ok, tmp_path = first
+    v = first.setup["v"]
+    ring = first.setup["ring"]
+    served = first.setup["served"]
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert ring.read_bytes() == served
     assert sorted(p.name for p in ring.parent.iterdir()) == [ring.name]  # no staging file left
@@ -192,11 +231,17 @@ def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(tmp_path, r
     assert list(ring.parent.iterdir()) == []  # refused: not installed, staging file removed
 
 
+def _first(tmp_path, role):
+    v, ring, _ = key_setup(tmp_path, role, extra_key=True)
+    return {"role": role, "tasks_from": "signing_key", "extra_vars": v, "setup": {"ring": ring}}
+
+
 @pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
 @pytest.mark.parametrize("role", sorted(KEY_CASES))
-def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refused(tmp_path, role):
-    v, ring, _ = key_setup(tmp_path, role, extra_key=True)
-    r = run_role(tmp_path, role, "signing_key", v)
+@first_run(_first)
+def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refused(first, role):
+    r, _ = first
+    ring = first.setup["ring"]
     assert r.returncode != 0 and "not the pinned" in r.stdout and not ring.exists()
 
 
@@ -218,9 +263,14 @@ def ts_vars(tmp_path, **kw):
     return d
 
 
-def test_tailscale_node_tags_the_zone(tmp_path):
+def _first(tmp_path):
     v = ts_vars(tmp_path, hnx_zone="mgmt", tailscale_node_extra_tags=["tag:dns"])
-    r = run_role(tmp_path, "tailscale_node", "validate", v, verbose=True)
+    return {"role": "tailscale_node", "tasks_from": "validate", "extra_vars": v, "verbose": True}
+
+
+@first_run(_first)
+def test_tailscale_node_tags_the_zone(first):
+    r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert '"tailscale_node_tags": ["tag:zone-mgmt", "tag:dns"]' in r.stdout
 
@@ -245,9 +295,11 @@ def test_the_role_and_the_policy_agree_on_the_zone_tag():
         {"tailscale_node_repository": "http://mirror.example.internal/debian"},
     ],
 )
-def test_tailscale_node_refuses_bad_inputs(tmp_path, over):
-    r = run_role(tmp_path, "tailscale_node", "validate", ts_vars(tmp_path, **over))
-    assert r.returncode != 0
+@first_run(lambda tmp, over: {"role": "tailscale_node", "tasks_from": "validate",
+                               "extra_vars": ts_vars(tmp, **over)})  # fmt: skip
+def test_tailscale_node_refuses_bad_inputs(first, over):
+    r, _ = first
+    assert r.returncode != 0, over
     assert "tailscale_node: version" in r.stdout
 
 
@@ -256,23 +308,43 @@ def test_tailscale_node_refuses_bad_inputs(tmp_path, over):
     [("Debian", "bookworm", True), ("Ubuntu", "noble", True), ("Linuxmint", "wilma", False),
      ("Ubuntu", "noble/../x", False)],
 )  # fmt: skip
-def test_tailscale_node_takes_debian_and_ubuntu_only(tmp_path, distribution, release, ok):
-    v = ts_vars(tmp_path, tailscale_node_distribution=distribution, tailscale_node_release=release)
-    r = run_role(tmp_path, "tailscale_node", "platform", v)
+@first_run(
+    lambda tmp, distribution, release, ok: {
+        "role": "tailscale_node",
+        "tasks_from": "platform",
+        "extra_vars": ts_vars(
+            tmp, tailscale_node_distribution=distribution, tailscale_node_release=release
+        ),
+    }
+)
+def test_tailscale_node_takes_debian_and_ubuntu_only(first, distribution, release, ok):
+    r, _ = first
     assert (r.returncode == 0) is ok, r.stdout
 
 
-@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
-def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(tmp_path):
-    """The vendor's apt layout is <track>/ubuntu/<codename> on Ubuntu (its installer.sh), so the
-    key comes from there, and the apt source uses the same root."""
+def _first(tmp_path):
     repo = tmp_path / "repo"
     fpr = make_key(tmp_path, "vendor", repo / "ubuntu" / "noble.noarmor.gpg", armor=False)
     ring = tmp_path / "keyrings" / "hnx-tailscale.gpg"
     v = ts_vars(tmp_path, tailscale_node_repository=f"file://{repo}", tailscale_node_keyring=str(ring),
                 tailscale_node_key_fingerprints=[fpr], tailscale_node_distribution="Ubuntu",
                 tailscale_node_release="noble")  # fmt: skip
-    r = run_role(tmp_path, "tailscale_node", "signing_key", v)
+    return {
+        "role": "tailscale_node",
+        "tasks_from": "signing_key",
+        "extra_vars": v,
+        "setup": {"repo": repo, "ring": ring},
+    }
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@first_run(_first)
+def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(first):
+    """The vendor's apt layout is <track>/ubuntu/<codename> on Ubuntu (its installer.sh), so the
+    key comes from there, and the apt source uses the same root."""
+    r, _ = first
+    repo = first.setup["repo"]
+    ring = first.setup["ring"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert ring.read_bytes() == (repo / "ubuntu" / "noble.noarmor.gpg").read_bytes()
     tasks = yaml.safe_load((ANSIBLE / "roles/tailscale_node/tasks/main.yml").read_text())
@@ -302,9 +374,15 @@ def status_cli(tmp_path, doc):
         ({"BackendState": "Running", "Self": {"Online": False, "Tags": ["tag:zone-edge"]}}, False),
     ],
 )
-def test_tailscale_node_health(tmp_path, doc, ok):
-    v = ts_vars(tmp_path, tailscale_node_cli=status_cli(tmp_path, doc))
-    r = run_role(tmp_path, "tailscale_node", "health", v)
+@first_run(
+    lambda tmp, doc, ok: {
+        "role": "tailscale_node",
+        "tasks_from": "health",
+        "extra_vars": ts_vars(tmp, tailscale_node_cli=status_cli(tmp, doc)),
+    }
+)
+def test_tailscale_node_health(first, doc, ok):
+    r, _ = first
     assert (r.returncode == 0) is ok, r.stdout
 
 
@@ -357,9 +435,21 @@ ALL_HOME = '"[198.51.100.40,198.51.100.50,203.0.113.10]"'
 LIVE_ONLY = ["hnx-address-groups.yaml", "suricata.yaml"]  # nothing staged or pending
 
 
-def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
+def _first(tmp_path):
     v, log = suricata_setup(tmp_path)
-    r = run_role(tmp_path, "suricata_enroll", "main", v)
+    return {
+        "role": "suricata_enroll",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v, "log": log},
+    }
+
+
+@first_run(_first)
+def test_suricata_enroll_writes_groups_tests_and_reloads_once(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    log = first.setup["log"]
     assert r.returncode == 0, r.stdout + r.stderr
     groups = yaml.safe_load((tmp_path / "etc" / "hnx-address-groups.yaml").read_text())
     assert groups["HOME_NET"] == "[198.51.100.40,198.51.100.50,203.0.113.10]"
@@ -373,10 +463,24 @@ def test_suricata_enroll_writes_groups_tests_and_reloads_once(tmp_path):
     assert again.returncode == 0 and log.read_text().splitlines() == calls
 
 
-def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
+def _first(tmp_path):
     v, log = suricata_setup(tmp_path)
     live = tmp_path / "etc" / "hnx-address-groups.yaml"
-    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
+    return {
+        "role": "suricata_enroll",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v, "log": log, "live": live},
+    }
+
+
+@first_run(_first)
+def test_suricata_enroll_never_installs_a_file_that_fails_the_test(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    log = first.setup["log"]
+    live = first.setup["live"]
+    assert r.returncode == 0, r.stdout + r.stderr
     good = live.read_text()
     # guests with the other addresses they send from (guest 1.6), as the baseline playbook passes
     # them (with the zone's subnet, and edge's IPv6 prefix, site 1.4), in two zones, and one naming
@@ -419,10 +523,23 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     assert groups["HNX_ZONE_EDGE"] == "[2001:db8:0:28::b,203.0.113.10,203.0.113.11]"
 
 
-def test_suricata_enroll_retries_a_failed_reload(tmp_path):
+def _first(tmp_path):
     v, log = suricata_setup(tmp_path)
     (tmp_path / "suricatasc.fails").touch()
-    assert run_role(tmp_path, "suricata_enroll", "main", v).returncode != 0
+    return {
+        "role": "suricata_enroll",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v, "log": log},
+    }
+
+
+@first_run(_first)
+def test_suricata_enroll_retries_a_failed_reload(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    log = first.setup["log"]
+    assert r.returncode != 0, r.stdout + r.stderr
     assert (tmp_path / "etc" / "hnx-address-groups.yaml").exists()  # tested, so live
     (tmp_path / "suricatasc.fails").unlink()
     log.write_text("")
@@ -435,17 +552,35 @@ def test_suricata_enroll_retries_a_failed_reload(tmp_path):
     assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
 
 
-def test_suricata_enroll_keeps_the_reload_owed_while_reloads_are_off(tmp_path):
+def _first(tmp_path):
     v, log = suricata_setup(tmp_path)
-    off = run_role(tmp_path, "suricata_enroll", "main", {**v, "suricata_enroll_reload": False})
+    return {
+        "role": "suricata_enroll",
+        "tasks_from": "main",
+        "extra_vars": {**v, "suricata_enroll_reload": False},
+        "setup": {"v": v, "log": log},
+    }
+
+
+@first_run(_first)
+def test_suricata_enroll_keeps_the_reload_owed_while_reloads_are_off(first):
+    off, tmp_path = first
+    v = first.setup["v"]
+    log = first.setup["log"]
     assert off.returncode == 0 and "-c reload-rules" not in log.read_text()
     assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
     assert log.read_text().splitlines()[-1] == "-c reload-rules"
 
 
-def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(tmp_path):
+def _first(tmp_path):
     v, log = suricata_setup(tmp_path, conf="vars:\n  address-groups:\n    HOME_NET: any\n")
-    r = run_role(tmp_path, "suricata_enroll", "main", v)
+    return {"role": "suricata_enroll", "tasks_from": "main", "extra_vars": v, "setup": {"log": log}}
+
+
+@first_run(_first)
+def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(first):
+    r, tmp_path = first
+    log = first.setup["log"]
     assert r.returncode != 0 and "must hold, in place of its own" in r.stdout
     assert not (tmp_path / "etc" / "hnx-address-groups.yaml").exists() and not log.exists()
 
@@ -476,9 +611,11 @@ BAD_EXTRAS = [PUBLIC, "::", "1:2:3", "999.1.1.1", "127.0.0.1", "203.0.113.5", MA
         ),
     ],
 )
-def test_suricata_enroll_refuses_bad_guests(tmp_path, guests, named):
-    v, _ = suricata_setup(tmp_path)
-    r = run_role(tmp_path, "suricata_enroll", "main", {**v, "suricata_enroll_guests": guests})
+@first_run(lambda tmp, guests, named: {"role": "suricata_enroll", "tasks_from": "main",
+                                       "extra_vars": {**suricata_setup(tmp)[0],
+                                                      "suricata_enroll_guests": guests}})  # fmt: skip
+def test_suricata_enroll_refuses_bad_guests(first, guests, named):
+    r, tmp_path = first
     assert r.returncode != 0 and "suricata_enroll: at least one guest" in r.stdout
     for part in named:
         assert part in r.stdout, (part, r.stdout)
@@ -541,21 +678,45 @@ def gvm_setup(tmp_path, password="gmp-pass-fake", **kw):
     return v, env, state
 
 
-def test_greenbone_target_finds_a_scan_login_whose_name_has_spaces(tmp_path):
+def _first(tmp_path):
     v, env, state = gvm_setup(tmp_path, greenbone_target_scan_login="Lab SSH login")
-    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    return {
+        "role": "greenbone_target",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": env,
+        "setup": {"state": state},
+    }
+
+
+@first_run(_first)
+def test_greenbone_target_finds_a_scan_login_whose_name_has_spaces(first):
+    r, _ = first
+    state = first.setup["state"]
     assert r.returncode == 0, r.stdout + r.stderr
     calls = json.loads(state.read_text())["calls"]
     assert calls[0] == '<get_credentials filter="name=&quot;Lab SSH login&quot;"/>'
     assert '<get_targets filter="name=&quot;hnx-bus-core&quot;"/>' in calls
 
 
+def _gvm_run(tasks_from):
+    """A greenbone_target hook (``first_run``) on gvm_setup's fakes, with the test's ``password``
+    or ``over``; gvm_setup keeps the fake's state in gvm-state.json."""
+
+    def case(tmp, password="gmp-pass-fake", over=None):
+        v, env, _ = gvm_setup(tmp, password=password, **(over or {}))
+        return {"role": "greenbone_target", "tasks_from": tasks_from, "extra_vars": v, "env": env}
+
+    return case
+
+
 @pytest.mark.parametrize("password", ["gmp%pass-fake", "gmp%(user)s-fake", "100%%-fake"])
+@first_run(_gvm_run("health"))
 def test_greenbone_target_writes_a_password_with_percent_signs_gvm_tools_reads_back(
-    tmp_path, password
+    first, password
 ):
-    v, env, state = gvm_setup(tmp_path, password=password)
-    r = run_role(tmp_path, "greenbone_target", "health", v, env)
+    r, tmp_path = first
+    state = tmp_path / "gvm-state.json"
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(state.read_text())["calls"] == ["<get_version/>"]
     assert password not in r.stdout
@@ -565,9 +726,10 @@ def test_greenbone_target_writes_a_password_with_percent_signs_gvm_tools_reads_b
     "password",
     ["gmp-pass-fake\nusername=root", "gmp-pass-fake\r", " gmp-pass-fake", "gmp-pass-fake "],
 )
-def test_greenbone_target_refuses_a_password_the_ini_file_cannot_hold(tmp_path, password):
-    v, env, state = gvm_setup(tmp_path, password=password)
-    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+@first_run(_gvm_run("main"))
+def test_greenbone_target_refuses_a_password_the_ini_file_cannot_hold(first, password):
+    r, tmp_path = first
+    state = tmp_path / "gvm-state.json"
     assert r.returncode != 0
     assert "the GMP password (secret:assessment/gmp-password) holds a line break" in r.stdout
     assert json.loads(state.read_text())["calls"] == []
@@ -575,9 +737,23 @@ def test_greenbone_target_refuses_a_password_the_ini_file_cannot_hold(tmp_path, 
     assert "gmp-pass-fake" not in r.stdout
 
 
-def test_greenbone_target_creates_the_missing_targets_only(tmp_path):
+def _first(tmp_path):
     v, env, state = gvm_setup(tmp_path)
-    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    return {
+        "role": "greenbone_target",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": env,
+        "setup": {"v": v, "env": env, "state": state},
+    }
+
+
+@first_run(_first)
+def test_greenbone_target_creates_the_missing_targets_only(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    env = first.setup["env"]
+    state = first.setup["state"]
     assert r.returncode == 0, r.stdout + r.stderr
     doc = json.loads(state.read_text())
     assert doc["targets"] == ["hnx-edge-core", "hnx-bus-core", "hnx-lake-core"]
@@ -595,16 +771,26 @@ def test_greenbone_target_creates_the_missing_targets_only(tmp_path):
     assert len([c for c in json.loads(state.read_text())["calls"] if "<create_" in c]) == 2
 
 
-def test_greenbone_target_refuses_an_unknown_scan_login(tmp_path):
+def _first(tmp_path):
     v, env, _ = gvm_setup(tmp_path, greenbone_target_scan_login="nope")
-    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+    return {"role": "greenbone_target", "tasks_from": "main", "extra_vars": v, "env": env}
+
+
+@first_run(_first)
+def test_greenbone_target_refuses_an_unknown_scan_login(first):
+    r, tmp_path = first
     assert r.returncode != 0 and "no Greenbone credential named" in r.stdout
     assert not (tmp_path / "work" / "gvm-tools.conf").exists()
 
 
-def test_greenbone_target_needs_the_gmp_secret(tmp_path):
+def _first(tmp_path):
     v, _, _ = gvm_setup(tmp_path)
-    r = run_role(tmp_path, "greenbone_target", "main", v, {})
+    return {"role": "greenbone_target", "tasks_from": "main", "extra_vars": v, "env": {}}
+
+
+@first_run(_first)
+def test_greenbone_target_needs_the_gmp_secret(first):
+    r, _ = first
     assert r.returncode != 0
     assert "secret:assessment/gmp-password is not set" in r.stdout + r.stderr
 
@@ -619,14 +805,28 @@ def test_greenbone_target_needs_the_gmp_secret(tmp_path):
         {"greenbone_target_gmp_auth_ref": "plain-fake"},
     ],
 )
-def test_greenbone_target_refuses_values_that_would_rewrite_the_request(tmp_path, over):
-    v, env, state = gvm_setup(tmp_path, **over)
-    r = run_role(tmp_path, "greenbone_target", "main", v, env)
+@first_run(_gvm_run("main"))
+def test_greenbone_target_refuses_values_that_would_rewrite_the_request(first, over):
+    r, tmp_path = first
+    state = tmp_path / "gvm-state.json"
     assert r.returncode != 0 and "greenbone_target: at least one guest" in r.stdout
     assert json.loads(state.read_text())["calls"] == []
 
 
-def test_greenbone_target_health(tmp_path):
+def _first(tmp_path):
     v, env, state = gvm_setup(tmp_path)
-    assert run_role(tmp_path, "greenbone_target", "health", v, env).returncode == 0
+    return {
+        "role": "greenbone_target",
+        "tasks_from": "health",
+        "extra_vars": v,
+        "env": env,
+        "setup": {"state": state},
+    }
+
+
+@first_run(_first)
+def test_greenbone_target_health(first):
+    r, _ = first
+    state = first.setup["state"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(state.read_text())["calls"] == ["<get_version/>"]
