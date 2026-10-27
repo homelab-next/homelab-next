@@ -1,0 +1,46 @@
+{
+  "swap_id": "inference-rebind-fast-classifier",
+  "from_module": "example-inference",
+  "to_module": "other-inference",
+  "slots": [
+    {
+      "slot": "inference",
+      "instance": "inference"
+    }
+  ],
+  "route": {
+    "selection_diff": [
+      {
+        "slot": "inference",
+        "instance": "inference",
+        "from": "example-inference",
+        "to": "other-inference"
+      }
+    ]
+  },
+  "dependants": {
+    "report": [],
+    "blocked": []
+  },
+  "start_empty": {
+    "reason": "an inference engine keeps no data: the weights come from the model store",
+    "decided_by": "platform-team"
+  },
+  "model_roles": [
+    {
+      "slot": "inference",
+      "instance": "inference",
+      "role": "fast-classifier",
+      "from": {
+        "pin": "sha256:5b90c1b7125654ec11dbd79003300fb9a9a12cc322537c0359e76d3991f81ce3"
+      },
+      "to": {
+        "pin": "sha256:d24d2315281d684f2f1c5625fbffff166e54da0b778f857d65e1f9d9f38d5a07"
+      },
+      "evaluation": {
+        "report": "sha256:7b76ce0b1ad301b6f05a04bba96d0c418fd810370cc2c89516d7559a502c0e57",
+        "require_live": true
+      }
+    }
+  ]
+}
