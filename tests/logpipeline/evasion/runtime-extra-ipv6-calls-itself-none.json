@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "runtime-extra-ipv6-calls-itself-none",
+  "description": "a model runtime sends from its second (IPv6) address, not network.ip, and says it runs no model",
+  "observed": "2001:db8:0:82::8c",
+  "event": {
+    "message": "hnx-egress-drop: IN= OUT=eth0 PROTO=TCP DPT=443",
+    "labels": {
+      "hnx_runtime": "none"
+    }
+  },
+  "label": "model",
+  "rule": "model-runtime-egress-drop",
+  "fires": true
+}

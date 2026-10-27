@@ -219,7 +219,7 @@ def test_committed_example_table_matches_the_example_guests():
 def test_example_table_labels_the_model_runtime_and_nothing_else():
     table = RuntimeTable.load(EXAMPLE)
     models = {a for a, v in table.values.items() if v == "model"}
-    assert models == {"192.0.2.140"}
+    assert models == {"192.0.2.140", "2001:db8:0:82::8c"}  # network.ip and its extra address
     assert set(table.values.values()) == {"model", "none"}
 
 

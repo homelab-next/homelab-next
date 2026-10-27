@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import inspect
+import ipaddress
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -105,7 +106,17 @@ class ScopeDenied(Exception):
 
 
 def _norm(ref: str) -> str:
-    return ref.strip().lower().rstrip(".")
+    """A name lower-cased without its trailing dot; an IP address in its one canonical spelling
+    (IPv6 compressed, an IPv4-mapped one as its IPv4 address), so a longer spelling of an address
+    resolves to the same target."""
+    text = ref.strip().lower().rstrip(".")
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return text
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 class ScopeGuard:
@@ -266,7 +277,7 @@ def targets_from_fleet(fleet: Any) -> list[Target]:
     """Targets for every guest of a ``homelabnext.compute.Fleet``."""
     out = []
     for g in fleet.sorted():
-        aliases = [g.name, fleet.fqdn(g), g.ip]
+        aliases = [g.name, fleet.fqdn(g), *g.addresses]  # network.ip and every extra address
         if g.vmid is not None:
             aliases.append(f"vmid:{g.vmid}")
         out.append(

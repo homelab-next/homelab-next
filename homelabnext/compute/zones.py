@@ -25,6 +25,10 @@ class MappingZones:
     def zone(self, zone_id: str) -> ZoneInfo | None:
         return self._zones.get(zone_id)
 
+    def all(self) -> list[ZoneInfo]:
+        """Every zone (optional beside ``zone``: a lookup without it is asked by id only)."""
+        return list(self._zones.values())
+
 
 def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
     """Build a ZoneInfo from a site-model style zone mapping (id, subnet, gateway, dhcp.range)."""
@@ -92,6 +96,12 @@ class SiteAdapter:
             elif zs is not None:
                 found = next((z for z in zs if self._get(z, "id") == zone_id), None)
         return None if found is None else self._convert(found)
+
+    def all(self) -> list[ZoneInfo]:
+        """Every zone the site's ``zones`` collection holds (none when it offers only ``zone``)."""
+        zs = getattr(self._site, "zones", None)
+        items = zs.values() if isinstance(zs, Mapping) else (zs or ())
+        return [self._convert(z) for z in items]
 
 
 def _site_error(exc: Exception) -> ComputeError:

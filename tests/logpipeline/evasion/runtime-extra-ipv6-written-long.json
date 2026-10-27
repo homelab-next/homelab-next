@@ -1,0 +1,18 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "runtime-extra-ipv6-written-long",
+  "description": "the collector writes a model runtime's second address uncompressed, zero-padded and partly upper-case; it is the same address",
+  "observed": "2001:db8:0000:0082:0000:0000:0000:008C",
+  "event": {
+    "dns": {
+      "question": {
+        "name": "example-bucket.storage.googleapis.com"
+      }
+    },
+    "labels.hnx_runtime": "none"
+  },
+  "label": "model",
+  "rule": "model-runtime-object-store-lookup",
+  "fires": true
+}

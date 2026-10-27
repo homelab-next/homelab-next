@@ -22,6 +22,11 @@
       "value": "model",
       "guest": "guest:infer-core",
       "capability": "cap:inference"
+    },
+    "2001:db8:0:82::8c": {
+      "value": "model",
+      "guest": "guest:infer-core",
+      "capability": "cap:inference"
     }
   }
 }

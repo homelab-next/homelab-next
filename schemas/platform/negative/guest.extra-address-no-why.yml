@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:infer-box
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 240}
+resources:
+  cpu: {cores: 8}
+  memory: {size_mb: 32768}
+  disks: [{name: rootfs, size_gb: 40, pool: fast}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network:
+  zone: compute
+  ip: 198.51.100.140
+  extra_addresses:
+    - {address: "2001:db8:0:82::8c"}
+capability: cap:inference
+owners: {primary: ml-team}

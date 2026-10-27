@@ -298,10 +298,20 @@ def test_targets_from_fleet_reads_scope_vmid_tags_and_aliases(tmp_path):
     p = d / "infer-core.yml"
     doc = yaml.safe_load(p.read_text())
     doc["scope"] = "out"
+    doc["network"]["extra_addresses"] = [{"address": "2001:db8::82", "why": "its IPv6 address"}]
     p.write_text(yaml.safe_dump(doc, sort_keys=False))
     fleet = load_fleet(d, ZONES)
-    g = ScopeGuard(targets_from_fleet(fleet), ScopePolicy(vmid_threshold=200))
-    for ref in ("guest:infer-core", "infer-core", "infer-core.example.internal", "198.51.100.130"):
+    g = ScopeGuard(targets_from_fleet(fleet), ScopePolicy(vmid_threshold=200, unknown="allow"))
+    refs = (
+        "guest:infer-core",
+        "infer-core",
+        "infer-core.example.internal",
+        "198.51.100.130",
+        "::ffff:198.51.100.130",  # the same address as a dual-stack listener writes it
+        "2001:db8::82",  # an extra address (guest 1.6) is the guest too
+        "2001:db8:0000:0000:0000:0000:0000:0082",  # in any spelling
+    )
+    for ref in refs:
         assert g.in_scope(ref).code == "explicit-out", ref
     assert g.in_scope("lake-core").allow
     by_vmid = next(t for t in targets_from_fleet(fleet) if t.vmid == 140)

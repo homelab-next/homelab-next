@@ -166,6 +166,18 @@ class Guest:
         return self.raw["network"]["ip"]
 
     @property
+    def extra_addresses(self) -> tuple[str, ...]:
+        """(guest 1.6) The other addresses the guest sends from, as written; validation holds
+        each to a canonical bare address (:func:`homelabnext.compute.validate`)."""
+        return tuple(str(a["address"]) for a in self.raw["network"].get("extra_addresses", ()))
+
+    @property
+    def addresses(self) -> tuple[str, ...]:
+        """``network.ip`` first, then ``network.extra_addresses``: every address the guest sends
+        from that the guest model knows."""
+        return (self.ip, *self.extra_addresses)
+
+    @property
     def zone(self) -> str:
         return self.raw["network"]["zone"]
 
