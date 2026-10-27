@@ -368,8 +368,8 @@ jobs:
   # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the
   # thing being avoided.  A pull_request run still takes this workflow file (and the constraints
   # its dependencies come from) from the change, so the guarantee rests on both being
-  # human-approve (CODEOWNERS, hnx modules review-tier); never pull_request_target.  Bootstrap: a
-  # base whose code has no swap-gate yet runs the change's own and says so.
+  # human-approve (CODEOWNERS, hnx modules review-tier); the privileged pull-request trigger is never
+  # used.  Bootstrap: a base whose code has no swap-gate yet runs the change's own and says so.
   trusted-gates:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -381,6 +381,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
+          extras: core  # the checker's own imports (YAML, JSON Schema); the project itself is not installed
           install-project: "false"
       - name: the base commit, checked out apart as the checker
         id: base
