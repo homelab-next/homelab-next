@@ -4,7 +4,9 @@
 ``hnx golden pins check``  every binding is pinned, every role is evaluated, and the stored
                            evaluation report is current and passing, with a valid egress canary
                            for every binding (a fake report must also reproduce exactly);
-                           ``--require-live`` also fails a canary that ran against the fake.
+                           ``--require-live`` also fails a canary that ran against the fake,
+                           and without it a table other than the shipped example whose
+                           canaries are all fake fails.
                            Exit 0 pass, 1 fail.
 ``hnx golden pins report`` (re)generate the evaluation report: against the deterministic fake by
                            default, or live (``--registry``) through the model-role resolver.
@@ -122,6 +124,8 @@ def _pins(args: argparse.Namespace) -> int:
         print(f"golden pins: cannot read {args.report}: {exc}", file=sys.stderr)
         return 1
     problems = pins.check_report(stored, table, suites, require_live=args.require_live)
+    if not args.require_live and (guard := pins.fake_canary_on_a_real_table(stored, table)):
+        problems.append(guard)
     model = stored.get("model", {}).get("name") if isinstance(stored, dict) else None
     if not problems and model == "fake-golden":
         fresh = pins.run_eval(table, suites, pins.fake_factory, model_name="fake-golden")

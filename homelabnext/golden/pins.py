@@ -359,6 +359,8 @@ def _entry_problems(e: Any, pin: dict, params: dict, suite: Any) -> list[str]:
             shape.append(f"canary task {tid}: {n} samples, the suite asks for {suite.samples}")
         elif not 0 <= f <= n:
             shape.append(f"canary task {tid}: {f} failed of {n} samples")
+        else:
+            shape += [f"canary task {tid}: {p}" for p in _task_problems(t, f)]
     if shape:
         return out + shape
     s = cn.summarise(tasks)
@@ -370,6 +372,62 @@ def _entry_problems(e: Any, pin: dict, params: dict, suite: Any) -> list[str]:
             "not be bound (hnx golden canary for the findings)"
         )
     return out
+
+
+def _task_problems(t: Mapping[str, Any], failed: int) -> list[str]:
+    """A task's finding counts and kept failures agree with its ``failed`` count (a sample's
+    kinds are counted once per sample, and the first failing samples are kept in full)."""
+    from .canary import KEEP_FAILURES
+
+    found, kept = t["findings"], t.get("failures")
+    if not isinstance(kept, list):
+        return ["failures: not a list"]
+    out = []
+    if failed == 0:
+        if found:
+            out.append("findings counted, but no sample failed")
+        if kept:
+            out.append("failing samples kept, but no sample failed")
+        return out
+    if not found:
+        out.append(f"{failed} failed, but no finding is counted")
+    bad = sorted(k for k, n in found.items() if not (isinstance(n, int) and 1 <= n <= failed))
+    if bad:
+        out.append(f"finding counts out of range 1..{failed}: {', '.join(map(str, bad))}")
+    if len(kept) != min(failed, KEEP_FAILURES):
+        out.append(
+            f"{len(kept)} failing samples kept for {failed} failed "
+            f"(expected {min(failed, KEEP_FAILURES)})"
+        )
+    elif not all(isinstance(k, Mapping) and (k.get("findings") or k.get("error")) for k in kept):
+        out.append("a kept failing sample names no finding and no error")
+    return out
+
+
+#: the shipped example role table: its pins mark a report as the repository's own CI example
+EXAMPLE_ROLES = Path(__file__).resolve().parents[2] / "examples" / "model_roles.json"
+
+
+def fake_canary_on_a_real_table(report: Any, table: RoleTable) -> str | None:
+    """A problem when the table is not the shipped example (its pins differ) and every canary
+    entry in the report ran against the fake: a real lab's check then proves nothing about its
+    models, so it must check a live report with ``--require-live``.  None otherwise."""
+    if not EXAMPLE_ROLES.is_file() or RoleTable.load(EXAMPLE_ROLES).pins() == table.pins():
+        return None
+    canary = report.get("canary") if isinstance(report, Mapping) else None
+    entries = [
+        e
+        for c in (canary.values() if isinstance(canary, Mapping) else ())
+        if isinstance(c, Mapping) and isinstance(c.get("bindings"), list)
+        for e in c["bindings"]
+    ]
+    if entries and all(isinstance(e, Mapping) and e.get("mode") == "fake" for e in entries):
+        return (
+            "this role table is not the shipped example, and every egress canary in the report "
+            "ran against the fake; run the evaluation live (make models-eval) and check that "
+            "report with --require-live (MODELS_CHECK_FLAGS=--require-live)"
+        )
+    return None
 
 
 def load_report(path: str | Path) -> Any:
