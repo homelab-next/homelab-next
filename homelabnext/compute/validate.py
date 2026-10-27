@@ -180,11 +180,13 @@ def model_runtime(g: Guest) -> str | None:
     return None
 
 
-def today() -> dt.date:
-    """The date reviews are judged against: ``HNX_TODAY`` (YYYY-MM-DD) when set, so a test or a
-    replay is deterministic, else the local date."""
+def today(now: dt.date | None = None) -> dt.date:
+    """The date reviews are judged against: ``now`` when given, else ``HNX_TODAY`` (YYYY-MM-DD)
+    when set, so a test or a replay is deterministic, else the local date."""
     raw = os.environ.get("HNX_TODAY")
-    return dt.date.fromisoformat(raw) if raw else dt.date.today()
+    if now is None and raw:
+        now = dt.date.fromisoformat(raw)
+    return now or dt.date.today()
 
 
 def _review_date(raw: Any) -> dt.date | None:
