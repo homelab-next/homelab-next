@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from rolerun import first_run
 
 from tests.suite_policy import require_tool
 
@@ -78,8 +79,18 @@ def svc_vars(tmp_path, **kw):
     return d
 
 
-def test_example_service_main_renders_with_registry_lookup(tmp_path):
-    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path))
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": svc_vars(tmp_path),
+    }
+
+
+@first_run(_first)
+def test_example_service_main_renders_with_registry_lookup(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     cfg = yaml.safe_load((tmp_path / "etc" / "config.yml").read_text())
     assert cfg["dependencies"] == [
@@ -102,8 +113,18 @@ def unit_directives(path):
     return out
 
 
-def test_example_service_unit_runs_unprivileged_and_sandboxed(tmp_path):
-    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path))
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": svc_vars(tmp_path),
+    }
+
+
+@first_run(_first)
+def test_example_service_unit_runs_unprivileged_and_sandboxed(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     d = unit_directives(tmp_path / "etc" / "example-service.service")
     assert d["User"] == ["example-service"] and d["Group"] == ["example-service"]
@@ -133,28 +154,43 @@ def test_example_service_unit_runs_unprivileged_and_sandboxed(tmp_path):
         {"example_service_listen_port": 80},
     ],
 )
-def test_example_service_refuses_values_that_would_rewrite_the_unit(tmp_path, over):
-    r = run_role(tmp_path, "example_service", "main", svc_vars(tmp_path, **over))
-    assert r.returncode != 0
+@first_run(lambda tmp, over: {"runner": run_role, "role": "example_service", "tasks_from": "main",
+                               "extra_vars": svc_vars(tmp, **over)})  # fmt: skip
+def test_example_service_refuses_values_that_would_rewrite_the_unit(first, over):
+    r, tmp_path = first
+    assert r.returncode != 0, over
     assert not (tmp_path / "etc" / "example-service.service").exists()
 
 
-def test_example_service_config_values_are_quoted(tmp_path):
-    r = run_role(
-        tmp_path, "example_service", "main", svc_vars(tmp_path, example_service_version="1.0: x")
-    )
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": svc_vars(tmp_path, example_service_version="1.0: x"),
+    }
+
+
+@first_run(_first)
+def test_example_service_config_values_are_quoted(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     cfg = yaml.safe_load((tmp_path / "etc" / "config.yml").read_text())
     assert cfg["version"] == "1.0: x" and cfg["service_id"] == "example-service"
 
 
-def test_example_service_unknown_dependency_fails(tmp_path):
-    r = run_role(
-        tmp_path,
-        "example_service",
-        "main",
-        svc_vars(tmp_path, example_service_dependencies=["nope"]),
-    )
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": svc_vars(tmp_path, example_service_dependencies=["nope"]),
+    }
+
+
+@first_run(_first)
+def test_example_service_unknown_dependency_fails(first):
+    r, _ = first
     assert r.returncode != 0
     assert "unknown service id 'nope'" in r.stdout + r.stderr
 
@@ -167,19 +203,37 @@ def test_example_service_missing_required_input_fails(tmp_path):
     assert "example_service_logical_id" in r.stdout + r.stderr
 
 
-def test_example_service_wrong_type_rejected_by_argument_specs(tmp_path):
-    r = run_role(
-        tmp_path,
-        "example_service",
-        "main",
-        svc_vars(tmp_path, example_service_listen_port="not-a-port"),
-    )
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": svc_vars(tmp_path, example_service_listen_port="not-a-port"),
+    }
+
+
+@first_run(_first)
+def test_example_service_wrong_type_rejected_by_argument_specs(first):
+    r, _ = first
     assert r.returncode != 0
 
 
-def test_example_service_hooks_backup_upgrade_export_restore(tmp_path):
+def _first(tmp_path):
     v = svc_vars(tmp_path)
-    assert run_role(tmp_path, "example_service", "main", v).returncode == 0
+    return {
+        "runner": run_role,
+        "role": "example_service",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_example_service_hooks_backup_upgrade_export_restore(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     (tmp_path / "data" / "f.txt").write_text("payload")
     r = run_role(tmp_path, "example_service", "backup", v)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -269,16 +323,36 @@ def app_vars(tmp_path, s=None, **kw):
     return d
 
 
-def test_compose_app_renders_golden_byte_identical(tmp_path):
-    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path))
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path),
+    }
+
+
+@first_run(_first)
+def test_compose_app_renders_golden_byte_identical(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     out = (tmp_path / "app" / "docker-compose.yml").read_bytes()
     assert out == (GOLDEN / "compose_app.docker-compose.yml").read_bytes()
 
 
-def test_compose_app_output_passes_docker_compose_config(tmp_path):
+def _first(tmp_path):
     require_tool("docker", docker_compose_ok)
-    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path))
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path),
+    }
+
+
+@first_run(_first)
+def test_compose_app_output_passes_docker_compose_config(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     c = subprocess.run(
         [
@@ -303,14 +377,19 @@ def test_compose_app_output_passes_docker_compose_config(tmp_path):
     assert cfg["services"]["web"]["depends_on"]["db"]["condition"] == "service_healthy"
 
 
-def test_compose_app_optional_fields_render_valid_yaml(tmp_path):
+def _first(tmp_path):
     s = spec(command=["serve", "--port", "80"], user=1000, env_file=["app.env"])
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    }
+
+
+@first_run(_first)
+def test_compose_app_optional_fields_render_valid_yaml(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     assert doc["services"]["web"]["command"] == ["serve", "--port", "80"]
@@ -416,46 +495,53 @@ REJECTED = {
 }
 
 
-@pytest.mark.parametrize("case", sorted(REJECTED))
-def test_compose_app_rejects_spec_violation(tmp_path, case):
+def _rejected(tmp, case):
     s = spec()
     REJECTED[case](s)
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+    v = app_vars(tmp, s, compose_app_validate_with_docker=False)
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
+@pytest.mark.parametrize("case", sorted(REJECTED))
+@first_run(_rejected)
+def test_compose_app_rejects_spec_violation(first, case):
+    r, tmp_path = first
     assert r.returncode != 0, case
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
+def _one_volume(tmp, vol):
+    v = app_vars(tmp, spec(volumes=[vol]), compose_app_validate_with_docker=False)
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
 @pytest.mark.parametrize("vol", ["${X:-/}:/host", "~:/home"])
-def test_compose_app_names_the_interpolation_rule_when_it_refuses(tmp_path, vol):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
-    )
-    assert r.returncode != 0
+@first_run(_one_volume)
+def test_compose_app_names_the_interpolation_rule_when_it_refuses(first, vol):
+    r, _ = first
+    assert r.returncode != 0, vol
     assert "has a refused bind source" in r.stdout + r.stderr
 
 
-def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path):
-    """compose interpolates `$` in every value from the environment of whoever runs `compose up`;
-    the template writes `$$`, so the container gets exactly the text of the spec."""
+def _first(tmp_path):
     s = spec(
         environment={"MODE": "${HOME}", "COUNT": "$X"},
         command=["sh", "-c", "echo $PATH ${Y:-/}"],
     )
     s["services"]["web"]["healthcheck"]["test"] = ["CMD-SHELL", 'test -n "$HOSTNAME"']
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    }
+
+
+@first_run(_first)
+def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(first):
+    """compose interpolates `$` in every value from the environment of whoever runs `compose up`;
+    the template writes `$$`, so the container gets exactly the text of the spec."""
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     web = services_of(tmp_path)["web"]
     assert web["environment"] == {"COUNT": "$$X", "MODE": "$${HOME}"}
@@ -479,10 +565,7 @@ def test_compose_app_writes_every_dollar_so_compose_reads_it_literally(tmp_path)
     assert got["healthcheck"]["test"] == ["CMD-SHELL", 'test -n "$$HOSTNAME"']
 
 
-def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
-    """Relative sources, named and anonymous volumes, paths under the bind roots and listed paths
-    (hidden directories and the listed secrets directory included) pass the allow-list, the
-    canonical-source and the runtime rules."""
+def _first(tmp_path):
     data = tmp_path / "app" / "data"
     vols = [
         "./secrets:/run/app-secrets:ro",
@@ -500,15 +583,27 @@ def test_compose_app_accepts_ordinary_bind_sources(tmp_path):
         {"path": "/run/systemd/journal", "reason": "the journal socket, read-only"},
         {"path": str(tmp_path / "app" / "secrets"), "reason": "fictional: reads its own env files"},
     ]
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(
-            tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path,
+            spec(volumes=vols),
+            compose_app_validate_with_docker=False,
             compose_app_bind_extra=extra,
         ),
-    )  # fmt: skip
+        "setup": {"vols": vols},
+    }
+
+
+@first_run(_first)
+def test_compose_app_accepts_ordinary_bind_sources(first):
+    """Relative sources, named and anonymous volumes, paths under the bind roots and listed paths
+    (hidden directories and the listed secrets directory included) pass the allow-list, the
+    canonical-source and the runtime rules."""
+    r, tmp_path = first
+    vols = first.setup["vols"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert services_of(tmp_path)["web"]["volumes"] == vols
 
@@ -529,14 +624,10 @@ OUTSIDE_THE_ROOTS = [
 
 
 @pytest.mark.parametrize("vol", OUTSIDE_THE_ROOTS)
-def test_compose_app_refuses_a_host_path_outside_the_bind_roots(tmp_path, vol):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
-    )
-    assert r.returncode != 0
+@first_run(_one_volume)
+def test_compose_app_refuses_a_host_path_outside_the_bind_roots(first, vol):
+    r, tmp_path = first
+    assert r.returncode != 0, vol
     assert "a host path outside the allowed roots" in r.stdout + r.stderr
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
@@ -547,46 +638,67 @@ def refused_sources(r):
     return out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
 
 
-def test_compose_app_env_file_paths_follow_the_bind_source_rule(tmp_path):
-    """compose reads an env_file on the deploy host and hands it to the container: it used to be
-    any string, so /etc/shadow or another application's secrets were accepted."""
+def _first(tmp_path):
     other = str(tmp_path / "other-app" / "secrets" / "db.env")
     ok = ["app.env", "./conf/web.env", f"{tmp_path / 'app' / 'data'}/web.env"]
     s = spec(env_file=[*ok, "/etc/shadow", other])
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+        "setup": {"other": other},
+    }
+
+
+@first_run(_first)
+def test_compose_app_env_file_paths_follow_the_bind_source_rule(first):
+    """compose reads an env_file on the deploy host and hands it to the container: it used to be
+    any string, so /etc/shadow or another application's secrets were accepted."""
+    r, tmp_path = first
+    other = first.setup["other"]
     assert refused_sources(r) == ["env_file=/etc/shadow", f"env_file={other}"]
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_compose_app_refuses_the_app_directory_and_its_secrets_unless_listed(tmp_path):
-    """`.` and secrets/ hold every service's 0600 env file: any service could mount them all."""
+def _first(tmp_path):
     d = tmp_path / "app"
     vols = [".:/src:ro", "./secrets:/s", f"{d}/secrets:/s2", f"{d}:/app", "./secrets/db.env:/e"]
     s = spec(volumes=vols, env_file=["secrets/db.env", "./secrets/db.env"])
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, s, compose_app_validate_with_docker=False),
-    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+        "setup": {"d": d},
+    }
+
+
+@first_run(_first)
+def test_compose_app_refuses_the_app_directory_and_its_secrets_unless_listed(first):
+    """`.` and secrets/ hold every service's 0600 env file: any service could mount them all."""
+    r, _ = first
+    d = first.setup["d"]
     want = [".", "./secrets", f"{d}/secrets", str(d), "./secrets/db.env"]
     assert refused_sources(r) == [*want, "env_file=secrets/db.env", "env_file=./secrets/db.env"]
 
 
-def test_compose_app_bind_root_is_a_directory_boundary(tmp_path):
+def _first(tmp_path):
     # a sibling whose name only starts like the data root is outside it
     vol = f"{tmp_path / 'app'}-other:/x"
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False),
-    )
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path, spec(volumes=[vol]), compose_app_validate_with_docker=False
+        ),
+    }
+
+
+@first_run(_first)
+def test_compose_app_bind_root_is_a_directory_boundary(first):
+    r, _ = first
     assert r.returncode != 0
     assert "outside the allowed roots" in r.stdout + r.stderr
 
@@ -605,14 +717,12 @@ def test_compose_app_bind_root_is_a_directory_boundary(tmp_path):
     ],
     ids=["var", "root", "etc", "relative", "docker", "no reason", "short reason", "etc listed"],
 )
-def test_compose_app_refuses_a_bind_root_or_listing_that_is_too_wide(tmp_path, over):
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(tmp_path, compose_app_validate_with_docker=False, **over),
-    )
-    assert r.returncode != 0
+@first_run(lambda tmp, over: {"runner": run_role, "role": "compose_app", "tasks_from": "main",
+                               "extra_vars": app_vars(tmp, compose_app_validate_with_docker=False,
+                                                      **over)})  # fmt: skip
+def test_compose_app_refuses_a_bind_root_or_listing_that_is_too_wide(first, over):
+    r, _ = first
+    assert r.returncode != 0, over
     assert "compose_app_bind_roots must be" in r.stdout + r.stderr
 
 
@@ -620,9 +730,19 @@ def services_of(tmp_path):
     return yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
 
 
-def test_compose_app_hardening_defaults(tmp_path):
+def _first(tmp_path):
     s = spec(cap_add=["NET_BIND_SERVICE"], read_only=True, mem_limit="256m", user="1000:1000")
-    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, s))
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s),
+    }
+
+
+@first_run(_first)
+def test_compose_app_hardening_defaults(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     svcs = services_of(tmp_path)
     for svc in svcs.values():
@@ -646,17 +766,17 @@ def test_compose_app_hardening_defaults(tmp_path):
         ({"user": "root"}, "compose_app_allow_root"),
     ],
 )
-def test_compose_app_escape_hatches_need_their_explicit_flag(tmp_path, over, flag):
-    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, spec(**over), **{flag: True}))
+@first_run(lambda tmp, over, flag: {"runner": run_role, "role": "compose_app", "tasks_from": "main",
+                                     "extra_vars": app_vars(tmp, spec(**over), **{flag: True})})  # fmt: skip
+def test_compose_app_escape_hatches_need_their_explicit_flag(first, over, flag):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     web = services_of(tmp_path)["web"]
     for k, v in over.items():
         assert web[k] == v
 
 
-def test_compose_app_docker_socket_flag_unlocks_only_the_socket(tmp_path):
-    """The flag used to pass every source the runtime pattern matched: host root, /var, /run,
-    any path holding docker.sock. Only the socket itself passes now."""
+def _first(tmp_path):
     refused = ["/", "/var", "/var/lib/docker", "/run/user/1000", "/root/docker.sock"]
     vols = ["/var/run/docker.sock:/var/run/docker.sock"] + [
         f"{v}:/m{i}" for i, v in enumerate(refused)
@@ -665,33 +785,75 @@ def test_compose_app_docker_socket_flag_unlocks_only_the_socket(tmp_path):
         tmp_path, spec(volumes=vols), compose_app_validate_with_docker=False,
         compose_app_allow_docker_socket=True,
     )  # fmt: skip
-    r = run_role(tmp_path, "compose_app", "main", v)
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"refused": refused},
+    }
+
+
+@first_run(_first)
+def test_compose_app_docker_socket_flag_unlocks_only_the_socket(first):
+    """The flag used to pass every source the runtime pattern matched: host root, /var, /run,
+    any path holding docker.sock. Only the socket itself passes now."""
+    r, _ = first
+    refused = first.setup["refused"]
     assert r.returncode != 0
     out = r.stdout + r.stderr
     listed = out.split("outside the allowed roots (", 1)[1].split(")", 1)[0].split()
     assert listed == refused
 
 
+def _root_group(tmp, user, ok):
+    v = app_vars(
+        tmp, spec(user=user), compose_app_validate_with_docker=False,
+        compose_app_allow_root_group=True,
+    )  # fmt: skip
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
 @pytest.mark.parametrize(
     ("user", "ok"), [("1000:0", True), ("1000:root", True), ("0:0", False), ("00", False)]
 )
-def test_compose_app_root_group_alone_has_its_own_flag(tmp_path, user, ok):
-    v = app_vars(
-        tmp_path, spec(user=user), compose_app_validate_with_docker=False,
-        compose_app_allow_root_group=True,
-    )  # fmt: skip
-    assert (run_role(tmp_path, "compose_app", "main", v).returncode == 0) is ok
+@first_run(_root_group)
+def test_compose_app_root_group_alone_has_its_own_flag(first, user, ok):
+    r, _ = first
+    assert (r.returncode == 0) is ok, user
 
 
-def test_compose_app_dropping_no_new_privileges_needs_the_flag(tmp_path):
-    r = run_role(tmp_path, "compose_app", "main", app_vars(tmp_path, compose_app_security_opt=[]))
+def _first(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, compose_app_security_opt=[]),
+    }
+
+
+@first_run(_first)
+def test_compose_app_dropping_no_new_privileges_needs_the_flag(first):
+    r, _ = first
     assert r.returncode != 0
 
 
-def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(tmp_path):
+def _first(tmp_path):
     secret = "fake-s3cr3t-$HOME-value"  # a $ must reach the container literally
     v = app_vars(tmp_path, compose_app_secret_env={"db": {"POSTGRES_PASSWORD": secret}})
-    r = run_role(tmp_path, "compose_app", "main", v)
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"secret": secret},
+    }
+
+
+@first_run(_first)
+def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(first):
+    r, tmp_path = first
+    secret = first.setup["secret"]
     assert r.returncode == 0, r.stdout + r.stderr
     assert secret not in r.stdout + r.stderr
     compose_yml = (tmp_path / "app" / "docker-compose.yml").read_text()
@@ -714,9 +876,10 @@ def test_compose_app_secrets_go_to_a_0600_env_file_not_compose_yml(tmp_path):
         {"db": {"POSTGRES_PASSWORD_FILE": "fake-never-echoed-3"}},  # already in environment
     ],
 )
-def test_compose_app_rejects_bad_secret_env_without_echoing_it(tmp_path, secret_env):
-    v = app_vars(tmp_path, compose_app_secret_env=secret_env)
-    r = run_role(tmp_path, "compose_app", "main", v)
+@first_run(lambda tmp, secret_env: {"runner": run_role, "role": "compose_app", "tasks_from": "main",
+                                     "extra_vars": app_vars(tmp, compose_app_secret_env=secret_env)})  # fmt: skip
+def test_compose_app_rejects_bad_secret_env_without_echoing_it(first, secret_env):
+    r, tmp_path = first
     assert r.returncode != 0
     for vals in secret_env.values():
         for val in vals.values():
@@ -724,38 +887,69 @@ def test_compose_app_rejects_bad_secret_env_without_echoing_it(tmp_path, secret_
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
-def test_compose_app_placeholder_digest_allowed_only_when_flagged(tmp_path):
+def _first(tmp_path):
     s = spec(digest=ZERO)
-    r = run_role(
-        tmp_path,
-        "compose_app",
-        "main",
-        app_vars(
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
             tmp_path,
             s,
             compose_app_validate_with_docker=False,
             compose_app_allow_placeholder_digest=True,
         ),
-    )
+    }
+
+
+@first_run(_first)
+def test_compose_app_placeholder_digest_allowed_only_when_flagged(first):
+    r, _ = first
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_compose_app_backup_manifest_lists_bind_sources(tmp_path):
+def _first(tmp_path):
     # an anonymous volume (a container path alone) has no host source: accepted, as on main
     # before the bind allow-list, and not a path to back up
     s = spec()
     s["services"]["db"]["volumes"] = ["/var/lib/postgresql/data"]
     v = app_vars(tmp_path, s)
-    assert run_role(tmp_path, "compose_app", "main", v).returncode == 0
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_compose_app_backup_manifest_lists_bind_sources(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     r = run_role(tmp_path, "compose_app", "backup", v)
     assert r.returncode == 0, r.stdout + r.stderr
     m = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
     assert m["paths"] == sorted({str(tmp_path / "app" / "data"), "/srv/shared"})
 
 
-def test_compose_app_export_and_restore(tmp_path):
+def _first(tmp_path):
     v = app_vars(tmp_path)
-    assert run_role(tmp_path, "compose_app", "main", v).returncode == 0
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_compose_app_export_and_restore(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     (tmp_path / "app" / "data" / "x").write_text("1")
     assert run_role(tmp_path, "compose_app", "export", v).returncode == 0
     assert (tmp_path / "export" / "demo-app.tar.gz").exists()
@@ -771,9 +965,22 @@ def test_compose_app_export_and_restore(tmp_path):
     assert (tmp_path / "app" / "data" / "y").read_text() == "2"
 
 
-def test_compose_app_upgrade_hook_validates_pin(tmp_path):
+def _first(tmp_path):
     v = app_vars(tmp_path)
-    assert run_role(tmp_path, "compose_app", "main", v).returncode == 0
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"v": v},
+    }
+
+
+@first_run(_first)
+def test_compose_app_upgrade_hook_validates_pin(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
     up = {
         **v,
         "compose_app_upgrade_service": "web",
