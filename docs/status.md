@@ -440,7 +440,8 @@ services with their descriptions (service registry 2.4 `description`), its power
 inherited from its hypervisor) and its data flow as IN and OUT lines. "Show Power" draws a dotted
 line from each UPS to what it feeds. "Show Data Flows" draws curved arrows between cards (and zone lanes): the
 dataflow model's flows split at their transport's host, the registry's `upstreams`, each guest's
-`firewall_rules` (a /32 that is a guest's address is that guest, `any` is the internet) and the
+`firewall_rules` (a single-address CIDR, /32 or /128, at any of a guest's addresses is that
+guest, `any` is the internet) and the
 site's service exceptions; an arrow with a planned end is dashed, one with a retired end is not
 drawn; a selected card highlights its own flows and dims the rest. The toolbar filters by host,
 address, service or type (Ctrl+F focuses it, Esc clears), resets the view, and switches between

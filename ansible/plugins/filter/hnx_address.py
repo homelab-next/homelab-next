@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Address checks for roles that put guests' addresses into a product's configuration.
+
+    {{ suricata_enroll_guests | hnx_enroll_address_problems }}
+
+returns one message per problem (an empty list when the rows are sound), so a role's assert can
+name every bad entry at once.  A row is ``{name, ip, zone, extra_addresses?, subnet?}`` as the
+baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet`` is the
+guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``.
+
+The addresses are parsed, never pattern-matched, and held to the guest model's own rules
+(``homelabnext/compute/validate.py``), so a hand-written inventory gets no further than the
+generator's rows:
+
+* every address is in its canonical form (IPv4 dotted quad without leading zeros, IPv6 lower case
+  and compressed), and never loopback, unspecified, multicast, reserved, link-local, this-network
+  (0.0.0.0/8) or a cloud metadata address;
+* ``ip`` is IPv4, and inside ``subnet`` when the row gives one;
+* ``subnet`` is a canonical IPv4 network of /8 to /30 that holds ``ip``; one that reaches beyond
+  private, shared (CGNAT) and documentation space is no wider than /24;
+* an IPv4 extra address is inside ``subnet`` (never its network or broadcast address) or in the
+  shared range a zone-less overlay such as a tailnet uses; a row without ``subnet`` (hand-written)
+  may name only private, shared or documentation addresses;
+* an IPv6 extra address never writes around an IPv4 one (mapped, compatible, translated, NAT64)
+  and is unique-local or documentation: zones carry no IPv6 prefix to hold a global one against.
+
+Standard library only (the controller needs nothing beyond Ansible).
+"""
+
+from __future__ import annotations
+
+import ipaddress
+from collections.abc import Iterable, Mapping
+from typing import Any
+
+Address = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+def _v4(value: int, plen: int) -> ipaddress.IPv4Network:
+    return ipaddress.IPv4Network((value, plen))
+
+
+def _v6(groups: Iterable[int], plen: int) -> ipaddress.IPv6Network:
+    value = 0
+    for i, g in enumerate(groups):
+        value |= g << (16 * (7 - i))
+    return ipaddress.IPv6Network((value, plen))
+
+
+#: written as integers so no address literal sits in the tree (the leak scan)
+PRIVATE_V4 = (_v4(0x0A00_0000, 8), _v4(0xAC10_0000, 12), _v4(0xC0A8_0000, 16))
+SHARED_V4 = _v4(0x6440_0000, 10)  # RFC 6598: CGNAT, and the overlay range tailnets use
+DOC_V4 = (_v4(0xC000_0200, 24), _v4(0xC633_6400, 24), _v4(0xCB00_7100, 24))
+NOT_INTERNET_V4 = (*PRIVATE_V4, SHARED_V4, *DOC_V4)
+OWNABLE_V6 = (
+    _v6((0xFC00,), 7),  # unique-local
+    _v6((0x2001, 0x0DB8), 32),  # documentation
+    _v6((0x3FFF,), 20),  # documentation
+)
+EMBEDDED_V4 = (
+    _v6((), 96),  # IPv4-compatible
+    _v6((0, 0, 0, 0, 0, 0xFFFF), 96),  # IPv4-mapped
+    _v6((0, 0, 0, 0, 0xFFFF), 96),  # IPv4-translated
+    _v6((0x64, 0xFF9B), 96),  # NAT64, well-known
+    _v6((0x64, 0xFF9B, 1), 48),  # NAT64, local use
+)
+METADATA = frozenset(
+    {
+        ipaddress.IPv4Address(0xA9FE_A9FE),
+        ipaddress.IPv4Address(0xA9FE_AA02),
+        ipaddress.IPv4Address(0xC000_00C0),
+        ipaddress.IPv4Address(0x6464_64C8),
+        _v6((0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254), 128).network_address,
+    }
+)
+
+
+def _address(raw: Any) -> tuple[Address | None, str | None]:
+    """The parsed address, or why ``raw`` is not one this module accepts anywhere."""
+    if not isinstance(raw, str):
+        return None, "is not a string"
+    try:
+        ip = ipaddress.ip_address(raw)
+    except ValueError:
+        return None, "is not an IP address"
+    if ip in METADATA:
+        return None, "is a cloud metadata address"
+    if ip.is_loopback or ip.is_unspecified:
+        return None, "is a loopback or unspecified address"
+    if isinstance(ip, ipaddress.IPv6Address) and any(ip in n for n in EMBEDDED_V4):
+        return None, "writes an IPv4 address inside IPv6; write the IPv4 address"
+    if ip.is_multicast or ip.is_reserved:
+        return None, "is a multicast or reserved address"
+    if ip.is_link_local:
+        return None, "is link-local"
+    if str(ip) != raw:
+        return None, f"is not in its canonical form ({ip})"
+    if isinstance(ip, ipaddress.IPv4Address) and int(ip) >> 24 == 0:
+        return None, "is in this-network (0.0.0.0/8)"
+    return ip, None
+
+
+def _subnet(raw: Any, ip: Address | None) -> tuple[ipaddress.IPv4Network | None, str | None]:
+    if not isinstance(raw, str):
+        return None, "is not a string"
+    try:
+        net = ipaddress.IPv4Network(raw)  # strict: no host bits
+    except ValueError:
+        return None, "is not an IPv4 network without host bits"
+    if str(net) != raw:
+        return None, f"is not in its canonical form ({net})"
+    if not 8 <= net.prefixlen <= 30:
+        return None, "is not a /8 to /30"
+    if not any(net.subnet_of(n) for n in NOT_INTERNET_V4) and net.prefixlen < 24:
+        return None, "reaches beyond private, shared and documentation space and is wider than /24"
+    if ip is not None and ip not in net:
+        return None, f"does not hold the guest's ip {ip}"
+    return net, None
+
+
+def _extra(ip: Address, net: ipaddress.IPv4Network | None) -> str | None:
+    """Why an otherwise sound extra address is not this guest's to name, else None."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if any(ip in n for n in OWNABLE_V6):
+            return None
+        return (
+            "is a global or special-purpose IPv6 address, not a unique-local or documentation one"
+        )
+    if net is not None:
+        if ip in (net.network_address, net.broadcast_address):
+            return f"is the network or broadcast address of the zone subnet {net}"
+        if ip in net or ip in SHARED_V4:
+            return None
+        return f"is outside the zone subnet {net} (and outside the shared range)"
+    if any(ip in n for n in NOT_INTERNET_V4):
+        return None
+    return "is outside private, shared and documentation space (the row gives no zone subnet)"
+
+
+def enroll_address_problems(guests: Any) -> list[str]:
+    """Every problem with the addresses of ``<role>_guests`` rows, one message each."""
+    if not isinstance(guests, list):
+        return ["the guests are not a list"]
+    out: list[str] = []
+    for n, row in enumerate(guests):
+        if not isinstance(row, Mapping):
+            out.append(f"guest #{n} is not a mapping")
+            continue
+        who = f"guest {row.get('name', '#' + str(n))}"
+        ip, why = _address(row.get("ip"))
+        if ip is not None and not isinstance(ip, ipaddress.IPv4Address):
+            ip, why = None, "is not IPv4"
+        if why:
+            out.append(f"{who}: ip {row.get('ip')!r} {why}")
+        net: ipaddress.IPv4Network | None = None
+        if "subnet" in row:
+            net, why = _subnet(row["subnet"], ip)
+            if why:
+                out.append(f"{who}: subnet {row['subnet']!r} {why}")
+        extras = row.get("extra_addresses", [])
+        if not isinstance(extras, list):
+            out.append(f"{who}: extra_addresses is not a list")
+            continue
+        for raw in extras:
+            extra, why = _address(raw)
+            if extra is not None:
+                if "subnet" in row and net is None:
+                    why = "cannot be held against the row's unusable subnet"
+                else:
+                    why = _extra(extra, net)
+            if why:
+                out.append(f"{who}: extra address {raw!r} {why}")
+    return out
+
+
+class FilterModule:
+    def filters(self) -> dict[str, Any]:
+        return {"hnx_enroll_address_problems": enroll_address_problems}

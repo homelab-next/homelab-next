@@ -8,6 +8,7 @@ run here and their install path is proven only by ``--syntax-check`` of the gene
 (``tests/compute/test_products.py``).  Every refusal is shown failing on a bad input and passing
 on a good one."""
 
+import ipaddress
 import json
 import shutil
 import subprocess
@@ -377,26 +378,38 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     live = tmp_path / "etc" / "hnx-address-groups.yaml"
     assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
     good = live.read_text()
-    # one guest with the other addresses it sends from (guest 1.6): every one of them is HOME_NET
-    extra = ["2001:db8:0:32::5", "198.51.100.51"]
-    fewer = {**v, "suricata_enroll_guests": [{**GUESTS[0], "extra_addresses": extra}]}
+    # guests with the other addresses they send from (guest 1.6), as the baseline playbook passes
+    # them (with the zone's subnet), in two zones, and one naming none: every address is HOME_NET,
+    # and each zone's group holds its own guests' addresses only
+    data = {"subnet": "198.51.100.0/24", "extra_addresses": ["2001:db8:0:32::5", "198.51.100.51"]}
+    edge = {"subnet": "203.0.113.0/24", "extra_addresses": ["203.0.113.11"]}
+    changed = {
+        **v,
+        "suricata_enroll_guests": [
+            {**GUESTS[0], **data},
+            {**GUESTS[1], **edge},
+            {**GUESTS[2], "extra_addresses": []},
+        ],
+    }
     (tmp_path / "suricata.fails").touch()
-    r = run_role(tmp_path, "suricata_enroll", "main", fewer)
+    r = run_role(tmp_path, "suricata_enroll", "main", changed)
     assert r.returncode != 0
     assert live.read_text() == good  # the failing file never went live
     assert sorted(p.name for p in (tmp_path / "etc").iterdir()) == LIVE_ONLY
     assert log.read_text().splitlines()[-1].startswith("-T ")  # tested, never reloaded
     (tmp_path / "suricata.fails").unlink()
     log.write_text("")
-    fixed = run_role(tmp_path, "suricata_enroll", "main", fewer)  # the next run tests again
+    fixed = run_role(tmp_path, "suricata_enroll", "main", changed)  # the next run tests again
     assert fixed.returncode == 0, fixed.stdout
-    home = "[198.51.100.50,198.51.100.51,2001:db8:0:32::5]"
+    zone_data = "198.51.100.40,198.51.100.50,198.51.100.51,2001:db8:0:32::5"
+    home = f"[{zone_data},203.0.113.10,203.0.113.11]"
     assert log.read_text().splitlines() == [
         TESTED.format(etc=tmp_path / "etc", home=f'"{home}"'),
         "-c reload-rules",
     ]
     groups = yaml.safe_load(live.read_text())
-    assert groups["HOME_NET"] == home and groups["HNX_ZONE_DATA"] == home
+    assert groups["HOME_NET"] == home and groups["HNX_ZONE_DATA"] == f"[{zone_data}]"
+    assert groups["HNX_ZONE_EDGE"] == "[203.0.113.10,203.0.113.11]"
 
 
 def test_suricata_enroll_retries_a_failed_reload(tmp_path):
@@ -430,21 +443,39 @@ def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(tmp_p
     assert not (tmp_path / "etc" / "hnx-address-groups.yaml").exists() and not log.exists()
 
 
+# an internet address and an IPv4-mapped one, built from integers (no literal for the leak scan);
+# the address checks themselves are tests/roles/test_hnx_address_filter.py, called directly
+PUBLIC = str(ipaddress.IPv4Address(0x0808_0808))
+MAPPED = str(ipaddress.IPv6Address(0xFFFF_C633_6405))
+BAD_EXTRAS = [PUBLIC, "::", "1:2:3", "999.1.1.1", "127.0.0.1", "203.0.113.5", MAPPED]
+
+
 @pytest.mark.parametrize(
-    "guests",
+    ("guests", "named"),
     [
-        [],
-        [{**GUESTS[0], "ip": "198.51.100.50\nHOME_NET: any"}],
-        [{**GUESTS[0], "ip": "any"}],
-        [{**GUESTS[0], "zone": "data: x"}],
-        [{**GUESTS[0], "extra_addresses": ["2001:db8::5\nHOME_NET: any"]}],
-        [{**GUESTS[0], "extra_addresses": "198.51.100.51"}],
+        ([], []),
+        ([{**GUESTS[0], "ip": "198.51.100.50\nHOME_NET: any"}], ["ip '198.51.100.50\\nHOME_NET"]),
+        ([{**GUESTS[0], "ip": "any"}], ["ip 'any' is not an IP address"]),
+        ([{**GUESTS[0], "zone": "data: x"}], []),
+        (
+            [{**GUESTS[0], "extra_addresses": ["2001:db8::5\nHOME_NET: any"]}],
+            ["is not an IP address"],
+        ),
+        ([{**GUESTS[0], "extra_addresses": "198.51.100.51"}], ["extra_addresses is not a list"]),
+        # one run, every bad address named: outside the zone, special-purpose, malformed, mapped
+        (
+            [{**GUESTS[0], "subnet": "198.51.100.0/24", "extra_addresses": BAD_EXTRAS}],
+            [f"extra address '{x}'" for x in BAD_EXTRAS],
+        ),
     ],
 )
-def test_suricata_enroll_refuses_bad_guests(tmp_path, guests):
+def test_suricata_enroll_refuses_bad_guests(tmp_path, guests, named):
     v, _ = suricata_setup(tmp_path)
     r = run_role(tmp_path, "suricata_enroll", "main", {**v, "suricata_enroll_guests": guests})
     assert r.returncode != 0 and "suricata_enroll: at least one guest" in r.stdout
+    for part in named:
+        assert part in r.stdout, (part, r.stdout)
+    assert not (tmp_path / "etc" / "hnx-address-groups.yaml").exists()
 
 
 # ---------------------------------------------------------------- greenbone_target

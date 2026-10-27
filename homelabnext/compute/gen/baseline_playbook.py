@@ -8,9 +8,10 @@ ADR-0016 decision 7) targets its ``group``, the central product host, once, and 
 ``<role>_guests``: every guest that needs the control as ``{id, name, fqdn, ip, zone}``, sorted
 by id, which the product enrolls (a sensor's monitored addresses, a scanner's targets); a guest
 that names other addresses it sends from (``network.extra_addresses``, guest 1.6) carries them as
-``extra_addresses: [...]`` after ``ip``, so a sensor counts them as its own; a guest
-whose baselines set inputs of that role (``with:``, baseline set 1.2) carries them as
-``settings: {<role>_<input>: value}`` in its row.  A per-guest control's settings are host
+``extra_addresses: [...]`` after ``ip``, so a sensor counts them as its own, and its zone's IPv4
+``subnet`` after ``zone``, so the role can hold each one to the guest's own zone as validation
+did; a guest whose baselines set inputs of that role (``with:``, baseline set 1.2) carries them
+as ``settings: {<role>_<input>: value}`` in its row.  A per-guest control's settings are host
 variables (the ``inventory`` target writes them), so its play names only the role.
 
 A control whose ``role`` is null has no product yet: it is written as a commented block that names
@@ -32,8 +33,9 @@ FILE = "baseline.yml"
 
 
 def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> list[dict]:
-    """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id,
-    plus ``extra_addresses`` when the guest names any, and ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
+    """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id;
+    ``extra_addresses`` and the zone's ``subnet`` when the guest names extra addresses; and
+    ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
     baselines set any."""
     by_id = {g.id: g for g in fleet.guests}
     out: list[dict] = []
@@ -42,6 +44,8 @@ def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> 
         if g.extra_addresses:
             row["extra_addresses"] = list(g.extra_addresses)
         row["zone"] = g.zone
+        if g.extra_addresses:
+            row["subnet"] = fleet.zone(g).subnet
         if control and fleet.baselines is not None:
             role = fleet.baselines.role(control)
             mine = resolve(g, fleet.baselines).settings.get(control, {})

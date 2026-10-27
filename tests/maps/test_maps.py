@@ -269,6 +269,30 @@ def test_an_extra_address_resolves_to_its_guest_in_any_spelling():
     assert idx.address(A_IP) == ("guest:a", "a")
     assert idx.address(STRAY) == ("zone:z", f"{STRAY} (zone z)")
     assert idx.host_node("long") == "guest:b"
+    # the dataflow page's line under a guest's end names every address it sends from
+    assert dataflow._where("guest:b", idx) == f"guest:b \u00b7 {B_IP}, {B_NIC}, {B_V6}"
+    assert dataflow._where("guest:a", idx) == f"guest:a \u00b7 {A_IP}"
+
+
+def test_an_extra_address_never_displaces_another_guests_primary():
+    """An extra address that is also another guest's network.ip (which validation refuses, but a
+    hand-written site may hold) still resolves to the guest whose primary it is, whichever guest
+    comes first; of two guests naming one extra address, the first keeps it."""
+    why = {"why": "a second interface on the same segment"}
+
+    def guest(name: str, ip: str, *extras: str) -> dict:
+        net = {"ip": ip, "zone": "z", "extra_addresses": [{"address": e, **why} for e in extras]}
+        return {"id": f"guest:{name}", "network": net}
+
+    site = {"zones": [{"id": "z", "subnet": SEG}]}
+    for guests in (
+        [guest("a", A_IP, B_IP), guest("b", B_IP)],
+        [guest("b", B_IP), guest("a", A_IP, B_IP)],
+    ):
+        idx = Index(site, guests, {})
+        assert idx.address(B_IP) == ("guest:b", "b") and idx.address(A_IP) == ("guest:a", "a")
+    idx = Index(site, [guest("a", A_IP, B_NIC), guest("b", B_IP, B_NIC)], {})
+    assert idx.address(B_NIC) == ("guest:a", "a")
 
 
 def test_topology_of_the_lab_topology_example():
