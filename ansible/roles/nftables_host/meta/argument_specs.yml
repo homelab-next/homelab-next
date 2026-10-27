@@ -14,8 +14,13 @@ argument_specs:
         default: "{{ hnx_firewall | default({'policy_out': 'ACCEPT', 'inbound_allow': [], 'outbound_allow': []}) }}"
       nftables_host_require_egress: &egress
         type: bool
-        description: Refuse (and fail health on) an outbound policy of ACCEPT; on when the guest needs egress-filter.
+        description: Refuse (and fail health on) an outbound policy of ACCEPT, and drop forwarded (container) traffic its outbound_allow does not name; on when the guest needs egress-filter.
         default: "{{ 'egress-filter' in (hnx_controls | default([])) }}"
+      nftables_host_forward_local: &fwdlocal
+        type: list
+        elements: str
+        description: "IPv4 CIDRs of the host's own container bridges: forwarded traffic between them stays allowed when egress is required (it never leaves the host); empty: none."
+        default: []
       nftables_host_ssh_port: &port
         type: int
         description: The SSH port of the management rule.
@@ -46,6 +51,7 @@ argument_specs:
       nftables_host_ssh_sources: *ssh
       nftables_host_firewall: *fw
       nftables_host_require_egress: *egress
+      nftables_host_forward_local: *fwdlocal
       nftables_host_ssh_port: *port
       nftables_host_table: *table
       nftables_host_config_file: *conf
@@ -53,7 +59,7 @@ argument_specs:
       nftables_host_apply: *apply
       nftables_host_state_dir: *state
   health:
-    short_description: Fail unless the table is loaded with an inbound policy of drop (and outbound drop when egress is required).
+    short_description: Fail unless the table is loaded with an inbound policy of drop (and outbound and forward drop when egress is required).
     options:
       nftables_host_require_egress: *egress
       nftables_host_table: *table

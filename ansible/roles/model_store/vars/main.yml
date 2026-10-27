@@ -2,3 +2,6 @@
 # Fixed, not settings: the store layout (homelabnext.models.store.Entry.directory).
 model_store_hub_formats: [hf, gguf]
 model_store_revision_pattern: '^[0-9a-f]{40}\Z'
+# The public hub's own hosts: never a "mirror" (a default-deny host cannot reach them, and its
+# token must not go to them by that route); case-insensitive, any subdomain, a trailing dot too.
+model_store_public_hub_pattern: '^https://(?:[A-Za-z0-9-]+\.)*(?:huggingface|hf)\.co\.?(?::[0-9]+)?(?:/|\Z)'

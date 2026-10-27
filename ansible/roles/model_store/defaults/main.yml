@@ -15,8 +15,13 @@ model_store_fetch: true
 # fetch only these entry ids (empty: every hf and gguf entry of the manifest)
 model_store_fetch_ids: []
 model_store_hf_cli: hf
-# A hub mirror (https URL) instead of the public hub; empty: the hub.
+# A hub mirror (an https URL; on a default-deny host, one its outbound_allow reaches, never the
+# public hub itself) instead of the public hub; empty: the hub.
 model_store_hf_endpoint: ""
+# On a host whose outbound policy is default-deny (a model runtime: docs/compute-model.md, "Model
+# runtimes") the public hub is never allowed, so a fetch needs the mirror, a lab destination its
+# firewall_rules.outbound_allow names; this role opens no egress of its own.
+model_store_require_mirror: "{{ (hnx_firewall | default({})).get('policy_out', 'ACCEPT') in ['DROP', 'REJECT'] }}"
 # The hub token for gated repositories, by reference (secret:<name>); empty: anonymous.
 model_store_hf_token_ref: ""
 model_store_export_dir: /var/backups/model-store/export
