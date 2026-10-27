@@ -1,0 +1,12 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "refused-metadata",
+  "description": "a metadata refusal is det:cloud-metadata-probe, not this rule",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "message": "hnx-egress-refused: IN= OUT=eth0 PROTO=TCP DPT=80"
+  }
+}

@@ -1,0 +1,7 @@
+<!-- det:cloud-metadata-refused -->
+<rule id="900008" level="12">
+  <if_group>hnx_generic</if_group>
+  <field name="message" type="pcre2">(?i)hnx\-egress\-refused:\ </field>
+  <description>A guest firewall refused a connection to a cloud instance metadata service</description>
+  <mitre><id>T1552.005</id></mitre>
+</rule>

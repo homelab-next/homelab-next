@@ -31,11 +31,17 @@ def _report(root):
     return coverage_report(load_rules(root), run_all(root))
 
 
+def _failing(rep):
+    """The uncounted rules whose fixtures failed (an inert rule is uncounted by its status)."""
+    return [u for u in rep["uncounted"] if not u["reason"].startswith("status ")]
+
+
 def test_committed_golden_report_is_current(capsys):
     assert main(["coverage", "--check", str(GOLDEN)]) == 0
     rep = json.loads(GOLDEN.read_text())
-    assert rep["uncounted"] == []
-    assert rep["summary"]["rules_counted"] == rep["summary"]["rules_total"] >= 6
+    assert _failing(rep) == []
+    inert = [u["rule"] for u in rep["uncounted"]]  # status unsupported: tested, never counted
+    assert rep["summary"]["rules_counted"] == rep["summary"]["rules_total"] - len(inert) >= 6
     assert "T1505.003" in rep["techniques"]
 
 
@@ -61,16 +67,16 @@ def test_a_rule_that_fires_on_benign_input_is_not_counted(det):
     (det / FX / "must_not_fire" / "worker-writes-image.json").write_text(hit)
     rep = _report(det)
     assert "T1505.003" not in rep["techniques"]
-    assert rep["uncounted"][0]["reason"] == "must_not_fire fired: worker-writes-image.json"
+    assert _failing(rep)[0]["reason"] == "must_not_fire fired: worker-writes-image.json"
 
 
 def test_a_rule_without_fixtures_is_not_counted(det):
     shutil.rmtree(det / FX / "must_fire")
     rep = _report(det)
-    assert rep["uncounted"] == [{"rule": "det:web-shell-write", "reason": "no must_fire fixture"}]
+    assert _failing(rep) == [{"rule": "det:web-shell-write", "reason": "no must_fire fixture"}]
     shutil.rmtree(det / FX / "must_not_fire")
     rep = _report(det)
-    assert rep["uncounted"][0]["reason"] == "no must_fire fixture"
+    assert _failing(rep)[0]["reason"] == "no must_fire fixture"
 
 
 def test_evasion_misses_are_gaps_not_coverage_loss():

@@ -3,7 +3,11 @@
 [OPTIONS]
 enable: 1
 policy_in: DROP
-policy_out: ACCEPT
+policy_out: DROP
 log_level_in: nolog
+log_level_out: nolog
 
 [RULES]
+OUT ACCEPT -p udp -dport 53 -dest 192.0.2.0/24 -log nolog # dns
+OUT ACCEPT -p udp -dport 123 -dest 192.0.2.0/24 -log nolog # time
+OUT ACCEPT -p tcp -dport 443 -dest 198.51.100.0/25 -log nolog # model-store

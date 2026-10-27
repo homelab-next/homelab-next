@@ -1,0 +1,9 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "refused",
+  "description": "the guest firewall refused a metadata address",
+  "event": {
+    "message": "hnx-egress-refused: IN= OUT=eth0 PROTO=TCP DPT=80"
+  }
+}

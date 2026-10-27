@@ -1,0 +1,14 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "http-get-cloud-bucket",
+  "description": "a model runtime requests another cloud's bucket",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "url": {
+      "domain": "example.blob.core.windows.net"
+    }
+  }
+}

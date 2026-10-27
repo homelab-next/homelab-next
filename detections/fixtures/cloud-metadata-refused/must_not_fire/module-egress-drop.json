@@ -1,0 +1,9 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "module-egress-drop",
+  "description": "a module role's egress drop (its own prefix)",
+  "event": {
+    "message": "hnx-egress example/runtime IN= OUT=eth0 PROTO=TCP DPT=443"
+  }
+}

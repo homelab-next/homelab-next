@@ -1,0 +1,14 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "other-host-cloud-bucket",
+  "description": "a host that runs no model requests a cloud bucket",
+  "event": {
+    "labels": {
+      "hnx_runtime": "none"
+    },
+    "url": {
+      "domain": "backups.s3.amazonaws.com"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "host-without-the-firewall",
+  "description": "a host without the guest firewall reaches a metadata service",
+  "event": {
+    "destination": {
+      "port": 80
+    },
+    "network": {
+      "transport": "tcp"
+    }
+  },
+  "note": "no refusal without nftables_host: the sensor's flow and det:cloud-metadata-probe are what remain"
+}

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """ATT&CK coverage counted from passing fixtures only (checklist D-04).
 
-A rule counts toward coverage only when the fixture runner proves it: it has at least one
+A rule counts toward coverage only when it is deployed (its ``status`` is neither ``unsupported``
+nor ``deprecated``) and the fixture runner proves it: it has at least one
 ``must_fire`` and one ``must_not_fire`` fixture and every one of them passes (each must_fire fires,
 each must_not_fire stays silent).  A rule that misses a must_fire, or fires on benign input, is
 listed under ``uncounted`` with the reason, and its techniques are covered only if another, passing
@@ -47,7 +48,11 @@ def coverage_report(rules: list[Rule], run: RunReport) -> dict[str, Any]:
     gaps: list[dict[str, str]] = []
     for rule in sorted(rules, key=lambda r: r.det_id):
         rr = by_det.get(rule.det_id)
-        reason = "not run" if rr is None else _why_not(rr)
+        if not rule.deployable:
+            # an inert rule is tested, never counted: it cannot fire as shipped
+            reason = f"status {rule.status}: not deployed, so not coverage"
+        else:
+            reason = "not run" if rr is None else _why_not(rr)
         if reason:
             uncounted.append({"rule": rule.det_id, "reason": reason})
             continue

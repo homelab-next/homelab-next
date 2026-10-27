@@ -8,6 +8,20 @@
     <description>Cloud API key used from a network not seen before for that key</description>
     <mitre><id>T1078.004</id></mitre>
   </rule>
+  <!-- det:cloud-metadata-probe -->
+  <rule id="900007" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="destination.ip" type="pcre2">(?:(?i)^169\.254\.169\.254$)|(?:(?i)^169\.254\.170\.2$)</field>
+    <description>A lab host tried to reach the link-local cloud instance metadata service</description>
+    <mitre><id>T1552.005</id></mitre>
+  </rule>
+  <!-- det:cloud-metadata-refused -->
+  <rule id="900008" level="12">
+    <if_group>hnx_generic</if_group>
+    <field name="message" type="pcre2">(?i)hnx\-egress\-refused:\ </field>
+    <description>A guest firewall refused a connection to a cloud instance metadata service</description>
+    <mitre><id>T1552.005</id></mitre>
+  </rule>
   <!-- det:mass-file-rename-ransom-extension -->
   <rule id="900002" level="12">
     <if_group>hnx_generic</if_group>

@@ -22,6 +22,8 @@ technique_ids:
   - T1486
   - T1505.003
   - T1543.003
+  - T1552.005
+  - T1567.002
   # parents of the above (so --suggest-parent can propose them when a newer sub-technique
   # has not landed in the engine's bundle yet)
   - T1059
@@ -29,3 +31,5 @@ technique_ids:
   - T1098
   - T1505
   - T1543
+  - T1552
+  - T1567

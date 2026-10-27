@@ -497,22 +497,75 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(tmp_path):
     assert 'ip saddr 198.51.100.128/25 tcp dport 8443-8444 accept comment "query-api"' in text
     assert 'ip saddr 192.0.2.0/24 ip protocol icmp accept comment "ping"' in text
     assert '\t\ttcp dport 443 accept comment "https-public"' in text
-    assert 'policy drop;\n\t\tct state established,related accept\n\t\toif "lo" accept' in text
+    assert (
+        '"homelabnext-refused-destination"\n\t\tct state established,related accept\n\t\toif "lo" accept'
+        in text
+    )
     assert 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"' in text
-    assert text.rstrip().endswith("reject with icmpx type admin-prohibited\n\t}\n}")
+    assert text.rstrip().endswith(
+        'log prefix "hnx-egress-drop: " level warn\n'
+        "\t\treject with icmpx type admin-prohibited\n\t}\n}"
+    )
     assert "flush ruleset" not in text  # other tables (a container engine's) are left alone
     assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"]
     assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
     assert len(calls(tmp_path)) == 1
 
 
-def test_nftables_host_accept_egress_has_no_output_rules(tmp_path):
+def test_nftables_host_accept_egress_refuses_only_the_metadata_services(tmp_path):
     fw = {"policy_out": "ACCEPT", "inbound_allow": [], "outbound_allow": []}
     v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False,
                  nftables_host_ssh_sources=["any"])  # fmt: skip
     assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
     text = (tmp_path / "nftables.conf").read_text()
-    assert "policy accept;\n\t}" in text and "\t\ttcp dport 22 accept" in text
+    out = text.split("chain output {", 1)[1]
+    assert "policy accept;" in out and "\t\ttcp dport 22 accept" in text
+    assert out.rstrip().endswith('"homelabnext-refused-destination"\n\t}\n}')
+    assert "accept" not in out.split("policy accept;", 1)[1] and "hnx-egress-drop" not in out
+
+
+def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
+    """No outbound_allow (here the whole link-local range) and no policy reopens the metadata
+    services: their drop is the output chain's first verdict, ahead of established flows."""
+    for policy in ("ACCEPT", "DROP"):
+        fw = {
+            "policy_out": policy,
+            "inbound_allow": [],
+            "outbound_allow": []
+            if policy == "ACCEPT"
+            else [{"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}],
+        }
+        v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False)
+        assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
+        out = (tmp_path / "nftables.conf").read_text().split("chain output {", 1)[1]
+        lines = [
+            ln.strip() for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("#")
+        ]
+        verdicts = [
+            ln
+            for ln in lines[1:]
+            if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
+        ]
+        assert (
+            verdicts[0]
+            == (
+                "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
+                'drop comment "homelabnext-refused-destination"'
+            )
+        )
+        assert (
+            verdicts[1]
+            == 'ip6 daddr { fd00:ec2::254 } drop comment "homelabnext-refused-destination"'  # scrub-allow: cloud metadata, refused
+        )
+        assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
+        assert ("hnx-egress-drop: " in out) is (policy == "DROP")
+        # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
+        # forward chains (priority filter is 0), and nothing else
+        text = (tmp_path / "nftables.conf").read_text()
+        fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+        assert "type filter hook forward priority filter - 10; policy accept;" in fwd
+        assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
+        assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
 
 
 def test_nftables_host_retries_a_failed_load(tmp_path):

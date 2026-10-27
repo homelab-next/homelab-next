@@ -450,13 +450,14 @@ def test_the_example_labs_playbook_passes_ansible_syntax_check(tmp_path):
     )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     plays = yaml.safe_load((tmp_path / "baseline.yml").read_text())
-    # every control of base and server is bound; network-sensor, remote-access, os-hardening and
-    # the rest come with `exposed`, `sensitive` or no default baseline, which no example guest has
+    # every control of base, server and model-runtime (infer-core) is bound; network-sensor,
+    # remote-access and the rest come with `exposed`, `sensitive` or no default baseline, which no
+    # example guest has
     assert {p["roles"][0]["role"] for p in plays} == {
         "chrony", "unattended_upgrades", "needrestart", "ssh_hardening", "sssd_ldap", "lynis", "nftables_host",
         "rsyslog_forward", "wazuh_agent", "auditd", "greenbone_target", "trivy", "rkhunter",
-        "restore_drill", "etckeeper",
+        "restore_drill", "etckeeper", "os_hardening",
     }  # fmt: skip
     central = [p for p in plays if p["name"].endswith(", central)")]
     assert [(p["hosts"], len(p["roles"][0][p["roles"][0]["role"] + "_guests"])) for p in central] == [
-        ("cap_scanner", 3), ("cap_backup", 2)]  # fmt: skip
+        ("cap_scanner", 4), ("cap_backup", 3)]  # fmt: skip
