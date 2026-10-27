@@ -115,7 +115,10 @@ def _units(doc: Doc, mod_dir: Path, load) -> set[str]:
 
 
 def privileged_unit(e: Doc) -> bool:
-    """A unit that runs as root or opts out of hardening: allowed only with grants.units."""
+    """A unit that runs as root or opts out of hardening: allowed only with grants.units.  A
+    numeric ``user: "0"`` is not tested here: the fleet_units validator, which the module rules
+    run on every unit (:func:`unit_problems`), refuses a root user (``root`` or ``0``) without
+    ``run_as_root``, so such a unit carries the flag this reads."""
     return bool(e.get("run_as_root") or e.get("user") == "root" or e.get("hardening_opt_out"))
 
 
@@ -355,6 +358,14 @@ def module_problems(
             out.append(f"agent {key}: a module spec carries no ceiling")
         if spec.get("id") != a["profile"]:
             out.append(f"agent {key}: spec id is the agent's profile")
+        # the agent's model role is one the module requires, so the site's model rules (the
+        # cloud-model grant above all) cover the agent's prompts too
+        required_roles = {r["role"] for r in doc["requires"].get("model_roles", [])}
+        if spec.get("model_role") and spec["model_role"] not in required_roles:
+            out.append(
+                f"agent {key}: model role {spec['model_role']} is not one of the module's "
+                "requires.model_roles"
+            )
         if set(spec.get("capabilities", [])) != {n["cap"] for n in a.get("needs", [])}:
             out.append(f"agent {key}: needs name exactly the spec's capabilities")
         trig = a.get("trigger", {}).get("interface")
@@ -754,18 +765,21 @@ def site_problems(
     site: Doc,
     mods: dict[str, Doc],
     slots: dict[str, Doc],
-    rows: dict[str, dict[str, Doc]] | None = None,
-    units: dict[str, set[str]] | None = None,
-    privileged_units: dict[str, set[str]] | None = None,
-    roles: dict[str, Doc] | None = None,
+    *,
+    rows: dict[str, dict[str, Doc]],
+    units: dict[str, set[str]],
+    privileged_units: dict[str, set[str]],
+    roles: dict[str, Doc],
 ) -> list[str]:
-    """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows)
-    adds the row rules: public routes need grants.public_routes, upstreams follow the fallback,
-    and a broker, idp or remote-admin upstream needs grants.upstreams.  ``units`` (module id ->
-    its unit names) and ``privileged_units`` (the ones that run as root or opt out of hardening)
-    add the units rules; ``roles`` (the model role table's ``roles``) adds the cloud-model rule:
-    a module that requires a role whose prompts can leave the lab needs grants.cloud_models.  The
-    loader passes all four; without one, its rule is not checked."""
+    """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows):
+    public routes need grants.public_routes, upstreams follow the fallback, and an upstream that
+    reaches the broker, idp or remote-admin (directly, through a fallback or through an
+    instance) needs grants.upstreams.  ``units`` (module id -> its unit names) and
+    ``privileged_units`` (the ones that run as root or opt out of hardening): such a unit needs
+    grants.units.  ``roles`` (the model role table's ``roles``): a module that requires a role
+    whose prompts can leave the lab needs grants.cloud_models.  All four are required, so no rule
+    is skipped for want of an input (a module with none passes an empty mapping); the loader will
+    pass them."""
     out: list[str] = []
     try:
         sel = selected(site, mods)
@@ -774,7 +788,7 @@ def site_problems(
     ch = chosen(site)
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
-    out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch)
+    out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
     for m in sel.values():
@@ -791,7 +805,7 @@ def site_problems(
     #: registry services an egress svc: target can name: every selected slot, every instance, and
     #: the rows of the selected feature and core modules
     services = {cap[4:] for cap in ch} | {c["instance"] for cs in ch.values() for c in cs}
-    services |= {n for mid, rs in (rows or {}).items() if mid in sel for n in rs}
+    services |= {n for mid, rs in rows.items() if mid in sel for n in rs}
     for slot, d in slots.items():
         if d.get("required_in_core") and "cap:" + slot not in ch:
             out.append(f"{slot}: a required core slot has no provider")
@@ -848,7 +862,7 @@ def site_problems(
                 needs = t == "internet" or t.removeprefix("svc:") in authority
                 if needs and t not in granted.get(e["host"], []):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t} without a grant")
-                if t.startswith("svc:") and not _is_service(t[4:], services, sel, rows):
+                if t.startswith("svc:") and not _is_service(t[4:], services):
                     out.append(f"{m['id']}: host {e['host']} egresses to {t}, which is no service")
         for role, h in _hosts(m).items():
             if h["kind"] == "external" and "external" not in granted.get(role, []):
@@ -863,13 +877,13 @@ def site_problems(
                 out.append(
                     f"{m['id']}: host role {role} is internet-facing inside the lab without grants.internet_facing"
                 )
-        for name, row in (rows or {}).get(m["id"], {}).items():
+        for name, row in rows.get(m["id"], {}).items():
             if row.get("public_hostname") and name not in grants.get("public_routes", {}).get(
                 m["id"], []
             ):
                 out.append(f"{m['id']}: service {name} is public without grants.public_routes")
             out += _upstream_problems(m, name, row, ch, slots, grants)
-        for u in sorted((privileged_units or {}).get(m["id"], set())):
+        for u in sorted(privileged_units.get(m["id"], set())):
             if u not in grants.get("units", {}).get(m["id"], []):
                 out.append(
                     f"{m['id']}: unit {u} runs as root or opts out of hardening without grants.units"
@@ -880,16 +894,15 @@ def site_problems(
                 m["id"], []
             ):
                 out.append(f"{m['id']}: shared_config {t} without grants.shared_config")
-        if roles is not None:
-            cloud = cloud_roles(roles)
-            for r in m["requires"].get("model_roles", []):
-                if r["role"] in cloud and r["role"] not in grants.get("cloud_models", {}).get(
-                    m["id"], []
-                ):
-                    out.append(
-                        f"{m['id']}: requires {r['role']}, whose prompts can leave the lab (a "
-                        "binding marked leaves_lab), without grants.cloud_models"
-                    )
+        cloud = cloud_roles(roles)
+        for r in m["requires"].get("model_roles", []):
+            if r["role"] in cloud and r["role"] not in grants.get("cloud_models", {}).get(
+                m["id"], []
+            ):
+                out.append(
+                    f"{m['id']}: requires {r['role']}, whose prompts can leave the lab (a "
+                    "binding marked leaves_lab), without grants.cloud_models"
+                )
         for a in _agents(m):
             bind = site.get(SECTION[m["kind"]], {}).get(m["id"], {})
             lanes = bind.get("agents", {}).get(a["key"], {}).get("lanes", {})
@@ -918,25 +931,21 @@ def site_problems(
     return out
 
 
-def _is_service(name: str, services: set[str], sel: dict[str, Doc], rows) -> bool:
-    """A registry service the site has.  Without ``rows`` a selected feature or core module's row
-    is unknown, so a name bound to such a module (``<id>-...``) stands in for it; anything else
-    (``svc:secret`` for ``svc:secrets``) is still refused."""
-    if name in services:
-        return True
-    return rows is None and any(
-        _named(name, mid) for mid, m in sel.items() if m["kind"] != "provider"
-    )
+def _is_service(name: str, services: set[str]) -> bool:
+    """A registry service the site has: a selected slot or instance, or a selected module's row
+    (``svc:secret`` for ``svc:secrets`` is refused)."""
+    return name in services
 
 
 def _grant_problems(
     grants: Doc,
     sel: dict[str, Doc],
-    rows=None,
-    units=None,
-    privileged=None,
-    model_roles=None,
-    ch=None,
+    rows: dict[str, dict[str, Doc]],
+    units: dict[str, set[str]],
+    privileged: dict[str, set[str]],
+    model_roles: dict[str, Doc],
+    ch: dict[str, list[Doc]],
+    slots: dict[str, Doc],
 ) -> list[str]:
     """Every grant names a selected module and only what that module uses: an egress target its
     entry lists (or external for an external role), an internet-facing role inside the lab, a
@@ -948,8 +957,16 @@ def _grant_problems(
     def stale(where: str, why: str) -> None:
         out.append(f"grants.{where}: {why}; remove the grant")
 
-    kinds = ("egress", "internet_facing", "public_routes", "secrets", "units", "shared_config")
-    for kind in (*kinds, "upstreams", "cloud_models"):
+    for kind in (
+        "egress",
+        "internet_facing",
+        "public_routes",
+        "secrets",
+        "units",
+        "shared_config",
+        "upstreams",
+        "cloud_models",
+    ):
         for mid in grants.get(kind, {}):
             if mid not in sel:
                 stale(f"{kind}.{mid}", "the module is not selected")
@@ -980,7 +997,7 @@ def _grant_problems(
                     "the role is not an internet-facing role inside the lab",
                 )
     for mid, names in grants.get("public_routes", {}).items():
-        if mid not in sel or rows is None:
+        if mid not in sel:
             continue
         mine = rows.get(mid, {})
         for n in names:
@@ -1001,11 +1018,11 @@ def _grant_problems(
             elif n not in owners:
                 stale(f"secrets.{mid}", f"{n} is no selected module's credential")
     for mid, names in grants.get("units", {}).items():
-        if mid in sel and units is not None:
+        if mid in sel:
             for n in names:
                 if n not in units.get(mid, set()):
                     stale(f"units.{mid}.{n}", "not one of the module's units")
-                elif privileged is not None and n not in privileged.get(mid, set()):
+                elif n not in privileged.get(mid, set()):
                     stale(
                         f"units.{mid}.{n}",
                         "the unit neither runs as root nor opts out of hardening",
@@ -1019,30 +1036,27 @@ def _grant_problems(
                 if t not in declared:
                     stale(f"shared_config.{mid}", f"the module declares no shared_config for {t}")
     for mid, caps in grants.get("upstreams", {}).items():
-        if mid not in sel or rows is None:
+        if mid not in sel:
             continue
-        fills = {}  # instance -> the slots it fills
-        for cap, cs in (ch or {}).items():
-            for c in cs:
-                fills.setdefault(c["instance"], set()).add(cap[4:])
+        # what the rows reach as traffic goes (through a fallback, through an instance)
         used = {
             "cap:" + a
             for row in rows.get(mid, {}).values()
             for u in row.get("upstreams", [])
-            for a in ({u} | fills.get(u, set())) & set(GRANTED_UPSTREAMS)
+            for a in _resolved_upstream(sel[mid], u, ch, slots) & set(GRANTED_UPSTREAMS)
         }
         for c in caps:
             if c not in used:
-                stale(f"upstreams.{mid}", f"no service row of the module names {c[4:]} upstream")
+                stale(f"upstreams.{mid}", f"no service row of the module reaches {c[4:]}")
     for mid, wanted in grants.get("cloud_models", {}).items():
         if mid not in sel:
             continue
         required = {r["role"] for r in sel[mid]["requires"].get("model_roles", [])}
-        cloud = cloud_roles(model_roles) if model_roles is not None else None
+        cloud = cloud_roles(model_roles)
         for r in wanted:
             if r not in required:
                 stale(f"cloud_models.{mid}", f"the module does not require {r}")
-            elif cloud is not None and r not in cloud:
+            elif r not in cloud:
                 stale(f"cloud_models.{mid}", f"{r} has no binding that leaves the lab")
     return out
 
@@ -1121,21 +1135,37 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
     return out
 
 
+def _fallback_to(m: Doc, slot: str) -> str | None:
+    """The ``cap:`` a module falls back to when the site leaves its preferred ``slot`` out."""
+    pref = next(
+        (p for p in m.get("prefers", {}).get("capabilities", []) if p["cap"] == "cap:" + slot),
+        None,
+    )
+    return pref["fallback"].get("to") if pref else None
+
+
+def _resolved_upstream(m: Doc, u: str, ch, slots) -> set[str]:
+    """The slots a row's upstream ``u`` reaches on this site, as traffic goes: a selected slot
+    itself; an unselected preferred slot, its fallback slot when that is selected; an instance,
+    every slot it fills."""
+    if u in slots:
+        if "cap:" + u in ch:
+            return {u}
+        to = _fallback_to(m, u)
+        return {to[4:]} if to and to in ch else set()
+    return {cap[4:] for cap, cs in ch.items() for c in cs if c["instance"] == u}
+
+
 def _upstream_problems(m: Doc, name: str, row: Doc, ch, slots, grants: Doc) -> list[str]:
     """A row's upstream follows the module's fallback: a preferred slot the site does not select
     resolves to its fallback slot, which must be selected; an instance must be selected.  A
-    broker, idp or remote-admin upstream (the slot, or an instance of it) needs grants.upstreams."""
+    broker, idp or remote-admin upstream needs grants.upstreams, judged by what the upstream
+    reaches as traffic goes (:func:`_resolved_upstream`: the slot, its fallback, an instance)."""
     out = []
     selected_instances = {c["instance"] for cs in ch.values() for c in cs}
     granted = grants.get("upstreams", {}).get(m["id"], [])
     for u in row.get("upstreams", []):
-        # the slot itself, or every authority slot the named instance fills
-        reached = (
-            {u}
-            if u in slots
-            else {cap[4:] for cap, cs in ch.items() for c in cs if c["instance"] == u}
-        )
-        for authority in sorted(reached & set(GRANTED_UPSTREAMS)):
+        for authority in sorted(_resolved_upstream(m, u, ch, slots) & set(GRANTED_UPSTREAMS)):
             if "cap:" + authority not in granted:
                 out.append(
                     f"{m['id']}: service {name} upstream {u} reaches {authority} without "
@@ -1144,11 +1174,7 @@ def _upstream_problems(m: Doc, name: str, row: Doc, ch, slots, grants: Doc) -> l
         if u in slots:
             if "cap:" + u in ch:
                 continue
-            pref = next(
-                (p for p in m.get("prefers", {}).get("capabilities", []) if p["cap"] == "cap:" + u),
-                None,
-            )
-            to = pref and pref["fallback"].get("to")
+            to = _fallback_to(m, u)
             if not (to and to in ch):
                 out.append(
                     f"{m['id']}: service {name} upstream {u} is not selected, nor a fallback for it"
