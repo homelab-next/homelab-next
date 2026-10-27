@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -16,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 
 
-def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
+def _invocation(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
+    """The ``ansible-playbook`` command (and its environment) that runs one hook of a role."""
     play = [
         {
             "hosts": "localhost",
@@ -49,7 +52,102 @@ def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
     cmd = ["ansible-playbook", "-i", "localhost,", "-e", f"@{ev}", str(pb)]
     if verbose:
         cmd.append("-v")
+    return cmd, run_env
+
+
+def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
+    cmd, run_env = _invocation(tmp_path, role, tasks_from, extra_vars, env, verbose)
     return subprocess.run(cmd, capture_output=True, text=True, env=run_env, cwd=tmp_path)
+
+
+def first_run(case):
+    """Mark a test whose first role run needs nothing from any other test, so it can run beside
+    the others.  ``case(tmp, **params)`` sets up what that run needs under a fresh directory
+    ``tmp`` (fake commands, files) and returns run_role's keyword arguments, or another runner's
+    under ``runner`` (``run_cases``, or a module's own run_role), plus, under ``setup``, values
+    the test reads back.  The test takes the ``first`` fixture, ``(result, tmp)`` with
+    ``.vars`` and ``.setup``, in place of its own first run and ``tmp_path``.
+
+    The first test of a module to ask starts the first runs of every marked test of that module
+    this session will run, one ``ansible-playbook`` per CPU at a time (``prefetch_first_runs``).
+    Each is the very command the test ran itself, in its own directory, so it sees the same
+    result, sooner: the role tests spend their time waiting on ``ansible-playbook`` (about 0.85 s
+    to start, 0.3 s a module task), one process at a time, on runners with idle CPUs."""
+
+    def mark(fn):
+        fn.hnx_first_run = case
+        return fn
+
+    return mark
+
+
+class FirstRun(tuple):
+    """A prefetched first run: ``(result, tmp)``, with the run's extra variables as ``.vars``."""
+
+    vars: dict
+    setup: dict
+    error: Exception | None
+
+
+_FIRST_RUNS: dict[str, FirstRun] = {}
+
+
+def _run_one(job):
+    """One prefetched run: ``(result, None)``, or ``(None, exception)`` for its own test to raise."""
+    _, tmp, spec = job
+    spec = dict(spec)
+    spec.pop("setup", None)
+    try:
+        return spec.pop("runner", run_role)(tmp, **spec), None
+    except Exception as e:  # handed to the test it belongs to
+        return None, e
+
+
+def _raise(e):
+    def runner(_tmp):
+        raise e
+
+    return runner
+
+
+def _will_run(item) -> bool:
+    """Not skipped by a mark (a skip, or a skipif whose condition is already a true value)."""
+    if item.get_closest_marker("skip"):
+        return False
+    return not any(m.args and m.args[0] is True for m in item.iter_markers("skipif"))
+
+
+def prefetch_first_runs(request, tmp_path_factory):
+    """The ``first`` fixture: this test's first run (see ``first_run``), with the first runs of
+    every other marked test of its module that this session will run started alongside it."""
+    node = request.node
+    if node.nodeid not in _FIRST_RUNS:
+        todo = []
+        for item in node.session.items:
+            case = getattr(getattr(item, "function", None), "hnx_first_run", None)
+            if (case is None or item.module is not node.module or item.nodeid in _FIRST_RUNS
+                    or not (item is node or _will_run(item))):  # fmt: skip
+                continue
+            # named as tmp_path names a test's directory (30 characters: gpg's agent socket
+            # path under it must stay short)
+            tmp = tmp_path_factory.mktemp(re.sub(r"[\W]", "_", item.name)[:30], numbered=True)
+            params = getattr(getattr(item, "callspec", None), "params", {})
+            try:
+                todo.append((item.nodeid, tmp, case(tmp, **params)))
+            except Exception as e:  # a bad setup fails its own test only
+                todo.append((item.nodeid, tmp, {"runner": _raise(e)}))
+        workers = max(1, len(os.sched_getaffinity(0)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            done = list(pool.map(_run_one, todo))
+        for (nid, tmp, spec), (r, err) in zip(todo, done, strict=True):
+            _FIRST_RUNS[nid] = FirstRun((r, tmp))
+            _FIRST_RUNS[nid].vars = spec.get("extra_vars", spec.get("base_vars"))
+            _FIRST_RUNS[nid].setup = spec.get("setup", {})
+            _FIRST_RUNS[nid].error = err
+    run = _FIRST_RUNS.pop(node.nodeid)
+    if run.error is not None:  # raised by this test's own run (run_cases asserts), not another's
+        raise run.error
+    return run
 
 
 def fake(path: Path, body: str) -> str:

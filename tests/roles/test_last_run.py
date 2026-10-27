@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 import pytest
-from rolerun import ROOT, last_run_vars, logging_fake, run_cases, run_role
+from rolerun import ROOT, first_run, last_run_vars, logging_fake, run_cases, run_role
 
 from homelabnext.scripts.catalog import tracked_files
 from homelabnext.status import apply_mapping
@@ -42,10 +42,17 @@ def _lr_vars(tmp_path):
             "last_run_writer": str(tmp_path / "bin" / "hnx-last-run")}  # fmt: skip
 
 
-@needs_ansible
-def test_last_run_installs_the_writer_and_a_group_readable_directory(tmp_path):
+def _first(tmp_path):
     v = _lr_vars(tmp_path)
-    assert run_role(tmp_path, "last_run", "health", v).returncode != 0  # nothing installed yet
+    return {"role": "last_run", "tasks_from": "health", "extra_vars": v, "setup": {"v": v}}
+
+
+@needs_ansible
+@first_run(_first)
+def test_last_run_installs_the_writer_and_a_group_readable_directory(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout + r.stderr  # nothing installed yet
     r = run_role(tmp_path, "last_run", "main", v)
     assert r.returncode == 0, r.stdout + r.stderr
     d = (tmp_path / "records").stat()
@@ -76,8 +83,7 @@ def _run(tmp_path, argv, **env):
                           env={**clean, **env}, check=False)  # fmt: skip
 
 
-@needs_ansible
-def test_the_rendered_unit_writes_its_record_on_start_and_on_a_failed_stop(tmp_path):
+def _first(tmp_path):
     (tmp_path / "units").mkdir()
     v = {
         "lynis_min_hardening_index": 60,
@@ -89,7 +95,13 @@ def test_the_rendered_unit_writes_its_record_on_start_and_on_a_failed_stop(tmp_p
         "lynis_schedule": "*-*-* 03:30:00 UTC",
         **last_run_vars(tmp_path, "lynis"),
     }
-    r = run_role(tmp_path, "lynis", "config", v)
+    return {"role": "lynis", "tasks_from": "config", "extra_vars": v}
+
+
+@needs_ansible
+@first_run(_first)
+def test_the_rendered_unit_writes_its_record_on_start_and_on_a_failed_stop(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     lines = _writer_lines(
         (tmp_path / "units" / "hnx-lynis.service").read_text(), "hnx-lynis.service"
