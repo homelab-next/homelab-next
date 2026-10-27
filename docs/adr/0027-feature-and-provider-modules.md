@@ -131,10 +131,11 @@ with no schema, generator or check in any form):
 3. `platform/interface` 1.0: the shape of a manifest `interfaces:` entry, published as a draft
    schema; `gate: true` on a gate interface's definition and on its gate's consuming entry, with
    the rules that the gate module owns it and never provides it (no standalone loader yet);
-4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
-   remote-admin, cloud-bound model roles and `grants.shared_config`, and the per-field review tier
-   for in-tree manifests (the review-policy module kinds came with follow-up 5, for fetched
-   modules, with a flat tier);
+4. the trust-tier grants: implemented as site rules (`grants.units`, `grants.shared_config`,
+   `grants.upstreams` for broker, idp and remote-admin, and `grants.cloud_models` for a model role
+   with a `leaves_lab` binding, model roles 1.3); the loader will pass the units, rows and role
+   table they read. Not done: the per-field review tier for in-tree manifests (the review-policy
+   module kinds came with follow-up 5, for fetched modules, with a flat tier);
 5. the supply chain: implemented (`homelabnext.modules.supply`: the tree digest, the draft schema
    `platform/module_lock` 1.0 for `lab/modules.lock`, and reviews keyed by the digest against the
    new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader will

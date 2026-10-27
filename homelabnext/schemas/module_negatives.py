@@ -572,6 +572,16 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["scope"]["trusted"].__setitem__("lan", [DOC_NET]),
         "A misspelt scope part is refused, never read as an extra list nobody reads.",
     ),
+    "upstream-grant-not-authority": (
+        "full",
+        lambda d: d["grants"].__setitem__("upstreams", {"publishing": ["cap:secrets"]}),
+        "grants.upstreams names only broker, idp or remote-admin (secrets is never an upstream).",
+    ),
+    "cloud-model-not-a-role": (
+        "full",
+        lambda d: d["grants"].__setitem__("cloud_models", {"publishing": ["main-reasoner"]}),
+        "grants.cloud_models names model roles as mdl:<role>.",
+    ),
 }
 
 
