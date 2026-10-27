@@ -45,11 +45,17 @@ def _root(arg: Path | None) -> Path:
     return root
 
 
-def _read(path: Path, what: str) -> Any:
+def _read(path: Path, what: str, budget: ld.Budget | None = None) -> Any:
     try:
-        return ld.load_json(path) if path.suffix == ".json" else ld.load_yaml(path)
+        return ld.load_input(path, budget)
     except ld.Unreadable as exc:
         raise ld.LoaderError(f"{what} {path}: {exc}") from None
+
+
+def _shown_path(path: Path, root: Path) -> str:
+    """A path in a note: relative to the repository root when it is under it."""
+    p = path.resolve()
+    return p.relative_to(root).as_posix() if p.is_relative_to(root) else str(path)
 
 
 def _given(path: Path | None, flag: str) -> Path | None:
@@ -94,27 +100,37 @@ def _run(args: argparse.Namespace) -> int:
     for flag in ("site", "slots", "roles", "services", "lock", "review_policy"):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
-    if args.cmd == "render" and args.out.exists() and any(args.out.iterdir()):
-        raise ld.LoaderError(f"--out {args.out}: not empty (render writes a fresh directory)")
+    if args.cmd == "render" and (args.out.exists() or args.out.is_symlink()):
+        if not args.out.is_dir() or args.out.is_symlink():
+            raise ld.LoaderError(f"--out {args.out}: not a directory")
+        if any(args.out.iterdir()):
+            raise ld.LoaderError(f"--out {args.out}: not empty (render writes a fresh directory)")
     notes: list[str] = []
     lab = args.overlay / "lab" if args.overlay else None
+    budget = ld.Budget()
     public = root / "modules"
     if not public.is_dir() or not any(public.iterdir()):
-        notes.append(f"the public modules/ tree ({public}) is missing or empty")
+        notes.append("the public modules/ tree is missing or empty")
     fixtures = root / "examples" / "modules" if args.examples else None
-    tree, problems = ld.discover(public, fixtures, args.overlay)
+    tree, problems = ld.discover(public, fixtures, args.overlay, budget)
     in_tree = (public, *([fixtures] if fixtures else []))
-    slots = _read(args.slots or root / "examples" / "modules" / "slots.yml", "slot registry")
+    slots = _read(
+        args.slots or root / "examples" / "modules" / "slots.yml", "slot registry", budget
+    )
     roles_path = args.roles or _existing(lab and lab / "model_roles.json")
     if roles_path is None:
         roles_path = root / "examples" / "model_roles.json"
-        notes.append(f"the role table is the repository's example ({roles_path})")
-    roles = _read(roles_path, "role table")
+        notes.append(
+            f"the role table is the repository's example ({_shown_path(roles_path, root)})"
+        )
+    roles = _read(roles_path, "role table", budget)
     services = args.services or _existing(lab and lab / "services.yml")
     if services is None:
         services = root / "examples" / "services.yml"
-        notes.append(f"the core registry is the repository's example ({services})")
-    core, registry_problems = ld.core_names(_read(services, "core registry"))
+        notes.append(
+            f"the core registry is the repository's example ({_shown_path(services, root)})"
+        )
+    core, registry_problems = ld.core_names(_read(services, "core registry", budget))
     site_path = args.site or _existing(lab and lab / "modules.yml")
     lock_path = args.lock or _existing(lab and lab / "modules.lock")
     policy_path = args.review_policy or _existing(lab and lab / "review-policy.yml")
@@ -126,7 +142,7 @@ def _run(args: argparse.Namespace) -> int:
             policy = load_policy(policy_path)
         except ReviewError as exc:
             raise ld.LoaderError(f"review policy {policy_path}: {exc}") from None
-    site = _read(site_path, "site selection") if site_path else None
+    site = _read(site_path, "site selection", budget) if site_path else None
     if args.cmd == "render" and site is None:
         raise ld.LoaderError(
             "render needs a site selection (--site, or --overlay with lab/modules.yml)"
@@ -142,21 +158,23 @@ def _run(args: argparse.Namespace) -> int:
         in_tree_roots=in_tree,
         core=core,
         site=site,
-        lock=_read(lock_path, "lock") if lock_path else None,
+        lock=_read(lock_path, "lock", budget) if lock_path else None,
         policy=policy,
-        inventory=_read(running, "inventory") if running else None,
+        inventory=_read(running, "inventory", budget) if running else None,
+        budget=budget,
     )
     found = sorted({*problems, *registry_problems, *report.problems})
     notes += report.notes
     written: dict[str, int] = {}
+    error = None
     if not found and args.cmd == "render":
-        written = _render(args, tree, site)
-        if not written:
-            return 1
+        written, error = _render(args, tree, site)
     if args.json:
         doc = {"problems": [str(p) for p in found], "notes": notes, "modules": len(tree.mods)}
         if args.cmd == "render":
             doc["written"] = written
+        if error:
+            doc["error"] = error
         print(json.dumps(doc, indent=2))
     else:
         for p in found:
@@ -169,10 +187,15 @@ def _run(args: argparse.Namespace) -> int:
                 f"egress file(s) under {args.out}"
             )
         print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
-    return 1 if found else 0
+    if error:
+        print(f"hnx modules render: {error}", file=sys.stderr)
+    return 1 if found or error else 0
 
 
-def _render(args: argparse.Namespace, tree: ld.Tree, site: dict) -> dict[str, int]:
+def _render(
+    args: argparse.Namespace, tree: ld.Tree, site: dict
+) -> tuple[dict[str, int], str | None]:
+    """(files written per output, or the generator's refusal)."""
     from homelabnext.modules import egress, limits
 
     ins = ld.inputs(tree)
@@ -180,11 +203,10 @@ def _render(args: argparse.Namespace, tree: ld.Tree, site: dict) -> dict[str, in
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins))
     except (limits.LimitsError, egress.EgressError) as exc:
-        print(f"hnx modules render: {exc}", file=sys.stderr)
-        return {}
+        return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
-    return {"limits": len(lim), "egress": len(egr)}
+    return {"limits": len(lim), "egress": len(egr)}, None
 
 
 def main(argv: list[str] | None = None) -> int:

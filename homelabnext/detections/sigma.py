@@ -190,9 +190,11 @@ def parse_condition(text: str, names: list[str]) -> tuple:
     return ast
 
 
-def load_rule(path: Path) -> Rule:
+def load_rule(path: Path, text: str | None = None) -> Rule:
+    """The rule at ``path``; with ``text``, that text stands for the file's (a caller that has
+    already read it safely, such as the module loader, passes it so the file is read once)."""
     try:
-        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8") if text is None else text)
     except yaml.YAMLError as exc:
         raise RuleError(f"{path}: invalid YAML: {exc}") from exc
     if not isinstance(raw, dict):

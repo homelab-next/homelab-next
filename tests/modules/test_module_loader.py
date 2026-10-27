@@ -192,6 +192,24 @@ def test_a_symbolic_link_module_directory_or_manifest_is_refused(tmp_path):
     assert tree.mods == {}
 
 
+def test_a_hard_linked_module_yml_is_refused(tmp_path):
+    d = tmp_path / "lab" / "modules" / "publishing"
+    shutil.copytree(EXAMPLES / "publishing", d)
+    (d / "module.yml").unlink()
+    os.link(_alias(tmp_path), d / "module.yml")
+    tree, found = ld.discover(overlay=tmp_path)
+    assert messages(found) == [
+        "publishing: module.yml: a hard link (it may alias a file outside the module)"
+    ]
+    assert tree.mods == {}
+
+
+def _alias(tmp_path):
+    outside = tmp_path / "alias.yml"
+    outside.write_bytes((EXAMPLES / "publishing" / "module.yml").read_bytes())
+    return outside
+
+
 def test_an_untrusted_name_is_printed_escaped():
     p = ld.Problem("::error::x\n\x1b[31m", "y\x1b[0m\nz")
     assert str(p) == "'::error::x\\n\\x1b[31m': y\\x1b[0m\\nz"
@@ -234,6 +252,40 @@ def test_a_yaml_alias_bomb_is_refused_before_it_expands(tmp_path):
     bomb.write_text("\n".join(lines) + "\n")
     with pytest.raises(ld.Unreadable, match="an alias"):
         ld.load_yaml(bomb)
+
+
+def test_each_contributed_file_is_read_and_parsed_once_per_run(tmp_path, monkeypatch):
+    tree, _ = examples()
+    reads = []
+    real = ld.read_bytes
+    monkeypatch.setattr(ld, "read_bytes", lambda p, **k: reads.append(Path(p)) or real(p, **k))
+    check(tree, site=SITES["small-lab"], inventory=INVENTORY)
+    assert reads and len(reads) == len(set(reads))  # the rules read some files more than once
+
+
+def test_a_module_whose_files_add_up_past_its_budget_is_refused(monkeypatch):
+    tree, _ = examples()
+    got = messages(check(tree, budget=ld.Budget(per_module=200)))
+    assert any(m.endswith("its files add up to over 200 bytes") for m in got), got
+
+
+def test_a_run_whose_files_add_up_past_its_budget_is_refused(tmp_path):
+    budget = ld.Budget(per_run=2000)
+    _, found = ld.discover(fixtures=EXAMPLES, budget=budget)
+    assert any("the run's files add up to over 2000 bytes" in m for m in messages(found))
+
+
+def test_a_sigma_rule_is_validated_from_the_text_the_loader_read(monkeypatch):
+    import homelabnext.detections.sigma as sigma
+
+    seen = []
+    real = sigma.load_rule
+    monkeypatch.setattr(
+        sigma, "load_rule", lambda p, text=None: seen.append(text) or real(p, text=text)
+    )
+    tree, _ = examples()
+    check(tree)
+    assert seen and all(isinstance(t, str) for t in seen)  # never re-opened by the rule loader
 
 
 # ----------------------------------------------------------------------------- per manifest
@@ -486,6 +538,33 @@ def test_the_cli_exits_100_on_an_internal_failure(capsys, monkeypatch):
     monkeypatch.setattr(ld, "check", boom)
     code, out = run(capsys)
     assert code == 100 and "internal error" in out.err
+
+
+def test_render_into_a_file_is_a_usage_error(capsys, tmp_path):
+    out = tmp_path / "out"
+    out.write_text("x")
+    site = str(EXAMPLES / "sites" / "full.yml")
+    code, got = run(capsys, "--site", site, "--out", str(out), cmd="render")
+    assert code == 2 and "not a directory" in got.err
+
+
+def test_a_generator_refusal_is_a_json_error_with_exit_1(capsys, tmp_path, monkeypatch):
+    from homelabnext.modules import limits
+
+    def refuse(*_a, **_k):
+        raise limits.LimitsError("planted")
+
+    monkeypatch.setattr(limits, "render", refuse)
+    site = str(EXAMPLES / "sites" / "full.yml")
+    code, got = run(capsys, "--site", site, "--out", str(tmp_path / "o"), "--json", cmd="render")
+    assert code == 1 and json.loads(got.out)["error"] == "planted"
+
+
+def test_notes_name_a_path_under_the_root_relative_to_it(capsys):
+    _, out = run(capsys)
+    assert "note: the core registry is the repository's example (examples/services.yml)" in (
+        out.out
+    )
 
 
 def test_render_writes_a_fresh_directory_only_for_a_clean_site(capsys, tmp_path):

@@ -865,8 +865,11 @@ site, the selected modules' supply chain runs too (`homelabnext.modules.supply`;
 with no lock is refused).
 
 **Every file is read the same way**: opened without blocking (a FIFO or a device is refused,
-never waited on), a regular file only, at most 4 MB (a larger file is refused, never skipped),
-YAML with duplicate keys and **aliases** refused, and a document nested too deeply refused; each
+never waited on), a regular file only and not a hard link, at most 1 MB (a larger file is
+refused, never skipped; one cap for every file, since none needs more: the largest example is
+13 kB), YAML with duplicate keys and **aliases** refused, and a document nested too deeply
+refused. A module's files may add up to 2 MB and the run's to 8 MB, refused once spent, and each
+file is read and parsed once per run, so a planted tree cannot stall it; each
 is a named problem against its module, the selection, the registry or the inventory (exit 1),
 or, for an input named on the command line, a usage error (exit 2). Untrusted names (directory
 names, ids) are printed quoted and escaped when they are not plain identifiers, so they cannot
@@ -875,7 +878,8 @@ carry a terminal escape, a line break or a CI workflow command. Whatever the loa
 repository's examples instead of the overlay (the role table, the core registry, an empty
 public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE --out
 DIR` writes the footprint limits and the egress policy, only for a site that checks clean and
-only into a new or empty `DIR` (stale files from an earlier render never mix in). The rules
+only into a new or empty directory (stale files from an earlier render never mix in; a file
+there is a usage error); with `--json`, a generator's refusal is the output's `error`. The rules
 (`homelabnext/modules/rules.py`):
 
 1. **Per manifest**: id equals the directory and is not reserved; `origin: in-tree` exactly when the

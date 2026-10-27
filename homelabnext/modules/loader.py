@@ -29,8 +29,11 @@ rules need, so no rule is skipped because a caller forgot an argument:
 
 What was not checked is a note in the report, never a pass.  Every file is read the same way
 (:func:`read_bytes`): opened without blocking, a regular file only, at most :data:`MAX_BYTES`;
-YAML with duplicate keys and aliases refused, and a document nested too deeply refused.  A file
-that breaks any of these is a named problem, never a skip and never an internal error.
+YAML with duplicate keys and aliases refused, and a document nested too deeply refused.  The
+files of one module, and of the whole run, are held to a :class:`Budget`, and each contributed
+file is read and parsed once per run (:class:`ModuleReader`), so a planted tree cannot stall
+the run.  A file that breaks any of these is a named problem, never a skip and never an internal
+error.
 """
 
 from __future__ import annotations
@@ -56,9 +59,13 @@ Doc = dict[str, Any]
 
 __all__ = [
     "MAX_BYTES",
+    "MODULE_BYTES",
+    "RUN_BYTES",
     "VALIDATED_KINDS",
+    "Budget",
     "CoreNames",
     "LoaderError",
+    "ModuleReader",
     "Problem",
     "Report",
     "Tree",
@@ -68,6 +75,7 @@ __all__ = [
     "core_names",
     "discover",
     "inputs",
+    "load_input",
     "load_json",
     "load_yaml",
     "read_bytes",
@@ -75,8 +83,12 @@ __all__ = [
 ]
 
 #: the largest file the loader reads (a manifest, a record, the selection, the inventory, the role
-#: table, the registry, the lock): a larger one is refused, never skipped
-MAX_BYTES = 4_000_000
+#: table, the registry, the lock; one cap for all): a larger one is refused, never skipped
+MAX_BYTES = 1_000_000  # no input needs more: the largest example (services.yml) is 13 kB
+#: what one module's files, and the whole run's, may add up to; refused once spent (a parse of
+#: dense YAML runs at well under a megabyte a second, so these bound the run's time)
+MODULE_BYTES = 2_000_000
+RUN_BYTES = 8_000_000
 #: files a fixture root's modules may name without shipping (the fictional examples carry no
 #: Ansible): never exempt for the public tree or an overlay
 FIXTURE_UNSHIPPED = ("roles/", "playbooks/")
@@ -195,23 +207,67 @@ class _Loader(UniqueKeyLoader):
         return super().compose_node(parent, index)
 
 
-def _text(path: str | Path, follow: bool) -> str:
+class Budget:
+    """The bytes a run may read: :data:`MODULE_BYTES` per module and :data:`RUN_BYTES` in all,
+    refused (:class:`Unreadable`) once spent."""
+
+    def __init__(self, per_module: int | None = None, per_run: int | None = None) -> None:
+        self.per_module = MODULE_BYTES if per_module is None else per_module
+        self.per_run = RUN_BYTES if per_run is None else per_run
+        self.spent: dict[str, int] = {}
+        self.total = 0
+
+    def charge(self, key: str, n: int) -> None:
+        self.spent[key] = self.spent.get(key, 0) + n
+        self.total += n
+        if self.spent[key] > self.per_module:
+            raise Unreadable(f"its files add up to over {self.per_module} bytes")
+        if self.total > self.per_run:
+            raise Unreadable(f"the run's files add up to over {self.per_run} bytes")
+
+
+def _decoded(data: bytes) -> str:
     try:
-        return read_bytes(path, follow=follow).decode("utf-8")
+        return data.decode("utf-8")
     except UnicodeDecodeError:
         raise Unreadable("not UTF-8") from None
+
+
+def _text(path: str | Path, follow: bool) -> str:
+    return _decoded(read_bytes(path, follow=follow))
 
 
 def load_yaml(path: str | Path, *, follow: bool = True) -> Any:
     """A YAML file read safely (:func:`read_bytes`): duplicate keys and aliases refused, and a
     document nested too deeply refused; each as :class:`Unreadable`."""
-    text = _text(path, follow)
+    return parse_yaml(_text(path, follow))
+
+
+def parse_yaml(text: str) -> Any:
+    """YAML text with duplicate keys and aliases refused and deep nesting refused."""
     try:
         return yaml.load(text, Loader=_Loader)
     except yaml.YAMLError as exc:
         raise Unreadable(
             f"not valid YAML ({exc.__class__.__name__}: {getattr(exc, 'problem', '') or exc})"
         ) from None
+    except RecursionError:
+        raise Unreadable("nested too deeply") from None
+
+
+def load_input(path: str | Path, budget: Budget | None = None) -> Any:
+    """A site input (the selection, the inventory, the role table, the registry, the lock, the
+    slot registry): JSON by its suffix, else YAML, read safely and charged to the run's budget."""
+    data = read_bytes(path)
+    if budget is not None:
+        budget.charge("inputs", len(data))
+    text = _decoded(data)
+    if Path(path).suffix != ".json":
+        return parse_yaml(text)
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise Unreadable(f"not valid JSON ({exc.__class__.__name__})") from None
     except RecursionError:
         raise Unreadable("nested too deeply") from None
 
@@ -248,13 +304,17 @@ def _errors(schema: Doc, doc: Any) -> list[str]:
 
 
 def discover(
-    public: Path | None = None, fixtures: Path | None = None, overlay: Path | None = None
+    public: Path | None = None,
+    fixtures: Path | None = None,
+    overlay: Path | None = None,
+    budget: Budget | None = None,
 ) -> tuple[Tree, list[Problem]]:
     """Every ``<id>/module.yml`` under the given roots (``overlay`` is the overlay checkout: its
     ``lab/modules/`` is read).  A manifest that cannot be read, a symbolic-link module directory
     or manifest, an id that is not its directory, a reserved id, an id under two shipped roots,
     or (from the overlay) an id that shadows a shipped one is refused and left out of the tree."""
     tree, out = Tree(), []
+    budget = budget or Budget()
     roots = [("public", public), ("fixture", fixtures)]
     if overlay is not None:
         roots.append(("overlay", overlay / "lab" / "modules"))
@@ -270,7 +330,11 @@ def discover(
                 out.append(Problem(name, "a symbolic-link module directory or module.yml"))
                 continue
             try:
-                doc = load_yaml(mf, follow=False)
+                if mf.lstat().st_nlink > 1:
+                    raise Unreadable("a hard link (it may alias a file outside the module)")
+                data = read_bytes(mf, follow=False)
+                budget.charge(name, len(data))
+                doc = parse_yaml(_decoded(data))
             except Unreadable as exc:
                 out.append(Problem(name, f"module.yml: {exc}"))
                 continue
@@ -351,22 +415,43 @@ def _file_problems(doc: Doc, mod_dir: Path, fixture: bool) -> tuple[list[str], b
     return out, exempt
 
 
-def module_reader(tree: Tree) -> Callable[[Path], Any]:
+class ModuleReader:
     """The ``load`` the rules read contributed files with: only a contained regular file of one
-    of the tree's modules (:func:`_contained`), read safely (:func:`load_yaml`)."""
-    dirs = sorted(tree.dirs.values(), key=lambda d: -len(str(d)))
+    of the tree's modules (:func:`_contained`), read safely (:func:`read_bytes`, never through a
+    final link), charged to the module's and the run's :class:`Budget`, and parsed once per run
+    (the rules read some files more than once)."""
 
-    def load(path: Path) -> Any:
+    def __init__(self, tree: Tree, budget: Budget | None = None) -> None:
+        self._dirs = sorted(tree.dirs.items(), key=lambda kv: -len(str(kv[1])))
+        self.budget = budget or Budget()
+        self._texts: dict[Path, str] = {}
+        self._docs: dict[Path, Any] = {}
+
+    def text(self, path: Path) -> str:
         p = Path(path)
-        for d in dirs:
+        if p in self._texts:
+            return self._texts[p]
+        for mid, d in self._dirs:
             if p.is_relative_to(d):
-                why = _contained(d, p.relative_to(d).as_posix())
+                rel = p.relative_to(d).as_posix()
+                why = _contained(d, rel)
                 if why:
-                    raise Unreadable(f"{p.relative_to(d).as_posix()}: {why}")
-                return load_yaml(p, follow=False)
+                    raise Unreadable(f"{rel}: {why}")
+                data = read_bytes(p, follow=False)
+                self.budget.charge(mid, len(data))
+                self._texts[p] = _decoded(data)
+                return self._texts[p]
         raise Unreadable(f"{p}: outside every module")
 
-    return load
+    def __call__(self, path: Path) -> Any:
+        p = Path(path)
+        if p not in self._docs:
+            self._docs[p] = parse_yaml(self.text(p))
+        return self._docs[p]
+
+
+def module_reader(tree: Tree, budget: Budget | None = None) -> ModuleReader:
+    return ModuleReader(tree, budget)
 
 
 def _record_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
@@ -434,7 +519,7 @@ def _record_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
         from homelabnext.detections.sigma import RuleError, load_rule
 
         try:
-            load_rule(mod_dir / e)
+            load_rule(mod_dir / e, text=load.text(mod_dir / e))
         except RuleError as exc:
             out.append(f"{e}: not a Sigma rule ({str(exc).rsplit(': ', 1)[-1]})")
     for i in doc.get("interfaces", []):
@@ -605,13 +690,14 @@ def check(
     lock: Any = None,
     policy: Any = None,
     inventory: Doc | None = None,
+    budget: Budget | None = None,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
     the supply chain, with ``inventory`` the runtime half of the two-way check."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
-    load = module_reader(tree)
+    load = module_reader(tree, budget)
     module_schema = _schema("platform", "module.schema.json")
     valid: dict[str, Doc] = {}
     exempted = []
