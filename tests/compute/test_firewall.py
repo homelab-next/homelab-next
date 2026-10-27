@@ -177,7 +177,7 @@ def test_rules_on_a_disabled_nic_are_rejected(tmp_path):
     assert "flag is disabled" in problems(fleet_dir(tmp_path, "lake-core", edit))
 
 
-def test_rules_on_a_host_are_rejected(tmp_path):
+def test_rules_on_a_host_that_runs_no_host_ruleset_are_rejected(tmp_path):
     d = fleet_dir(
         tmp_path,
         "hv-a",
@@ -185,7 +185,25 @@ def test_rules_on_a_host_are_rejected(tmp_path):
             firewall_rules={"inbound_allow": [{"name": "x", "proto": "icmp", "source": "any"}]}
         ),
     )
-    assert "vm and lxc only" in problems(d)
+    assert "firewall_rules on kind host need its baselines to resolve host-firewall" in problems(d)
+
+
+def test_rules_on_a_host_reach_its_own_ruleset_and_no_hypervisor_file(tmp_path):
+    """A host's rules go to its nftables_host ruleset (hnx_firewall), never to a .fw file."""
+    d = fleet_dir(
+        tmp_path,
+        "hv-a",
+        lambda x: x.update(
+            baseline={"names": ["base"]},
+            firewall_rules={"inbound_allow": [{"name": "x", "proto": "icmp", "source": "any"}]},
+        ),
+    )
+    f = load_fleet(d, STUB)
+    hv = yaml.safe_load(render(f, "inventory")["host_vars/hv-a.example.internal.yml"])
+    assert hv["hnx_firewall"]["inbound_allow"] == [{"name": "x", "proto": "icmp", "source": "any"}]
+    assert set(render(f, "firewall-rules")) == set(
+        render(load_fleet(FLEET, STUB), "firewall-rules")
+    )
 
 
 # ---------------------------------------------------------------- rule semantics
@@ -720,3 +738,121 @@ def test_an_outbound_allow_never_holds_a_metadata_address(tmp_path, guest):
     assert "firewall_rules.link-local: dest 169.254.0.0/16 holds the cloud metadata address" in (
         problems(fleet_dir(tmp_path, guest, link_local))
     )
+
+
+# ---------------------------------------------------------------- physical model runtimes
+PHYSICAL = HERE / "physical" / "gpu-1.yml"
+EGRESS = {
+    "layer": "network",
+    "description": "Outbound traffic only to listed destinations.",
+    "role": None,
+    "verify": "a connection to an unlisted outside address is refused",
+}
+
+
+def physical_fleet(tmp_path: Path, edit=None, *, egress: bool = True) -> Path:
+    """The test fleet plus gpu-1 (tests/compute/physical), with a ``model-runtime`` baseline that
+    resolves egress-filter when the set defines it (``egress=False`` leaves the control out)."""
+    d = fleet_dir(tmp_path)
+    p = d / "_baselines.yml"
+    doc = yaml.safe_load(p.read_text())
+    runtime = {"description": "A model runtime.", "extends": ["server"], "controls": []}
+    if egress:
+        doc["controls"]["egress-filter"] = EGRESS
+        runtime["controls"] = ["egress-filter"]
+        g = d / "infer-core.yml"
+        guest = yaml.safe_load(g.read_text())
+        guest["baseline"]["add"] = ["egress-filter"]
+        g.write_text(yaml.safe_dump(guest, sort_keys=False))
+    else:
+        runtime["controls"] = ["host-firewall"]
+    doc["baselines"]["model-runtime"] = runtime
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    host = yaml.safe_load(PHYSICAL.read_text())
+    if edit:
+        edit(host)
+    (d / "gpu-1.yml").write_text(yaml.safe_dump(host, sort_keys=False))
+    return d
+
+
+def test_a_physical_model_runtime_with_egress_filter_and_lab_allows_is_accepted(tmp_path):
+    f = load_fleet(physical_fleet(tmp_path), STUB)
+    hv = yaml.safe_load(render(f, "inventory")["host_vars/gpu-1.example.internal.yml"])
+    assert hv["hnx_kind"] == "host" and "egress-filter" in hv["hnx_controls"]
+    assert hv["hnx_firewall"]["policy_out"] == "DROP"
+    assert [r["dest"] for r in hv["hnx_firewall"]["outbound_allow"]] == [
+        "192.0.2.0/24",
+        "192.0.2.0/24",
+        "198.51.100.0/25",
+    ]
+    assert set(render(f, "firewall-rules")) == set(
+        render(load_fleet(FLEET, STUB), "firewall-rules")
+    )
+
+
+def test_a_physical_model_runtime_whose_set_defines_no_egress_filter_is_refused(tmp_path):
+    msg = problems(physical_fleet(tmp_path, egress=False))
+    assert (
+        "guest:gpu-1: cap:inference runs models or model-written code on a physical host: the "
+        "baseline set must define egress-filter"
+    ) in msg
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda x: x.update(baseline={"names": ["server"]}),
+        lambda x: x.update(
+            baseline={
+                "names": ["model-runtime"],
+                "remove": [{"control": "egress-filter", "reason": "Filtered by the rack switch."}],
+            }
+        ),
+        lambda x: x.update(
+            baseline={
+                "exemption": {"reason": "Hardened by its vendor image instead of a baseline."}
+            }
+        ),
+    ],
+    ids=["baseline-without-it", "removed", "exempted"],
+)
+def test_a_physical_model_runtime_without_egress_filter_is_refused(tmp_path, edit):
+    msg = problems(physical_fleet(tmp_path, edit))
+    assert "on a physical host: its baselines must resolve egress-filter" in msg
+
+
+def test_a_physical_model_runtime_with_open_egress_is_refused(tmp_path):
+    for edit in (
+        lambda x: x["firewall_rules"].update(policy_out="ACCEPT", outbound_allow=[]),
+        lambda x: x.pop("firewall_rules"),
+    ):
+        msg = problems(physical_fleet(tmp_path / str(id(edit)), edit))
+        assert f"guest:gpu-1: cap:inference runs models or model-written code: {ACCEPTS}" in msg
+
+
+@pytest.mark.parametrize(
+    "dest",
+    ["any", "0.0.0.0/0", "8.0.0.0/7"],  # scrub-allow: a public range the rule must refuse
+    ids=["any", "default-route", "public"],
+)
+def test_a_physical_model_runtime_internet_allow_is_refused(tmp_path, dest):
+    def allow(x):
+        x["firewall_rules"]["outbound_allow"].append(
+            {"name": "registry", "proto": "tcp", "ports": "443", "dest": dest}
+        )
+
+    msg = problems(physical_fleet(tmp_path, allow))
+    assert "guest:gpu-1: cap:inference runs models or model-written code: " in msg
+    assert f"firewall_rules.registry: dest {dest} reaches the internet" in msg
+
+
+def test_a_physical_model_runtime_metadata_allow_is_refused(tmp_path):
+    imds = "169.254.169.254/32"  # scrub-allow: cloud metadata, refused
+
+    def allow(x):
+        x["firewall_rules"]["outbound_allow"].append(
+            {"name": "imds", "proto": "tcp", "ports": "80", "dest": imds}
+        )
+
+    msg = problems(physical_fleet(tmp_path, allow))
+    assert f"guest:gpu-1: firewall_rules.imds: dest {imds} holds the cloud metadata" in msg

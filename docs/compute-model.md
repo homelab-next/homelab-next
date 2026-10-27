@@ -80,9 +80,9 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
-| `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
+| `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; on vm/lxc only with the flag on, on a host only when its baselines resolve `host-firewall` or `egress-filter` (a host's rules reach its own `nftables_host` ruleset, never a hypervisor file) | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
-| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is not ACCEPT, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
+| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. A physical one (`kind: host`) has `policy_out: DROP` or `REJECT`, no internet `outbound_allow`, and baselines that resolve `egress-filter`, which the set must define; no exemption stands in for it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is not ACCEPT, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
@@ -320,8 +320,8 @@ reasoning is not a security boundary, and an agent's network should be default-d
 
 What is enforced:
 
-- **Default-deny egress, to the lab only.** Validation refuses a model runtime (a `vm` or `lxc`)
-  whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
+- **Default-deny egress, to the lab only.** Validation refuses a model runtime (a `vm`, `lxc` or
+  physical `host`) whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
   reaches the internet: `any`, a `/0`, or any network not inside the never-internet ranges
   (`homelabnext.modules.egress.NOT_INTERNET`), a `zone:` destination judged by its subnet in the
   site model. No guest's `outbound_allow` may hold a cloud metadata address either, since the
@@ -330,6 +330,21 @@ What is enforced:
   the internet is reached through the gateway, never directly. The example lab's `infer-core`
   runs the `model-runtime` baseline (`server` plus `egress-filter` and the stricter
   `os-hardening`; add `network-sensor` where the lab has a sensor host), and with a set that defines `egress-filter` the guest must resolve it.
+- **Physical model runtimes.** A `kind: host` model runtime (a GPU box outside any hypervisor)
+  has no NIC firewall, so its own `nftables_host` ruleset is all that filters it. It states its
+  outbound policy and allow list in `firewall_rules` like a guest (the inventory carries them as
+  `hnx_firewall`; no `<vmid>.fw` file is rendered for a host), and validation refuses it unless
+  `policy_out` is `DROP` or `REJECT`, no `outbound_allow` reaches the internet, and its baselines
+  resolve `egress-filter`, a control the baseline set must define. Neither a baseline exemption
+  nor a `filtered_by` pointer stands in for it. Any host's `firewall_rules` need its baselines to
+  resolve `host-firewall` or `egress-filter`, since nothing else enforces them (fixture:
+  `tests/compute/physical/gpu-1.yml`).
+- **Serving roles open no egress.** `vllm_server` runs with the hub offline and reads weights only
+  from the local store; `model_store` fetches hub entries, and on a host whose `policy_out` is
+  `DROP` or `REJECT` it refuses to run without `model_store_hf_endpoint`, the lab's hub mirror
+  (`model_store_require_mirror`), because the public hub can never be an allow there. List the
+  mirror (and any registry the host pulls from) in `outbound_allow` as the lab destination it is,
+  as the example's `model-store` rule does.
 - **Filtered elsewhere is a pointer, not prose.** A model runtime whose NIC firewall is off needs a
   `firewall_exemption` with `filtered_by` (guest 1.5) and a `review_by` date that has not passed
   (judged against `HNX_TODAY` when set, else today). A guest pointer must name a guest that
@@ -366,9 +381,10 @@ What is not enforced:
   the `model-runtime` baseline and `policy_out: DROP` yourself. `cap:codemode-runner` is not a
   model runtime: it runs pinned code that relays a program's calls to the broker, and the program
   itself runs in the executor (`docs/codemode.md`, CM-5b).
-- A physical host (`kind: host`) carries no `firewall_rules`, so a GPU box serving models outside
-  a hypervisor is not checked (validation has no warning channel to flag it): filter it upstream
-  (the network model) or give it `nftables_host` input by hand.
+- A physical model runtime's only outbound filter is its own ruleset: nothing the model states
+  sits upstream of it, so someone with root on the box can still flush the table (the
+  `hnx-egress-drop: ` logs just stop; the role's `health` hook, which checks the output policy
+  is drop, is what notices).
 - A guest without `host-firewall` or `egress-filter` gets no metadata refusal on the guest; the
   hypervisor's firewall files do not carry it.
 - Forwarded traffic is refused only for the metadata addresses: the forward chain does not apply

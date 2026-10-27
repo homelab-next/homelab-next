@@ -40,6 +40,10 @@ argument_specs:
         type: str
         description: "A hub mirror (https URL) used instead of the public hub; empty: the hub."
         default: ""
+      model_store_require_mirror: &mirror
+        type: bool
+        description: "Refuse a fetch without model_store_hf_endpoint (default: the host's hnx_firewall.policy_out is DROP or REJECT, so the public hub is unreachable)."
+        default: "{{ (hnx_firewall | default({})).get('policy_out', 'ACCEPT') != 'ACCEPT' }}"
       model_store_hf_token_ref: &token
         type: str
         description: "secret:<name> holding the hub token for gated repositories; empty: anonymous."

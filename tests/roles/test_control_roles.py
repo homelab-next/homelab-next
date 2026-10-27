@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 from rolerun import calls, fake, last_run_vars, logging_fake, run_cases, run_role
+
+ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
@@ -510,6 +513,37 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(tmp_path):
     assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"]
     assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
     assert len(calls(tmp_path)) == 1
+
+
+def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
+    """gpu-1 (kind host, cap:inference; tests/compute/physical) end to end: the inventory the
+    compute model renders for it is what the role is fed, and the ruleset that passes nft's own
+    check drops every outbound packet its lab allows do not name."""
+    import importlib.util
+
+    import yaml
+
+    from homelabnext.compute import load_fleet, render
+
+    spec = importlib.util.spec_from_file_location(
+        "compute_test_firewall", ROOT / "tests" / "compute" / "test_firewall.py"
+    )
+    tf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tf)
+    fleet = load_fleet(tf.physical_fleet(tmp_path / "src"), tf.STUB)
+    hv = yaml.safe_load(render(fleet, "inventory")["host_vars/gpu-1.example.internal.yml"])
+    egress = "egress-filter" in hv["hnx_controls"]
+    v = nft_vars(tmp_path, nftables_host_firewall=hv["hnx_firewall"],
+                 nftables_host_require_egress=egress)  # fmt: skip
+    r = run_role(tmp_path, "nftables_host", "config", v)
+    assert egress and r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "nftables.conf").read_text()
+    out = text.split("chain output {", 1)[1]
+    assert "type filter hook output priority filter; policy drop;" in out
+    assert 'ip daddr 198.51.100.0/25 tcp dport 443 accept comment "model-store"' in out
+    assert out.rstrip().endswith('log prefix "hnx-egress-drop: " level warn\n\t}\n}')
+    assert 'ip saddr 198.51.100.0/25 tcp dport 8000 accept comment "inference-api"' in text
+    assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"]
 
 
 def test_nftables_host_accept_egress_refuses_only_the_metadata_services(tmp_path):

@@ -19,6 +19,15 @@
       hub mirror or nothing, a secret: reference for the hub token or nothing, and fetch ids that
       name manifest entries
 
+- name: Refuse a fetch from the public hub on a host whose outbound traffic is default-deny
+  ansible.builtin.assert:
+    that:
+      - not (model_store_require_mirror | bool) or not (model_store_fetch | bool) or model_store_hf_endpoint != ''
+    fail_msg: >-
+      model_store: this host's outbound policy is default-deny, so the public hub is unreachable;
+      set model_store_hf_endpoint to the lab's hub mirror and list it in the guest's
+      firewall_rules.outbound_allow (this role opens no egress)
+
 - name: Refuse an entry that is not pinned, or a path that leaves its directory
   ansible.builtin.assert:
     that:

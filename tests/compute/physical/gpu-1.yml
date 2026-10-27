@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# A physical model runtime (kind: host, cap:inference): no hypervisor NIC firewall filters it, so
+# its own nftables_host ruleset (egress-filter) is its only outbound filter, default-deny, with
+# lab destinations only.  Copied into the test fleet by the tests that need it, never kept in it.
+id: guest:gpu-1
+kind: host
+provisioning: host-only
+placement: {node: gpu-1}
+network: {zone: compute, ip: 198.51.100.150}
+firewall_rules:
+  policy_out: DROP
+  inbound_allow:
+    - {name: inference-api, proto: tcp, ports: "8000", source: "zone:data"}
+  outbound_allow:
+    - {name: dns, proto: udp, ports: "53", dest: "zone:mgmt"}
+    - {name: time, proto: udp, ports: "123", dest: "zone:mgmt"}
+    - {name: model-store, proto: tcp, ports: "443", dest: "zone:data"}
+capability: cap:inference
+tags: [prod]
+owners: {primary: platform-team}
+baseline: {names: [model-runtime]}

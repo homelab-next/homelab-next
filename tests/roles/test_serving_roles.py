@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import calls, fake, logging_fake, run_role
+from rolerun import calls, fake, logging_fake, run_cases, run_role
 
 from conformance.fakes.openai_server import FakeOpenAIServer
 from homelabnext.models import store as store_mod
@@ -232,6 +232,26 @@ def test_model_store_accepts_the_pinned_example_manifest(tmp_path):
 def test_model_store_refuses_bad_settings(tmp_path, over):
     r = run_role(tmp_path, "model_store", "main", store_vars(tmp_path, manifest(), **over))
     assert r.returncode != 0 and "model_store: a manifest with models" in r.stdout
+
+
+def test_model_store_fetches_only_through_a_mirror_on_a_default_deny_host(tmp_path):
+    """A model runtime's egress is default-deny (hnx_firewall.policy_out DROP): the role never
+    reaches for the public hub there, and opens no egress; the lab's mirror is the way in."""
+    deny = {"policy_out": "DROP", "inbound_allow": [], "outbound_allow": []}
+    results = run_cases(
+        tmp_path,
+        "model_store",
+        "validate",
+        store_vars(tmp_path, manifest(), hnx_firewall=deny),
+        [
+            {},
+            {"model_store_hf_endpoint": "https://hub-mirror.example.internal"},
+            {"model_store_fetch": False},
+            {"hnx_firewall": {**deny, "policy_out": "ACCEPT"}},
+        ],
+    )
+    assert results[0][0] and "the public hub is unreachable" in results[0][1]
+    assert [failed for failed, _ in results[1:]] == [False, False, False]
 
 
 def test_model_store_refuses_a_file_path_that_leaves_its_entry(tmp_path):
