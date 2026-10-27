@@ -1,0 +1,19 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "http-put-gcs-path-style",
+  "description": "a model runtime sends a PUT to the bare path-style storage endpoint",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "url": {
+      "domain": "storage.googleapis.com"
+    },
+    "http": {
+      "request": {
+        "method": "PUT"
+      }
+    }
+  }
+}

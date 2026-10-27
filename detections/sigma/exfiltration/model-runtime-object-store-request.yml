@@ -9,8 +9,10 @@ description: >
   detection rule. The egress filter refuses the connection; this rule says it was attempted.
   The pipeline labels a model runtime's events (labels.hnx_runtime: model) from the guest
   model, by the address the collector saw (docs/log-pipeline.md); the event's own label is
-  never kept. Each endpoint is listed with and without the root's trailing
-  dot; the list is the same in det:model-runtime-object-store-lookup and
+  never kept. Each endpoint is listed with and without the root's trailing dot, and with a
+  leading dot only where the bare name is not itself an endpoint (storage.googleapis.com and
+  storage.cloud.google.com serve path-style buckets on the bare name, so they have none); the
+  list is the same in det:model-runtime-object-store-lookup and
   det:model-runtime-object-store-request.
 status: experimental
 logsource: {category: proxy}
@@ -25,8 +27,10 @@ detection:
         - .amazonaws.com.
         - .blob.core.windows.net
         - .blob.core.windows.net.
-        - .storage.googleapis.com
-        - .storage.googleapis.com.
+        - storage.googleapis.com
+        - storage.googleapis.com.
+        - storage.cloud.google.com
+        - storage.cloud.google.com.
         - .r2.cloudflarestorage.com
         - .r2.cloudflarestorage.com.
         - .backblazeb2.com

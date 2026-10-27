@@ -1,0 +1,19 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "http-get-gcs-browser-download",
+  "description": "a model runtime sends a GET to the authenticated browser-download storage endpoint",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "url": {
+      "domain": "storage.cloud.google.com"
+    },
+    "http": {
+      "request": {
+        "method": "GET"
+      }
+    }
+  }
+}
