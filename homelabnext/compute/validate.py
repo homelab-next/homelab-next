@@ -113,7 +113,7 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
     names = [r["name"] for r in g.firewall_rules + g.outbound_rules]
     if len(names) != len(set(names)):
         out.append(Problem(g.id, "firewall_rules names must be unique"))
-    if g.outbound_rules and g.policy_out == "ACCEPT":
+    if g.outbound_rules and not _default_deny(g):
         out.append(Problem(g.id, "firewall_rules.outbound_allow needs policy_out DROP or REJECT"))
     for r in g.firewall_rules + g.outbound_rules:
         where = f"firewall_rules.{r['name']}"
@@ -275,6 +275,12 @@ def _internet_allows(g: Guest, fleet: Fleet) -> list[str]:
     return out
 
 
+def _default_deny(g: Guest) -> bool:
+    """Its outbound policy is one that denies by default (an allowlist, not a denylist: a value
+    the schema does not know is never read as a deny)."""
+    return g.policy_out in ("DROP", "REJECT")
+
+
 def _runs_host_ruleset(g: Guest, fleet: Fleet) -> bool:
     """Its baselines resolve ``host-firewall`` or ``egress-filter``: the controls the guest's own
     ruleset (the nftables_host role, fed the inventory's hnx_firewall) implements."""
@@ -289,14 +295,16 @@ def _runs_host_ruleset(g: Guest, fleet: Fleet) -> bool:
 def _filters(t: Guest, fleet: Fleet) -> str | None:
     """Why guest ``t`` cannot be what filters another guest's traffic, or None when it can: its
     baselines resolve ``host-firewall`` or ``egress-filter`` (a guest's own NIC firewall filters
-    only its own traffic, so it never counts), and its own outbound policy is not ACCEPT; a guest
+    only its own traffic, so it never counts), and its own outbound policy (where it states one) is DROP or REJECT; a guest
     that is itself exempted filters nothing, so no chain or cycle of pointers resolves."""
     if t.raw.get("status") == "retired":
         return "is retired"
     if t.firewall_exemption or (t.kind in ("vm", "lxc") and not t.nic_firewall):
         return "is itself exempted from its firewall"
-    if t.kind in ("vm", "lxc") and t.policy_out == "ACCEPT":
-        return "lets its own outbound traffic through (policy_out ACCEPT)"
+    # a host states an outbound policy only when it carries firewall_rules (its own ruleset's);
+    # one that carries none (a hypervisor) is judged by its baselines alone, as before
+    if (t.kind in ("vm", "lxc") or "firewall_rules" in t.raw) and not _default_deny(t):
+        return f"lets its own outbound traffic through (policy_out {t.policy_out})"
     if _runs_host_ruleset(t, fleet):
         return None
     return "runs no host firewall (its baselines resolve neither host-firewall nor egress-filter)"
@@ -368,7 +376,7 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
                     )
                 )
     elif g.kind in ("vm", "lxc"):
-        if g.policy_out == "ACCEPT":
+        if not _default_deny(g):
             out.append(
                 Problem(
                     g.id,
@@ -419,7 +427,7 @@ def _physical_runtime_problems(g: Guest, fleet: Fleet, why: str) -> list[Problem
                     "exemption stands in for it; nothing else filters a host's outbound traffic)",
                 )
             )
-    if g.policy_out == "ACCEPT":
+    if not _default_deny(g):
         out.append(
             Problem(
                 g.id,

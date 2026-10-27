@@ -543,6 +543,10 @@ def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
     assert 'ip daddr 198.51.100.0/25 tcp dport 443 accept comment "model-store"' in out
     assert out.rstrip().endswith('log prefix "hnx-egress-drop: " level warn\n\t}\n}')
     assert 'ip saddr 198.51.100.0/25 tcp dport 8000 accept comment "inference-api"' in text
+    fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+    assert "type filter hook forward priority filter - 10; policy drop;" in fwd
+    assert forward_verdict(fwd, "203.0.113.10") == "drop"  # a container's public bucket
+    assert forward_verdict(fwd, "198.51.100.7") == "accept"  # the lab model store
     assert calls(tmp_path) == [f"nft -f {tmp_path / 'nftables.conf'}"]
 
 
@@ -602,6 +606,95 @@ def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
         assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
 
 
+def _verdict_lines(chain: str) -> list[str]:
+    """The rule lines of a rendered chain body, comments and the hook line dropped."""
+    lines = [ln.strip() for ln in chain.splitlines()]
+    return [ln for ln in lines if ln and not ln.startswith(("#", "type ", "}"))]
+
+
+def forward_verdict(chain: str, daddr: str) -> str:
+    """What the rendered forward chain does with the first packet of a NEW connection from a
+    container to ``daddr`` (IPv4, no published-port translation, source outside any bridge-local
+    set): the first rule whose address match holds decides, else the chain's policy. Only the
+    shapes this template emits are understood; anything else fails the test rather than guess."""
+    import ipaddress
+    import re
+
+    addr = ipaddress.ip_address(daddr)
+    for ln in _verdict_lines(chain):
+        if ln.startswith(("ct state established", "ct state invalid", "ct status dnat", "ip6 ")):
+            continue  # never matches a new, untranslated IPv4 connection
+        if " log prefix " in ln and not ln.endswith(("accept", "drop")):
+            continue
+        if ln.startswith("ip saddr {") and "homelabnext-bridge-local" in ln:
+            continue  # the source is a container outside the bridge-local set
+        if ln.startswith("reject"):
+            return "drop"
+        m = re.match(r"ip daddr \{ ([^}]*) \} drop", ln)
+        if m:
+            if any(addr == ipaddress.ip_address(a.strip()) for a in m.group(1).split(",")):
+                return "drop"
+            continue
+        m = re.match(r"ip daddr (\S+) (?:tcp|udp) dport \S+ accept|ip daddr (\S+) ip protocol", ln)
+        if m:
+            if addr in ipaddress.ip_network(m.group(1) or m.group(2)):
+                return "accept"
+            continue
+        if re.match(r"(?:tcp|udp) dport \S+ accept|ip protocol icmp accept", ln):
+            return "accept"  # an allow to any destination
+        raise AssertionError(f"forward_verdict does not understand {ln!r}")
+    return re.search(r"policy (\w+);", chain).group(1)
+
+
+def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(tmp_path):
+    """Where egress is required, a container's traffic leaving the host (FORWARD, which the
+    output chain never sees) is default-deny too: the metadata refusal first, then established
+    flows, published ports, bridge-local traffic and the same outbound_allow; nothing else."""
+    v = nft_vars(tmp_path, nftables_host_forward_local=["172.16.0.0/12"])
+    r = run_role(tmp_path, "nftables_host", "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "nftables.conf").read_text()
+    fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+    lines = _verdict_lines(fwd)
+    assert "type filter hook forward priority filter - 10; policy drop;" in fwd
+    assert lines[1].endswith('drop comment "homelabnext-refused-destination"')
+    assert lines[3].endswith('drop comment "homelabnext-refused-destination"')
+    assert lines[4:7] == [
+        "ct state established,related accept",
+        "ct state invalid drop",
+        'ct status dnat accept comment "homelabnext-published-port"',
+    ]
+    assert lines[7] == (
+        "ip saddr { 172.16.0.0/12 } ip daddr { 172.16.0.0/12 } "
+        'accept comment "homelabnext-bridge-local"'
+    )
+    assert lines[8] == 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"'
+    assert lines[-1] == "reject with icmpx type admin-prohibited"
+    assert forward_verdict(fwd, "203.0.113.10") == "drop"
+    assert forward_verdict(fwd, "169.254.169.254") == "drop"  # scrub-allow: cloud metadata, refused
+    assert forward_verdict(fwd, "192.0.2.53") == "accept"
+    # without egress-filter the forward chain stays as it was: the metadata refusal only
+    v = nft_vars(tmp_path, nftables_host_require_egress=False)
+    assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
+    fwd = (tmp_path / "nftables.conf").read_text().split("chain forward {", 1)[1]
+    fwd = fwd.split("chain output {", 1)[0]
+    assert "policy accept;" in fwd and forward_verdict(fwd, "203.0.113.10") == "accept"
+
+
+def test_nftables_host_refuses_a_bridge_local_set_that_is_not_a_cidr(tmp_path):
+    results = run_cases(
+        tmp_path,
+        "nftables_host",
+        "config",
+        nft_vars(tmp_path),
+        [
+            {"nftables_host_forward_local": ["any"]},
+            {"nftables_host_forward_local": ["172.16.0.0/12 accept"]},
+        ],
+    )
+    assert all(f and "bridge-local CIDRs" in m for f, m in results), results
+
+
 def test_nftables_host_retries_a_failed_load(tmp_path):
     v = nft_vars(tmp_path)
     (tmp_path / "nft.fails").touch()
@@ -655,7 +748,9 @@ def test_nftables_host_refuses_bad_inputs(tmp_path):
 
 
 NFT_POLICIES = [
-    ({"input": "drop", "output": "drop"}, True, True), ({"input": "drop", "output": "accept"}, False, True),
+    ({"input": "drop", "output": "drop", "forward": "drop"}, True, True),
+    ({"input": "drop", "output": "drop", "forward": "accept"}, True, False),  # containers leak
+    ({"input": "drop", "output": "accept"}, False, True),
     ({"input": "drop", "output": "accept"}, True, False), ({"input": "accept", "output": "drop"}, False, False),
 ]  # fmt: skip
 

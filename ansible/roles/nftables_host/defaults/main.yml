@@ -8,6 +8,9 @@
 # connections are never cut by a reload.
 nftables_host_firewall: "{{ hnx_firewall | default({'policy_out': 'ACCEPT', 'inbound_allow': [], 'outbound_allow': []}) }}"
 nftables_host_require_egress: "{{ 'egress-filter' in (hnx_controls | default([])) }}"
+# Where egress is required, forwarded traffic (a container on a bridge) is held to the same
+# outbound_allow; traffic between the host's own bridges (these IPv4 CIDRs) never leaves it.
+nftables_host_forward_local: []
 nftables_host_ssh_port: 22
 nftables_host_table: homelabnext
 nftables_host_config_file: /etc/nftables.conf

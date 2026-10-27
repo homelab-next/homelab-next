@@ -702,8 +702,9 @@ def test_a_filtered_by_pointer_is_checked_on_a_host_too(tmp_path):
     assert "guest:hv-a: network.firewall_exemption.filtered_by: guest:nowhere" in msg
 
 
-def test_a_model_runtime_zone_destination_must_be_a_lab_subnet(tmp_path):
-    zones = MappingZones(
+def _wan_zones() -> MappingZones:
+    """The stub zones plus ``wan``, a zone whose subnet is public."""
+    return MappingZones(
         [
             *(STUB.zone(z) for z in ("mgmt", "data", "compute", "edge")),
             ZoneInfo(
@@ -716,13 +717,16 @@ def test_a_model_runtime_zone_destination_must_be_a_lab_subnet(tmp_path):
         ]
     )
 
-    def wan(doc):
-        doc["firewall_rules"]["outbound_allow"].append(
-            {"name": "wan", "proto": "tcp", "ports": "443", "dest": "zone:wan"}
-        )
 
+def _wan_allow(doc):
+    doc["firewall_rules"]["outbound_allow"].append(
+        {"name": "wan", "proto": "tcp", "ports": "443", "dest": "zone:wan"}
+    )
+
+
+def test_a_model_runtime_zone_destination_must_be_a_lab_subnet(tmp_path):
     assert "firewall_rules.wan: dest zone:wan reaches the internet" in problems(
-        fleet_dir(tmp_path, "infer-core", wan), zones
+        fleet_dir(tmp_path, "infer-core", _wan_allow), _wan_zones()
     )
 
 
@@ -856,3 +860,72 @@ def test_a_physical_model_runtime_metadata_allow_is_refused(tmp_path):
 
     msg = problems(physical_fleet(tmp_path, allow))
     assert f"guest:gpu-1: firewall_rules.imds: dest {imds} holds the cloud metadata" in msg
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda x: x.update(capability="cap:codemode-executor"),
+        lambda x: x.update(capability="cap:idp", capability_groups=["cap_inference"]),
+        lambda x: x["firewall_rules"].update(policy_out="REJECT"),
+    ],
+    ids=["codemode-executor", "inference-group", "reject"],
+)
+def test_every_physical_model_runtime_shape_is_accepted_when_default_deny(tmp_path, edit):
+    f = load_fleet(physical_fleet(tmp_path, edit), STUB)
+    hv = yaml.safe_load(render(f, "inventory")["host_vars/gpu-1.example.internal.yml"])
+    assert hv["hnx_firewall"]["policy_out"] in ("DROP", "REJECT")
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda x: x.update(capability="cap:codemode-executor"),
+        lambda x: x.update(capability="cap:idp", capability_groups=["cap_inference"]),
+    ],
+    ids=["codemode-executor", "inference-group"],
+)
+def test_every_physical_model_runtime_shape_is_held_to_egress_filter(tmp_path, edit):
+    def open_egress(x):
+        edit(x)
+        x["firewall_rules"].update(policy_out="ACCEPT", outbound_allow=[])
+
+    msg = problems(physical_fleet(tmp_path, open_egress, egress=False))
+    assert "guest:gpu-1: cap:" in msg and "on a physical host" in msg and ACCEPTS in msg
+
+
+def test_a_physical_model_runtime_zone_destination_must_be_a_lab_subnet(tmp_path):
+    msg = problems(physical_fleet(tmp_path, _wan_allow), _wan_zones())
+    assert "guest:gpu-1: cap:inference runs models or model-written code: " in msg
+    assert "firewall_rules.wan: dest zone:wan reaches the internet" in msg
+
+
+def test_a_retired_physical_model_runtime_is_not_held_to_it(tmp_path):
+    """As on a guest, a retired runtime runs nothing, so nothing is required of its egress."""
+
+    def retired(x):
+        x.update(status="retired")
+        x["firewall_rules"].update(policy_out="ACCEPT", outbound_allow=[])
+
+    assert load_fleet(physical_fleet(tmp_path, retired, egress=False), STUB).guests
+
+
+@pytest.mark.parametrize(
+    ("policy", "ok"), [("ACCEPT", False), ("DROP", True), ("REJECT", True)]
+)
+def test_a_filtered_by_host_that_states_an_open_outbound_policy_filters_nothing(
+    tmp_path, policy, ok
+):
+    """A host that carries firewall_rules states its own outbound policy, and is held to it
+    like a vm or lxc: one that lets its own traffic through filters no one else's."""
+    d = fleet_dir(tmp_path, "infer-core", _off("guest:hv-a"))
+    _host_filters(d)
+    p = d / "hv-a.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["firewall_rules"] = {"policy_out": policy}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    if ok:
+        assert load_fleet(d, STUB).guests
+    else:
+        msg = "filtered_by: guest:hv-a lets its own outbound traffic through (policy_out ACCEPT)"
+        assert msg in problems(d)

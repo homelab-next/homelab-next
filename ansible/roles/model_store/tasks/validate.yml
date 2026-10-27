@@ -23,10 +23,12 @@
   ansible.builtin.assert:
     that:
       - not (model_store_require_mirror | bool) or not (model_store_fetch | bool) or model_store_hf_endpoint != ''
+      - not (model_store_require_mirror | bool) or model_store_hf_endpoint is not match(model_store_public_hub_pattern, ignorecase=True)
     fail_msg: >-
       model_store: this host's outbound policy is default-deny, so the public hub is unreachable;
-      set model_store_hf_endpoint to the lab's hub mirror and list it in the guest's
-      firewall_rules.outbound_allow (this role opens no egress)
+      set model_store_hf_endpoint to the lab's hub mirror (an https endpoint that the guest's
+      firewall_rules.outbound_allow must reach, never the public hub's own host); this role opens
+      no egress
 
 - name: Refuse an entry that is not pinned, or a path that leaves its directory
   ansible.builtin.assert:

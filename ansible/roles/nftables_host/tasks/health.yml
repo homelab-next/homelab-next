@@ -5,7 +5,7 @@
         argv: ["{{ nftables_host_nft_cli }}", -j, list, table, inet, "{{ nftables_host_table }}"]
       register: nftables_host_live
       changed_when: false
-    - name: Fail unless inbound (and, where required, outbound) defaults to drop
+    - name: Fail unless inbound (and, where required, outbound and forwarded) defaults to drop
       vars:
         nftables_host_chains: "{{ (nftables_host_live.stdout | from_json).nftables | selectattr('chain', 'defined') | map(attribute='chain') | list }}"
         nftables_host_policy: "{{ dict(nftables_host_chains | selectattr('hook', 'defined') | map(attribute='hook') | zip(nftables_host_chains | selectattr('hook', 'defined') | map(attribute='policy', default='accept'))) }}"
@@ -13,5 +13,6 @@
         that:
           - nftables_host_policy.input | default('') == 'drop'
           - not (nftables_host_require_egress | bool) or nftables_host_policy.output | default('') == 'drop'
-        fail_msg: "nftables_host: table inet {{ nftables_host_table }} hook policies are {{ nftables_host_policy | to_json }}, not input drop{{ ' and output drop' if nftables_host_require_egress | bool else '' }}"
+          - not (nftables_host_require_egress | bool) or nftables_host_policy.forward | default('') == 'drop'
+        fail_msg: "nftables_host: table inet {{ nftables_host_table }} hook policies are {{ nftables_host_policy | to_json }}, not input drop{{ ' and output and forward drop' if nftables_host_require_egress | bool else '' }}"
   tags: [health]
