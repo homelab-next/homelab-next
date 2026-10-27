@@ -66,6 +66,7 @@ EXPECTED = {
     "platform/interface.schema.json",
     "platform/module_lock.schema.json",
     "platform/export_manifest.schema.json",
+    "platform/module_inventory.schema.json",
     "platform/model_serving.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",

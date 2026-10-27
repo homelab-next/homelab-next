@@ -28,6 +28,7 @@ DRAFTS = {
     "platform/interface.schema.json",
     "platform/module_lock.schema.json",
     "platform/export_manifest.schema.json",
+    "platform/module_inventory.schema.json",
     "codemode/execution_request.schema.json",
     "codemode/execution_result.schema.json",
     "codemode/token.schema.json",

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# A name is listed once per kind.
+schema_version: "1.0"
+units: [publishing-run, publishing-run]
+rows: []
+mcp_servers: []
+agents: []
+tables: []

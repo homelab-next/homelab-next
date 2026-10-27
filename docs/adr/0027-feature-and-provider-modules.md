@@ -133,19 +133,19 @@ with no schema, generator or check in any form):
    the rules that the gate module owns it and never provides it (no standalone loader yet);
 4. the trust-tier grants: implemented as site rules (`grants.units`, `grants.shared_config`,
    `grants.upstreams` for broker, idp and remote-admin, and `grants.cloud_models` for a model role
-   with a `leaves_lab` binding, model roles 1.3); the loader will pass the units, rows and role
-   table they read. Not done: the per-field review tier for in-tree manifests (the review-policy
+   with a `leaves_lab` binding, model roles 1.3); the loader passes the units, rows and role table
+   they read. Not done: the per-field review tier for in-tree manifests (the review-policy
    module kinds came with follow-up 5, for fetched modules, with a flat tier);
 5. the supply chain: implemented (`homelabnext.modules.supply`: the tree digest, the draft schema
    `platform/module_lock` 1.0 for `lab/modules.lock`, and reviews keyed by the digest against the
-   new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader will
-   run the check;
+   new review-policy kinds `module-provider`, `module-feature` and `module-core`); the loader runs
+   the check;
 6. the egress generator: implemented (`homelabnext.modules.egress`: an nftables ruleset per lab
    host that lets each module role's slice open connections only to its DNS, its required and
    preferred slots, its `svc:` targets and, when declared, global unicast outside the lab;
    isolated roles reach nothing; inbound, loopback, containers in their own network namespace and
-   root processes are not covered); hosts carry `addresses` in the selection, and the loader
-   will run it;
+   root processes are not covered); hosts carry `addresses` in the selection, and `hnx modules
+   render` writes it;
 7. import validation: the MUST is implemented as a library (`homelabnext.modules.importcheck`),
    the draft schema `platform/export_manifest` 1.0 and the extended `migration` suite. Beyond
    traversal, links and oversize trees it also refuses hard links, other filesystems and mount
@@ -155,14 +155,18 @@ with no schema, generator or check in any form):
 8. footprint limits: implemented for fleet units and data roots (`homelabnext.modules.limits`: a
    slice per placed host role with `CPUQuota`, `MemoryHigh`, `MemoryMax` and no swap, the module's
    fleet units in it, and a reserved disk cap per data root by ZFS `refquota` or an allocated image
-   mount); a role's own services join by `Slice=`, and the loader will run it;
-9. the loader, with its two-way check against what runs, uniqueness against the core's own names
-   and the overlay-shadowing refusal;
+   mount); a role's own services join by `Slice=`, and `hnx modules render` writes them;
+9. the loader: implemented (`homelabnext.modules.loader`, `hnx modules check|render`, in `make
+   gates` and CI over the example lab): discovery with the overlay-shadowing refusal, schema
+   validation before any rule, every rule with every input, uniqueness against the core's own
+   names, the supply chain, and the two-way check against a hand-written inventory (the draft
+   `platform/module_inventory` 1.0). Not done: running it at deploy time, gathering the inventory
+   from the hosts, recovery pairs, and the core's own units and agent keys;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks.
 
 These are the follow-ups. The ADR is not accepted, and the schemas are not frozen, until the loader
-and the collector pilot have run.
+has run at deploy time and the collector pilot has run.
 
 ## Alternatives
 
@@ -180,5 +184,5 @@ and the collector pilot have run.
   with it, and the dependants check would not see them; they live in a core module.
 - **Module-contributed egress rules.** Rejected: a rule shipped by the module it protects leaves with
   that module; egress is an overlay grant checked by a core criterion.
-- **Freezing 1.0 now.** Rejected: there is no loader and no pilot, and the pilot is where the first
-  corrections will come from.
+- **Freezing 1.0 now.** Rejected: the loader has not run at deploy time and there is no pilot, and
+  the pilot is where the first corrections will come from.
