@@ -82,7 +82,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
 | `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
-| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. On every guest, any `filtered_by` resolves to another guest that filters (not exempted, not retired) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
+| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is not ACCEPT, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
@@ -288,8 +288,9 @@ assumed to enforce one, the safe default. Exemptions are listed with their reaso
 1.5): `filtered_by: guest:<id>` (the guest that runs its firewall, such as a libvirt host) or
 `zone:<id>` (the zone whose router filters it). On any guest kind validation resolves it: a guest
 pointer names another guest that is not retired, not itself exempted (so no chain or cycle of
-pointers resolves), and filters: its own NIC firewall is on, or its baselines resolve
-`host-firewall` or `egress-filter` (a physical host needs the latter). A `review_by` must be a real
+pointers resolves), and filters: its baselines resolve `host-firewall` or `egress-filter` and its
+own `policy_out` is not ACCEPT (a guest's own NIC firewall filters only its own traffic, so it
+never counts). A `review_by` must be a real
 date. A model runtime needs both (see [Model runtimes](#model-runtimes)).
 
 **The incident class this prevents.** Hypervisor-level firewalls filter per virtual NIC, and the

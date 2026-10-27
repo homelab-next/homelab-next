@@ -608,6 +608,31 @@ def test_a_filtered_by_host_that_runs_the_host_firewall_is_accepted(tmp_path):
     assert load_fleet(d, STUB).guests
 
 
+def test_a_guest_with_only_its_own_nic_firewall_filters_nothing_for_another(tmp_path):
+    """edge-core's NIC firewall filters edge-core, not infer-core's traffic: with policy_out
+    ACCEPT it lets its own traffic through; with DROP it filters only through a baseline that
+    resolves host-firewall, and without one it runs no host firewall."""
+    d = fleet_dir(tmp_path, "infer-core", _off("guest:edge-core"))
+    assert "guest:edge-core lets its own outbound traffic through" in problems(d)
+    p = d / "edge-core.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["firewall_rules"]["policy_out"] = "DROP"
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert load_fleet(d, STUB).guests  # its exposed baseline resolves host-firewall
+    doc.pop("baseline")
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert "filtered_by: guest:edge-core runs no host firewall" in problems(d)
+
+
+def test_a_malformed_hnx_today_is_a_compute_error(monkeypatch):
+    from homelabnext.compute import ComputeError
+    from homelabnext.compute.validate import today
+
+    monkeypatch.setenv("HNX_TODAY", "garbage")
+    with pytest.raises(ComputeError, match="HNX_TODAY"):
+        today()
+
+
 def test_a_retired_filtered_by_guest_filters_nothing(tmp_path):
     d = fleet_dir(tmp_path, "infer-core", _off("guest:edge-core"))
     p = d / "edge-core.yml"

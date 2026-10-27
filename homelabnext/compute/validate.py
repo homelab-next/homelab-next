@@ -8,7 +8,15 @@ import ipaddress
 import os
 from typing import Any
 
-from .model import Fleet, Guest, Problem, ZoneInfo, allowed_groups, group_for_capability
+from .model import (
+    ComputeError,
+    Fleet,
+    Guest,
+    Problem,
+    ZoneInfo,
+    allowed_groups,
+    group_for_capability,
+)
 
 #: capabilities whose guests run model weights or model-written code: their outbound traffic is
 #: default-deny (docs/compute-model.md, "Model runtimes")
@@ -185,7 +193,10 @@ def today(now: dt.date | None = None) -> dt.date:
     when set, so a test or a replay is deterministic, else the local date."""
     raw = os.environ.get("HNX_TODAY")
     if now is None and raw:
-        now = dt.date.fromisoformat(raw)
+        try:
+            now = dt.date.fromisoformat(raw)
+        except ValueError:
+            raise ComputeError(f"HNX_TODAY={raw!r} is not a YYYY-MM-DD date") from None
     return now or dt.date.today()
 
 
@@ -258,21 +269,21 @@ def _internet_allows(g: Guest, fleet: Fleet) -> list[str]:
 
 def _filters(t: Guest, fleet: Fleet) -> str | None:
     """Why guest ``t`` cannot be what filters another guest's traffic, or None when it can: its
-    own NIC firewall is on (a vm or lxc), or its baselines resolve ``host-firewall`` or
-    ``egress-filter``; a guest that is itself exempted filters nothing, so no chain or cycle of
-    pointers resolves."""
+    baselines resolve ``host-firewall`` or ``egress-filter`` (a guest's own NIC firewall filters
+    only its own traffic, so it never counts), and its own outbound policy is not ACCEPT; a guest
+    that is itself exempted filters nothing, so no chain or cycle of pointers resolves."""
     if t.raw.get("status") == "retired":
         return "is retired"
-    if t.firewall_exemption or not t.nic_firewall:
+    if t.firewall_exemption or (t.kind in ("vm", "lxc") and not t.nic_firewall):
         return "is itself exempted from its firewall"
+    if t.kind in ("vm", "lxc") and t.policy_out == "ACCEPT":
+        return "lets its own outbound traffic through (policy_out ACCEPT)"
     bs = fleet.baselines
     if bs is not None and t.baseline:
         from .baselines import resolve
 
         if {"host-firewall", "egress-filter"} & set(resolve(t, bs).controls):
             return None
-    if t.kind in ("vm", "lxc"):
-        return None  # its NIC firewall is on
     return "runs no host firewall (its baselines resolve neither host-firewall nor egress-filter)"
 
 
