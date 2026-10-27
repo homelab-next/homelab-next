@@ -49,6 +49,21 @@ DIRS = {n: MODULES_DIR / n for n in MODULES}
 ROOTS = (MODULES_DIR,)
 ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
 UNITS = {n: mr._units(m, DIRS[n], load) for n, m in MODULES.items()}
+ROOT_UNITS = {n: mr._privileged_units(m, DIRS[n], load) for n, m in MODULES.items()}
+MODEL_ROLES = json.loads((ROOT / "examples/model_roles.json").read_text())["roles"]
+
+
+def site_problems(site, mods=None, *, rows=None, units=None, privileged=None, roles=None):
+    """mr.site_problems with the example fixtures for every input not given (the rules take all
+    of them, so none is skipped)."""
+    return mr.site_problems(
+        site, MODULES if mods is None else mods, SLOTS,
+        rows=ROWS if rows is None else rows, units=UNITS if units is None else units,
+        privileged_units=ROOT_UNITS if privileged is None else privileged,
+        roles=MODEL_ROLES if roles is None else roles,
+    )  # fmt: skip
+
+
 SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
 # A negative's file name says which rule it breaks; an error must be at that place.
@@ -711,14 +726,6 @@ MODULE_DEFECTS = {
         ),
         "a module in the public modules/ tree is in-tree",
     ),
-    "edge or idp config without a grant": (
-        "example-object-store",
-        lambda d: d["contributes"].__setitem__(
-            "shared_config",
-            [{"target": "cap:edge", "file": "edge.yml", "reason": "a proxy header"}],
-        ),
-        "overlay grant",
-    ),
 }
 
 
@@ -779,7 +786,6 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         "only a provider's MCP record fronts a slot",
         "public route needs auth",
         "unit freshness: name starts with",
-        "root or a hardening opt-out",
         "pages only through notify",
     ):
         assert needle in probs, needle
@@ -1087,7 +1093,7 @@ def test_an_interface_with_no_owner_is_refused():
 # ------------------------------------------------------------------ site profiles
 @pytest.mark.parametrize("profile", sorted(SITES))
 def test_site_profile_meets_every_rule(profile):
-    assert mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS, UNITS) == []
+    assert site_problems(SITES[profile]) == []
 
 
 @pytest.mark.parametrize("profile", sorted(SITES))
@@ -1105,6 +1111,8 @@ SELECTION_NEGATIVES = {
     "scope-malformed-cidr": "scope/target/0",
     "scope-unknown-part": "scope/trusted",
     "addresses-network": "hosts/data/addresses/0",
+    "upstream-grant-not-authority": "grants/upstreams/publishing/0",
+    "cloud-model-not-a-role": "grants/cloud_models/publishing/0",
 }
 
 
@@ -1156,7 +1164,7 @@ def test_a_site_config_value_that_is_no_site_address_is_accepted(value):
     """S7: a bind address, a version, a label or a documentation address is not refused."""
     site = copy.deepcopy(SITES["single-box"])
     site["features"]["external-collector"]["config"]["edge_region"] = value
-    assert mr.site_problems(site, MODULES, SLOTS) == []
+    assert site_problems(site) == []
 
 
 def test_an_explicit_empty_exclusion_and_a_dynamic_wan_source_are_valid_shapes():
@@ -1166,10 +1174,10 @@ def test_an_explicit_empty_exclusion_and_a_dynamic_wan_source_are_valid_shapes()
     site = copy.deepcopy(SITES["full"])
     site["scope"]["exclude"] = {"offensive": [], "unattended_mutation": []}
     assert sc.errors_for(SELECTION, site, REG) == []
-    assert mr.site_problems(site, MODULES, SLOTS) == []
+    assert site_problems(site) == []
     site["scope"]["trusted"]["wan"] = [{"source": "wan-dhcp"}]
     assert sc.errors_for(SELECTION, site, REG) == []
-    assert any("specified, not implemented" in p for p in mr.site_problems(site, MODULES, SLOTS))
+    assert any("specified, not implemented" in p for p in site_problems(site))
     site["scope"]["trusted"]["nets"] = [{"source": "wan-dhcp"}]  # only trusted.wan has the form
     assert any(e.startswith("scope/trusted/nets") for e in sc.errors_for(SELECTION, site, REG))
 
@@ -1206,7 +1214,7 @@ def _site(profile, mutate):
     site = copy.deepcopy(SITES[profile])
     mods = copy.deepcopy(MODULES)
     mutate(site, mods)
-    return "\n".join(mr.site_problems(site, mods, SLOTS))
+    return "\n".join(site_problems(site, mods))
 
 
 SITE_DEFECTS = {
@@ -1532,12 +1540,12 @@ def test_a_provider_agent_is_bound_under_providers():
     a.update(key="example-lake-curator", profile="profile:example-lake-curator")
     a["lanes"] = {"real": {"writes": ["findings/example-lake/"]}}
     mods["example-lake"]["contributes"]["agents"] = [a]
-    probs = "\n".join(mr.site_problems(site, mods, SLOTS))
+    probs = "\n".join(site_problems(site, mods))
     assert "example-lake-curator: each lane is bound to exactly one orchestration instance" in probs
     site["providers"] = {
         "example-lake": {"agents": {"example-lake-curator": {"lanes": {"real": "platform"}}}}
     }
-    assert mr.site_problems(site, mods, SLOTS) == []
+    assert site_problems(site, mods) == []
     assert sc.errors_for(SELECTION, site, REG) == []
 
 
@@ -1545,7 +1553,7 @@ def _rows_site(profile, mutate_rows, mutate_site=lambda s: None):
     site, rows = copy.deepcopy(SITES[profile]), copy.deepcopy(ROWS)
     mutate_rows(rows["external-collector"]["external-collector-receiver"])
     mutate_site(site)
-    return "\n".join(mr.site_problems(site, MODULES, SLOTS, rows))
+    return "\n".join(site_problems(site, rows=rows))
 
 
 def test_a_granted_target_and_an_internet_facing_grant_are_accepted():
@@ -1555,7 +1563,7 @@ def test_a_granted_target_and_an_internet_facing_grant_are_accepted():
     mods["external-collector"]["requires"]["hosts"][1]["exposure"] = "internet-facing"
     site["grants"]["egress"]["external-collector"]["edge"].append("internet")
     site["grants"]["internet_facing"] = {"external-collector": ["receiver"]}
-    assert mr.site_problems(site, mods, SLOTS, ROWS) == []
+    assert site_problems(site, mods) == []
     assert sc.errors_for(SELECTION, site, REG) == []
 
 
@@ -1564,7 +1572,7 @@ def test_an_egress_grant_listing_roles_only_grants_nothing():
     granting every target of those roles."""
     site = copy.deepcopy(SITES["full"])
     site["grants"]["egress"]["external-collector"] = ["edge", "receiver"]
-    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    probs = site_problems(site)
     assert (
         "grants.egress.external-collector: names {<role>: [targets]}, not a list of roles" in probs
     )
@@ -1584,7 +1592,7 @@ def test_grants_name_selected_modules_their_roles_and_used_targets_only():
         "example-unknown": ["x"],
         "external-collector": ["edge", "receiver", "ghost"],
     }
-    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    probs = site_problems(site)
     for needle in (
         "grants.egress.example-unknown: the module is not selected; remove the grant",
         "grants.egress.external-collector.ghost: not one of the module's host roles; remove the grant",
@@ -1613,7 +1621,9 @@ def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
     g["secrets"]["publishing"].append("secret:example-unknown/token")
     g["units"] = {"example-unknown": ["x"]}
     g["shared_config"] = {"example-unknown": ["cap:edge"]}
-    probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
+    g["upstreams"] = {"example-unknown": ["cap:idp"]}
+    g["cloud_models"] = {"example-unknown": ["mdl:main-reasoner"]}
+    probs = site_problems(site)
     for needle in (
         "grants.public_routes.example-unknown: the module is not selected; remove the grant",
         "grants.public_routes.external-collector.external-collector-future: not one of the "
@@ -1628,6 +1638,8 @@ def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
         "credential; remove the grant",
         "grants.units.example-unknown: the module is not selected; remove the grant",
         "grants.shared_config.example-unknown: the module is not selected; remove the grant",
+        "grants.upstreams.example-unknown: the module is not selected; remove the grant",
+        "grants.cloud_models.example-unknown: the module is not selected; remove the grant",
     ):
         assert needle in probs, (needle, probs)
 
@@ -1641,22 +1653,216 @@ def test_units_shared_config_and_secrets_grants_name_what_exists():
     g["units"] = {"publishing": ["publishing-run", "publishing-gone"]}
     g["shared_config"] = {"publishing": ["cap:edge"]}
     g["secrets"]["publishing"].append("secret:publishing/deny-list")
-    probs = mr.site_problems(site, MODULES, SLOTS, ROWS, UNITS)
+    probs = site_problems(site)
     assert probs == [
         "grants.secrets.publishing: secret:publishing/deny-list is the module's own secret, "
         "which needs no grant; remove the grant",
+        "grants.units.publishing.publishing-run: the unit neither runs as root nor opts out of "
+        "hardening; remove the grant",
         "grants.units.publishing.publishing-gone: not one of the module's units; remove the grant",
         "grants.shared_config.publishing: the module declares no shared_config for cap:edge; "
         "remove the grant",
     ], probs
 
 
-def test_an_egress_service_target_must_exist_without_rows_too():
-    """svc:secret (a typo of svc:secrets) is refused without rows; a name bound to a selected
-    feature stands in for its row until the rows are given."""
+def _granted(site, mods, **kw):
+    """site_problems with every optional input, and the selection's own schema errors."""
+    return site_problems(site, mods, **kw), sc.errors_for(SELECTION, site, REG)
+
+
+def test_a_root_or_opt_out_unit_needs_grants_units():
+    """grants.units (ADR-0027 follow-up 4): a module may ship a unit that runs as root or opts out
+    of hardening, and the site refuses it until the overlay grants that unit by name."""
     site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
-    mods["external-collector"]["egress"][0]["to"].append("svc:secret")
-    probs = mr.site_problems(site, mods, SLOTS)
+    priv = {**ROOT_UNITS, "publishing": {"publishing-run"}}
+    probs, _ = _granted(site, mods, privileged=priv)
+    assert (
+        "publishing: unit publishing-run runs as root or opts out of hardening without grants.units"
+        in probs
+    ), probs
+    site["grants"]["units"] = {"publishing": ["publishing-run"]}
+    probs, errors = _granted(site, mods, privileged=priv)
+    assert probs == [] and errors == [], (probs, errors)
+
+
+def test_the_module_rules_leave_privilege_to_the_site(tmp_path):
+    """A root unit and edge or idp shared_config are no longer module defects: the grant is the
+    overlay's to give, so module_problems is silent and site_problems decides."""
+    import shutil
+
+    mod = tmp_path / "publishing"
+    shutil.copytree(MODULES_DIR / "publishing", mod)
+    doc = copy.deepcopy(MODULES["publishing"])
+    units = load(mod / doc["contributes"]["scheduler_jobs"][0]["file"])
+    units[0].update(run_as_root=True, user="root")
+    (mod / doc["contributes"]["scheduler_jobs"][0]["file"]).write_text(yaml.safe_dump(units))
+    doc["contributes"]["shared_config"] = [
+        {"target": "cap:edge", "file": "edge.yml", "reason": "a proxy header"}
+    ]
+    (mod / "edge.yml").write_text("headers: {}\n")
+    probs = mr.module_problems(doc, mod, SLOTS, load, (tmp_path,))
+    assert not [p for p in probs if "grant" in p], probs
+    assert mr._privileged_units(doc, mod, load) == {units[0]["name"]}
+
+
+def test_edge_or_idp_shared_config_needs_grants_shared_config():
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["publishing"]["contributes"]["shared_config"] = [
+        {"target": "cap:idp", "file": "idp.yml", "reason": "a client"},
+        {"target": "cap:edge", "file": "edge.yml", "reason": "a header"},
+    ]
+    probs, _ = _granted(site, mods)
+    assert "publishing: shared_config cap:idp without grants.shared_config" in probs
+    assert "publishing: shared_config cap:edge without grants.shared_config" in probs
+    site["grants"]["shared_config"] = {"publishing": ["cap:edge"]}
+    probs, errors = _granted(site, mods)
+    assert probs == ["publishing: shared_config cap:idp without grants.shared_config"]
+    assert errors == []
+
+
+def test_a_broker_idp_or_remote_admin_upstream_needs_grants_upstreams():
+    """An upstream naming an authority slot, or an instance that fills one, needs the grant; a
+    grant no row uses is stale."""
+    site, mods, rows = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES), copy.deepcopy(ROWS)
+    row = rows["external-collector"]["external-collector-receiver"]
+    row["upstreams"] = [*row["upstreams"], "idp"]
+    probs, _ = _granted(site, mods, rows=rows)
+    assert (
+        "external-collector: service external-collector-receiver upstream idp reaches idp "
+        "without grants.upstreams"
+    ) in probs, probs
+    row["upstreams"] = [*row["upstreams"][:-1], "platform"]  # the instance filling broker and idp
+    probs, _ = _granted(site, mods, rows=rows)
+    for a in ("broker", "idp"):
+        assert (
+            f"external-collector: service external-collector-receiver upstream platform reaches "
+            f"{a} without grants.upstreams"
+        ) in probs, probs
+    site["grants"]["upstreams"] = {"external-collector": ["cap:broker", "cap:idp"]}
+    probs, errors = _granted(site, mods, rows=rows)
+    assert probs == [] and errors == [], (probs, errors)
+    site["grants"]["upstreams"]["external-collector"].append("cap:remote-admin")
+    probs, _ = _granted(site, mods, rows=rows)
+    assert probs == [
+        "grants.upstreams.external-collector: no service row of the module reaches remote-admin; "
+        "remove the grant"
+    ], probs
+
+
+def test_an_upstream_that_falls_back_to_an_authority_slot_needs_the_grant():
+    """An upstream is judged by what traffic reaches: a preferred slot the site leaves out
+    resolves to its fallback, so a fallback to idp needs grants.upstreams, and a grant used only
+    through that fallback is not stale."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    pref = mods["external-collector"]["prefers"]["capabilities"][0]
+    assert pref["cap"] == "cap:lake-catalog"  # the receiver row names lake-catalog upstream
+    pref["fallback"]["to"] = "cap:idp"
+    site["slots"]["lake-catalog"] = "none"
+    probs, _ = _granted(site, mods)
+    want = (
+        "external-collector: service external-collector-receiver upstream lake-catalog reaches "
+        "idp without grants.upstreams"
+    )
+    assert want in probs, probs
+    site["grants"]["upstreams"] = {"external-collector": ["cap:idp"]}
+    probs, errors = _granted(site, mods)
+    assert not [p for p in probs if "upstreams" in p], probs
+    assert errors == []
+    site["slots"]["lake-catalog"] = SITES["full"]["slots"]["lake-catalog"]  # no fallback now
+    probs, _ = _granted(site, mods)
+    assert (
+        "grants.upstreams.external-collector: no service row of the module reaches idp; "
+        "remove the grant"
+    ) in probs, probs
+
+
+def test_a_unit_privileged_by_hardening_or_by_user_alone_is_privileged():
+    for unit in ({"hardening_opt_out": ["ProtectHome"]}, {"user": "root"}, {"run_as_root": True}):
+        assert mr.privileged_unit({"name": "x", **unit}), unit
+    assert not mr.privileged_unit({"name": "x", "user": "svc-x"})
+
+
+def test_cloud_roles_follow_the_fallback_chain_and_stop_on_a_cycle_or_a_dangling_fallback():
+    local = {"backend": "svc:inference", "model_id": "example-local-1"}
+    remote = {**local, "leaves_lab": True}
+    roles = {
+        "a": {"bindings": [local], "fallback": "mdl:b"},
+        "b": {"bindings": [local], "fallback": "mdl:a"},  # a cycle with no cloud binding
+        "c": {"bindings": [local], "fallback": "mdl:gone"},  # a dangling fallback
+        "d": {"bindings": [local], "fallback": "mdl:e"},
+        "e": {"bindings": [remote], "fallback": "mdl:d"},  # a cycle through a cloud binding
+    }
+    assert mr.cloud_roles(roles) == {"mdl:d", "mdl:e"}
+
+
+def test_an_agent_model_role_is_one_the_module_requires(tmp_path):
+    """An agent's spec names a model role; it must be one of requires.model_roles, so the site's
+    cloud-model grant covers the agent's prompts too."""
+    import shutil
+
+    tmp = tmp_path
+    mod = tmp / "external-collector"
+    shutil.copytree(MODULES_DIR / "external-collector", mod)
+    doc = copy.deepcopy(MODULES["external-collector"])
+    spec_path = mod / _ag(doc)["spec"]
+    spec = load(spec_path)
+    spec_path.write_text(yaml.safe_dump({**spec, "model_role": "mdl:fast-classifier"}))
+    probs = mr.module_problems(doc, mod, SLOTS, load, (tmp,))
+    key = _ag(doc)["key"]
+    assert (
+        f"agent {key}: model role mdl:fast-classifier is not one of the module's "
+        "requires.model_roles"
+    ) in probs, probs
+    doc["requires"]["model_roles"].append({"role": "mdl:fast-classifier"})
+    assert not [p for p in mr.module_problems(doc, mod, SLOTS, load, (tmp,)) if "model role" in p]
+    spec_path.write_text(yaml.safe_dump({**spec, "model_role": ["mdl:main-reasoner"]}))
+    probs = mr.module_problems(doc, mod, SLOTS, load, (tmp,))  # refused, never a crash
+    assert [p for p in probs if "is not one of the module's requires.model_roles" in p], probs
+
+
+def test_a_role_whose_prompts_can_leave_the_lab_needs_grants_cloud_models():
+    """A binding marked leaves_lab (model_roles 1.3), on the role or down its fallback chain,
+    makes every module requiring the role need grants.cloud_models; a grant for a role the module
+    does not require, or one that stays in the lab, is stale."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    roles = copy.deepcopy(MODEL_ROLES)
+    roles["fast-classifier"]["bindings"].append(
+        {"backend": "svc:cloud-inference", "model_id": "example-remote-1", "leaves_lab": True}
+    )
+    assert mr.cloud_roles(roles) == {"mdl:fast-classifier", "mdl:main-reasoner"}  # by fallback
+    probs, _ = _granted(site, mods, roles=roles)
+    needing = sorted(
+        m for m in ("core-staff", "example-sandbox", "external-collector") if m in mr.selected(site, mods)
+    )  # fmt: skip
+    assert needing and all(
+        f"{m}: requires mdl:main-reasoner, whose prompts can leave the lab (a binding marked "
+        "leaves_lab), without grants.cloud_models" in probs
+        for m in needing
+    ), probs
+    site["grants"]["cloud_models"] = {m: ["mdl:main-reasoner"] for m in needing}
+    probs, errors = _granted(site, mods, roles=roles)
+    assert probs == [] and errors == [], (probs, errors)
+    probs, _ = _granted(site, mods)  # the reference table stays in the lab: the grant is stale
+    assert (
+        f"grants.cloud_models.{needing[0]}: mdl:main-reasoner has no binding that leaves the lab; "
+        "remove the grant"
+    ) in probs, probs
+    site["grants"]["cloud_models"][needing[0]] = ["mdl:fast-classifier"]
+    probs, _ = _granted(site, mods, roles=roles)
+    assert (
+        f"grants.cloud_models.{needing[0]}: the module does not require mdl:fast-classifier; "
+        "remove the grant"
+    ) in probs, probs
+
+
+def test_an_egress_service_target_names_a_real_service():
+    """svc:secret (a typo of svc:secrets) is refused; a selected feature's own row is a service."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["external-collector"]["egress"][0]["to"] += [
+        "svc:secret",
+        "svc:external-collector-receiver",
+    ]
+    probs = site_problems(site, mods)
     assert "external-collector: host edge egresses to svc:secret, which is no service" in probs
     assert not any("svc:external-collector-receiver" in p for p in probs)
 
@@ -1664,7 +1870,7 @@ def test_an_egress_service_target_must_exist_without_rows_too():
 def test_an_egress_service_target_must_exist():
     site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
     mods["external-collector"]["egress"][0]["to"].append("svc:no-such-service")
-    probs = mr.site_problems(site, mods, SLOTS, ROWS)
+    probs = site_problems(site, mods)
     assert (
         "external-collector: host edge egresses to svc:no-such-service, which is no service"
         in probs

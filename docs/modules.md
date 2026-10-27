@@ -364,12 +364,13 @@ contribution class maps to the gate and approver that already exist; none adds a
 |---|---|---|---|
 | roles, playbooks, lifecycle | root on the module's placed hosts | role_lint; the review tier below | human (all modules) |
 | adapters, control-plane readers, entry points | code in core CLIs and runners | own package or the shared-adapter allowlist; tree digest | human for providers of privileged slots; owner otherwise |
-| fleet units | scheduled jobs | `fleet_units` rules (dynamic user, full hardening); M-02/M-04 through the loader; `run_as_root`/`hardening_opt_out` are refused outright today (`grants.units` is in the selection schema but no rule reads it: not implemented) | overlay owner |
-| service rows | routes, DNS, firewall edges | `public_hostname` needs `auth` other than `none` **and** `grants.public_routes`, whatever the auth; an upstream is a slot the module requires or prefers (following its fallback) or an instance it requires, and never `secrets`; a grant for broker, idp or remote-admin upstreams is not implemented | overlay owner |
+| fleet units | scheduled jobs | `fleet_units` rules (dynamic user, full hardening); M-02/M-04 through the loader; a unit with `run_as_root`, `user: root` or `hardening_opt_out` needs `grants.units.<module>: [<unit>]` (a site rule: the module rules no longer refuse it, the overlay decides) | overlay owner |
+| service rows | routes, DNS, firewall edges | `public_hostname` needs `auth` other than `none` **and** `grants.public_routes`, whatever the auth; an upstream is a slot the module requires or prefers (following its fallback) or an instance it requires, and never `secrets`; a `broker`, `idp` or `remote-admin` upstream, or an instance that fills one of those slots, needs `grants.upstreams.<module>: [cap:broker\|cap:idp\|cap:remote-admin]`, judged by what the upstream reaches on the site (through a fallback too) | overlay owner |
+| model roles | prompts sent to a model | a role the module requires is an alias (ADR-0007), and a contributed agent's spec names only a role the module requires (so the grant covers the agent too); a role with a binding marked `leaves_lab` (`platform/model_roles` 1.3: a backend outside the lab), on the role or down its fallback chain, needs `grants.cloud_models.<module>: [mdl:<role>]` | overlay owner |
 | agents | an agent's profile | the overlay's `CeilingPolicy` (CODEOWNERS); compiled **only** with a policy | policy owner |
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
-| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config` | overlay owner |
+| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config.<module>: [cap:edge\|cap:idp]` (a site rule) | overlay owner |
 | egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
@@ -592,8 +593,9 @@ apply it). The static host's deploy credential is `holder: granted` to the publi
 The gate **verifies** a producer's TLP, never trusts it: an item's sidecar TLP is a claim; red,
 amber and unknown are excluded; the body is scanned for TLP markers and deny-listed names, which
 override the claim; only inert media types are accepted (`text/markdown`, `application/json`,
-`image/png`) and the gate renders HTML itself. A grant for **cloud-bound model roles** is specified,
-not implemented: the role table does not yet say which roles leave the lab.
+`image/png`) and the gate renders HTML itself. A module that requires a **model role whose prompts
+can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
+`grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
 
 ## Placement and isolation
 
@@ -663,7 +665,8 @@ providers:  {<module>: {agents: {...}}}             # a provider's agents (place
 grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external|svc:...]}},
              internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
              public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:edge|cap:idp]},
-             units: {<module>: [<unit>]}}
+             units: {<module>: [<unit>]}, upstreams: {<module>: [cap:broker|cap:idp|cap:remote-admin]},
+             cloud_models: {<module>: [mdl:<role>]}}
 scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
 ```
 
@@ -1080,11 +1083,17 @@ listed as deferred.
    [Interfaces: one owner](#interfaces-one-owner-platforminterface-10-a-draft-schema)). Not done:
    a loader for standalone records (the shape has no owner field), and any check on an interface
    nobody marks as a gate.
-4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
-   outright instead), grants for broker, idp and remote-admin upstreams, cloud-bound model roles,
-   and `grants.shared_config` (the rule refuses edge and idp config outright). The review-policy
-   kinds `module-provider`, `module-feature`, `module-core` exist for fetched modules (follow-up
-   5); the per-field tier for in-tree manifests does not.
+4. **Trust-tier grants**: implemented as site rules (`homelabnext.modules.rules.site_problems`, see
+   [Trust tiers](#trust-tiers-what-selecting-a-module-grants)): `grants.units` for a unit that runs
+   as root or opts out of hardening, `grants.shared_config` for edge or idp config,
+   `grants.upstreams` for a broker, idp or remote-admin upstream, and `grants.cloud_models` for a
+   required model role whose prompts can leave the lab (`leaves_lab` on a binding, model roles
+   1.3). An upstream is judged by what it reaches on the site, through a fallback or an instance;
+   a contributed agent's model role is one its module requires. Each grant names only what a
+   selected module uses, or it is refused as stale. The site rules take the units, rows and role
+   table as required inputs, so none is skipped; the loader will pass them. Not done: the per-field review tier for in-tree manifests (the
+   review-policy kinds `module-provider`, `module-feature`, `module-core` exist for fetched
+   modules, with a flat tier, from follow-up 5).
 5. **Supply chain**: implemented (see [Supply chain](#supply-chain)); the loader will run the check.
 6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing)); the
    loader will run it.

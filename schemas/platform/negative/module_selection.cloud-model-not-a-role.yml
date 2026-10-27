@@ -1,0 +1,211 @@
+# SPDX-License-Identifier: Apache-2.0
+# grants.cloud_models names model roles as mdl:<role>.
+profile: full
+hosts:
+  data-core:
+    kind: vm
+    addresses:
+    - 192.0.2.10
+    capacity:
+      cpu: 16
+      memory_mb: 32768
+      disk_gb: 8000
+    headroom:
+      memory_mb: 4096
+  detect-core:
+    kind: vm
+    addresses:
+    - 192.0.2.11
+    capacity:
+      cpu: 8
+      memory_mb: 16384
+      disk_gb: 2000
+    headroom:
+      memory_mb: 2048
+  sandbox-core:
+    kind: vm
+    addresses:
+    - 192.0.2.12
+    isolated: true
+    capacity:
+      cpu: 8
+      memory_mb: 16384
+      disk_gb: 500
+    headroom:
+      memory_mb: 2048
+  runtime-core:
+    kind: vm
+    addresses:
+    - 192.0.2.13
+    - 2001:db8:30::13
+    capacity:
+      cpu: 8
+      memory_mb: 8192
+      disk_gb: 200
+      gpu_memory_mb: 8192
+    resources:
+    - name: gpu0
+      kind: gpu
+    headroom:
+      memory_mb: 1024
+  collector-edge:
+    kind: external
+    capacity:
+      cpu: 1
+      memory_mb: 1024
+      disk_gb: 25
+    headroom:
+      memory_mb: 256
+slots:
+  secrets:
+  - provider: example-platform
+    instance: platform
+    placement:
+      platform: data-core
+  idp:
+  - provider: example-platform
+    instance: platform
+  edge:
+  - provider: example-platform
+    instance: platform
+  dns:
+  - provider: example-platform
+    instance: platform
+  backup:
+  - provider: example-platform
+    instance: platform
+  events:
+  - provider: example-platform
+    instance: platform
+  broker:
+  - provider: example-platform
+    instance: platform
+  records:
+  - provider: example-platform
+    instance: platform
+  orchestration:
+  - provider: example-platform
+    instance: platform
+  - provider: example-orchestrator
+    instance: orchestrator
+    placement:
+      jobs: runtime-core
+  agent-runtime:
+  - provider: example-agent-runtime
+    instance: runtime
+    placement:
+      runtime: runtime-core
+  inference:
+  - provider: example-inference
+    instance: inference
+    placement:
+      server: runtime-core
+  object-store:
+  - provider: example-object-store
+    instance: objects
+    placement:
+      store: data-core
+  - provider: other-object-store
+    instance: samples
+    placement:
+      store: data-core
+  lake-catalog:
+  - provider: example-lake
+    instance: lake
+    placement:
+      lake: data-core
+  lake-query:
+  - provider: example-lake
+    instance: lake
+  log-pipeline:
+  - provider: example-log-pipeline
+    instance: pipeline
+    placement:
+      pipeline: data-core
+  siem-source:
+  - provider: example-siem-suite
+    instance: siem
+    placement:
+      suite: detect-core
+  hot-index:
+  - provider: example-siem-suite
+    instance: siem
+  detections:
+  - provider: example-siem-suite
+    instance: siem
+  notify:
+  - provider: example-siem-suite
+    instance: siem
+  cases: none
+  exposure-management:
+  - provider: example-detonation
+    instance: detonation
+    placement:
+      engine: sandbox-core
+  static-hosting:
+  - provider: example-static-host
+    instance: public-site
+features:
+  external-collector:
+    placement:
+      edge: collector-edge
+      receiver: data-core
+    config:
+      edge_region: region-example-3
+      mode: full
+    agents:
+      external-collector-analyst:
+        lanes:
+          real: platform
+          shadow: orchestrator
+  example-sandbox:
+    placement:
+      detonation: sandbox-core
+    agents:
+      example-sandbox-analyst:
+        lanes:
+          real: orchestrator
+  publishing:
+    placement:
+      publisher: runtime-core
+core:
+  core-staff:
+    agents:
+      core-staff-scorecard:
+        lanes:
+          real: platform
+grants:
+  publish:
+  - publishing
+  egress:
+    publishing:
+      publisher:
+      - internet
+    external-collector:
+      edge:
+      - external
+  secrets:
+    publishing:
+    - secret:example-static-host/deploy-token
+  cloud_models:
+    publishing:
+    - main-reasoner
+scope:
+  trusted:
+    wan:
+    - 203.0.113.32/29
+    nets:
+    - 192.0.2.0/24
+    - 2001:db8:30::/48
+    tooling:
+    - 192.0.2.240/28
+  target:
+  - 198.51.100.0/24
+  - 192.0.2.0/24
+  exclude:
+    unattended_mutation:
+    - 192.0.2.1/32
+    - 192.0.2.2/32
+    offensive:
+    - 192.0.2.0/28
+    - 198.51.100.128/25
