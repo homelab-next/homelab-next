@@ -262,6 +262,88 @@ def test_deploy_reads_role_credentials_from_openbao(deploy):
     assert len(ca) == 1 and "BAO_CACERT=" in ca[0]["run"]
 
 
+# ---- the module loader at deploy time (docs/modules.md, "The loader at deploy time") ------------
+
+
+def _step(job: dict, name: str) -> tuple[int, dict]:
+    (found,) = [(i, s) for i, s in enumerate(job["steps"]) if s.get("name") == name]
+    return found
+
+
+def test_the_loader_runs_before_the_deploy_and_checks_what_runs_after_it(deploy):
+    (job,) = deploy["jobs"].values()
+    i_check, check = _step(job, "the module loader, before anything changes on a host")
+    i_deploy, run = _step(job, "deploy")
+    i_after, after = _step(job, "what runs matches what the lab declares")
+    assert i_check < i_deploy < i_after
+    # nothing before the check reaches a host: the tailnet join is the first thing that could
+    i_net = next(
+        i
+        for i, s in enumerate(job["steps"])
+        if s.get("if") == "vars.HNX_DEPLOY_PATH != 'self-hosted'"
+    )
+    assert i_check < i_net
+    for step in (check, run, after):  # a failing check fails the run, never only warns
+        assert "continue-on-error" not in step
+    assert "hnx modules check --root hnx --overlay . --deploy\n" in check["run"]
+    assert check["id"] == "modules"
+    assert run["env"]["MODULES_IN_USE"] == "${{ steps.modules.outputs.in_use }}"
+    script = run["run"]
+    assert script.index("ansible/playbooks/site.yml") < script.index("module_census.yml")
+    assert after["if"] == "steps.modules.outputs.in_use == 'true'"
+    assert "hnx modules gather" in after["run"]
+    assert "--deploy --running" in after["run"]
+
+
+def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str, str]:
+    """Run the template's loader step: in an overlay with ``lab_files``, with an ``hnx`` that
+    exits ``hnx_exit`` and logs its arguments.  Returns (exit, its output, GITHUB_OUTPUT)."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed")
+    (job,) = yaml.safe_load((SKELETON / ".github" / "workflows" / "deploy.yml").read_text())[
+        "jobs"
+    ].values()
+    _, step = _step(job, "the module loader, before anything changes on a host")
+    work = tmp_path / "overlay"
+    (work / "lab").mkdir(parents=True)
+    for f in lab_files:
+        (work / "lab" / f).write_text("x\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "hnx"
+    fake.write_text(f'#!/bin/sh\necho "hnx $*" >> {tmp_path}/calls\nexit {hnx_exit}\n')
+    fake.chmod(0o755)
+    out = tmp_path / "github_output"
+    r = subprocess.run(
+        [bash, "-c", step["run"]],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out)},
+    )
+    calls = (tmp_path / "calls").read_text() if (tmp_path / "calls").exists() else ""
+    return r.returncode, calls + r.stdout, out.read_text() if out.exists() else ""
+
+
+def test_the_deploy_stops_when_the_loader_finds_a_problem(tmp_path):
+    code, said, output = _loader_step(tmp_path, 1, "modules.yml")
+    assert code == 1
+    assert "hnx modules check --root hnx --overlay . --deploy" in said
+    assert "in_use" not in output  # the deploy step never runs, nor the census after it
+
+
+def test_a_clean_check_lets_the_deploy_and_the_census_run(tmp_path):
+    code, said, output = _loader_step(tmp_path, 0, "modules.lock")
+    assert code == 0 and "hnx modules check" in said and output == "in_use=true\n"
+
+
+def test_a_lab_without_modules_is_told_the_loader_had_nothing_to_check(tmp_path):
+    code, said, output = _loader_step(tmp_path, 1)
+    assert code == 0 and "hnx" not in said.split("::notice::")[0]
+    assert "selects no modules" in said and output == "in_use=false\n"
+
+
 def test_zizmor_accepts_the_templates():
     """docs/private-overlay.md says the templates pass zizmor (checked with 1.31.1, offline)."""
     require_tool("zizmor")

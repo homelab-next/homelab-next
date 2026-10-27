@@ -69,6 +69,7 @@ SHIPPED = [
     "last_run",
     "lynis",
     "model_store",
+    "module_census",
     "needrestart",
     "nftables_host",
     "open_webui",
@@ -121,6 +122,16 @@ def test_playbook_targeting_a_hostname_fails():
 
 def test_playbook_targeting_a_capability_group_passes():
     assert role_lint.lint_playbook(FX / "PB001" / "good.yml", FX / "PB001" / "hosts.yml") == []
+
+
+def test_one_playbook_flag_takes_every_playbook_a_glob_expands_to(capsys):
+    """make and CI pass ``--playbook ansible/playbooks/*.yml``: with two playbooks the second
+    must be linted as a playbook, not read as a role directory."""
+    pbs = [str(FX / "PB001" / "good.yml"), str(FX / "PB001" / "playbook.yml")]
+    code = role_lint.main(["--playbook", *pbs, "--inventory", str(FX / "PB001" / "hosts.yml")])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "PB001" in out and "not a directory" not in out
 
 
 def test_every_shipped_playbook_targets_a_group():

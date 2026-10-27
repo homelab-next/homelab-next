@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# A gathered inventory (hnx modules gather): the hosts report their enabled fleet units, and the
+# kinds they cannot report are named in not_gathered, so the loader notes them as not compared
+# (lake-compact, bound to no module id, is a core unit the check does not judge).
+schema_version: "1.0"
+units: [lake-compact]
+not_gathered: [rows, mcp_servers, agents, tables]

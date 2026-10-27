@@ -543,8 +543,13 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("roles", nargs="*", help="role directories")
+    # one --playbook may name several (make and CI pass a glob after a single flag)
     ap.add_argument(
-        "--playbook", action="append", default=[], help="playbook to check (repeatable)"
+        "--playbook",
+        action="extend",
+        nargs="+",
+        default=[],
+        help="playbook(s) to check (repeatable)",
     )
     ap.add_argument("--inventory", help="YAML inventory used for the playbook host check")
     ap.add_argument("--json", action="store_true")

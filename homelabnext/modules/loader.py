@@ -684,11 +684,14 @@ def running_problems(
 ) -> list[Problem]:
     """Every running name bound to a module id is declared by that module, which the site
     selects; every declared name runs.  A name bound to no module id is the core's and is not
-    judged here."""
+    judged here.  A kind the inventory names in ``not_gathered`` is not compared."""
     declared = _declared(tree, ins, site, sel, load or module_reader(tree))
     ids = set(tree.mods)
+    skipped = set(inventory.get("not_gathered", []))
     out = []
     for kind in INVENTORY_KINDS:
+        if kind in skipped:
+            continue
         running = set(inventory.get(kind, []))
         for name in sorted(running - set(declared[kind])):
             owner = _bound_to(kind, name, ids)
@@ -820,6 +823,13 @@ def check(
             problems += [Problem("running", f"schema: {e}") for e in errs]
         else:
             problems += running_problems(vtree, ins, site, sel, inventory, load)
+            skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
+            if skipped:
+                notes.append(
+                    "the inventory does not report "
+                    + ", ".join(skipped)
+                    + ": not compared (not_gathered)"
+                )
     return Report(sorted(set(problems)), notes)
 
 
