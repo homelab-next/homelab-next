@@ -174,7 +174,11 @@ a `subnet6` a global IPv6 address names no zone and is refused there.
 `hnx site validate` requires the prefix in its canonical form (lower case, compressed, no host
 bits), a /48 to a /64, and none of: link-local, multicast, loopback or unspecified, and a range
 that writes an IPv4 address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo),
-where the address a collector sees is the IPv4 one. Two zones' prefixes may not overlap.
+where the address a collector sees is the IPv4 one. It must come from the space zones are
+numbered from: unique-local (`fc00::/7`), global unicast (`2000::/3`, less the IETF protocol
+assignments `2001::/23`: benchmarking, ORCHID, AMT, Teredo and the rest) or documentation space;
+discard-only, deprecated site-local and any other special-purpose range is refused. Two zones'
+prefixes may not overlap.
 
 Nothing is configured from it yet: the router and switch adapters, the guests' firewall renders
 (`zone:` references) and the egress policy still speak IPv4 only, so a `zone:` allow does not

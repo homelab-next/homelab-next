@@ -48,7 +48,14 @@ def test_the_example_lab_is_clean(zdoc, registry):
 
 
 @pytest.mark.parametrize(
-    "prefix", ["2001:db8:0:82::/64", "2001:db8:5::/48", _net(0x2600_0000_0000_0082 << 64, 64)]
+    "prefix",
+    [
+        "2001:db8:0:82::/64",
+        "2001:db8:5::/48",
+        _net(0x3FFF_0000_0005 << 80, 48),  # documentation (RFC 9637)
+        _net(0x2600_0000_0000_0082 << 64, 64),  # global unicast
+        _net(0xFD00_0000_0000_0082 << 64, 64),  # unique-local
+    ],
 )
 def test_a_canonical_48_to_64_is_a_prefix(prefix):
     net, why = subnet6_problem(prefix)
@@ -70,6 +77,14 @@ def test_a_canonical_48_to_64_is_a_prefix(prefix):
         (_net(0x64_FF9B_0001 << 80, 48), "embeds IPv4"),  # NAT64, local use
         (_net(0x2002_C000_0200 << 80, 48), "embeds IPv4"),  # 6to4
         (_net(0x2001_0000_0001 << 80, 48), "embeds IPv4"),  # Teredo
+        # special-purpose space no zone is numbered from
+        (_net(0x0100 << 112, 64), "is not unique-local"),  # discard-only
+        (_net(0xFEC0 << 112, 48), "is not unique-local"),  # deprecated site-local
+        (_net(0x2001_0002 << 96, 48), "is not unique-local"),  # benchmarking
+        (_net(0x2001_0010 << 96, 48), "is not unique-local"),  # ORCHID
+        (_net(0x2001_0020 << 96, 48), "is not unique-local"),  # ORCHIDv2
+        (_net(0x5F00 << 112, 48), "is not unique-local"),  # SRv6 SIDs
+        (_net(0x4000 << 112, 48), "is not unique-local"),  # unassigned
     ],
 )
 def test_a_prefix_that_names_no_one_zone_is_refused(prefix, why):

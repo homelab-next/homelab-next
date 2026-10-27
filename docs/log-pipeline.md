@@ -109,11 +109,16 @@ example table and then the rule. They show that a self-set label changes nothing
   `network.extra_addresses` (guest 1.6: a second interface, a macvlan or bridge address its
   containers use, its IPv6 address, each with a `why`) are labelled alike, so a
   runtime that sends from any address written there is still a runtime. Validation holds each
-  extra address to one that names this guest and no other wherever a collector sees it: canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not one any guest already names.
+  extra address to one that names this guest and no other wherever a collector sees it: canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, never an anycast address of its /64, and inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not one any guest already names.
 - **IPv6 is held against the zone's prefix.** A zone may give its IPv6 prefix (`subnet6`, site
   1.4, a /48 to a /64), and then an IPv6 extra address of a guest in it must sit inside that
-  prefix, global (a SLAAC address included) or not, and not be the prefix itself (the
-  subnet-router anycast address); an address inside another zone's prefix is that zone's.
+  prefix, global (a SLAAC address included) or not; an address inside another zone's prefix is
+  that zone's. An anycast address of its /64 is refused wherever it is (the subnet-router one,
+  with no host part, and the top 128 interface identifiers RFC 2526 reserves). The prefixes are
+  read as `hnx site validate` reads them even where it has not run: when any zone's `subnet`
+  or given `subnet6` does not read (an empty or non-text `subnet6` included), or the guest's
+  zone is not in the site model, every IPv6 extra address is refused, and the IPv4 ones are
+  judged against the zones that read.
   Without a `subnet6` on its zone, a global IPv6 address is refused (nothing says whose it is)
   and a unique-local or documentation one is accepted with no ownership check beyond "no other
   guest names it and no zone's prefix holds it": review it as you would a new `network.ip`. A

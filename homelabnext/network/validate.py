@@ -49,14 +49,25 @@ class Report:
         return "\n".join(lines)
 
 
+#: the IPv6 space a zone's prefix may come from: unique-local, global unicast and documentation
+ZONE_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
+    ipaddress.IPv6Network((0x2000 << 112, 3)),  # global unicast (holds 2001:db8::/32, 3fff::/20)
+)
+#: ...less the IETF protocol assignments (benchmarking, ORCHID, AMT, Teredo and the rest), which
+#: no zone is numbered from
+SPECIAL_V6: tuple[ipaddress.IPv6Network, ...] = (ipaddress.IPv6Network((0x2001 << 112, 23)),)
+
+
 def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
     """``(prefix, None)`` for a zone's ``subnet6`` (site 1.4), else ``(None, why)``.
 
     A guest's IPv6 extra address is held against it (``homelabnext.compute.validate``), so it must
     be one prefix that names this zone only: canonical (no host bits, lower case, compressed), a
-    /48 to a /64, and not link-local, multicast, loopback, unspecified or one that writes an IPv4
+    /48 to a /64, not link-local, multicast, loopback, unspecified or one that writes an IPv4
     address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo), where the address
-    a collector sees is the IPv4 one."""
+    a collector sees is the IPv4 one, and from the space zones are numbered from
+    (:data:`ZONE_V6` less :data:`SPECIAL_V6`)."""
     from homelabnext.modules.scope import EMBEDDED_V4
 
     try:
@@ -79,6 +90,11 @@ def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]
     )
     if any(net.overlaps(e) for e in embedding):
         return None, "embeds IPv4 addresses (mapped, compatible, translated, NAT64, 6to4, Teredo)"
+    if any(net.subnet_of(s) for s in SPECIAL_V6) or not any(net.subnet_of(a) for a in ZONE_V6):
+        return None, (
+            "is not unique-local (fc00::/7), global unicast (2000::/3, less the IETF protocol "
+            "assignments 2001::/23) or documentation space"
+        )
     return net, None  # type: ignore[return-value]
 
 

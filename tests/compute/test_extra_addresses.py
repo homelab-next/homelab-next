@@ -115,7 +115,11 @@ def test_every_address_of_a_guest_is_in_the_table_with_its_value(tmp_path):
         (_v6(0x2001 << 112 | 1), "is outside zone compute's IPv6 prefix"),  # Teredo
         (_v6(0xFD00 << 112 | 0x8C), "is outside zone compute's IPv6 prefix"),  # unique-local
         ("2001:db8:0:83::1", "is outside zone compute's IPv6 prefix"),
-        ("2001:db8:0:82::", "subnet-router anycast address"),
+        ("2001:db8:0:82::", "subnet-router anycast address of its /64"),
+        # RFC 2526: the top 128 interface identifiers of a /64, EUI-64 form and not
+        ("2001:db8:0:82:fdff:ffff:ffff:ff80", "anycast address RFC 2526 reserves"),
+        ("2001:db8:0:82:fdff:ffff:ffff:ffff", "anycast address RFC 2526 reserves"),
+        ("2001:db8:0:82:ffff:ffff:ffff:ff80", "anycast address RFC 2526 reserves"),
         ("192.0.2.129", "zone compute's gateway"),
         # another zone's address, whatever holds it (a router, a NAS, a VIP no guest file names)
         ("192.0.2.5", "inside zone mgmt's subnet, not zone compute's"),
@@ -332,10 +336,9 @@ def test_a_zone_reads_its_prefix():
     from homelabnext.compute.zones import SiteAdapter, zone_from_mapping
 
     z = zone_from_mapping({"id": "c", "subnet": "192.0.2.128/26", "subnet6": PREFIX})
-    assert z.network6 == ipaddress.IPv6Network(PREFIX)
-    assert ZoneInfo(id="a", subnet="192.0.2.0/26").network6 is None
-    with pytest.raises(ValueError, match="not an IPv6 prefix"):
-        ZoneInfo(id="a", subnet="192.0.2.0/26", subnet6="192.0.2.0/26").network6  # noqa: B018
+    assert z.subnet6 == PREFIX
+    assert ZoneInfo(id="a", subnet="192.0.2.0/26").subnet6 is None
+    assert zone_from_mapping({"id": "a", "subnet": "192.0.2.0/26", "subnet6": ""}).subnet6 == ""
     listed = SiteAdapter(
         type("S", (), {"zones": [{"id": "c", "subnet": "192.0.2.128/26", "subnet6": PREFIX}]})()
     ).all()
@@ -416,3 +419,85 @@ def test_a_why_of_only_white_space_is_refused_at_load(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     with pytest.raises(ComputeError, match="extra_addresses"):
         _load(site)
+
+
+def _zone(site: Path, zone: str, **fields) -> None:
+    """Set fields of a zone in the copied site (any value, a bad one included)."""
+    path = site / "site.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    next(z for z in doc["zones"] if z["id"] == zone).update(fields)
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
+ULA = _v6(0xFD00_0010 << 96 | 5)  # unique-local, zone-less without a prefix that holds it
+ULA_PREFIX = str(ipaddress.IPv6Network((0xFD00_0010 << 96, 64)))
+
+
+@pytest.mark.parametrize("zone", ["edge", "sandbox"])  # zones no guest of the example is in
+def test_a_zone_whose_subnet_does_not_read_still_holds_its_prefix(tmp_path, zone):
+    """A zone dropped from the list for its bad IPv4 subnet took its IPv6 prefix with it, and a
+    guest of another zone could name an address inside that prefix (the review of #119)."""
+    site = _site(tmp_path, [ULA])
+    _subnet6(site, "compute", None)
+    _zone(site, zone, subnet="bogus", subnet6=ULA_PREFIX)
+    with pytest.raises(ComputeError, match=f"cannot be held against zone {zone}: its subnet"):
+        _load(site)
+    # the IPv4 extra is still judged against the zones that read
+    site = _site(tmp_path / "v4", ["192.0.2.150"])
+    _zone(site, zone, subnet="bogus")
+    assert (
+        "192.0.2.150"
+        in next(g for g in _load(site).sorted() if g.id == "guest:infer-core").addresses
+    )
+
+
+@pytest.mark.parametrize("value", ["", False, 0, 64, [PREFIX]])
+def test_a_prefix_that_is_given_but_falsy_or_not_text_does_not_read(tmp_path, value):
+    """Only an absent subnet6 is no prefix; any value given must read as one."""
+    site = _site(tmp_path, [ULA])
+    _subnet6(site, "compute", None)
+    _zone(site, "mgmt", subnet6=value)
+    with pytest.raises(ComputeError, match=r"cannot be held against zone mgmt: its subnet6"):
+        _load(site)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        str(ipaddress.IPv6Network((0x2002 << 112, 48))),  # 6to4
+        str(ipaddress.IPv6Network((0x2001_0000 << 96, 48))),  # Teredo
+        str(ipaddress.IPv6Network((0x2001_0002 << 96, 48))),  # benchmarking
+        str(ipaddress.IPv6Network((0xFEC0 << 112, 48))),  # deprecated site-local
+        str(ipaddress.IPv6Network((0x0100 << 112, 64))),  # discard-only
+    ],
+)
+def test_a_special_purpose_prefix_refuses_every_ipv6_extra(tmp_path, prefix):
+    site = _site(tmp_path, [EXTRA])
+    _subnet6(site, "mgmt", prefix)
+    with pytest.raises(ComputeError, match=r"cannot be held against zone mgmt: its subnet6"):
+        _load(site)
+
+
+def test_overlapping_prefixes_refuse_the_overlap(tmp_path):
+    """hnx site validate refuses overlapping prefixes; open_site does not run it, so the compute
+    path must still never let a guest name an address another zone's prefix holds."""
+    site = _site(tmp_path, ["2001:db8:0:10::5"])
+    _subnet6(site, "compute", "2001:db8::/48")  # holds mgmt's /64
+    _subnet6(site, "mgmt", "2001:db8:0:10::/64")
+    with pytest.raises(ComputeError, match="is inside zone mgmt's IPv6 prefix, not zone compute's"):
+        _load(site)
+
+
+def test_a_guest_of_a_zone_the_site_lacks_names_no_ipv6_address():
+    """As in IPv4: no zone, nothing to hold the address against (validate's own check reports
+    the missing zone too)."""
+    from types import SimpleNamespace
+
+    from homelabnext.compute.model import ZoneInfo
+    from homelabnext.compute.validate import _ipv6_ownership_problem
+
+    zones = [ZoneInfo(id="compute", subnet="192.0.2.128/26")]
+    why = _ipv6_ownership_problem(
+        ipaddress.IPv6Address(ULA), SimpleNamespace(zone="nowhere"), zones
+    )
+    assert why == "cannot be held against zone nowhere: it is not in the site model"

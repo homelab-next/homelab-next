@@ -86,17 +86,6 @@ class ZoneInfo:
     def network(self) -> ipaddress.IPv4Network:
         return ipaddress.ip_network(self.subnet, strict=True)  # type: ignore[return-value]
 
-    @property
-    def network6(self) -> ipaddress.IPv6Network | None:
-        """The zone's IPv6 prefix, or None when it has none (``hnx site validate`` judges its
-        form; a value that is not an IPv6 prefix raises ValueError, as a bad ``subnet`` does)."""
-        if not self.subnet6:
-            return None
-        net = ipaddress.ip_network(self.subnet6, strict=True)
-        if net.version != 6:
-            raise ValueError(f"subnet6 {self.subnet6!r} is not an IPv6 prefix")
-        return net  # type: ignore[return-value]
-
 
 @dataclass(frozen=True)
 class ZoneFlow:
