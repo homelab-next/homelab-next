@@ -6,8 +6,9 @@ description: >
   outbound packet it drops with the prefix "hnx-egress-drop: ", rate-limited. On a guest that
   serves models or runs model-written code, a drop is a connection the model's output asked for
   that nobody listed: the attempt itself is the finding, whatever the model's reasoning said.
-  Expects the pipeline to label the guest's runtime (labels.hnx_runtime).
-status: experimental
+  Inert until the pipeline labels a model runtime's events (labels.hnx_runtime: model), which
+  no shipped enrichment does yet.
+status: unsupported  # inert: nothing sets labels.hnx_runtime yet (docs/compute-model.md)
 logsource: {product: linux, service: kernel}
 detection:
   selection_runtime:

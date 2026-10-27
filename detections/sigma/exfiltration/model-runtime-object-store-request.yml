@@ -7,9 +7,11 @@ description: >
   model store. An open-weight model has been reported (2026-10) to list /tmp, read the resolver
   configuration and attempt an HTTP PUT of a file to a cloud bucket while asked to write a
   detection rule. The egress filter refuses the connection; this rule says it was attempted.
-  Expects the pipeline to label the source guest's runtime (labels.hnx_runtime). The endpoint
-  list is the same in det:model-runtime-object-store-lookup and det:model-runtime-object-store-request.
-status: experimental
+  Inert until the pipeline labels a model runtime's events (labels.hnx_runtime: model), which
+  no shipped enrichment does yet. Each endpoint is listed with and without the root's trailing
+  dot; the list is the same in det:model-runtime-object-store-lookup and
+  det:model-runtime-object-store-request.
+status: unsupported  # inert: nothing sets labels.hnx_runtime yet (docs/compute-model.md)
 logsource: {category: proxy}
 detection:
   selection_runtime:
@@ -17,15 +19,25 @@ detection:
   selection_store:
     UrlDomain|endswith:
         - .aliyuncs.com
+        - .aliyuncs.com.
         - .amazonaws.com
+        - .amazonaws.com.
         - .blob.core.windows.net
+        - .blob.core.windows.net.
         - .storage.googleapis.com
+        - .storage.googleapis.com.
         - .r2.cloudflarestorage.com
+        - .r2.cloudflarestorage.com.
         - .backblazeb2.com
+        - .backblazeb2.com.
         - .digitaloceanspaces.com
+        - .digitaloceanspaces.com.
         - .wasabisys.com
+        - .wasabisys.com.
         - .myqcloud.com
+        - .myqcloud.com.
         - .myhuaweicloud.com
+        - .myhuaweicloud.com.
   condition: selection_runtime and selection_store
 level: high
 tags: [attack.exfiltration, attack.t1567.002]

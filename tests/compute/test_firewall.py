@@ -98,7 +98,15 @@ def test_flag_off_with_exemption_is_accepted(tmp_path):
         tmp_path,
         "infer-core",
         lambda x: (
-            x["network"].update(firewall="disabled", firewall_exemption=EXEMPT),
+            x["network"].update(
+                firewall="disabled",
+                # a model runtime: the exemption names the layer that filters it, and a date
+                firewall_exemption={
+                    **EXEMPT,
+                    "review_by": "2027-03-31",
+                    "filtered_by": "guest:hv-a",
+                },
+            ),
             x.pop("firewall_rules", None),
         ),
     )
@@ -403,8 +411,11 @@ def test_every_model_runtime_is_held_to_it(tmp_path, edit):
 
 def test_a_model_runtime_filtered_elsewhere_with_the_exemption_is_accepted(tmp_path):
     # bus-core's NIC firewall is off with an exemption naming where it is filtered
-    d = fleet_dir(tmp_path, "bus-core", lambda x: x.update(capability="cap:codemode-executor"))
-    assert load_fleet(d, STUB).guests
+    def executor(doc):
+        doc.update(capability="cap:codemode-executor")
+        doc["network"]["firewall_exemption"]["filtered_by"] = "zone:data"
+
+    assert load_fleet(fleet_dir(tmp_path, "bus-core", executor), STUB).guests
 
 
 def test_a_model_runtime_filtered_elsewhere_needs_the_exemption_saying_so(tmp_path):
@@ -415,7 +426,7 @@ def test_a_model_runtime_filtered_elsewhere_needs_the_exemption_saying_so(tmp_pa
 
     nodes = "nodes:\n  hv-a: {firewall: disabled}\n"  # no node rule asks for an exemption
     msg = problems(fleet_dir(tmp_path, "infer-core", off, nodes))
-    assert "NIC firewall is off with no network.firewall_exemption" in msg
+    assert "NIC firewall is off, so network.firewall_exemption needs filtered_by" in msg
 
 
 def test_a_model_runtime_must_resolve_egress_filter_when_the_set_defines_it(tmp_path):
@@ -443,3 +454,93 @@ def test_a_guest_that_runs_no_model_keeps_its_own_egress_policy(good):
     assert any(
         g.capability != "cap:inference" and not g.raw.get("firewall_rules") for g in good.guests
     )
+
+
+@pytest.mark.parametrize(
+    "exemption",
+    [
+        {"reason": "Filtered somewhere else, trust me."},
+        {"reason": "Filtered somewhere else, trust me.", "review_by": "2027-03-31"},
+        {"reason": "Filtered somewhere else, trust me.", "filtered_by": "guest:hv-a"},
+    ],
+    ids=["reason-only", "no-pointer", "no-review-date"],
+)
+def test_a_model_runtime_bare_exemption_is_refused(tmp_path, exemption):
+    def off(doc):
+        doc["network"].update(firewall="disabled", firewall_exemption=exemption)
+        doc.pop("firewall_rules")
+
+    assert "needs filtered_by (the guest or zone that filters it) and review_by" in problems(
+        fleet_dir(tmp_path, "infer-core", off)
+    )
+
+
+@pytest.mark.parametrize(
+    ("by", "expect"),
+    [
+        ("guest:nowhere", "guest:nowhere is not another guest"),
+        ("guest:bus-core", "guest:bus-core is not another guest"),
+        ("zone:nowhere", "zone 'nowhere' does not exist"),
+    ],
+    ids=["unknown-guest", "itself", "unknown-zone"],
+)
+def test_a_filtered_by_pointer_must_resolve(tmp_path, by, expect):
+    msg = problems(
+        fleet_dir(
+            tmp_path,
+            "bus-core",
+            lambda x: x["network"]["firewall_exemption"].update(filtered_by=by),
+        )
+    )
+    assert f"network.firewall_exemption.filtered_by: {expect}" in msg
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "any",
+        "0.0.0.0/0",
+        "8.0.0.0/7",  # scrub-allow: a public range the rule must refuse
+        "203.0.113.0/24",
+        "198.51.100.0/23",
+        "10.0.0.0/7",  # scrub-allow: a range wider than private the rule must refuse
+    ],
+    ids=["any", "default-route", "public", "documentation", "spans-out", "wider"],
+)
+def test_a_model_runtime_outbound_allow_never_reaches_the_internet(tmp_path, dest):
+    def allow(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "wide", "proto": "tcp", "ports": "443", "dest": dest}
+        )
+
+    if dest == "203.0.113.0/24":  # documentation space is never the internet: accepted
+        assert load_fleet(fleet_dir(tmp_path, "infer-core", allow), STUB).guests
+        return
+    assert f"firewall_rules.wide: dest {dest} reaches the internet" in problems(
+        fleet_dir(tmp_path, "infer-core", allow)
+    )
+
+
+def test_a_model_runtime_outbound_allow_to_lab_ranges_is_accepted(tmp_path):
+    def allow(doc):
+        doc["firewall_rules"]["outbound_allow"] += [
+            {
+                "name": "lab-private",
+                "proto": "tcp",
+                "ports": "443",
+                "dest": "10.20.0.0/16",  # scrub-allow: a private range, never the internet
+            },
+            {"name": "lab-zone", "proto": "tcp", "ports": "8443", "dest": "zone:compute"},
+        ]
+
+    assert load_fleet(fleet_dir(tmp_path, "infer-core", allow), STUB).guests
+
+
+def test_a_guest_that_runs_no_model_may_allow_the_internet(tmp_path):
+    def allow(doc):
+        doc["firewall_rules"]["policy_out"] = "DROP"
+        doc["firewall_rules"]["outbound_allow"] = [
+            {"name": "https-out", "proto": "tcp", "ports": "443", "dest": "any"}
+        ]
+
+    assert load_fleet(fleet_dir(tmp_path, "edge-core", allow), STUB).guests

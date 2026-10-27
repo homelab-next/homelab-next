@@ -127,13 +127,16 @@ NOT_INTERNET: tuple[Network, ...] = (
 )
 
 
-#: cloud instance metadata services (the link-local one most clouds use, Alibaba Cloud's, and the
-#: IPv6 one): never a lab host's address.  Each sits in a NOT_INTERNET range, so no role reaches
+#: cloud instance metadata services (the link-local one most clouds use, the container credentials
+#: endpoint beside it, Oracle Cloud's, Alibaba Cloud's, and the IPv6 one): never a lab host's
+#: address.  Each sits in a NOT_INTERNET range, so no role reaches
 #: one over ``internet``; refusing them as host addresses keeps a slot or ``svc:`` allow from
 #: naming one.  The guest firewall (role nftables_host, vars/main.yml) refuses the same addresses
 #: on every guest; a test keeps the two lists equal.
 METADATA: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...] = (
     ipaddress.IPv4Address(0xA9FE_A9FE),
+    ipaddress.IPv4Address(0xA9FE_AA02),
+    ipaddress.IPv4Address(0xC000_00C0),
     ipaddress.IPv4Address(0x6464_64C8),
     _v6((0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254), 128).network_address,
 )

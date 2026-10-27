@@ -207,13 +207,12 @@ baselines:
   model-runtime:
     description: >-
       A guest that serves model weights or runs model-written code (cap:inference,
-      cap:codemode-executor): outbound is default-deny and its segment is watched, because a
-      model's output, not only an attacker's, decides what it connects to.
+      cap:codemode-executor): outbound is default-deny, because a model's output, not only an
+      attacker's, decides what it connects to. Add network-sensor where the lab has a sensor host.
     extends: [server]
     controls:
       - {id: os-hardening, with: {items: [sysctl, filesystems, services, file_modes, core_dumps]}}
       - egress-filter
-      - network-sensor
   scratch:
     description: A throwaway lab guest (scope out) that still must not be an easy foothold.
     controls:

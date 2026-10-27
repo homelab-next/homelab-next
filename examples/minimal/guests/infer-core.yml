@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lab's model runtime (cap:inference): it serves model weights, so its outbound traffic is
+# default-deny and lists only lab destinations (docs/compute-model.md, "Model runtimes").
+id: guest:infer-core
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 182, vmid_scheme: freeform}
+resources:
+  cpu: {cores: 8}
+  memory: {size_mb: 32768}
+  disks:
+    - {name: rootfs, size_gb: 40, pool: fast, format: qcow2}
+    - {name: models, size_gb: 200, pool: fast, format: qcow2}
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
+network: {zone: compute, ip: 192.0.2.140, vlan_tag_mode: per_vlan_bridge}
+firewall_rules:
+  policy_out: DROP
+  inbound_allow:
+    - {name: inference-api, proto: tcp, ports: "8000", source: "zone:data"}
+  outbound_allow:
+    - {name: dns, proto: udp, ports: "53", dest: "zone:mgmt"}
+    - {name: time, proto: udp, ports: "123", dest: "zone:mgmt"}
+    - {name: model-store, proto: tcp, ports: "443", dest: "zone:data"}
+capability: cap:inference
+capability_groups: [cap_inference]
+tags: [prod]
+backup: {policy: none}
+owners: {primary: platform-team}
+baseline: {names: [model-runtime]}

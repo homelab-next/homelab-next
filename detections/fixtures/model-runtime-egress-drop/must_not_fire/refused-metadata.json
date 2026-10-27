@@ -7,6 +7,6 @@
     "labels": {
       "hnx_runtime": "model"
     },
-    "message": "hnx-egress-refused: IN= OUT=eth0 SRC=198.51.100.130 PROTO=TCP DPT=80"
+    "message": "hnx-egress-refused: IN= OUT=eth0 PROTO=TCP DPT=80"
   }
 }

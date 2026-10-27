@@ -90,6 +90,21 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
             out.append(
                 Problem(g.id, "network.firewall_exemption is set but the NIC firewall is enabled")
             )
+        by = (g.firewall_exemption or {}).get("filtered_by")
+        if (
+            by
+            and by.startswith("guest:")
+            and (by == g.id or by not in {x.id for x in fleet.guests})
+        ):
+            out.append(
+                Problem(g.id, f"network.firewall_exemption.filtered_by: {by} is not another guest")
+            )
+        elif by and by.startswith("zone:") and fleet.zones.zone(by[5:]) is None:
+            out.append(
+                Problem(
+                    g.id, f"network.firewall_exemption.filtered_by: zone {by[5:]!r} does not exist"
+                )
+            )
     elif g.raw.get("firewall_rules"):
         out.append(Problem(g.id, "firewall_rules apply to kind vm and lxc only"))
     names = [r["name"] for r in g.firewall_rules + g.outbound_rules]
@@ -178,6 +193,30 @@ def model_runtime(g: Guest) -> str | None:
     return None
 
 
+def _internet_allows(g: Guest) -> list[str]:
+    """Outbound allows that reach beyond the lab: ``any``, or a CIDR not inside the never-internet
+    ranges (:data:`homelabnext.modules.egress.NOT_INTERNET`).  A ``zone:`` is a lab subnet."""
+    from homelabnext.modules.egress import NOT_INTERNET
+
+    out = []
+    for r in g.outbound_rules:
+        dest = r["dest"]
+        if dest.startswith("zone:"):
+            continue
+        try:
+            net = None if dest == "any" else ipaddress.ip_network(dest, strict=True)
+        except ValueError:
+            continue  # a bad CIDR is _check_firewall's problem
+        if net is None or not any(
+            net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET
+        ):
+            out.append(
+                f"firewall_rules.{r['name']}: dest {dest} reaches the internet; a model runtime's "
+                "outbound_allow names zone:<id> or a lab CIDR (reach the internet through the gateway)"
+            )
+    return out
+
+
 def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
     """A model runtime's outbound traffic is default-deny: ``policy_out`` DROP or REJECT (the
     guest firewall then also logs what it drops), and, with a baseline set that defines the
@@ -190,17 +229,19 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
     why = f"{runtime} runs models or model-written code"
     out: list[Problem] = []
     if g.kind in ("vm", "lxc") and not g.nic_firewall:
-        if not g.firewall_exemption:  # filtered elsewhere (a libvirt host) is a recorded decision
+        # filtered elsewhere (a libvirt host, a zone's router) is a recorded, dated decision that
+        # names the layer, never a free-text reason alone
+        ex = g.firewall_exemption or {}
+        if not ex.get("filtered_by") or not ex.get("review_by"):
             out.append(
                 Problem(
                     g.id,
-                    f"{why}: its NIC firewall is off with no network.firewall_exemption saying "
-                    "where its egress is filtered",
+                    f"{why}: its NIC firewall is off, so network.firewall_exemption needs "
+                    "filtered_by (the guest or zone that filters it) and review_by",
                 )
             )
     elif g.kind in ("vm", "lxc"):
-        policy = (g.raw.get("firewall_rules") or {}).get("policy_out", "ACCEPT")
-        if policy == "ACCEPT":
+        if g.policy_out == "ACCEPT":
             out.append(
                 Problem(
                     g.id,
@@ -208,6 +249,7 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
                     "naming what it needs (resolver, time, model store, gateway)",
                 )
             )
+        out += [Problem(g.id, f"{why}: {p}") for p in _internet_allows(g)]
     bs = fleet.baselines
     if bs is not None and "egress-filter" in bs.controls and g.baseline:
         from .baselines import resolve

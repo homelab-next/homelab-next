@@ -7,9 +7,12 @@ nftables_host_cidr: '^(?:any|[0-9]{1,3}(?:\.[0-9]{1,3}){3}/[0-9]{1,2})\Z'
 # whatever policy_out says): cloud instance metadata services, which a lab host never needs and an
 # agent or model has been seen probing (docs/compute-model.md, "Model runtimes").
 # Built from integers, as homelabnext.modules.egress.METADATA is (no address literal in a role):
-# the link-local one most clouds use, Alibaba Cloud's, and the IPv6 one. A test keeps the two equal.
+# the link-local one most clouds use, the container credentials endpoint beside it, Oracle Cloud's,
+# Alibaba Cloud's, and the IPv6 one. A test keeps the two equal.
 nftables_host_refused_v4:
   - "{{ '%d.%d.%d.%d' | format(169, 254, 169, 254) }}"
+  - "{{ '%d.%d.%d.%d' | format(169, 254, 170, 2) }}"
+  - "{{ '%d.%d.%d.%d' | format(192, 0, 0, 192) }}"
   - "{{ '%d.%d.%d.%d' | format(100, 100, 100, 200) }}"
 nftables_host_refused_v6:
   - "{{ '%x:%x::%x' | format(0xfd00, 0x0ec2, 0x0254) }}"

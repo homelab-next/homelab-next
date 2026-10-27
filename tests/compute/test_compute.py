@@ -57,6 +57,7 @@ def good():
 LIBVIRT_EXEMPTION = {
     "reason": "Filtered on the libvirt host by its nftables ruleset, not by the hypervisor.",
     "review_by": "2027-03-31",
+    "filtered_by": "guest:hv-a",
 }
 
 

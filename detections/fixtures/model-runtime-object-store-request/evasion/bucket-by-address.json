@@ -8,7 +8,10 @@
       "hnx_runtime": "model"
     },
     "destination": {
-      "ip": "203.0.113.80"
+      "port": 443
+    },
+    "network": {
+      "transport": "tcp"
     }
   },
   "note": "no name to match: the egress filter's drop (det:model-runtime-egress-drop) is what catches it"

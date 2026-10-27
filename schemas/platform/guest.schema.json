@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.4",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.5",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -161,7 +161,12 @@
           "description": "Documented reason a NIC runs with the firewall flag off. Without it, a disabled flag on a firewall-enabled node is rejected.",
           "properties": {
             "reason": {"type": "string", "minLength": 10, "maxLength": 300},
-            "review_by": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+            "review_by": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+            "filtered_by": {
+              "type": "string",
+              "pattern": "^(?:guest:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|zone:[a-z][a-z0-9-]{0,31})$",
+              "description": "(1.5) Where this NIC's traffic is filtered instead: the guest that runs its firewall (guest:<id>, a libvirt host's nftables), or the zone whose router filters it (zone:<id>). Validation resolves it; a model runtime (cap:inference, cap:codemode-executor) with its NIC firewall off needs it and review_by."
+            }
           }
         }
       }

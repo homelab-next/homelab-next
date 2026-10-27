@@ -3,7 +3,7 @@ title: A lab host tried to reach the link-local cloud instance metadata service
 det: det:cloud-metadata-probe
 description: >
   No lab host runs in a cloud, so a flow to the link-local instance metadata address most clouds
-  use is reconnaissance or credential theft, or a model's output probing for one: steered runs of
+  use (or the container credentials address beside it) is reconnaissance or credential theft, or a model's output probing for one: steered runs of
   an open-weight model have produced such probes in a quarter to a third of completions (2026-10).
   Matches a sensor's flow or a parsed firewall log line. The other metadata addresses (Alibaba
   Cloud's and the IPv6 one) are refused and logged by every guest firewall, which
@@ -12,7 +12,9 @@ status: experimental
 logsource: {category: network}
 detection:
   selection:
-    DestinationIp: '169.254.169.254'  # no-raw-endpoint: allow the link-local cloud metadata address this rule matches
+    DestinationIp:
+      - '169.254.169.254'  # no-raw-endpoint: allow the link-local cloud metadata address this rule matches
+      - '169.254.170.2'  # no-raw-endpoint: allow the link-local container credentials address this rule matches
   condition: selection
 level: high
 tags: [attack.credential_access, attack.t1552.005]

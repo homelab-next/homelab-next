@@ -546,9 +546,12 @@ def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
             for ln in lines[1:]
             if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
         ]
-        assert verdicts[0] == (
-            "ip daddr { 169.254.169.254, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
-            'drop comment "homelabnext-refused-destination"'
+        assert (
+            verdicts[0]
+            == (
+                "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
+                'drop comment "homelabnext-refused-destination"'
+            )
         )
         assert (
             verdicts[1]
@@ -556,6 +559,13 @@ def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
         )
         assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
         assert ("hnx-egress-drop: " in out) is (policy == "DROP")
+        # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
+        # forward chains (priority filter is 0), and nothing else
+        text = (tmp_path / "nftables.conf").read_text()
+        fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+        assert "type filter hook forward priority filter - 10; policy accept;" in fwd
+        assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
+        assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
 
 
 def test_nftables_host_retries_a_failed_load(tmp_path):
