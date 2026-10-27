@@ -4,9 +4,10 @@
     {{ suricata_enroll_guests | hnx_enroll_address_problems }}
 
 returns one message per problem (an empty list when the rows are sound), so a role's assert can
-name every bad entry at once.  A row is ``{name, ip, zone, extra_addresses?, subnet?}`` as the
-baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet`` is the
-guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``.
+name every bad entry at once.  A row is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}``
+as the baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet``
+is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``, and
+``subnet6`` its IPv6 prefix (site 1.4), carried too when the zone gives one.
 
 The addresses are parsed, never pattern-matched, and held to the guest model's own rules
 (``homelabnext/compute/validate.py``), so a hand-written inventory gets no further than the
@@ -21,8 +22,13 @@ generator's rows:
 * an IPv4 extra address is inside ``subnet`` (never its network or broadcast address) or in the
   shared range a zone-less overlay such as a tailnet uses; a row without ``subnet`` (hand-written)
   may name only private, shared or documentation addresses;
-* an IPv6 extra address never writes around an IPv4 one (mapped, compatible, translated, NAT64)
-  and is unique-local or documentation: zones carry no IPv6 prefix to hold a global one against.
+* ``subnet6`` is a canonical IPv6 prefix of /48 to /64 from the space zones are numbered from
+  (unique-local, or global unicast less the IETF protocol assignments 2001::/23), never one that
+  writes IPv4 inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo);
+* an IPv6 extra address never writes around an IPv4 one and is never an anycast address of its /64
+  (the subnet-router one, with no host part, or one RFC 2526 reserves at its top); it is inside
+  ``subnet6`` when the row gives one, and otherwise unique-local or documentation, since there is
+  no prefix to hold a global one against.
 
 Standard library only (the controller needs nothing beyond Ansible).
 """
@@ -64,6 +70,14 @@ EMBEDDED_V4 = (
     _v6((0x64, 0xFF9B), 96),  # NAT64, well-known
     _v6((0x64, 0xFF9B, 1), 48),  # NAT64, local use
 )
+#: the space a zone's IPv6 prefix is numbered from, less the IETF protocol assignments
+ZONE_V6 = (_v6((0xFC00,), 7), _v6((0x2000,), 3))
+SPECIAL_V6 = _v6((0x2001,), 23)
+PREFIX_EMBEDS_V4 = (*EMBEDDED_V4, _v6((0x2002,), 16), _v6((0x2001, 0), 32))  # ... 6to4, Teredo
+#: RFC 2526's reserved subnet anycast interface identifiers: the top 128 of a /64, in EUI-64 form
+#: (starting 0xfdff) and not
+ANYCAST_EUI64 = 0xFDFF_FFFF_FFFF_FF80
+ANYCAST_TOP = 0xFFFF_FFFF_FFFF_FF80
 METADATA = frozenset(
     {
         ipaddress.IPv4Address(0xA9FE_A9FE),
@@ -118,14 +132,49 @@ def _subnet(raw: Any, ip: Address | None) -> tuple[ipaddress.IPv4Network | None,
     return net, None
 
 
-def _extra(ip: Address, net: ipaddress.IPv4Network | None) -> str | None:
+def _subnet6(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
+    if not isinstance(raw, str):
+        return None, "is not a string"
+    try:
+        net = ipaddress.IPv6Network(raw)  # strict: no host bits
+    except ValueError:
+        return None, "is not an IPv6 prefix without host bits"
+    if str(net) != raw:
+        return None, f"is not in its canonical form ({net})"
+    if not 48 <= net.prefixlen <= 64:
+        return None, "is not a /48 to /64"
+    if any(net.overlaps(n) for n in PREFIX_EMBEDS_V4):
+        return None, "writes IPv4 addresses inside IPv6 (mapped, NAT64, 6to4, Teredo and the like)"
+    if net.subnet_of(SPECIAL_V6) or not any(net.subnet_of(n) for n in ZONE_V6):
+        return None, (
+            "is not unique-local or global unicast space (less the IETF protocol assignments "
+            "2001::/23)"
+        )
+    return net, None
+
+
+def _extra6(ip: ipaddress.IPv6Address, net6: ipaddress.IPv6Network | None) -> str | None:
+    iid = int(ip) & (1 << 64) - 1  # the interface identifier: the low 64 bits
+    if iid == 0:
+        return "is the subnet-router anycast address of its /64 (no host part)"
+    if iid >= ANYCAST_EUI64 and (iid <= ANYCAST_EUI64 | 0x7F or iid >= ANYCAST_TOP):
+        return "is an anycast address RFC 2526 reserves at the top of its /64"
+    if net6 is not None:
+        return None if ip in net6 else f"is outside the zone's IPv6 prefix {net6}"
+    if any(ip in n for n in OWNABLE_V6):
+        return None
+    return (
+        "is a global or special-purpose IPv6 address, not a unique-local or documentation one, "
+        "and the row gives no IPv6 prefix (subnet6) to hold it against"
+    )
+
+
+def _extra(
+    ip: Address, net: ipaddress.IPv4Network | None, net6: ipaddress.IPv6Network | None
+) -> str | None:
     """Why an otherwise sound extra address is not this guest's to name, else None."""
     if isinstance(ip, ipaddress.IPv6Address):
-        if any(ip in n for n in OWNABLE_V6):
-            return None
-        return (
-            "is a global or special-purpose IPv6 address, not a unique-local or documentation one"
-        )
+        return _extra6(ip, net6)
     if net is not None:
         if ip in (net.network_address, net.broadcast_address):
             return f"is the network or broadcast address of the zone subnet {net}"
@@ -157,6 +206,11 @@ def enroll_address_problems(guests: Any) -> list[str]:
             net, why = _subnet(row["subnet"], ip)
             if why:
                 out.append(f"{who}: subnet {row['subnet']!r} {why}")
+        net6: ipaddress.IPv6Network | None = None
+        if "subnet6" in row:
+            net6, why = _subnet6(row["subnet6"])
+            if why:
+                out.append(f"{who}: subnet6 {row['subnet6']!r} {why}")
         extras = row.get("extra_addresses", [])
         if not isinstance(extras, list):
             out.append(f"{who}: extra_addresses is not a list")
@@ -164,10 +218,13 @@ def enroll_address_problems(guests: Any) -> list[str]:
         for raw in extras:
             extra, why = _address(raw)
             if extra is not None:
-                if "subnet" in row and net is None:
+                v6 = isinstance(extra, ipaddress.IPv6Address)
+                if "subnet" in row and net is None:  # as validation: no address of a bad zone
                     why = "cannot be held against the row's unusable subnet"
+                elif v6 and "subnet6" in row and net6 is None:
+                    why = "cannot be held against the row's unusable subnet6"
                 else:
-                    why = _extra(extra, net)
+                    why = _extra(extra, net, net6)
             if why:
                 out.append(f"{who}: extra address {raw!r} {why}")
     return out

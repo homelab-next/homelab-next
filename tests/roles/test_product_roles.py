@@ -379,10 +379,14 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
     good = live.read_text()
     # guests with the other addresses they send from (guest 1.6), as the baseline playbook passes
-    # them (with the zone's subnet), in two zones, and one naming none: every address is HOME_NET,
-    # and each zone's group holds its own guests' addresses only
+    # them (with the zone's subnet, and edge's IPv6 prefix, site 1.4), in two zones, and one naming
+    # none: every address is HOME_NET, and each zone's group holds its own guests' addresses only
     data = {"subnet": "198.51.100.0/24", "extra_addresses": ["2001:db8:0:32::5", "198.51.100.51"]}
-    edge = {"subnet": "203.0.113.0/24", "extra_addresses": ["203.0.113.11"]}
+    edge = {
+        "subnet": "203.0.113.0/24",
+        "subnet6": "2001:db8:0:28::/64",
+        "extra_addresses": ["203.0.113.11", "2001:db8:0:28::b"],
+    }
     changed = {
         **v,
         "suricata_enroll_guests": [
@@ -402,14 +406,17 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     fixed = run_role(tmp_path, "suricata_enroll", "main", changed)  # the next run tests again
     assert fixed.returncode == 0, fixed.stdout
     zone_data = "198.51.100.40,198.51.100.50,198.51.100.51,2001:db8:0:32::5"
-    home = f"[{zone_data},203.0.113.10,203.0.113.11]"
+    home = (
+        "[198.51.100.40,198.51.100.50,198.51.100.51,2001:db8:0:28::b,2001:db8:0:32::5,"
+        "203.0.113.10,203.0.113.11]"
+    )
     assert log.read_text().splitlines() == [
         TESTED.format(etc=tmp_path / "etc", home=f'"{home}"'),
         "-c reload-rules",
     ]
     groups = yaml.safe_load(live.read_text())
     assert groups["HOME_NET"] == home and groups["HNX_ZONE_DATA"] == f"[{zone_data}]"
-    assert groups["HNX_ZONE_EDGE"] == "[203.0.113.10,203.0.113.11]"
+    assert groups["HNX_ZONE_EDGE"] == "[2001:db8:0:28::b,203.0.113.10,203.0.113.11]"
 
 
 def test_suricata_enroll_retries_a_failed_reload(tmp_path):

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Central role for control network-sensor (ADR-0016 decision 7): runs once on the sensor host
 # (cap_sensor) with suricata_enroll_guests, the guests that need the control ({id, name, fqdn, ip,
-# zone}, plus extra_addresses and the zone's subnet where a guest names any), and writes Suricata's
-# address groups from them: every address of every guest is HOME_NET, once the guest model's rules
-# hold it (tasks/validate.yml). suricata.yaml must include the generated
-# file under vars.address-groups (the role checks; it never rewrites suricata.yaml).
+# zone}, plus extra_addresses and the zone's subnet, and subnet6 if it has one, where a guest names
+# any), and writes Suricata's address groups from them: every address of every guest is HOME_NET,
+# once the guest model's rules hold it (tasks/validate.yml). suricata.yaml must include the
+# generated file under vars.address-groups (the role checks; it never rewrites suricata.yaml).
 suricata_enroll_config_dir: /etc/suricata
 suricata_enroll_config_file: suricata.yaml
 suricata_enroll_groups_file: hnx-address-groups.yaml

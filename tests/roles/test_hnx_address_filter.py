@@ -153,6 +153,66 @@ def test_every_problem_is_reported_once():
     assert problems("not a list") == ["the guests are not a list"]
 
 
+PREFIX6 = a(0x2600 << 112, v6=True) + "/64"  # a global /64 a zone is numbered from
+IN_PREFIX6 = a(0x2600 << 112 | 0xA, v6=True)
+ZONED6 = {**ZONED, "subnet6": PREFIX6}
+
+
+def test_a_zones_ipv6_prefix_holds_a_global_extra_address():
+    assert problems([{**ZONED6, "extra_addresses": [IN_PREFIX6, "198.51.100.51"]}]) == []
+    # the row gives the prefix, so a unique-local or documentation address outside it is not its
+    (msg,) = problems([{**ZONED6, "extra_addresses": [ULA]}])
+    assert f"outside the zone's IPv6 prefix {PREFIX6}" in msg
+    (msg,) = problems([{**ZONED6, "extra_addresses": [a(0x2600_0000_0000_0001 << 64 | 5, True)]}])
+    assert "outside the zone's IPv6 prefix" in msg  # another /64
+    # without the prefix a global address has nothing to be held against
+    (msg,) = problems([{**ZONED, "extra_addresses": [IN_PREFIX6]}])
+    assert "gives no IPv6 prefix (subnet6)" in msg
+
+
+@pytest.mark.parametrize(
+    ("extra", "why"),
+    [
+        (a(0x2600 << 112, v6=True), "subnet-router anycast"),
+        (a(0x2600 << 112 | 0xFDFF_FFFF_FFFF_FF80, v6=True), "RFC 2526"),
+        (a(0x2600 << 112 | 0xFDFF_FFFF_FFFF_FFFF, v6=True), "RFC 2526"),
+        (a(0x2600 << 112 | 0xFFFF_FFFF_FFFF_FFFE, v6=True), "RFC 2526"),
+        (a(0xFD00 << 112, v6=True), "subnet-router anycast"),  # with no prefix too
+    ],
+)
+def test_an_anycast_address_of_its_64_is_never_an_extra_address(extra, why):
+    (msg,) = problems([{**ZONED6, "extra_addresses": [extra]}])
+    assert why in msg, msg
+
+
+@pytest.mark.parametrize(
+    ("subnet6", "why"),
+    [
+        (a(0x2600 << 112 | 5, v6=True) + "/64", "without host bits"),
+        ("2001:DB8:0:28::/64", "canonical form"),
+        (a(0x2600 << 112, v6=True) + "/32", "not a /48 to /64"),
+        (a(0x2600 << 112, v6=True) + "/96", "not a /48 to /64"),
+        (a(0x2002 << 112, v6=True) + "/48", "writes IPv4 addresses inside IPv6"),  # 6to4
+        (a(0x0064_FF9B << 96, v6=True) + "/64", "writes IPv4 addresses inside IPv6"),  # NAT64
+        (a(0x2001_0002 << 96, v6=True) + "/48", "IETF protocol assignments"),  # benchmarking
+        (a(0xFE80 << 112, v6=True) + "/64", "not unique-local or global unicast"),
+        (a(0xFF00 << 112, v6=True) + "/64", "not unique-local or global unicast"),
+        (64, "is not a string"),
+    ],
+)
+def test_the_subnet6_is_a_zone_prefix(subnet6, why):
+    msgs = problems([{**ZONED, "subnet6": subnet6, "extra_addresses": [ULA, "198.51.100.51"]}])
+    assert any(m.startswith("guest bus-core: subnet6 ") and why in m for m in msgs), msgs
+    # an unusable prefix holds no IPv6 extra address; the IPv4 one is still held to the subnet
+    assert any(f"{ULA!r} cannot be held against the row's unusable subnet6" in m for m in msgs)
+    assert not any("198.51.100.51" in m for m in msgs), msgs
+
+
+def test_an_unusable_ipv4_subnet_holds_no_ipv6_extra_either():
+    msgs = problems([{**ZONED6, "subnet": "198.51.100.5/24", "extra_addresses": [IN_PREFIX6]}])
+    assert any("unusable subnet" in m and IN_PREFIX6 in m for m in msgs), msgs
+
+
 def test_the_filter_is_registered():
     mod = _plugin()
     assert mod.FilterModule().filters() == {

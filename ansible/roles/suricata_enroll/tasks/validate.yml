@@ -6,7 +6,9 @@
 # metadata or an IPv4 address written inside IPv6; ip IPv4; an extra address inside the guest's
 # zone subnet (the row's subnet, which the baseline playbook carries) or the shared overlay range,
 # else, in a hand-written row without a subnet, only private, shared or documentation space; IPv6
-# extras unique-local or documentation.  Refuse an empty list (HOME_NET cannot be empty).
+# extras never an anycast address of their /64, and inside the row's subnet6 (the zone's IPv6
+# prefix) when it gives one, else unique-local or documentation.  Refuse an empty list (HOME_NET
+# cannot be empty).
 - name: Validate the enrolled guests and the file names
   vars:
     _enroll_guests: "{{ suricata_enroll_guests }}"
@@ -23,5 +25,6 @@
     fail_msg: >-
       suricata_enroll: at least one guest, each with an IPv4 ip, a zone id and a name, and every
       address one the guest model allows (canonical, not special-purpose, an extra address in the
-      guest's own zone subnet); an absolute config directory and plain .yaml file names.
+      guest's own zone subnet or IPv6 prefix); an absolute config directory and plain .yaml file
+      names.
       Address problems: {{ _enroll_problems | join('; ') if _enroll_problems else 'none' }}

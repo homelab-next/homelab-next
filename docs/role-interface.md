@@ -97,7 +97,12 @@ Every address is parsed, never pattern-matched: canonical, never loopback, link-
 multicast, reserved, a cloud metadata address or IPv4 written inside IPv6; `ip` IPv4; an extra
 address inside the row's `subnet` (the guest's zone, which the baseline playbook carries) or the
 shared range a tailnet uses, and, in a hand-written row with no `subnet`, private, shared or
-documentation space only; an IPv6 extra unique-local or documentation. `ansible.cfg` names
+documentation space only; an IPv6 extra never an anycast address of its /64 (the subnet-router
+one, or one RFC 2526 reserves at its top), and inside the row's `subnet6` (the zone's IPv6 prefix,
+site 1.4, carried when the zone gives one; itself held to the site's prefix rules: canonical, a /48
+to a /64, unique-local or global unicast, never one that writes IPv4 inside IPv6), else
+unique-local or documentation. An unusable `subnet` holds no extra address, and an unusable
+`subnet6` no IPv6 one. `ansible.cfg` names
 `plugins/filter` beside `plugins/lookup` (and a private overlay's names the checkout's).
 
 ## 5. Capability inventory groups
