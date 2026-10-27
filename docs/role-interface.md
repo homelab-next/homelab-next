@@ -86,6 +86,20 @@ that carries `no_log: true`:
 variable) or `<hnx_secrets_dir>/<name>`, and fails on a missing or empty secret. A role's
 default may be a reference (`secret:<name>`), never a value.
 
+A role that writes guests' addresses into a product's configuration holds them to the guest
+model's own rules with `ansible/plugins/filter/hnx_address.py`:
+
+```jinja
+{{ suricata_enroll_guests | hnx_enroll_address_problems }}   {# [] or one message per problem #}
+```
+
+Every address is parsed, never pattern-matched: canonical, never loopback, link-local,
+multicast, reserved, a cloud metadata address or IPv4 written inside IPv6; `ip` IPv4; an extra
+address inside the row's `subnet` (the guest's zone, which the baseline playbook carries) or the
+shared range a tailnet uses, and, in a hand-written row with no `subnet`, private, shared or
+documentation space only; an IPv6 extra unique-local or documentation. `ansible.cfg` names
+`plugins/filter` beside `plugins/lookup` (and a private overlay's names the checkout's).
+
 ## 5. Capability inventory groups
 
 Playbooks target capabilities, not machines:

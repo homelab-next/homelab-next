@@ -63,7 +63,7 @@
    "suricata": 2
   },
   "ansible/roles/suricata_enroll/tasks/validate.yml": {
-   "suricata": 11
+   "suricata": 5
   },
   "ansible/roles/suricata_enroll/templates/address-groups.yaml.j2": {
    "suricata": 4

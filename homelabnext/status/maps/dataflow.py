@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from . import svg
+from .lab import guest_addresses
 
 #: transport id -> (title, the registry capability that implements it, or None)
 TRANSPORTS: dict[str, tuple[str, str | None]] = {
@@ -553,12 +554,13 @@ def page(
 
 
 def _where(node: str | None, idx: Any) -> str:
-    """The line under a host-level flow's end: a guest's address, else its node id."""
+    """The line under a host-level flow's end: a guest's addresses (``network.ip``, then any
+    ``network.extra_addresses``), else its node id."""
     if not node:
         return "not placed"
     if idx is not None and node.startswith("guest:") and node[6:] in idx.guests:
-        ip = (idx.guests[node[6:]].get("network") or {}).get("ip")
-        return f"{node} \u00b7 {ip}" if ip else node
+        addrs = ", ".join(a for a in guest_addresses(idx.guests[node[6:]]) if a)
+        return f"{node} \u00b7 {addrs}" if addrs else node
     return node
 
 

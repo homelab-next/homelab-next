@@ -18,7 +18,8 @@ Everything here is a pure function of plain data:
   (ends that are code, workflows or samples have no host and stay on the Dataflow page);
 * the registry's ``upstreams`` (a service calls another);
 * each guest's ``firewall_rules`` (``inbound_allow`` sources, ``outbound_allow`` destinations:
-  ``zone:<id>``, a CIDR -- a /32 that is a guest's address is that guest, otherwise the zone
+  ``zone:<id>``, a CIDR -- a single address that is one of a guest's addresses (its
+  ``network.ip`` or one of its ``network.extra_addresses``) is that guest, otherwise the zone
   that contains it -- or ``any``, drawn from the internet);
 * the site firewall's ``service_exceptions`` (a zone to a service, so to its host).
 
@@ -79,6 +80,26 @@ def _net(value: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
         return None
 
 
+def guest_addresses(raw: Mapping[str, Any]) -> list[str]:
+    """A guest's ``network.ip`` (empty when it has none) then its ``network.extra_addresses``."""
+    net = raw.get("network") or {}
+    extras = [
+        str(a["address"])
+        for a in net.get("extra_addresses") or ()
+        if isinstance(a, Mapping) and a.get("address")
+    ]
+    return [str(net.get("ip") or ""), *extras]
+
+
+def _canonical(value: str) -> str:
+    """An address in the one spelling ``ipaddress`` prints (IPv6 compressed, lower case); anything
+    that is not an address unchanged."""
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return value
+
+
 class Index:
     """Resolve the names a flow uses to node ids, and node ids to titles and states."""
 
@@ -90,11 +111,15 @@ class Index:
         hypervisors: Iterable[str] = (),
     ):
         self.guests = {guest_name(g): g for g in guests}
-        self.by_ip = {
-            str((g.get("network") or {}).get("ip")): n
-            for n, g in self.guests.items()
-            if (g.get("network") or {}).get("ip")
-        }
+        # every address a guest sends from, in its canonical spelling: network.ip, then
+        # network.extra_addresses (guest 1.6), so a flow from a second NIC or an IPv6 address
+        # still lands on its guest; a primary address is never displaced by another's extra
+        self.by_ip: dict[str, str] = {}
+        for extra in (False, True):
+            for n, g in self.guests.items():
+                for a in guest_addresses(g)[1:] if extra else guest_addresses(g)[:1]:
+                    if a:
+                        self.by_ip.setdefault(_canonical(a), n)
         self.zones = {
             str(z["id"]): z
             for z in site.get("zones") or []
@@ -131,8 +156,8 @@ class Index:
         if host in self.hypervisors:
             return f"node:{host}"
         addr = (self.hosts.get(host) or {}).get("address")
-        if addr and str(addr) in self.by_ip:
-            return f"guest:{self.by_ip[str(addr)]}"
+        if addr and _canonical(str(addr)) in self.by_ip:
+            return f"guest:{self.by_ip[_canonical(str(addr))]}"
         return None
 
     def service_node(self, service: str | None) -> str | None:

@@ -1,16 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
-# Every value lands in a YAML file Suricata parses: refuse anything but plain names and IPv4
-# addresses (the guest model's own rules), and refuse an empty list (HOME_NET cannot be empty).
+# Every value lands in a YAML file Suricata parses, and every address in HOME_NET is one Suricata
+# trusts as the lab's own: refuse anything but plain names and zone ids, and addresses that parse
+# as the guest model's own rules allow (the hnx_enroll_address_problems filter,
+# ansible/plugins/filter/hnx_address.py): canonical, never loopback, link-local, multicast,
+# metadata or an IPv4 address written inside IPv6; ip IPv4; an extra address inside the guest's
+# zone subnet (the row's subnet, which the baseline playbook carries) or the shared overlay range,
+# else, in a hand-written row without a subnet, only private, shared or documentation space; IPv6
+# extras unique-local or documentation.  Refuse an empty list (HOME_NET cannot be empty).
 - name: Validate the enrolled guests and the file names
+  vars:
+    _enroll_guests: "{{ suricata_enroll_guests }}"
+    _enroll_problems: "{{ _enroll_guests | hnx_enroll_address_problems }}"
   ansible.builtin.assert:
     that:
-      - suricata_enroll_guests | length > 0
-      - suricata_enroll_guests | map(attribute='ip') | select('match', '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}\Z') | list | length == suricata_enroll_guests | length
-      - suricata_enroll_guests | map(attribute='zone') | select('match', '^[a-z][a-z0-9-]{0,40}\Z') | list | length == suricata_enroll_guests | length
-      - suricata_enroll_guests | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == suricata_enroll_guests | length
+      - _enroll_guests | length > 0
+      - _enroll_problems | length == 0
+      - _enroll_guests | map(attribute='zone') | select('match', '^[a-z][a-z0-9-]{0,40}\Z') | list | length == _enroll_guests | length
+      - _enroll_guests | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,62}\Z') | list | length == _enroll_guests | length
       - suricata_enroll_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - suricata_enroll_config_file is match('^[A-Za-z0-9._-]+\.ya?ml\Z')
       - suricata_enroll_groups_file is match('^[A-Za-z0-9._-]+\.ya?ml\Z')
     fail_msg: >-
-      suricata_enroll: at least one guest, each with an IPv4 ip, a zone id and a name; an absolute
-      config directory and plain .yaml file names
+      suricata_enroll: at least one guest, each with an IPv4 ip, a zone id and a name, and every
+      address one the guest model allows (canonical, not special-purpose, an extra address in the
+      guest's own zone subnet); an absolute config directory and plain .yaml file names.
+      Address problems: {{ _enroll_problems | join('; ') if _enroll_problems else 'none' }}
