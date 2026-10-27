@@ -1,0 +1,25 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "runtime-names-another-source",
+  "description": "a model runtime's proxy event names another guest as its source and host",
+  "observed": "192.0.2.140",
+  "event": {
+    "url": {
+      "domain": "example-bucket.s3.us-east-1.amazonaws.com"
+    },
+    "source": {
+      "ip": "192.0.2.20"
+    },
+    "host": {
+      "ip": "192.0.2.20",
+      "name": "ops-core"
+    },
+    "labels": {
+      "hnx_runtime": "none"
+    }
+  },
+  "label": "model",
+  "rule": "model-runtime-object-store-request",
+  "fires": true
+}

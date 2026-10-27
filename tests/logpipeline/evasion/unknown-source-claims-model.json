@@ -1,0 +1,20 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "unknown-source-claims-model",
+  "description": "a source outside the guest model labels itself model",
+  "observed": "203.0.113.9",
+  "event": {
+    "dns": {
+      "question": {
+        "name": "example-bucket.oss-cn-beijing.aliyuncs.com"
+      }
+    },
+    "labels": {
+      "hnx_runtime": "model"
+    }
+  },
+  "label": null,
+  "rule": "model-runtime-object-store-lookup",
+  "fires": false
+}

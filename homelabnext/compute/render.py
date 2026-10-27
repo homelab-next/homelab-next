@@ -14,6 +14,7 @@ from .gen import (
     libvirt,
     node_mirror,
     registry_hosts,
+    runtime_labels,
     tailscale_acl,
     terraform_proxmox,
 )
@@ -30,6 +31,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "baseline-playbook": baseline_playbook.render,
     "tailscale-acl": tailscale_acl.render,
     "node-mirror": node_mirror.render,
+    "runtime-labels": runtime_labels.render,
 }
 
 

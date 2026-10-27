@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "dns-gcs-browser-download",
+  "description": "a model runtime resolves the authenticated browser-download storage endpoint",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "dns": {
+      "question": {
+        "name": "storage.cloud.google.com"
+      }
+    }
+  }
+}

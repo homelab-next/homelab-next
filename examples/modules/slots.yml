@@ -13,7 +13,7 @@
 #   pass_through     the stage may be skipped when its neighbours' formats meet
 slots:
   siem-source:         {stage: 1, contract: null, stateful: false, formats: {in: [], out: [ocsf]}}
-  log-pipeline:        {stage: 2, contract: null, stateful: false, formats: {in: [ocsf], out: [ocsf]}, pass_through: true}
+  log-pipeline:        {stage: 2, contract: log_pipeline.py, stateful: false, formats: {in: [ocsf], out: [ocsf]}, pass_through: true}
   object-store:        {stage: 3, contract: object_store.py, stateful: true, export_formats: [object-tree], formats: {in: [s3], out: [s3]}}
   lake-catalog:        {stage: 3, contract: lake.py, stateful: true, export_formats: [parquet], formats: {in: [ocsf], out: [ocsf]}}
   lake-query:          {stage: 3, contract: lake.py, stateful: false, formats: {in: [sql], out: [sql]}}

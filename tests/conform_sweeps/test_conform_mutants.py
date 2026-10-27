@@ -13,7 +13,14 @@ ALL = [*CAPABILITIES, *EXTENDED]
 #: suites whose every mutant fails its named check and no other: a mutant another check also
 #: catches proves less about the check it names (the older suites predate the rule)
 ONLY_ITS_OWN = frozenset(
-    {"broker-tokens", "codemode-executor", "codemode-runner", "migration", "orchestration-features"}
+    {
+        "broker-tokens",
+        "codemode-executor",
+        "codemode-runner",
+        "log-pipeline",
+        "migration",
+        "orchestration-features",
+    }
 )
 CASES = [(c, name) for c in ALL for name in load_module(c).MUTANTS]
 

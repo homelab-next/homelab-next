@@ -316,7 +316,7 @@ is a draft enum; each slot descriptor names the subset it exports in.
 | # | Stage | Slots | Contract today | Boundary format |
 |---|---|---|---|---|
 | 1 | collect | `siem-source`, sensors | no (provisional) | OCSF events |
-| 2 | move & shape | `log-pipeline`; may be **pass-through** | no | OCSF in and out |
+| 2 | move & shape | `log-pipeline`; may be **pass-through** | yes, the runtime label ([log pipeline](log-pipeline.md)) | OCSF in and out |
 | 3 | store | `object-store`, `lake-catalog`, `lake-query`; optional `hot-index` | yes; `hot-index` no | S3, SQL |
 | 4 | detect | `detections` | yes | Sigma |
 | 5 | triage | `fast-classifier`, `ioc-enrichment`, intel lookup | `fast-classifier` yes | STIX indicators |
@@ -1184,7 +1184,7 @@ Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints
 | `orchestration` | Neutral JSONL job records (a superset of the job-finished record), neutral session fields. |
 | `agent-runtime` | New slot: dispatch with prompt, tool grant and deadline; usage, exit reason, session id. |
 | every suite | A MUST that tests field **meanings** in the boundary format; semantic differences become features a dependant can require. |
-| provisional slots | `metrics`, `siem-source`, `hot-index`, `log-pipeline`, `soar`, `threat-intel`, `ioc-enrichment`, `remote-admin`, `exposure-management`, `static-hosting`, `compute`, `network`, `status`, `mcp-catalog`, `agent-runtime`: start from Prometheus, OCSF, STIX/TAXII, SARIF. |
+| provisional slots | `metrics`, `siem-source`, `hot-index`, `soar`, `threat-intel`, `ioc-enrichment`, `remote-admin`, `exposure-management`, `static-hosting`, `compute`, `network`, `status`, `mcp-catalog`, `agent-runtime`: start from Prometheus, OCSF, STIX/TAXII, SARIF. |
 
 Out of scope here: merging the several "product store" MCP servers into one mechanism (one
 mechanism, one server) belongs to the MCP catalog.
