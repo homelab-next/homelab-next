@@ -999,9 +999,15 @@ def check(
     policy: Any = None,
     inventory: Doc | None = None,
     budget: Budget | None = None,
+    empty_selection: bool = False,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
-    the supply chain, with ``inventory`` the runtime half of the two-way check."""
+    the supply chain, with ``inventory`` the runtime half of the two-way check.
+
+    ``empty_selection`` (no ``site``): the site selects no module at all (a lab that has taken
+    up none, ``hnx modules check --deploy``).  The site rules and the supply chain have nothing
+    to judge, but the runtime check still runs: every running name bound to a module is one the
+    site does not select."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1060,6 +1066,15 @@ def check(
     problems += _core_problems(vtree, ins, core, load)
     if not tree.mods:
         notes.append("no module manifests were found under the given roots")
+    if site is None and empty_selection:
+        notes.append("an empty selection: the site selects no module")
+        if inventory is not None:
+            _runtime(vtree, ins, {"slots": {}}, {}, inventory, load, problems, notes)
+        else:
+            notes.append(
+                "no inventory of what runs: the runtime half of the two-way check did not run"
+            )
+        return Report(sorted(set(problems)), notes)
     if site is None:
         notes.append(
             "no site selection: the site rules, the supply chain and the runtime check did not run"
@@ -1095,23 +1110,33 @@ def check(
     if inventory is None:
         notes.append("no inventory of what runs: the runtime half of the two-way check did not run")
     else:
-        errs = _errors(_schema("platform", "module_inventory.schema.json"), inventory)
-        if errs:
-            problems += [Problem("running", f"schema: {e}") for e in errs]
-        else:
-            problems += running_problems(vtree, ins, site, sel, inventory, load)
-            skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
-            if skipped:
-                notes.append(
-                    "the inventory does not report "
-                    + ", ".join(skipped)
-                    + ": not compared (not_gathered)"
-                )
-            if "notify_pairs" not in inventory:
-                notes.append(
-                    "the inventory names no notify_pairs: the recovery pairs were not compared"
-                )
+        _runtime(vtree, ins, site, sel, inventory, load, problems, notes)
     return Report(sorted(set(problems)), notes)
+
+
+def _runtime(
+    vtree: Tree,
+    ins: Inputs,
+    site: Doc,
+    sel: Mapping[str, Doc],
+    inventory: Doc,
+    load,
+    problems: list[Problem],
+    notes: list[str],
+) -> None:
+    """The runtime half of the two-way check, appended to ``problems`` and ``notes``."""
+    errs = _errors(_schema("platform", "module_inventory.schema.json"), inventory)
+    if errs:
+        problems += [Problem("running", f"schema: {e}") for e in errs]
+        return
+    problems += running_problems(vtree, ins, site, sel, inventory, load)
+    skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
+    if skipped:
+        notes.append(
+            "the inventory does not report " + ", ".join(skipped) + ": not compared (not_gathered)"
+        )
+    if "notify_pairs" not in inventory:
+        notes.append("the inventory names no notify_pairs: the recovery pairs were not compared")
 
 
 def units_fn(ins: Inputs) -> Callable[[str], set[str]]:

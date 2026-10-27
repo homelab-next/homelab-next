@@ -460,8 +460,9 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
    then the OpenBao CA from `BAO_CACERT_PEM` is written to the runner's temporary directory.
 8. **Validation** of the lab data, with `SOPS_AGE_KEY` set for that step only, then the **module
    loader** (`hnx modules check --root hnx --overlay . --deploy`, [modules](modules.md#the-loader-at-deploy-time)):
-   a problem stops the run before anything reaches a host; a lab with no `lab/modules.yml`,
-   `lab/modules/` or `lab/modules.lock` is told the loader had nothing to check.
+   a problem stops the run before anything reaches a host. It always runs: a lab with none of
+   `lab/modules.yml`, `lab/modules/` and `lab/modules.lock` is checked as an empty selection,
+   which `hnx` decides, not the workflow.
 9. **Network**: on the Tailscale path the job joins the tailnet as `tag:ci-deploy` by workload
    identity federation (the `id-token` write permission, no stored secret); on the self-hosted path the
    ephemeral runner is already inside and its job-started hook has accepted the job.
@@ -471,12 +472,14 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
     `hnx_secret` lookup (`BAO_ADDR`, `BAO_ROLE_ID`, `BAO_SECRET_ID`, `BAO_CACERT`), each with a
     token minted for that read and revoked after it; and `ansible-playbook
     ansible/playbooks/site.yml` runs with `host_key_checking` on and diffs off (a diff can print a
-    templated secret). Where the lab uses modules, the census of what runs follows
+    templated secret). The census of what runs follows, always
     (`hnx/ansible/playbooks/module_census.yml`, read-only on every host, into a fresh directory of
-    the runner's).
+    the runner's, with `systemctl` pinned on the command line so the overlay's `group_vars` cannot
+    replace it).
 11. **What runs**: `hnx modules gather` builds the inventory from that census and `hnx modules
-    check --deploy --running` compares it with what the lab declares; a mismatch fails the run
-    after the deploy has applied (a verification, not a gate).
+    check --deploy --running` compares it with what the lab declares (with an empty selection, any
+    running unit of a module is a mismatch); a mismatch fails the run after the deploy has applied
+    (a verification, not a gate).
 
 Every secret is referenced only in the `env:` or `with:` of the step that needs it, never inside a
 `run:` script as an expression (that is how a value ends up in a shell command line), and nothing
@@ -487,8 +490,10 @@ with 1.31.1) over them when those tools are installed (the tests skip otherwise)
 (`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
 push.
 
-`checks.yml` runs on every pull request with no secret and no Environment: it only runs the
-private leak check, so a pull request's code never sees a credential.
+`checks.yml` runs on every pull request with no secret and no Environment: it runs the private
+leak check and the module loader (`hnx modules check --root hnx --overlay . --deploy`, with the
+pinned `hnx`, the overlay read as data), so a pull request's code never sees a credential and a
+module problem shows on the pull request, not only at the deploy.
 
 ## The leak checks, both directions
 

@@ -166,9 +166,10 @@ with no schema, generator or check in any form):
    titles), the supply chain, and the two-way check against an inventory of what runs (the draft
    `platform/module_inventory` 1.0), recovery pairs included; the private overlay's deploy
    workflow runs it at deploy time (`hnx modules check --deploy`, refusing the repository's
-   examples in place of a lab input) before anything changes on a host, and again after the
-   deploy against the fleet units gathered from the hosts (role `module_census`, `hnx modules
-   gather`). Not done: it has not run at a real lab's deploy yet; service rows, MCP servers,
+   examples in place of a lab input; a lab that takes up no modules is an empty selection, never
+   skipped) before anything changes on a host and on every pull request, and again after the
+   deploy against the fleet units gathered from the hosts, enabled or active (role
+   `module_census`, `hnx modules gather`). Not done: it has not run at a real lab's deploy yet; service rows, MCP servers,
    agents, tables and recovery pairs are not gathered from the hosts; and the core's own units,
    which have no source;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make

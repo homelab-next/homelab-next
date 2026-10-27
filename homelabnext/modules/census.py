@@ -2,11 +2,21 @@
 """What runs, gathered from the hosts: a ``platform/module_inventory`` built from the census the
 ``module_census`` role writes (ADR-0027 follow-up 9; docs/modules.md, "What the loader checks").
 
-The role runs ``systemctl list-unit-files`` on every host of the play, read-only, and the
-controller writes what each host answered to ``<dir>/<host>.json`` (``{"host": ..., "systemctl":
-[lines]}``), plus ``<dir>/_hosts.json``, the play's hosts (every host it targeted, the unreachable
-ones included).  :func:`gather` reads that directory and returns the inventory: ``units`` is
-every ``hnx-<name>.service`` or ``.timer`` some host reports ``enabled``, as ``<name>``.
+The role runs two read-only queries on every host of the play, ``systemctl list-unit-files
+--state=enabled`` and ``systemctl list-units --state=active`` (both for ``hnx-*`` services and
+timers), and the controller writes what each host answered to ``<dir>/<host>.json``
+(``{"host": ..., "enabled": [lines], "active": [lines]}``), plus ``<dir>/_hosts.json``, the play's
+hosts (every host it targeted, the unreachable ones included).  :func:`gather` reads that
+directory and returns the inventory: ``units`` is every ``hnx-<name>.service`` or ``.timer`` some
+host reports with an enabled unit file **or** as an active unit, as ``<name>``.  So a unit that
+runs without being enabled (``static``, ``enabled-runtime``, linked, or started by another unit
+or ``systemd-run`` under a ``hnx-`` name) is counted while it is active; one that is neither
+enabled nor active at the moment of the census is not.  Template instances (``hnx-<name>@...``)
+are counted and noted, never listed: an instance name is not a unit a manifest declares.
+
+**The census is a union across hosts.**  A unit counts as running when any host reports it, so a
+unit enabled on the wrong host satisfies the check for the right one: the inventory carries no
+host, and a manifest declares no placement per unit to compare one with.
 
 **No binding is guessed, and none is written.**  A running name is bound to a module by its name
 alone (``<id>`` or ``<id>-...``; the loader's :func:`~homelabnext.modules.loader.running_problems`
@@ -45,6 +55,13 @@ LINE_RE = re.compile(
     r"hnx-(?P<name>[a-z0-9][a-z0-9-]*)(?P<template>@?)\.(?:service|timer)"
     r"[ \t]+enabled(?:[ \t]+(?:enabled|disabled|ignored|-))?[ \t]*"
 )
+#: one line of ``systemctl list-units --no-legend --plain --state=active``: the unit, its load
+#: state, ``active``, its sub-state and its description (free text from the unit file: printable,
+#: never parsed)
+ACTIVE_RE = re.compile(
+    r"hnx-(?P<name>[a-z0-9][a-z0-9-]*)(?P<instance>@[^\s]*)?\.(?:service|timer)"
+    r"[ \t]+loaded[ \t]+active[ \t]+[a-z-]+(?:[ \t]+[^\x00-\x1f\x7f]*)?"
+)
 #: an inventory name (``platform/module_inventory`` ``$defs.name``)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 MAX_HOSTS = 4096
@@ -71,25 +88,30 @@ def _read(path: Path) -> Any:
         raise CensusError(f"{path.name}: not JSON ({exc.__class__.__name__})") from None
 
 
-def parse_units(lines: Any, host: str) -> tuple[set[str], int]:
-    """The fleet unit names one host reports enabled, and how many template units it listed
-    (``hnx-<name>@.service``: a template is not a unit that runs, its instances are)."""
+def parse_units(lines: Any, host: str, active: bool = False) -> tuple[set[str], int]:
+    """The fleet unit names one host reports enabled (or, with ``active``, active), and how many
+    template units or instances it listed (``hnx-<name>@...``: left out, see the module)."""
+    what = "active" if active else "enabled"
     if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
-        raise CensusError(f"{host}: systemctl is not a list of lines")
+        raise CensusError(f"{host}: the {what} units are not a list of lines")
     if len(lines) > MAX_LINES:
-        raise CensusError(f"{host}: over {MAX_LINES} lines")
+        raise CensusError(f"{host}: over {MAX_LINES} {what} lines")
     names: set[str] = set()
     templates = 0
     for i, line in enumerate(lines, 1):
-        m = LINE_RE.fullmatch(line)
+        m = (ACTIVE_RE if active else LINE_RE).fullmatch(line)
         if m is None:
-            raise CensusError(f"{host}: line {i} is not an enabled hnx- unit: {ld._shown(line)}")
-        if m["template"]:
+            raise CensusError(
+                f"{host}: {what} line {i} is not an {what} hnx- unit: {ld._shown(line)}"
+            )
+        if m["instance" if active else "template"]:
             templates += 1
             continue
         name = m["name"]
         if len(name) > 64 or not NAME_RE.fullmatch(name):
-            raise CensusError(f"{host}: line {i}: {ld._shown(name)} is not an inventory name")
+            raise CensusError(
+                f"{host}: {what} line {i}: {ld._shown(name)} is not an inventory name"
+            )
         names.add(name)
     return names, templates
 
@@ -124,16 +146,23 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     templates = 0
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
-        if not isinstance(doc, dict) or set(doc) != {"host", "systemctl"}:
-            raise CensusError(f"{file}: not {{host, systemctl}}")
+        if not isinstance(doc, dict) or set(doc) != {"host", "enabled", "active"}:
+            raise CensusError(f"{file}: not {{host, enabled, active}}")
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
-        names, t = parse_units(doc["systemctl"], host)
-        units |= names
-        templates += t
-    notes = [f"gathered from {len(hosts)} host(s): {len(units)} enabled fleet unit(s)"]
+        for active in (False, True):
+            names, t = parse_units(doc["active" if active else "enabled"], host, active)
+            units |= names
+            templates += t
+    notes = [
+        f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
+        "the census is a union across hosts: a unit is not checked against the host it runs on",
+    ]
     if templates:
-        notes.append(f"{templates} template unit(s) (hnx-<name>@) left out: their instances run")
+        notes.append(
+            f"{templates} template unit(s) or instance(s) (hnx-<name>@...) left out: an instance "
+            "is not a unit a manifest declares"
+        )
     inventory = {
         "schema_version": "1.0",
         "units": sorted(units),

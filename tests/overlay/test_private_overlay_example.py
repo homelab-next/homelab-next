@@ -283,21 +283,49 @@ def test_the_loader_runs_before_the_deploy_and_checks_what_runs_after_it(deploy)
         if s.get("if") == "vars.HNX_DEPLOY_PATH != 'self-hosted'"
     )
     assert i_check < i_net
-    for step in (check, run, after):  # a failing check fails the run, never only warns
+    for step in (check, run, after):
+        # a failing check fails the run, never only warns, and none is ever skipped: a lab that
+        # takes up no modules is checked as an empty selection (hnx decides it, not the step)
         assert "continue-on-error" not in step
-    assert "hnx modules check --root hnx --overlay . --deploy\n" in check["run"]
-    assert check["id"] == "modules"
-    assert run["env"]["MODULES_IN_USE"] == "${{ steps.modules.outputs.in_use }}"
+        assert "if" not in step
+    assert check["run"].strip() == "hnx modules check --root hnx --overlay . --deploy"
     script = run["run"]
     assert script.index("ansible/playbooks/site.yml") < script.index("module_census.yml")
-    assert after["if"] == "steps.modules.outputs.in_use == 'true'"
+    assert "if " not in script.split("ansible/playbooks/site.yml", 1)[1]  # the census always
+    # the overlay's group_vars cannot point the census at a stand-in: an extra variable wins
+    assert "-e module_census_systemctl_cli=/usr/bin/systemctl" in script
     assert "hnx modules gather" in after["run"]
     assert "--deploy --running" in after["run"]
 
 
-def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str, str]:
+def test_the_loader_also_runs_on_every_pull_request():
+    """checks.yml runs the same check as deploy.yml before it changes a host, with the pinned hnx
+    and no secret, so a problem shows on the pull request."""
+    checks = yaml.safe_load((SKELETON / ".github" / "workflows" / "checks.yml").read_text())
+    job = checks["jobs"]["module-loader"]
+    names = [s.get("name") for s in job["steps"]]
+    assert names[0] == "refuse an unpinned hnx"
+    (step,) = [
+        s
+        for s in job["steps"]
+        if s.get("name") == "the module loader over this lab's own selection"
+    ]
+    assert step["run"].strip() == "hnx modules check --root hnx --overlay . --deploy"
+    assert "continue-on-error" not in step and "if" not in step
+    assert "secrets." not in yaml.safe_dump(job)
+    hnx = [
+        s
+        for s in job["steps"]
+        if s.get("with", {}).get("repository") == "homelab-next/homelab-next"
+    ]
+    assert hnx and hnx[0]["with"]["ref"] == "${{ vars.HNX_REF }}"
+    assert all(s.get("with", {}).get("persist-credentials") is False
+               for s in job["steps"] if "actions/checkout" in s.get("uses", ""))  # fmt: skip
+
+
+def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str]:
     """Run the template's loader step: in an overlay with ``lab_files``, with an ``hnx`` that
-    exits ``hnx_exit`` and logs its arguments.  Returns (exit, its output, GITHUB_OUTPUT)."""
+    exits ``hnx_exit`` and logs its arguments.  Returns (exit, what it ran and printed)."""
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is not installed")
@@ -314,34 +342,29 @@ def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, s
     fake = bin_dir / "hnx"
     fake.write_text(f'#!/bin/sh\necho "hnx $*" >> {tmp_path}/calls\nexit {hnx_exit}\n')
     fake.chmod(0o755)
-    out = tmp_path / "github_output"
     r = subprocess.run(
-        [bash, "-c", step["run"]],
+        [bash, "-e", "-c", step["run"]],
         cwd=work,
         capture_output=True,
         text=True,
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out)},
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}"},
     )
     calls = (tmp_path / "calls").read_text() if (tmp_path / "calls").exists() else ""
-    return r.returncode, calls + r.stdout, out.read_text() if out.exists() else ""
+    return r.returncode, calls + r.stdout
 
 
 def test_the_deploy_stops_when_the_loader_finds_a_problem(tmp_path):
-    code, said, output = _loader_step(tmp_path, 1, "modules.yml")
+    code, said = _loader_step(tmp_path, 1, "modules.yml")
     assert code == 1
     assert "hnx modules check --root hnx --overlay . --deploy" in said
-    assert "in_use" not in output  # the deploy step never runs, nor the census after it
 
 
-def test_a_clean_check_lets_the_deploy_and_the_census_run(tmp_path):
-    code, said, output = _loader_step(tmp_path, 0, "modules.lock")
-    assert code == 0 and "hnx modules check" in said and output == "in_use=true\n"
-
-
-def test_a_lab_without_modules_is_told_the_loader_had_nothing_to_check(tmp_path):
-    code, said, output = _loader_step(tmp_path, 1)
-    assert code == 0 and "hnx" not in said.split("::notice::")[0]
-    assert "selects no modules" in said and output == "in_use=false\n"
+def test_a_lab_without_modules_is_checked_too(tmp_path):
+    """No lab/modules.yml, lab/modules/ or lab/modules.lock: the step still runs hnx, which
+    checks an empty selection; a problem there stops the deploy as any other."""
+    for code_in in (0, 1):
+        code, said = _loader_step(tmp_path / str(code_in), code_in)
+        assert code == code_in and "hnx modules check --root hnx --overlay . --deploy" in said
 
 
 def test_zizmor_accepts_the_templates():

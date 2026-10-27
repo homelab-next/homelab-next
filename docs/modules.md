@@ -1006,41 +1006,69 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
 ### The loader at deploy time
 
 The private overlay's deploy workflow ([private overlay](private-overlay.md#the-deploy-workflow-step-by-step))
-runs the loader twice:
+runs the loader twice, and both always run:
 
 1. **Before anything changes on a host**: `hnx modules check --root hnx --overlay . --deploy`, the
    check `make gates` runs, over the lab's own selection. A problem fails the step, and nothing
    after it runs: no tailnet join, no `site.yml`. `--deploy` needs `--overlay`, refuses
    `--examples`, and turns every input the overlay layout names and the lab lacks (the selection
-   `lab/modules.yml`, the role table `lab/model_roles.json`, the core registry `lab/services.yml`)
-   into a problem instead of the note an ad-hoc check prints: a deploy never checks the
-   repository's examples in place of the lab. A lab that has taken up no modules (none of
-   `lab/modules.yml`, `lab/modules/`, `lab/modules.lock` exists) has nothing to check, and the run
-   says so in a notice; one that has any of them is checked, so removing the selection alone
-   does not switch the check off.
+   `lab/modules.yml`, the role table `lab/model_roles.json`, the core registry `lab/services.yml`,
+   the MCP catalog `lab/mcp/` and the keyring) into a problem instead of the note an ad-hoc check
+   prints: a deploy never checks the repository's examples in place of the lab. The slot registry
+   is the pinned `hnx` checkout's own (`examples/modules/slots.yml`), never the overlay's. With
+   modules selected and no `lab/review-policy.yml`, the check says so: the supply chain then
+   refuses every fetched module, so a lab of in-tree modules needs no policy, and one that fetches
+   a module cannot load it without one.
 2. **After the deploy**: the census of what runs, then the two-way check against it. The deploy
    step runs `ansible-playbook hnx/ansible/playbooks/module_census.yml` (role `module_census`,
-   every host, read-only: one `systemctl list-unit-files --state=enabled 'hnx-*'` each) into a
-   fresh directory of the runner's; `hnx modules gather DIR --out FILE` builds the inventory
-   (`homelabnext.modules.census`): the fleet units every host reports enabled, as names without
-   `hnx-` and the suffix, and `not_gathered` naming the kinds the hosts do not report; and
-   `hnx modules check --deploy --running FILE` compares it. This is a verification, not a gate:
-   the deploy has applied by then, and the failed run is the alarm. It runs after the deploy
-   rather than before the next one because a unit the deploy installs runs only after it (checked
-   before, every new unit would read "declared but not running"), and because drift between
-   deploys is what a later check would see, not what this deploy did.
+   every host, read-only) into a fresh directory of the runner's, with `systemctl` pinned on the
+   command line (an extra variable wins over the overlay's `group_vars`, so the overlay cannot
+   point the census at a stand-in); `hnx modules gather DIR --out FILE` builds the inventory
+   (`homelabnext.modules.census`), and `hnx modules check --deploy --running FILE` compares it.
+   This is a verification, not a gate: the deploy has applied by then, and the failed run is the
+   alarm. It runs after the deploy rather than before the next one because a unit the deploy
+   installs runs only after it (checked before, every new unit would read "declared but not
+   running"), and because drift between deploys is what a later check would see, not what this
+   deploy did.
+
+The private overlay's `checks.yml` runs the first check on every pull request too, with the pinned
+`hnx` and no secret, so a problem shows on the pull request and not only when the operator
+dispatches the deploy. The census needs the hosts, so it stays in the deploy.
+
+**A lab that takes up no modules is an empty selection, never skipped.** With none of
+`lab/modules.yml`, `lab/modules/` and `lab/modules.lock` present (a dangling link counts as
+present, so a broken link never reads as "no modules"), `hnx` checks an empty selection: the site
+rules and the supply chain have nothing to judge, the inputs that only judge selected modules (the
+role table, the registry, the MCP catalog, the keyring) are notes instead of problems, and the
+runtime check still runs, so every running unit of a module (a core module's included) is one the
+site does not select. A unit whose name is no module's (`<id>` or `<id>-...`) is the core's and is
+not judged, as for any selection. A lab with some of the three but not the others is checked as one
+that takes up modules: every missing input is a problem. The decision is `hnx`'s, never the
+workflow's: the step that runs it has no condition of its own.
+
+**What the census measures.** Two queries per host, both for `hnx-*` services and timers:
+`systemctl list-unit-files --state=enabled` and `systemctl list-units --state=active`. A unit
+counts as running when a host reports its unit file enabled **or** reports it active, so one that
+runs without being enabled (static, `enabled-runtime`, linked, or started by another unit or by
+`systemd-run` under a `hnx-` name) is counted while it is active; one that is neither at the moment
+of the census is not. Template units and their instances (`hnx-<name>@...`) are left out and noted:
+an instance is not a unit a manifest declares. **The census is a union across hosts**: a unit
+counts when any host reports it, so a unit enabled on the wrong host satisfies the check for the
+right one. The inventory carries no host, and a manifest declares no placement per unit to
+compare one with; that is a known limit.
 
 **Binding and trust.** The gatherer binds nothing: a running name belongs to a module by its name
 alone (`<id>` or `<id>-...`), the rule the loader applies to a hand-written inventory too, so no
 stamp a host writes decides whose a unit is, and none exists. A host's only input is its
-`systemctl` output, which reaches the runner as a JSON list of lines and is parsed strictly: a line
-that is not one enabled `hnx-<name>.service` or `.timer` (a template, `hnx-<name>@`, is left out and
-noted) makes the census unreadable, and `gather` fails (exit 2). The directory is the runner's,
-made empty for the run: `_hosts.json` lists every host the play targeted, an unreachable one
-included, and a host that wrote no answer, an entry that is no listed host's answer, an answer
-written for another host, a linked or non-regular file, or one over 1 MB fails the gather too. What
-a host reports is believed: a host whose root is compromised can hide a unit or claim one, and no
-census read from the host itself can rule that out.
+`systemctl` output, which reaches the runner as two JSON lists of lines and is parsed strictly: a
+line that is not one `hnx-<name>.service` or `.timer` in the query's own shape (an active unit's
+description is free text, but no control character) makes the census unreadable, and `gather`
+fails (exit 2). The directory is the runner's, made empty for the run: `_hosts.json` lists every
+host the play targeted, an unreachable one included, and a host that wrote no answer, an entry that
+is no listed host's answer, an answer written for another host, a linked or non-regular file, or
+one over 1 MB fails the gather too. The role refuses a host name that is not a plain name before it
+writes anything. What a host reports is believed: a host whose root is compromised can hide a unit
+or claim one, and no census read from the host itself can rule that out.
 
 ## How a swap works, end to end
 

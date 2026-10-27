@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 galaxy_info:
   author: HomelabNext contributors
-  description: "The census of what runs (ADR-0027 follow-up 9): each host's enabled fleet units, read-only, written on the controller for hnx modules gather."
+  description: "The census of what runs (ADR-0027 follow-up 9): each host's enabled and active fleet units, read-only, written on the controller for hnx modules gather."
   license: Apache-2.0
   min_ansible_version: "2.15"
 dependencies: []
