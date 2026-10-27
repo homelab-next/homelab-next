@@ -385,9 +385,41 @@ errors.
 `module-core`) with the human-approve tier for any change to `credentials`, `control_plane`, agent
 `needs` (data grants), `egress`, or a privileged slot. The kinds exist for fetched modules (state
 `locked` in `lab/modules.lock`, see [Supply chain](#supply-chain)), where the example policy asks a
-human approve of every one, flatter and stricter than this per-field tier; the per-field tier for
-in-tree manifests is still specified, not implemented (an in-tree module is reviewed by this
-repository's pull requests). The gates this table marks as implemented are rules
+human approve of every one, flatter and stricter than this per-field tier. For **in-tree**
+modules, which this repository's pull requests review, `homelabnext.modules.review_tier`
+classifies every changed path under `modules/` and `examples/modules/` by the table above: a
+change is **human-approve** when it reaches anything the table gives an approver other than the
+module's owner (`credentials`, `control_plane`, `egress`, `data`, `lifecycle`, `interfaces`, an
+agent (its definition, or `needs` that grow), roles, entry points, fleet units, service rows, MCP
+records, `shared_config`, preflight hooks and workflow packs, a privileged slot it provides,
+requires, prefers or falls back to), or the module's `id`, `kind` or `origin`; a file in the module
+takes the tier of the contributions that name it (directly or as a directory above it) **in the base
+manifest**, and a file no contribution names there (code, an adapter) is human-approve. A file new
+in the pull request is human-approve unless the base names a directory above it; the head's
+manifest can only add human-rated names, never make a file owner, so a pull request cannot name
+its own unreviewed file as docs. An interface schema, and the conformance target of a module that
+provides a privileged slot, are human-approve files. Detections, docs, criteria, lake
+tables, paging pairs and status sources, and every other field, are **owner**. It fails closed: a
+new, removed or renamed manifest, one it cannot read (parsed like the loader: aliases, deep nesting
+and size refused), a symbolic link anywhere on a changed path, a key the module schema does not
+define, a list it cannot key, keys it cannot compare, a path outside a module directory, and,
+without a readable slot registry at both ends, every slot change are human-approve. The inputs
+that decide the tier are read **as of the base commit**: the module schema; the slot registry (the
+union of the base's and the head's privileged slots, so neither side can drop one); and
+CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
+(`tools/schema_check.py`, `.github/workflows/ci.yml`) is itself human-approve.
+
+`hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
+the job summary in CI, where `--ci-base` takes the base by `tools/schema_check.py --ci-base`'s
+rule). The human approval is the pull request's **code-owner review**: the command fails when a
+human-approve change has no valid owner (`@user`, `@org/team` or an email) in CODEOWNERS as of
+the base, matched by GitHub's rules (the last matching line wins, `*` within a segment, `**`
+across them, no character classes). It does not read approvals, so the guarantee is only as
+strong as the branch ruleset's "Require review from Code Owners". **Today the check is
+near-vacuous**: CODEOWNERS's first line, `*`, gives every path an owner, and the one owner reviews
+everything; the tier is the record of what needs care, and it starts to bite when ownership is
+split. `make modules-review-tier` runs it locally against `BASE` (default `origin/main`); it is not
+part of `make gates`, which has no base to compare with. The gates this table marks as implemented are rules
 (`homelabnext/modules/rules.py`) that the loader runs (`hnx modules check`, over the examples in
 `make gates` and CI); nothing runs the loader at deploy time yet.
 
@@ -1139,9 +1171,12 @@ listed as deferred.
    1.3). An upstream is judged by what it reaches on the site, through a fallback or an instance;
    a contributed agent's model role is one its module requires. Each grant names only what a
    selected module uses, or it is refused as stale. The site rules take the units, rows and role
-   table as required inputs, so none is skipped; the loader passes them. Not done: the per-field
-   review tier for in-tree manifests (the review-policy kinds `module-provider`,
-   `module-feature`, `module-core` exist for fetched modules, with a flat tier, from follow-up 5).
+   table as required inputs, so none is skipped; the loader passes them. The per-field review tier
+   for in-tree manifests is implemented as a classification and a code-owner check
+   (`homelabnext.modules.review_tier`, `hnx modules review-tier`, run in CI; see
+   [Trust tiers](#trust-tiers-what-selecting-a-module-grants)); the approval itself is the pull
+   request's code-owner review as of the base, so it is only as strong as the branch ruleset that
+   requires it, and with today's `*` owner line it is near-vacuous.
 5. **Supply chain**: implemented (see [Supply chain](#supply-chain)); the loader runs the check.
 6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing));
    `hnx modules render` writes it for a site that checks clean.
