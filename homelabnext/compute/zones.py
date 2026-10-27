@@ -31,7 +31,8 @@ class MappingZones:
 
 
 def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
-    """Build a ZoneInfo from a site-model style zone mapping (id, subnet, gateway, dhcp.range)."""
+    """Build a ZoneInfo from a site-model style zone mapping (id, subnet, gateway, dhcp.range,
+    subnet6)."""
     dhcp = z.get("dhcp") or {}
     rng = dhcp.get("range")
     return ZoneInfo(
@@ -41,6 +42,7 @@ def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
         dhcp_range=(str(rng[0]), str(rng[1])) if rng else None,
         vlan_id=z.get("vlan_id"),
         internet=(z.get("egress") or {}).get("internet"),
+        subnet6=z.get("subnet6"),
     )
 
 
@@ -61,7 +63,8 @@ class SiteAdapter:
     """Adapt a site-model object to ZoneLookup by duck typing.
 
     The object may offer ``zone(id)`` or a ``zones`` collection (mapping or list) whose items
-    expose ``id``/``subnet``/``gateway``/``dhcp``/``vlan_id`` attributes or keys.
+    expose ``id``/``subnet``/``gateway``/``dhcp``/``vlan_id`` (and optionally ``subnet6``)
+    attributes or keys.
     """
 
     def __init__(self, site: Any):
@@ -84,6 +87,7 @@ class SiteAdapter:
             dhcp_range=(str(rng[0]), str(rng[1])) if rng else None,
             vlan_id=self._get(z, "vlan_id"),
             internet=self._get(egress, "internet") if egress else None,
+            subnet6=self._get(z, "subnet6"),
         )
 
     def zone(self, zone_id: str) -> ZoneInfo | None:
