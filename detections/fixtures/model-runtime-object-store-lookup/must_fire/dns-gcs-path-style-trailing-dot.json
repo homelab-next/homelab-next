@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "dns-gcs-path-style-trailing-dot",
+  "description": "the bare path-style storage endpoint with the root's trailing dot",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "dns": {
+      "question": {
+        "name": "storage.googleapis.com."
+      }
+    }
+  }
+}

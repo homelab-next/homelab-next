@@ -344,6 +344,10 @@ jobs:
         run: python -m homelabnext.cli graph check
       - name: Code Mode stubs and search index match the example broker manifest (ADR-0031, CM-3)
         run: python -m homelabnext.cli codemode gen --check
+      - name: the example log pipeline's runtime table matches the example guests (docs/log-pipeline.md)
+        run: |
+          python -m homelabnext.cli guests plan examples/minimal/guests --site examples/minimal/site.yml \
+            --target runtime-labels --against examples/log-pipeline --exit-code
       - name: the module loader loads the example lab for every profile (ADR-0027 follow-up 9)
         run: |
           for site in examples/modules/sites/*.yml; do

@@ -75,7 +75,8 @@ schemas:
 # Code Mode golden suites (CM-6) run every task in classic MCP mode and in Code Mode, the G-02
 # corpus inside tool results, against the scripted fake model behind the fake inference server,
 # and the committed report is current (it proves the harness, not a model: docs/codemode.md); the
-# module loader loads the example lab (modules-check)
+# module loader loads the example lab (modules-check); the example log pipeline's runtime table
+# (examples/log-pipeline/, docs/log-pipeline.md) matches the example guests
 CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
@@ -92,6 +93,8 @@ gates:
 	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
 	$(PY) -m homelabnext.cli codemode gen --check
 	$(PY) -m homelabnext.cli golden codemode --check $(CODEMODE_GOLDEN)
+	$(PY) -m homelabnext.cli guests plan examples/minimal/guests --site examples/minimal/site.yml \
+	  --target runtime-labels --against examples/log-pipeline --exit-code
 	$(MAKE) modules-check
 
 # the module loader (ADR-0027 follow-up 9) over the example lab: every manifest, every profile's

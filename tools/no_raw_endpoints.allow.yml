@@ -85,6 +85,8 @@ allow:
     reason: negative guest fixtures (documentation addresses only)
   - path: "tests/compute/*"
     reason: synthetic fleet, site model, goldens and tests (documentation addresses only; addresses are the data under test)
+  - path: "tests/logpipeline/**"
+    reason: runtime-label tests and evasion fixtures; the observed address is the data under test (documentation ranges, RFC 5737 and RFC 3849)
   - path: "tests/scope/*"
     reason: scope tests resolve guests by address alias; documentation-range addresses are the data under test
   - path: "tests/schemas/fixtures/**"

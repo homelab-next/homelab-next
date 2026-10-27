@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# A log pipeline (fictional "Relecloud Pipes") for the move-and-shape stage. The slot has no
-# contract yet (provisional) and is stateless; a smaller site selects pass-through instead, which
-# the slot registry allows only when the neighbouring stages share a format.
+# A log pipeline (fictional "Relecloud Pipes") for the move-and-shape stage. The slot's contract
+# (conformance/protocols/log_pipeline.py, docs/log-pipeline.md) is the runtime label: every event
+# leaves with labels.hnx_runtime from the guest model's table, joined on the address the collector
+# saw, never the event's own. The slot is stateless; a smaller site selects pass-through instead,
+# which the slot registry allows only when the neighbouring stages share a format (and then no
+# event carries the label, so the model-runtime detections stay silent there).
 manifest_version: "1.0"
 id: example-log-pipeline
 kind: provider
@@ -32,8 +35,8 @@ provides:
       formats:
         - {format: ocsf, version: 1.3.0}
       adapter: hnx_modules.example_log_pipeline.log_pipeline:make
-      provisional: true
-      reason: the log-pipeline slot has no contract or conformance suite yet
+      conformance:
+        target: conformance/target.yml
 contributes:
   roles:
     - file: roles/example_log_pipeline

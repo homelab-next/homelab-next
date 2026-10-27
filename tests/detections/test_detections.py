@@ -272,32 +272,46 @@ def test_wazuh_bundle_wellformed_golden():
     text = be.bundle(arts)
     golden("wazuh/_bundle.xml", text)
     root = ET.fromstring(text)
-    assert len(root.findall("rule")) == 8  # 11 rules, 3 inert (status unsupported)
+    assert len(root.findall("rule")) == 11  # every rule is deployable
 
 
-INERT = {
+#: the rules armed by the log pipeline's runtime label (docs/log-pipeline.md); inert before it
+MODEL_RUNTIME = {
     "det:model-runtime-egress-drop",
     "det:model-runtime-object-store-lookup",
     "det:model-runtime-object-store-request",
 }
 
 
-def test_inert_rules_are_tested_but_neither_counted_nor_bundled(capsys):
+def test_no_shipped_rule_is_inert():
     rules = load_rules(DET)
-    assert {r.det_id for r in rules if not r.deployable} == INERT
-    rep = run_all(DET)
-    assert {rr.det_id for rr in rep.rules} >= INERT  # their fixtures still run
+    assert [r.det_id for r in rules if not r.deployable] == []
+    assert {r.det_id for r in rules} >= MODEL_RUNTIME
+
+
+def test_inert_rules_are_tested_but_neither_counted_nor_bundled(tmp_path, capsys):
+    root = tmp_path / "detections"
+    shutil.copytree(DET, root)
+    inert = set()
+    for d in MODEL_RUNTIME:
+        p = next(root.glob(f"sigma/*/{d.removeprefix('det:')}.yml"))
+        p.write_text(p.read_text().replace("status: experimental", "status: unsupported"))
+        inert.add(d)
+    rules = load_rules(root)
+    assert {r.det_id for r in rules if not r.deployable} == inert
+    rep = run_all(root)
+    assert {rr.det_id for rr in rep.rules} >= inert  # their fixtures still run
     from homelabnext.detections.coverage import coverage_report
 
     cov = coverage_report(rules, rep)
     counted = {d for t in cov["techniques"].values() for d in t["rules"]}
-    assert not counted & INERT
-    assert {u["rule"] for u in cov["uncounted"]} == INERT
-    assert cov["summary"]["rules_counted"] == len(rules) - len(INERT)
-    assert main(["--root", str(DET), "compile", "generic"]) == 0
+    assert not counted & inert
+    assert {u["rule"] for u in cov["uncounted"]} == inert
+    assert cov["summary"]["rules_counted"] == len(rules) - len(inert)
+    assert main(["--root", str(root), "compile", "generic"]) == 0
     out = capsys.readouterr().out
     assert "-- det:cloud-metadata-refused" in out
-    assert not any(f"-- {d}\n" in out for d in INERT)
+    assert not any(f"-- {d}\n" in out for d in inert)
 
 
 def test_a_rule_status_outside_sigmas_is_a_lint_problem(tmp_path):

@@ -179,6 +179,7 @@ have a zones file. Tests can also pass a stub.
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
+| `runtime-labels` | `runtime-labels.json`: each guest's address and its `hnx_runtime` label (`model` for a model runtime, else `none`), which the log pipeline joins on ([log pipeline](log-pipeline.md)) |
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
 | `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
@@ -349,13 +350,13 @@ What is enforced:
   a container bridge or a containerised executor. A module host can never name one as its
   address (`homelabnext.modules.egress.METADATA`; a test keeps the two lists equal).
 - **Detection.** `det:cloud-metadata-probe` (a flow to a link-local metadata address, from any
-  host a sensor sees) and `det:cloud-metadata-refused` (any refusal) fire today.
+  host a sensor sees) and `det:cloud-metadata-refused` (any refusal) fire on any host.
   `det:model-runtime-egress-drop` and `det:model-runtime-object-store-lookup` and `-request` (a
-  model runtime resolving or requesting a public cloud object store) are **inert** (`status:
-  unsupported`): they match `labels.hnx_runtime: model`, which no shipped pipeline enrichment sets
-  yet, so their fixtures run but they are neither counted in `detections/attack_coverage.json` nor
-  compiled into the engine bundle. Labelling a model runtime's events from the guest model is the
-  follow-up that arms them (and moves them to `experimental`).
+  model runtime resolving or requesting a public cloud object store; `status: experimental`)
+  match `labels.hnx_runtime: model`, which the log pipeline sets from the `runtime-labels` render
+  of this model, joined on the address the collector saw and never taken from the event
+  ([log pipeline](log-pipeline.md)). On a site whose `log-pipeline` is pass-through nothing sets
+  it and they stay silent.
 - **Agent sessions as modules.** A module role (an agent runtime included) already gets its own
   default-deny chain from `homelabnext.modules.egress`.
 

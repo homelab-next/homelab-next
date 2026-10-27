@@ -1,0 +1,18 @@
+{
+  "schema": "homelabnext.logpipeline.evasion/v1",
+  "spdx": "Apache-2.0",
+  "name": "runtime-flat-key-none",
+  "description": "a model runtime sets the flat dotted key, which the engine reads first",
+  "observed": "192.0.2.140",
+  "event": {
+    "dns": {
+      "question": {
+        "name": "example-bucket.oss-cn-beijing.aliyuncs.com"
+      }
+    },
+    "labels.hnx_runtime": "none"
+  },
+  "label": "model",
+  "rule": "model-runtime-object-store-lookup",
+  "fires": true
+}

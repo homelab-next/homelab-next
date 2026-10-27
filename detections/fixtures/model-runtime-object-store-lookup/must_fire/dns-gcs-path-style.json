@@ -1,0 +1,16 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "dns-gcs-path-style",
+  "description": "a model runtime resolves the bare path-style storage endpoint (bucket in the URL path, not the host name)",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "dns": {
+      "question": {
+        "name": "storage.googleapis.com"
+      }
+    }
+  }
+}
