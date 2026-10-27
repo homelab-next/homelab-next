@@ -104,6 +104,14 @@ modules-check:
 	$(PY) -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
 	  --running schemas/platform/examples/module_inventory.small-lab.yml
 
+# each module path the working tree changes against BASE (default origin/main): its review tier,
+# and a valid CODEOWNERS owner (as of BASE) for every human-approve one (ADR-0027 follow-up 4);
+# not part of gates, which has no base to compare with (CI runs it with --ci-base)
+.PHONY: modules-review-tier
+BASE ?= origin/main
+modules-review-tier:
+	$(PY) -m homelabnext.cli modules review-tier --base $(BASE)
+
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it
 .PHONY: codemode-golden-report

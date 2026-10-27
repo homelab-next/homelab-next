@@ -22,3 +22,9 @@
 /examples/mcp/                       @PeteSampras
 /examples/mcp/clients/policy/        @PeteSampras
 /homelabnext/agent/tool_classes.yml  @PeteSampras
+# ADR-0027 follow-up 4: a module manifest change that touches credentials, control-plane readers,
+# egress, an agent's data grants, a privileged slot or the module's identity needs a human
+# approve; the code-owner review is that approval (`hnx modules review-tier` checks each such
+# manifest has an owner here)
+/modules/                            @PeteSampras
+/examples/modules/                   @PeteSampras

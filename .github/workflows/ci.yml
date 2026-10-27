@@ -351,6 +351,11 @@ jobs:
           done
           python -m homelabnext.cli modules check --examples --site examples/modules/sites/small-lab.yml \
             --running schemas/platform/examples/module_inventory.small-lab.yml
+      - name: each changed module path's review tier, and a code owner (as of the base) for every human-approve one (ADR-0027 follow-up 4)
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python -m homelabnext.cli modules review-tier --ci-base
       - name: hnx entry point
         run: |
           hnx --help
