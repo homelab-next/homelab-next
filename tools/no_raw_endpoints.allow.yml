@@ -73,6 +73,8 @@ allow:
     reason: central product roles enroll guests by address; the synthetic guests use documentation addresses (the data under test)
   - path: "tests/roles/test_hnx_address_filter.py"
     reason: the role address checks are tested on addresses as data (documentation literals; anything else is built from integers)
+  - path: "tests/roles/test_hnx_address_parity.py"
+    reason: one corpus of addresses run through the filter and the guest model, as data (documentation literals; anything else is built from integers)
   - path: "tests/roles/test_control_roles.py"
     reason: the firewall, drill and directory tests use documentation addresses and example.internal registry endpoints as the data under test
   - path: "schemas/platform/negative/module_selection.*.yml"

@@ -64,12 +64,14 @@ def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]
 
     A guest's IPv6 extra address is held against it (``homelabnext.compute.validate``), so it must
     be one prefix that names this zone only: canonical (no host bits, lower case, compressed), a
-    /48 to a /64, not link-local, multicast, loopback, unspecified or one that writes an IPv4
+    /48 to a /64, without a zone id (``%scope``), not link-local, multicast, loopback, unspecified or one that writes an IPv4
     address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo), where the address
     a collector sees is the IPv4 one, and from the space zones are numbered from
     (:data:`ZONE_V6` less :data:`SPECIAL_V6`)."""
     from homelabnext.modules.scope import EMBEDDED_V4
 
+    if "%" in str(raw):  # Python parses a zone id into the prefix; no zone's prefix carries one
+        return None, "names an IPv6 zone id (%scope), which a zone's prefix never carries"
     try:
         net = ipaddress.ip_network(str(raw), strict=True)
     except ValueError as exc:

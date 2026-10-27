@@ -118,6 +118,25 @@ def test_a_1_0_control_is_applied_per_guest(fleet):
 
 
 # ---------------------------------------------------------------- the playbook
+def _sensor_rows(d: Path, site: Path = SITE) -> list[dict]:
+    plays = {
+        p["name"]: p
+        for p in yaml.safe_load(render(fleet_at(d, site), "baseline-playbook")["baseline.yml"])
+    }
+    (role,) = plays["control network-sensor (detection, central)"]["roles"]
+    (enrolled,) = [v for k, v in role.items() if k.endswith("_guests")]
+    return enrolled
+
+
+def _enroll_problems(rows: list[dict]) -> list[str]:
+    spec = importlib.util.spec_from_file_location(
+        "hnx_address", REPO / "ansible" / "plugins" / "filter" / "hnx_address.py"
+    )
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+    return plugin.enroll_address_problems(rows)
+
+
 def test_a_central_role_receives_a_guests_extra_addresses(tmp_path):
     """A guest that names other addresses it sends from (guest 1.6) passes them to the central
     role after its ip, so the sensor's HOME_NET holds them, with its zone's subnet after its zone,
@@ -130,12 +149,7 @@ def test_a_central_role_receives_a_guests_extra_addresses(tmp_path):
     d = copy_fleet(
         tmp_path, guests={"edge-core": lambda g: g["network"].update(extra_addresses=extra)}
     )
-    plays = {
-        p["name"]: p
-        for p in yaml.safe_load(render(fleet_at(d), "baseline-playbook")["baseline.yml"])
-    }
-    (role,) = plays["control network-sensor (detection, central)"]["roles"]
-    (enrolled,) = [v for k, v in role.items() if k.endswith("_guests")]
+    enrolled = _sensor_rows(d)
     rows = {r["name"]: r for r in enrolled}
     assert list(rows["edge-core"]) == [
         "id",
@@ -149,12 +163,31 @@ def test_a_central_role_receives_a_guests_extra_addresses(tmp_path):
     assert rows["edge-core"]["extra_addresses"] == ["203.0.113.11", "2001:db8:0:28::a"]
     assert rows["edge-core"]["subnet"] == "203.0.113.0/24"
     assert "extra_addresses" not in rows["secrets-core"] and "subnet" not in rows["secrets-core"]
-    spec = importlib.util.spec_from_file_location(
-        "hnx_address", REPO / "ansible" / "plugins" / "filter" / "hnx_address.py"
+    assert _enroll_problems(enrolled) == []
+
+
+def test_a_central_role_receives_the_zones_ipv6_prefix(tmp_path):
+    """Where the guest's zone gives an IPv6 prefix (site 1.4), the row carries it as ``subnet6``
+    after ``subnet``, so the role accepts a global IPv6 extra address inside it, as validation
+    did, and refuses one outside it."""
+    site = tmp_path / "site.yml"
+    doc = yaml.safe_load(SITE.read_text())
+    (edge,) = [z for z in doc["zones"] if z["id"] == "edge"]
+    edge["subnet6"] = "2001:db8:0:28::/64"
+    site.write_text(yaml.safe_dump(doc, sort_keys=False))
+    extra = [{"address": "2001:db8:0:28::a", "why": "the address SLAAC gave it on the edge"}]
+    d = copy_fleet(
+        tmp_path, guests={"edge-core": lambda g: g["network"].update(extra_addresses=extra)}
     )
-    plugin = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(plugin)
-    assert plugin.enroll_address_problems(enrolled) == []
+    enrolled = _sensor_rows(d, site)
+    rows = {r["name"]: r for r in enrolled}
+    assert list(rows["edge-core"])[-2:] == ["subnet", "subnet6"]
+    assert rows["edge-core"]["subnet6"] == "2001:db8:0:28::/64"
+    assert "subnet6" not in rows["secrets-core"]
+    assert _enroll_problems(enrolled) == []
+    rows["edge-core"]["extra_addresses"] = ["2001:db8:0:29::a"]  # another /64
+    (msg,) = _enroll_problems(enrolled)
+    assert "outside the zone's IPv6 prefix 2001:db8:0:28::/64" in msg
 
 
 def test_central_controls_render_one_play_on_the_product_host(fleet):

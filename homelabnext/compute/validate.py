@@ -216,6 +216,10 @@ def _extra_address_problem(
     from homelabnext.modules.egress import METADATA
     from homelabnext.modules.scope import EMBEDDED_V4
 
+    if not isinstance(raw, str):
+        return None, "is not an IP address"
+    if "%" in raw:  # Python parses a zone id into the address, and str() keeps it
+        return None, "names an IPv6 zone id (%scope), which a collector never reports"
     try:
         ip = ipaddress.ip_address(raw)
     except ValueError:

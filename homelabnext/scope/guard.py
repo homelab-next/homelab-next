@@ -118,7 +118,8 @@ def _ip_spelling(text: str) -> tuple[str | None, bool]:
     ``canonical`` is the one spelling targets are keyed by: IPv6 compressed, an IPv4 address
     written inside IPv6 (IPv4-compatible ``::a.b.c.d``, IPv4-mapped, IPv4-translated
     ``::ffff:0:a.b.c.d``, NAT64's RFC 6052 well-known prefix) as that IPv4 address, and an IPv4
-    address in hex, octal, integer or short dotted form as its dotted-quad form.  ``odd`` says the
+    address in hex, octal, integer or short dotted form as its dotted-quad form, and an IPv6
+    address with a zone id (``%scope``) without it.  ``odd`` says the
     reference was not written that way; NAT64's local-use prefix (RFC 8215, where the IPv4
     address sits depends on the operator's prefix length) has no canonical form: ``(None, True)``.
     """
@@ -136,6 +137,8 @@ def _ip_spelling(text: str) -> tuple[str | None, bool]:
         return str(ipaddress.IPv4Address(packed)), True
     if isinstance(ip, ipaddress.IPv4Address):
         return str(ip), str(ip) != text
+    if ip.scope_id is not None:  # a zone id names the link, not the host: the address without it
+        ip = ipaddress.IPv6Address(int(ip))
     for net in EMBEDDED_V4:
         if ip in net:
             if net.prefixlen != 96:
