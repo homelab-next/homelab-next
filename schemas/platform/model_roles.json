@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_roles/1.3",
   "title": "Model role table",
-  "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs. 1.2 adds, additively, a per-binding pin (version and sha256 digest of the served weights; `hnx models pins` requires one on every binding and a current evaluation report for the pinned set) and per-role limits (requests, tokens and cost per window; exceeding one throttles and alerts).",
+  "description": "Maps model-role aliases (mdl:<alias>) to concrete bindings. Consumers reference only the alias; model ids and backends appear here and nowhere else, so swapping a model is a one-file change. backends are svc: logical ids, never URLs. 1.2 adds, additively, a per-binding pin (version and sha256 digest of the served weights; `hnx models pins` requires one on every binding and a current evaluation report for the pinned set) and per-role limits (requests, tokens and cost per window; exceeding one throttles and alerts). 1.3 adds, additively, leaves_lab on a binding: the backend is outside the lab (a cloud API), so a prompt sent to it leaves the site; a module that requires such a role (on the role or down its fallback chain) needs the overlay's grants.cloud_models (ADR-0027).",
   "type": "object",
   "properties": {
     "version": {
@@ -57,6 +57,10 @@
                   "type": "string",
                   "pattern": "^sha256:[0-9a-f]{64}$",
                   "description": "sha256 of the pinned weights file (or the serving engine's manifest digest)."
+                },
+                "leaves_lab": {
+                  "type": "boolean",
+                  "description": "true: the backend is outside the lab (a cloud API) and a prompt sent to it leaves the site. Absent or false: the backend is in the lab. A module that requires a role with such a binding, on the role or down its fallback chain, needs grants.cloud_models in the site selection (docs/modules.md, Trust tiers)."
                 }
               },
               "required": [

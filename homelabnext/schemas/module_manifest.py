@@ -1463,6 +1463,14 @@ def module_selection_schema() -> dict[str, Any]:
             "units": by_module(
                 pat(SLUG, None, 64), "Units that may run as root or opt out of hardening."
             ),
+            "upstreams": by_module(
+                {"enum": ["cap:" + u for u in ("broker", "idp", "remote-admin")]},
+                "Authority slots a module's service rows may name as an upstream (the slot or an instance of it).",
+            ),
+            "cloud_models": by_module(
+                {"$ref": LID + "mdl_id"},
+                "Model roles the module requires whose prompts can leave the lab (a role-table binding marked leaves_lab, on the role or down its fallback chain).",
+            ),
         },
         desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
     )

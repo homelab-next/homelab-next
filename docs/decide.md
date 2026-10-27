@@ -27,7 +27,7 @@ rules, not that a real model classifies well: the keyword floor is real, the mod
 ## Model roles
 
 Consumers name a role (`mdl:fast-classifier`); the role table maps it to bindings
-(`schemas/platform/model_roles.json` 1.2). The reference table for CI is
+(`schemas/platform/model_roles.json` 1.3). The reference table for CI is
 `examples/model_roles.json`.
 
 | Guarantee | Mechanism | Checklist |

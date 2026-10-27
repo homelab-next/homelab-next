@@ -49,6 +49,8 @@ DIRS = {n: MODULES_DIR / n for n in MODULES}
 ROOTS = (MODULES_DIR,)
 ROWS = {n: mr._rows(m, DIRS[n], load) for n, m in MODULES.items()}
 UNITS = {n: mr._units(m, DIRS[n], load) for n, m in MODULES.items()}
+ROOT_UNITS = {n: mr._privileged_units(m, DIRS[n], load) for n, m in MODULES.items()}
+MODEL_ROLES = json.loads((ROOT / "examples/model_roles.json").read_text())["roles"]
 SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").read_text())
 
 # A negative's file name says which rule it breaks; an error must be at that place.
@@ -711,14 +713,6 @@ MODULE_DEFECTS = {
         ),
         "a module in the public modules/ tree is in-tree",
     ),
-    "edge or idp config without a grant": (
-        "example-object-store",
-        lambda d: d["contributes"].__setitem__(
-            "shared_config",
-            [{"target": "cap:edge", "file": "edge.yml", "reason": "a proxy header"}],
-        ),
-        "overlay grant",
-    ),
 }
 
 
@@ -779,7 +773,6 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         "only a provider's MCP record fronts a slot",
         "public route needs auth",
         "unit freshness: name starts with",
-        "root or a hardening opt-out",
         "pages only through notify",
     ):
         assert needle in probs, needle
@@ -1087,7 +1080,9 @@ def test_an_interface_with_no_owner_is_refused():
 # ------------------------------------------------------------------ site profiles
 @pytest.mark.parametrize("profile", sorted(SITES))
 def test_site_profile_meets_every_rule(profile):
-    assert mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS, UNITS) == []
+    assert (
+        mr.site_problems(SITES[profile], MODULES, SLOTS, ROWS, UNITS, ROOT_UNITS, MODEL_ROLES) == []
+    )
 
 
 @pytest.mark.parametrize("profile", sorted(SITES))
@@ -1105,6 +1100,8 @@ SELECTION_NEGATIVES = {
     "scope-malformed-cidr": "scope/target/0",
     "scope-unknown-part": "scope/trusted",
     "addresses-network": "hosts/data/addresses/0",
+    "upstream-grant-not-authority": "grants/upstreams/publishing/0",
+    "cloud-model-not-a-role": "grants/cloud_models/publishing/0",
 }
 
 
@@ -1613,6 +1610,8 @@ def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
     g["secrets"]["publishing"].append("secret:example-unknown/token")
     g["units"] = {"example-unknown": ["x"]}
     g["shared_config"] = {"example-unknown": ["cap:edge"]}
+    g["upstreams"] = {"example-unknown": ["cap:idp"]}
+    g["cloud_models"] = {"example-unknown": ["mdl:main-reasoner"]}
     probs = mr.site_problems(site, MODULES, SLOTS, ROWS)
     for needle in (
         "grants.public_routes.example-unknown: the module is not selected; remove the grant",
@@ -1628,6 +1627,8 @@ def test_every_grant_kind_names_a_selected_module_and_what_it_uses():
         "credential; remove the grant",
         "grants.units.example-unknown: the module is not selected; remove the grant",
         "grants.shared_config.example-unknown: the module is not selected; remove the grant",
+        "grants.upstreams.example-unknown: the module is not selected; remove the grant",
+        "grants.cloud_models.example-unknown: the module is not selected; remove the grant",
     ):
         assert needle in probs, (needle, probs)
 
@@ -1649,6 +1650,136 @@ def test_units_shared_config_and_secrets_grants_name_what_exists():
         "grants.shared_config.publishing: the module declares no shared_config for cap:edge; "
         "remove the grant",
     ], probs
+    # with the units' privilege known, a grant for a hardened unit grants nothing
+    probs = mr.site_problems(site, MODULES, SLOTS, ROWS, UNITS, ROOT_UNITS)
+    assert (
+        "grants.units.publishing.publishing-run: the unit neither runs as root nor opts out of "
+        "hardening; remove the grant"
+    ) in probs, probs
+
+
+def _granted(site, mods, **kw):
+    """site_problems with every optional input, and the selection's own schema errors."""
+    rows = kw.get("rows", ROWS)
+    probs = mr.site_problems(
+        site, mods, SLOTS, rows, kw.get("units", UNITS), kw.get("privileged", ROOT_UNITS),
+        kw.get("roles", MODEL_ROLES),
+    )  # fmt: skip
+    return probs, sc.errors_for(SELECTION, site, REG)
+
+
+def test_a_root_or_opt_out_unit_needs_grants_units():
+    """grants.units (ADR-0027 follow-up 4): a module may ship a unit that runs as root or opts out
+    of hardening, and the site refuses it until the overlay grants that unit by name."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    priv = {**ROOT_UNITS, "publishing": {"publishing-run"}}
+    probs, _ = _granted(site, mods, privileged=priv)
+    assert (
+        "publishing: unit publishing-run runs as root or opts out of hardening without grants.units"
+        in probs
+    ), probs
+    site["grants"]["units"] = {"publishing": ["publishing-run"]}
+    probs, errors = _granted(site, mods, privileged=priv)
+    assert probs == [] and errors == [], (probs, errors)
+
+
+def test_the_module_rules_leave_privilege_to_the_site(tmp_path):
+    """A root unit and edge or idp shared_config are no longer module defects: the grant is the
+    overlay's to give, so module_problems is silent and site_problems decides."""
+    import shutil
+
+    mod = tmp_path / "publishing"
+    shutil.copytree(MODULES_DIR / "publishing", mod)
+    doc = copy.deepcopy(MODULES["publishing"])
+    units = load(mod / doc["contributes"]["scheduler_jobs"][0]["file"])
+    units[0].update(run_as_root=True, user="root")
+    (mod / doc["contributes"]["scheduler_jobs"][0]["file"]).write_text(yaml.safe_dump(units))
+    doc["contributes"]["shared_config"] = [
+        {"target": "cap:edge", "file": "edge.yml", "reason": "a proxy header"}
+    ]
+    (mod / "edge.yml").write_text("headers: {}\n")
+    probs = mr.module_problems(doc, mod, SLOTS, load, (tmp_path,))
+    assert not [p for p in probs if "grant" in p], probs
+    assert mr._privileged_units(doc, mod, load) == {units[0]["name"]}
+
+
+def test_edge_or_idp_shared_config_needs_grants_shared_config():
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["publishing"]["contributes"]["shared_config"] = [
+        {"target": "cap:idp", "file": "idp.yml", "reason": "a client"},
+        {"target": "cap:edge", "file": "edge.yml", "reason": "a header"},
+    ]
+    probs, _ = _granted(site, mods)
+    assert "publishing: shared_config cap:idp without grants.shared_config" in probs
+    assert "publishing: shared_config cap:edge without grants.shared_config" in probs
+    site["grants"]["shared_config"] = {"publishing": ["cap:edge"]}
+    probs, errors = _granted(site, mods)
+    assert probs == ["publishing: shared_config cap:idp without grants.shared_config"]
+    assert errors == []
+
+
+def test_a_broker_idp_or_remote_admin_upstream_needs_grants_upstreams():
+    """An upstream naming an authority slot, or an instance that fills one, needs the grant; a
+    grant no row uses is stale."""
+    site, mods, rows = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES), copy.deepcopy(ROWS)
+    row = rows["external-collector"]["external-collector-receiver"]
+    row["upstreams"] = [*row["upstreams"], "idp"]
+    probs, _ = _granted(site, mods, rows=rows)
+    assert (
+        "external-collector: service external-collector-receiver upstream idp reaches idp "
+        "without grants.upstreams"
+    ) in probs, probs
+    row["upstreams"] = [*row["upstreams"][:-1], "platform"]  # the instance filling broker and idp
+    probs, _ = _granted(site, mods, rows=rows)
+    for a in ("broker", "idp"):
+        assert (
+            f"external-collector: service external-collector-receiver upstream platform reaches "
+            f"{a} without grants.upstreams"
+        ) in probs, probs
+    site["grants"]["upstreams"] = {"external-collector": ["cap:broker", "cap:idp"]}
+    probs, errors = _granted(site, mods, rows=rows)
+    assert probs == [] and errors == [], (probs, errors)
+    site["grants"]["upstreams"]["external-collector"].append("cap:remote-admin")
+    probs, _ = _granted(site, mods, rows=rows)
+    assert probs == [
+        "grants.upstreams.external-collector: no service row of the module names remote-admin "
+        "upstream; remove the grant"
+    ], probs
+
+
+def test_a_role_whose_prompts_can_leave_the_lab_needs_grants_cloud_models():
+    """A binding marked leaves_lab (model_roles 1.3), on the role or down its fallback chain,
+    makes every module requiring the role need grants.cloud_models; a grant for a role the module
+    does not require, or one that stays in the lab, is stale."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    roles = copy.deepcopy(MODEL_ROLES)
+    roles["fast-classifier"]["bindings"].append(
+        {"backend": "svc:cloud-inference", "model_id": "example-remote-1", "leaves_lab": True}
+    )
+    assert mr.cloud_roles(roles) == {"mdl:fast-classifier", "mdl:main-reasoner"}  # by fallback
+    probs, _ = _granted(site, mods, roles=roles)
+    needing = sorted(
+        m for m in ("core-staff", "example-sandbox", "external-collector") if m in mr.selected(site, mods)
+    )  # fmt: skip
+    assert needing and all(
+        f"{m}: requires mdl:main-reasoner, whose prompts can leave the lab (a binding marked "
+        "leaves_lab), without grants.cloud_models" in probs
+        for m in needing
+    ), probs
+    site["grants"]["cloud_models"] = {m: ["mdl:main-reasoner"] for m in needing}
+    probs, errors = _granted(site, mods, roles=roles)
+    assert probs == [] and errors == [], (probs, errors)
+    probs, _ = _granted(site, mods)  # the reference table stays in the lab: the grant is stale
+    assert (
+        f"grants.cloud_models.{needing[0]}: mdl:main-reasoner has no binding that leaves the lab; "
+        "remove the grant"
+    ) in probs, probs
+    site["grants"]["cloud_models"][needing[0]] = ["mdl:fast-classifier"]
+    probs, _ = _granted(site, mods, roles=roles)
+    assert (
+        f"grants.cloud_models.{needing[0]}: the module does not require mdl:fast-classifier; "
+        "remove the grant"
+    ) in probs, probs
 
 
 def test_an_egress_service_target_must_exist_without_rows_too():

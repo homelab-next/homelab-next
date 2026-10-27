@@ -667,6 +667,64 @@
             "minItems": 1
           },
           "description": "Units that may run as root or opt out of hardening."
+        },
+        "upstreams": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "cap:broker",
+                "cap:idp",
+                "cap:remote-admin"
+              ]
+            },
+            "minItems": 1
+          },
+          "description": "Authority slots a module's service rows may name as an upstream (the slot or an instance of it)."
+        },
+        "cloud_models": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "type": "string",
+                "maxLength": 48,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              {
+                "not": {
+                  "pattern": "-shadow$"
+                }
+              }
+            ],
+            "description": "A module id."
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+            },
+            "minItems": 1
+          },
+          "description": "Model roles the module requires whose prompts can leave the lab (a role-table binding marked leaves_lab, on the role or down its fallback chain)."
         }
       },
       "description": "Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant."

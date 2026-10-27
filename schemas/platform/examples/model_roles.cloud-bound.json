@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "roles": {
+    "remote-reasoner": {
+      "description": "A role bound to a backend outside the lab: a module requiring it needs grants.cloud_models.",
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:cloud-inference",
+          "model_id": "example-remote-1",
+          "leaves_lab": true
+        }
+      ]
+    },
+    "local-reasoner": {
+      "tier": "standard",
+      "bindings": [
+        {
+          "backend": "svc:inference",
+          "model_id": "example-9b"
+        }
+      ],
+      "fallback": "mdl:remote-reasoner"
+    }
+  }
+}
