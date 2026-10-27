@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+title: A guest firewall refused a connection to a cloud instance metadata service
+det: det:cloud-metadata-refused
+description: >
+  The guest firewall (role nftables_host) refuses the cloud instance metadata addresses on every
+  guest, ahead of any allow, and logs each attempt with the prefix "hnx-egress-refused: ". No lab
+  host needs one, so any attempt is reconnaissance, credential theft or a model's output probing
+  for one (2026-10 reporting on an open-weight model). Catches what det:cloud-metadata-probe
+  cannot name: every refused address, on hosts no sensor watches.
+status: experimental
+logsource: {product: linux, service: kernel}
+detection:
+  selection:
+    Message|contains: 'hnx-egress-refused: '
+  condition: selection
+level: high
+tags: [attack.credential_access, attack.t1552.005]
+falsepositives: [None in a lab]

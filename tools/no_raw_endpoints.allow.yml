@@ -9,6 +9,8 @@ allow:
     reason: the Code Mode golden suites' fixtures, fictional broker results a correlation joins (documentation addresses only, RFC 5737)
   - path: "tests/**/fixtures/**"
     reason: negative fixtures that deliberately contain literals
+  - path: "detections/fixtures/cloud-metadata-probe/**"
+    reason: the link-local cloud metadata address the rule matches, beside documentation and link-local neighbours it must not
   - path: "schemas/**/examples/**"
     reason: schema example documents use documentation addresses
   - path: "compose/lab-in-a-box/docker-compose.yml"

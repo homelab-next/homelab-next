@@ -23,6 +23,9 @@ import yaml
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 ATTACK_TECH_RE = re.compile(r"^attack\.t\d{4}(\.\d{3})?$")
 LEVELS = ("informational", "low", "medium", "high", "critical")
+#: Sigma's rule statuses; ``unsupported`` is a rule that cannot work as shipped (here: a field no
+#: shipped enrichment sets), so it is tested but neither counted as coverage nor deployed
+STATUSES = ("stable", "test", "experimental", "deprecated", "unsupported")
 OPS = {"contains", "startswith", "endswith", "re"}
 
 
@@ -57,6 +60,16 @@ class Rule:
     @property
     def det_id(self) -> str:
         return f"det:{self.slug}"
+
+    @property
+    def status(self) -> str:
+        return str(self.raw.get("status", "experimental"))
+
+    @property
+    def deployable(self) -> bool:
+        """Compiled into an engine bundle and counted as coverage: not ``unsupported`` (inert)
+        and not ``deprecated``."""
+        return self.status not in ("unsupported", "deprecated")
 
     @property
     def attack_techniques(self) -> list[str]:

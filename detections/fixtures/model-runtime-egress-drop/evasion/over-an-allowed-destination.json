@@ -1,0 +1,13 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "over-an-allowed-destination",
+  "description": "a model runtime relays through a destination its allow list names",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "message": "accepted flow to the lab gateway"
+  },
+  "note": "an allowed destination used as a relay is never dropped, so never logged"
+}

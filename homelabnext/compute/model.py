@@ -76,6 +76,9 @@ class ZoneInfo:
     gateway: str | None = None
     dhcp_range: tuple[str, str] | None = None
     vlan_id: int | None = None
+    #: the site model's ``egress.internet`` for the zone (``allow`` or ``deny``, enforced by the
+    #: router); None when the source does not say
+    internet: str | None = None
 
     @property
     def network(self) -> ipaddress.IPv4Network:

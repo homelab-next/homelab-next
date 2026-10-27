@@ -1,0 +1,11 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "metadata-flow",
+  "description": "a flow to the link-local metadata address",
+  "event": {
+    "destination": {
+      "ip": "169.254.169.254"
+    }
+  }
+}

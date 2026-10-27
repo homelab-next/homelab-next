@@ -1,0 +1,14 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "metadata-by-name",
+  "description": "a lookup of a metadata host name with no flow",
+  "event": {
+    "dns": {
+      "question": {
+        "name": "metadata.example.invalid"
+      }
+    }
+  },
+  "note": "a name is not matched; the connection that follows is refused and logged (det:cloud-metadata-refused)"
+}

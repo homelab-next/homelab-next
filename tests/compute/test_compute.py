@@ -57,6 +57,7 @@ def good():
 LIBVIRT_EXEMPTION = {
     "reason": "Filtered on the libvirt host by its nftables ruleset, not by the hypervisor.",
     "review_by": "2027-03-31",
+    "filtered_by": "guest:hv-a",
 }
 
 
@@ -76,7 +77,16 @@ def libvirt_dir(tmp_path_factory):
         doc = yaml.safe_load(p.read_text())
         _libvirt_ready(doc)
         p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    _libvirt_host_filters(d)
     return d
+
+
+def _libvirt_host_filters(d: Path) -> None:
+    """hv-a is the libvirt host: it runs the host firewall the exempted NICs point at."""
+    p = d / "hv-a.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["baseline"] = {"names": ["base"]}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
 
 
 @pytest.fixture(scope="module")

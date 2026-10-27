@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+title: A model runtime requested a public cloud object store
+det: det:model-runtime-object-store-request
+description: >
+  A guest that serves models or runs model-written code requested a public cloud
+  object-storage endpoint. A lab model runtime has no reason to: its weights come from the lab's
+  model store. An open-weight model has been reported (2026-10) to list /tmp, read the resolver
+  configuration and attempt an HTTP PUT of a file to a cloud bucket while asked to write a
+  detection rule. The egress filter refuses the connection; this rule says it was attempted.
+  Inert until the pipeline labels a model runtime's events (labels.hnx_runtime: model), which
+  no shipped enrichment does yet. Each endpoint is listed with and without the root's trailing
+  dot; the list is the same in det:model-runtime-object-store-lookup and
+  det:model-runtime-object-store-request.
+status: unsupported  # inert: nothing sets labels.hnx_runtime yet (docs/compute-model.md)
+logsource: {category: proxy}
+detection:
+  selection_runtime:
+    Runtime: model
+  selection_store:
+    UrlDomain|endswith:
+        - .aliyuncs.com
+        - .aliyuncs.com.
+        - .amazonaws.com
+        - .amazonaws.com.
+        - .blob.core.windows.net
+        - .blob.core.windows.net.
+        - .storage.googleapis.com
+        - .storage.googleapis.com.
+        - .r2.cloudflarestorage.com
+        - .r2.cloudflarestorage.com.
+        - .backblazeb2.com
+        - .backblazeb2.com.
+        - .digitaloceanspaces.com
+        - .digitaloceanspaces.com.
+        - .wasabisys.com
+        - .wasabisys.com.
+        - .myqcloud.com
+        - .myqcloud.com.
+        - .myhuaweicloud.com
+        - .myhuaweicloud.com.
+  condition: selection_runtime and selection_store
+level: high
+tags: [attack.exfiltration, attack.t1567.002]
+falsepositives: [A model runtime deliberately fetching weights from a cloud bucket; give it the lab model store instead]

@@ -1,0 +1,18 @@
+{
+  "schema": "homelabnext.detections.fixture/v1",
+  "spdx": "Apache-2.0",
+  "name": "bucket-by-address",
+  "description": "a model runtime connects to a storage address with no name",
+  "event": {
+    "labels": {
+      "hnx_runtime": "model"
+    },
+    "destination": {
+      "port": 443
+    },
+    "network": {
+      "transport": "tcp"
+    }
+  },
+  "note": "no name to match: the egress filter's drop (det:model-runtime-egress-drop) is what catches it"
+}

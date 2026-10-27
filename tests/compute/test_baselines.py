@@ -76,7 +76,16 @@ def test_the_example_lab_gives_every_guest_a_baseline():
     report = coverage(f.sorted(), f.baselines)
     assert report["summary"]["missing"] == 0
     assert {f.baselines.layer(c) for c in f.baselines.controls} == set(LAYERS)
-    assert set(f.baselines.baselines) >= {"base", "server", "exposed", "sensitive", "scratch"}
+    assert set(f.baselines.baselines) >= {
+        "base",
+        "server",
+        "exposed",
+        "sensitive",
+        "model-runtime",
+        "scratch",
+    }
+    # a guest that serves models or runs model-written code gets default-deny egress
+    assert "egress-filter" in f.baselines.expand(["model-runtime"])[1]
 
 
 def test_the_test_fleet_loads_with_its_set(fleet):

@@ -1,0 +1,5 @@
+-- det:cloud-metadata-refused
+-- title: A guest firewall refused a connection to a cloud instance metadata service
+-- level: high
+-- tags: attack.credential_access, attack.t1552.005
+WHERE (message ~contains "hnx-egress-refused: ")

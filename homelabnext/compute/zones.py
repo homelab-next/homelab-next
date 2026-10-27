@@ -36,6 +36,7 @@ def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
         gateway=z.get("gateway"),
         dhcp_range=(str(rng[0]), str(rng[1])) if rng else None,
         vlan_id=z.get("vlan_id"),
+        internet=(z.get("egress") or {}).get("internet"),
     )
 
 
@@ -71,12 +72,14 @@ class SiteAdapter:
             return z
         dhcp = self._get(z, "dhcp")
         rng = self._get(dhcp, "range") if dhcp else None
+        egress = self._get(z, "egress")
         return ZoneInfo(
             id=self._get(z, "id"),
             subnet=self._get(z, "subnet") or self._get(z, "cidr"),
             gateway=self._get(z, "gateway"),
             dhcp_range=(str(rng[0]), str(rng[1])) if rng else None,
             vlan_id=self._get(z, "vlan_id"),
+            internet=self._get(egress, "internet") if egress else None,
         )
 
     def zone(self, zone_id: str) -> ZoneInfo | None:
