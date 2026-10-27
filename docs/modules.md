@@ -393,8 +393,12 @@ module's owner (`credentials`, `control_plane`, `egress`, `data`, `lifecycle`, `
 agent (its definition, or `needs` that grow), roles, entry points, fleet units, service rows, MCP
 records, `shared_config`, preflight hooks and workflow packs, a privileged slot it provides,
 requires, prefers or falls back to), or the module's `id`, `kind` or `origin`; a file in the module
-takes the tier of the contributions that name it (directly or as a directory above it), and a file
-no contribution names (code, an adapter) is human-approve. Detections, docs, criteria, lake
+takes the tier of the contributions that name it (directly or as a directory above it) **in the base
+manifest**, and a file no contribution names there (code, an adapter) is human-approve. A file new
+in the pull request is human-approve unless the base names a directory above it; the head's
+manifest can only add human-rated names, never make a file owner, so a pull request cannot name
+its own unreviewed file as docs. An interface schema, and the conformance target of a module that
+provides a privileged slot, are human-approve files. Detections, docs, criteria, lake
 tables, paging pairs and status sources, and every other field, are **owner**. It fails closed: a
 new, removed or renamed manifest, one it cannot read (parsed like the loader: aliases, deep nesting
 and size refused), a symbolic link anywhere on a changed path, a key the module schema does not
@@ -402,7 +406,8 @@ define, a list it cannot key, keys it cannot compare, a path outside a module di
 without a readable slot registry at both ends, every slot change are human-approve. The inputs
 that decide the tier are read **as of the base commit**: the module schema; the slot registry (the
 union of the base's and the head's privileged slots, so neither side can drop one); and
-CODEOWNERS. A change to any of those, or to `review_tier.py`, is itself human-approve.
+CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
+(`tools/schema_check.py`, `.github/workflows/ci.yml`) is itself human-approve.
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
 the job summary in CI, where `--ci-base` takes the base by `tools/schema_check.py --ci-base`'s

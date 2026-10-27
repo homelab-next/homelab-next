@@ -90,7 +90,14 @@ SCHEMA = "schemas/platform/module.schema.json"
 #: where GitHub reads CODEOWNERS from, first found wins
 CODEOWNERS_PATHS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 #: what decides the tier: a change to any of these is human-approve
-GOVERNANCE = (SLOTS, SCHEMA, *CODEOWNERS_PATHS, "homelabnext/modules/review_tier.py")
+GOVERNANCE = (
+    SLOTS,
+    SCHEMA,
+    *CODEOWNERS_PATHS,
+    "homelabnext/modules/review_tier.py",
+    "tools/schema_check.py",  # the base rule --ci-base takes
+    ".github/workflows/ci.yml",  # the step that runs the check
+)
 #: git's empty tree, the base of a root commit
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -394,20 +401,51 @@ def _references(doc: Any) -> dict[str, set[str]]:
     return out
 
 
-def _file_change(rel: str, refs: dict[str, set[str]]) -> Change:
-    """The tier of a change to a file in a module, by the contributions that name it (a path or
-    a directory above it): human when any is human-rated or none names it."""
-    keys = set()
+def _named_by(rel: str, refs: dict[str, set[str]], *, dirs_only: bool = False) -> set[str]:
+    """The contribution keys naming ``rel``: the path itself, or a directory above it."""
+    keys: set[str] = set()
     for path, ks in refs.items():
-        if rel == path or rel.startswith(path + "/"):
+        if (rel == path and not dirs_only) or rel.startswith(path + "/"):
             keys |= ks
+    return keys
+
+
+def _rated(keys: set[str], privileged_provider: bool) -> set[str]:
+    """The human-rated keys among ``keys``: every key but the owner contributions, and a
+    conformance target only for a provider of a privileged slot."""
+    out = keys - OWNER_CONTRIBUTIONS
+    if not privileged_provider:
+        out.discard("conformance")
+    return out
+
+
+def _file_change(
+    rel: str,
+    base_refs: dict[str, set[str]],
+    head_refs: dict[str, set[str]],
+    *,
+    at_base: bool,
+    privileged_provider: bool,
+) -> Change:
+    """The tier of a change to a file in a module.  A file the base has takes the tier of what
+    the **base** manifest names it by; a new file only by a directory the base names above it,
+    else it is human-approve; the head's manifest can only add human-rated names, never make a
+    file owner (a pull request cannot name its own unreviewed file as docs); a file nothing names
+    (code, an adapter) is human-approve."""
     where = f"file:{rel}"
-    if not keys:
-        return Change(where, HUMAN, "named by no contribution (code, an adapter) (fail closed)")
-    rated = keys - OWNER_CONTRIBUTIONS - {"interfaces", "conformance"}
+    keys = _named_by(rel, base_refs, dirs_only=not at_base)
+    head_rated = _rated(_named_by(rel, head_refs), privileged_provider)
+    rated = _rated(keys, privileged_provider) | head_rated
     if rated:
         return Change(where, HUMAN, f"named by {', '.join(sorted(rated))}")
-    return Change(where, OWNER, f"named by {', '.join(sorted(keys))}")
+    if not keys:
+        why = (
+            "named by no contribution at the base"
+            if at_base
+            else "a new file the base names no directory of"
+        )
+        return Change(where, HUMAN, f"{why} (code, an adapter) (fail closed)")
+    return Change(where, OWNER, f"named by {', '.join(sorted(keys))} at the base")
 
 
 # ------------------------------------------------------------------------------- CODEOWNERS
@@ -633,9 +671,13 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
                 changes.append(Change("module", HUMAN, f"{old_err or new_err} (fail closed)"))
             else:
                 changes += classify(old, new, keys, priv)
-        refs = _references(old)
-        for k, v in _references(new).items():
-            refs.setdefault(k, set()).update(v)
+        base_refs, head_refs = _references(old), _references(new)
+        provided = set()
+        for doc in (old, new):
+            slots = (doc.get("provides") or {}).get("slots") if isinstance(doc, dict) else None
+            if isinstance(slots, dict):
+                provided |= {f"cap:{s}" for s in slots}
+        privileged_provider = priv is None or bool(provided & priv)
         for rel in rels:
             if rel == mpath:
                 continue
@@ -643,7 +685,15 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
             if _linked(root, rel):
                 changes.append(Change(f"file:{inner}", HUMAN, "a symbolic link on its path"))
             else:
-                changes.append(_file_change(inner, refs))
+                changes.append(
+                    _file_change(
+                        inner,
+                        base_refs,
+                        head_refs,
+                        at_base=_show(root, base, rel) is not None,
+                        privileged_provider=privileged_provider,
+                    )
+                )
         results[mpath] = Result(mpath, changes)
     out = []
     for r in sorted(results.values(), key=lambda r: r.path):

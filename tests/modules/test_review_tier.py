@@ -206,6 +206,18 @@ def test_removing_every_grant_of_an_agent_is_owner_and_adding_one_is_human():
     assert tiers(new, old) == {f"{EC}.needs": rt.HUMAN}
 
 
+def test_an_agent_added_or_removed_is_human_approve():
+    old, new = _edit("external-collector", lambda d: d["contributes"]["agents"].clear())
+    assert tiers(old, new) == {EC: rt.HUMAN}
+    assert tiers(new, old) == {EC: rt.HUMAN}
+
+
+def test_a_contribution_the_tier_does_not_rate_is_human_approve():
+    keys = {**KEYS, "contributes": {*KEYS["contributes"], "novel"}}
+    old, new = _edit("external-collector", lambda d: d["contributes"].update(novel=[{"x": 1}]))
+    assert tiers(old, new, keys=keys) == {"contributes.novel": rt.HUMAN}
+
+
 def test_capability_entries_are_keyed_by_capability_and_instance():
     old, new = _edit(
         "external-collector",
@@ -275,7 +287,55 @@ def test_without_a_schema_every_change_is_an_undefined_key():
 )
 def test_a_module_file_takes_the_tier_of_what_names_it(rel, tier):
     refs = rt._references(MODS["external-collector"])
-    assert rt._file_change(rel, refs).tier == tier
+    got = rt._file_change(rel, refs, refs, at_base=True, privileged_provider=False)
+    assert got.tier == tier
+
+
+def test_a_pull_request_cannot_name_its_own_file_as_owner_class():
+    """R1: a file the base names by nothing stays human-approve when the head's manifest names it
+    as docs; a new file too; the head may only add human-rated names."""
+    base = rt._references(MODS["external-collector"])
+    head = {**base, "playbooks/install.yml": {"docs"}, "docs/new.md": {"docs"}}
+    for rel in ("playbooks/install.yml", "docs/new.md"):
+        for at_base in (True, False):
+            got = rt._file_change(rel, base, head, at_base=at_base, privileged_provider=False)
+            assert got.tier == rt.HUMAN, (rel, at_base)
+    # a head that names a base docs file as an MCP record makes it human
+    head = {**base, "docs/external-collector.md": {"docs", "mcp_servers"}}
+    got = rt._file_change(
+        "docs/external-collector.md", base, head, at_base=True, privileged_provider=False
+    )
+    assert got.tier == rt.HUMAN
+
+
+def test_a_new_file_takes_only_a_base_directory_name():
+    base = {"roles/x": {"roles"}, "docs/guide.md": {"docs"}}
+    new_role_file = rt._file_change(
+        "roles/x/tasks/new.yml", base, base, at_base=False, privileged_provider=False
+    )
+    assert new_role_file.tier == rt.HUMAN and "roles" in new_role_file.why
+    # a new file at a path the base names exactly (not a directory) is not named by it
+    got = rt._file_change("docs/guide.md", base, base, at_base=False, privileged_provider=False)
+    assert got.tier == rt.HUMAN
+
+
+@pytest.mark.parametrize(
+    ("privileged", "tier"), [(True, rt.HUMAN), (False, rt.OWNER)], ids=["privileged", "ordinary"]
+)
+def test_a_conformance_target_is_human_only_for_a_privileged_provider(privileged, tier):
+    refs = {"conformance/target.yml": {"conformance"}}
+    got = rt._file_change(
+        "conformance/target.yml", refs, refs, at_base=True, privileged_provider=privileged
+    )
+    assert got.tier == tier
+
+
+def test_an_interface_schema_is_human_approve():
+    refs = {"schemas/output.schema.json": {"interfaces"}}
+    got = rt._file_change(
+        "schemas/output.schema.json", refs, refs, at_base=True, privileged_provider=False
+    )
+    assert got.tier == rt.HUMAN
 
 
 # ---------------------------------------------------------------- CODEOWNERS
@@ -495,6 +555,86 @@ def test_an_empty_slot_registry_fails_closed(repo, capsys):
     assert _by_path(out)["modules/external-collector/module.yml"] == rt.HUMAN
 
 
+def test_a_slot_the_head_marks_privileged_counts_too(repo, capsys):
+    """The union: a head registry that makes a slot privileged rates a use of it human."""
+    slots = yaml.safe_load((repo / rt.SLOTS).read_text())
+    slots["slots"]["notify"]["privileged"] = True
+    (repo / rt.SLOTS).write_text(yaml.safe_dump(slots))
+    _change(repo, lambda d: d["requires"]["capabilities"][1].update(purpose="changed"))
+    _, out = _run(repo, capsys)
+    changes = {c["field"]: c["tier"] for c in out["manifests"][1]["changes"]}
+    assert changes == {"requires.capabilities.cap:notify": rt.HUMAN}
+
+
+def test_the_head_file_named_as_docs_in_the_same_pull_request_is_human(repo, capsys):
+    """R1 end to end: an unnamed playbook edited and named as docs in one pull request."""
+    pb = repo / "modules" / "external-collector" / "playbooks" / "install.yml"
+    pb.parent.mkdir()
+    pb.write_text("- hosts: all\n")
+    _commit(repo)
+    pb.write_text("- hosts: all\n  become: true\n")
+    _change(repo, lambda d: d["contributes"]["docs"].append({"file": "playbooks/install.yml"}))
+    _, out = _run(repo, capsys)
+    changes = {c["field"]: c["tier"] for c in out["manifests"][0]["changes"]}
+    assert changes["file:playbooks/install.yml"] == rt.HUMAN
+
+
+@pytest.mark.parametrize(
+    ("module", "tier"),
+    [("example-orchestrator", rt.HUMAN), ("example-object-store", rt.OWNER)],
+    ids=["privileged-slot", "ordinary-slot"],
+)
+def test_a_conformance_target_end_to_end(repo, capsys, module, tier):
+    """A privileged provider's conformance target is human-approve; an ordinary one's owner."""
+    shutil.copytree(EXAMPLES / module, repo / "modules" / module)
+    _commit(repo)
+    target = repo / "modules" / module / "conformance" / "target.yml"
+    target.write_text(target.read_text() + "# changed\n")
+    _, out = _run(repo, capsys)
+    (m,) = out["manifests"]
+    assert m["changes"] == [
+        {"field": "file:conformance/target.yml", "tier": tier, "why": m["changes"][0]["why"]}
+    ]
+
+
+def test_a_linked_module_directory_is_human_approve(repo, capsys, tmp_path):
+    """The head's manifest is read through no symbolic link, its directory's included."""
+    real = tmp_path / "real-module"
+    shutil.copytree(repo / "modules" / "external-collector", real)
+    shutil.rmtree(repo / "modules" / "external-collector")
+    (repo / "modules" / "external-collector").symlink_to(real)
+    _, out = _run(repo, capsys)
+    (m,) = [m for m in out["manifests"] if m["path"].endswith("module.yml")]
+    module = [c for c in m["changes"] if c["field"] == "module"]
+    assert [c["tier"] for c in module] == [rt.HUMAN]
+    assert "symbolic link" in module[0]["why"]
+
+
+def test_a_base_read_is_size_capped(monkeypatch):
+    """The base's bytes come from git, not the capped file reader, so the cap is applied here."""
+    monkeypatch.setattr(ld, "MAX_BYTES", 100)
+    doc, err = rt._version(b"title: x\n" * 20)
+    assert doc is None and err == "over 100 bytes"
+    assert rt._version(b"title: x\n") == ({"title": "x"}, None)
+
+
+def test_an_oversized_manifest_is_human_approve(repo, capsys, monkeypatch):
+    monkeypatch.setattr(ld, "MAX_BYTES", 100)
+    _change(repo, lambda d: d.update(title="changed"))
+    _, out = _run(repo, capsys)
+    (m,) = out["manifests"]
+    assert m["tier"] == rt.HUMAN and "bytes" in m["changes"][0]["why"]
+
+
+@pytest.mark.parametrize("path", ["tools/schema_check.py", ".github/workflows/ci.yml"])
+def test_what_the_check_rests_on_is_governance(repo, capsys, path):
+    f = repo / path
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x\n")
+    _, out = _run(repo, capsys)
+    assert _by_path(out) == {path: rt.HUMAN}
+
+
 def test_the_schema_is_read_as_of_the_base(repo, capsys):
     """S2: a pull request that adds a key to the schema still has its use judged undefined."""
     schema = json.loads((repo / rt.SCHEMA).read_text())
@@ -576,6 +716,8 @@ def test_a_bad_base_is_a_usage_error(repo, capsys):
 
 
 def test_ci_base_takes_the_pull_requests_base(repo, capsys, monkeypatch):
+    shutil.copytree(ROOT / "tools", repo / "tools", ignore=shutil.ignore_patterns("tests"))
+    _commit(repo)  # the check's own tools are governance; keep them out of this diff
     base = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -583,12 +725,28 @@ def test_ci_base_takes_the_pull_requests_base(repo, capsys, monkeypatch):
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("HNX_PR_BASE", base)
     _change(repo, lambda d: d.update(title="changed"))
-    shutil.copytree(ROOT / "tools", repo / "tools", ignore=shutil.ignore_patterns("tests"))
     rc = mcli.main(["review-tier", "--root", str(repo), "--ci-base", "--json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and _by_path(out)["modules/external-collector/module.yml"] == rt.OWNER
     monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
     assert mcli.main(["review-tier", "--root", str(repo), "--ci-base"]) == 2
+
+
+def test_a_root_commit_compares_with_the_empty_tree(tmp_path, capsys, monkeypatch):
+    root = tmp_path / "solo"
+    shutil.copytree(EXAMPLES / "external-collector", root / "modules" / "external-collector")
+    (root / ".github").mkdir()
+    (root / ".github" / "CODEOWNERS").write_text("* @owner\n")
+    _git(root, "init", "-q")
+    _commit(root)
+    shutil.copytree(ROOT / "tools", root / "tools", ignore=shutil.ignore_patterns("tests"))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("HNX_PUSH_BEFORE", "0" * 40)
+    rc = mcli.main(["review-tier", "--root", str(root), "--ci-base", "--json"])
+    out = json.loads(capsys.readouterr().out)
+    got = _by_path(out)
+    assert got["modules/external-collector/module.yml"] == rt.HUMAN  # new against the empty tree
+    assert rc == 1  # the empty tree has no CODEOWNERS
 
 
 def test_the_step_summary_lists_each_path(repo, capsys, monkeypatch, tmp_path):
