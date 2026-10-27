@@ -161,9 +161,11 @@ with no schema, generator or check in any form):
 9. the loader: implemented (`homelabnext.modules.loader`, `hnx modules check|render`, in `make
    gates` and CI over the example lab): discovery with the overlay-shadowing refusal, schema
    validation before any rule, every rule with every input, uniqueness against the core's own
-   names, the supply chain, and the two-way check against a hand-written inventory (the draft
-   `platform/module_inventory` 1.0). Not done: running it at deploy time, gathering the inventory
-   from the hosts, recovery pairs, and the core's own units and agent keys;
+   names (its registry rows, MCP catalog ids, keyring agent keys, OCSF tables and notify pair
+   titles), the supply
+   chain, and the two-way check against a hand-written inventory (the draft
+   `platform/module_inventory` 1.0), recovery pairs included. Not done: running it at deploy time,
+   gathering the inventory from the hosts, and the core's own units, which have no source;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks.
 

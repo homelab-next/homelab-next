@@ -27,6 +27,9 @@ from .errors import LakeError, UnknownTable
 SCALARS = ("string", "long", "double", "boolean", "timestamp")
 LISTS = ("list<string>", "list<long>", "list<double>")
 SCHEMAS_ENV = paths.KIND_ENV["schemas"][0]  # HNX_SCHEMAS_DIR
+#: the lake namespace the core's own OCSF tables live in (``table:ocsf.<name>``); a module's
+#: tables live in its own (its id with ``-`` as ``_``), so no module may be named for this one
+CORE_NAMESPACE = "ocsf"
 
 
 @dataclass(frozen=True)

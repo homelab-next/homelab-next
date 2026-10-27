@@ -28,6 +28,8 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Protocol
 
+from homelabnext.notify.core_pairs import STATUS_ITEM
+
 from .mapping import Draft, clean_summary
 from .model import OBSERVED_EVENT, Observation, SourceSpec, iso, parse_iso
 from .scheduler import SourceResult
@@ -35,8 +37,7 @@ from .scheduler import SourceResult
 PREFIX = "status"
 _log = logging.getLogger(__name__)
 DEFAULT_HISTORY = 20
-PROBLEM_TITLE = "Status item needs attention"
-RECOVERY_TITLE = "Status item recovered"
+PROBLEM_TITLE, RECOVERY_TITLE = STATUS_ITEM
 
 
 class _Store(Protocol):

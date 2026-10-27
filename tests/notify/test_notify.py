@@ -97,6 +97,17 @@ def test_register_pair_validation(env):
         n.register_pair("", "x")
 
 
+def test_a_problem_title_holds_one_recovery(env):
+    n, sender, _ = env
+    n.register_pair("T", "T ok")
+    n.register_pair("T", "T ok")  # the same pair again (each run of a check) is fine
+    with pytest.raises(ValueError, match="already registered with recovery 'T ok'"):
+        n.register_pair("T", "something else")
+    assert n.report("k", "red", msg(title="T", key="k"))
+    assert n.report("k", "ok", msg(title="T", key="k"))
+    assert sender.sent[-1].title == "T ok"  # the first registrant's recovery, unchanged
+
+
 def test_state_survives_a_new_notifier_on_same_store(tmp_path):
     sender = FakeSender()
     path = tmp_path / "n.json"

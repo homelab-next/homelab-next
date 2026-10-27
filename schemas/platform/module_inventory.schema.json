@@ -3,7 +3,7 @@
   "$id": "https://schemas.example.internal/homelabnext/platform/module_inventory/1.0",
   "x-draft": "ADR-0027 (proposed): what runs on a site, for the loader's two-way check (follow-up 9); not frozen, may change before acceptance",
   "title": "Module inventory",
-  "description": "What runs on a site, by kind, for the module loader's two-way check (ADR-0027, proposed; docs/modules.md, 'What the loader checks'): every running name bound to a module id (<id> or <id>-..., a table as table:<id_>.<name>) must be declared by that module, which the site selects, and every declared name must run. A name bound to no module id is the core's and is not judged by this check. The deployer writes it from the hosts (unit names without the hnx- prefix and the .service/.timer suffix, service rows by registry name, MCP server ids, agent keys, lake tables). The rules are in homelabnext.modules.loader.running_problems.",
+  "description": "What runs on a site, by kind, for the module loader's two-way check (ADR-0027, proposed; docs/modules.md, 'What the loader checks'): every running name bound to a module id (<id> or <id>-..., a table as table:<id_>.<name>) must be declared by that module, which the site selects, and every declared name must run. A name bound to no module id is the core's and is not judged by this check. The deployer writes it from the hosts (unit names without the hnx- prefix and the .service/.timer suffix, service rows by registry name, MCP server ids, agent keys, lake tables). Optionally, the running notifier's recovery pairs (notify_pairs), each with the module it is bound to; a pair with no module is the core's. Without notify_pairs the pairs are not compared, and the loader says so. The rules are in homelabnext.modules.loader.running_problems.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -64,6 +64,34 @@
         "pattern": "^table:[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$(?!\\n)"
       },
       "description": "Lake tables that exist."
+    },
+    "notify_pairs": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "problem",
+          "recovery"
+        ],
+        "properties": {
+          "problem": {
+            "$ref": "#/$defs/title",
+            "description": "The problem title the notifier holds."
+          },
+          "recovery": {
+            "$ref": "#/$defs/title",
+            "description": "Its recovery title."
+          },
+          "module": {
+            "$ref": "#/$defs/name",
+            "description": "The module the pair was loaded from; absent for a pair of the core's."
+          }
+        }
+      },
+      "description": "The running notifier's recovery pairs (optional): each declared by its module, which the site selects, with the same recovery title, and every selected module's pair running."
     }
   },
   "$defs": {
@@ -71,6 +99,12 @@
       "type": "string",
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
     }
   }
 }
