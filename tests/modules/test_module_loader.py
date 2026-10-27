@@ -211,6 +211,28 @@ def test_a_problem_title_is_declared_once_across_the_selected_modules():
     ]
 
 
+def test_a_recovery_title_names_one_thing():
+    """A recovery is not another pair's problem or another pair's recovery: a recovery page
+    always says which alert cleared."""
+    tree, _ = examples()
+    m = tree.mods["publishing"]
+    m["contributes"]["notify_pairs"] = [
+        {"problem": "Publishing: blocked", "recovery": PAIR["problem"]},
+        {"problem": "Publishing: stale", "recovery": PAIR["recovery"]},
+    ]
+    got = [
+        str(p)
+        for p in ld.pair_problems({n: tree.mods[n] for n in ("external-collector", "publishing")})
+    ]
+    assert got == [
+        "publishing: notify pair 'Publishing: blocked': the recovery 'External data collector: "
+        "no new sessions' is a problem title",
+        "publishing: notify pair 'Publishing: stale': the recovery 'External data collector: "
+        "sessions arriving again' is also external-collector's for 'External data collector: "
+        "no new sessions'",
+    ]
+
+
 def test_a_running_pair_with_a_control_character_is_refused_by_the_schema():
     tree, _ = examples()
     inv = _pairs({**PAIR, "problem": "External data collector:\nno new sessions"})
@@ -546,7 +568,13 @@ def test_a_module_mcp_id_agent_key_table_or_namespace_that_is_the_core_s_is_refu
 def test_the_core_s_names_are_read_from_the_sources_it_already_has():
     core, problems = ld.core_names(
         {"services": {"lake-query": {"capability": "cap:lake-query"}}},
-        mcp=[("lake.yml", {"id": "lake"}), ("bad.yml", ["x"]), ("anon.yml", {"id": 3})],
+        mcp=[
+            ("lake.yml", {"id": "lake"}),
+            ("bad.yml", ["x"]),
+            ("anon.yml", {"id": 3}),
+            ("stem.yml", {"name": "no id: the file's stem"}),
+            ("other.yml", {"id": "elsewhere"}),
+        ],
         keyring={
             "principals": [
                 {"kind": "agent", "principal": "profile:reader"},
@@ -559,11 +587,13 @@ def test_the_core_s_names_are_read_from_the_sources_it_already_has():
         table_namespace="ocsf",
     )
     assert core.rows == {"lake-query": "cap:lake-query"}
-    assert core.mcp_servers == {"lake"} and core.agents == {"reader"}
+    # the id as the catalog's own loader takes it: the record's, else the file's stem
+    assert core.mcp_servers == {"lake", "stem", "elsewhere"} and core.agents == {"reader"}
     assert core.tables == {"table:ocsf.authentication"} and core.table_namespace == "ocsf"
     assert [str(p) for p in problems] == [
-        "registry: mcp/bad.yml: a record without a string id",
-        "registry: mcp/anon.yml: a record without a string id",
+        "registry: mcp/bad.yml: a record must be a mapping",
+        "registry: mcp/anon.yml: an id that is not a string",
+        "registry: mcp/other.yml: id elsewhere is not the file name",
         "registry: a keyring principal without a name",
     ]
 
@@ -592,13 +622,142 @@ def test_the_core_mcp_catalog_is_read_like_any_input(tmp_path):
     ]
 
 
+def test_another_record_like_file_in_the_mcp_catalog_is_named_not_skipped(tmp_path):
+    cat = tmp_path / "mcp"
+    cat.mkdir()
+    for name in ("a.yaml", "b.YML", "c.json", "d.Yml"):
+        (cat / name).write_text("id: x\n")
+    (cat / "README.md").write_text("notes\n")
+    recs, problems = ld.core_mcp_records(cat)
+    assert recs == []
+    assert [p.message for p in problems] == [
+        f"mcp/{n}: a record file is <id>.yml; this one is not read"
+        for n in ("a.yaml", "b.YML", "c.json", "d.Yml")
+    ]
+
+
+def test_an_oversized_mcp_record_or_a_crowded_catalog_is_refused(tmp_path, monkeypatch):
+    cat = tmp_path / "mcp"
+    cat.mkdir()
+    (cat / "big.yml").write_bytes(b"id: big\nx: '" + b"a" * ld.MAX_BYTES + b"'\n")
+    recs, problems = ld.core_mcp_records(cat)
+    assert recs == [] and [p.message for p in problems] == [
+        f"mcp/big.yml: over {ld.MAX_BYTES} bytes"
+    ]
+    for i in range(3):
+        (cat / f"r{i}.yml").write_text(f"id: r{i}\n")
+    monkeypatch.setattr(ld, "MAX_CATALOG_FILES", 3)
+    recs, problems = ld.core_mcp_records(cat)
+    assert recs == [] and [str(p) for p in problems] == [
+        "registry: the MCP catalog mcp/ holds over 3 entries"
+    ]
+
+
+def test_the_core_s_ocsf_tables_are_read_like_any_input(tmp_path):
+    names, problems = ld.core_table_names(ROOT / "schemas" / "ocsf")
+    from homelabnext.lake.tables import load_schemas
+
+    assert problems == [] and names == sorted(load_schemas(ROOT / "schemas" / "ocsf"))
+    d = tmp_path / "ocsf"
+    d.mkdir()
+    shutil.copy(ROOT / "schemas" / "ocsf" / "authentication.v1.json", d)
+    (d / "broken.v1.json").write_text("{")
+    os.mkfifo(d / "fifo.v1.json")
+    (d / "linked.v1.json").symlink_to(d / "authentication.v1.json")
+    names, problems = ld.core_table_names(d)
+    assert names == ["authentication"]
+    assert [p.message.split(": ")[0] for p in problems] == [
+        "ocsf/broken.v1.json",
+        "ocsf/fifo.v1.json",
+        "ocsf/linked.v1.json",
+    ]
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert [str(p) for p in ld.core_table_names(empty)[1]] == [
+        "registry: the OCSF tables: no subset (*.v*.json)"
+    ]
+    linked = tmp_path / "linked-ocsf"
+    linked.symlink_to(d)
+    assert [str(p) for p in ld.core_table_names(linked)[1]] == [
+        "registry: the OCSF tables linked-ocsf/ is not a directory"
+    ]
+
+
+CORE_WITH_PAIRS = ld.CoreNames(
+    rows=CORE.rows, pairs={"Core thing broke": "Core thing fixed", "Core other": "Core fine"}
+)
+
+
+@pytest.mark.parametrize(
+    ("pair", "which"),
+    [
+        ({"problem": "Core thing broke", "recovery": "External: fixed"}, "problem"),
+        ({"problem": "External: broke", "recovery": "Core thing fixed"}, "recovery"),
+        ({"problem": "Core fine", "recovery": "External: fine"}, "problem"),
+    ],
+)
+def test_a_module_pair_may_not_take_a_core_title(pair, which):
+    """The notifier keys pairs by problem title: a module taking a core title would change the
+    recovery the core's own alert clears with (or name a core recovery as its own)."""
+    tree, _ = examples()
+    tree.mods["external-collector"]["contributes"]["notify_pairs"] = [pair]
+    got = messages(
+        ld.check(tree, slots=SLOTS, roles=ROLES, in_tree_roots=(EXAMPLES,), core=CORE_WITH_PAIRS)
+    )
+    assert (
+        f"external-collector: notify pair {pair['problem']!r}: its {which} title is a core title"
+        in got
+    )
+
+
+def test_the_cli_refuses_a_module_pair_with_one_of_the_core_s_own_titles(capsys, tmp_path):
+    from homelabnext.notify.core_pairs import STATUS_ITEM
+
+    fixtures = tmp_path / "root"
+    shutil.copytree(ROOT / "examples" / "modules", fixtures / "examples" / "modules")
+    for name in ("model_roles.json", "services.yml"):
+        shutil.copy(ROOT / "examples" / name, fixtures / "examples" / name)
+    shutil.copytree(ROOT / "examples" / "keyring", fixtures / "examples" / "keyring")
+    (fixtures / "modules").mkdir()
+    m = fixtures / "examples" / "modules" / "publishing" / "module.yml"
+    doc = ld.load_yaml(m)
+    doc["contributes"]["notify_pairs"] = [{"problem": STATUS_ITEM[0], "recovery": "Ours"}]
+    m.write_text(yaml.safe_dump(doc))
+    code = mcli.main(["check", "--root", str(fixtures), "--examples", "--json"])
+    got = json.loads(capsys.readouterr().out)["problems"]
+    assert code == 1
+    assert f"publishing: notify pair {STATUS_ITEM[0]!r}: its problem title is a core title" in got
+
+
+def test_the_title_pattern_is_one_for_manifest_and_inventory():
+    from homelabnext.schemas.module_manifest import TITLE_PATTERN
+
+    inv = json.loads((ROOT / "schemas/platform/module_inventory.schema.json").read_text())
+    man = json.loads((ROOT / "schemas/platform/module.schema.json").read_text())
+    assert inv["$defs"]["title"]["pattern"] == TITLE_PATTERN
+    for k in ("problem", "recovery"):
+        assert man["$defs"]["notify_pair"]["properties"][k]["pattern"] == TITLE_PATTERN
+
+
+@pytest.mark.parametrize(
+    "bad", ["no\u00a0break", "bidi\u202eflip", "zero\u200bwidth", "line\nfeed", "c1\u0085"]
+)
+def test_a_notify_title_that_could_pass_for_another_is_refused(bad):
+    import re
+
+    from homelabnext.schemas.module_manifest import TITLE_PATTERN
+
+    assert not re.search(TITLE_PATTERN, bad)
+    assert re.search(TITLE_PATTERN, "Publishing: the gate passes every item again")
+
+
 def test_the_cli_reads_the_core_s_names_from_the_registry_catalog_keyring_and_tables(
     capsys, tmp_path
 ):
     services = tmp_path / "services.yml"
     services.write_text("services: {}\n")
     (tmp_path / "mcp").mkdir()
-    (tmp_path / "mcp" / "probe.yml").write_text("id: external-collector-probe\n")
+    (tmp_path / "mcp" / "external-collector-probe.yml").write_text("id: external-collector-probe\n")
     keyring = tmp_path / "keyring.json"
     keyring.write_text(
         json.dumps(
@@ -620,6 +779,76 @@ def test_without_a_catalog_or_keyring_the_cli_names_what_it_did_not_compare(caps
     assert code == 0
     assert "the core's MCP server ids were not compared" in out.out
     assert "note: the keyring is the repository's example" in out.out
+
+
+def _overlay(tmp_path, mcp=False, keyring=False):
+    lab = tmp_path / "overlay" / "lab"
+    lab.mkdir(parents=True)
+    if mcp:
+        (lab / "mcp").mkdir()
+    if keyring:
+        (lab / "keyring").mkdir()
+        (lab / "keyring" / "keyring.json").write_text('{"principals": []}')
+    return tmp_path / "overlay"
+
+
+def test_an_overlay_without_its_own_catalog_or_keyring_is_a_problem_not_the_examples(
+    capsys, tmp_path
+):
+    """The repository's example keyring and catalog would answer for a lab they do not
+    describe: with --overlay, a missing source is a problem, never a fallback."""
+    code, out = run(capsys, "--overlay", str(_overlay(tmp_path)), "--json")
+    assert code == 1
+    doc = json.loads(out.out)
+    assert [p for p in doc["problems"] if p.startswith("registry: the overlay has no")] == [
+        "registry: the overlay has no MCP catalog ("
+        + str(tmp_path / "overlay" / "lab" / "mcp")
+        + "): give --mcp-catalog, or the core's MCP server ids cannot be compared",
+        "registry: the overlay has no keyring (lab/keyring/keyring.json): give --keyring, or "
+        "the core's agent keys cannot be compared",
+    ]
+    assert not [n for n in doc["notes"] if "keyring is the repository's example" in n]
+    assert "note: " in out.err  # JSON on stdout, what was not checked also on stderr
+
+
+def test_an_overlay_with_its_own_catalog_and_keyring_uses_them(capsys, tmp_path):
+    code, out = run(capsys, "--overlay", str(_overlay(tmp_path, mcp=True, keyring=True)), "--json")
+    doc = json.loads(out.out)
+    assert code == 0
+    assert not [p for p in doc["problems"] if p.startswith("registry:")]
+    assert not [n for n in doc["notes"] if "keyring" in n or "MCP catalog" in n]
+
+
+def test_an_overlay_may_name_its_catalog_and_keyring_explicitly(capsys, tmp_path):
+    cat = tmp_path / "elsewhere-mcp"
+    cat.mkdir()
+    keyring = tmp_path / "keyring.json"
+    keyring.write_text('{"principals": []}')
+    code, out = run(
+        capsys,
+        "--overlay",
+        str(_overlay(tmp_path)),
+        "--mcp-catalog",
+        str(cat),
+        "--keyring",
+        str(keyring),
+        "--json",
+    )
+    assert code == 0 and not json.loads(out.out)["problems"]
+
+
+def test_a_keyring_that_is_a_fifo_a_directory_or_oversized_cannot_be_read(capsys, tmp_path):
+    fifo = tmp_path / "fifo.json"
+    os.mkfifo(fifo)
+    big = tmp_path / "big.json"
+    big.write_bytes(b'{"principals": [], "x": "' + b"a" * ld.MAX_BYTES + b'"}')
+    for path, why in (
+        (fifo, "not a regular file"),
+        (tmp_path, "not a regular file"),
+        (big, "over"),
+    ):
+        code, out = run(capsys, "--keyring", str(path))
+        assert code == 2 and why in out.err, (path, out.err)
 
 
 def test_a_provider_instance_that_takes_another_core_service_name_is_refused():
@@ -729,7 +958,8 @@ def test_the_cli_exits_2_on_an_unreadable_input(capsys, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "flag", ["--overlay", "--services", "--keyring", "--site", "--running", "--roles"]
+    "flag",
+    ["--overlay", "--services", "--keyring", "--mcp-catalog", "--site", "--running", "--roles"],
 )
 def test_a_path_given_that_does_not_exist_is_a_usage_error(capsys, tmp_path, flag):
     code, out = run(capsys, flag, str(tmp_path / "nonexistent"))

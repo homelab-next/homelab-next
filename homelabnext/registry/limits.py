@@ -22,11 +22,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from homelabnext.notify.core_pairs import MODEL_CALL_BUDGET
+
 from .models import ChatResult, ModelError, RoleTable
 
 KEY_PREFIX = "model-budget/"
-PROBLEM = "Model call budget exceeded"
-RECOVERY = "Model call budget back within limits"
+PROBLEM, RECOVERY = MODEL_CALL_BUDGET
 
 
 class Throttled(ModelError):

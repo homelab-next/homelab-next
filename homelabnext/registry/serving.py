@@ -11,15 +11,16 @@ when it clears, never on every run.  Every problem title is registered with its 
 from __future__ import annotations
 
 from homelabnext.notify import Message, Notifier
+from homelabnext.notify.core_pairs import SERVING_ERROR, SERVING_MISMATCH, SERVING_UNREACHABLE
 
 from .models import ModelResolver, ProbeResult, Transport, probe_all
 
 KEY_PREFIX = "model-serving/"
 #: probe status -> (problem title, recovery title, level)
 PAIRS: dict[str, tuple[str, str, str]] = {
-    "mismatch": ("Model serving config mismatch", "Model serving config matches", "crit"),
-    "unreachable": ("Model backend unreachable", "Model backend reachable", "warn"),
-    "error": ("Model probe failed", "Model probe recovered", "warn"),
+    "mismatch": (*SERVING_MISMATCH, "crit"),
+    "unreachable": (*SERVING_UNREACHABLE, "warn"),
+    "error": (*SERVING_ERROR, "warn"),
 }
 
 
@@ -35,7 +36,7 @@ def report(results: list[ProbeResult], notifier: Notifier, *, topic: str | None 
     for r in results:
         key = KEY_PREFIX + r.role
         if r.ok:
-            msg = Message(key, "Model serving config matches", f"mdl:{r.role} ok", topic=topic)
+            msg = Message(key, SERVING_MISMATCH[1], f"mdl:{r.role} ok", topic=topic)
             sent += notifier.report(key, "ok", msg)
             continue
         title, _, level = PAIRS.get(r.status, PAIRS["error"])

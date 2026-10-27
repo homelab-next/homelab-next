@@ -885,8 +885,8 @@ scope:
 ## What the loader checks
 
 `homelabnext/modules/loader.py` (`hnx modules check [--overlay DIR] [--examples] [--site FILE]
-[--running FILE] [--keyring FILE] [--json]`; exit 0 clean, 1 problems, 2 a path that does not exist or an input
-that cannot be read, 100 an internal error) discovers `<id>/module.yml` under the public
+[--running FILE] [--keyring FILE] [--mcp-catalog DIR] [--json]`; exit 0 clean, 1 problems, 2 a
+path that does not exist or an input that cannot be read, 100 an internal error) discovers `<id>/module.yml` under the public
 `modules/`, the fictional `examples/modules/` (`--examples`, a fixture root whose modules may omit
 `roles/` and `playbooks/`; the report names the modules the exemption applied to) and an
 overlay's `lab/modules/`. It refuses a manifest that cannot be read, a module directory or
@@ -938,13 +938,24 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    is one of the core's own names**, and, per site, no provider instance named like a core service
    row whose capability it does not fill. The core's names are read from sources it already has,
    never from a list kept for this check: the reserved ids, the core registry's service rows
-   (`services.yml`), the ids of the core MCP catalog beside it (`mcp/`), the agent keys of the
-   keyring's agent principals (`profile:<key>`, the generated map of every principal; `--keyring`,
-   else the overlay's `lab/keyring/keyring.json`, else the example's, said in a note) and the
+   (`services.yml`), the ids of the core MCP catalog (each record's `id`, else its file's stem, as
+   the catalog's own loader takes it; an id that is not its file name, a record that is not a
+   mapping, and a record-like file that is not `<id>.yml` are `registry` problems), the agent keys
+   of the keyring's agent principals (`profile:<key>`, the generated map of every principal), the
    core's OCSF tables (`schemas/ocsf`) in their lake namespace (`ocsf`, which no module's own
-   namespace may be). A source that is absent is a note; one that is malformed is a `registry`
-   problem. The core's own units have no source: no fleet_units spec of the core's is in the
-   repository, so they are not compared (a module's units carry its id, which no core name is).
+   namespace may be), and the core's own notify pairs (`homelabnext.notify.core_pairs`, the one
+   list the core registers its pairs from: no module may declare one of their problem or recovery
+   titles, since the notifier keys pairs by problem title and a module taking one would change
+   how the core's alert clears). With `--overlay`, the catalog (`lab/mcp/`) and the keyring
+   (`lab/keyring/keyring.json`) are the overlay's: one that is missing is a `registry` problem
+   unless it is given (`--mcp-catalog`, `--keyring`), never the repository's examples answering
+   for a lab they do not describe. Without an overlay, the catalog beside the core registry
+   (`mcp/`) and the example keyring are used, each said in a note, and a missing one is a note.
+   The catalogs are read like any other input, at most 1,000 entries each. Exact names only: a
+   lookalike with a core name as its prefix (`<core name>-tools`) is a module's own name, as a
+   service row's is. The core's own units have no source: no fleet_units spec of the core's is in
+   the repository, so they are not compared (a module's units carry its id, which no core name
+   is).
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
    values are declared keys, carry no site address, and a secret value is the module's own or
@@ -976,8 +987,13 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    the site selects, with the same recovery title; every selected module's pair runs; and the
    notifier holds one pair per problem title, so a title runs once. Without `notify_pairs` the
    pairs are not compared, and the report says so. Per site, a problem title is declared once
-   across the selected modules (the notifier keys its pairs by it) and its recovery is another
-   title. The inventory is written by hand: nothing gathers it from the hosts.
+   across the selected modules (the notifier keys its pairs by it, and `register_pair` refuses
+   a second registration of a title with another recovery), and every title names one thing: a
+   recovery is not its own problem's title, another pair's problem title or another pair's
+   recovery. A title is one line of printable text without the characters that make two titles
+   look alike (controls, no-break and other spaces, zero-width and bidirectional marks), in the
+   manifest and the inventory alike. The inventory is written by hand: nothing gathers it from
+   the hosts.
 
 ## How a swap works, end to end
 
@@ -1300,7 +1316,8 @@ listed as deferred.
 9. **The loader**: implemented (see [What the loader checks](#what-the-loader-checks)):
    discovery with the overlay-shadowing refusal, schema validation first, every rule with every
    input, uniqueness against the core's own names (reserved ids, registry service rows, the core
-   MCP catalog's ids, the keyring's agent keys and the core's OCSF tables and their namespace),
+   MCP catalog's ids, the keyring's agent keys, the core's OCSF tables and their namespace, and
+   the core's notify pair titles),
    the supply chain, and the two-way check against a hand-written inventory, recovery pairs
    included; `hnx modules check|render`, run over the example lab in `make gates` and CI. Not
    done: nothing runs it at deploy time, nothing gathers the inventory from the hosts, and the

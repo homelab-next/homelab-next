@@ -7,7 +7,9 @@ Rules the Notifier enforces (each exists because the opposite shipped once and h
   The same problem state reported every minute is one page, not sixty.
 * **Every alert has a registered recovery.**  A problem is sent only if its ``title`` was registered
   with :meth:`Notifier.register_pair`.  An alert that can never clear is refused at the source
-  (:class:`UnregisteredProblem`) instead of paging forever.
+  (:class:`UnregisteredProblem`) instead of paging forever.  A problem title holds one recovery:
+  registering it again with another recovery is refused (the core's own titles are
+  :mod:`homelabnext.notify.core_pairs`).
 * **Recovery is automatic.**  Reporting state ``"ok"`` for a key that is in a problem state sends
   that title's registered recovery message once.
 * **Rate limited.**  A global budget (``max_sends`` per ``window_s``) and a per-key minimum interval.
@@ -109,6 +111,13 @@ class Notifier:
             raise ValueError("both titles are required")
         if problem_title == recovery_title:
             raise ValueError("recovery title must differ from the problem title")
+        # the pairs are keyed by problem title: a second registration with another recovery
+        # would change how the first registrant's alert clears, so only the same pair repeats
+        held = self._pairs.get(problem_title)
+        if held is not None and held != recovery_title:
+            raise ValueError(
+                f"problem title {problem_title!r} is already registered with recovery {held!r}"
+            )
         self._pairs[problem_title] = recovery_title
 
     def is_registered(self, problem_title: str) -> bool:

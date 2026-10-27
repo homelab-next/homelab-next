@@ -105,6 +105,20 @@ def ref(name: str, desc: str | None = None) -> dict[str, Any]:
     return d
 
 
+#: a notify title: one line of printable text, without the characters that make two titles look
+#: alike (C0 and C1 controls, no-break and other spaces, zero-width and bidirectional marks, the
+#: byte-order mark); the inventory's titles (platform/module_inventory) take the same pattern.
+#: ``$(?!\n)``: a Python ``$`` also matches before a final newline
+TITLE_PATTERN = (
+    "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f"
+    "\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
+)
+
+
+def title(desc: str) -> dict[str, Any]:
+    return {**text(160, desc), "pattern": TITLE_PATTERN}
+
+
 def text(maxlen: int = 300, desc: str | None = None) -> dict[str, Any]:
     d: dict[str, Any] = {"type": "string", "minLength": 1, "maxLength": maxlen}
     if desc:
@@ -559,8 +573,8 @@ def _defs() -> dict[str, Any]:
         ),
         "notify_pair": obj(
             {
-                "problem": text(160, "The problem title."),
-                "recovery": text(160, "Its recovery title."),
+                "problem": title("The problem title."),
+                "recovery": title("Its recovery title."),
             },
             ["problem", "recovery"],
             "A recovery pair. The notifier loads pairs from manifests: this is their only source.",

@@ -104,7 +104,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 160,
-      "pattern": "^[^\\u0000-\\u001f\\u007f]+$(?!\\n)"
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
     }
   }
 }
