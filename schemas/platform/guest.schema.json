@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.5",
+  "$id": "https://schemas.example.internal/homelabnext/platform/guest/1.6",
   "title": "Guest (compute) descriptor",
   "description": "One VM, container or physical host, described in vendor-neutral values. Zones are referenced by id (a site model owns them); capabilities by cap: id. Generators render Terraform, libvirt, cloud-init, an Ansible inventory, registry hosts and backup jobs from a directory of these files.",
   "type": "object",
@@ -146,6 +146,25 @@
             {"const": "inherit"},
             {"type": "string", "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"}
           ]
+        },
+        "extra_addresses": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "(1.6) Other addresses this guest sends from, besides network.ip: a second NIC, a macvlan or bridge address its containers use, a unique-local IPv6 address. The log pipeline's runtime table labels each one like network.ip (docs/log-pipeline.md). Nothing is configured from them. Validation refuses a non-canonical form, an IPv4-mapped or embedded IPv6 form, a loopback, link-local, multicast or metadata address; an IPv4 address outside the guest's own zone subnet (except a zone-less overlay range such as a tailnet's) or inside another zone's; any IPv6 address but a unique-local or documentation one (the site model has no IPv6 prefix per zone, so a global or SLAAC address cannot be checked and is refused); a zone gateway, a gateway a guest names, a DHCP pool, an address the site's DNS names for something else, and any address another guest (or this one) already names.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["address", "why"],
+            "properties": {
+              "address": {
+                "type": "string",
+                "maxLength": 39,
+                "pattern": "^(?:(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|[0-9a-f]{0,4}:[0-9a-f:]{1,38})$",
+                "description": "A bare IPv4 address, or an IPv6 address in its compressed lower-case form; no prefix, port or zone id."
+              },
+              "why": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "\\S", "description": "What sends from this address (not only white space)."}
+            }
+          }
         },
         "bridge": {"type": "string", "pattern": "^(?:default|[a-z][a-z0-9_.-]{0,14})$", "default": "default"},
         "vlan_tag_mode": {"enum": ["in_bridge", "per_vlan_bridge"], "default": "in_bridge"},

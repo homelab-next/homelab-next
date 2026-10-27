@@ -13,7 +13,14 @@ resources:
     - {name: models, size_gb: 200, pool: fast, format: qcow2}
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
-network: {zone: compute, ip: 192.0.2.140, vlan_tag_mode: per_vlan_bridge}
+network:
+  zone: compute
+  ip: 192.0.2.140
+  vlan_tag_mode: per_vlan_bridge
+  # what else it sends from, so the log pipeline labels those events too (docs/log-pipeline.md)
+  extra_addresses:
+    - {address: "192.0.2.150", why: A container on a macvlan interface sends from it.}
+    - {address: "2001:db8:0:82::8c", why: The IPv6 address its traffic to the lab leaves by.}
 firewall_rules:
   policy_out: DROP
   inbound_allow:

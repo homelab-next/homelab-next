@@ -219,8 +219,41 @@ def test_committed_example_table_matches_the_example_guests():
 def test_example_table_labels_the_model_runtime_and_nothing_else():
     table = RuntimeTable.load(EXAMPLE)
     models = {a for a, v in table.values.items() if v == "model"}
-    assert models == {"192.0.2.140"}
+    # network.ip and its two extra addresses
+    assert models == {"192.0.2.140", "192.0.2.150", "2001:db8:0:82::8c"}
     assert set(table.values.values()) == {"model", "none"}
+
+
+def test_a_peer_seen_through_nat64_is_not_found():
+    """A known limit (docs/log-pipeline.md): the table folds IPv4-mapped peers only, so an extra
+    IPv4 address a collector sees under NAT64's well-known prefix (RFC 6052) is unlabelled."""
+    nat64 = str(ipaddress.IPv6Address(0x64_FF9B << 96 | int(ipaddress.IPv4Address("192.0.2.150"))))
+    table = RuntimeTable.load(EXAMPLE)
+    assert canonical_address(nat64) == nat64 and nat64 not in table.values
+    out = enrich({"labels": {LABEL: "none"}}, nat64, table)
+    assert LABEL not in (out.get("labels") or {})
+    # the same address mapped, as a dual-stack listener reports it, is found
+    mapped = str(ipaddress.IPv6Address(0xFFFF << 32 | int(ipaddress.IPv4Address("192.0.2.150"))))
+    assert enrich({}, mapped, table)["labels"][LABEL] == "model"
+
+
+def test_two_guests_claiming_one_extra_address_stop_the_render():
+    """Validation refuses it first (tests/compute/test_extra_addresses.py); the generator's own
+    refusal is the second guard, for a fleet that skipped validation."""
+    import dataclasses
+
+    from homelabnext.compute.model import ComputeError, Guest
+
+    fleet = _example_fleet()
+    guests = []
+    for g in fleet.guests:
+        if g.id == "guest:ops-core":
+            raw = json.loads(json.dumps(g.raw))
+            raw["network"]["extra_addresses"] = [{"address": "192.0.2.150", "why": "a copy"}]
+            g = Guest(raw, g.source)
+        guests.append(g)
+    with pytest.raises(ComputeError, match=r"runtime-labels: .*192\.0\.2\.150"):
+        render(dataclasses.replace(fleet, guests=tuple(guests)), "runtime-labels")
 
 
 @pytest.mark.parametrize("bad", ["192.0.2.014", "192.0.2.140.", "192.0.2.0/24", "2001:db8::5"])

@@ -46,9 +46,9 @@ reads, so it passes through unchanged rather than failing the batch it came in.
 hnx guests render <guests> --site <site> --target runtime-labels --out <dir>
 ```
 
-writes `runtime-labels.json` (`homelabnext.logpipeline.runtime_labels/v1`): every guest's address
-with `model` (it is a model runtime by capability or inventory group, the same test validation
-uses for default-deny egress) or `none`, and the guest and capability for a reader. Addresses are
+writes `runtime-labels.json` (`homelabnext.logpipeline.runtime_labels/v1`): every address of every
+guest (`network.ip`, and each of its `network.extra_addresses`, guest 1.6) with `model` (it is a
+model runtime by capability or inventory group, the same test validation uses for default-deny egress) or `none`, and the guest and capability for a reader. Addresses are
 canonical (IPv6 compressed and lower case) and ordered; two guests on one address is an error.
 `RuntimeTable.load` refuses any other shape, value or key. A reload replaces the table, so a guest
 that stops being a model runtime stops being labelled one.
@@ -105,13 +105,27 @@ example table and then the rule. They show that a self-set label changes nothing
   runs no model are the same: silent. That is deliberate (labelling an unknown source `model`
   would let anything unlisted raise the alarm, and the event's own word is not evidence), but it
   fails open for a runtime seen from an address the table lacks.
-- **One address per guest.** The guest model has one IPv4 address per guest (the guest schema
-  refuses anything else). A runtime's second interface, an IPv6 or SLAAC address, a container's
-  NAT address, or a collector behind a proxy that hides its peers all give an address the table
-  does not hold, so those events are unlabelled and the rules stay silent; behind NAT the
-  collector may even see the gateway's address. A provider SHOULD count the events it leaves
-  unlabelled, per collector, so a rise is visible; that metric, and more than one address per
-  guest in the model, are follow-ups.
+- **Only the addresses the guest model names.** A guest's `network.ip` and its
+  `network.extra_addresses` (guest 1.6: a second interface, a macvlan or bridge address its
+  containers use, a unique-local IPv6 address, each with a `why`) are labelled alike, so a
+  runtime that sends from any address written there is still a runtime. Validation holds each
+  extra address to one that names this guest and no other wherever a collector sees it: canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, a unique-local or documentation address only; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not one any guest already names.
+- **IPv6 is checked by range only.** The site model gives a zone no IPv6 prefix, so nothing
+  says which guest owns an IPv6 address: a global one (a SLAAC address included) is refused, and
+  a unique-local or documentation one is accepted with no ownership check beyond "no other guest
+  names it". Review an IPv6 extra address as you would a new `network.ip`.
+- **First come, first named.** Two guests naming one address is refused on whichever sorts
+  second, and nothing ties an extra address to the guest's owner: review a guest file that adds
+  one (CODEOWNERS) the way you review a change of `network.ip`, since claiming an address labels
+  everything sent from it.
+- **What stays unlabelled:** an address nobody wrote down; a DHCP lease or an IPv6 privacy
+  address that changes (pin it, or it cannot be listed); a NAT or proxy that several guests leave
+  by, which the collector sees for all of them and which therefore cannot name one; a collector
+  behind a proxy that hides its peers; and a peer the collector sees through NAT64 (an IPv4
+  address under the RFC 6052 well-known prefix): the table folds only IPv4-mapped forms
+  (`::ffff:a.b.c.d`), so a translated peer is not found and stays unlabelled
+  (`tests/logpipeline/test_runtime_labels.py` records it). A provider SHOULD count the
+  events it leaves unlabelled, per collector, so a rise is visible; that metric is a follow-up.
 - The example provider's adapter (`hnx_modules.example_log_pipeline.log_pipeline:make`) is part
   of the fictional product. The reference behaviour is the fake in
   `conformance/fakes/log_pipeline.py`, which applies the library rule.

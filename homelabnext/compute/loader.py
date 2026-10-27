@@ -246,6 +246,7 @@ def load_fleet(
     flows: tuple[ZoneFlow, ...] = (),
     power: Mapping[str, Any] | None = None,
     deploy: Mapping[str, Any] | None = None,
+    site_addresses: Mapping[str, tuple[str, ...]] | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
 
@@ -256,7 +257,9 @@ def load_fleet(
     follow them (``tailscale-acl``).  ``power``: the site's power facts
     (:func:`homelabnext.compute.zones.site_power`); with them, every hypervisor and physical
     host must say what feeds it.  ``deploy``: the deploy's tailnet access
-    (:func:`homelabnext.compute.zones.site_deploy`), for ``tailscale-acl``."""
+    (:func:`homelabnext.compute.zones.site_deploy`), for ``tailscale-acl``.  ``site_addresses``:
+    the addresses the site names something other than a guest
+    (:func:`homelabnext.compute.zones.site_addresses`), which no extra address may claim."""
     from .validate import validate
 
     d = Path(directory)
@@ -284,6 +287,7 @@ def load_fleet(
         flows=tuple(flows),
         power=power,
         deploy=deploy,
+        site_addresses=dict(site_addresses or {}),
     )
     problems += validate(fleet, require_baselines=require_baselines)
     if problems:
