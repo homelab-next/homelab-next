@@ -115,6 +115,15 @@ BASE ?= origin/main
 modules-review-tier:
 	$(PY) -m homelabnext.cli modules review-tier --base $(BASE)
 
+# a swap record 1.2 against BASE (default origin/main) and the working tree: the record, the
+# manifests and the site it starts from, with the model evidence read from the repository (the
+# role table at BASE and in the working tree, the model store, the evaluation reports). Not part
+# of gates: the tree holds no swap record of its own to check (the schema examples are fictional)
+.PHONY: swap-check
+swap-check:
+	@test -n "$(RECORD)" -a -n "$(SITE)" || { echo "usage: make swap-check RECORD=<swap record> SITE=<site> [BASE=<rev>]"; exit 2; }
+	$(PY) -m homelabnext.cli modules swap-check $(RECORD) --site $(SITE) --base $(BASE) --examples
+
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it
 .PHONY: codemode-golden-report

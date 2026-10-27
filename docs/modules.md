@@ -1060,10 +1060,25 @@ and `meaning_changes` is recorded, never checked.
   `inference` slot without it is refused, legs or none, because only the two tables show which
   roles it rebinds; so is a record with legs and no evidence. A malformed leg is refused by name.
 
-  The evidence is the caller's and trusted as given. Nothing yet reads the two role tables from the
-  commits the swap moves between: a loader that does is a follow-up. A report's `live` is its claim,
-  checked for shape and pins, not for provenance. Nothing ties the new binding's `svc:` backend to
-  the incoming provider module either (also a follow-up).
+  The new binding's backend is the instance the leg moves: `svc:<instance>`, the service row the
+  incoming provider's row is renamed to at bind time (see the naming table). A leg that rebinds a
+  model onto any other backend is refused, since the swap does not install it there.
+
+  **`hnx modules swap-check RECORD --site FILE --base REV | --ci-base`** builds the evidence from
+  the repository rather than taking it from a caller (`homelabnext.modules.swap_evidence`). It
+  reads the role table before from the base commit (`git`; absent there, a symbolic link there, or
+  over the loader's size cap: refused) and the table after from the working tree at the same path
+  (`--roles`, default `examples/model_roles.json`; read like every loader input: no symbolic link
+  on its path, a regular file, capped, opened without blocking). The model store comes from
+  `examples/model-serving/model_store.json` and the candidate reports from
+  `examples/model_roles.eval.json` and `build/models/eval.json` (plus each `--report`; a leg pins
+  the one it means by digest). Live evidence is required: that is policy, never the record's. The
+  record validates against `platform/module_swap`, then `module_swap_problems` runs against the
+  discovered manifests (`--examples`, `--overlay`) and the site. An input it cannot read is exit 2,
+  never "no change". `make swap-check RECORD=... SITE=... [BASE=...]` runs it; it is not part of
+  `make gates`, because the tree holds no swap record of its own to check. A library caller that
+  assembles its own `ModelEvidence` is still trusted with it, and a report's `live` is its claim,
+  checked for shape and pins, not for provenance.
 
 `tests/schemas/test_module_swap_model_roles.py` drives one inference swap through these rules. It
 rebinds `mdl:fast-classifier` from the shipped example's binding to a model-store entry and refuses:
@@ -1072,6 +1087,7 @@ rebinds `mdl:fast-classifier` from the shipped example's binding to a model-stor
 - a fake canary entry where live is required, and a fake entry for the new binding in an otherwise
   live report;
 - a changed role with no leg, a leg for an unchanged role, and a second leg for one role;
+- a new binding on a backend the swap does not install;
 - an unknown role, a malformed leg, and an unresolvable binding;
 - an inference swap with no evidence.
 

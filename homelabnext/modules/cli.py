@@ -22,6 +22,14 @@ checks").
     anything it cannot read; owner otherwise.  The approval is the pull request's code-owner
     review, so it fails when a human-approve change has no valid owner in CODEOWNERS as of the
     base.  ``--ci-base`` picks the base like ``tools/schema_check.py --ci-base``.
+``hnx modules swap-check RECORD --site FILE --base REV | --ci-base [--examples] [--overlay DIR]
+[--roles REL] [--report FILE ...] [--json]``
+    a swap record 1.2 end to end: it validates against ``platform/module_swap``, then
+    :func:`homelabnext.modules.swap.module_swap_problems` against the discovered manifests and
+    the site it starts from, with the model evidence read from the repository
+    (:mod:`homelabnext.modules.swap_evidence`): the role table before from the base commit, the
+    one after from the working tree, the model store and the evaluation reports from where the
+    repository keeps them (plus each ``--report``), and live evidence required.
 
 Defaults follow the overlay layout: with ``--overlay DIR`` the site is ``DIR/lab/modules.yml``,
 the lock ``DIR/lab/modules.lock``, the review policy ``DIR/lab/review-policy.yml``, the role table
@@ -112,10 +120,30 @@ def _parser() -> argparse.ArgumentParser:
         "HNX_PR_BASE, HNX_PUSH_BEFORE)",
     )
     t.add_argument("--json", action="store_true")
+    w = sub.add_parser("swap-check", help="a swap record against the repository's evidence")
+    w.add_argument("record", type=Path, help="the swap record (platform/module_swap, JSON or YAML)")
+    w.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
+    w.add_argument("--overlay", type=Path, help="a private overlay checkout (lab/modules/)")
+    w.add_argument(
+        "--examples", action="store_true", help="also load the fictional examples/modules/"
+    )
+    w.add_argument("--site", type=Path, required=True, help="the selection the swap starts from")
+    w.add_argument(
+        "--roles", default=None, help="the role table, relative to the root (read at both ends)"
+    )
+    w.add_argument(
+        "--report", type=Path, action="append", default=[], help="another evaluation report"
+    )
+    which = w.add_mutually_exclusive_group(required=True)
+    which.add_argument("--base", help="the commit the swap starts from")
+    which.add_argument(
+        "--ci-base", action="store_true", help="pick the base like tools/schema_check.py --ci-base"
+    )
+    w.add_argument("--json", action="store_true")
     return ap
 
 
-def _ci_base(root: Path) -> str:
+def _ci_base(root: Path, prog: str = "review-tier") -> str:
     """The base CI compares with: tools/schema_check.py's rule (a pull request's base; a push's
     previous tip, else ``HEAD^``; a root commit, the empty tree)."""
     import importlib.util
@@ -141,7 +169,7 @@ def _ci_base(root: Path) -> str:
         )
     except ValueError as exc:
         raise ld.LoaderError(f"--ci-base: {exc}") from None
-    print(f"hnx modules review-tier: base {base or 'the empty tree'} ({why})", file=sys.stderr)
+    print(f"hnx modules {prog}: base {base or 'the empty tree'} ({why})", file=sys.stderr)
     return base or rt.EMPTY_TREE
 
 
@@ -195,9 +223,63 @@ def _review_tier(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _swap_check(args: argparse.Namespace) -> int:
+    """The record's problems with the repository's evidence: 1 when it does not hold, 2 when an
+    input (the record, the role table at either end, the store, a report) cannot be read."""
+    from homelabnext.modules import swap as ms
+    from homelabnext.modules import swap_evidence as se
+
+    root = _root(args.root)
+    base = _ci_base(root, "swap-check") if args.ci_base else args.base
+    if not base or not base.strip():
+        raise ld.LoaderError("--base needs a commit (an empty value would skip the check)")
+    _given(args.record, "record")
+    if args.overlay is not None and not args.overlay.is_dir():
+        raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
+    if args.record.is_symlink():
+        raise ld.LoaderError(f"record {args.record}: a symbolic link")
+    budget = ld.Budget()
+    record = _read(args.record, "record", budget)
+    problems = [
+        f"record: {e}"
+        for e in ld._errors(ld._schema("platform", "module_swap.schema.json"), record)
+    ]
+    tree, found = ld.discover(
+        root / "modules",
+        root / "examples" / "modules" if args.examples else None,
+        args.overlay,
+        budget,
+    )
+    problems += [str(p) for p in found]
+    site = _read(_given(args.site, "--site"), "site selection", budget)
+    if not isinstance(site, dict):
+        raise ld.LoaderError("the site selection is not a mapping")
+    models = None
+    if not problems and (
+        "model_roles" in record or any(s["slot"] == "inference" for s in record["slots"])
+    ):
+        models = se.from_git(root, base, roles=args.roles or se.ROLES, extra_reports=args.report)
+    if not problems:
+        problems = ms.module_swap_problems(record, tree.mods, site, models=models)
+    if args.json:
+        print(
+            json.dumps(
+                {"problems": problems, "base": base, "evidence": models is not None}, indent=2
+            )
+        )
+    else:
+        for p in problems:
+            print(p)
+        what = "with model evidence from the repository" if models else "no model evidence needed"
+        print(f"hnx modules swap-check: {len(problems)} problem(s) ({what}, base {base})")
+    return 1 if problems else 0
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.cmd == "review-tier":
         return _review_tier(args)
+    if args.cmd == "swap-check":
+        return _swap_check(args)
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
