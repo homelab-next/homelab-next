@@ -7,6 +7,8 @@ group (the ``inventory`` target writes it).  A control applied centrally (``appl
 ADR-0016 decision 7) targets its ``group``, the central product host, once, and passes the role
 ``<role>_guests``: every guest that needs the control as ``{id, name, fqdn, ip, zone}``, sorted
 by id, which the product enrolls (a sensor's monitored addresses, a scanner's targets); a guest
+that names other addresses it sends from (``network.extra_addresses``, guest 1.6) carries them as
+``extra_addresses: [...]`` after ``ip``, so a sensor counts them as its own; a guest
 whose baselines set inputs of that role (``with:``, baseline set 1.2) carries them as
 ``settings: {<role>_<input>: value}`` in its row.  A per-guest control's settings are host
 variables (the ``inventory`` target writes them), so its play names only the role.
@@ -31,12 +33,15 @@ FILE = "baseline.yml"
 
 def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> list[dict]:
     """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id,
-    plus ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
+    plus ``extra_addresses`` when the guest names any, and ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
     baselines set any."""
     by_id = {g.id: g for g in fleet.guests}
     out: list[dict] = []
     for g in sorted((by_id[i] for i in guest_ids), key=lambda x: x.id):
-        row: dict = {"id": g.id, "name": g.name, "fqdn": fleet.fqdn(g), "ip": g.ip, "zone": g.zone}
+        row: dict = {"id": g.id, "name": g.name, "fqdn": fleet.fqdn(g), "ip": g.ip}
+        if g.extra_addresses:
+            row["extra_addresses"] = list(g.extra_addresses)
+        row["zone"] = g.zone
         if control and fleet.baselines is not None:
             role = fleet.baselines.role(control)
             mine = resolve(g, fleet.baselines).settings.get(control, {})

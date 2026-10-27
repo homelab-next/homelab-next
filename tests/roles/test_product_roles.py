@@ -377,7 +377,9 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     live = tmp_path / "etc" / "hnx-address-groups.yaml"
     assert run_role(tmp_path, "suricata_enroll", "main", v).returncode == 0
     good = live.read_text()
-    fewer = {**v, "suricata_enroll_guests": GUESTS[:1]}
+    # one guest with the other addresses it sends from (guest 1.6): every one of them is HOME_NET
+    extra = ["2001:db8:0:32::5", "198.51.100.51"]
+    fewer = {**v, "suricata_enroll_guests": [{**GUESTS[0], "extra_addresses": extra}]}
     (tmp_path / "suricata.fails").touch()
     r = run_role(tmp_path, "suricata_enroll", "main", fewer)
     assert r.returncode != 0
@@ -388,11 +390,13 @@ def test_suricata_enroll_never_installs_a_file_that_fails_the_test(tmp_path):
     log.write_text("")
     fixed = run_role(tmp_path, "suricata_enroll", "main", fewer)  # the next run tests again
     assert fixed.returncode == 0, fixed.stdout
+    home = "[198.51.100.50,198.51.100.51,2001:db8:0:32::5]"
     assert log.read_text().splitlines() == [
-        TESTED.format(etc=tmp_path / "etc", home='"[198.51.100.50]"'),
+        TESTED.format(etc=tmp_path / "etc", home=f'"{home}"'),
         "-c reload-rules",
     ]
-    assert yaml.safe_load(live.read_text())["HOME_NET"] == "[198.51.100.50]"
+    groups = yaml.safe_load(live.read_text())
+    assert groups["HOME_NET"] == home and groups["HNX_ZONE_DATA"] == home
 
 
 def test_suricata_enroll_retries_a_failed_reload(tmp_path):
@@ -433,6 +437,8 @@ def test_suricata_enroll_refuses_a_config_that_does_not_include_the_groups(tmp_p
         [{**GUESTS[0], "ip": "198.51.100.50\nHOME_NET: any"}],
         [{**GUESTS[0], "ip": "any"}],
         [{**GUESTS[0], "zone": "data: x"}],
+        [{**GUESTS[0], "extra_addresses": ["2001:db8::5\nHOME_NET: any"]}],
+        [{**GUESTS[0], "extra_addresses": "198.51.100.51"}],
     ],
 )
 def test_suricata_enroll_refuses_bad_guests(tmp_path, guests):

@@ -429,7 +429,8 @@ a zone the site does not define gets a dashed lane), collapsible. A lane with mo
 guests in at least two capability groups is split into **stacks**, one per guest's first
 `capability_groups` entry (the grouping the Ansible inventory already deploys by, so no new
 field). Each card shows the name and address; kind and provisioning, resources, image,
-capability and its hypervisor; badges for its service count, `vmid`, `not IaC` (`manual` or
+capability, its `extra addresses` (guest 1.6 `network.extra_addresses`, listed apart from the
+address) and its hypervisor; badges for its service count, `vmid`, `not IaC` (`manual` or
 `host-only`), `planned` / `retired` (guest schema 1.4 `status`) and, on a powered device,
 `UPS: <id>` or `no UPS` (the reason in its tooltip; [power](network-model.md#power-11)); a UPS
 with a NUT reading in the hub also gets its live state (`on line`, `on battery`, `on battery, low`,

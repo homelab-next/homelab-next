@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# Control network-sensor, central (ADR-0016 decision 7). HOME_NET is every enrolled guest;
-# HNX_ZONE_<ZONE> is each zone's guests, for zone-aware rules. A changed file never goes live
+# Control network-sensor, central (ADR-0016 decision 7). HOME_NET is every address of every
+# enrolled guest (its ip and its extra_addresses); HNX_ZONE_<ZONE> is each zone's guests' addresses,
+# for zone-aware rules. A changed file never goes live
 # untested: it is staged beside the live one with a staged copy of the main configuration that
 # includes it, and suricata -T runs on that copy; only a passing file replaces the live one. If the
 # test fails the role stops and the live file, and the running sensor, keep the old groups.

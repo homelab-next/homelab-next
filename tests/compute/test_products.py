@@ -117,6 +117,28 @@ def test_a_1_0_control_is_applied_per_guest(fleet):
 
 
 # ---------------------------------------------------------------- the playbook
+def test_a_central_role_receives_a_guests_extra_addresses(tmp_path):
+    """A guest that names other addresses it sends from (guest 1.6) passes them to the central
+    role after its ip, so the sensor's HOME_NET holds them; a guest naming none has no key."""
+    extra = [
+        {"address": "203.0.113.11", "why": "its second NIC, on the same edge segment"},
+        {"address": "2001:db8:0:28::a", "why": "the address SLAAC gave it on the edge segment"},
+    ]
+    d = copy_fleet(
+        tmp_path, guests={"edge-core": lambda g: g["network"].update(extra_addresses=extra)}
+    )
+    plays = {
+        p["name"]: p
+        for p in yaml.safe_load(render(fleet_at(d), "baseline-playbook")["baseline.yml"])
+    }
+    (role,) = plays["control network-sensor (detection, central)"]["roles"]
+    (enrolled,) = [v for k, v in role.items() if k.endswith("_guests")]
+    rows = {r["name"]: r for r in enrolled}
+    assert list(rows["edge-core"]) == ["id", "name", "fqdn", "ip", "extra_addresses", "zone"]
+    assert rows["edge-core"]["extra_addresses"] == ["203.0.113.11", "2001:db8:0:28::a"]
+    assert "extra_addresses" not in rows["secrets-core"]
+
+
 def test_central_controls_render_one_play_on_the_product_host(fleet):
     plays = {
         p["name"]: p for p in yaml.safe_load(render(fleet, "baseline-playbook")["baseline.yml"])

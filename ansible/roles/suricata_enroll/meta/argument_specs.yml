@@ -6,7 +6,7 @@ argument_specs:
       suricata_enroll_guests:
         type: list
         elements: dict
-        description: The guests to monitor, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}).
+        description: The guests to monitor, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}, plus extra_addresses when a guest names other addresses it sends from); every address is HOME_NET.
         required: true
       suricata_enroll_config_dir: &dir
         type: path

@@ -21,7 +21,7 @@ from homelabnext.graph.model import Edge, Graph, Node
 from homelabnext.registry.model import load
 from homelabnext.status.cli import main
 from homelabnext.status.maps import MapSite, architecture, assets, dataflow, roadmap, topology
-from homelabnext.status.maps.lab import host_flows
+from homelabnext.status.maps.lab import Index, host_flows
 from homelabnext.status.maps.mdtables import parse_tables, split_row
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
@@ -36,6 +36,17 @@ SITE = ROOT / "examples" / "minimal" / "site.yml"
 LAB = ROOT / "examples" / "lab-topology"
 HOSTILE = '<script>alert("x")</script>'
 BOX_IP = "192.0.2.9"  # no-raw-endpoint: allow RFC 5737 documentation address
+# the example infer-core's addresses (examples/minimal/guests/infer-core.yml)
+INFER_IP = "192.0.2.140"  # no-raw-endpoint: allow RFC 5737 documentation address
+INFER_NIC = "192.0.2.150"  # no-raw-endpoint: allow RFC 5737 documentation address
+INFER_EXTRA = [INFER_NIC, "2001:db8:0:82::8c"]
+# a synthetic segment for the extra-address resolution test
+SEG = "192.0.2.0/24"  # no-raw-endpoint: allow RFC 5737 documentation address
+A_IP = "192.0.2.10"  # no-raw-endpoint: allow RFC 5737 documentation address
+B_IP = "192.0.2.20"  # no-raw-endpoint: allow RFC 5737 documentation address
+B_NIC = "192.0.2.21"  # no-raw-endpoint: allow RFC 5737 documentation address
+STRAY = "192.0.2.99"  # no-raw-endpoint: allow RFC 5737 documentation address
+B_V6, B_V6_LONG = "2001:db8::21", "2001:0db8:0000:0000:0000:0000:0000:0021"
 
 
 def golden(name: str, text: str) -> None:
@@ -225,6 +236,39 @@ def test_topology_of_the_example_lab():
     ]
     flows = {(f["from"], f["to"]): f["allowed"] for f in vm["flows"]}
     assert flows[("mgmt", "compute")] == "tcp 22, 443" and ("edge", "data") not in flows
+    # infer-core names other addresses it sends from (guest 1.6): its row, card and table say so,
+    # apart from its ip, and only its row carries the key
+    rows = {g["id"]: g for g in vm["guests"]}
+    assert rows["guest:infer-core"]["extra_addresses"] == INFER_EXTRA
+    assert "extra_addresses" not in rows["guest:bus-core"]
+    page = topology.render(vm)
+    extras = ", ".join(INFER_EXTRA)
+    assert f'<div class="card-meta">extra addresses: {extras}</div>' in page
+    assert f"{INFER_IP} · extra {extras}" in page
+
+
+def test_an_extra_address_resolves_to_its_guest_in_any_spelling():
+    """A host, firewall source or /32 at one of a guest's extra addresses is that guest, however
+    the address is written; an address no guest names is not."""
+    why = {"why": "a second interface on the same segment"}
+    guests = [
+        {"id": "guest:a", "network": {"ip": A_IP, "zone": "z"}},
+        {
+            "id": "guest:b",
+            "network": {
+                "ip": B_IP,
+                "zone": "z",
+                "extra_addresses": [{"address": B_NIC, **why}, {"address": B_V6, **why}],
+            },
+        },
+    ]
+    site = {"zones": [{"id": "z", "subnet": SEG}]}
+    idx = Index(site, guests, {"hosts": {"long": {"address": B_V6_LONG}}})
+    assert idx.address(f"{B_NIC}/32") == ("guest:b", "b")
+    assert idx.address(B_V6) == ("guest:b", "b")
+    assert idx.address(A_IP) == ("guest:a", "a")
+    assert idx.address(STRAY) == ("zone:z", f"{STRAY} (zone z)")
+    assert idx.host_node("long") == "guest:b"
 
 
 def test_topology_of_the_lab_topology_example():

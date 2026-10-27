@@ -43,7 +43,7 @@ import yaml
 from homelabnext import power as pw
 
 from . import assets, svg
-from .lab import INTERNET, Index, guest_name, host_flows, lab_of, status_of
+from .lab import INTERNET, Index, guest_addresses, guest_name, host_flows, lab_of, status_of
 
 CELL_W = 96  # the zone flow matrix
 STACK_MIN = 4
@@ -138,7 +138,7 @@ def _zone_row(z: Mapping[str, Any]) -> dict[str, Any]:
 
 def _guest_row(raw: Mapping[str, Any], services: list[str]) -> dict[str, Any]:
     net = raw.get("network") or {}
-    return {
+    row: dict[str, Any] = {
         "id": str(raw["id"]),
         "name": guest_name(raw),
         "kind": raw.get("kind"),
@@ -151,6 +151,10 @@ def _guest_row(raw: Mapping[str, Any], services: list[str]) -> dict[str, Any]:
         "baselines": _baselines(raw),
         "services": services,
     }
+    extras = guest_addresses(raw)[1:]
+    if extras:  # guest 1.6: only on a guest that names any, so other rows keep their shape
+        row["extra_addresses"] = extras
+    return row
 
 
 class _Cards:
@@ -294,6 +298,11 @@ class _Cards:
         net = raw.get("network") or {}
         category = "hypervisor" if hypervisor else kind
         meta = [f"{kind} · {prov}", _resources(raw), _image(raw), raw.get("capability")]
+        extras = guest_addresses(raw)[1:]
+        if extras:  # the other addresses it sends from (guest 1.6), marked apart from its ip
+            meta.append(
+                "extra address" + ("es" if len(extras) > 1 else "") + ": " + ", ".join(extras)
+            )
         if hypervisor:
             meta.append(f"hypervisor · {children} guest{'s' if children != 1 else ''}")
         elif placement.get("node") and placement.get("node") != name:
@@ -859,7 +868,9 @@ def tables(vm: Mapping[str, Any]) -> str:
             svg.e(g["provisioning"]),
             svg.code(g["node"]),
             svg.code(g["zone"]),
-            svg.e(g["ip"] or ""),
+            svg.e(" · extra ".join([g["ip"] or "", ", ".join(g["extra_addresses"])]))
+            if g.get("extra_addresses")
+            else svg.e(g["ip"] or ""),
             svg.code(g["capability"]) if g["capability"] else "",
             svg.codes(g["services"]),
             svg.codes(g["baselines"]),

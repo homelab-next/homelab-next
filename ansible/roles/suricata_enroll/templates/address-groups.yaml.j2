@@ -3,12 +3,17 @@
 ---
 # Managed by Ansible (role suricata_enroll) from the baseline set; do not edit.
 # Included by suricata.yaml under vars.address-groups.
-{% set ips = suricata_enroll_guests | map(attribute='ip') | unique | sort | list %}
-HOME_NET: {{ ('[' ~ (ips | join(',')) ~ ']') | to_json }}
+{# every address a guest sends from: its ip and its extra_addresses (guest 1.6), so traffic from a
+   second NIC, an IPv6 address or a container bridge is HOME_NET, never EXTERNAL_NET #}
+{% macro addresses(guests) -%}
+{{ ((guests | map(attribute='ip') | list)
+    + (guests | map(attribute='extra_addresses', default=[]) | flatten(levels=1) | list))
+   | unique | sort | join(',') }}
+{%- endmacro %}
+HOME_NET: {{ ('[' ~ addresses(suricata_enroll_guests) ~ ']') | to_json }}
 {% for name, value in suricata_enroll_standard_groups | dictsort %}
 {{ name }}: {{ value | to_json }}
 {% endfor %}
 {% for zone in suricata_enroll_guests | map(attribute='zone') | unique | sort %}
-{% set zips = suricata_enroll_guests | selectattr('zone', 'equalto', zone) | map(attribute='ip') | unique | sort | list %}
-HNX_ZONE_{{ zone | upper | replace('-', '_') }}: {{ ('[' ~ (zips | join(',')) ~ ']') | to_json }}
+HNX_ZONE_{{ zone | upper | replace('-', '_') }}: {{ ('[' ~ addresses(suricata_enroll_guests | selectattr('zone', 'equalto', zone) | list) ~ ']') | to_json }}
 {% endfor %}
