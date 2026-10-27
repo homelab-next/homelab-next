@@ -45,9 +45,15 @@ override) is still out. Only a policy override naming the service itself beats t
 
 Every reference is resolved to one canonical logical id before anything is decided: the id itself,
 the guest hostname, FQDN, address, `vmid:<n>`, any registered alias, and (optionally) an
-`homelabnext.ids` resolver. Case and a trailing dot are normalised. A reference that resolves to
-nothing is denied (`unknown-target`); one that matches two different targets is denied
-(`ambiguous-target`) even under `unknown: allow`. A different spelling of an out-of-scope target
+`homelabnext.ids` resolver. Case and a trailing dot are normalised, and an address is put in its
+one canonical spelling: IPv6 compressed; an IPv4 address written inside IPv6 (IPv4-compatible,
+IPv4-mapped, IPv4-translated, NAT64's RFC 6052 well-known prefix) as that IPv4 address; an IPv4
+address in hex, octal, integer or short dotted form (what `inet_aton` accepts) as its dotted quad.
+A guest's targets carry every address it has (`network.ip` and its `network.extra_addresses`). A
+reference that resolves to nothing is denied (`unknown-target`); one that matches two different
+targets is denied (`ambiguous-target`) even under `unknown: allow`, and so is an address in any
+but its canonical spelling that resolves to nothing, as is NAT64's local-use prefix, whose IPv4
+reading depends on the operator's prefix length. A different spelling of an out-of-scope target
 therefore cannot slip past the guard.
 
 Denial codes: `explicit-out`, `override-out`, `vmid-threshold`, `out-tag`, `unknown-target`,

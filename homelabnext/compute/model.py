@@ -101,9 +101,12 @@ class ZoneFlow:
 
 @runtime_checkable
 class ZoneLookup(Protocol):
-    """The only thing the compute model asks of a site model."""
+    """What the compute model asks of a site model: a zone by id, and every zone (validation holds
+    a guest's ``network.extra_addresses`` against every zone, guests or none in it)."""
 
     def zone(self, zone_id: str) -> ZoneInfo | None: ...
+
+    def all(self) -> list[ZoneInfo]: ...
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,11 @@ class Guest:
     def extra_addresses(self) -> tuple[str, ...]:
         """(guest 1.6) The other addresses the guest sends from, as written; validation holds
         each to a canonical bare address (:func:`homelabnext.compute.validate`)."""
-        return tuple(str(a["address"]) for a in self.raw["network"].get("extra_addresses", ()))
+        return tuple(
+            str(a.get("address", ""))
+            for a in self.raw["network"].get("extra_addresses") or ()
+            if isinstance(a, Mapping)
+        )
 
     @property
     def addresses(self) -> tuple[str, ...]:
@@ -302,6 +309,10 @@ class Fleet:
     #: the deploy's tailnet access (:func:`homelabnext.tailnet.site_deploy`: tag, owners, zones,
     #: exceptions); None = the site declares none, so the policy gives the deploy tag nothing
     deploy: Mapping[str, Any] | None = None
+    #: addresses the site model gives something other than a guest
+    #: (:func:`homelabnext.compute.zones.site_addresses`: its static DNS ``A`` records), address ->
+    #: the names it holds; no guest may claim one as an extra address unless the name is its own
+    site_addresses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

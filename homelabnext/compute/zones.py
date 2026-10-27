@@ -26,7 +26,7 @@ class MappingZones:
         return self._zones.get(zone_id)
 
     def all(self) -> list[ZoneInfo]:
-        """Every zone (optional beside ``zone``: a lookup without it is asked by id only)."""
+        """Every zone, in the order given."""
         return list(self._zones.values())
 
 
@@ -98,7 +98,8 @@ class SiteAdapter:
         return None if found is None else self._convert(found)
 
     def all(self) -> list[ZoneInfo]:
-        """Every zone the site's ``zones`` collection holds (none when it offers only ``zone``)."""
+        """Every zone the site's ``zones`` collection holds.  A site that offers only ``zone(id)``
+        lists none, and validation says so when a guest needs every zone (extra addresses)."""
         zs = getattr(self._site, "zones", None)
         items = zs.values() if isinstance(zs, Mapping) else (zs or ())
         return [self._convert(z) for z in items]
@@ -224,6 +225,37 @@ def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
             out.append(ZoneFlow(src, dst, tuple(whole)))
         out.extend(ZoneFlow(src, dst, tuple(protos), ports) for ports, protos in ported.items())
     return tuple(out)
+
+
+def addresses_from_site(doc: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """The addresses a site document gives a name of its own, address -> the names: every static
+    DNS ``A`` record (``dns.records.static``).  A value that is not an IPv4 address is skipped
+    (``hnx site validate`` judges the record)."""
+    import ipaddress
+
+    out: dict[str, list[str]] = {}
+    records = ((doc.get("dns") or {}).get("records") or {}).get("static") or []
+    for r in records:
+        if not isinstance(r, Mapping) or r.get("type") != "A":
+            continue
+        try:
+            ip = ipaddress.ip_address(str(r.get("value", "")).strip())
+        except ValueError:
+            continue
+        name = str(r.get("fqdn", "")).strip().lower().rstrip(".")
+        out.setdefault(str(ip), []).append(name)
+    return {a: tuple(sorted(set(n))) for a, n in out.items()}
+
+
+def site_addresses(path: str | Path) -> dict[str, tuple[str, ...]]:
+    """:func:`addresses_from_site` for a site file, read by the network model's own loader."""
+    from homelabnext.network.loader import SiteError, load_site
+
+    try:
+        doc = load_site(path)
+    except SiteError as exc:
+        raise _site_error(exc) from exc
+    return addresses_from_site(doc) if isinstance(doc, Mapping) else {}
 
 
 def site_power(path: str | Path) -> dict[str, Any] | None:

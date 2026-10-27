@@ -14,6 +14,8 @@ import contextlib
 import functools
 import inspect
 import ipaddress
+import re
+import socket
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -105,18 +107,55 @@ class ScopeDenied(Exception):
         super().__init__(f"out of scope: {decision.target}: {decision.reason}")
 
 
-def _norm(ref: str) -> str:
-    """A name lower-cased without its trailing dot; an IP address in its one canonical spelling
-    (IPv6 compressed, an IPv4-mapped one as its IPv4 address), so a longer spelling of an address
-    resolves to the same target."""
-    text = ref.strip().lower().rstrip(".")
+#: a dotted IPv4 address with one to four parts, each decimal, octal (leading 0) or hex (0x): the
+#: spellings ``inet_aton`` accepts, which a tool handing the reference to the C resolver reaches
+_V4_PARTS = re.compile(r"^(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+)){0,3}\Z")
+
+
+def _ip_spelling(text: str) -> tuple[str | None, bool]:
+    """``(canonical, odd)`` for a reference that is an IP address, ``(None, False)`` otherwise.
+
+    ``canonical`` is the one spelling targets are keyed by: IPv6 compressed, an IPv4 address
+    written inside IPv6 (IPv4-compatible ``::a.b.c.d``, IPv4-mapped, IPv4-translated
+    ``::ffff:0:a.b.c.d``, NAT64's RFC 6052 well-known prefix) as that IPv4 address, and an IPv4
+    address in hex, octal, integer or short dotted form as its dotted-quad form.  ``odd`` says the
+    reference was not written that way; NAT64's local-use prefix (RFC 8215, where the IPv4
+    address sits depends on the operator's prefix length) has no canonical form: ``(None, True)``.
+    """
+    from homelabnext.modules.scope import EMBEDDED_V4
+
     try:
         ip = ipaddress.ip_address(text)
     except ValueError:
-        return text
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return str(ip)
+        if not _V4_PARTS.match(text):
+            return None, False
+        try:
+            packed = socket.inet_aton(text)
+        except OSError:
+            return None, False
+        return str(ipaddress.IPv4Address(packed)), True
+    if isinstance(ip, ipaddress.IPv4Address):
+        return str(ip), str(ip) != text
+    for net in EMBEDDED_V4:
+        if ip in net:
+            if net.prefixlen != 96:
+                return None, True
+            return str(ipaddress.IPv4Address(int(ip) & 0xFFFF_FFFF)), True
+    return str(ip), str(ip) != text
+
+
+def _norm(ref: str) -> str:
+    """A name lower-cased without its trailing dot; an IP address in its one canonical spelling
+    (:func:`_ip_spelling`), so a longer or embedded spelling of an address resolves to the same
+    target."""
+    text = ref.strip().lower().rstrip(".")
+    canonical, _ = _ip_spelling(text)
+    return canonical or text
+
+
+def _odd_address(ref: str) -> bool:
+    """Whether ``ref`` is an IP address written in any but its canonical spelling."""
+    return isinstance(ref, str) and _ip_spelling(ref.strip().lower().rstrip("."))[1]
 
 
 class ScopeGuard:
@@ -176,6 +215,17 @@ class ScopeGuard:
         """
         canonical, why = self.resolve(ref)
         if canonical is None:
+            if why == "unknown-target" and _odd_address(ref):
+                # an address spelt around its canonical form (embedded in IPv6, hex, octal, an
+                # integer) that names no target: the spelling a tool would use to reach a target
+                # it could not name plainly, so refused whatever the policy says about unknowns
+                return Decision(
+                    False,
+                    ref,
+                    None,
+                    "unknown-target",
+                    "an address in a non-canonical or embedded spelling that does not resolve",
+                )
             if why == "unknown-target" and self.policy.unknown == "allow":
                 return Decision(
                     True, ref, None, "unknown-allowed", "unknown target allowed by policy"

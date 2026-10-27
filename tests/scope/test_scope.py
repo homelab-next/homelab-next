@@ -301,7 +301,7 @@ def test_targets_from_fleet_reads_scope_vmid_tags_and_aliases(tmp_path):
     doc["network"]["extra_addresses"] = [{"address": "2001:db8::82", "why": "its IPv6 address"}]
     p.write_text(yaml.safe_dump(doc, sort_keys=False))
     fleet = load_fleet(d, ZONES)
-    g = ScopeGuard(targets_from_fleet(fleet), ScopePolicy(vmid_threshold=200, unknown="allow"))
+    g = ScopeGuard(targets_from_fleet(fleet), ScopePolicy(vmid_threshold=200))
     refs = (
         "guest:infer-core",
         "infer-core",
@@ -317,6 +317,72 @@ def test_targets_from_fleet_reads_scope_vmid_tags_and_aliases(tmp_path):
     by_vmid = next(t for t in targets_from_fleet(fleet) if t.vmid == 140)
     assert f"vmid:{by_vmid.vmid}" in by_vmid.aliases
     assert g.in_scope(f"vmid:{by_vmid.vmid}").canonical == by_vmid.id
+
+
+def _v6(n: int) -> str:
+    import ipaddress
+
+    return str(ipaddress.IPv6Address(n))
+
+
+#: 198.51.100.130 (the fixture's infer-core) in the spellings a tool could hand a resolver
+V4 = 0xC633_6482
+SPELLINGS = (
+    _v6(V4),  # IPv4-compatible
+    _v6(0xFFFF << 32 | V4),  # IPv4-mapped
+    _v6(0xFFFF << 48 | V4),  # IPv4-translated
+    _v6(0x64_FF9B << 96 | V4),  # NAT64, well-known prefix
+    hex(V4),
+    str(V4),
+    "198.51.25730",
+    "0306.063.0144.0202",
+)
+
+
+def _out_of_scope_fleet(tmp_path):
+    import shutil
+
+    import yaml
+
+    d = tmp_path / "fleet"
+    shutil.copytree(FLEET, d)
+    p = d / "infer-core.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["scope"] = "out"
+    doc["network"]["extra_addresses"] = [{"address": "2001:db8::82", "why": "its IPv6 address"}]
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return load_fleet(d, ZONES)
+
+
+@pytest.mark.parametrize("unknown", ["deny", "allow"])
+def test_an_out_of_scope_guest_is_out_in_every_spelling_of_every_address(tmp_path, unknown):
+    """Under ``unknown: allow`` a spelling that failed to resolve would be allowed, so every
+    spelling of every address (network.ip, an extra address, IPv4 inside IPv6, hex, octal, an
+    integer) must resolve to the guest and be denied as it."""
+    g = ScopeGuard(targets_from_fleet(_out_of_scope_fleet(tmp_path)), ScopePolicy(unknown=unknown))
+    for ref in (*SPELLINGS, "2001:db8::82", "2001:db8:0:0:0:0:0:82"):
+        d = g.in_scope(ref)
+        assert (d.allow, d.code, d.canonical) == (False, "explicit-out", "guest:infer-core"), ref
+
+
+def test_an_odd_spelling_that_names_nothing_is_denied_even_under_unknown_allow(tmp_path):
+    g = ScopeGuard(targets_from_fleet(_out_of_scope_fleet(tmp_path)), ScopePolicy(unknown="allow"))
+    nobody = 0xCB00_7109  # 203.0.113.9, no target
+    for ref in (
+        _v6(nobody),
+        _v6(0xFFFF << 32 | nobody),
+        _v6(0x64_FF9B << 96 | nobody),
+        hex(nobody),
+        str(nobody),
+        _v6(0x64_FF9B_0001 << 80 | V4),  # NAT64 local-use: no one IPv4 reading, never resolved
+        "2001:db8:0:0:0:0:0:99",
+    ):
+        d = g.in_scope(ref)
+        assert (d.allow, d.code) == (False, "unknown-target"), ref
+        assert "non-canonical or embedded spelling" in d.reason
+    # its plain spelling is an ordinary unknown, which the policy allows
+    assert g.in_scope("203.0.113.9").code == "unknown-allowed"
+    assert g.in_scope("unlisted-host").code == "unknown-allowed"
 
 
 def test_service_inherits_scope_from_its_host_guest():

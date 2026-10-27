@@ -19,7 +19,8 @@ network:
   vlan_tag_mode: per_vlan_bridge
   # what else it sends from, so the log pipeline labels those events too (docs/log-pipeline.md)
   extra_addresses:
-    - {address: "2001:db8:0:82::8c", why: The SLAAC address its IPv6 traffic leaves by.}
+    - {address: "192.0.2.150", why: A container on a macvlan interface sends from it.}
+    - {address: "2001:db8:0:82::8c", why: The IPv6 address its traffic to the lab leaves by.}
 firewall_rules:
   policy_out: DROP
   inbound_allow:

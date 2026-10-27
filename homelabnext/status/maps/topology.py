@@ -637,7 +637,12 @@ def inputs(
     unloadable tree or site)."""
     from homelabnext.compute.loader import NODES_FILE, load_fleet, load_nodes
     from homelabnext.compute.model import ComputeError
-    from homelabnext.compute.zones import flows_from_site, open_site, site_power
+    from homelabnext.compute.zones import (
+        addresses_from_site,
+        flows_from_site,
+        open_site,
+        site_power,
+    )
     from homelabnext.network.loader import SiteError, load_site
 
     try:
@@ -653,6 +658,7 @@ def inputs(
         domain=domain or "example.internal",
         require_baselines=False,
         power=site_power(site_path),
+        site_addresses=addresses_from_site(doc),
     )
     nodes_file = Path(guests_dir) / NODES_FILE
     nodes = load_nodes(nodes_file) if nodes_file.is_file() else {}

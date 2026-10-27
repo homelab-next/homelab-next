@@ -74,7 +74,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `ip` inside the zone subnet, outside the DHCP pool, not network/broadcast/gateway | no collisions with leases |
 | `vmid_scheme: freeform` is the default; `octet` pins `vmid` to the last octet of `ip` for a readable id | pick whichever reads better for your layout |
 | ids, `(node, vmid)` and ips are unique | |
-| each `network.extra_addresses` entry (guest 1.6) is a canonical bare address (no IPv4 written inside IPv6), not loopback, link-local, multicast, reserved or a cloud metadata address, not an internet address outside the guest's own zone, not any zone's gateway, network or broadcast address or inside its DHCP pool, named once, not the guest's own `ip`, and not an address (`ip` or extra) of any other guest | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); nothing is configured from them |
+| each `network.extra_addresses` entry (guest 1.6) is canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, a unique-local or documentation address only; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not the guest's own `ip` or an address (`ip` or extra) of any other guest, named once; a zone lookup that cannot list its zones (`ZoneLookup.all`) is itself a problem then | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); nothing is configured from them |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
 | `capability` is one of the eighteen in `docs/interfaces.md` | |
@@ -384,7 +384,8 @@ What is enforced:
   match `labels.hnx_runtime: model`, which the log pipeline sets from the `runtime-labels` render
   of this model, joined on the address the collector saw and never taken from the event
   ([log pipeline](log-pipeline.md)). A runtime that sends from more than `network.ip` (a second
-  NIC, IPv6, its containers' bridge or NAT address) lists those in `network.extra_addresses`,
+  NIC, a unique-local IPv6 address, its containers' macvlan or bridge address) lists those in
+  `network.extra_addresses`,
   or its events from them go unlabelled. On a site whose `log-pipeline` is pass-through nothing
   sets it and they stay silent.
 - **Agent sessions as modules.** A module role (an agent runtime included) already gets its own

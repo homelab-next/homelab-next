@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -55,8 +56,8 @@ def _load(site: Path):
 def test_the_example_runtime_has_an_extra_address_and_loads():
     fleet = _load(MINIMAL)
     (g,) = [g for g in fleet.sorted() if g.id == "guest:infer-core"]
-    assert g.extra_addresses == (EXTRA,)
-    assert g.addresses == ("192.0.2.140", EXTRA)
+    assert g.extra_addresses == ("192.0.2.150", EXTRA)
+    assert g.addresses == ("192.0.2.140", "192.0.2.150", EXTRA)
 
 
 def test_every_address_of_a_guest_is_in_the_table_with_its_value(tmp_path):
@@ -93,10 +94,16 @@ def test_every_address_of_a_guest_is_in_the_table_with_its_value(tmp_path):
         (_v4(0x7F00_0001), "loopback"),
         (_v4(0xF000_0001), "reserved"),
         (_v4(0x0000_0001), "this-network"),
-        (_v4(0x0B00_0001), "internet address outside zone compute"),
-        (_v6(0x2600 << 112 | 1), "internet address outside zone compute"),
+        (_v4(0x0B00_0001), "is outside zone compute's subnet"),
+        (_v4(0xC0A8_0001), "is outside zone compute's subnet"),  # private, but in no zone
+        (_v6(0x2600 << 112 | 1), "global IPv6 address"),
+        (_v6(0x2002 << 112 | 1), "special-purpose IPv6"),  # 6to4 writes an IPv4 address in it
+        (_v6(0x2001 << 112 | 1), "special-purpose IPv6"),  # Teredo
         ("192.0.2.129", "zone compute's gateway"),
-        ("198.51.100.1", "zone edge's gateway"),  # a zone no guest is in
+        # another zone's address, whatever holds it (a router, a NAS, a VIP no guest file names)
+        ("192.0.2.5", "inside zone mgmt's subnet, not zone compute's"),
+        ("192.0.2.66", "inside zone data's subnet, not zone compute's"),
+        ("198.51.100.1", "inside zone edge's subnet"),  # a zone no guest is in
         ("192.0.2.170", "zone compute's DHCP pool"),
         ("192.0.2.128", "network or broadcast"),
         ("192.0.2.191", "network or broadcast"),
@@ -127,14 +134,144 @@ def test_one_extra_address_on_two_guests_is_refused(tmp_path):
         _load(site)
 
 
+def _into_compute(site: Path, guest: str, ip: str) -> None:
+    """Move an example guest into zone compute (the only zone infer-core may claim in)."""
+    path = site / "guests" / f"{guest}.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["network"]["zone"], doc["network"]["ip"] = "compute", ip
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
 @pytest.mark.parametrize(
-    ("address", "owner"), [("192.0.2.80", "guest:bus-core"), ("192.0.2.20", "guest:infer-core")]
+    ("address", "owner"), [("192.0.2.151", "guest:bus-core"), ("192.0.2.152", "guest:infer-core")]
 )
 def test_another_guests_network_ip_is_refused_whichever_comes_first(tmp_path, address, owner):
     """bus-core sorts before infer-core and ops-core after it: the address is refused either way,
-    on whichever guest names it second."""
+    on whichever guest names it second, and the message names its first holder."""
+    site = _site(tmp_path, [address])
+    _into_compute(site, "bus-core", "192.0.2.151")
+    _into_compute(site, "ops-core", "192.0.2.152")
     with pytest.raises(ComputeError, match=f"{address} already used by {owner}"):
-        _load(_site(tmp_path, [address]))
+        _load(site)
+
+
+def test_a_third_claimant_of_an_address_names_its_first_holder(tmp_path):
+    site = _site(tmp_path, [])
+    _into_compute(site, "bus-core", "192.0.2.151")
+    _into_compute(site, "ops-core", "192.0.2.151")
+    path = site / "guests" / "infer-core.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["network"]["ip"] = "192.0.2.151"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ComputeError) as exc:
+        _load(site)
+    text = str(exc.value)
+    assert "guest:infer-core: ip 192.0.2.151 already used by guest:bus-core" in text
+    assert "guest:ops-core: ip 192.0.2.151 already used by guest:bus-core" in text
+
+
+def test_the_guests_own_gateway_override_is_refused(tmp_path):
+    site = _site(tmp_path, ["192.0.2.150"])
+    path = site / "guests" / "infer-core.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["network"]["gateway"] = "192.0.2.150"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ComputeError, match=re.escape("192.0.2.150 is this guest's own gateway")):
+        _load(site)
+
+
+def test_another_guests_gateway_override_is_refused(tmp_path):
+    site = _site(tmp_path, ["192.0.2.150"])
+    _into_compute(site, "ops-core", "192.0.2.152")
+    path = site / "guests" / "ops-core.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["network"]["gateway"] = "192.0.2.150"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(
+        ComputeError, match=re.escape("192.0.2.150 is the gateway guest:ops-core names")
+    ):
+        _load(site)
+
+
+def _dns_record(site: Path, fqdn: str, value: str) -> None:
+    path = site / "site.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["dns"]["records"]["static"].append({"fqdn": fqdn, "type": "A", "value": value})
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+
+
+def _load_with_site_addresses(site: Path):
+    from homelabnext.compute.zones import site_addresses
+
+    zones, domain = open_site(site / "site.yml")
+    return load_fleet(
+        site / "guests",
+        zones,
+        domain=domain or "example.internal",
+        site_addresses=site_addresses(site / "site.yml"),
+    )
+
+
+def test_an_address_the_site_names_for_something_else_is_refused(tmp_path):
+    """A NAS or a service VIP in the guest's own zone that no guest file names: its static DNS
+    name is the site model's record of who holds it."""
+    site = _site(tmp_path, ["192.0.2.150"])
+    _dns_record(site, "nas.example.internal", "192.0.2.150")
+    with pytest.raises(ComputeError, match=re.escape("the site's DNS name nas.example.internal")):
+        _load_with_site_addresses(site)
+    # the guest's own name for the address is no conflict
+    site = _site(tmp_path / "own", ["192.0.2.150"])
+    _dns_record(site, "infer-core.example.internal", "192.0.2.150")
+    assert (
+        "192.0.2.150"
+        in next(
+            g for g in _load_with_site_addresses(site).sorted() if g.id == "guest:infer-core"
+        ).addresses
+    )
+
+
+def test_the_cli_reads_the_sites_names(tmp_path, capsys):
+    from homelabnext.compute.cli import main
+
+    site = _site(tmp_path, ["192.0.2.150"])
+    _dns_record(site, "nas.example.internal", "192.0.2.150")
+    rc = main(["validate", str(site / "guests"), "--site", str(site / "site.yml")])
+    assert rc == 1
+    assert "nas.example.internal" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        _v6(0xFD00 << 112 | 0x8C),  # unique-local: no zone prefix says whose, operator review
+        "2001:db8:0:83::1",
+        _v4(0x6440_0A8C),  # a tailnet's overlay address (zone-less)
+    ],
+)
+def test_unique_local_documentation_and_overlay_addresses_are_accepted(tmp_path, address):
+    g = next(g for g in _load(_site(tmp_path, [address])).sorted() if g.id == "guest:infer-core")
+    assert address in g.addresses
+
+
+def test_an_overlay_address_inside_a_zone_is_that_zones(tmp_path):
+    """The overlay exception is for zone-less ranges: once a zone holds part of the range, an
+    address in it is that zone's like any other."""
+    overlay = _v4(0x6440_0A00)
+    site = _site(tmp_path, [_v4(0x6440_0A8C)])
+    path = site / "site.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["zones"].append(
+        {
+            "id": "tailnet",
+            "purpose": "overlay",
+            "vlan_id": 60,
+            "subnet": f"{overlay}/24",
+            "gateway": _v4(0x6440_0A01),
+        }
+    )
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ComputeError, match="inside zone tailnet's subnet, not zone compute's"):
+        _load(site)
 
 
 @pytest.mark.parametrize(
@@ -144,3 +281,49 @@ def test_another_guests_network_ip_is_refused_whichever_comes_first(tmp_path, ad
 def test_a_shape_that_is_no_bare_address_is_refused_by_the_schema(tmp_path, address):
     with pytest.raises(ComputeError, match="extra_addresses"):
         _load(_site(tmp_path, [address]))
+
+
+class _ByIdOnly:
+    """A zone lookup that answers ``zone(id)`` and cannot list its zones."""
+
+    def __init__(self, zones):
+        self._zones = zones
+
+    def zone(self, zone_id):
+        return self._zones.zone(zone_id)
+
+
+def test_a_lookup_that_cannot_list_its_zones_is_a_problem_only_for_extra_addresses(tmp_path):
+    zones, domain = open_site(MINIMAL / "site.yml")
+    with pytest.raises(ComputeError, match=r"does not list zone\(s\) .*ZoneLookup.all"):
+        load_fleet(MINIMAL / "guests", _ByIdOnly(zones), domain=domain)
+    site = _site(tmp_path, [])  # no guest names an extra address: nothing needs every zone
+    assert load_fleet(site / "guests", _ByIdOnly(zones), domain=domain).guests
+
+
+def test_the_zone_lookups_list_every_zone():
+    from homelabnext.compute.model import ZoneInfo, ZoneLookup
+    from homelabnext.compute.zones import MappingZones, SiteAdapter
+
+    a = ZoneInfo(id="a", subnet="192.0.2.0/26", gateway="192.0.2.1")
+    b = {"id": "b", "subnet": "192.0.2.64/26", "dhcp": {"range": ["192.0.2.100", "192.0.2.110"]}}
+    assert [z.id for z in MappingZones([a]).all()] == ["a"]
+    assert isinstance(MappingZones([a]), ZoneLookup)
+    listed = SiteAdapter(type("S", (), {"zones": [a, b]})()).all()
+    assert [z.id for z in listed] == ["a", "b"]
+    assert listed[1].dhcp_range == ("192.0.2.100", "192.0.2.110")
+    assert [z.id for z in SiteAdapter(type("S", (), {"zones": {"b": b}})()).all()] == ["b"]
+    # a site that only answers zone(id) lists none, and validation says so (test above)
+    only = SiteAdapter(type("S", (), {"zone": lambda self, i: a if i == "a" else None})())
+    assert only.zone("a") == a and only.all() == []
+    assert not isinstance(_ByIdOnly(MappingZones([a])), ZoneLookup)
+
+
+def test_a_why_of_only_white_space_is_refused_at_load(tmp_path):
+    site = _site(tmp_path, [])
+    path = site / "guests" / "infer-core.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc["network"]["extra_addresses"] = [{"address": "192.0.2.150", "why": " " * 12}]
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ComputeError, match="extra_addresses"):
+        _load(site)

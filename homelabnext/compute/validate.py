@@ -138,18 +138,35 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
-def _known_zones(fleet: Fleet) -> list[ZoneInfo]:
-    """Every zone of the site model when its lookup can list them (``all()``), and the zones the
-    fleet's guests are in in any case (a lookup is otherwise asked by id only)."""
+#: the IPv4 ranges an extra address may be outside its zone's subnet in: zone-less overlays, where
+#: a guest holds an address of its own (a tailnet's shared range, RFC 6598).  Never one that
+#: falls inside a zone's subnet; nothing else outside the guest's own zone, since the site model
+#: says who holds an address only by zone.
+OVERLAY_V4: tuple[ipaddress.IPv4Network, ...] = (ipaddress.IPv4Network((0x6440_0000, 10)),)
+#: the IPv6 ranges an extra address may come from: unique-local and documentation.  The site model
+#: gives a zone no IPv6 prefix, so nothing says which guest owns one of these (operator review),
+#: and a global IPv6 address (SLAAC included) cannot be checked against any zone: refused.
+UNOWNED_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
+    ipaddress.IPv6Network((0x2001_0DB8 << 96, 32)),  # documentation
+    ipaddress.IPv6Network((0x3FFF << 112, 20)),  # documentation
+)
+
+
+def _known_zones(fleet: Fleet) -> tuple[list[ZoneInfo], list[str]]:
+    """Every zone of the site model (``ZoneLookup.all``), and the ids of zones a guest is in that
+    the list leaves out (a lookup that answers ``zone(id)`` but cannot list them)."""
     found: dict[str, ZoneInfo] = {}
     listed = getattr(fleet.zones, "all", None)
     for z in listed() if callable(listed) else ():
         if isinstance(z, ZoneInfo):
             found.setdefault(z.id, z)
+    missing = []
     for g in fleet.sorted():
         z = fleet.zones.zone(g.zone)
-        if z is not None:
-            found.setdefault(z.id, z)
+        if z is not None and z.id not in found:
+            found[z.id] = z
+            missing.append(z.id)
     out = []
     for z in found.values():
         try:
@@ -157,19 +174,35 @@ def _known_zones(fleet: Fleet) -> list[ZoneInfo]:
         except ValueError:
             continue
         out.append(z)
+    return out, sorted(set(missing))
+
+
+def _taken_addresses(fleet: Fleet) -> dict[str, str]:
+    """Addresses that belong to something other than a guest, address -> what holds it: the
+    site's static DNS names and every guest's own ``network.gateway`` (a router).  A static name
+    that is a guest's own fqdn is that guest's, and :func:`_extra_address_problem` lets it be."""
+    out: dict[str, str] = {}
+    for addr, names in fleet.site_addresses.items():
+        out[addr] = "the site's DNS name " + ", ".join(names)
+    for g in fleet.sorted():
+        gw = g.network.get("gateway", "inherit")
+        if isinstance(gw, str) and gw != "inherit":
+            out.setdefault(gw, f"the gateway {g.id} names (network.gateway)")
     return out
 
 
 def _extra_address_problem(
-    raw: str, g: Guest, zones: list[ZoneInfo]
+    raw: str, g: Guest, zones: list[ZoneInfo], taken: dict[str, str], fleet: Fleet
 ) -> tuple[str | None, str | None]:
     """``(canonical, None)`` for an extra address the runtime table can key, else ``(None, why)``.
 
-    The table matches the observed address exactly, so only an address that names one guest
-    wherever the collector sees it is any use: never a loopback, link-local (unique only on its
-    own link), multicast or metadata address, never one IPv6 writes around an IPv4 one, and never
-    an address that moves (a DHCP lease) or that many guests leave by (a zone gateway's NAT)."""
-    from homelabnext.modules.egress import METADATA, NOT_INTERNET
+    The table matches the observed address exactly and labels it as this guest, so an extra
+    address must name this guest and no other wherever the collector sees it: never a loopback,
+    link-local (unique only on its own link), multicast or metadata address, never one IPv6
+    writes around an IPv4 one, never an address that moves (a DHCP lease) or that many guests
+    leave by (a gateway), never another zone's or anything the site names, and in IPv4 always in
+    the guest's own zone (or a zone-less overlay, :data:`OVERLAY_V4`)."""
+    from homelabnext.modules.egress import METADATA
     from homelabnext.modules.scope import EMBEDDED_V4
 
     try:
@@ -188,10 +221,20 @@ def _extra_address_problem(
         return None, "is link-local, so it names no one guest beyond its own link"
     if ip.version == 4 and int(ip) >> 24 == 0:
         return None, "is in this-network (0.0.0.0/8)"
-    own = next((z for z in zones if z.id == g.zone), None)
-    in_own = own is not None and ip.version == 4 and ip in own.network
-    if not in_own and not any(ip.version == n.version and ip in n for n in NOT_INTERNET):
-        return None, f"is an internet address outside zone {g.zone}'s subnet"
+    if ip.version == 4:
+        other = next((z for z in zones if z.id != g.zone and ip in z.network), None)
+        if other is not None:
+            return None, f"is inside zone {other.id}'s subnet, not zone {g.zone}'s"
+        own = next((z for z in zones if z.id == g.zone), None)
+        if (own is None or ip not in own.network) and not any(ip in n for n in OVERLAY_V4):
+            return None, f"is outside zone {g.zone}'s subnet (and in no zone-less overlay range)"
+    elif not any(ip in n for n in UNOWNED_V6):
+        if ip.is_global:
+            return None, (
+                "is a global IPv6 address; the site model gives no zone an IPv6 prefix to hold "
+                "it against, so only unique-local or documentation IPv6 is accepted"
+            )
+        return None, "is a special-purpose IPv6 address, not a unique-local or documentation one"
     for z in zones:
         if ip.version != 4 or ip not in z.network:
             continue
@@ -201,16 +244,23 @@ def _extra_address_problem(
             return None, f"is zone {z.id}'s gateway, which every guest it routes leaves by"
         if z.dhcp_range and _in_range(ip, z.dhcp_range):
             return None, f"is inside zone {z.id}'s DHCP pool, so another host may lease it"
+    if g.network.get("gateway", "inherit") == str(ip):
+        return None, "is this guest's own gateway (network.gateway), which it leaves by"
+    holder = taken.get(str(ip))
+    if holder is not None and fleet.fqdn(g) not in fleet.site_addresses.get(str(ip), ()):
+        return None, f"is {holder}, not this guest's"
     return str(ip), None
 
 
-def _check_extra_addresses(g: Guest, zones: list[ZoneInfo]) -> tuple[list[Problem], list[str]]:
+def _check_extra_addresses(
+    g: Guest, zones: list[ZoneInfo], taken: dict[str, str], fleet: Fleet
+) -> tuple[list[Problem], list[str]]:
     """The guest's own problems with ``network.extra_addresses``, and the addresses that are
     sound and new (each once, never ``network.ip``), for the fleet-wide duplicate check."""
     out: list[Problem] = []
     keys: list[str] = []
     for raw in g.extra_addresses:
-        key, why = _extra_address_problem(raw, g, zones)
+        key, why = _extra_address_problem(raw, g, zones, taken, fleet)
         if key is None:
             out.append(Problem(g.id, f"network.extra_addresses {raw} {why}"))
         elif key == g.ip:
@@ -536,7 +586,16 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
     seen_id: dict[str, str] = {}
     seen_vmid: dict[tuple[str, int], str] = {}
     seen_ip: dict[str, str] = {}
-    zones = _known_zones(fleet)
+    zones, unlisted = _known_zones(fleet)
+    taken = _taken_addresses(fleet)
+    if unlisted and any(g.extra_addresses for g in fleet.guests):
+        out.append(
+            Problem(
+                "site",
+                f"the zone lookup does not list zone(s) {', '.join(unlisted)} (ZoneLookup.all), "
+                "so network.extra_addresses cannot be held against every zone",
+            )
+        )
     for g in fleet.sorted():
         if g.id in seen_id:
             out.append(Problem(g.id, f"duplicate id (also in {seen_id[g.id]})"))
@@ -552,9 +611,9 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
             seen_vmid[key] = g.id
         if g.ip in seen_ip:
             out.append(Problem(g.id, f"ip {g.ip} already used by {seen_ip[g.ip]}"))
-        seen_ip[g.ip] = g.id
+        seen_ip.setdefault(g.ip, g.id)  # the first holder, so a third claimant names it too
         out += _check_guest(g, fleet)
-        extra, keys = _check_extra_addresses(g, zones)
+        extra, keys = _check_extra_addresses(g, zones, taken, fleet)
         out += extra
         for key in keys:  # one address names one guest, as network.ip or as an extra
             if key in seen_ip:
