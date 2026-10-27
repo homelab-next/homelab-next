@@ -143,8 +143,9 @@ suite_budgets = [
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
-  # md-levels pages (2026-10-25)
-  "tests/graph = 130",
+  # md-levels pages (2026-10-25); 170 since CI measured 131.4s on 3.12 (106.1s on 3.11) after the
+  # extra-address, zone IPv6 and swap-evidence docs (2026-10-27)
+  "tests/graph = 170",
   # the read-only server starts the MCP SDK over stdio and builds the repository graph, and the
   # catalog's file-level rules (record files, locks, renders, imports) each copy the catalog
   "tests/mcp = 90",
