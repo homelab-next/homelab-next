@@ -99,6 +99,12 @@ def pin_digest(pin: Mapping[str, Any]) -> str:
     return _digest(dict(pin))
 
 
+def report_digest(report: Any) -> str:
+    """An evaluation report as one digest (canonical JSON, so formatting does not change it): what
+    a module swap's model-role leg pins as its evidence."""
+    return _digest(report)
+
+
 def fake_canary_factory(role: str, binding: Binding) -> tuple[Completer, str]:
     """The canary's CI stand-in for every binding: the benign scripted model, marked ``fake``."""
     from .canary import benign_model
