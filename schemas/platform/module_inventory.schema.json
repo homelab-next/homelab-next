@@ -3,16 +3,143 @@
   "$id": "https://schemas.example.internal/homelabnext/platform/module_inventory/1.0",
   "x-draft": "ADR-0027 (proposed): what runs on a site, for the loader's two-way check (follow-up 9); not frozen, may change before acceptance",
   "title": "Module inventory",
-  "description": "What runs on a site, by kind, for the module loader's two-way check (ADR-0027, proposed; docs/modules.md, 'What the loader checks'): every running name bound to a module id (<id> or <id>-..., a table as table:<id_>.<name>) must be declared by that module, which the site selects, and every declared name must run. A name bound to no module id is the core's and is not judged by this check. The deployer writes it from the hosts (unit names without the hnx- prefix and the .service/.timer suffix, service rows by registry name, MCP server ids, agent keys, lake tables). Optionally, the running notifier's recovery pairs (notify_pairs), each with the module it is bound to; a pair with no module is the core's. Without notify_pairs the pairs are not compared, and the loader says so. The rules are in homelabnext.modules.loader.running_problems.",
+  "description": "What runs on a site, by kind, for the module loader's two-way check (ADR-0027, proposed; docs/modules.md, 'What the loader checks'): every running name bound to a module id (<id> or <id>-..., a table as table:<id_>.<name>) must be declared by that module, which the site selects, and every declared name must run. A name bound to no module id is the core's and is not judged by this check. Every kind is listed, even when empty (a missing list would read as 'nothing runs'), unless not_gathered names it: then it is left out and the loader notes it as not compared. hnx modules gather builds one from the census the module_census role takes on the hosts: units (every hnx-<name>.service or .timer some host reports enabled, as <name>), with service rows, MCP servers, agents and tables, which the hosts do not report, named in not_gathered. Optionally, the running notifier's recovery pairs (notify_pairs), each with the module it is bound to; a pair with no module is the core's. Without notify_pairs the pairs are not compared, and the loader says so. The rules are in homelabnext.modules.loader.running_problems.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
-    "units",
-    "rows",
-    "mcp_servers",
-    "agents",
-    "tables"
+    "schema_version"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "not_gathered"
+        ],
+        "properties": {
+          "not_gathered": {
+            "contains": {
+              "const": "units"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "units"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "units"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "not_gathered"
+        ],
+        "properties": {
+          "not_gathered": {
+            "contains": {
+              "const": "rows"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "rows"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "rows"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "not_gathered"
+        ],
+        "properties": {
+          "not_gathered": {
+            "contains": {
+              "const": "mcp_servers"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "mcp_servers"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "mcp_servers"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "not_gathered"
+        ],
+        "properties": {
+          "not_gathered": {
+            "contains": {
+              "const": "agents"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "agents"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "agents"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "not_gathered"
+        ],
+        "properties": {
+          "not_gathered": {
+            "contains": {
+              "const": "tables"
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "tables"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "tables"
+        ]
+      }
+    }
   ],
   "properties": {
     "schema_version": {
@@ -64,6 +191,21 @@
         "pattern": "^table:[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$(?!\\n)"
       },
       "description": "Lake tables that exist."
+    },
+    "not_gathered": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "units",
+          "rows",
+          "mcp_servers",
+          "agents",
+          "tables"
+        ]
+      },
+      "description": "Kinds this inventory does not report (a gathered one: the hosts do not report them): each is left out of the inventory and noted as not compared, never read as 'nothing runs'. A kind it names must not be listed."
     },
     "notify_pairs": {
       "type": "array",

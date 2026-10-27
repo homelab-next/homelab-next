@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read-only on the hosts: two systemctl queries each (enabled unit files, active units).  The answers are written on the controller
+# (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
+# binding of a unit to a module is its name, decided by the loader, never by anything written here.
+- name: Validate the inputs
+  ansible.builtin.assert:
+    that:
+      - module_census_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_dir
+      - module_census_systemctl_cli is match('^[A-Za-z0-9._/-]+\Z')
+      - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z')
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, and the host name a plain name (it names the host's answer file)"
+
+- name: Look at the census directory on the controller
+  ansible.builtin.stat:
+    path: "{{ module_census_dir }}"
+  register: module_census_dir_stat
+  delegate_to: localhost  # workstation-ref: allow the census is the deploy run's own (the runner), never a runtime dependency
+  become: false
+
+- name: Fail unless the census directory is a directory
+  ansible.builtin.assert:
+    that:
+      - module_census_dir_stat.stat.isdir | default(false)
+      - not (module_census_dir_stat.stat.islnk | default(false))
+    fail_msg: "module_census: {{ module_census_dir }} is not a directory on the controller"
+
+- name: Write the play's hosts (every host it targets, an unreachable one included)
+  ansible.builtin.copy:
+    content: "{{ ansible_play_hosts_all | to_json }}\n"
+    dest: "{{ module_census_dir }}/_hosts.json"
+    mode: "0600"
+  delegate_to: localhost  # workstation-ref: allow the census is the deploy run's own (the runner), never a runtime dependency
+  become: false
+  run_once: true
+
+- name: List the enabled fleet units
+  ansible.builtin.command:
+    argv:
+      - "{{ module_census_systemctl_cli }}"
+      - list-unit-files
+      - --no-legend
+      - --plain
+      - --no-pager
+      - --type=service,timer
+      - --state=enabled
+      - hnx-*
+  register: module_census_units
+  changed_when: false
+  # systemctl exits 1 when no unit file matches the pattern, and prints nothing then
+  failed_when: >-
+    module_census_units.rc not in [0, 1]
+    or (module_census_units.rc == 1 and module_census_units.stdout | length > 0)
+
+- name: List the active fleet units (one may run without being enabled)
+  ansible.builtin.command:
+    argv:
+      - "{{ module_census_systemctl_cli }}"
+      - list-units
+      - --no-legend
+      - --plain
+      - --no-pager
+      - --type=service,timer
+      - --state=active
+      - hnx-*
+  register: module_census_active
+  changed_when: false
+  # list-units exits 0 with nothing printed when no unit matches; anything else is a failure
+  failed_when: module_census_active.rc != 0
+
+- name: Write this host's answer on the controller
+  ansible.builtin.copy:
+    content: "{{ {'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines} | to_json }}\n"
+    dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
+    mode: "0600"
+  delegate_to: localhost  # workstation-ref: allow the census is the deploy run's own (the runner), never a runtime dependency
+  become: false

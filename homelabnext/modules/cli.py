@@ -3,11 +3,27 @@
 checks").
 
 ``hnx modules check [--overlay DIR] [--examples] [--site FILE] [--running FILE] [--keyring FILE]
-[--mcp-catalog DIR] [--json]``
+[--mcp-catalog DIR] [--deploy] [--json]``
     discover the manifests (the public ``modules/``, with ``--examples`` the fictional
     ``examples/modules/`` as a fixture root, and an overlay's ``lab/modules/``), and run every
     rule: per manifest, across manifests, per site, the supply chain and, with ``--running``, the
-    runtime half of the two-way check.  What was not checked is printed as a note.
+    runtime half of the two-way check.  What was not checked is printed as a note.  ``--deploy``
+    is the check a deploy runs (the private overlay's deploy workflow, before anything changes on
+    a host, and again after it with the gathered inventory): it needs ``--overlay``, refuses
+    ``--examples``, and every input the overlay layout names must be the overlay's own (the site
+    selection ``lab/modules.yml``, the role table, the core registry) or given on the command
+    line; a fallback to the repository's examples is a problem, never a note.  A lab with none
+    of ``lab/modules.yml``, ``lab/modules/`` and ``lab/modules.lock`` (a dangling link counts as
+    present) has an **empty selection**: the check still runs, and with ``--running`` every
+    running name bound to a module is one the site does not select.  With modules selected and
+    no review policy, every fetched module is refused (the supply chain fails closed), so a lab
+    of in-tree modules needs none.
+``hnx modules gather DIR --out FILE``
+    the inventory of what runs (``platform/module_inventory``), built from the census the
+    ``module_census`` role wrote under ``DIR`` (:mod:`homelabnext.modules.census`): the fleet
+    units some host reports enabled or active; the kinds the hosts do not report are named in
+    ``not_gathered``.  ``FILE`` must not exist.  Exit 2 when the census cannot be read or does
+    not cover every host the play targeted.
 ``hnx modules render --site FILE --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
@@ -59,12 +75,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
 from homelabnext.modules import loader as ld
+
+#: what a lab names when it takes up modules: with none of them, ``--deploy`` checks an empty
+#: selection
+MODULE_INPUTS = ("modules.yml", "modules", "modules.lock")
 
 
 def _root(arg: Path | None) -> Path:
@@ -109,14 +130,19 @@ def _core(
     services: Path,
     budget: ld.Budget,
     notes: list[str],
+    strict: bool = True,
 ) -> tuple[ld.CoreNames, list[ld.Problem]]:
     """The core's names from the sources it already has (:func:`ld.core_names`): the registry,
-    its MCP catalog, the keyring, the OCSF tables and the core's notify pairs.
+    its MCP catalog, the keyring, the OCSF tables, the core's notify pairs and its own fleet units
+    (read from ``ansible/roles`` under the root and the generators, :func:`ld.core_units`; a
+    deploy without them is a ``registry`` problem).
 
     With ``--overlay``, the MCP catalog (``lab/mcp/``) and the keyring
     (``lab/keyring/keyring.json``) are the overlay's: one that is missing is a ``registry``
     problem unless it is given (``--mcp-catalog``, ``--keyring``), since the repository's
-    examples would answer for a lab they do not describe.  Without one, the catalog beside the
+    examples would answer for a lab they do not describe (with ``strict`` false, an empty
+    selection's check, it is a note: those names judge only modules).  Without one, the catalog
+    beside the
     core registry (``mcp/``) and the example keyring are used, each fallback a note, and a missing
     source is a note: never a silently smaller set."""
     from homelabnext.lake.tables import CORE_NAMESPACE
@@ -128,13 +154,14 @@ def _core(
     if catalog.exists() or catalog.is_symlink():
         mcp, problems = ld.core_mcp_records(catalog, budget)
     elif lab is not None:
-        problems.append(
-            ld.Problem(
-                "registry",
-                f"the overlay has no MCP catalog ({_shown_path(catalog, root)}): give "
-                "--mcp-catalog, or the core's MCP server ids cannot be compared",
-            )
+        why = (
+            f"the overlay has no MCP catalog ({_shown_path(catalog, root)}): give "
+            "--mcp-catalog, or the core's MCP server ids cannot be compared"
         )
+        if strict:
+            problems.append(ld.Problem("registry", why))
+        else:
+            notes.append(why)
     else:
         notes.append(
             f"no MCP catalog beside the core registry ({_shown_path(catalog, root)}): the core's "
@@ -144,13 +171,14 @@ def _core(
     if keyring_path is None and lab is not None:
         keyring_path = _existing(lab / "keyring" / "keyring.json")
         if keyring_path is None:
-            problems.append(
-                ld.Problem(
-                    "registry",
-                    "the overlay has no keyring (lab/keyring/keyring.json): give --keyring, or "
-                    "the core's agent keys cannot be compared",
-                )
+            why = (
+                "the overlay has no keyring (lab/keyring/keyring.json): give --keyring, or "
+                "the core's agent keys cannot be compared"
             )
+            if strict:
+                problems.append(ld.Problem("registry", why))
+            else:
+                notes.append(why)
     elif keyring_path is None:
         keyring_path = _existing(root / "examples" / "keyring" / "keyring.json")
         if keyring_path is not None:
@@ -162,6 +190,20 @@ def _core(
     keyring = _read(keyring_path, "keyring", budget) if keyring_path is not None else None
     tables, found = ld.core_table_names(paths.ocsf_dir(), budget)
     problems += found
+    units = None
+    roles_dir = root / "ansible" / "roles"
+    if roles_dir.exists() or roles_dir.is_symlink():
+        names, families, found = ld.core_units(roles_dir, budget)
+        problems += found
+        units = (names, families)
+    elif getattr(args, "deploy", False):
+        why = "the core's roles (ansible/roles under --root) are missing: its units cannot be read"
+        problems.append(ld.Problem("registry", why))
+    else:
+        notes.append(
+            "no ansible/roles under the root: the core's own units were not read, so a running "
+            "unit bound to no module is not judged"
+        )
     core, found = ld.core_names(
         _read(services, "core registry", budget),
         mcp=mcp,
@@ -169,6 +211,7 @@ def _core(
         tables=tables,
         table_namespace=CORE_NAMESPACE,
         pairs=CORE_PAIRS,
+        units=units,
     )
     return core, [*problems, *found]
 
@@ -194,8 +237,18 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--json", action="store_true")
         if name == "check":
             p.add_argument("--running", type=Path, help="what runs (platform/module_inventory)")
+            p.add_argument(
+                "--deploy",
+                action="store_true",
+                help="the deploy's check: the overlay's own inputs only, never the examples",
+            )
         else:
             p.add_argument("--out", type=Path, required=True, help="a new or empty directory")
+    c = sub.add_parser("gather", help="the inventory of what runs, from the hosts' census")
+    c.add_argument("census", type=Path, help="the directory the module_census role wrote")
+    c.add_argument(
+        "--out", type=Path, required=True, help="the inventory to write (must not exist)"
+    )
     t = sub.add_parser("review-tier", help="the review tier of each manifest changed since a base")
     t.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
     which = t.add_mutually_exclusive_group(required=True)
@@ -399,7 +452,29 @@ def _swap_gate(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _gather(args: argparse.Namespace) -> int:
+    """Write the gathered inventory; 2 when the census cannot be read (a host missing, an entry
+    that is no listed host's answer, a line that is not a fleet unit in its query's shape)."""
+    from homelabnext.modules import census
+
+    if args.out.exists() or args.out.is_symlink():
+        raise ld.LoaderError(f"--out {args.out}: exists (gather writes a new file)")
+    try:
+        inventory, notes = census.gather(args.census)
+    except census.CensusError as exc:
+        raise ld.LoaderError(f"census {args.census}: {exc}") from None
+    with open(args.out, "x", encoding="utf-8") as fh:
+        json.dump(inventory, fh, indent=2)
+        fh.write("\n")
+    for n in notes:
+        print(f"note: {n}")
+    print(f"hnx modules gather: {len(inventory['units'])} unit(s) written to {args.out}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.cmd == "gather":
+        return _gather(args)
     if args.cmd == "review-tier":
         return _review_tier(args)
     if args.cmd == "swap-check":
@@ -409,6 +484,11 @@ def _run(args: argparse.Namespace) -> int:
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
+    deploy = getattr(args, "deploy", False)
+    if deploy and args.overlay is None:
+        raise ld.LoaderError("--deploy needs --overlay (the lab the deploy applies)")
+    if deploy and args.examples:
+        raise ld.LoaderError("--deploy refuses --examples (a deploy never loads the fixtures)")
     for flag in (
         "site",
         "slots",
@@ -427,7 +507,32 @@ def _run(args: argparse.Namespace) -> int:
         if any(args.out.iterdir()):
             raise ld.LoaderError(f"--out {args.out}: not empty (render writes a fresh directory)")
     notes: list[str] = []
+    #: a deploy's input that fell back to the repository's example: a problem, never a note
+    fallbacks: list[ld.Problem] = []
+
+    def fallback(what: str, path: Path) -> None:
+        if deploy and not empty:
+            shown = path.relative_to(args.overlay).as_posix()  # never resolved: a link stays one
+            why = (
+                f"{shown} is not a regular file"
+                if os.path.lexists(path)
+                else f"the overlay has no {shown}"
+            )
+            fallbacks.append(ld.Problem("deploy", f"{what}: {why}"))
+
     lab = args.overlay / "lab" if args.overlay else None
+    #: under --deploy, a lab that names none of its module inputs selects no module at all: the
+    #: check still runs (and, with --running, judges every running unit of a module), but an
+    #: input that only judges selected modules is not required of it
+    empty = (
+        deploy and args.site is None and not any(os.path.lexists(lab / f) for f in MODULE_INPUTS)
+    )
+    if empty:
+        notes.append(
+            "this lab selects no modules (none of "
+            + ", ".join(f"lab/{f}" for f in MODULE_INPUTS)
+            + "): an empty selection"
+        )
     budget = ld.Budget()
     public = root / "modules"
     if not public.is_dir() or not any(public.iterdir()):
@@ -440,6 +545,8 @@ def _run(args: argparse.Namespace) -> int:
     )
     roles_path = args.roles or _existing(lab and lab / "model_roles.json")
     if roles_path is None:
+        if lab:
+            fallback("the role table", lab / "model_roles.json")
         roles_path = root / "examples" / "model_roles.json"
         notes.append(
             f"the role table is the repository's example ({_shown_path(roles_path, root)})"
@@ -447,11 +554,13 @@ def _run(args: argparse.Namespace) -> int:
     roles = _read(roles_path, "role table", budget)
     services = args.services or _existing(lab and lab / "services.yml")
     if services is None:
+        if lab:
+            fallback("the core registry", lab / "services.yml")
         services = root / "examples" / "services.yml"
         notes.append(
             f"the core registry is the repository's example ({_shown_path(services, root)})"
         )
-    core, registry_problems = _core(args, root, lab, services, budget, notes)
+    core, registry_problems = _core(args, root, lab, services, budget, notes, strict=not empty)
     site_path = args.site or _existing(lab and lab / "modules.yml")
     lock_path = args.lock or _existing(lab and lab / "modules.lock")
     policy_path = args.review_policy or _existing(lab and lab / "review-policy.yml")
@@ -463,6 +572,13 @@ def _run(args: argparse.Namespace) -> int:
             policy = load_policy(policy_path)
         except ReviewError as exc:
             raise ld.LoaderError(f"review policy {policy_path}: {exc}") from None
+    if site_path is None and lab and not empty:
+        fallback("the site selection", lab / "modules.yml")
+    if deploy and site_path is not None and policy_path is None:
+        notes.append(
+            "no review policy (lab/review-policy.yml): every fetched module is refused, so only "
+            "in-tree modules load"
+        )
     site = _read(site_path, "site selection", budget) if site_path else None
     if args.cmd == "render" and site is None:
         raise ld.LoaderError(
@@ -483,8 +599,9 @@ def _run(args: argparse.Namespace) -> int:
         policy=policy,
         inventory=_read(running, "inventory", budget) if running else None,
         budget=budget,
+        empty_selection=empty,
     )
-    found = sorted({*problems, *registry_problems, *report.problems})
+    found = sorted({*problems, *registry_problems, *report.problems, *fallbacks})
     notes += report.notes
     written: dict[str, int] = {}
     error = None

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ask the host's systemctl for its version
+      ansible.builtin.command:
+        argv: ["{{ module_census_systemctl_cli }}", --version]
+      changed_when: false
+  tags: [health]

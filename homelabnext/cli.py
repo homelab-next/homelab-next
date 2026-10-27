@@ -240,7 +240,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.codemode.cli").main(a),
     ),
     "modules": (
-        "the module loader (ADR-0027): check (every manifest, site, lock and runtime rule)|render "
+        "the module loader (ADR-0027): check (every manifest, site, lock and runtime rule)|gather "
+        "(the inventory of what runs, from the hosts' census)|render "
         "(footprint limits and egress policy for a site)|review-tier (each changed manifest's "
         "review tier, and a code owner for every human-approve one)|swap-check (a swap record with "
         "its model evidence read from the base commit)|swap-gate (a role-table change must be "

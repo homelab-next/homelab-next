@@ -137,6 +137,15 @@ jobs:
           hnx guests validate lab/guests --site lab/site.yml
           hnx custom check
 
+      # The module loader (ADR-0027, docs/modules.md "The loader at deploy time"): the same check
+      # `make gates` runs, over this lab's own selection, before anything changes on a host; a
+      # problem stops the deploy.  --deploy refuses the repository's examples in place of a lab
+      # input.  It always runs: a lab that has taken up no modules (none of lab/modules.yml,
+      # lab/modules/ and lab/modules.lock, a dangling link counting as present) is checked as an
+      # empty selection, which hnx decides, never this step.
+      - name: the module loader, before anything changes on a host
+        run: hnx modules check --root hnx --overlay . --deploy
+
       # Tailscale path: join the tailnet for this run only, by workload identity federation: the
       # action trades the job's OIDC token for an ephemeral, pre-authorized node tagged
       # tag:ci-deploy, so no Tailscale secret exists to steal.  The tag's ACL is generated from
@@ -173,3 +182,22 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" | ssh-add - 2> /dev/null
           unset DEPLOY_SSH_KEY
           ansible-playbook ansible/playbooks/site.yml
+          # the census of what runs, read-only on every host, into a fresh directory of this
+          # runner's (the next step gathers and checks it); always, even for a lab that selects
+          # no modules.  systemctl is pinned here: an extra variable wins over the overlay's own
+          # group_vars, so the overlay cannot point the census at a stand-in
+          census="$(mktemp -d "$RUNNER_TEMP/census.XXXXXX")"
+          ansible-playbook hnx/ansible/playbooks/module_census.yml \
+            -e "module_census_dir=$census" -e module_census_systemctl_cli=/usr/bin/systemctl
+          echo "HNX_CENSUS_DIR=$census" >> "$GITHUB_ENV"
+
+      # After the deploy, what runs must be what the lab declares (the loader's two-way check
+      # against the census just taken): a unit a selected module does not declare, one of a module
+      # the lab does not select (with an empty selection, any module's), or a declared one that
+      # is not running fails the run.  It is a verification, not a gate: the deploy has already
+      # applied, and the red run is the alarm.  It always runs.
+      - name: what runs matches what the lab declares
+        run: |
+          set -euo pipefail
+          hnx modules gather "$HNX_CENSUS_DIR" --out "$HNX_CENSUS_DIR.inventory.json"
+          hnx modules check --root hnx --overlay . --deploy --running "$HNX_CENSUS_DIR.inventory.json"

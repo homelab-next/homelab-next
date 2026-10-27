@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# not_gathered names only the inventory's own kinds.
+schema_version: "1.0"
+units: []
+rows: []
+mcp_servers: []
+agents: []
+tables: []
+not_gathered: [jobs]

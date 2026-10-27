@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# A kind named in not_gathered is not listed: the two would disagree about whether it was compared.
+schema_version: "1.0"
+units: []
+rows: [samples]
+mcp_servers: []
+agents: []
+tables: []
+not_gathered: [rows]

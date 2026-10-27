@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: List each host's enabled and active fleet units (read-only) and write the answers on the controller.
+    options:
+      module_census_dir: &dir
+        type: path
+        description: "A directory on the controller, empty when the play starts (the deploy makes a fresh one): the role writes <host>.json for each host and _hosts.json, the play's hosts, and hnx modules gather reads them."
+        required: true
+      module_census_systemctl_cli: &cli
+        type: str
+        description: "The systemctl command each host runs (a test points it at a stand-in)."
+        default: systemctl
+  health:
+    short_description: Fail unless the host answers systemctl --version.
+    options:
+      module_census_systemctl_cli: *cli
+  readiness:
+    short_description: No dependency; succeeds.
+    options: {}
+  backup:
+    short_description: Nothing to back up; the census is taken again on every run.
+    options: {}
+  restore:
+    short_description: Nothing to restore; the census is taken again on every run.
+    options: {}
+  upgrade:
+    short_description: Nothing installed, nothing to upgrade.
+    options: {}
+  export:
+    short_description: Nothing kept on the host; the census is the controller's directory.
+    options: {}

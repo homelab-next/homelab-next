@@ -35,6 +35,9 @@ from ._text import HEADER
 #: the filter's priority: fixed, so a re-run replaces it and ``--remove`` finds it
 PREF = 49152
 SCRIPT_PATH = "/usr/local/sbin/hnx-mirror.sh"
+#: the core fleet unit this generator writes on every mirroring node (``hnx-mirror`` service and
+#: timer): one of the core's own units (:func:`homelabnext.modules.loader.core_units`)
+UNIT = "mirror"
 #: the guest schema's placement.node pattern: the node name becomes a directory of the render
 NODE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 
@@ -206,6 +209,6 @@ def render(fleet: Fleet) -> dict[str, str]:
     out = {"mirror/README.md": readme(mirrors)}
     for node, m in mirrors.items():
         out[f"mirror/{node}/hnx-mirror.sh"] = script(node, m["to"], m["bridges"])
-        out[f"mirror/{node}/hnx-mirror.service"] = service(node)
-        out[f"mirror/{node}/hnx-mirror.timer"] = timer(node)
+        out[f"mirror/{node}/hnx-{UNIT}.service"] = service(node)
+        out[f"mirror/{node}/hnx-{UNIT}.timer"] = timer(node)
     return out

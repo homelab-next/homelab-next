@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# The census of what runs (docs/modules.md, "What the loader checks"): read-only on the hosts;
+# module_census_dir, a fresh directory on the controller, is required and has no default.
+module_census_systemctl_cli: systemctl

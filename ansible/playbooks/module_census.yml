@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The census of what runs (docs/modules.md, "What the loader checks"): read-only on every host.
+# Run it after a deploy with a fresh controller directory, then gather and check:
+#   d=$(mktemp -d)
+#   ansible-playbook <hnx>/ansible/playbooks/module_census.yml -e module_census_dir="$d"
+#   hnx modules gather "$d" --out "$d.inventory.json"
+#   hnx modules check --overlay . --deploy --running "$d.inventory.json"
+- name: Census of the fleet units every host enables or runs
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: module_census

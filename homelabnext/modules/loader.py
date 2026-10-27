@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -79,6 +80,7 @@ __all__ = [
     "core_mcp_records",
     "core_names",
     "core_table_names",
+    "core_units",
     "discover",
     "inputs",
     "load_input",
@@ -170,11 +172,12 @@ class CoreNames:
     * ``tables`` and ``table_namespace``: the core's OCSF tables (``schemas/ocsf``) and the lake
       namespace they live in (:data:`homelabnext.lake.tables.CORE_NAMESPACE`);
     * ``pairs``: the core's own notify pairs, problem title to recovery title
-      (:data:`homelabnext.notify.core_pairs.CORE_PAIRS`, the list the core registers from).
-
-    The core's own units have no source to read (no fleet_units spec of the core's is in the
-    repository), so they are not compared; a module's units carry its id, which a core name
-    never is."""
+      (:data:`homelabnext.notify.core_pairs.CORE_PAIRS`, the list the core registers from);
+    * ``units`` and ``unit_families``: the core's own fleet units (``hnx-<name>``, the name
+      without the prefix), and the prefixes of the families a core role installs one unit of per
+      instance (``<prefix>-<instance>``), read from the core's roles and generators
+      (:func:`core_units`); ``units_known`` says they were read.  A running ``hnx-*`` unit that is
+      neither a module's nor one of these is a problem."""
 
     ids: frozenset[str] = frozenset(RESERVED_IDS)
     rows: Mapping[str, str] = field(default_factory=dict)  # row name -> capability
@@ -183,6 +186,15 @@ class CoreNames:
     tables: frozenset[str] = frozenset()  # table:<namespace>.<name>
     table_namespace: str | None = None
     pairs: Mapping[str, str] = field(default_factory=dict)  # problem title -> recovery title
+    units: frozenset[str] = frozenset()  # hnx-<name>: the name
+    unit_families: frozenset[str] = frozenset()  # hnx-<prefix>-<instance>: "<prefix>-"
+    units_known: bool = False
+
+    def is_unit(self, name: str) -> bool:
+        """``name`` (``hnx-`` left off) is one of the core's own units, or of a core family."""
+        return name in self.units or any(
+            name.startswith(f) and len(name) > len(f) for f in self.unit_families
+        )
 
 
 @dataclass
@@ -639,13 +651,15 @@ def core_names(
     tables: Iterable[str] | None = None,
     table_namespace: str | None = None,
     pairs: Mapping[str, str] | None = None,
+    units: tuple[Iterable[str], Iterable[str]] | None = None,
 ) -> tuple[CoreNames, list[Problem]]:
     """The core's names from the sources it already has: its service registry (``services.yml``;
     None: the reserved ids only), its MCP catalog's records (``(file name, record)``, as
     :func:`core_mcp_records` reads them), the keyring (its agent principals) and the names of its
-    OCSF tables in ``table_namespace``, and its notify pairs (problem title to recovery title).  A
-    source that is malformed is a ``registry`` problem,
-    never a silently smaller set."""
+    OCSF tables in ``table_namespace``, its notify pairs (problem title to recovery title) and
+    its own fleet units (``(names, family prefixes)``, as :func:`core_units` reads them; None:
+    not read).  A source that is malformed is a ``registry`` problem, never a silently smaller
+    set."""
     out: list[Problem] = []
     names: dict[str, str] = {}
     if services is not None:
@@ -699,6 +713,9 @@ def core_names(
             tables=core_tables if table_namespace else frozenset(),
             table_namespace=table_namespace,
             pairs=dict(pairs or {}),
+            units=frozenset(units[0]) if units is not None else frozenset(),
+            unit_families=frozenset(units[1]) if units is not None else frozenset(),
+            units_known=units is not None,
         ),
         out,
     )
@@ -776,6 +793,57 @@ def core_table_names(
     return sorted(names), out
 
 
+#: an Ansible task's ``dest:`` that installs a core unit file: ``.../hnx-<name>.service``,
+#: ``.timer`` or ``.{{ item }}`` (a loop over both), or ``.../hnx-<prefix>-{{ ... }}.service``, a
+#: family with one unit per instance
+_DEST_UNIT = re.compile(
+    r"""^[ \t-]*dest:[ \t]*["']?[^"'\n#]*/hnx-"""
+    r"""(?:(?P<family>[a-z0-9][a-z0-9-]*-)\{\{[^}\n]*\}\}\.service"""
+    r"""|(?P<name>[a-z0-9][a-z0-9-]*)\.(?:service|timer|\{\{[ \t]*item[ \t]*\}\}))["']?[ \t]*$""",
+    re.M,
+)
+
+
+def core_units(
+    roles: str | Path, budget: Budget | None = None
+) -> tuple[frozenset[str], frozenset[str], list[Problem]]:
+    """The core's own fleet units, read from what installs them, never from a list kept for this
+    check: every unit file a core role's tasks install (a ``dest:`` naming ``hnx-<name>.service``,
+    ``.timer`` or ``.{{ item }}``; ``hnx-<prefix>-{{ ... }}.service`` is a family, one unit per
+    instance), and the units the core's generators write (:data:`homelabnext.modules.egress.UNIT`,
+    :data:`homelabnext.compute.gen.node_mirror.UNIT`).  Returns ``(names, family prefixes,
+    problems)``; ``roles`` is the core's ``ansible/roles``, each task file read like any other
+    input.  A roles directory that is a symbolic link, missing or over
+    :data:`MAX_CATALOG_FILES` roles, or a task file that cannot be read, is a ``registry``
+    problem."""
+    from homelabnext.compute.gen import node_mirror
+    from homelabnext.modules import egress
+
+    names = {egress.UNIT, node_mirror.UNIT}
+    families: set[str] = set()
+    entries, out = _catalog(roles, "the core's roles")
+    for role in entries:
+        tasks = role / "tasks"
+        if role.is_symlink() or not role.is_dir() or tasks.is_symlink() or not tasks.is_dir():
+            continue
+        files, found = _catalog(tasks, f"role {role.name}'s tasks")
+        out += found
+        for f in files:
+            if f.suffix not in (".yml", ".yaml"):
+                continue
+            try:
+                text = _decoded(_catalog_read(f, budget))
+            except Unreadable as exc:
+                out.append(Problem("registry", f"role {_shown(role.name)}/{_shown(f.name)}: {exc}"))
+                continue
+            for m in _DEST_UNIT.finditer(text):
+                if m["family"]:
+                    families.add(m["family"])
+                else:
+                    names.add(m["name"])
+    return frozenset(names), frozenset(families), out
+
+
 def _module_tables(m: Doc, d: Path, load) -> set[str]:
     """The tables a module names as its own: its ``data`` tables and its lake table records."""
     out = {x["table"] for x in m.get("data", []) if "table" in x}
@@ -811,6 +879,11 @@ def _core_problems(tree: Tree, ins: Inputs, core: CoreNames, load=None) -> list[
         out += [
             Problem(n, f"table {t} is a core table")
             for t in sorted(_module_tables(m, d, load) & core.tables)
+        ]
+        out += [
+            Problem(n, f"unit {u} is a core unit")
+            for u in sorted(ins.units.get(n, set()))
+            if core.is_unit(u)
         ]
         core_titles = {*core.pairs, *core.pairs.values()}
         for pr in _pairs(m):
@@ -953,20 +1026,35 @@ def running_pair_problems(tree: Tree, sel: Mapping[str, Doc], running: list[Doc]
 
 
 def running_problems(
-    tree: Tree, ins: Inputs, site: Doc, sel: Mapping[str, Doc], inventory: Doc, load=None
+    tree: Tree,
+    ins: Inputs,
+    site: Doc,
+    sel: Mapping[str, Doc],
+    inventory: Doc,
+    load=None,
+    core: CoreNames | None = None,
 ) -> list[Problem]:
     """Every running name bound to a module id is declared by that module, which the site
-    selects; every declared name runs.  A name bound to no module id is the core's and is not
-    judged here.  With the inventory's ``notify_pairs``, the same for recovery pairs
-    (:func:`running_pair_problems`)."""
+    selects; every declared name runs.  A unit bound to no module id must be one of the core's
+    own (:attr:`CoreNames.units`, when ``core`` knows them): any other ``hnx-*`` unit runs but is
+    no module's or the core's.  Another kind's name bound to no module id is the core's and is
+    not judged here.  A kind the inventory names in ``not_gathered`` is not compared.  With the
+    inventory's ``notify_pairs``, the same for recovery pairs (:func:`running_pair_problems`)."""
     declared = _declared(tree, ins, site, sel, load or module_reader(tree))
     ids = set(tree.mods)
+    skipped = set(inventory.get("not_gathered", []))
     out = []
     for kind in INVENTORY_KINDS:
+        if kind in skipped:
+            continue
         running = set(inventory.get(kind, []))
         for name in sorted(running - set(declared[kind])):
             owner = _bound_to(kind, name, ids)
             if owner is None:
+                known = kind == "units" and core is not None and core.units_known
+                if known and not core.is_unit(name):
+                    why = f"units {name} runs but is no module's or the core's"
+                    out.append(Problem("running", why))
                 continue
             if owner not in sel:
                 why = f"{kind} {name} runs for {owner}, which the site does not select"
@@ -996,9 +1084,15 @@ def check(
     policy: Any = None,
     inventory: Doc | None = None,
     budget: Budget | None = None,
+    empty_selection: bool = False,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
-    the supply chain, with ``inventory`` the runtime half of the two-way check."""
+    the supply chain, with ``inventory`` the runtime half of the two-way check.
+
+    ``empty_selection`` (no ``site``): the site selects no module at all (a lab that has taken
+    up none, ``hnx modules check --deploy``).  The site rules and the supply chain have nothing
+    to judge, but the runtime check still runs: every running name bound to a module is one the
+    site does not select."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1057,6 +1151,15 @@ def check(
     problems += _core_problems(vtree, ins, core, load)
     if not tree.mods:
         notes.append("no module manifests were found under the given roots")
+    if site is None and empty_selection:
+        notes.append("an empty selection: the site selects no module")
+        if inventory is not None:
+            _runtime(vtree, ins, {"slots": {}}, {}, inventory, load, problems, notes, core)
+        else:
+            notes.append(
+                "no inventory of what runs: the runtime half of the two-way check did not run"
+            )
+        return Report(sorted(set(problems)), notes)
     if site is None:
         notes.append(
             "no site selection: the site rules, the supply chain and the runtime check did not run"
@@ -1092,16 +1195,38 @@ def check(
     if inventory is None:
         notes.append("no inventory of what runs: the runtime half of the two-way check did not run")
     else:
-        errs = _errors(_schema("platform", "module_inventory.schema.json"), inventory)
-        if errs:
-            problems += [Problem("running", f"schema: {e}") for e in errs]
-        else:
-            problems += running_problems(vtree, ins, site, sel, inventory, load)
-            if "notify_pairs" not in inventory:
-                notes.append(
-                    "the inventory names no notify_pairs: the recovery pairs were not compared"
-                )
+        _runtime(vtree, ins, site, sel, inventory, load, problems, notes, core)
     return Report(sorted(set(problems)), notes)
+
+
+def _runtime(
+    vtree: Tree,
+    ins: Inputs,
+    site: Doc,
+    sel: Mapping[str, Doc],
+    inventory: Doc,
+    load,
+    problems: list[Problem],
+    notes: list[str],
+    core: CoreNames | None = None,
+) -> None:
+    """The runtime half of the two-way check, appended to ``problems`` and ``notes``."""
+    errs = _errors(_schema("platform", "module_inventory.schema.json"), inventory)
+    if errs:
+        problems += [Problem("running", f"schema: {e}") for e in errs]
+        return
+    problems += running_problems(vtree, ins, site, sel, inventory, load, core)
+    if "units" not in inventory.get("not_gathered", []) and not (core and core.units_known):
+        notes.append(
+            "the core's own units were not read: a running unit bound to no module was not judged"
+        )
+    skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
+    if skipped:
+        notes.append(
+            "the inventory does not report " + ", ".join(skipped) + ": not compared (not_gathered)"
+        )
+    if "notify_pairs" not in inventory:
+        notes.append("the inventory names no notify_pairs: the recovery pairs were not compared")
 
 
 def units_fn(ins: Inputs) -> Callable[[str], set[str]]:

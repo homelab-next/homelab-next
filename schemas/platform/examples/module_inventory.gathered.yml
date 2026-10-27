@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# A gathered inventory (hnx modules gather): the hosts report their enabled fleet units, and the
+# kinds they cannot report are named in not_gathered, so the loader notes them as not compared
+# (egress and mirror, bound to no module id, are core units: ones the core's generators write).
+schema_version: "1.0"
+units: [egress, mirror]
+not_gathered: [rows, mcp_servers, agents, tables]
