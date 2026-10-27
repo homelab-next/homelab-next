@@ -34,7 +34,7 @@ from .duck import referenced_tables, run_duckdb
 from .endpoints import endpoint_for
 from .errors import LakeError, SchemaMismatch, UnknownTable
 from .protocol import Mark, TableInfo, WriteResult
-from .tables import Column, TableSchema, column_diffs, load_schemas, table_name
+from .tables import CORE_NAMESPACE, Column, TableSchema, column_diffs, load_schemas, table_name
 from .validate import content_key, normalize_rows
 
 PROP_BATCH = "hnx.batch-id"
@@ -113,7 +113,7 @@ class IcebergLake(AdapterBase):
         catalog: Any,
         schemas: Iterable[TableSchema] | Mapping[str, TableSchema] | None = None,
         *,
-        namespace: str = "ocsf",
+        namespace: str = CORE_NAMESPACE,
         named_queries: Mapping[str, str] | None = None,
     ):
         _need("pyiceberg")

@@ -121,6 +121,103 @@ def test_a_running_name_must_be_declared_selected_and_every_declared_one_must_ru
     ]
 
 
+PAIR = {
+    "problem": "External data collector: no new sessions",
+    "recovery": "External data collector: sessions arriving again",
+    "module": "external-collector",
+}
+
+
+def _pairs(*entries):
+    inv = copy.deepcopy(INVENTORY)
+    inv["notify_pairs"] = list(entries)
+    return inv
+
+
+def test_a_running_pair_must_be_declared_by_a_selected_module_with_the_same_recovery():
+    tree, _ = examples()
+    gate = {
+        "problem": "Publishing: an item was blocked by the gate",
+        "recovery": "Publishing: the gate passes every item again",
+        "module": "publishing",
+    }
+    got = messages(
+        check(
+            tree,
+            site=SITES["small-lab"],
+            inventory=_pairs(
+                gate,  # declared, but by a module the site does not select
+                {**PAIR, "problem": "External data collector: stalled"},  # not declared
+                {"problem": "Lake: compaction late", "recovery": "Lake: compacted"},  # the core's
+                {"problem": "Orphan: down", "recovery": "Orphan: up", "module": "no-such-module"},
+            ),
+        )
+    )
+    assert got == [
+        "running: notify pair 'External data collector: no new sessions' (external-collector) "
+        "is declared but not running",
+        "running: notify pair 'External data collector: stalled' runs but external-collector "
+        "declares no such pair",
+        "running: notify pair 'Orphan: down' runs for no-such-module, which is no module",
+        "running: notify pair 'Publishing: an item was blocked by the gate' runs for publishing, "
+        "which the site does not select",
+    ]
+
+
+def test_a_running_pair_is_compared_by_both_titles_and_held_once():
+    tree, _ = examples()
+    other = {**PAIR, "recovery": "External data collector: back"}
+    got = messages(check(tree, site=SITES["small-lab"], inventory=_pairs(other, PAIR)))
+    assert got == [
+        "running: notify pair 'External data collector: no new sessions' runs twice (the "
+        "notifier holds one per title)",
+        "running: notify pair 'External data collector: no new sessions' runs with recovery "
+        "'External data collector: back' but external-collector declares "
+        "'External data collector: sessions arriving again'",
+    ]
+
+
+def test_without_notify_pairs_in_the_inventory_the_pairs_are_named_as_not_compared():
+    tree, _ = examples()
+    inv = {k: v for k, v in INVENTORY.items() if k != "notify_pairs"}
+    report = check(tree, site=SITES["small-lab"], inventory=inv)
+    assert report.problems == []
+    assert "the inventory names no notify_pairs: the recovery pairs were not compared" in (
+        report.notes
+    )
+    assert "notify_pairs" in INVENTORY  # the example names them, so its check compares them
+    assert not [
+        n
+        for n in check(tree, site=SITES["small-lab"], inventory=INVENTORY).notes
+        if "notify_pairs" in n
+    ]
+
+
+def test_a_problem_title_is_declared_once_across_the_selected_modules():
+    tree, _ = examples()
+    m = tree.mods["publishing"]
+    m["contributes"]["notify_pairs"] = [
+        {"problem": PAIR["problem"], "recovery": "Publishing: fine"},
+        {"problem": "Publishing: same", "recovery": "Publishing: same"},
+    ]
+    got = [
+        str(p)
+        for p in ld.pair_problems({n: tree.mods[n] for n in ("external-collector", "publishing")})
+    ]
+    assert got == [
+        "publishing: notify pair 'External data collector: no new sessions' is also declared "
+        "by external-collector",
+        "publishing: notify pair 'Publishing: same': the recovery is its own title",
+    ]
+
+
+def test_a_running_pair_with_a_control_character_is_refused_by_the_schema():
+    tree, _ = examples()
+    inv = _pairs({**PAIR, "problem": "External data collector:\nno new sessions"})
+    got = messages(check(tree, site=SITES["small-lab"], inventory=inv))
+    assert got and all(m.startswith("running: schema: ") for m in got)
+
+
 def test_an_inventory_that_breaks_its_schema_is_refused_not_judged():
     tree, _ = examples()
     inv = {k: v for k, v in INVENTORY.items() if k != "tables"}
@@ -419,6 +516,112 @@ def test_a_module_id_or_feature_row_that_is_a_core_name_is_refused():
     ]
 
 
+@pytest.mark.parametrize(
+    "core, message",
+    [
+        (
+            ld.CoreNames(mcp_servers=frozenset({"external-collector-probe"})),
+            "external-collector: MCP server external-collector-probe is a core MCP server id",
+        ),
+        (
+            ld.CoreNames(agents=frozenset({"external-collector-analyst"})),
+            "external-collector: agent external-collector-analyst is a core agent key",
+        ),
+        (
+            ld.CoreNames(tables=frozenset({"table:external_collector.sessions"})),
+            "external-collector: table table:external_collector.sessions is a core table",
+        ),
+        (
+            ld.CoreNames(table_namespace="external_collector"),
+            "external-collector: the module's table namespace is the core's (external_collector)",
+        ),
+    ],
+)
+def test_a_module_mcp_id_agent_key_table_or_namespace_that_is_the_core_s_is_refused(core, message):
+    tree, _ = examples()
+    got = messages(ld.check(tree, slots=SLOTS, roles=ROLES, in_tree_roots=(EXAMPLES,), core=core))
+    assert got == [message]
+
+
+def test_the_core_s_names_are_read_from_the_sources_it_already_has():
+    core, problems = ld.core_names(
+        {"services": {"lake-query": {"capability": "cap:lake-query"}}},
+        mcp=[("lake.yml", {"id": "lake"}), ("bad.yml", ["x"]), ("anon.yml", {"id": 3})],
+        keyring={
+            "principals": [
+                {"kind": "agent", "principal": "profile:reader"},
+                {"kind": "human", "principal": "sso:approver-one"},
+                {"kind": "network", "principal": "zone:data"},
+                {"kind": "agent"},
+            ]
+        },
+        tables=["authentication"],
+        table_namespace="ocsf",
+    )
+    assert core.rows == {"lake-query": "cap:lake-query"}
+    assert core.mcp_servers == {"lake"} and core.agents == {"reader"}
+    assert core.tables == {"table:ocsf.authentication"} and core.table_namespace == "ocsf"
+    assert [str(p) for p in problems] == [
+        "registry: mcp/bad.yml: a record without a string id",
+        "registry: mcp/anon.yml: a record without a string id",
+        "registry: a keyring principal without a name",
+    ]
+
+
+@pytest.mark.parametrize("keyring", [{"principals": "x"}, ["x"], {}])
+def test_a_malformed_keyring_is_a_named_problem(keyring):
+    core, problems = ld.core_names(None, keyring=keyring)
+    assert [str(p) for p in problems] == ["registry: the keyring's principals is not a list"]
+    assert core.agents == frozenset()
+
+
+def test_the_core_mcp_catalog_is_read_like_any_input(tmp_path):
+    cat = tmp_path / "mcp"
+    cat.mkdir()
+    (cat / "lake.yml").write_text("id: lake\n")
+    (cat / "notes.txt").write_text("not a record\n")
+    (cat / "linked.yml").symlink_to(cat / "lake.yml")
+    os.mkfifo(cat / "fifo.yml")
+    recs, problems = ld.core_mcp_records(cat)
+    assert recs == [("lake.yml", {"id": "lake"})]
+    assert [p.message.split(": ")[0] for p in problems] == ["mcp/fifo.yml", "mcp/linked.yml"]
+    linked = tmp_path / "linked-mcp"
+    linked.symlink_to(cat)
+    assert [str(p) for p in ld.core_mcp_records(linked)[1]] == [
+        "registry: the MCP catalog linked-mcp/ is not a directory"
+    ]
+
+
+def test_the_cli_reads_the_core_s_names_from_the_registry_catalog_keyring_and_tables(
+    capsys, tmp_path
+):
+    services = tmp_path / "services.yml"
+    services.write_text("services: {}\n")
+    (tmp_path / "mcp").mkdir()
+    (tmp_path / "mcp" / "probe.yml").write_text("id: external-collector-probe\n")
+    keyring = tmp_path / "keyring.json"
+    keyring.write_text(
+        json.dumps(
+            {"principals": [{"kind": "agent", "principal": "profile:external-collector-analyst"}]}
+        )
+    )
+    code, out = run(capsys, "--services", str(services), "--keyring", str(keyring), "--json")
+    assert code == 1
+    assert json.loads(out.out)["problems"] == [
+        "external-collector: MCP server external-collector-probe is a core MCP server id",
+        "external-collector: agent external-collector-analyst is a core agent key",
+    ]
+
+
+def test_without_a_catalog_or_keyring_the_cli_names_what_it_did_not_compare(capsys, tmp_path):
+    services = tmp_path / "services.yml"
+    services.write_text("services: {}\n")
+    code, out = run(capsys, "--services", str(services))
+    assert code == 0
+    assert "the core's MCP server ids were not compared" in out.out
+    assert "note: the keyring is the repository's example" in out.out
+
+
 def test_a_provider_instance_that_takes_another_core_service_name_is_refused():
     tree, _ = examples()
     site = copy.deepcopy(SITES["small-lab"])
@@ -525,7 +728,9 @@ def test_the_cli_exits_2_on_an_unreadable_input(capsys, tmp_path):
     assert code == 2 and "not valid YAML" in out.err
 
 
-@pytest.mark.parametrize("flag", ["--overlay", "--services", "--site", "--running", "--roles"])
+@pytest.mark.parametrize(
+    "flag", ["--overlay", "--services", "--keyring", "--site", "--running", "--roles"]
+)
 def test_a_path_given_that_does_not_exist_is_a_usage_error(capsys, tmp_path, flag):
     code, out = run(capsys, flag, str(tmp_path / "nonexistent"))
     assert code == 2 and "nonexistent" in out.err

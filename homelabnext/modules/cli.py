@@ -40,9 +40,12 @@ checks").
 
 For ``check`` and ``render``, defaults follow the overlay layout: with ``--overlay DIR`` the site
 is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
-``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json`` and the core registry
-``DIR/lab/services.yml`` when they exist; otherwise the repository's examples
-(``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.  The slot registry is the draft
+``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json``, the core registry
+``DIR/lab/services.yml`` and the keyring ``DIR/lab/keyring/keyring.json`` when they exist;
+otherwise the repository's examples (``examples/model_roles.json``, ``examples/services.yml``,
+``examples/keyring/keyring.json``), each such fallback printed as a note.  The core's own names
+(:class:`homelabnext.modules.loader.CoreNames`) are read from the registry, the MCP catalog
+beside it (``mcp/``), the keyring's agent principals and the OCSF tables.  The slot registry is the draft
 ``examples/modules/slots.yml``.  A path given on the command line must exist.
 
 Exit: 0 clean, 1 problems, 2 usage or an input that cannot be read, 100 an internal error.
@@ -95,6 +98,57 @@ def _existing(path: Path | None) -> Path | None:
     return path if path is not None and path.is_file() else None
 
 
+def _core(
+    args: argparse.Namespace,
+    root: Path,
+    lab: Path | None,
+    services: Path,
+    budget: ld.Budget,
+    notes: list[str],
+) -> tuple[ld.CoreNames, list[ld.Problem]]:
+    """The core's names from the sources it already has (:func:`ld.core_names`): the registry,
+    its MCP catalog (``mcp/`` beside it), the keyring and the OCSF tables.  A source that is
+    absent is a note, never a silently smaller set."""
+    from homelabnext.lake.errors import LakeError
+    from homelabnext.lake.tables import CORE_NAMESPACE, load_schemas
+
+    problems: list[ld.Problem] = []
+    catalog = services.parent / "mcp"
+    mcp: list[tuple[str, Any]] = []
+    if catalog.exists() or catalog.is_symlink():
+        mcp, problems = ld.core_mcp_records(catalog, budget)
+    else:
+        notes.append(
+            f"no MCP catalog beside the core registry ({_shown_path(catalog, root)}): the core's "
+            "MCP server ids were not compared"
+        )
+    keyring_path = args.keyring or _existing(lab and lab / "keyring" / "keyring.json")
+    if keyring_path is None:
+        keyring_path = _existing(root / "examples" / "keyring" / "keyring.json")
+        if keyring_path is not None:
+            notes.append(
+                f"the keyring is the repository's example ({_shown_path(keyring_path, root)})"
+            )
+    keyring = None
+    if keyring_path is None:
+        notes.append("no keyring: the core's agent keys were not compared")
+    else:
+        keyring = _read(keyring_path, "keyring", budget)
+    tables: list[str] = []
+    try:
+        tables = sorted(load_schemas(paths.ocsf_dir()))
+    except (LakeError, OSError, ValueError) as exc:
+        problems.append(ld.Problem("registry", f"the core's OCSF tables: {exc}"))
+    core, found = ld.core_names(
+        _read(services, "core registry", budget),
+        mcp=mcp,
+        keyring=keyring,
+        tables=tables,
+        table_namespace=CORE_NAMESPACE,
+    )
+    return core, [*problems, *found]
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="hnx modules", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -109,6 +163,7 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--slots", type=Path, help="the slot registry (draft)")
         p.add_argument("--roles", type=Path, help="the model role table")
         p.add_argument("--services", type=Path, help="the core service registry")
+        p.add_argument("--keyring", type=Path, help="the generated keyring (its agent principals)")
         p.add_argument("--lock", type=Path, help="lab/modules.lock")
         p.add_argument("--review-policy", type=Path, help="the review policy")
         p.add_argument("--json", action="store_true")
@@ -329,7 +384,7 @@ def _run(args: argparse.Namespace) -> int:
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
-    for flag in ("site", "slots", "roles", "services", "lock", "review_policy"):
+    for flag in ("site", "slots", "roles", "services", "keyring", "lock", "review_policy"):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
     if args.cmd == "render" and (args.out.exists() or args.out.is_symlink()):
@@ -362,7 +417,7 @@ def _run(args: argparse.Namespace) -> int:
         notes.append(
             f"the core registry is the repository's example ({_shown_path(services, root)})"
         )
-    core, registry_problems = ld.core_names(_read(services, "core registry", budget))
+    core, registry_problems = _core(args, root, lab, services, budget, notes)
     site_path = args.site or _existing(lab and lab / "modules.yml")
     lock_path = args.lock or _existing(lab and lab / "modules.lock")
     policy_path = args.review_policy or _existing(lab and lab / "review-policy.yml")

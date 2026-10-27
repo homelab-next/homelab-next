@@ -885,7 +885,7 @@ scope:
 ## What the loader checks
 
 `homelabnext/modules/loader.py` (`hnx modules check [--overlay DIR] [--examples] [--site FILE]
-[--running FILE] [--json]`; exit 0 clean, 1 problems, 2 a path that does not exist or an input
+[--running FILE] [--keyring FILE] [--json]`; exit 0 clean, 1 problems, 2 a path that does not exist or an input
 that cannot be read, 100 an internal error) discovers `<id>/module.yml` under the public
 `modules/`, the fictional `examples/modules/` (`--examples`, a fixture root whose modules may omit
 `roles/` and `playbooks/`; the report names the modules the exemption applied to) and an
@@ -934,10 +934,17 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
 2. **Across manifests**: one owner per interface id (every version), no reference without a
    definition; every bound name belongs to the longest module id it is named under; unique names
    (the list above); no data prefix or records write prefix overlap; **no module id, and no
-   feature or core module's service row, that is one of the core's own names** (the reserved ids
-   and the core registry's service rows, `services.yml`), and, per site, no provider instance
-   named like a core service row whose capability it does not fill. The core keeps no registry
-   of its own units, agent keys, MCP ids or tables, so those are not compared.
+   feature or core module's service row, MCP server id, agent key, table or table namespace that
+   is one of the core's own names**, and, per site, no provider instance named like a core service
+   row whose capability it does not fill. The core's names are read from sources it already has,
+   never from a list kept for this check: the reserved ids, the core registry's service rows
+   (`services.yml`), the ids of the core MCP catalog beside it (`mcp/`), the agent keys of the
+   keyring's agent principals (`profile:<key>`, the generated map of every principal; `--keyring`,
+   else the overlay's `lab/keyring/keyring.json`, else the example's, said in a note) and the
+   core's OCSF tables (`schemas/ocsf`) in their lake namespace (`ocsf`, which no module's own
+   namespace may be). A source that is absent is a note; one that is malformed is a `registry`
+   problem. The core's own units have no source: no fleet_units spec of the core's is in the
+   repository, so they are not compared (a module's units carry its id, which no core name is).
 3. **Per site**: every selected module has a manifest (core included); each features, core and
    providers entry is a selected module of that kind and binds only agents it contributes; config
    values are declared keys, carry no site address, and a secret value is the module's own or
@@ -963,8 +970,14 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    unit, service row, MCP server, agent and table bound to a module id is declared by that
    module, which the site selects, and every declared one runs (a provider's row runs under the
    instance name the site gives it; a name bound to no module id is the core's and not judged
-   here). Recovery pairs are not checked yet, and the inventory is written by hand: nothing
-   gathers it from the hosts.
+   here). With the inventory's optional `notify_pairs` (the running notifier's recovery pairs,
+   each with the module it was loaded from; a pair with no module is the core's), the same holds
+   for recovery pairs, compared by both titles: a running pair is declared by its module, which
+   the site selects, with the same recovery title; every selected module's pair runs; and the
+   notifier holds one pair per problem title, so a title runs once. Without `notify_pairs` the
+   pairs are not compared, and the report says so. Per site, a problem title is declared once
+   across the selected modules (the notifier keys its pairs by it) and its recovery is another
+   title. The inventory is written by hand: nothing gathers it from the hosts.
 
 ## How a swap works, end to end
 
@@ -1286,11 +1299,12 @@ listed as deferred.
    [Footprint and resources](#footprint-and-resources)); `hnx modules render` writes them.
 9. **The loader**: implemented (see [What the loader checks](#what-the-loader-checks)):
    discovery with the overlay-shadowing refusal, schema validation first, every rule with every
-   input, uniqueness against the core's own names (reserved ids and registry service rows), the
-   supply chain, and the two-way check against a hand-written inventory; `hnx modules
-   check|render`, run over the example lab in `make gates` and CI. Not done: nothing runs it at
-   deploy time, nothing gathers the inventory from the hosts, recovery pairs are not compared,
-   and the core's own units and agent keys have no registry to compare against.
+   input, uniqueness against the core's own names (reserved ids, registry service rows, the core
+   MCP catalog's ids, the keyring's agent keys and the core's OCSF tables and their namespace),
+   the supply chain, and the two-way check against a hand-written inventory, recovery pairs
+   included; `hnx modules check|render`, run over the example lab in `make gates` and CI. Not
+   done: nothing runs it at deploy time, nothing gathers the inventory from the hosts, and the
+   core's own units have no source to compare against.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
     the core's existing product names are a baseline that only shrinks.
 
