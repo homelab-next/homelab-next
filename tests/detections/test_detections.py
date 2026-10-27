@@ -268,11 +268,44 @@ def test_wazuh_stub_golden_wellformed_and_keeps_logical_id(slug):
 
 def test_wazuh_bundle_wellformed_golden():
     be = WazuhStubBackend()
-    arts = [be.compile(r, target("wazuh")) for r in load_rules(DET)]
+    arts = [be.compile(r, target("wazuh")) for r in load_rules(DET) if r.deployable]
     text = be.bundle(arts)
     golden("wazuh/_bundle.xml", text)
     root = ET.fromstring(text)
-    assert len(root.findall("rule")) == 11
+    assert len(root.findall("rule")) == 8  # 11 rules, 3 inert (status unsupported)
+
+
+INERT = {
+    "det:model-runtime-egress-drop",
+    "det:model-runtime-object-store-lookup",
+    "det:model-runtime-object-store-request",
+}
+
+
+def test_inert_rules_are_tested_but_neither_counted_nor_bundled(capsys):
+    rules = load_rules(DET)
+    assert {r.det_id for r in rules if not r.deployable} == INERT
+    rep = run_all(DET)
+    assert {rr.det_id for rr in rep.rules} >= INERT  # their fixtures still run
+    from homelabnext.detections.coverage import coverage_report
+
+    cov = coverage_report(rules, rep)
+    counted = {d for t in cov["techniques"].values() for d in t["rules"]}
+    assert not counted & INERT
+    assert {u["rule"] for u in cov["uncounted"]} == INERT
+    assert cov["summary"]["rules_counted"] == len(rules) - len(INERT)
+    assert main(["--root", str(DET), "compile", "generic"]) == 0
+    out = capsys.readouterr().out
+    assert "-- det:cloud-metadata-refused" in out
+    assert not any(f"-- {d}\n" in out for d in INERT)
+
+
+def test_a_rule_status_outside_sigmas_is_a_lint_problem(tmp_path):
+    d = tmp_path / "detections"
+    shutil.copytree(DET, d)
+    p = d / "sigma/credential-access/cloud-metadata-refused.yml"
+    p.write_text(p.read_text().replace("status: experimental", "status: maybe"))
+    assert any("status 'maybe' is not one of" in x for x in lint.lint_rules(d))
 
 
 def test_wazuh_rejects_inexpressible_and_missing_id(tmp_path):

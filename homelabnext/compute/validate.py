@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import ipaddress
+import os
 from typing import Any
 
 from .model import Fleet, Guest, Problem, ZoneInfo, allowed_groups, group_for_capability
@@ -89,21 +91,6 @@ def _check_firewall(g: Guest, fleet: Fleet) -> list[Problem]:
         elif g.firewall_exemption:
             out.append(
                 Problem(g.id, "network.firewall_exemption is set but the NIC firewall is enabled")
-            )
-        by = (g.firewall_exemption or {}).get("filtered_by")
-        if (
-            by
-            and by.startswith("guest:")
-            and (by == g.id or by not in {x.id for x in fleet.guests})
-        ):
-            out.append(
-                Problem(g.id, f"network.firewall_exemption.filtered_by: {by} is not another guest")
-            )
-        elif by and by.startswith("zone:") and fleet.zones.zone(by[5:]) is None:
-            out.append(
-                Problem(
-                    g.id, f"network.firewall_exemption.filtered_by: zone {by[5:]!r} does not exist"
-                )
             )
     elif g.raw.get("firewall_rules"):
         out.append(Problem(g.id, "firewall_rules apply to kind vm and lxc only"))
@@ -193,27 +180,119 @@ def model_runtime(g: Guest) -> str | None:
     return None
 
 
-def _internet_allows(g: Guest) -> list[str]:
-    """Outbound allows that reach beyond the lab: ``any``, or a CIDR not inside the never-internet
-    ranges (:data:`homelabnext.modules.egress.NOT_INTERNET`).  A ``zone:`` is a lab subnet."""
+def today() -> dt.date:
+    """The date reviews are judged against: ``HNX_TODAY`` (YYYY-MM-DD) when set, so a test or a
+    replay is deterministic, else the local date."""
+    raw = os.environ.get("HNX_TODAY")
+    return dt.date.fromisoformat(raw) if raw else dt.date.today()
+
+
+def _review_date(raw: Any) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def _dest_net(r: Any, fleet: Fleet) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    """An outbound rule's destination as a network: a ``zone:`` through the site model, ``any``
+    as the whole address space; None when it cannot be read (another rule reports that)."""
+    dest = r["dest"]
+    if dest == "any":
+        return ipaddress.ip_network("0.0.0.0/0")
+    if dest.startswith("zone:"):
+        z = fleet.zones.zone(dest[5:])
+        try:
+            return z.network if z is not None else None
+        except ValueError:
+            return None
+    try:
+        return ipaddress.ip_network(dest, strict=True)
+    except ValueError:
+        return None
+
+
+def _metadata_allows(g: Guest, fleet: Fleet) -> list[Problem]:
+    """An outbound allow that holds a cloud metadata address: the guest firewall refuses those
+    addresses ahead of every allow, so the rule could only mislead a reader."""
+    from homelabnext.modules.egress import METADATA
+
+    out = []
+    for r in g.outbound_rules:
+        net = _dest_net(r, fleet)
+        if net is None or r["dest"] == "any":
+            continue
+        held = [str(a) for a in METADATA if a.version == net.version and a in net]
+        if held:
+            out.append(
+                Problem(
+                    g.id,
+                    f"firewall_rules.{r['name']}: dest {r['dest']} holds the cloud metadata "
+                    f"address {held[0]}, which the guest firewall always refuses; narrow it",
+                )
+            )
+    return out
+
+
+def _internet_allows(g: Guest, fleet: Fleet) -> list[str]:
+    """Outbound allows that reach beyond the lab: ``any``, or a network (a CIDR, or a ``zone:``'s
+    subnet from the site model) not inside the never-internet ranges
+    (:data:`homelabnext.modules.egress.NOT_INTERNET`)."""
     from homelabnext.modules.egress import NOT_INTERNET
 
     out = []
     for r in g.outbound_rules:
-        dest = r["dest"]
-        if dest.startswith("zone:"):
-            continue
-        try:
-            net = None if dest == "any" else ipaddress.ip_network(dest, strict=True)
-        except ValueError:
-            continue  # a bad CIDR is _check_firewall's problem
-        if net is None or not any(
-            net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET
-        ):
+        net = _dest_net(r, fleet)
+        if net is None:
+            continue  # an unknown zone or a bad CIDR is _check_firewall's problem
+        if not any(net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET):
             out.append(
-                f"firewall_rules.{r['name']}: dest {dest} reaches the internet; a model runtime's "
-                "outbound_allow names zone:<id> or a lab CIDR (reach the internet through the gateway)"
+                f"firewall_rules.{r['name']}: dest {r['dest']} reaches the internet; a model "
+                "runtime's outbound_allow names a lab zone or CIDR (reach the internet through the "
+                "gateway)"
             )
+    return out
+
+
+def _filters(t: Guest, fleet: Fleet) -> str | None:
+    """Why guest ``t`` cannot be what filters another guest's traffic, or None when it can: its
+    own NIC firewall is on (a vm or lxc), or its baselines resolve ``host-firewall`` or
+    ``egress-filter``; a guest that is itself exempted filters nothing, so no chain or cycle of
+    pointers resolves."""
+    if t.raw.get("status") == "retired":
+        return "is retired"
+    if t.firewall_exemption or not t.nic_firewall:
+        return "is itself exempted from its firewall"
+    bs = fleet.baselines
+    if bs is not None and t.baseline:
+        from .baselines import resolve
+
+        if {"host-firewall", "egress-filter"} & set(resolve(t, bs).controls):
+            return None
+    if t.kind in ("vm", "lxc"):
+        return None  # its NIC firewall is on
+    return "runs no host firewall (its baselines resolve neither host-firewall nor egress-filter)"
+
+
+def _filtered_by_problems(g: Guest, fleet: Fleet) -> list[Problem]:
+    """``firewall_exemption.filtered_by`` and ``review_by`` on any guest kind: the pointer resolves
+    to a guest that filters, or to a zone; the date is a real date."""
+    ex = g.firewall_exemption or {}
+    out: list[Problem] = []
+    where = "network.firewall_exemption"
+    if "review_by" in ex and _review_date(ex["review_by"]) is None:
+        out.append(Problem(g.id, f"{where}.review_by: {ex['review_by']!r} is not a date"))
+    by = ex.get("filtered_by")
+    if not by:
+        return out
+    if by.startswith("guest:"):
+        t = next((x for x in fleet.guests if x.id == by), None)
+        if by == g.id or t is None:
+            out.append(Problem(g.id, f"{where}.filtered_by: {by} is not another guest"))
+        elif (why := _filters(t, fleet)) is not None:
+            out.append(Problem(g.id, f"{where}.filtered_by: {by} {why}"))
+    elif fleet.zones.zone(by[5:]) is None:
+        out.append(Problem(g.id, f"{where}.filtered_by: zone {by[5:]!r} does not exist"))
     return out
 
 
@@ -232,7 +311,8 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
         # filtered elsewhere (a libvirt host, a zone's router) is a recorded, dated decision that
         # names the layer, never a free-text reason alone
         ex = g.firewall_exemption or {}
-        if not ex.get("filtered_by") or not ex.get("review_by"):
+        by, review = ex.get("filtered_by"), _review_date(ex.get("review_by"))
+        if not by or not ex.get("review_by"):
             out.append(
                 Problem(
                     g.id,
@@ -240,6 +320,25 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
                     "filtered_by (the guest or zone that filters it) and review_by",
                 )
             )
+        if review is not None and review < today():
+            out.append(
+                Problem(
+                    g.id,
+                    f"{why}: network.firewall_exemption.review_by {review} has passed; review "
+                    "where it is filtered and set a new date",
+                )
+            )
+        if by and by.startswith("zone:"):
+            # the only filtering the site model states for a zone is its router's egress.internet
+            z = fleet.zones.zone(by[5:])
+            if z is not None and z.internet != "deny":
+                out.append(
+                    Problem(
+                        g.id,
+                        f"{why}: filtered_by {by}, but the site model does not deny that zone's "
+                        f"internet egress (egress.internet: {z.internet or 'not stated'})",
+                    )
+                )
     elif g.kind in ("vm", "lxc"):
         if g.policy_out == "ACCEPT":
             out.append(
@@ -249,7 +348,7 @@ def _model_runtime_problems(g: Guest, fleet: Fleet) -> list[Problem]:
                     "naming what it needs (resolver, time, model store, gateway)",
                 )
             )
-        out += [Problem(g.id, f"{why}: {p}") for p in _internet_allows(g)]
+        out += [Problem(g.id, f"{why}: {p}") for p in _internet_allows(g, fleet)]
     bs = fleet.baselines
     if bs is not None and "egress-filter" in bs.controls and g.baseline:
         from .baselines import resolve
@@ -295,6 +394,8 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         if require_baselines or g.baseline:
             out += guest_problems(g, fleet.baselines)
         out += _model_runtime_problems(g, fleet)
+        out += _filtered_by_problems(g, fleet)
+        out += _metadata_allows(g, fleet)
     out += _power(fleet)
     out += _capacity(fleet)
     return out

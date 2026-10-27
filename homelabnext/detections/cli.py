@@ -109,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         fm = root / "mappings" / "generic.yml"
         tgt = Target(a.backend, load_mapping(fm if fm.exists() else None), m["entries"])
         be = get_backend(a.backend)
-        arts = [be.compile(r, tgt) for r in load_rules(root)]
+        # an unsupported (inert) or deprecated rule is tested but never shipped to an engine
+        arts = [be.compile(r, tgt) for r in load_rules(root) if r.deployable]
         sys.stdout.write(
             be.bundle(arts) if hasattr(be, "bundle") else "\n".join(x.content for x in arts)
         )

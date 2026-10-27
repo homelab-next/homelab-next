@@ -46,9 +46,34 @@ def fleet_dir(tmp_path: Path, name: str | None = None, edit=None, nodes: str | N
     return d
 
 
-def problems(d: Path) -> str:
+def _host_filters(d: Path) -> None:
+    """hv-a runs the host firewall a pointer at it claims (its baseline resolves host-firewall)."""
+    p = d / "hv-a.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["baseline"] = {"names": ["base"]}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+DENY_DATA = MappingZones(
+    [
+        ZoneInfo("mgmt", "192.0.2.0/24", "192.0.2.1", None, 10),
+        ZoneInfo(
+            "data",
+            "198.51.100.0/25",
+            "198.51.100.1",
+            ("198.51.100.100", "198.51.100.126"),
+            20,
+            internet="deny",
+        ),
+        ZoneInfo("compute", "198.51.100.128/25", "198.51.100.129", None, 30),
+        ZoneInfo("edge", "203.0.113.0/24", "203.0.113.1", None, 40),
+    ]
+)
+
+
+def problems(d: Path, zones=None) -> str:
     with pytest.raises(ComputeError) as ei:
-        load_fleet(d, STUB)
+        load_fleet(d, zones or STUB)
     return str(ei.value)
 
 
@@ -110,6 +135,7 @@ def test_flag_off_with_exemption_is_accepted(tmp_path):
             x.pop("firewall_rules", None),
         ),
     )
+    _host_filters(d)
     f = load_fleet(d, STUB)
     assert "firewall = false" in render(f, "terraform-proxmox")["vm-infer-core.tf"]
 
@@ -415,7 +441,8 @@ def test_a_model_runtime_filtered_elsewhere_with_the_exemption_is_accepted(tmp_p
         doc.update(capability="cap:codemode-executor")
         doc["network"]["firewall_exemption"]["filtered_by"] = "zone:data"
 
-    assert load_fleet(fleet_dir(tmp_path, "bus-core", executor), STUB).guests
+    # the site model denies the data zone's internet egress at its router
+    assert load_fleet(fleet_dir(tmp_path, "bus-core", executor), DENY_DATA).guests
 
 
 def test_a_model_runtime_filtered_elsewhere_needs_the_exemption_saying_so(tmp_path):
@@ -544,3 +571,127 @@ def test_a_guest_that_runs_no_model_may_allow_the_internet(tmp_path):
         ]
 
     assert load_fleet(fleet_dir(tmp_path, "edge-core", allow), STUB).guests
+
+
+def _off(by, review="2027-03-31"):
+    def off(doc):
+        doc["network"].update(
+            firewall="disabled",
+            firewall_exemption={
+                "reason": "Filtered by another layer, named here.",
+                "filtered_by": by,
+                "review_by": review,
+            },
+        )
+        doc.pop("firewall_rules")
+
+    return off
+
+
+@pytest.mark.parametrize(
+    ("by", "expect"),
+    [
+        ("guest:bus-core", "guest:bus-core is itself exempted from its firewall"),  # no chains
+        ("guest:hv-a", "guest:hv-a runs no host firewall"),  # a host with no host-firewall
+    ],
+    ids=["exempted-target", "host-without-firewall"],
+)
+def test_a_filtered_by_guest_must_actually_filter(tmp_path, by, expect):
+    assert f"network.firewall_exemption.filtered_by: {expect}" in problems(
+        fleet_dir(tmp_path, "infer-core", _off(by))
+    )
+
+
+def test_a_filtered_by_host_that_runs_the_host_firewall_is_accepted(tmp_path):
+    d = fleet_dir(tmp_path, "infer-core", _off("guest:hv-a"))
+    _host_filters(d)
+    assert load_fleet(d, STUB).guests
+
+
+def test_a_retired_filtered_by_guest_filters_nothing(tmp_path):
+    d = fleet_dir(tmp_path, "infer-core", _off("guest:edge-core"))
+    p = d / "edge-core.yml"
+    doc = yaml.safe_load(p.read_text())
+    doc["status"] = "retired"
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert "filtered_by: guest:edge-core is retired" in problems(d)
+
+
+@pytest.mark.parametrize("internet", [None, "allow"], ids=["not-stated", "allowed"])
+def test_a_model_runtime_filtered_by_a_zone_needs_the_zone_to_deny_the_internet(tmp_path, internet):
+    zones = MappingZones(
+        [
+            *(STUB.zone(z) for z in ("mgmt", "compute", "edge")),
+            ZoneInfo("data", "198.51.100.0/25", "198.51.100.1", None, 20, internet=internet),
+        ]
+    )
+    msg = problems(fleet_dir(tmp_path, "infer-core", _off("zone:data")), zones)
+    assert "filtered_by zone:data, but the site model does not deny that zone's internet" in msg
+
+
+def test_a_filtered_by_zone_that_denies_the_internet_is_accepted(tmp_path):
+    assert load_fleet(fleet_dir(tmp_path, "infer-core", _off("zone:data")), DENY_DATA).guests
+
+
+def test_a_review_date_must_be_a_date(tmp_path):
+    def bad(doc):
+        doc["network"]["firewall_exemption"]["review_by"] = "2026-13-45"
+
+    assert "network.firewall_exemption.review_by: '2026-13-45' is not a date" in problems(
+        fleet_dir(tmp_path, "bus-core", bad)
+    )
+
+
+def test_a_model_runtime_with_an_expired_review_is_refused(tmp_path):
+    d = fleet_dir(tmp_path, "infer-core", _off("zone:data", review="2026-01-01"))
+    msg = problems(d, DENY_DATA)  # HNX_TODAY is 2026-10-27 (conftest)
+    assert "network.firewall_exemption.review_by 2026-01-01 has passed" in msg
+
+
+def test_a_filtered_by_pointer_is_checked_on_a_host_too(tmp_path):
+    def host(doc):
+        doc["network"]["firewall_exemption"] = {
+            "reason": "Filtered by another layer, named here.",
+            "filtered_by": "guest:nowhere",
+        }
+
+    msg = problems(fleet_dir(tmp_path, "hv-a", host))
+    assert "guest:hv-a: network.firewall_exemption.filtered_by: guest:nowhere" in msg
+
+
+def test_a_model_runtime_zone_destination_must_be_a_lab_subnet(tmp_path):
+    zones = MappingZones(
+        [
+            *(STUB.zone(z) for z in ("mgmt", "data", "compute", "edge")),
+            ZoneInfo(
+                "wan",
+                "8.8.0.0/16",  # scrub-allow: a public zone the rule refuses
+                "8.8.0.1",  # scrub-allow: its gateway
+                None,
+                50,
+            ),
+        ]
+    )
+
+    def wan(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "wan", "proto": "tcp", "ports": "443", "dest": "zone:wan"}
+        )
+
+    assert "firewall_rules.wan: dest zone:wan reaches the internet" in problems(
+        fleet_dir(tmp_path, "infer-core", wan), zones
+    )
+
+
+@pytest.mark.parametrize("guest", ["infer-core", "edge-core"])
+def test_an_outbound_allow_never_holds_a_metadata_address(tmp_path, guest):
+    def link_local(doc):
+        fw = doc.setdefault("firewall_rules", {})
+        fw["policy_out"] = "DROP"
+        fw.setdefault("outbound_allow", []).append(
+            {"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}
+        )
+
+    assert "firewall_rules.link-local: dest 169.254.0.0/16 holds the cloud metadata address" in (
+        problems(fleet_dir(tmp_path, guest, link_local))
+    )

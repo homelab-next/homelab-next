@@ -82,7 +82,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
 | `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; only on vm/lxc with the flag on | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
-| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet, or a disabled NIC firewall with `firewall_exemption.filtered_by` and `review_by`; with a baseline set that defines `egress-filter`, its baselines include it; any `filtered_by` resolves to another guest or a zone | see [Model runtimes](#model-runtimes) |
+| a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. On every guest, any `filtered_by` resolves to another guest that filters (not exempted, not retired) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
@@ -286,8 +286,11 @@ disabled NIC. Which nodes enforce a firewall is data: `_nodes.yml` next to the g
 assumed to enforce one, the safe default. Exemptions are listed with their reasons in
 `firewall/EXEMPTIONS.md`. An exemption may also say where the NIC is filtered instead (guest
 1.5): `filtered_by: guest:<id>` (the guest that runs its firewall, such as a libvirt host) or
-`zone:<id>` (the zone whose router filters it), which validation resolves; a model runtime needs
-it (see [Model runtimes](#model-runtimes)).
+`zone:<id>` (the zone whose router filters it). On any guest kind validation resolves it: a guest
+pointer names another guest that is not retired, not itself exempted (so no chain or cycle of
+pointers resolves), and filters: its own NIC firewall is on, or its baselines resolve
+`host-firewall` or `egress-filter` (a physical host needs the latter). A `review_by` must be a real
+date. A model runtime needs both (see [Model runtimes](#model-runtimes)).
 
 **The incident class this prevents.** Hypervisor-level firewalls filter per virtual NIC, and the
 per-NIC flag decides whether a guest's traffic goes through that filtering path. With the
@@ -318,16 +321,20 @@ What is enforced:
 
 - **Default-deny egress, to the lab only.** Validation refuses a model runtime (a `vm` or `lxc`)
   whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
-  reaches the internet: `any`, a `/0`, or any CIDR not inside the never-internet ranges
-  (`homelabnext.modules.egress.NOT_INTERNET`). A `zone:` destination is a lab subnet. What it
+  reaches the internet: `any`, a `/0`, or any network not inside the never-internet ranges
+  (`homelabnext.modules.egress.NOT_INTERNET`), a `zone:` destination judged by its subnet in the
+  site model. No guest's `outbound_allow` may hold a cloud metadata address either, since the
+  guest firewall refuses those ahead of every allow and the rule could only mislead. What it
   needs (the lab resolver, time, the model store, the gateway or broker) is listed; anything on
   the internet is reached through the gateway, never directly. The example lab's `infer-core`
   runs the `model-runtime` baseline (`server` plus `egress-filter` and the stricter
   `os-hardening`; add `network-sensor` where the lab has a sensor host), and with a set that defines `egress-filter` the guest must resolve it.
 - **Filtered elsewhere is a pointer, not prose.** A model runtime whose NIC firewall is off needs a
-  `firewall_exemption` with `filtered_by` (guest 1.5: `guest:<id>`, the guest that runs its
-  firewall, such as a libvirt host, or `zone:<id>`, the zone whose router filters it; validation
-  resolves it) and a `review_by` date. A reason alone is refused.
+  `firewall_exemption` with `filtered_by` (guest 1.5) and a `review_by` date that has not passed
+  (judged against `HNX_TODAY` when set, else today). A guest pointer must name a guest that
+  filters (above). A zone pointer is accepted only when the site model denies that zone's
+  internet egress (`egress.internet: deny`, which the router enforces): that is the one filtering
+  control the model states for a zone. A reason alone is refused.
 - **On the guest, where `nftables_host` runs.** The guest firewall runs on every guest whose
   baselines resolve `host-firewall` or `egress-filter` (the hypervisor's `<vmid>.fw` files carry
   neither of the rules below). There it loads the same outbound policy and logs dropped packets,
@@ -345,7 +352,9 @@ What is enforced:
   `det:model-runtime-egress-drop` and `det:model-runtime-object-store-lookup` and `-request` (a
   model runtime resolving or requesting a public cloud object store) are **inert** (`status:
   unsupported`): they match `labels.hnx_runtime: model`, which no shipped pipeline enrichment sets
-  yet. Labelling a model runtime's events from the guest model is the follow-up that arms them.
+  yet, so their fixtures run but they are neither counted in `detections/attack_coverage.json` nor
+  compiled into the engine bundle. Labelling a model runtime's events from the guest model is the
+  follow-up that arms them (and moves them to `experimental`).
 - **Agent sessions as modules.** A module role (an agent runtime included) already gets its own
   default-deny chain from `homelabnext.modules.egress`.
 

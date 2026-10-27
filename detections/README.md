@@ -11,8 +11,11 @@ detections/
 
 Rules: every rule needs >=1 `must_fire` and >=1 `must_not_fire` fixture (lint fails otherwise),
 an ATT&CK technique tag (`attack.tNNNN[.NNN]`), and lives in a directory named after one of its
-tactic tags. `evasion` fixtures document known-hard variants: the runner lists whether each was
-caught, a miss is a reported gap, never a failure.
+tactic tags. A rule's `status` is one of Sigma's (`stable`, `test`, `experimental`, `deprecated`,
+`unsupported`); an `unsupported` (inert: it needs a field nothing sets yet) or `deprecated` rule
+still runs its fixtures but is neither counted in `attack_coverage.json` nor compiled into an
+engine bundle (`compile`). `evasion` fixtures document known-hard variants: the runner lists
+whether each was caught, a miss is a reported gap, never a failure.
 
 Engine rule numbers appear in `det_map.yml` and nowhere else. Charters, profiles, decision specs and
 schedules say `det:<slug>`; `lint-ids` fails on a raw number. With no paths it scans the checkout

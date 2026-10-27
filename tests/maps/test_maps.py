@@ -217,7 +217,12 @@ def test_topology_escapes_hostile_names_and_honours_the_default_action():
 def test_topology_of_the_example_lab():
     vm = topology.load(GUESTS, SITE)
     assert {z["id"] for z in vm["zones"]} >= {"mgmt", "data", "compute", "edge", "sandbox"}
-    assert [g["id"] for g in vm["guests"]] == ["guest:bus-core", "guest:hv-a", "guest:ops-core"]
+    assert [g["id"] for g in vm["guests"]] == [
+        "guest:bus-core",
+        "guest:hv-a",
+        "guest:infer-core",
+        "guest:ops-core",
+    ]
     flows = {(f["from"], f["to"]): f["allowed"] for f in vm["flows"]}
     assert flows[("mgmt", "compute")] == "tcp 22, 443" and ("edge", "data") not in flows
 

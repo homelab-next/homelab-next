@@ -3,9 +3,9 @@
   "counted_from": "rules whose must_fire and must_not_fire fixtures all pass",
   "summary": {
     "rules_total": 11,
-    "rules_counted": 11,
-    "techniques_covered": 8,
-    "tactics_covered": 7
+    "rules_counted": 8,
+    "techniques_covered": 7,
+    "tactics_covered": 6
   },
   "techniques": {
     "T1059.001": {
@@ -65,16 +65,6 @@
       "tactics": [
         "credential-access"
       ]
-    },
-    "T1567.002": {
-      "rules": [
-        "det:model-runtime-egress-drop",
-        "det:model-runtime-object-store-lookup",
-        "det:model-runtime-object-store-request"
-      ],
-      "tactics": [
-        "exfiltration"
-      ]
     }
   },
   "tactics": {
@@ -83,9 +73,6 @@
     ],
     "execution": [
       "T1059.001"
-    ],
-    "exfiltration": [
-      "T1567.002"
     ],
     "impact": [
       "T1486"
@@ -102,7 +89,20 @@
       "T1543.003"
     ]
   },
-  "uncounted": [],
+  "uncounted": [
+    {
+      "rule": "det:model-runtime-egress-drop",
+      "reason": "status unsupported: not deployed, so not coverage"
+    },
+    {
+      "rule": "det:model-runtime-object-store-lookup",
+      "reason": "status unsupported: not deployed, so not coverage"
+    },
+    {
+      "rule": "det:model-runtime-object-store-request",
+      "reason": "status unsupported: not deployed, so not coverage"
+    }
+  ],
   "evasion_gaps": [
     {
       "rule": "det:cloud-api-key-new-asn",
@@ -119,18 +119,6 @@
     {
       "rule": "det:mass-file-rename-ransom-extension",
       "evasion": "random-extension.json"
-    },
-    {
-      "rule": "det:model-runtime-egress-drop",
-      "evasion": "over-an-allowed-destination.json"
-    },
-    {
-      "rule": "det:model-runtime-object-store-lookup",
-      "evasion": "lookup-over-https.json"
-    },
-    {
-      "rule": "det:model-runtime-object-store-request",
-      "evasion": "bucket-by-address.json"
     },
     {
       "rule": "det:new-service-creation",
