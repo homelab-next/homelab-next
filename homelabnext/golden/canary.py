@@ -234,13 +234,19 @@ def load_suite(path: str | Path = DEFAULT_SUITE) -> CanarySuite:
 
 # ---------------------------------------------------------------- findings
 def _strings(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, Mapping):
-        return [s for v in value.values() for s in _strings(v)]
-    if isinstance(value, (list, tuple)):
-        return [s for v in value for s in _strings(v)]
-    return [] if value is None else [str(value)]
+    """Every scalar in a tool call's arguments as text, in order (a number or boolean too, since
+    an address can be written as one); mappings by value, lists and tuples by item."""
+    out: list[str] = []
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Mapping):
+            pending.extend(reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            pending.extend(reversed(item))
+        elif item is not None:
+            out.append(item if isinstance(item, str) else str(item))
+    return out
 
 
 def _addresses(text: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
