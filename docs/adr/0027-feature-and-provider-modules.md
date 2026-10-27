@@ -128,7 +128,9 @@ with no schema, generator or check in any form):
 2. swap record 1.2: its additions (`legs`, `selection_diff`, the dependants report) are now the
    draft schema `platform/module_swap` 1.0 with its rules, and the documented swap runs through
    them in a test; the record and the swap kit stay 1.1 until acceptance;
-3. `platform/interface` 1.0 as a record, and gate-interface ownership;
+3. `platform/interface` 1.0: the shape of a manifest `interfaces:` entry, published as a draft
+   schema; `gate: true` on a gate interface's definition and on its gate's consuming entry, with
+   the rules that the gate module owns it and never provides it (no standalone loader yet);
 4. the trust-tier grants not yet implemented: `grants.units`, upstream grants for broker, idp and
    remote-admin, cloud-bound model roles and `grants.shared_config`, and the per-field review tier
    for in-tree manifests (the review-policy module kinds came with follow-up 5, for fetched
@@ -155,7 +157,8 @@ with no schema, generator or check in any form):
    mount); a role's own services join by `Slice=`, and the loader will run it;
 9. the loader, with its two-way check against what runs, uniqueness against the core's own names
    and the overlay-shadowing refusal;
-10. the product-name lint.
+10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
+    gates` and CI), with the core's existing product names as a baseline that only shrinks.
 
 These are the follow-ups. The ADR is not accepted, and the schemas are not frozen, until the loader
 and the collector pilot have run.

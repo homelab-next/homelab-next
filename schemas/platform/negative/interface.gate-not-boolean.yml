@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# gate is true or false.
+id: publishable-output
+version: '1.0'
+kind: object-prefix
+gate: 'yes'
+schema: interfaces/publishable-item.schema.json
+description: items offered for publication under a producer's prefix, each with a JSON sidecar carrying
+  its claimed TLP; the gate verifies the claim against the content before anything leaves

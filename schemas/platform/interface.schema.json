@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/interface/1.0",
+  "x-draft": "ADR-0027 (proposed): the shape of a manifest interfaces: entry, published as a draft schema (follow-up 3); generated from the module manifest's interface_definition, so it changes with it until accepted, then only with a version bump",
+  "title": "Interface definition",
+  "description": "The shape of one interfaces: entry in the owner's module manifest (docs/modules.md, 'Interfaces: one owner'): id, version, kind, the item schema (a path relative to the owner's module directory, or a shipped schema id) and whether it is a gate. No loader reads a standalone interface record yet, and this shape names no owner: the rules a schema cannot state (one owner per id, gate ownership, the schema's $id in the owner's namespace) run on manifests, in homelabnext.modules.rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "kind",
+    "description"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "#/$defs/interface_id"
+    },
+    "version": {
+      "$ref": "#/$defs/contract_version"
+    },
+    "kind": {
+      "enum": [
+        "object-prefix",
+        "event",
+        "lake-table",
+        "service"
+      ],
+      "description": "object-prefix: objects under a prefix of an object-store instance; event: an event type; lake-table: a table others read; service: a registry service's API."
+    },
+    "formats": {
+      "$ref": "#/$defs/formats"
+    },
+    "schema": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*\\.json$(?!\\n)",
+      "description": "The JSON Schema of one item (a .json file), in this (the owning) module; the loader reads it as a JSON Schema whose $id is in .../modules/<owner>/."
+    },
+    "schema_id": {
+      "$ref": "#/$defs/schema_id"
+    },
+    "gate": {
+      "type": "boolean",
+      "description": "true: a gate interface, owned by the module whose gate checks every item; that module consumes it with gate: true and never provides it (homelabnext.modules.rules)."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "schema"
+      ]
+    },
+    {
+      "required": [
+        "schema_id"
+      ]
+    }
+  ],
+  "$defs": {
+    "contract_version": {
+      "type": "string",
+      "maxLength": 16,
+      "pattern": "^[0-9]+\\.[0-9]+$(?!\\n)",
+      "description": "MAJOR.MINOR of a contract: met by the same major and an equal or higher minor."
+    },
+    "format_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "version"
+      ],
+      "properties": {
+        "format": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "An interchange format at a boundary: ocsf, sigma, cloudevents, action-request, sql, s3, openai-compatible, markdown-records, stix, sarif, ics."
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z.-]*$(?!\\n)",
+          "description": "The format's own version (ocsf 1.3.0, cloudevents 1.0, the S3 API 2006-03-01)."
+        },
+        "schema_id": {
+          "$ref": "#/$defs/schema_id"
+        },
+        "classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_.-]*$(?!\\n)"
+          },
+          "description": "The subset in use (OCSF classes, event types)."
+        }
+      },
+      "description": "A neutral format at a boundary: the conformance suite checks field meanings in it."
+    },
+    "formats": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/format_ref"
+      }
+    },
+    "interface_id": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+      "description": "An inter-module interface, named by what it carries; exactly one module (or the core) defines each id and version."
+    },
+    "schema_id": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^https://schemas\\.example\\.internal/homelabnext/[a-z0-9_/.-]+/[0-9]+\\.[0-9]+$(?!\\n)",
+      "description": "The $id of a shipped schema (an event type such as events/case.opened/1.0, an OCSF class, ids/logical-id/1.0)."
+    }
+  }
+}

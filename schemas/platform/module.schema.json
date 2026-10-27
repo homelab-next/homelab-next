@@ -721,6 +721,10 @@
           ],
           "description": "one (default): exactly one selected module provides it; all: consume every selected provider."
         },
+        "gate": {
+          "type": "boolean",
+          "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules)."
+        },
         "purpose": {
           "type": "string",
           "minLength": 1,
@@ -864,6 +868,10 @@
             "one",
             "all"
           ]
+        },
+        "gate": {
+          "type": "boolean",
+          "description": "true: this module's gate checks every item of the interface, so the module must own it and never provide it (homelabnext.modules.rules)."
         },
         "purpose": {
           "type": "string",
@@ -1229,13 +1237,17 @@
         "schema_id": {
           "$ref": "#/$defs/schema_id"
         },
+        "gate": {
+          "type": "boolean",
+          "description": "true: a gate interface, owned by the module whose gate checks every item; that module consumes it with gate: true and never provides it (homelabnext.modules.rules)."
+        },
         "description": {
           "type": "string",
           "minLength": 1,
           "maxLength": 300
         }
       },
-      "description": "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. The consumer owns a gate interface.",
+      "description": "An interface this module OWNS (platform/interface, docs/modules.md): one definition per id and version across every manifest, the core included. A gate interface (gate: true) is owned by the consumer whose gate checks it.",
       "oneOf": [
         {
           "required": [

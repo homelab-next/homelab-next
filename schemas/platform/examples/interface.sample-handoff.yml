@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# A gate interface, as examples/modules/example-sandbox/module.yml defines it.
+id: sample-handoff
+version: '1.0'
+kind: object-prefix
+gate: true
+schema: interfaces/collected-sample.schema.json
+description: files a producer offers for detonation, each under files/ with its sidecar under meta/

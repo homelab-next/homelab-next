@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:8fb4a1a1873e95c0
+summary_of: outline:sha256:ac3d2ea65e02ae7f
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -257,7 +257,7 @@ Roles on `kind: external` hosts are listed, not rendered: those hosts are outsid
 memory has no systemd control and stays a placement sum. There is no CLI yet: the loader
 (follow-up 9) will render this from the overlay's selection.
 
-## Interfaces: one owner (`platform/interface` 1.0: specified, not implemented)
+## Interfaces: one owner (`platform/interface` 1.0, a draft schema)
 
 An interface is defined **once**, in the owning module's (or a core module's) `interfaces:`: `id`,
 `version`, `kind` (`object-prefix | event | lake-table | service`), the item schema (`schema`, a
@@ -267,12 +267,29 @@ interface references it in `provides.interfaces` with `via: {cap, instance, pref
 the prefix is in the provider's own namespace and the instance is one it requires. Ownership is per
 **id**, every version included: the loader refuses a second module defining any version of an id
 another module defines, and a reference to a version the owner does not define. The inline
-definition is what exists; a standalone `platform/interface` record is not written.
+definition is what exists: [`schemas/platform/interface.schema.json`](../schemas/platform/interface.schema.json)
+is the shape of a manifest `interfaces:` entry, published as a draft schema with the examples' two
+gate interfaces as its examples. It is generated from the manifest's definition, so it changes with
+it until acceptance. No loader reads a standalone interface record yet, the shape names no owner,
+and its `schema` path is relative to the owner's module directory: the ownership rules run on
+manifests.
 
-**Gate ownership: specified, not implemented.** A gate interface is meant to be owned by the
-consumer, whose gate input the schema is (`publishable-output` belongs to publishing,
-`sample-handoff` to the sandbox). The manifest has no field marking an interface as a gate, so
-nothing yet refuses a gate interface defined by its producer. Unselected modules'
+**Gate ownership.** A gate interface is owned by the consumer whose gate input the schema is
+(`publishable-output` belongs to publishing, `sample-handoff` to the sandbox). The gate module
+marks both sides: its consuming `requires` or `prefers` entry carries `gate: true`, and so does its
+definition. The rules refuse, per id and every version:
+
+- a module gating on an interface it does not define (another module owns it), and a gated
+  interface whose definition lacks `gate: true`;
+- a definition marked `gate: true` that its owner does not consume with `gate: true`;
+- a gate interface its owner also provides;
+- an id marked `gate: true` on some versions only (an id is a gate when any version says so, and
+  every version must).
+
+So a producer cannot take over the interface a gate checks: the gate's own entry names it, and the
+gate must own it. What is not covered: an interface nobody marks as a gate, and a gate module that
+consumes a different interface than it should (both are a change to the gate's own manifest, made
+in review). Unselected modules'
 manifests are still read for definitions; only selected ones run. The interface kinds
 `agent-handoff` and `records-prefix` wait for a real module.
 
@@ -939,22 +956,60 @@ Model-role rebinds go through the same record with `{slot: cap:inference, role}`
 as conformance and calibration refit as a gate. Downtime migrations and derived-data rebuilds remain
 open (below).
 
-## The product-name lint (rule 1): specification
+## The product-name lint (rule 1)
 
-Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
+Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints.py`, run by
+`make gates`, the CI `schemas` job (with `--ci-base`) and invariant X-11.
 
-- **Vocabulary**: every provider's `product.name`, `display` (lower-cased, spaces as `-`/`_`) and
-  `aliases`, from the tree and the overlay; `tools/product_names.yml` for products without a provider
-  module yet; **model identifiers** from the role table; and product-named environment variable
-  prefixes (`<PRODUCT>_*`).
-- **Where allowed**: inside a provider module; site configuration (the overlay, the public example
-  sites); ADRs, the changelog and prose.
-- **What is linted**: code, config keys and values, schema `enum`/`default`/`const`, CLI defaults
-  and choices, file and directory names, env names, in the core and in feature and core modules.
-- **Skipped**: comments, docstrings and Markdown prose. **Matching**: case-insensitive, bounded,
-  `-` and `_` alike. **Suppression**: a path glob with a reason, plus a baseline that only shrinks.
-- The contract tests already apply it to the examples (feature and core modules, sites, the slot
-  registry).
+- **Vocabulary**: every provider's `product.name`, `display` and `aliases`, from
+  `examples/modules/`, the public `modules/` and an overlay's `lab/modules/` (`--overlay`);
+  `tools/product_names.yml` `products:` for products without a provider module yet (each with a
+  `why`; unambiguous names only); and **model identifiers** from the role table
+  (`examples/model_roles.json`, `--roles`). Each name must be lower-case words of at most 128
+  characters, and a manifest that is not well formed is an error, never skipped.
+- **Where allowed**: a provider module's directory, **for its own product only** (claiming
+  `kind: provider` does not open a directory to every product); site configuration
+  (`examples/modules/sites/`, `examples/private-overlay/`, an overlay's `lab/`); the role table;
+  Markdown prose (ADRs and the changelog included); and the reviewed globs of
+  `tools/product_names.yml` `allow:`, each with a reason (generated catalogues and other gates'
+  path lists, whose paths are counted where they live).
+- **What is linted**: the files `git ls-files` lists under the root (tracked, plus untracked but
+  not ignored; a directory walk outside a git work tree). Python string and bytes constants as
+  Python reads them (escapes decoded, implicit concatenation joined, f-string parts) and
+  identifiers; every key and string value of YAML (sets, ordered maps and binaries included) and
+  JSON, except the string value of a prose key (`description`, `title`, `$comment`, `summary`,
+  `reason`, `why`, `purpose`, `help`); the lines of every other text file, whatever its suffix
+  (`Dockerfile`, `Makefile`, `.env`, `.html`, `.sql` included) or encoding (UTF-8; UTF-16 or
+  UTF-32 by BOM or byte pattern; otherwise Latin-1); every file, directory and submodule name; and
+  a symbolic link's target text and, for a link into the tree, the target's content under the
+  link's path. A binary (a NUL byte in a suffix not known as text) is skipped whatever its size; a
+  text file over 20 MB is an error.
+- **Skipped**: comments (Python, and `#` or `//` lines in the formats that use them), docstrings
+  (as nodes, so code on the same line is still read) and prose.
+- **Matching**: one pass of one pattern per file (about 5 seconds over this tree). A file is parsed
+  only when its letters and digits contain some name's, or it holds an escape or a line
+  continuation, so the prefilter never skips a file a parse would match in. Case-insensitive after
+  compatibility normalisation with combining marks and invisible format characters removed; `-`,
+  `_`, `.`, a space or nothing between a name's parts; bounded by a non-alphanumeric or a
+  camel-case, upper-case-run or letter/digit seam, so `NorthwindObjectsClient`,
+  `NORTHWINDOBJECTSClient` and `getNorthwindObjects` count and a longer word containing the name
+  does not (`OPENBAOADDR`, all capitals glued, is a known miss). It finds ordinary spellings, not
+  deliberate obfuscation (`"open" + "bao"`, an encoded string): that is what review of a change is
+  for.
+- **Baseline**: `tools/product_names.baseline.json` holds today's counts per path and product
+  (the core still names its reference products in about 530 paths). A count above it fails, and so
+  does an entry above what is there. `make product-names-baseline` (`--update`) rewrites it to what
+  is there and is refused when any product's total would rise. In CI `--ci-base` also compares the
+  committed baseline and vocabulary with the base commit's (the same base rule as
+  `tools/schema_check.py --ci-base`): no path's count may rise above its count there (a file git
+  sees as renamed or copied keeps its old path's counts, and a split records its new path under
+  `tools/product_names.yml` `moved:` with a reason, so a new file never takes on debt freed
+  elsewhere), no product's total may rise (so a copy never doubles debt), and no spelling linted
+  there (a product, an alias, a provider's display name, a model id) may stop being linted unless
+  `retired:` says why (each retirement is printed in the CI log). Neither file can be loosened by
+  hand. Moving product code into a provider module is how it shrinks.
+- **Exit**: 0 clean, 1 violations, 2 a bad input, 100 the lint itself failed (X-11 reports that
+  as "could not measure", not as a failure).
 
 ## Prerequisite record changes
 
@@ -963,7 +1018,7 @@ Modelled on `tools/no_raw_endpoints.py`. Not implemented in this draft.
 | `platform/capability` 1.1 | the slot registry fields above; derived `implementations` | **draft schema** `platform/slot` 1.0 holds the fields and rules; `examples/modules/slots.yml` is validated against it; capability stays 1.0 until acceptance |
 | `platform/swap_record` 1.2 | above | **draft schema** `platform/module_swap` 1.0 holds the additions and their rules; the record stays 1.1 until acceptance |
 | `platform/module_selection` 1.0 | above | **draft schema** (the three example profiles are its examples) |
-| `platform/interface` 1.0 | the owned interface record (today inline in the owner's manifest) | specified, not implemented |
+| `platform/interface` 1.0 | the owned interface record (inline in the owner's manifest) | **draft schema**: the shape of a manifest `interfaces:` entry, generated from it and changing with it until acceptance; no standalone loader; `gate` on the definition and on the gate's consuming entry |
 | `platform/lake_table` 1.0 | owner, schema, retention, maintenance, freshness | **draft schema** |
 | `registers/invariant` 1.1 | ids `^[A-Z]-NN$` **or** `<module id>/<slug>`, never a pillar letter in a module | specified |
 | `platform/service` 2.7 | status source `module` renamed `group`, `module` kept as a deprecated alias for one minor | specified |
@@ -1018,8 +1073,13 @@ listed as deferred.
 2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
    `platform/module_swap` 1.0 and one swap is driven through its rules end to end in a test;
    folding it into the swap record and the swap kit (`hnx swap`) waits for acceptance.
-3. **`platform/interface` 1.0** as a standalone record, and a `gate` marker so a gate interface
-   defined by its producer is refused.
+3. **`platform/interface` 1.0**: the shape of a manifest `interfaces:` entry, published as a draft
+   schema generated from the manifest's definition (it changes with it until acceptance, then only
+   with a version bump); `gate: true` on the definition and on the gate's consuming entry, with the
+   rules that the gate module owns the interface and never provides it (see
+   [Interfaces: one owner](#interfaces-one-owner-platforminterface-10-a-draft-schema)). Not done:
+   a loader for standalone records (the shape has no owner field), and any check on an interface
+   nobody marks as a gate.
 4. **Trust-tier grants not yet implemented**: `grants.units` (root and opt-out units are refused
    outright instead), grants for broker, idp and remote-admin upstreams, cloud-bound model roles,
    and `grants.shared_config` (the rule refuses edge and idp config outright). The review-policy
@@ -1036,7 +1096,8 @@ listed as deferred.
 9. **The loader itself**: everything under "What the loader checks" runs today only over the
    fictional examples in the contract tests, plus the two-way check against what runs, uniqueness
    against the core's own names, and refusing an overlay module that shadows a shipped id.
-10. **The product-name lint** (specified above).
+10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
+    the core's existing product names are a baseline that only shrinks.
 
 ## Open questions
 
