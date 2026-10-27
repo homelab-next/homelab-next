@@ -259,26 +259,41 @@ class ModelResolver:
                 except ResolutionError as exc:
                     trail.append(f"{cur}: svc:{b.backend} unresolved ({str(exc)[:80]})")
                     continue
-                return ResolvedModel(
-                    role=cur,
-                    asked=asked,
-                    kind=r.kind,
-                    model_id=b.model_id,
-                    backend=b.backend,
-                    endpoint=ep,
-                    params=dict(r.params),
-                    logprobs=r.logprobs,
-                    require_model_served=r.require_model_served,
-                    dimensions=r.dimensions,
-                    trail=tuple(trail),
-                    max_context_tokens=r.max_context_tokens,
-                    version=b.version,
-                    digest=b.digest,
-                )
+                return _resolved(r, asked, b, ep, tuple(trail))
             if r.fallback:
                 trail.append(f"{cur}: no binding resolved, falling back to mdl:{r.fallback}")
             cur = r.fallback
         raise ResolutionError(f"mdl:{asked}", "no binding or fallback resolved", trail)
+
+    def resolve_binding(self, role: str, binding: Binding) -> ResolvedModel:
+        """One given binding of a role, with no fallback (the egress canary runs every binding
+        of a role, not the first that resolves)."""
+        asked = normalize_role(role)
+        r = self.table.get(asked)
+        return _resolved(
+            r, asked, binding, self.resolver.resolve(self._capability_of(binding.backend)), ()
+        )
+
+
+def _resolved(
+    r: Role, asked: str, b: Binding, ep: Endpoint, trail: tuple[str, ...]
+) -> ResolvedModel:
+    return ResolvedModel(
+        role=r.name,
+        asked=asked,
+        kind=r.kind,
+        model_id=b.model_id,
+        backend=b.backend,
+        endpoint=ep,
+        params=dict(r.params),
+        logprobs=r.logprobs,
+        require_model_served=r.require_model_served,
+        dimensions=r.dimensions,
+        trail=trail,
+        max_context_tokens=r.max_context_tokens,
+        version=b.version,
+        digest=b.digest,
+    )
 
 
 # ---------------------------------------------------------------- HTTP plumbing

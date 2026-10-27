@@ -61,8 +61,11 @@ def test_a_changed_pin_makes_the_stored_report_stale_until_regenerated(field, va
     doc = table_doc()
     doc["roles"]["fast-classifier"]["bindings"][0][field] = value
     t = RoleTable.from_dict(doc)
-    (p,) = pins.check_report(stored, t, SUITES)
+    p, *canary = pins.check_report(stored, t, SUITES)
     assert "stale" in p and "pin mdl:fast-classifier" in p and "main-reasoner" not in p
+    # and the canary entry names the binding whose pin it no longer matches
+    assert all(c.startswith("mdl:fast-classifier -> svc:inference") for c in canary)
+    assert any("a different pin" in c for c in canary)
     _, regenerated = fresh(doc)
     assert pins.check_report(regenerated, t, SUITES) == []
 

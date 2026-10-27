@@ -219,11 +219,12 @@ annotate(records, cascade) -> [records + decide_* columns]   # batch/ingest: rec
 safety.check() -> [SpecResult]                               # hnx decide safety: REQUIRED safety specs pass their cases (K-15)
 
 # homelabnext.golden
-pins.run_eval(table, suites, factory, model_name=...) ; pins.check_report(report, table, suites)   # hnx golden pins (G-11)
+pins.run_eval(table, suites, factory, model_name=..., canary_factory=) ; pins.check_report(report, table, suites, *, require_live=False)   # hnx golden pins (G-11); canary_factory(role, binding) -> (completer, "live"|"fake")
 load_suite(path) -> Suite ; run_suite(suite, completer, *, role=None, model_id="") -> Report ; score(output, expect)
 agentic.run_task(suite, task, mode, completer, backend) -> Trace ; agentic.run_suites(suites, completer, backend_for, corpus, ...)   # Code Mode vs MCP mode (CM-6)
 score_check(trace, check)                                    # trace scorers: broker_calls | denied_calls | ungranted_actions | turns
 fakes.fake_report(suite_paths, *, fake="fence") ; agentic.check_report(stored, fresh)   # hnx golden codemode --check (scripted fake, fake broker world)
+canary.run_canary(suite, completer, *, role=, model_id=, samples=) ; canary.findings(tool, arguments, task) ; canary.raw_findings(text, task)   # hnx golden canary (the egress canary)
 
 # homelabnext.models   (docs/model-serving.md)
 store.load(path) -> Store ; store.bindings_problems(store, table, engines=None) -> [str] ; store.check_disk(store, root) -> [str]

@@ -2,8 +2,12 @@
 """``hnx golden``: run a golden suite against a model-role alias; check model pins (G-11).
 
 ``hnx golden pins check``  every binding is pinned, every role is evaluated, and the stored
-                           evaluation report is current and passing (a fake report must also
-                           reproduce exactly).  Exit 0 pass, 1 fail.
+                           evaluation report is current and passing, with a valid egress canary
+                           for every binding (a fake report must also reproduce exactly);
+                           ``--require-live`` also fails a canary that ran against the fake,
+                           and without it a table other than the shipped example whose
+                           canaries are all fake fails.
+                           Exit 0 pass, 1 fail.
 ``hnx golden pins report`` (re)generate the evaluation report: against the deterministic fake by
                            default, or live (``--registry``) through the model-role resolver.
 ``hnx golden codemode``    the Code Mode golden suites (CM-6): every task in classic MCP mode and
@@ -11,6 +15,10 @@
                            fake model behind the fake inference server and the fake broker world;
                            ``--check REPORT`` fails unless the committed report is current and
                            passing, ``--out REPORT`` (re)writes it.  Exit 0 pass, 1 fail.
+``hnx golden canary``      the egress canary (docs/compute-model.md, "The egress canary"): live
+                           against every binding of a role (``--registry`` and ``--roles``), or
+                           against a scripted fake (``--fake benign|incident``).  Exit 0 pass,
+                           1 a finding, 2 usage.
 """
 
 from __future__ import annotations
@@ -19,6 +27,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from homelabnext.registry import load as load_registry
 from homelabnext.registry.models import ModelResolver, RoleTable
@@ -42,6 +51,11 @@ def main(argv: list[str]) -> int:
     pins.add_argument("--report", required=True, help="evaluation report (JSON)")
     pins.add_argument("--suite", action="append", type=Path, help="golden suite (repeatable)")
     pins.add_argument("--registry", help="report: run live against this service registry")
+    pins.add_argument(
+        "--require-live",
+        action="store_true",
+        help="check: fail a canary entry that ran against the fake (an overlay with real models)",
+    )
     cm = sub.add_parser(
         "codemode", help="Code Mode vs classic MCP mode suites against the fakes (CM-6)"
     )
@@ -54,7 +68,17 @@ def main(argv: list[str]) -> int:
         "--in-process", action="store_true", help="call the fake model directly, not over HTTP"
     )
     cm.add_argument("--json", action="store_true", help="print the report as JSON")
+    can = sub.add_parser("canary", help="the egress canary against a role or a scripted fake")
+    can.add_argument("--suite", type=Path, help="canary suite (default: the shipped one)")
+    can.add_argument("--role", help="role to test (live)")
+    can.add_argument("--registry", help="service registry (live)")
+    can.add_argument("--roles", help="model role table (JSON, live)")
+    can.add_argument("--fake", choices=("benign", "incident"), help="a scripted fake model")
+    can.add_argument("--samples", type=int, help="samples per task (default: the suite's)")
+    can.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    if args.cmd == "canary":
+        return _canary(args)
     if args.cmd == "pins":
         return _pins(args)
     if args.cmd == "codemode":
@@ -80,8 +104,15 @@ def _pins(args: argparse.Namespace) -> int:
     suites = args.suite or list(pins.DEFAULT_SUITES)
     if args.action == "report":
         if args.registry:
-            factory, tiers, name = _live(args.registry, table)
-            rep = pins.run_eval(table, suites, factory, model_name=name, replay_tiers=tiers)
+            factory, tiers, canary_for, name = _live(args.registry, table)
+            rep = pins.run_eval(
+                table,
+                suites,
+                factory,
+                model_name=name,
+                replay_tiers=tiers,
+                canary_factory=canary_for,
+            )
         else:
             rep = pins.run_eval(table, suites, pins.fake_factory, model_name="fake-golden")
         pins.dump_report(rep, args.report)
@@ -92,7 +123,9 @@ def _pins(args: argparse.Namespace) -> int:
     except (OSError, ValueError) as exc:
         print(f"golden pins: cannot read {args.report}: {exc}", file=sys.stderr)
         return 1
-    problems = pins.check_report(stored, table, suites)
+    problems = pins.check_report(stored, table, suites, require_live=args.require_live)
+    if not args.require_live and (guard := pins.fake_canary_on_a_real_table(stored, table)):
+        problems.append(guard)
     model = stored.get("model", {}).get("name") if isinstance(stored, dict) else None
     if not problems and model == "fake-golden":
         fresh = pins.run_eval(table, suites, pins.fake_factory, model_name="fake-golden")
@@ -102,6 +135,63 @@ def _pins(args: argparse.Namespace) -> int:
         print(f"golden pins: {p}")
     print(f"golden pins: {len(table.roles)} role(s), {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _canary(args: argparse.Namespace) -> int:
+    from . import canary
+
+    live = (args.role, args.registry, args.roles)
+    if bool(args.fake) == any(live) or (not args.fake and not all(live)):
+        print(
+            "golden canary: pass --fake benign|incident, or --role, --registry and --roles",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        suite = canary.load_suite(args.suite or canary.DEFAULT_SUITE)
+    except (OSError, ValueError) as exc:
+        print(f"golden canary: {exc}", file=sys.stderr)
+        return 2
+    runs: list[tuple[Any, str, str]] = []
+    if args.fake:
+        completer: Any = canary.IncidentModel() if args.fake == "incident" else canary.benign_model
+        runs.append((completer, "fake", f"fake-{args.fake}"))
+    else:  # pragma: no cover - needs a real model server
+        table = RoleTable.load(args.roles)
+        resolver = ModelResolver(load_registry(args.registry), table)
+        canary_for = _binding_completer(resolver)
+        for b in table.get(args.role).bindings:  # every binding, not the first that resolves
+            runs.append((canary_for(args.role, b)[0], args.role, b.model_id))
+    reports = []
+    try:
+        for completer, role, model_id in runs:
+            reports.append(
+                canary.run_canary(
+                    suite, completer, role=role, model_id=model_id, samples=args.samples
+                )
+            )
+    except canary.CanaryError as exc:
+        print(f"golden canary: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        doc: Any = reports[0] if len(reports) == 1 else reports
+        print(json.dumps(doc, indent=2, sort_keys=True))
+    else:
+        for rep in reports:
+            print(canary.render_report(rep), end="")
+    return 0 if all(r["summary"]["ok"] for r in reports) else 1
+
+
+def _binding_completer(resolver: ModelResolver):  # pragma: no cover - needs a real model server
+    """``(role, binding) -> (completer, "live")``: the canary's completer for one binding, which
+    returns the whole ChatResult so the canary sees ``finish_reason``."""
+    from homelabnext.registry.models import ModelClient
+
+    def canary_for(role: str, binding: Any) -> tuple[Any, str]:
+        client = ModelClient(resolver.resolve_binding(role, binding))
+        return (lambda messages, params: client.chat(messages, **params)), "live"
+
+    return canary_for
 
 
 def _codemode(args: argparse.Namespace) -> int:
@@ -160,7 +250,11 @@ def _live(registry: str, table: RoleTable):  # pragma: no cover - needs a real m
             tiers[t.name] = ModelTier(
                 t.name, lambda m, c=client: c.chat(m), spec.question_set, LABELS
             )
-    return (lambda role: client_completer(resolver, role)), tiers, "live"
+
+    def factory(role: str):
+        return client_completer(resolver, role)
+
+    return factory, tiers, _binding_completer(resolver), "live"
 
 
 if __name__ == "__main__":
