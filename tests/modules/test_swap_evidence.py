@@ -524,6 +524,72 @@ def test_a_rebind_record_does_not_cover_another_roles_trust_change(repo, report,
     assert not any("mdl:fast-classifier" in p for p in out["problems"]), out
 
 
+def _pair(first: dict, second: dict) -> dict:
+    """The shipped table with ``mdl:main-reasoner`` bound to two bindings (pins only: a digest
+    each), ``first`` and ``second`` the keys each carries beside its pin."""
+    doc = json.loads(ROLES.read_text(encoding="utf-8"))
+    pin = doc["roles"]["main-reasoner"]["bindings"][0]
+    doc["roles"]["main-reasoner"]["bindings"] = [
+        {**pin, "digest": "sha256:" + "a" * 64, **first},
+        {**pin, "digest": "sha256:" + "b" * 64, **second},
+    ]
+    return doc
+
+
+def _trust_pair(repo: Path, base: dict, head: dict) -> None:
+    _write(repo, se.ROLES, base)
+    _commit(repo)
+    _write(repo, se.ROLES, head)
+
+
+def test_a_leaves_lab_moved_to_another_binding_is_a_change(repo, capsys):
+    """The flag moved from the second binding to the first: the multiset of non-pin keys was the
+    same, so the gate saw nothing; keyed by each binding's pin it is a change."""
+    _trust_pair(repo, _pair({}, {"leaves_lab": True}), _pair({"leaves_lab": True}, {}))
+    rc, out = _gate(repo, capsys)
+    assert rc == 1
+    assert any("mdl:main-reasoner" in p and "bindings[].leaves_lab" in p for p in out["problems"])
+
+
+def test_the_same_flag_on_the_same_binding_is_no_change(repo, capsys):
+    both = _pair({}, {"leaves_lab": True})
+    _trust_pair(repo, both, both | {"x": 1})
+    assert se._trust_changes(both, both) == {}
+    assert se._trust_changes(both, _pair({}, {"leaves_lab": True})) == {}
+
+
+def test_moved_bindings_keep_their_flag_with_their_pin():
+    """Reordering the bindings is not a change when each flag stays with its pin."""
+    a, b = _pair({"leaves_lab": True}, {}), _pair({"leaves_lab": True}, {})
+    b["roles"]["main-reasoner"]["bindings"].reverse()
+    assert se._trust_changes(a, b) == {}
+
+
+@pytest.mark.parametrize("value", [False, None, "true", 1, 0])
+def test_a_leaves_lab_the_rules_do_not_read_as_true_equals_the_key_absent(value, repo, capsys):
+    """``rules.cloud_roles`` tests ``is True``: ``false`` (or any other value) reads as absent, so
+    swapping one for the other is no change and needs no record."""
+    base = json.loads(ROLES.read_text(encoding="utf-8"))
+    head = json.loads(ROLES.read_text(encoding="utf-8"))
+    head["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = value
+    assert se._trust_changes(base, head) == {} == se._trust_changes(head, base)
+    _write(repo, se.ROLES, base)
+    _commit(repo)
+    _write(repo, se.ROLES, head)
+    rc, out = _gate(repo, capsys)
+    assert (rc, out["problems"]) == (0, []) and "reads the same" in out["decided"]
+
+
+def test_true_against_false_is_still_a_change(repo, capsys):
+    base = json.loads(ROLES.read_text(encoding="utf-8"))
+    base["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = False
+    head = json.loads(ROLES.read_text(encoding="utf-8"))
+    head["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = True
+    _trust_pair(repo, base, head)
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and any("bindings[].leaves_lab" in p for p in out["problems"])
+
+
 # ------------------------------------------- the gate over a private overlay's lab/ layout
 
 LAB_ROLES = "lab/model_roles.json"
@@ -663,3 +729,63 @@ def test_repository_mode_paths_are_unchanged():
     repo = se.Layout(se.ROLES, se.STORE, se.REPORTS, se.EVALS, se.SWAPS, se.SUITES)
     assert repo == se.REPO
     assert se.OVERLAY.suites is None  # the installed hnx's golden suites
+
+
+@pytest.mark.parametrize("field", ["leaves_lab", "fallback"])
+def test_an_overlay_trust_change_needs_a_record_naming_the_role(overlay, report, capsys, field):
+    base = json.loads(ROLES.read_text(encoding="utf-8"))
+    head = json.loads(ROLES.read_text(encoding="utf-8"))
+    if field == "leaves_lab":
+        head["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = True
+    else:
+        del head["roles"]["main-reasoner"]["fallback"]
+    _write(overlay, LAB_ROLES, base)
+    _commit(overlay)
+    _write(overlay, LAB_ROLES, head)
+    assert _ogate(overlay, capsys)[0] == 1  # no record at all
+    swap = _swap(report)
+    del swap["model_roles"]
+    _write(overlay, f"{LAB_SWAPS}/other.json", swap)  # a record, naming no role
+    rc, out = _ogate(overlay, capsys)
+    assert rc == 1 and any(
+        "mdl:main-reasoner" in p and field in p and "model_role_changes" in p
+        for p in out["problems"]
+    ), out
+    swap["model_role_changes"] = ["mdl:main-reasoner"]
+    _write(overlay, f"{LAB_SWAPS}/other.json", swap)
+    rc, out = _ogate(overlay, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+def test_the_overlay_takes_a_push_events_base(overlay, report, capsys, monkeypatch):
+    _write(overlay, f"{LAB_SWAPS}/fast-classifier.json", _swap(report))
+    sha = _git(overlay, "rev-parse", "HEAD")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("HNX_PUSH_BEFORE", sha)
+    monkeypatch.delenv("HNX_PR_BASE", raising=False)
+    rc = mcli.main(["swap-gate", "--overlay", str(overlay), "--ci-base", "--json"])
+    cap = capsys.readouterr()
+    assert rc == 0 and json.loads(cap.out)["problems"] == []
+    assert f"base {sha}" in cap.err
+    (overlay / LAB_SWAPS / "fast-classifier.json").unlink()  # uncovered against that push base
+    rc = mcli.main(["swap-gate", "--overlay", str(overlay), "--ci-base", "--json"])
+    assert rc == 1
+
+
+def test_an_overlay_that_is_not_the_git_root_is_refused(overlay, tmp_path, capsys):
+    sub = overlay / "sub"
+    sub.mkdir()
+    rc = mcli.main(["swap-gate", "--overlay", str(sub), "--base", "HEAD"])
+    err = capsys.readouterr().err
+    assert rc == 2 and "not the root of a git checkout" in err and str(overlay.resolve()) in err
+    bare = tmp_path / "plain"
+    bare.mkdir()
+    rc = mcli.main(["swap-gate", "--overlay", str(bare), "--base", "HEAD"])
+    assert rc == 2 and "not the root of a git checkout" in capsys.readouterr().err
+
+
+def test_an_overlay_given_through_a_link_to_its_root_is_accepted(overlay, tmp_path, capsys):
+    link = tmp_path / "link"
+    link.symlink_to(overlay, target_is_directory=True)
+    rc = mcli.main(["swap-gate", "--overlay", str(link), "--base", "HEAD", "--json"])
+    assert rc == 1 and json.loads(capsys.readouterr().out)["decided"] == "uncovered"
