@@ -647,6 +647,18 @@ def _firewall(doc: dict, reg: Any, zone_ids: dict[str, dict], r: Report) -> None
             and zone_ids[src]["egress"]["internet"] == "allow"
         ):
             r.error(f"{where}: deny to 'any' contradicts egress.internet=allow of zone {src!r}")
+        if (
+            dst == "any"
+            and rule["action"] == "allow"
+            and src in zone_ids
+            and zone_ids[src]["egress"]["internet"] == "deny"
+        ):
+            # 'any' includes the internet: the linux adapter renders this allow with no outbound
+            # interface match, ahead of the zone's internet rule, so the deny would never apply
+            r.error(
+                f"{where}: allow to 'any' contradicts egress.internet=deny of zone {src!r}; "
+                "name the zones it may reach instead"
+            )
     for zid in sorted(one_way):
         z = zone_ids[zid]
         if z["egress"]["internet"] != "deny":
