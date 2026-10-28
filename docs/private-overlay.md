@@ -440,7 +440,7 @@ These are owner, because they widen no reach:
 | Field | Why |
 |---|---|
 | `site_version` | the schema version the file is written to |
-| `site` (`id`, `domain`, `timezone`) | names, not reach |
+| `site` (`id`, `timezone`) | names, not reach (`site.domain` is human: the lab's DNS answers it for every client and DHCP pushes it as the search domain) |
 | `edge` | the uplink chain's devices and their power: a description, not a rule |
 | `power` | the UPSes and a device's default power |
 | `zones[].tags` | labels no rule reads (a zone's `purpose` is human: `management` opens SSH to the router from the zone) |

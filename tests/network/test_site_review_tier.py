@@ -129,6 +129,17 @@ def test_tailnet_is_human_and_a_field_that_widens_nothing_is_owner():
     }
 
 
+def test_the_sites_domain_is_human():
+    """The domain is DNS authority: dnsmasq answers it locally for every client and DHCP pushes
+    it as the search domain, so renaming it to a public domain would resolve that domain in the
+    lab; the id and timezone stay owner."""
+    doc = copy.deepcopy(SITE)
+    doc["site"]["domain"] = "example.com"
+    assert tiers(rt.site_changes(SITE, doc)) == {"site.domain": rt.HUMAN}
+    doc["site"]["timezone"] = "Europe/London"
+    assert tiers(rt.site_changes(SITE, doc)) == {"site.domain": rt.HUMAN, "site": rt.OWNER}
+
+
 def test_a_zones_purpose_is_human():
     """``purpose: management`` opens SSH to the router from the zone (the linux adapter) and
     makes its mirrored traffic sensitive, so it is no description: making the internet-facing

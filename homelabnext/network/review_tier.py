@@ -114,7 +114,7 @@ FIELDS = {
 #: the site's top-level keys that widen no reach, and why (every other changed key is human)
 SITE_OWNER = {
     "site_version": "the schema version the file is written to",
-    "site": "the site's id, domain and timezone: names, not reach",
+    "site": "the site's id and timezone: names, not reach",
     "edge": "the uplink chain's devices and their power: a description, not a rule",
     "power": "the UPSes and a device's default power",
 }
@@ -372,6 +372,20 @@ def site_changes(old: Any, new: Any) -> list[Change]:
     judged = {"delegated_prefixes6", "zones", "firewall", "tailnet"}
     rest = sorted(k for k in {*o, *n} - judged if _canon(o.get(k)) != _canon(n.get(k)))
     for k in rest:
+        os_, ns_ = o.get(k), n.get(k)
+        if (
+            k == "site"
+            and isinstance(os_, dict)
+            and isinstance(ns_, dict)
+            and _canon(os_.get("domain")) != _canon(ns_.get("domain"))
+        ):
+            # the DNS authority: dnsmasq answers it locally for every client and DHCP pushes it
+            # as the search domain, so a public domain here would be resolved in the lab
+            changes.append(Change("site.domain", HUMAN, "the domain the lab's DNS answers for"))
+            os_ = {kk: v for kk, v in os_.items() if kk != "domain"}
+            ns_ = {kk: v for kk, v in ns_.items() if kk != "domain"}
+            if _canon(os_) == _canon(ns_):
+                continue
         if k in SITE_OWNER:
             changes.append(Change(k, OWNER, SITE_OWNER[k]))
         else:
