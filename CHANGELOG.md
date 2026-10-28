@@ -126,6 +126,7 @@ has no section below.
 
 ### Changed
 
+- The `linux` router's IPv6 input narrows what it takes from the WAN: a router solicitation only from a zone (the router advertises to no one on the WAN), an MLD query only from a link-local source at hop limit 1 (the only form a querier sends), and echo on two budgets, 10 a second from the zones and 5 from the WAN, so a ping flood from outside no longer starves the zones' diagnostics.
 - `hnx site validate` warns when a networkd site sets `router.wan6` without stating `adapters.options.linux.wan_network` (and so does `hnx site render|plan --adapter linux` on a site whose own adapter is another): the drop-in then extends the assumed `10-<wan_interface>.network`, and networkd silently ignores a drop-in whose file does not exist.
 - The docs no longer say `main` is unprotected: a ruleset requires the CI checks, `trusted-gates` among them, before a merge (ADR-0027, ADR-0028), though not a pull-request review. F-08's observable reads a ruleset (`rules/branches/main`) as well as classic protection, whose endpoint answers 404 for a branch a ruleset alone protects.
 - `tests/roles` starts at most 8 first role runs at once (one per CPU below that); `HNX_ROLERUN_WORKERS=N` sets the number, and anything but a positive integer is refused (CONTRIBUTING.md, "Time budgets").

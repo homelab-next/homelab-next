@@ -70,8 +70,11 @@ table inet hnx_site {
         ct state invalid drop
         iifname "lo" accept
         ip protocol icmp accept
-        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-reply, nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query, mld2-listener-report } accept
-        icmpv6 type echo-request limit rate 10/second accept
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-reply, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept
+        ip6 saddr fe80::/10 ip6 hoplimit 1 icmpv6 type mld-listener-query accept
+        iifname != "wan0" icmpv6 type nd-router-solicit accept
+        iifname != "wan0" icmpv6 type echo-request limit rate 10/second accept
+        iifname "wan0" icmpv6 type echo-request limit rate 5/second accept
         iifname "vlan*" udp dport { 53, 67 } accept
         iifname "vlan*" tcp dport 53 accept
         ip saddr @z_mgmt tcp dport 22 accept comment "ssh from management zone mgmt"
