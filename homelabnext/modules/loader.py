@@ -1470,7 +1470,7 @@ def check(
         Problem("site", p)
         for p in mr.site_problems(
             site, valid, dict(slots), rows=ins.rows, units=ins.units,
-            privileged_units=ins.privileged_units, roles=dict(roles),
+            privileged_units=ins.privileged_units, roles=dict(roles), known=dict(tree.mods),
         )
     ]  # fmt: skip
     problems += _instance_problems(site, core)

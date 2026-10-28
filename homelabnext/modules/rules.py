@@ -796,6 +796,7 @@ def site_problems(
     units: dict[str, set[str]],
     privileged_units: dict[str, set[str]],
     roles: dict[str, Doc],
+    known: dict[str, Doc] | None = None,
 ) -> list[str]:
     """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows):
     public routes need grants.public_routes, upstreams follow the fallback, and an upstream that
@@ -805,19 +806,20 @@ def site_problems(
     grants.units.  ``roles`` (the model role table's ``roles``): a module that requires a role
     whose prompts can leave the lab needs grants.cloud_models.  All four are required, so no rule
     is skipped for want of an input (a module with none passes an empty mapping); the loader will
-    pass them."""
-    out: list[str] = []
+    pass them.  ``known`` is every module the tree holds, those that failed validation included
+    (default ``mods``): a lab namespace may name none of them."""
+    # first: a selected module that failed validation stops the rest, not this
+    out = lab_namespace_problems(site, mods if known is None else known)
     try:
         sel = selected(site, mods)
     except KeyError as exc:
-        return [str(exc)]
+        return [*out, str(exc)]
     ch = chosen(site)
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
-    out += lab_namespace_problems(site, mods)
     for m in sel.values():
         for need in m["requires"].get("scope", []):
             try:

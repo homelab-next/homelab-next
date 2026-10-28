@@ -493,8 +493,9 @@ def _lab_namespaces(o: dict, n: dict) -> list[Change]:
     if (key in o) == (key in n) and _canon(o.get(key)) == _canon(n.get(key)):
         return []
 
-    def index(value: Any) -> dict[str, Any] | None:
-        entries = [] if value is None else value
+    def index(side: dict) -> dict[str, Any] | None:
+        # absent is empty; present and null is no list (the schema refuses it too)
+        entries = side.get(key, [])
         if not isinstance(entries, list):
             return None
         out: dict[str, Any] = {}
@@ -505,7 +506,7 @@ def _lab_namespaces(o: dict, n: dict) -> list[Change]:
             out[ns] = e.get("why")
         return out
 
-    io, inew = index(o.get(key)), index(n.get(key))
+    io, inew = index(o), index(n)
     if io is None or inew is None:
         return [_fail(key, "not a list of distinct {namespace, why} at both ends")]
     if key not in n:

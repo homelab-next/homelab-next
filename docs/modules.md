@@ -716,9 +716,11 @@ module and the core (the full profile lists `archive` and `scratch`); the runtim
 gathered table in any other namespace that no module id binds (see "Lake tables, from the
 catalog"). The loader refuses a namespace listed twice, the core's (`ocsf`), or a module id's (the
 id with `-` read as `_`, any module the tree holds): listing one would let a table there pass as
-the lab's instead of being judged as that module's or the core's. In the private overlay, adding a
-namespace or dropping the list is human-approve (`hnx site review-tier`), removing a namespace
-owner.
+the lab's instead of being judged as that module's or the core's; a module that failed its own
+validation counts too. In the private overlay, adding a namespace or dropping the list is
+human-approve (`hnx site review-tier`); removing a namespace, changing a `why` or declaring the
+list where it was absent (every other namespace is then judged) is owner, and a list that is not
+a list of distinct `{namespace, why}` at either end (a `null` included) fails the gate.
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive
