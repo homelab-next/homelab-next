@@ -719,6 +719,24 @@
     },
     {
       "exit": {
+        "0": "every file listed was read and parsed, or is absent (an absent file is a result, not a failure)",
+        "1": "a file is not a small regular file of its client's name, a file or a directory on its way is a link, someone else's or writable by its group or others, or a file does not parse strictly; the census stops"
+      },
+      "id": "mcp-client-configs",
+      "inputs": "the configuration files (absolute paths, each with its client), the largest file read",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "per file whether it is present and the server names it registers, never its text (JSON, as an Ansible module)",
+      "owner": "platform",
+      "path": "ansible/roles/module_census/library/mcp_client_configs.py",
+      "purpose": "Read the MCP client configurations installed on a host (what each client registers when it starts), never through a link, and return only the server names each registers, for the module census.",
+      "status": "active",
+      "trigger": [
+        "role:module_census"
+      ]
+    },
+    {
+      "exit": {
         "0": "every file was read (a missing file is a result, not a failure)",
         "1": "a file could not be read (permission, a link loop); the role stops"
       },

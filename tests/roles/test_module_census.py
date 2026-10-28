@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Role module_census (docs/modules.md, "What the loader checks"): each host's enabled and active
-fleet units and its notifier owners' pairs records, read-only, and on a broker host the agents its
-broker serves, written on the controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
+fleet units, its notifier owners' pairs records and its installed MCP client configurations,
+read-only, and on a broker host the agents its broker serves, written on the controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
 play runs on localhost, which is then both the host and the controller."""
 
 from __future__ import annotations
@@ -46,6 +46,11 @@ def _systemctl(tmp_path) -> str:
 
 
 PAIR = {"problem": "UPS on battery", "recovery": "UPS back on line power"}
+#: a value in a configuration's env block: it never leaves the host (only names do)
+MCP_SECRET = "s3cr3t-census-token-0002"
+MCP_JSON = json.dumps(
+    {"mcpServers": {"hnx-broker": {"type": "stdio", "command": "hnx", "env": {"T": MCP_SECRET}}}}
+)
 AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
 
 
@@ -123,6 +128,12 @@ def _first(tmp_path):
     os.chmod(pairs, 0o700)
     # this process writes it, so the record's process is running while the role reads it
     PairsRecord(pairs, "broker").write({PAIR["problem"]: (PAIR["recovery"], None)})
+    # an installed MCP client configuration, and one the host lists that is absent
+    agent = tmp_path / "agent"
+    agent.mkdir(mode=0o700)
+    os.chmod(agent, 0o700)
+    (agent / ".mcp.json").write_text(MCP_JSON)
+    os.chmod(agent / ".mcp.json", 0o600)
     v = {
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
@@ -133,6 +144,10 @@ def _first(tmp_path):
         "module_census_hnx_cli": _hnx(tmp_path),
         # the broker task becomes root (the identity the broker's manifest lists as operator)
         "ansible_become_exe": _sudo(tmp_path),
+        "module_census_mcp_configs": [
+            {"path": str(agent / ".mcp.json"), "client": "claude-code"},
+            {"path": str(agent / "hermes" / "config.yaml"), "client": "hermes"},
+        ],
     }
     return {
         "role": "module_census",
@@ -176,13 +191,32 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         },
         "listening": ["tcp/8443", "tcp/9000", "udp/53"],
         "agents": AGENTS.splitlines(),
+        "mcp": [
+            {
+                "path": v["module_census_mcp_configs"][0]["path"],
+                "client": "claude-code",
+                "present": True,
+                "servers": ["hnx-broker"],
+            },
+            {
+                "path": v["module_census_mcp_configs"][1]["path"],
+                "client": "hermes",
+                "present": False,
+                "servers": [],
+            },
+        ],
     }
+    # a configuration is parsed on the host: no value of its env block reaches the answer, nor
+    # anything the run printed
+    assert MCP_SECRET not in (out / "localhost.json").read_text()
+    assert MCP_SECRET not in r.stdout + r.stderr
     inventory, notes = census.gather(out)
     assert inventory == {
         "schema_version": "1.0",
         "units": ["external-collector-pull", "lake-compact", "stray"],
         "agents": ["core-staff-scorecard", "external-collector-analyst"],
-        "not_gathered": ["rows", "mcp_servers", "tables"],
+        "mcp_servers": ["hnx-broker"],
+        "not_gathered": ["rows", "tables"],
         "notify_pairs": [PAIR],
         "listening": [{"host": "localhost", "sockets": ["tcp/8443", "tcp/9000", "udp/53"]}],
     }
@@ -223,6 +257,9 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     os.mkfifo(fifo / "status" / "pairs.json")
     via = tmp_path / "via"
     via.symlink_to(tmp_path / "pairs")
+    # an MCP client configuration is an absolute plain path of a known client, read never
+    # through a link
+    (tmp_path / "agent" / "link.mcp.json").symlink_to(tmp_path / "agent" / ".mcp.json")
     results = run_cases(
         tmp_path,
         "module_census",
@@ -253,6 +290,16 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_hnx_cli": "hnx"},
             {"module_census_hnx_cli": "-hnx"},
             {"module_census_hnx_cli": fake(tmp_path / "hnx-fails", "import sys\nsys.exit(1)\n")},
+            {"module_census_mcp_configs": [{"path": "agent/.mcp.json", "client": "claude-code"}]},
+            {"module_census_mcp_configs": [{"path": "/srv/a.json", "client": "other"}]},
+            {"module_census_mcp_configs": ["/srv/a.json"]},
+            {
+                "module_census_mcp_configs": [
+                    {"path": str(tmp_path / "agent" / "link.mcp.json"), "client": "generic"}
+                ]
+            },
+            # a file not named as its client's configuration is never opened
+            {"module_census_mcp_configs": [{"path": "/etc/shadow", "client": "claude-code"}]},
         ],
         env=BECOME_ENV,
     )
@@ -271,6 +318,12 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     for failed, said in results[9:15]:
         assert failed and "the broker socket empty or a path under /run/" in said, results
     assert results[15][0], results
+    for failed, said in results[16:18]:
+        assert failed and "each MCP client configuration {path, client}" in said, results
+    # an entry that is not a mapping: the role's argument spec refuses it first
+    assert results[18][0] and "module_census_mcp_configs" in results[18][1], results
+    assert results[19][0] and "is not a regular file of at most 1048576 bytes" in results[19][1]
+    assert results[20][0] and "is not named as a claude-code configuration" in results[20][1]
 
 
 def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):

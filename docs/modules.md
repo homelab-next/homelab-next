@@ -1156,6 +1156,48 @@ lab whose inventory sets no socket has not shown which agents run, which is neve
 "none"). What the broker answers is believed, like a unit line: an overlay that sets no socket
 leaves `agents` not compared, and the gather says so.
 
+**MCP servers, from the installed clients.** A host's inventory may list the MCP client
+configurations installed on it (`module_census_mcp_configs`, in `host_vars`: each `{path,
+client}`, the file `hnx mcp catalog render` wrote and the deploy put in place, client one of
+`claude-code`, `generic` or `hermes`: a fleet host's clients; `claude-desktop`, a person's own
+machine, is never a fleet host's, and the `llm-orchestrator` client's catalog lists kinds, not
+servers). The list is trusted overlay input: it names files the census reads on the host, so each
+must be named as its client's configuration (`claude-code` `.mcp.json` or `<name>.mcp.json`,
+`generic` those or `mcp.json`, `hermes` `config.yaml`) and any other name is refused before it is
+opened. The census reads each in one step (`library/mcp_client_configs.py`): every directory on
+its way opened without following a link, root's or the connection user's, and refused when its
+group or others may write it (a root-owned sticky directory, `/tmp`, passes: no one can replace
+an entry in it they do not own, though what is reached through it must still be root's or the
+user's); the file a regular file with a single link, root's or the user's, no one but its owner
+may write, at most 1 MiB, read without blocking.
+
+A configuration can hold secrets (an `env` value, a header), so **its text never leaves the
+host**: the module parses it there, for its client (the `mcpServers` object of a JSON client file,
+duplicate keys, `NaN` and `Infinity` refused; the `mcp_servers` mapping of a Hermes file, read
+with PyYAML's safe loader with aliases and duplicate keys refused; where PyYAML is not installed
+on the host, a Hermes file fails the census rather than its text being sent), and returns only
+whether the file is present and the server names it registers. The task runs with `no_log`, and
+so does the one that writes the answer. `gather` checks each name again; every one is a name that
+client registers when it starts; an absent file registers nothing, and the gather says so. A name
+that is not an inventory name, or a file that does not parse, fails the census, for the whole
+fleet: one host's stray name stops it. `mcp_servers` is gathered when at least one host lists a
+configuration and stays in `not_gathered` otherwise.
+
+The loader matches each registered name back to its catalog record by the record's instance
+template (`instance:`, default `{id}`: `{id}` is the record's id and every other placeholder one
+or more name segments), so a parameterized server's `notes-<profile>-<lane>` counts for the
+record that declares it. A template that begins with a placeholder other than `{id}`
+(`{profile}-x`, which would claim any name ending in its tail) is refused, in a module's record
+and in the core's catalog. A name its prefix binds to a module is matched against that module's
+records only, so another module's template never claims it; a name bound to no module against
+every selected record. Of several records that match one name, an exact id wins, then the template
+that fixes the longest prefix; a name still matched by several is reported as ambiguous. A name no
+record matches is judged as any other kind's, by its module prefix, and one bound to no module
+must be one of the core's MCP records (its id or an instance of it) when the core's catalog was
+read. The file is what the client reads at start, so a home that lost an entry, or one a hand
+added, shows; whether a server then launched does not, nor anything a client reads from files the
+host does not list (a user-level or a project's own configuration, a managed policy file).
+
 **Service rows, by what listens.** Each host's answer also carries the sockets it listens on: the
 role's `listening_sockets` module reads the kernel's own socket tables (`/proc/net/tcp`, `tcp6`,
 `udp`, `udp6`, never a command's output, each read to a fixed size) and reports each listening TCP
@@ -1191,13 +1233,12 @@ is one way. Its limits:
 **Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
 can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in
 `not_gathered`, so the loader says it was not compared instead of judging the declarations against
-themselves. Beside the fleet units, only the recovery pairs and the agents have such a source,
-and service rows are judged by what listens (above); for the rest:
+themselves. Beside the fleet units, only the recovery pairs, the agents and the MCP servers have such a
+source, and service rows are judged by what listens (above); for the rest:
 
 | Kind | What exists today | What a census of it would need |
 |---|---|---|
 | `rows` by name (service rows that answer) | the listening sockets judge each declared row (above), but name none; the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
-| `mcp_servers` (registered) | `hnx mcp catalog render` writes client files from the catalog; no core role installs them and nothing lists what a client registered | the agent runtime writing, root-owned and read-only, the servers it registered, or a read-only listing the census can query on the agent host |
 | `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
 
 Reading these back from the manifests or the role table would only restate what is declared, so

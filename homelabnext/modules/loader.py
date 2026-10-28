@@ -166,7 +166,9 @@ class CoreNames:
 
     * ``ids``: the reserved ids (:data:`homelabnext.schemas.module_manifest.RESERVED_IDS`);
     * ``rows``: the service rows of the core registry (``services.yml``), each with its capability;
-    * ``mcp_servers``: the ids of the core's MCP catalog (``mcp/`` beside the registry);
+    * ``mcp_servers``: the ids of the core's MCP catalog (``mcp/`` beside the registry), and
+      ``mcp_instances`` each one's instance template (a running name bound to no module must be
+      one of these, when ``mcp_known``);
     * ``agents``: the agent keys of the keyring's agent principals (``profile:<key>``), the
       generated map of every principal (``hnx agent keyring build``);
     * ``tables`` and ``table_namespace``: the core's OCSF tables (``schemas/ocsf``) and the lake
@@ -189,6 +191,15 @@ class CoreNames:
     units: frozenset[str] = frozenset()  # hnx-<name>: the name
     unit_families: frozenset[str] = frozenset()  # hnx-<prefix>-<instance>: "<prefix>-"
     units_known: bool = False
+    #: each core MCP record's instance template (``instance:``, default ``{id}``), by id;
+    #: ``mcp_known`` says the core's MCP catalog was read
+    mcp_instances: Mapping[str, str] = field(default_factory=dict)
+    mcp_known: bool = False
+
+    def is_mcp(self, name: str) -> bool:
+        """``name`` is a name a client registers for one of the core's MCP records: its id, or
+        an instance of it (:func:`instance_pattern`)."""
+        return any(instance_pattern(i, t).fullmatch(name) for i, t in self.mcp_instances.items())
 
     def is_unit(self, name: str) -> bool:
         """``name`` (``hnx-`` left off) is one of the core's own units, or of a core family."""
@@ -675,6 +686,7 @@ def core_names(
                     continue
                 names[k] = str(v.get("capability", ""))
     mcp_ids: set[str] = set()
+    mcp_instances: dict[str, str] = {}
     for fname, rec in mcp or ():
         # the id as the catalog's own loader takes it: the record's, else the file's stem; the
         # catalog's integrity check requires the two to agree
@@ -691,6 +703,11 @@ def core_names(
             why = f"mcp/{_shown(fname)}: id {_shown(sid)} is not the file name"
             out.append(Problem("registry", why))
         mcp_ids.add(sid)
+        template = rec.get("instance")
+        template = template if isinstance(template, str) and template else "{id}"
+        if why := template_problem(template):
+            out.append(Problem("registry", f"mcp/{_shown(fname)}: {why}"))
+        mcp_instances[sid] = template
     agents: set[str] = set()
     if keyring is not None:
         principals = keyring.get("principals") if isinstance(keyring, dict) else None
@@ -716,6 +733,8 @@ def core_names(
             units=frozenset(units[0]) if units is not None else frozenset(),
             unit_families=frozenset(units[1]) if units is not None else frozenset(),
             units_known=units is not None,
+            mcp_instances=mcp_instances,
+            mcp_known=mcp is not None,
         ),
         out,
     )
@@ -945,6 +964,124 @@ def _bound_to(kind: str, name: str, ids: set[str]) -> str | None:
     return mr._owner(name, ids, "-")
 
 
+#: a placeholder in a catalog record's instance template (``{id}``, ``{profile}``, a parameter)
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def instance_pattern(sid: str, template: str) -> re.Pattern[str]:
+    """The names a client registers for a catalog record (``platform/mcp_server``): its
+    ``instance`` template (default ``{id}``), with ``{id}`` the record's id and every other
+    placeholder (``{profile}``, ``{lane}``, ``{home}``, a parameter) one or more inventory-name
+    segments.  A name a client registers is matched back to its record by this, never guessed
+    from a prefix (and a template that begins with any other placeholder matches nothing: see
+    :func:`template_problem`)."""
+    if template_problem(template):
+        return re.compile(r"(?!)")
+    out, last = [], 0
+    for m in _PLACEHOLDER.finditer(template):
+        out.append(re.escape(template[last : m.start()]))
+        out.append(re.escape(sid) if m[1] == "id" else r"[a-z0-9]+(?:-[a-z0-9]+)*")
+        last = m.end()
+    out.append(re.escape(template[last:]))
+    return re.compile("".join(out))
+
+
+def template_problem(template: str) -> str | None:
+    """Why an instance template cannot be matched back to its record, or None: one that begins
+    with a placeholder other than ``{id}`` (``{profile}-x``) would claim any name ending in its
+    tail."""
+    m = _PLACEHOLDER.match(template)
+    if m and m[1] != "id":
+        return f"instance template {_shown(template)} begins with a placeholder other than {{id}}"
+    return None
+
+
+def _literal_prefix(sid: str, template: str) -> int:
+    """How much of a name a template fixes before its first placeholder other than ``{id}``: the
+    longer, the more specific (the tie-break between two records that match one name)."""
+    m = next((m for m in _PLACEHOLDER.finditer(template) if m[1] != "id"), None)
+    head = template if m is None else template[: m.start()]
+    return len(head.replace("{id}", sid))
+
+
+def _mcp_instances(doc: Doc, mod_dir: Path, load) -> dict[str, str]:
+    """A module's MCP records' instance templates, by id (an unreadable record fails where
+    module_problems loads it)."""
+    out: dict[str, str] = {}
+    for e in doc.get("contributes", {}).get("mcp_servers", []):
+        try:
+            rec = load(mod_dir / e["file"])
+            template = rec.get("instance")
+            out[rec["id"]] = template if isinstance(template, str) and template else "{id}"
+        except Exception:
+            continue
+    return out
+
+
+def _running_mcp(
+    tree: Tree,
+    sel: Mapping[str, Doc],
+    running: set[str],
+    declared: Mapping[str, str],
+    load,
+    core: CoreNames | None,
+) -> list[Problem]:
+    """The MCP server names the installed clients register, against the selected modules'
+    records: a name is a record's when its instance template matches it
+    (:func:`instance_pattern`).  A name bound by its prefix to a module is matched against that
+    module's records only (another module's template never claims it); a name bound to no module
+    against every selected record.  Of several records that match one name, an exact id wins, then
+    the template that fixes the longest prefix; a name still matched by several is ambiguous.  A
+    name no record matches is judged as any other kind's: bound by its module prefix, else the
+    core's, which (when the core's catalog was read) must be one of the core's records."""
+    records: dict[str, tuple[str, str, re.Pattern[str]]] = {}
+    out = []
+    for n in sel:
+        for sid, t in _mcp_instances(sel[n], tree.dirs[n], load).items():
+            if sid not in declared:
+                continue
+            if why := template_problem(t):
+                out.append(Problem(n, f"mcp_servers {sid}: {why}"))
+                continue
+            records[sid] = (n, t, instance_pattern(sid, t))
+    ids = set(tree.mods)
+    seen: set[str] = set()
+    for name in sorted(running):
+        owner = _bound_to("mcp_servers", name, ids)
+        hits = {
+            sid
+            for sid, (n, _, p) in records.items()
+            if (owner is None or n == owner) and p.fullmatch(name)
+        }
+        if hits:
+            exact = {sid for sid in hits if sid == name}
+            if exact:
+                hits = exact
+            else:
+                best = max(_literal_prefix(sid, records[sid][1]) for sid in hits)
+                hits = {sid for sid in hits if _literal_prefix(sid, records[sid][1]) == best}
+            if len(hits) == 1:
+                seen |= hits
+            else:
+                why = f"mcp_servers {name} is ambiguous: {', '.join(sorted(hits))} all match it"
+                out.append(Problem("running", why))
+            continue
+        if owner is None:
+            if core is not None and core.mcp_known and not core.is_mcp(name):
+                why = f"mcp_servers {name} runs but is no module's or the core's"
+                out.append(Problem("running", why))
+            continue
+        if owner not in sel:
+            why = f"mcp_servers {name} runs for {owner}, which the site does not select"
+        else:
+            why = f"mcp_servers {name} runs but {owner} declares no such entry"
+        out.append(Problem("running", why))
+    for sid in sorted(set(declared) - seen):
+        why = f"mcp_servers {sid} ({declared[sid]}) is declared but not running"
+        out.append(Problem("running", why))
+    return out
+
+
 def _title(text: str) -> str:
     """A notify title as it is printed: always quoted (a title has spaces and colons), with every
     control character escaped."""
@@ -1135,10 +1272,13 @@ def running_problems(
     """Every running name bound to a module id is declared by that module, which the site
     selects; every declared name runs.  A unit bound to no module id must be one of the core's
     own (:attr:`CoreNames.units`, when ``core`` knows them): any other ``hnx-*`` unit runs but is
-    no module's or the core's.  Another kind's name bound to no module id is the core's and is
-    not judged here.  A kind the inventory names in ``not_gathered`` is not compared.  With the
-    inventory's ``notify_pairs``, the same for recovery pairs (:func:`running_pair_problems`)."""
-    declared = _declared(tree, ins, site, sel, load or module_reader(tree))
+    no module's or the core's, and so must an MCP server name (:func:`_running_mcp`, which
+    matches a name back to its record by the record's instance template).  Another kind's name
+    bound to no module id is the core's and is not judged here.  A kind the inventory names in
+    ``not_gathered`` is not compared.  With the inventory's ``notify_pairs``, the same for
+    recovery pairs (:func:`running_pair_problems`)."""
+    load = load or module_reader(tree)
+    declared = _declared(tree, ins, site, sel, load)
     ids = set(tree.mods)
     skipped = set(inventory.get("not_gathered", []))
     out = []
@@ -1146,6 +1286,9 @@ def running_problems(
         if kind in skipped:
             continue
         running = set(inventory.get(kind, []))
+        if kind == "mcp_servers":
+            out += _running_mcp(tree, sel, running, declared[kind], load, core)
+            continue
         for name in sorted(running - set(declared[kind])):
             owner = _bound_to(kind, name, ids)
             if owner is None:
