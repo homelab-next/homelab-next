@@ -6,3 +6,4 @@ Name=vlan50
 
 [Network]
 Address=198.51.100.65/26
+IPv6AcceptRA=no

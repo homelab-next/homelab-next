@@ -21,7 +21,9 @@ DHCPv6).  networkd gets a drop-in for the WAN's own ``.network`` file
 (``<wan_network>.d/50-hnx-wan6.conf``, never a second file for the WAN: networkd applies only the
 first ``.network`` file that matches an interface), ifupdown an ``inet6`` stanza for the WAN.  The
 router's input takes the ICMPv6 a router must take once it has any IPv6, and a router
-advertisement only on the WAN, from a link-local source at hop limit 255.  Zones never take one.
+advertisement only on the WAN, from a link-local source at hop limit 255.  Zones never take one,
+and the forward chain drops IPv6 to a zone's prefix that would leave by the WAN (a route a WAN
+neighbour advertised).
 """
 
 from __future__ import annotations
@@ -113,24 +115,39 @@ class LinuxAdapter(Adapter):
             if wan6:
                 files["etc/network/interfaces.d/hnx-wan6"] = self._ifupdown_wan6(wan, wan6)
         else:
-            files.update(self._networkd(ir, opts["trunk_interface"]))
+            files.update(self._networkd(ir, opts["trunk_interface"], bool(wan6)))
             if wan6:
                 files[f"etc/systemd/network/{wan_network(opts)}.d/50-hnx-wan6.conf"] = (
                     self._networkd_wan6(wan6)
                 )
         sysctl = "net.ipv4.ip_forward = 1\nnet.ipv4.conf.all.rp_filter = 1\n"
-        if any(i.subnet6 for i in ir.interfaces):
-            # forwarding on, and the router takes no advertisement from a zone it serves
-            sysctl += "net.ipv6.conf.all.forwarding = 1\nnet.ipv6.conf.all.accept_ra = 0\n"
+        six = any(i.subnet6 for i in ir.interfaces)
+        if six:
+            sysctl += "net.ipv6.conf.all.forwarding = 1\n"
         if wan6:
-            # the WAN alone takes advertisements (2: even with forwarding on), or none if static
-            sysctl += f"{_sysctl_key(wan, 'accept_ra')} = {2 if 'ra' in wan6 else 0}\n"
+            # an interface made later (a VLAN, a bridge) takes neither advertisements nor
+            # redirects: without a zone prefix forwarding is off, and then it would take both
+            sysctl += (
+                "net.ipv6.conf.default.accept_ra = 0\nnet.ipv6.conf.default.accept_redirects = 0\n"
+            )
+        if six or wan6:
+            # the router takes no advertisement from a zone it serves
+            sysctl += "net.ipv6.conf.all.accept_ra = 0\n"
+        if wan6:
+            # the WAN takes no redirect and no route-information option (a more specific route
+            # than a zone's prefix), and alone takes advertisements (2: even with forwarding on),
+            # or none if static; accept_ra last, after "all"'s
+            sysctl += (
+                f"{_sysctl_key(wan, 'accept_redirects')} = 0\n"
+                f"{_sysctl_key(wan, 'accept_ra_rt_info_max_plen')} = 0\n"
+                f"{_sysctl_key(wan, 'accept_ra')} = {2 if 'ra' in wan6 else 0}\n"
+            )
         files["etc/sysctl.d/90-hnx-routing.conf"] = header("linux") + sysctl
         files["etc/nftables.d/50-hnx-site.nft"] = self._nft(ir, wan)
         return dict(sorted(files.items()))
 
     # -- interfaces ------------------------------------------------------------------------
-    def _networkd(self, ir: NetworkIR, trunk: str) -> Rendered:
+    def _networkd(self, ir: NetworkIR, trunk: str, wan6: bool = False) -> Rendered:
         files: Rendered = {}
         vlan_lines = "".join(f"VLAN={i.name}\n" for i in ir.interfaces)
         files[f"etc/systemd/network/10-{trunk}.network"] = (
@@ -152,6 +169,10 @@ class LinuxAdapter(Adapter):
                     f"Address={i.address6}/{plen6}\nIPv6AcceptRA=no\nIPv6SendRA=yes\n"
                     f"\n[IPv6Prefix]\nPrefix={i.subnet6}\n"
                 )
+            elif wan6:
+                # networkd takes advertisements on a link by default while forwarding is off,
+                # which it is when no zone has a prefix: a zone host's would route the router
+                network += "IPv6AcceptRA=no\n"
             files[f"etc/systemd/network/20-{i.name}.network"] = network
         return files
 
@@ -161,7 +182,12 @@ class LinuxAdapter(Adapter):
         if "ra" in wan6:
             # SLAAC and the default route from the advertisement; no DHCPv6 (its replies are not
             # let in), and the site's resolvers stay the router's
-            return out + "IPv6AcceptRA=yes\n\n[IPv6AcceptRA]\nDHCPv6Client=no\nUseDNS=no\n"
+            # and no on-link route from a prefix option: an advertised prefix inside a zone's
+            # would pull that zone's traffic out the WAN (the forward chain drops it as well)
+            return out + (
+                "IPv6AcceptRA=yes\n\n[IPv6AcceptRA]\nDHCPv6Client=no\nUseDNS=no\n"
+                "UseOnLinkPrefix=no\n"
+            )
         st = wan6["static"]
         return (
             out + f"Address={st['address']}\nIPv6AcceptRA=no\n\n[Route]\nGateway={st['gateway']}\n"
@@ -264,6 +290,14 @@ class LinuxAdapter(Adapter):
         out.append(
             "    chain forward {\n        type filter hook forward priority filter; policy drop;\n"
         )
+        if ir.router.wan6 and pol.zones6:
+            # before established: a route a WAN neighbour advertised (a prefix inside a zone's)
+            # must not carry a zone's traffic, return traffic included, out the WAN
+            prefixes = ", ".join(pol.zones6.values())
+            out.append(
+                f'        oifname "{wan}" ip6 daddr {{ {prefixes} }} drop'
+                ' comment "router.wan6: a zone prefix never leaves by the WAN"\n'
+            )
         out.append("        ct state established,related accept\n        ct state invalid drop\n")
         for rule in pol.rules:
             if rule.dst.kind == "internet" and rule.action == "deny":

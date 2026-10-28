@@ -82,6 +82,7 @@ table inet hnx_site {
 
     chain forward {
         type filter hook forward priority filter; policy drop;
+        oifname "wan0" ip6 daddr { 2001:db8:0:10::/64, 2001:db8:0:20::/64, 2001:db8:0:30::/64, 2001:db8:0:40::/64 } drop comment "router.wan6: a zone prefix never leaves by the WAN"
         ct state established,related accept
         ct state invalid drop
         ip saddr @z_data ip daddr 192.0.2.5 udp dport 53 accept comment "service_exceptions[0]:data:udp: data -> svc:dns"

@@ -186,7 +186,7 @@ def _anycast64(addr: ipaddress.IPv6Address, net: ipaddress.IPv6Network) -> bool:
     return host == 0 or host >= (1 << 64) - 128
 
 
-def wan6_problems(raw: Any, zones6: Any = ()) -> list[str]:
+def wan6_problems(raw: Any, zones6: Any = (), delegated6: Any = ()) -> list[str]:
     """The problems of a router's ``wan6`` (site 1.6); absent (None) is none.
 
     Exactly one of ``ra: true`` or ``static: {address, gateway}``.  A static ``address`` is the
@@ -194,7 +194,8 @@ def wan6_problems(raw: Any, zones6: Any = ()) -> list[str]:
     :func:`delegated_prefix6_problem` would accept (global unicast, never unique-local,
     documentation, special-purpose or IPv4-embedding), neither the /64's subnet-router anycast
     address nor one of its RFC 2526 anycast addresses (the top 128), and overlapping no zone's
-    ``subnet6`` (``zones6``, prefixes) -- the WAN link is not a zone.  The ``gateway`` is
+    ``subnet6`` (``zones6``, prefixes) or ``delegated_prefixes6`` prefix (``delegated6``) -- the
+    WAN link is not a zone, and a delegated prefix numbers zones.  The ``gateway`` is
     canonical with no zone id (it is the WAN's) and either link-local (fe80::/10) or another
     usable address inside the WAN /64."""
     if raw is None:
@@ -235,6 +236,9 @@ def wan6_problems(raw: Any, zones6: Any = ()) -> list[str]:
     for z in zones6:
         if net.overlaps(z):
             out.append(f"router.wan6.static.address {a_raw!r} lies in zone prefix {z}")
+    for d in delegated6:
+        if net.overlaps(d):
+            out.append(f"router.wan6.static.address {a_raw!r} lies in delegated prefix {d}")
     if not isinstance(g_raw, str) or "%" in g_raw:
         return [
             *out,
@@ -366,7 +370,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         if clash is not None:
             r.error(f"zones {clash} and {zid}: subnet6 {nets6[clash]} and {net6} overlap")
         nets6[zid] = net6
-    for msg in delegated_prefixes6(doc.get("delegated_prefixes6"))[1]:
+    delegated6, problems = delegated_prefixes6(doc.get("delegated_prefixes6"))
+    for msg in problems:
         r.error(msg)
 
     for zid, net in nets.items():
@@ -432,7 +437,7 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         )
     if "tls_pin" not in router:
         r.warn("router.tls_pin is absent; the console certificate will not be pinned")
-    for msg in wan6_problems(router.get("wan6"), nets6.values()):
+    for msg in wan6_problems(router.get("wan6"), nets6.values(), delegated6):
         r.error(msg)
     network_adapter = doc.get("adapters", {}).get("network", router["model"])
     if "wan6" in router and network_adapter != "linux":

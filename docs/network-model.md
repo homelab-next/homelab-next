@@ -311,7 +311,8 @@ internet by. It is exactly one of:
   `hnx site validate` requires the address canonical, with no zone id, global unicast (never
   unique-local, documentation, link-local, special-purpose or IPv4-embedding: the rules of a
   delegated prefix), neither the /64's subnet-router anycast address nor one of its top 128
-  (RFC 2526), and outside every zone's `subnet6`; the gateway canonical, with no zone id (it is the
+  (RFC 2526), and outside every zone's `subnet6` and every `delegated_prefixes6` prefix (which
+  numbers zones); the gateway canonical, with no zone id (it is the
   WAN's), and either link-local or another usable address in the WAN /64.
 - `ra: true`: router advertisements are accepted on the WAN, and only there: the address by SLAAC
   and the default route from the advertisement. No DHCPv6: an upstream that numbers its customers
@@ -323,7 +324,7 @@ declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
 
 | Flavor | `ra` | `static` |
 |---|---|---|
-| networkd | `IPv6AcceptRA=yes` (`[IPv6AcceptRA]` `DHCPv6Client=no`, `UseDNS=no`) | `Address=`, `IPv6AcceptRA=no` and a `[Route]` with `Gateway=` |
+| networkd | `IPv6AcceptRA=yes` (`[IPv6AcceptRA]` `DHCPv6Client=no`, `UseDNS=no`, `UseOnLinkPrefix=no`) | `Address=`, `IPv6AcceptRA=no` and a `[Route]` with `Gateway=` |
 | ifupdown | `iface <wan> inet6 auto` with `accept_ra 2`, `dhcp 0` | `iface <wan> inet6 static` with `address`, `gateway`, `accept_ra 0` |
 
 - networkd gets a drop-in for the WAN's own `.network` file,
@@ -333,13 +334,24 @@ declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
   IPv4 or be ignored. **A drop-in whose file does not exist is ignored**: name the WAN's file, or
   the WAN has no IPv6 and IPv6 fails closed. ifupdown gets `etc/network/interfaces.d/hnx-wan6`,
   an `inet6` stanza; the WAN's `auto` line and IPv4 stanza stay the operator's.
-- The sysctl file sets the WAN's `accept_ra` after `all`'s: 2 for `ra` (so forwarding does not
+- The sysctl file sets `default.accept_ra` and `default.accept_redirects` to 0 (an interface made
+  later takes neither: without a zone prefix forwarding is off, and then it would), then
+  `all.accept_ra = 0`, then for the WAN `accept_redirects = 0`, `accept_ra_rt_info_max_plen = 0`
+  (no route-information option) and last its `accept_ra`: 2 for `ra` (so forwarding does not
   switch advertisements off) and 0 for `static`. A WAN name with a dot (a VLAN) is written with
-  slashes (`net/ipv6/conf/<wan>/accept_ra`). The zones keep `IPv6AcceptRA=no` / `accept_ra 0`.
+  slashes (`net/ipv6/conf/<wan>/accept_ra`). Every zone takes no advertisement: `accept_ra 0`
+  with ifupdown, and with networkd `IPv6AcceptRA=no` on every zone's file, a zone without a
+  `subnet6` included (networkd takes advertisements by default while forwarding is off).
 - nftables: once the router has any IPv6 it takes the ICMPv6 a router must (above). With `ra`,
   the input chain also takes a router advertisement from a link-local source at hop limit 255 on
   the WAN, and nowhere else, and the reverse-path check exempts that same packet. Legitimate WAN
-  traffic passes the check by the default route. The forward chain and NAT are unchanged.
+  traffic passes the check by the default route. The forward chain gains one rule, before
+  `established,related`: IPv6 to a zone's `subnet6` never leaves by the WAN. A neighbour on the
+  WAN that can send advertisements can still take the router's default route (an `ra` WAN trusts
+  its link, as every SLAAC host does), but a prefix it advertises inside a zone's, which would
+  route that zone's traffic, return traffic included, out the WAN, only drops it
+  (`UseOnLinkPrefix=no` keeps networkd from installing such a route at all; the kernel, with
+  ifupdown, installs it). NAT is unchanged.
 - Other adapters do not render `wan6`. `hnx site validate` warns when the site's network adapter
   is not `linux`, and `hnx site render|plan --adapter` does when another adapter renders a site
   whose own adapter is. Configure the WAN's IPv6 on that router itself.

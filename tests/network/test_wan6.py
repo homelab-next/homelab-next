@@ -142,13 +142,58 @@ def test_a_static_wan_renders_its_address_and_default_route(doc6, registry, flav
         )
 
 
-def test_the_forward_chain_and_nat_are_unchanged_by_wan6(doc6, registry):
+GUARD = (
+    '        oifname "wan0" ip6 daddr { 2001:db8:0:10::/64, 2001:db8:0:20::/64, 2001:db8:0:30::/64,'
+    ' 2001:db8:0:40::/64 } drop comment "router.wan6: a zone prefix never leaves by the WAN"\n'
+)
+
+
+def test_the_forward_chain_gains_only_the_zone_prefix_guard_and_nat_is_unchanged(doc6, registry):
     def tail(nft: str) -> str:
         return nft.split("chain forward {", 1)[1]
 
     plain = render("linux", _ir(doc6, registry, None))[NFT]
+    assert "router.wan6" not in plain
     for wan6 in ({"ra": True}, {"static": DOC_STATIC}):
-        assert tail(render("linux", _ir(doc6, registry, wan6))[NFT]) == tail(plain)
+        nft = render("linux", _ir(doc6, registry, wan6))[NFT]
+        # the guard comes before established,related: a hostile route must not carry return
+        # traffic either
+        head = "\n        type filter hook forward priority filter; policy drop;\n"
+        assert tail(nft).startswith(head + GUARD + "        ct state established,related accept\n")
+        assert tail(nft).replace(GUARD, "", 1) == tail(plain)
+
+
+def test_a_wan_without_zone_prefixes_takes_no_advertisement_elsewhere(doc, registry):
+    """With no zone prefix forwarding stays off, so an interface that defaulted to accept_ra = 1
+    would take a zone host's advertisement: the default, every zone file and the WAN's own
+    redirects and route-information options are pinned off."""
+    d = copy.deepcopy(doc)
+    d["router"]["model"] = "linux"
+    d["adapters"]["network"] = "linux"
+    d["router"]["wan6"] = {"ra": True}
+    files = render("linux", build_ir(d, registry))
+    sysctl = files[SYSCTL]
+    order = [
+        "net.ipv6.conf.default.accept_ra = 0\n",
+        "net.ipv6.conf.default.accept_redirects = 0\n",
+        "net.ipv6.conf.all.accept_ra = 0\n",
+        "net.ipv6.conf.wan0.accept_redirects = 0\n",
+        "net.ipv6.conf.wan0.accept_ra_rt_info_max_plen = 0\n",
+        "net.ipv6.conf.wan0.accept_ra = 2\n",
+    ]
+    at = [sysctl.index(line) for line in order]
+    assert at == sorted(at) and sysctl.endswith(order[-1])
+    zones = [
+        f
+        for p, f in files.items()
+        if p.startswith("etc/systemd/network/20-") and p.endswith(".network")
+    ]
+    assert zones and all("IPv6AcceptRA=no\n" in f for f in zones)
+    assert "chain forward" in files[NFT] and "router.wan6: a zone prefix" not in files[NFT]
+
+
+def test_the_wans_advertisements_install_no_on_link_prefix(doc6, registry):
+    assert "UseOnLinkPrefix=no\n" in render("linux", _ir(doc6, registry, {"ra": True}))[DROPIN]
 
 
 def test_the_reverse_path_check_exempts_only_the_wans_advertisement(doc6, registry):
@@ -260,6 +305,13 @@ def test_a_wan_address_inside_a_zone_prefix_is_refused():
     zone = ipaddress.IPv6Network(WAN64)
     problems = wan6_problems({"static": {"address": _addr(2), "gateway": LL}}, [zone])
     assert any("lies in zone prefix" in p for p in problems), problems
+
+
+def test_a_wan_address_inside_a_delegated_prefix_is_refused():
+    delegated = WAN64.supernet(new_prefix=56)
+    problems = wan6_problems({"static": {"address": _addr(2), "gateway": LL}}, (), [delegated])
+    assert any("lies in delegated prefix" in p for p in problems), problems
+    assert not wan6_problems({"static": {"address": _addr(2), "gateway": LL}})
 
 
 @pytest.mark.parametrize(
