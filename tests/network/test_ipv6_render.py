@@ -401,13 +401,13 @@ def test_an_unknown_selector_kind_fails_in_every_rule_adapter(doc6, registry, ad
         six = real(rule, zones6)
         return six and irmod.Rule(**{**six.__dict__, "dst": Selector("elsewhere")})
 
-    import homelabnext.network.adapters.linux as lin
-    import homelabnext.network.adapters.unifi as uni
+    import sys
 
+    # the adapter's own module, found through its registered name (no product name here)
+    module = sys.modules[type(adapters.get(adapter)).__module__]
     mp = pytest.MonkeyPatch()
     try:
-        mp.setattr(lin, "ipv6_form", odd, raising=False)
-        mp.setattr(uni, "ipv6_form", odd, raising=False)
+        mp.setattr(module, "ipv6_form", odd)
         with pytest.raises(ValueError, match="unknown selector kind"):
             render(adapter, build_ir(doc6, registry))
     finally:
