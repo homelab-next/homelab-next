@@ -110,7 +110,7 @@ def test_a_zone_to_zone_rule_has_an_ipv6_form_only_when_both_zones_have_prefixes
     assert six.src.cidrs == (ZONES6["a"],) and six.dst.cidrs == (ZONES6["b"],)
     assert ipv6_form(_rule(_z("a"), _z("c")), ZONES6) is None  # c has no prefix
     assert ipv6_form(_rule(_z("c"), _z("a")), ZONES6) is None
-    assert ipv6_form(_rule(_z("a"), Selector("any")), ZONES6).dst.kind == "any"
+    assert ipv6_form(_rule(_z("g"), Selector("any")), ZONES6).dst.kind == "any"
 
 
 def test_an_allow_naming_a_host_has_no_ipv6_form():
@@ -338,3 +338,67 @@ def test_an_ipv4_only_site_digests_as_before_ipv6(ir):
     assert "zones6" not in d["policy"]
     assert all("subnet6" not in i and "address6" not in i for i in d["interfaces"])
     assert all("zone" not in r["dst"] for r in d["policy"]["rules"])
+
+
+ULA6 = str(ipaddress.IPv6Network((0xFD00_0000_0000_0082 << 64, 64)))
+
+
+def _ula_any_ir(doc6, registry, action: str = "allow"):
+    """The example lab with a unique-local prefix on zone compute and a rule from it to ``any``."""
+    next(z for z in doc6["zones"] if z["id"] == "compute")["subnet6"] = ULA6
+    doc6["firewall"]["zone_to_zone"].append({"from": "compute", "to": "any", "action": action})
+    return build_ir(doc6, registry)
+
+
+def test_an_ipv6_allow_to_any_from_a_non_global_prefix_cannot_leave_by_the_wan():
+    """``any`` includes the internet; a unique-local source has no IPv6 form there (see
+    ``ipv6_form``), so its form must say "anything but the internet", for every adapter."""
+    ula = {"u": ULA6}
+    six = ipv6_form(_rule(_z("u"), Selector("any")), ula)
+    assert six.dst.kind == "intranet"
+    # a global prefix may go anywhere, the internet included; a deny stays as wide as written
+    assert ipv6_form(_rule(_z("g"), Selector("any")), ZONES6).dst.kind == "any"
+    assert ipv6_form(_rule(_z("u"), Selector("any"), "deny"), ula).dst.kind == "any"
+    # a documentation prefix is not global either
+    assert ipv6_form(_rule(_z("a"), Selector("any")), ZONES6).dst.kind == "intranet"
+
+
+def test_the_linux_router_never_forwards_a_ula_allow_to_any_out_the_wan(doc6, registry):
+    nft = render("linux", _ula_any_ir(doc6, registry))["etc/nftables.d/50-hnx-site.nft"]
+    six = [ln.strip() for ln in nft.splitlines() if "zone_to_zone[5]:v6" in ln]
+    assert len(six) == 1 and all('oifname != "wan0"' in ln for ln in six), six
+    # IPv4 is untouched: any is any
+    v4 = [ln for ln in nft.splitlines() if "ip saddr @z_compute " in ln and "any" in ln]
+    assert v4 and not any("oifname" in ln for ln in v4)
+
+
+def test_the_controller_renders_a_ula_allow_to_any_as_it_does_in_ipv4(doc6, registry):
+    rules = json.loads(render(CONTROLLER, _ula_any_ir(doc6, registry))["firewall-rules.json"])
+    mine = [r for r in rules["objects"] if r["name"] == "hnx-zone_to_zone-5-v6"]
+    assert len(mine) == 1 and mine[0]["ruleset"] == "LANv6_IN"
+    assert "dst_address" not in mine[0] and "dst_networkconf_id" not in mine[0]
+    assert not any(
+        r["ruleset"] == "WANv6_OUT" and r["action"] == "accept" for r in rules["objects"]
+    )
+
+
+def test_the_controller_drops_a_ula_zones_ipv6_internet_deny(doc6, registry):
+    """A deny always has an IPv6 form: with none, WANv6_OUT would be left to the controller's
+    default for a zone the site says may not reach the internet."""
+    next(z for z in doc6["zones"] if z["id"] == "sandbox")["subnet6"] = ULA6
+    ir6 = build_ir(doc6, registry)
+    objs = json.loads(render(CONTROLLER, ir6)["firewall-rules.json"])["objects"]
+    out = [r for r in objs if r["ruleset"] == "WANv6_OUT"]
+    v4 = [r for r in objs if r["ruleset"] == "WAN_OUT" and "sandbox" in r["name"]]
+    assert v4, "the example lab denies sandbox the internet in IPv4"
+    assert any(r["action"] == "drop" and "sandbox" in r["name"] for r in out), out
+    # the linux chain policy already drops it: no rule is written
+    nft = render("linux", ir6)["etc/nftables.d/50-hnx-site.nft"]
+    assert "egress.internet:sandbox:v6" not in nft
+
+
+def test_a_deny_to_the_internet_has_an_ipv6_form_from_any_prefix():
+    ula = {"u": ULA6}
+    assert ipv6_form(_rule(_z("u"), Selector("internet"), "deny"), ula) is not None
+    assert ipv6_form(_rule(_z("a"), Selector("internet"), "deny"), ZONES6) is not None
+    assert ipv6_form(_rule(_z("u"), Selector("internet"), "allow"), ula) is None

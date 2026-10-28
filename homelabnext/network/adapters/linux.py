@@ -67,6 +67,8 @@ def _match(sel: Selector, direction: str, wan: str, six: bool = False) -> str:
         return f"ip {direction}addr {sel.cidrs[0].split('/')[0]}"
     if sel.kind == "internet":
         return f'oifname "{wan}"'
+    if sel.kind == "intranet":
+        return f'oifname != "{wan}"'
     raise ValueError(f"unknown selector kind {sel.kind!r}")
 
 

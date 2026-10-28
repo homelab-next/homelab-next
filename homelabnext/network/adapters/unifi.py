@@ -26,7 +26,11 @@ default-deny frame, so IPv6 is closed by default exactly as IPv4 is.  Both famil
 rules from ``RULE_BASE`` (2000) up to ``RULE_BASE + 999``: the IPv6 rule sets are separate rule
 sets, so no offset is needed, and the range stays inside the custom-rule indexes the IPv4 rules
 already use.  An IPv6 rule names its protocol in ``protocol_v6`` (``icmpv6`` for ICMP), the field
-the controller's legacy object carries for IPv6 rule sets.  None of this is verified offline: the
+the controller's legacy object carries for IPv6 rule sets.  An allow to ``any`` from
+a source without a global prefix is the ``intranet`` selector in IPv6 (everything but the
+internet); the controller renders it as it does ``any``, in ``LANv6_IN``, which never carries
+traffic bound for the WAN.  A zone denied the internet gets its ``WANv6_OUT`` drop whatever its
+prefix, so the controller's default never decides.  None of this is verified offline: the
 index range, ``protocol_v6`` and its values are checked on the server, like every other shape here.
 The IPv6 rule sets cover forwarded traffic only.  Traffic to the gateway itself
 (``LANv6_LOCAL``) and the controller's anti-spoofing for IPv6 sources are left to the

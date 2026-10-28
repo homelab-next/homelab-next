@@ -265,8 +265,16 @@ so first match is the same in each family:
   the host stays closed by the default deny;
 * a deny that names a host denies, in IPv6, the same traffic to the host's whole zone. Without
   it a later, wider allow would let through in IPv6 what the deny refuses in IPv4;
-* an internet rule has an IPv6 form only from a routed (global) prefix. Nothing translates IPv6,
-  and a unique-local or documentation source has no business on the internet.
+* an internet allow has an IPv6 form only from a routed (global) prefix. Nothing translates IPv6,
+  and a unique-local or documentation source has no business on the internet. An internet deny
+  has one from any prefix, so every adapter closes the internet to such a zone in IPv6 as in
+  IPv4 (the controller's `WANv6_OUT` gets the drop; the Linux router's chain policy already
+  drops it);
+* an allow to `any` from a non-global prefix reads, in IPv6, as "anything but the internet"
+  (the IR's `intranet` selector): `any` includes the internet, which that source cannot reach.
+  The Linux router renders it with `oifname != "<wan>"`; the controller's rule sits in
+  `LANv6_IN`, which never carries WAN-bound traffic, so it renders as the `any` rule does. A
+  deny to `any`, and any rule from a global prefix, keep `any`.
 
 ## Adapters
 
