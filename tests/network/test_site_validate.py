@@ -141,6 +141,12 @@ def _any_deny_vs_internet_allow(d):
     d["firewall"]["zone_to_zone"].append({"from": "compute", "to": "any", "action": "deny"})
 
 
+def _any_allow_vs_internet_deny(d):
+    # data's internet egress is deny; the linux router renders an allow to 'any' with no outbound
+    # interface match ahead of that deny, so data would reach the internet
+    d["firewall"]["zone_to_zone"].append({"from": "data", "to": "any", "action": "allow"})
+
+
 def _switch_unknown_vlan(d):
     d["switches"][0]["port_assignments"][1]["vlan"] = 99
 
@@ -241,6 +247,7 @@ CASES = [
     (_allow_out_of_one_way, "may only send through service_exceptions"),
     (_one_way_internet, "one_way requires egress.internet=deny"),
     (_any_deny_vs_internet_allow, "contradicts egress.internet=allow"),
+    (_any_allow_vs_internet_deny, "allow to 'any' contradicts egress.internet=deny"),
     (_switch_unknown_vlan, "vlan 99 is not a zone"),
     (_switch_port_twice, "port 3 already assigned"),
     (_switch_reversed_range, "bad port range"),

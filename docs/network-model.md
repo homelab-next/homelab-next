@@ -245,7 +245,10 @@ Firewall rules are evaluated first match wins, in this order:
 
 1. `service_exceptions`, in document order (host-specific beats everything general);
 2. `zone_to_zone` rules whose `to` is a zone, in document order;
-3. `zone_to_zone` rules whose `to` is `any` (the one-way contracts);
+3. `zone_to_zone` rules whose `to` is `any` (the one-way contracts); `any` includes the internet,
+   so validation refuses an allow to `any` from a zone whose `egress.internet` is `deny` (and a
+   deny to `any` from one whose is `allow`): the allow would reach the internet before the
+   zone's deny, on the routers that render it as one rule;
 4. internet egress, one rule per zone from `egress.internet`;
 5. the default: deny.
 
