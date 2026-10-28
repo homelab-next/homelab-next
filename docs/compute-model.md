@@ -671,7 +671,7 @@ control as `{id, name, fqdn, ip, zone}`, sorted by id, written into the playbook
 reviewed with the guest change that moved it. A guest that names other addresses it sends from
 (`network.extra_addresses`, guest 1.6) also carries `extra_addresses: [...]` after `ip` and its
 zone's IPv4 `subnet` after `zone` (and its IPv6 `subnet6` after that, when the zone gives one,
-site 1.4): the network sensor counts them in `HOME_NET` after holding
+site 1.4, then its `gateway` and `dhcp_range` as `[first, last]`, when it gives them): the network sensor counts them in `HOME_NET` after holding
 each to the guest's own zone again (`hnx_enroll_address_problems`, [role
 interface](role-interface.md)); the other central roles enroll `ip` only. A central control whose
 group holds no guest of the model renders with a `NO HOST` comment, is listed as `unplaced` by `hnx guests baselines`

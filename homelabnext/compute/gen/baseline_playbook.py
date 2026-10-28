@@ -44,8 +44,8 @@ NO_OP = ["- name: no baseline control to apply", "  hosts: localhost", "  gather
 
 def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> list[dict]:
     """What a central role receives for each guest: id, name, fqdn, ip and zone, sorted by id;
-    ``extra_addresses`` and the zone's ``subnet`` (and ``subnet6``, when it has one) when the
-    guest names extra addresses; and
+    ``extra_addresses`` and the zone's ``subnet`` (and ``subnet6``, ``gateway`` and ``dhcp_range``
+    as ``[first, last]``, each when it has one) when the guest names extra addresses; and
     ``settings`` (the guest's baseline settings of ``control`` as role variables) when its
     baselines set any."""
     by_id = {g.id: g for g in fleet.guests}
@@ -60,6 +60,10 @@ def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> 
             row["subnet"] = zone.subnet
             if zone.subnet6 is not None:
                 row["subnet6"] = zone.subnet6
+            if zone.gateway:
+                row["gateway"] = zone.gateway
+            if zone.dhcp_range:
+                row["dhcp_range"] = list(zone.dhcp_range)
         if control and fleet.baselines is not None:
             role = fleet.baselines.role(control)
             mine = resolve(g, fleet.baselines).settings.get(control, {})

@@ -159,10 +159,13 @@ def test_a_central_role_receives_a_guests_extra_addresses(tmp_path):
         "extra_addresses",
         "zone",
         "subnet",
+        "gateway",
     ]
+    assert rows["edge-core"]["gateway"] == "203.0.113.1"
     assert rows["edge-core"]["extra_addresses"] == ["203.0.113.11", "2001:db8:0:28::a"]
     assert rows["edge-core"]["subnet"] == "203.0.113.0/24"
     assert "extra_addresses" not in rows["secrets-core"] and "subnet" not in rows["secrets-core"]
+    assert "gateway" not in rows["secrets-core"]
     assert _enroll_problems(enrolled) == []
 
 
@@ -181,13 +184,38 @@ def test_a_central_role_receives_the_zones_ipv6_prefix(tmp_path):
     )
     enrolled = _sensor_rows(d, site)
     rows = {r["name"]: r for r in enrolled}
-    assert list(rows["edge-core"])[-2:] == ["subnet", "subnet6"]
+    assert list(rows["edge-core"])[-3:] == ["subnet", "subnet6", "gateway"]
     assert rows["edge-core"]["subnet6"] == "2001:db8:0:28::/64"
     assert "subnet6" not in rows["secrets-core"]
     assert _enroll_problems(enrolled) == []
     rows["edge-core"]["extra_addresses"] = ["2001:db8:0:29::a"]  # another /64
     (msg,) = _enroll_problems(enrolled)
     assert "outside the zone's IPv6 prefix 2001:db8:0:28::/64" in msg
+
+
+def test_a_central_role_receives_the_zones_gateway_and_dhcp_pool(tmp_path):
+    """The row carries the zone's ``gateway`` and ``dhcp_range`` (``[first, last]``) after
+    ``subnet``, so the role refuses, as validation does, an extra address that is the gateway or
+    inside the pool."""
+    site = tmp_path / "site.yml"
+    doc = yaml.safe_load(SITE.read_text())
+    (edge,) = [z for z in doc["zones"] if z["id"] == "edge"]
+    edge["dhcp"] = {"range": ["203.0.113.100", "203.0.113.150"]}
+    site.write_text(yaml.safe_dump(doc, sort_keys=False))
+    extra = [{"address": "203.0.113.11", "why": "its second NIC, on the same edge segment"}]
+    d = copy_fleet(
+        tmp_path, guests={"edge-core": lambda g: g["network"].update(extra_addresses=extra)}
+    )
+    enrolled = _sensor_rows(d, site)
+    rows = {r["name"]: r for r in enrolled}
+    assert rows["edge-core"]["gateway"] == "203.0.113.1"
+    assert rows["edge-core"]["dhcp_range"] == ["203.0.113.100", "203.0.113.150"]
+    assert "dhcp_range" not in rows["secrets-core"]
+    assert _enroll_problems(enrolled) == []
+    for bad, why in (("203.0.113.1", "gateway"), ("203.0.113.120", "DHCP pool")):
+        rows["edge-core"]["extra_addresses"] = [bad]
+        (msg,) = _enroll_problems(enrolled)
+        assert why in msg, msg
 
 
 def test_central_controls_render_one_play_on_the_product_host(fleet):
