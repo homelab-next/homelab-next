@@ -228,6 +228,30 @@ def test_serve_pages_through_ntfy_with_a_token_by_secret_reference(tmp_path, mon
     assert notifier_from_args(argparse.Namespace(**{**vars(args), "notify_topic": None})) is None
 
 
+def test_serve_records_the_notify_pairs_it_holds_for_the_census(tmp_path, monkeypatch):
+    import argparse
+
+    from homelabnext.broker.cli import _service
+    from homelabnext.notify.core_pairs import BROKER_APPROVAL, BROKER_LANE_QUOTA
+    from homelabnext.notify.record import parse_record
+
+    override = "https://n.svc.example.internal:8443"  # no-raw-endpoint: allow override syntax
+    monkeypatch.setenv("HNX_ENDPOINT_NOTIFY", override)
+    pairs = tmp_path / "pairs"
+    pairs.mkdir()
+    args = argparse.Namespace(
+        manifest=str(EXAMPLE), state=str(tmp_path / "state"), data_root=None,
+        approvals_url=None, notify_topic="broker", notify_token=None, registry=None,
+        cmd="serve", notify_pairs_dir=str(pairs),
+    )  # fmt: skip
+    _service(args)
+    held = parse_record((pairs / "broker" / "pairs.json").read_text(), "broker").pairs
+    want = [BROKER_APPROVAL, BROKER_LANE_QUOTA]
+    assert [{"problem": p, "recovery": r} for p, r in sorted(want)] == held
+    with pytest.raises(ValueError, match="is not a directory reached without a link"):
+        _service(argparse.Namespace(**{**vars(args), "notify_pairs_dir": str(tmp_path / "x")}))
+
+
 def test_without_a_notifier_a_lane_quota_refusal_is_logged_once(tmp_path, caplog):
     from homelabnext.broker.service import BrokerService, load_manifest
 

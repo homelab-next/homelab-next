@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any
 
 from homelabnext.modules.scope import (
@@ -113,6 +114,8 @@ TITLE_PATTERN = (
     "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f"
     "\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
 )
+#: :data:`TITLE_PATTERN` compiled, for a Python reader of the same titles (``fullmatch``)
+TITLE_RE = re.compile(TITLE_PATTERN)
 
 
 def title(desc: str) -> dict[str, Any]:

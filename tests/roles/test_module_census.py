@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """Role module_census (docs/modules.md, "What the loader checks"): each host's enabled and active
-fleet units, read-only, and on a broker host the agents its broker serves, written on the
-controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
+fleet units and its notifier owners' pairs records, read-only, and on a broker host the agents its
+broker serves, written on the controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
 play runs on localhost, which is then both the host and the controller."""
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 
 import pytest
 from rolerun import LOGGER, calls, fake, first_run, run_cases
 
 from homelabnext.modules import census
+from homelabnext.notify import record as nr
+from homelabnext.notify.record import PairsRecord
 
 needs_ansible = pytest.mark.skipif(
     shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
@@ -42,6 +45,7 @@ def _systemctl(tmp_path) -> str:
     return fake(tmp_path / "systemctl", body)
 
 
+PAIR = {"problem": "UPS on battery", "recovery": "UPS back on line power"}
 AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
 
 
@@ -90,9 +94,15 @@ def _sudo(tmp_path) -> str:
 def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
+    pairs = tmp_path / "pairs"
+    pairs.mkdir(mode=0o700)
+    os.chmod(pairs, 0o700)
+    # this process writes it, so the record's process is running while the role reads it
+    PairsRecord(pairs, "broker").write({PAIR["problem"]: (PAIR["recovery"], None)})
     v = {
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
+        "module_census_pairs_dir": str(pairs),  # broker's record present, status's absent
         # this host runs the broker: the census asks it for the agents it serves
         "module_census_broker_socket": "/run/hnx-broker/broker.sock",
         "module_census_hnx_cli": _hnx(tmp_path),
@@ -128,10 +138,17 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     out = tmp_path / "census"
     assert json.loads((out / "_hosts.json").read_text()) == ["localhost"]
     answer = json.loads((out / "localhost.json").read_text())
+    text = (tmp_path / "pairs" / "broker" / "pairs.json").read_text()
+    started = nr.parse_record(text, "broker").started
     assert answer == {
         "host": "localhost",
         "enabled": ENABLED.splitlines(),
         "active": ACTIVE.splitlines(),
+        "pairs": {
+            "boot_id": nr.boot_id(),
+            "now": answer["pairs"]["now"],
+            "records": {"broker": {"text": text, "pid_started": started}, "status": None},
+        },
         "agents": AGENTS.splitlines(),
     }
     inventory, notes = census.gather(out)
@@ -140,6 +157,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "units": ["external-collector-pull", "lake-compact", "stray"],
         "agents": ["core-staff-scorecard", "external-collector-analyst"],
         "not_gathered": ["rows", "mcp_servers", "tables"],
+        "notify_pairs": [PAIR],
     }
     assert any("template unit" in n for n in notes)
 
@@ -160,12 +178,35 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         tmp_path / "systemctl-active-fails",
         "import sys\nsys.exit(1 if sys.argv[1] == 'list-units' else 0)\n",
     )
+
+    # a record is read only as a small regular file, never through a link, in a directory no
+    # one else may write; a FIFO never blocks the read
+    def plain(name, owner):  # its owner's only
+        d = tmp_path / name
+        (d / owner).mkdir(parents=True)
+        for x in (d, d / owner):
+            os.chmod(x, 0o700)
+        return d
+
+    linked = plain("linked-pairs", "broker")
+    (linked / "broker" / "pairs.json").symlink_to(tmp_path / "pairs" / "broker" / "pairs.json")
+    big = plain("big-pairs", "status")
+    (big / "status" / "pairs.json").write_text(" " * (256 * 1024 + 1))
+    fifo = plain("fifo-pairs", "status")
+    os.mkfifo(fifo / "status" / "pairs.json")
+    via = tmp_path / "via"
+    via.symlink_to(tmp_path / "pairs")
     results = run_cases(
         tmp_path,
         "module_census",
         "main",
         v,
         [
+            {"module_census_pairs_dir": "relative/pairs"},
+            {"module_census_pairs_dir": str(linked)},
+            {"module_census_pairs_dir": str(big)},
+            {"module_census_pairs_dir": str(fifo)},
+            {"module_census_pairs_dir": str(via)},
             {"module_census_dir": "relative/census"},
             {"module_census_dir": str(tmp_path / "absent")},
             {"module_census_systemctl_cli": failing},
@@ -188,6 +229,11 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         ],
         env=BECOME_ENV,
     )
+    assert results[0][0] and "the notify pairs directory an absolute" in results[0][1]
+    for failed, said in results[1:4]:
+        assert failed and "is not a regular file of at most 262144 bytes" in said, results
+    assert results[4][0] and "reached without a link" in results[4][1], results
+    results = results[5:]
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
     assert results[1][0] and "is not a directory on the controller" in results[1][1]
     assert results[2][0] and results[3][0], results
@@ -198,3 +244,37 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     for failed, said in results[9:15]:
         assert failed and "the broker socket empty or a path under /run/" in said, results
     assert results[15][0], results
+
+
+def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):
+    # the reader's own mode rule, on reported modes: no real directory is made writable by
+    # others (the playbook cases above cover links, size and the FIFO)
+    import importlib.util
+    import sys
+    import types
+
+    # the reader imports only AnsibleModule, which main() alone uses: a stand-in keeps this test
+    # free of an Ansible install (the repository's own ansible/ directory is not the package)
+    for name in ("ansible", "ansible.module_utils", "ansible.module_utils.basic"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["ansible.module_utils.basic"].AnsibleModule = object
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "ansible",
+        "roles",
+        "module_census",
+        "library",
+        "notify_pairs_records.py",
+    )
+    spec = importlib.util.spec_from_file_location("notify_pairs_records", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for mode, refused in ((0o40700, False), (0o40755, False), (0o40775, True), (0o40757, True)):
+        monkeypatch.setattr(mod.os, "fstat", lambda fd, m=mode: types.SimpleNamespace(st_mode=m))
+        if refused:
+            with pytest.raises(mod.Refused, match="is writable by its group or others"):
+                mod.guarded(3, "/x")
+        else:
+            mod.guarded(3, "/x")

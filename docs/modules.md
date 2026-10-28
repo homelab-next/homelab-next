@@ -991,7 +991,9 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    module, which the site selects, and every declared one runs (a provider's row runs under the
    instance name the site gives it; a name bound to no module id is the core's and not judged
    here). With the inventory's optional `notify_pairs` (the running notifier's recovery pairs,
-   each with the module it was loaded from; a pair with no module is the core's), the same holds
+   each with the module it was loaded from; a pair with no module must be one of the core's own,
+   `homelabnext.notify.core_pairs`, with the same recovery, or it runs but is no module's or the
+   core's), the same holds
    for recovery pairs, compared by both titles: a running pair is declared by its module, which
    the site selects, with the same recovery title; every selected module's pair runs; and the
    notifier holds one pair per problem title, so a title runs once. Without `notify_pairs` the
@@ -1003,12 +1005,11 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    look alike (controls, no-break and other spaces, zero-width and bidirectional marks), in the
    manifest and the inventory alike. A kind the inventory names in `not_gathered` is not
    compared, and the report says so; one it merely leaves out is refused by the schema, never
-   read as "nothing runs". The fleet units come from the hosts, and the agents from the running
-   broker where the census asks one
-   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers, tables
-   and recovery pairs are not reported by the hosts, so a gathered inventory names the first
-   three in `not_gathered` and leaves `notify_pairs` out, and only a hand-written one compares
-   them.
+   read as "nothing runs". The fleet units and the recovery pairs come from the hosts, and the
+   agents from the running broker where the census asks one
+   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers and tables
+   are not reported by the hosts, so a gathered inventory names them in `not_gathered`, and only a
+   hand-written one compares them.
 
 ### The loader at deploy time
 
@@ -1068,6 +1069,56 @@ counts when any host reports it, so a unit enabled on the wrong host satisfies t
 right one. The inventory carries no host, and a manifest declares no placement per unit to
 compare one with; that is a known limit.
 
+**Notify pairs.** A process that owns a notifier (`hnx broker serve`, `hnx status collect
+--notify-topic`) given `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) writes the pairs it
+holds to `DIR/broker/pairs.json` or `DIR/status/pairs.json` (`homelabnext.notify.record`), when it
+starts and after each registration, the whole set each time. The record also carries when it was
+written (UTC), the host's boot id, and the writer's pid and start time.
+
+- **Where it is written.** `DIR` and `DIR/<owner>` are opened once, never through a link at any
+  step, and each must be owned by root or by the writing process's user and writable by no one
+  else (group or other), or the process refuses to start. Every later step (the `flock` on the
+  owner's directory itself, the temp file, the replace) is relative to that open directory, so a
+  path swapped or a link planted after start cannot redirect a write, and there is no lock file to
+  plant. **No role in this repository deploys the broker or the status hub**, so the operator
+  makes the directories: `/var/lib/homelabnext/notify-pairs` owned by root, mode `0755`; and
+  `broker` and `status` beneath it, each owned by that service's user (or root), mode `0755` (a
+  process running as root creates its own). A unit that writes there names its own `DIR/<owner>`
+  in `ReadWritePaths`.
+- **When it fails.** The first write, at start, stops the process: one that cannot say what it
+  holds is not started quietly. A later write that fails is logged; the pair is still held
+  (alerting goes on), and the whole set is written again at the next registration or report until
+  a write succeeds.
+- **What it discloses.** The record is mode `0644`: it tells the host's local users which pairs,
+  and which module ids, run there. Titles are code constants and manifest strings, not secrets.
+- **Modules.** A pair carries the module it was loaded from only when its registrant names one
+  (`register_pair(..., module=...)`); the notifier never guesses one. **Nothing in the core passes
+  `module=` yet**: until a module loader registers a module's pairs with it, a module's pair seen
+  running is bound to no module, and the loader reports it as no module's or the core's.
+
+The census reads each owner's record at the fixed directory `/var/lib/homelabnext/notify-pairs`
+(`module_census_pairs_dir`; no glob) in one step, with the role's `notify_pairs_records` module, so
+nothing can be swapped between a check and a read. No link is followed at any step; each directory
+on the way must be writable by no one but its owner; the record must be a regular file of at most
+256 KiB (a FIFO never blocks the read); otherwise the census fails. Beside each record the host
+reports its boot id, its clock, and the start time now of the process the record names. `gather`
+parses each record strictly, and **a record that no longer says what runs is noted and not
+counted**:
+- one written before the host's last boot, or where the boot cannot be told;
+- a broker record whose process (that pid, with that start time) is not running: the broker is
+  long-running, so its record counts however old it is while its process runs;
+- a status record older than 900 s: `hnx status collect` is one pass per timer run, and every run
+  rewrites its record, so 15 minutes outlasts a few missed runs of a timer that fires every few
+  minutes. A status record says what the last pass held, not what a live process holds.
+
+A process that stops leaves its file; the census, not the file, decides whether it still counts.
+`gather` lists every pair a counted record holds, once (one title held with two recoveries, or for
+two modules, is listed twice, which the loader refuses). With no counted record on any host,
+`notify_pairs` is left out and the pairs are not compared: the census cannot tell "no notifier
+records its pairs" from "no pair runs". When the core's own pairs were not read, the loader does
+not judge a pair bound to no module and says so. A record is the owning service's word about its
+own pairs, believed as a host's `systemctl` output is about its units.
+
 **Binding and trust.** The gatherer binds nothing: a running name belongs to a module by its name
 alone (`<id>` or `<id>-...`), the rule the loader applies to a hand-written inventory too, so no
 stamp a host writes decides whose a unit is, and none exists. A host's only input is its
@@ -1107,19 +1158,18 @@ leaves `agents` not compared, and the gather says so.
 
 **Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
 can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in
-`not_gathered` (recovery pairs, which are not an inventory kind, are left out of the inventory), so
-the loader says it was not compared instead of judging the declarations against themselves. As of
-this release these kinds have no such source:
+`not_gathered`, so the loader says it was not compared instead of judging the declarations against
+themselves. Beside the fleet units, only the recovery pairs and the agents have such a source
+(above); for the rest:
 
 | Kind | What exists today | What a census of it would need |
 |---|---|---|
 | `rows` (service rows that answer) | the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
 | `mcp_servers` (registered) | `hnx mcp catalog render` writes client files from the catalog; no core role installs them and nothing lists what a client registered | the agent runtime writing, root-owned and read-only, the servers it registered, or a read-only listing the census can query on the agent host |
 | `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
-| `notify_pairs` | the pairs live in the notifier's memory (`Notifier.register_pair`); its state store keeps message states, not pairs | the notifier persisting its registered pairs, or a read-only endpoint the census can query |
 
-Reading these back from the manifests, the role table or the core's `core_pairs` would only restate
-what is declared, so none is.
+Reading these back from the manifests or the role table would only restate what is declared, so
+none is.
 
 ## How a swap works, end to end
 
@@ -1449,9 +1499,9 @@ listed as deferred.
    before the deploy, and again after it against the fleet units gathered from the hosts by role
    `module_census` and `hnx modules gather`; see
    [The loader at deploy time](#the-loader-at-deploy-time)). Not done: it has not run at a real
-   lab's deploy yet; service rows, MCP servers, tables and recovery pairs are not gathered from
-   the hosts (a gathered inventory names the first three in `not_gathered`; agents are gathered
-   from the running broker). The core's own
+   lab's deploy yet; service rows, MCP servers and tables are not gathered from the hosts (a
+   gathered inventory names them in `not_gathered`; the agents come from the running broker and the
+   recovery pairs from the notifiers' records). The core's own
    units are read from its roles and generators, so a running unit that is no module's or the
    core's is a problem.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));

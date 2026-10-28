@@ -145,6 +145,13 @@ def _parser() -> argparse.ArgumentParser:
         "HNX_SECRET_BROKER_NTFY_TOKEN), never from the command line",
     )
     srv.add_argument("--registry", help="services.yml: resolve the notify capability through it")
+    srv.add_argument(
+        "--notify-pairs-dir",
+        default=os.environ.get("HNX_NOTIFY_PAIRS_DIR"),
+        metavar="DIR",
+        help="write the notify pairs this broker holds to DIR/broker.json for the module census "
+        "(an existing directory; the census reads /var/lib/homelabnext/notify-pairs)",
+    )
     rel = sub.add_parser("relay", help="publish the outbox to the event bus (at least once)")
     rel.add_argument("--state", default=os.environ.get("HNX_BROKER_STATE"))
     rel.add_argument(
@@ -362,7 +369,14 @@ def notifier_from_args(args) -> Any:
         window_s=3600.0,
         max_sends_all_scopes=NOTIFY_ALL_AGENTS_PER_HOUR,
     )
-    return Notifier(sender, store, rate_limit=limit)
+    return Notifier(sender, store, rate_limit=limit, record=pairs_record(args, "broker"))
+
+
+def pairs_record(args, owner: str) -> Any:
+    """The notify pairs record ``--notify-pairs-dir`` names (``<dir>/<owner>.json``), or None."""
+    from homelabnext.notify.record import record_in
+
+    return record_in(getattr(args, "notify_pairs_dir", None), owner)
 
 
 def _service(args) -> BrokerService:

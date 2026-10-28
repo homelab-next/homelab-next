@@ -83,3 +83,20 @@ def test_bad_registry_and_usage_are_exit_two(tmp_path, capsys):
 def test_hnx_routes_status(capsys):
     assert cli.main(["status", "--help"]) == 0
     assert "usage: hnx status" in capsys.readouterr().out
+
+
+def test_collect_records_the_notify_pairs_it_holds_for_the_census(tmp_path, capsys):
+    from homelabnext.notify.core_pairs import STATUS_ITEM
+    from homelabnext.notify.record import parse_record
+
+    pairs = tmp_path / "pairs"
+    pairs.mkdir()
+    collect = ["collect", "--registry", str(REGISTRY), "--root", str(ROOT),
+               "--state", str(tmp_path / "state.json"), "--notify-topic", "status",
+               "--notify-pairs-dir", str(pairs), *FILE_SOURCES]  # fmt: skip
+    assert main(collect) == 0
+    # the file sources page nothing here, so no message leaves; the pairs are recorded anyway
+    assert "notifications sent: 0" in capsys.readouterr().out
+    held = parse_record((pairs / "status" / "pairs.json").read_text(), "status").pairs
+    assert {"problem": STATUS_ITEM[0], "recovery": STATUS_ITEM[1]} in held
+    assert not (pairs / "broker").exists()

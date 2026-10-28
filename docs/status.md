@@ -150,7 +150,11 @@ items go `stale` after the source's `stale_after_s`, like any other reading.
 in its own thread under its own `timeout_s`: a pass takes at most the longest timeout, and a hung
 or raising source is an error for itself only. A source whose previous poll is still running is
 not started again (no thread pile-up). `--notify-topic T` pages transitions through the
-registry's `notify` service.
+registry's `notify` service; with `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
+also writes the pairs it holds to `DIR/status/pairs.json` for the module census
+([modules](modules.md#the-loader-at-deploy-time), "Notify pairs"; the census reads
+`/var/lib/homelabnext/notify-pairs`, and counts a status record for 900 s after the pass that
+wrote it).
 
 The hub keeps the latest observation per `(source, module, item)` and a bounded history of state
 transitions. An item a successful poll no longer lists is removed (a resolved alert disappears

@@ -802,6 +802,24 @@
     },
     {
       "exit": {
+        "0": "every record present was read (a missing directory or record is a result, not a failure)",
+        "1": "a record is not a small regular file, or a directory on the way is a link or writable by others; the census stops"
+      },
+      "id": "notify-pairs-records",
+      "inputs": "the pairs directory, the owners, the largest record read",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the host's boot id and clock, and per owner the record's text and whether its process still runs (JSON, as an Ansible module)",
+      "owner": "platform",
+      "path": "ansible/roles/module_census/library/notify_pairs_records.py",
+      "purpose": "Read each notifier owner's notify pairs record on a host, never through a link, with the facts that tell a live record from a leftover.",
+      "status": "active",
+      "trigger": [
+        "role:module_census"
+      ]
+    },
+    {
+      "exit": {
         "0": "the job is the manual deploy from main; it may run",
         "1": "any other job; the runner fails it before its first step"
       },

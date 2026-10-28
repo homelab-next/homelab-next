@@ -11,6 +11,10 @@ argument_specs:
         type: str
         description: "The systemctl command each host runs (a test points it at a stand-in)."
         default: systemctl
+      module_census_pairs_dir:
+        type: path
+        description: "Where the notifier owners write the notify pairs they hold, <dir>/<owner>/pairs.json (owners broker and status; homelabnext.notify.record): read in one step by the role's notify_pairs_records module, never through a link at any step, from directories no one but their owner may write; a record missing means the host holds none of that owner."
+        default: /var/lib/homelabnext/notify-pairs
       module_census_broker_socket:
         type: str
         description: "On a host that runs the broker, its socket, under /run/: the census asks it, as root, for the agents it serves (hnx broker agents); the broker's manifest lists root in operators (manifest 1.8). Empty: the host runs no broker."

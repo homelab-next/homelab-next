@@ -5,7 +5,8 @@
     hnx status catalog generate|check [--registry FILE] [--out FILE]   docs/status/sources.md
     hnx status views check [VIEWS] [--registry FILE]        views.yml against schema + registry
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
-                       [--notify-topic T] [--secrets-dir DIR] [--site SITE [--site-guests DIR]]
+                       [--notify-topic T [--notify-pairs-dir DIR]] [--secrets-dir DIR]
+                       [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
                       [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
                       [--invariants-results FILE] [--roster FILE] [--mcp-catalog DIR]
@@ -58,6 +59,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import threading
 import time
@@ -216,6 +218,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--source", action="append", help="only this source (repeatable; implies due or not)"
     )
     p.add_argument("--notify-topic", help="page transitions through the registry's notify service")
+    p.add_argument(
+        "--notify-pairs-dir",
+        default=os.environ.get("HNX_NOTIFY_PAIRS_DIR"),
+        metavar="DIR",
+        help="with --notify-topic, write the notify pairs held to DIR/status.json for the module "
+        "census (an existing directory; the census reads /var/lib/homelabnext/notify-pairs)",
+    )
     agents_opt(p)
     p = sub.add_parser("render", help="write the static page and status.json")
     common(p, views=True, state=True)
@@ -611,7 +620,11 @@ def _collect(args, reg, specs, clock: Callable[[], float], store=None) -> int:
         from homelabnext.registry.resolver import Resolver
 
         sender = NtfySender(default_topic=args.notify_topic, resolver=Resolver(reg))
-        sent = hub.notify(Notifier(sender, hub.store, clock=clock))
+        from homelabnext.notify.record import record_in
+
+        record = record_in(args.notify_pairs_dir, "status")
+        notifier = Notifier(sender, hub.store, clock=clock, record=record)
+        sent = hub.notify(notifier)
         print(f"notifications sent: {len(sent)}")
     print(f"collected {len(results)} source(s) into {args.state}")
     return 0

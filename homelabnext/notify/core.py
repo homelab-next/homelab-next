@@ -21,15 +21,25 @@ Rules the Notifier enforces (each exists because the opposite shipped once and h
 * **Quiet clear.**  :meth:`Notifier.clear` marks a key ``ok`` without sending its recovery (a
   problem its own reporter withdrew, which nobody needs paged about).
 * **A failed send is not recorded** (the exception propagates), so the next call retries.
+* **What it holds can be recorded.**  With a ``record`` (a
+  :class:`~homelabnext.notify.record.PairsRecord`), the notifier writes every pair it holds when
+  it is built and after each registration, the whole set each time, so the module census can
+  read what runs.  The first write, when it is built, raises on failure: a notifier that cannot
+  say what it holds is not started quietly.  A later one is written before the pair counts as
+  recorded; when it fails the pair is still held (alerting goes on), the failure is logged and
+  the record is marked behind, and the whole set is written again at the next registration or
+  report until a write succeeds.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+log = logging.getLogger("homelabnext.notify")
 LEVELS = ("info", "warn", "crit")
 _LEVEL_PRIORITY = {"info": 3, "warn": 4, "crit": 5}
 OK = "ok"
@@ -80,6 +90,10 @@ class Sender(Protocol):
     def send(self, message: Message) -> None: ...
 
 
+class _Record(Protocol):
+    def write(self, pairs: dict[str, tuple[str, str | None]]) -> None: ...
+
+
 class _Store(Protocol):
     def get(self, key: str, default: Any = None) -> Any: ...
     def put(self, key: str, value: Any) -> None: ...
@@ -102,11 +116,24 @@ class Notifier:
     clock: Callable[[], float] = time.time
     rate_limit: RateLimit | None = None
     namespace: str = "notify"
+    #: where the pairs it holds are written (see the module); None: nowhere
+    record: _Record | None = None
     _pairs: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _modules: dict[str, str | None] = field(default_factory=dict, init=False, repr=False)
     suppressed_by_rate_limit: int = field(default=0, init=False)
+    #: the record is behind what is held (a write after the first failed); see the module
+    record_behind: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if self.record is not None:
+            self.record.write({})  # a fresh process holds no pair until it registers one
 
     # ---------------------------------------------------------------- registration
-    def register_pair(self, problem_title: str, recovery_title: str) -> None:
+    def register_pair(
+        self, problem_title: str, recovery_title: str, *, module: str | None = None
+    ) -> None:
+        """Register a problem title and its recovery.  ``module``: the module the pair was
+        loaded from, written to the record for the census; None for the core's own."""
         if not problem_title or not recovery_title:
             raise ValueError("both titles are required")
         if problem_title == recovery_title:
@@ -118,7 +145,37 @@ class Notifier:
             raise ValueError(
                 f"problem title {problem_title!r} is already registered with recovery {held!r}"
             )
+        if held is not None and self._modules[problem_title] != module:
+            raise ValueError(
+                f"problem title {problem_title!r} is already registered for "
+                f"{self._modules[problem_title] or 'the core'}"
+            )
+        if held is not None:
+            self._catch_up()
+            return
+        pairs = self._held()
+        pairs[problem_title] = (recovery_title, module)
+        self._write_record(pairs)  # first: nothing is claimed recorded that is not
         self._pairs[problem_title] = recovery_title
+        self._modules[problem_title] = module
+
+    def _held(self) -> dict[str, tuple[str, str | None]]:
+        return {t: (r, self._modules[t]) for t, r in self._pairs.items()}
+
+    def _write_record(self, pairs: dict[str, tuple[str, str | None]]) -> None:
+        if self.record is None:
+            return
+        try:
+            self.record.write(pairs)
+        except (OSError, ValueError):
+            log.exception("notify pairs record not written; it is written again next time")
+            self.record_behind = True
+        else:
+            self.record_behind = False
+
+    def _catch_up(self) -> None:
+        if self.record_behind:
+            self._write_record(self._held())
 
     def is_registered(self, problem_title: str) -> bool:
         return problem_title in self._pairs
@@ -129,6 +186,7 @@ class Notifier:
         short id: whose message this is) counts the send against that scope's own budget."""
         if not key or not state:
             raise ValueError("key and state are required")
+        self._catch_up()
         if message.key != key:
             message = replace(message, key=key)
         rec = self.store.get(f"{self.namespace}/{key}")
