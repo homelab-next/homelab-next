@@ -811,6 +811,32 @@
       },
       "description": "The site's network scope: the one place a selection holds addresses (module config refuses address literals). It lives in the private overlay; public examples use documentation ranges only (RFC 5737, 2001:db8::/32, 3fff::/20), which tools/private_leak_check.py enforces. A module declares the parts it needs (requires.scope); a part a selected module needs is present (loader), and every reader fails closed.",
       "minProperties": 1
+    },
+    "lab_table_namespaces": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "why"
+        ],
+        "properties": {
+          "namespace": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]*$(?!\\n)"
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What the lab keeps there (an archive, a scratch space)."
+          }
+        }
+      },
+      "description": "The lake namespaces that are the lab's own, outside every module and the core. With the list, a gathered table in a namespace no module id binds, not the core's and not listed is a problem; without it such a table is not judged. A namespace that is a module id's (the id with - read as _), the core's, or listed twice is refused (loader)."
     }
   },
   "$defs": {

@@ -208,3 +208,8 @@ scope:
     offensive:
     - 192.0.2.0/28
     - 198.51.100.128/25
+lab_table_namespaces:
+- namespace: archive
+  why: the lab's own long-term copies of retired tables
+- namespace: scratch
+  why: ad hoc analysis tables, dropped by hand

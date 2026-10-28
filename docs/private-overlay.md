@@ -433,6 +433,7 @@ These fields are judged by their own rules; a narrowing of one is owner:
 | `scope.target` (selection) | an address is added | what assessment tooling may touch |
 | `scope.exclude` (selection) | an address is removed, or a part declared where it was absent | the carve-outs every reader honours (absent fails closed; `[]` excludes nothing) |
 | `grants` (selection) | any grant is added | what a selected module may do beyond its own slot |
+| `lab_table_namespaces` (selection) | a namespace is added, or the list removed | a table in a listed namespace is the lab's own and is never judged; without the list no unbound table is (declaring the list, removing a namespace or rewording a `why` is owner) |
 
 These are owner, because they widen no reach:
 

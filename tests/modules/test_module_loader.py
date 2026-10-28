@@ -121,6 +121,75 @@ def test_a_running_name_must_be_declared_selected_and_every_declared_one_must_ru
     ]
 
 
+LAB_NS_NOTE = (
+    "the lab's own table namespaces are not declared (lab_table_namespaces): a table in a "
+    "namespace that is no module's or the core's was not judged"
+)
+
+
+def _lab_tables(namespaces=None):
+    """The small lab's site (with ``lab_table_namespaces`` when given) and its inventory with
+    tables in the lab's, the core's and a stray namespace."""
+    site = copy.deepcopy(SITES["small-lab"])
+    if namespaces is not None:
+        site["lab_table_namespaces"] = [
+            {"namespace": n, "why": f"the lab's own, entry {i}"} for i, n in enumerate(namespaces)
+        ]
+    inv = copy.deepcopy(INVENTORY)
+    inv["tables"] += ["table:archive.old_sessions", "table:stray.x", "table:ocsf.authentication"]
+    return site, inv
+
+
+def test_with_the_lab_s_namespaces_declared_a_table_in_any_other_unbound_one_is_a_problem():
+    tree, _ = examples()
+    site, inv = _lab_tables(["archive"])
+    report = check(tree, site=site, inventory=inv)
+    assert messages(report) == [
+        "running: tables table:stray.x runs in namespace stray, which is no module's, the "
+        "core's or the lab's"
+    ]
+    assert LAB_NS_NOTE not in report.notes
+    # an empty list declares that the lab keeps no namespace of its own
+    site, inv = _lab_tables([])
+    assert messages(check(tree, site=site, inventory=inv)) == [
+        "running: tables table:archive.old_sessions runs in namespace archive, which is no "
+        "module's, the core's or the lab's",
+        "running: tables table:stray.x runs in namespace stray, which is no module's, the "
+        "core's or the lab's",
+    ]
+
+
+def test_without_the_lab_s_namespaces_an_unbound_table_is_not_judged_and_the_check_says_so():
+    tree, _ = examples()
+    site, inv = _lab_tables()
+    report = check(tree, site=site, inventory=inv)
+    assert report.problems == [] and LAB_NS_NOTE in report.notes
+    # tables not gathered: nothing to judge, so no note about the lab's namespaces
+    inv["not_gathered"] = [*inv.get("not_gathered", []), "tables"]
+    inv.pop("tables")
+    assert LAB_NS_NOTE not in check(tree, site=site, inventory=inv).notes
+
+
+@pytest.mark.parametrize(
+    ("namespaces", "message"),
+    [
+        (["ocsf"], "lab_table_namespaces: ocsf is the core's namespace, never the lab's"),
+        (
+            ["external_collector"],
+            "lab_table_namespaces: external_collector is module external-collector's "
+            "namespace, never the lab's",
+        ),
+        (["archive", "archive"], "lab_table_namespaces: archive is listed twice"),
+    ],
+)
+def test_a_lab_namespace_that_is_a_module_s_the_core_s_or_listed_twice_is_refused(
+    namespaces, message
+):
+    tree, _ = examples()
+    site, _ = _lab_tables(namespaces)
+    assert messages(check(tree, site=site)) == [f"site: {message}"]
+
+
 def _listening(*hosts):
     """The small lab's inventory with the hosts' listening sockets, its rows left ungathered (as
     a census leaves them): ``hosts`` are ``(census host, sockets)``."""

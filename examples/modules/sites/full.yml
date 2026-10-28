@@ -99,3 +99,11 @@ scope:
   exclude:
     unattended_mutation: [192.0.2.1/32, 192.0.2.2/32]
     offensive: [192.0.2.0/28, 198.51.100.128/25]
+# The lake namespaces that are the lab's own, outside every module and the core: with the list, a
+# gathered table in a namespace no module id binds, not the core's (ocsf) and not listed here is a
+# problem. A module id's namespace or the core's is refused.
+lab_table_namespaces:
+  - namespace: archive
+    why: the lab's own long-term copies of retired tables
+  - namespace: scratch
+    why: ad hoc analysis tables, dropped by hand
