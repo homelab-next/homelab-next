@@ -110,13 +110,16 @@ def test_an_absent_configuration_still_gathers_the_kind_as_registering_nothing(t
         ),
         ([{**cfg("/a", "claude-code", None), "servers": ["a"]}], "is absent yet registers"),
         ([cfg("/a", "claude-code", ["a", "a"])], "the server names are not a set"),
-        ([cfg("/a", "claude-code", ["Upper"])], "is not an inventory name"),
-        ([cfg("/a", "claude-code", ["has space"])], "is not an inventory name"),
-        ([cfg("/a", "claude-code", ["-lead"])], "is not an inventory name"),
-        ([cfg("/a", "claude-code", ["x" * 65])], "is not an inventory name"),
+        ([cfg("/a", "claude-code", ["Upper"])], "is not a valid MCP server name"),
+        ([cfg("/a", "claude-code", ["has space"])], "is not a valid MCP server name"),
+        ([cfg("/a", "claude-code", ["-lead"])], "is not a valid MCP server name"),
+        ([cfg("/a", "claude-code", ["x" * 65])], "is not a valid MCP server name"),
         # past census.MCP_NAME_MAX a name is more likely a pasted secret: refused, never persisted
-        ([cfg("/a", "claude-code", ["x" * (census.MCP_NAME_MAX + 1)])], "is not an inventory name"),
-        ([cfg("/a", "claude-code", [5])], "is not an inventory name"),
+        (
+            [cfg("/a", "claude-code", ["x" * (census.MCP_NAME_MAX + 1)])],
+            "is not a valid MCP server name",
+        ),
+        ([cfg("/a", "claude-code", [5])], "is not a valid MCP server name"),
     ],
 )
 def test_a_configuration_the_host_reports_malformed_fails_the_census(tmp_path, configs, why):

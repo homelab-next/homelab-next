@@ -91,7 +91,6 @@ HUMAN_CONTRIBUTIONS = frozenset(
         "workflow_packs",
     }
 )
-#: contributions the owner approves: rules, docs, criteria, tables, paging pairs, status sources
 #: ``requires`` keys whose change is human-approve, and why: which host roles the module's roles
 #: (root code) land on, their exposure, count and footprint; and the scope parts it needs, which
 #: keep the scope reader's ScopeUndeclared refusal in force
@@ -99,6 +98,7 @@ HUMAN_REQUIRES = {
     "hosts": "host roles: where its roles run as root, and their exposure and footprint",
     "scope": "the scope parts it may act on",
 }
+#: contributions the owner approves: rules, docs, criteria, tables, paging pairs, status sources
 OWNER_CONTRIBUTIONS = frozenset(
     {"detections", "docs", "invariants", "lake_tables", "notify_pairs", "status_sources"}
 )

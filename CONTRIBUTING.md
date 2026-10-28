@@ -16,7 +16,11 @@ tests on a laptop with no network and no private context.
    Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
    may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
    change until the ADR is accepted, when removing `x-draft` and `tools/schema_check.py --freeze`
-   freeze it.
+   freeze it. A frozen copy is written by `--freeze` and nothing else: with `--base` (as CI runs
+   it), a file new under `schemas/_frozen/` must be byte-identical to the live schema at its own
+   version. So run `--freeze` last in a change (after any description edit to the same schema),
+   and a version that was never frozen is fixed forward (bump and freeze the next minor), never
+   backfilled from history.
 3. **Every library ships a fake**, and the fake passes the conformance test for its capability.
 4. **No raw endpoints.** Addresses come from the registry; an unset endpoint raises, it never
    defaults (ADR-0002). `tools/no_raw_endpoints.py` gates this.

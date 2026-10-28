@@ -244,7 +244,7 @@ def server_names(text: str, client: str, path: str) -> list[str]:
         raise Refused(f"{path} registers more than {MAX_SERVERS} servers")
     for name in servers:
         if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not MCP_NAME_RE.fullmatch(name):
-            raise Refused(f"{path}: a server name is not an inventory name")
+            raise Refused(f"{path}: a server name is not a valid MCP server name")
     return sorted(servers)
 
 
