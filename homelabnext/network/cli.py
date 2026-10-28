@@ -201,6 +201,13 @@ def _run(args, out, err) -> int:
 
     name = adapter_name or _pick(args, doc)
     adapter = adapters.get(name)
+    own = doc.get("adapters", {}).get("network") or doc["router"]["model"]
+    if ir.router.wan6 and name != "linux" and own == "linux":
+        # validation warned only about the site's own adapter, which renders it
+        print(
+            f"warning: router.wan6 is rendered by the linux adapter only; {name} ignores it",
+            file=err,
+        )
     rendered = adapter.render(ir)
 
     if args.cmd == "render":

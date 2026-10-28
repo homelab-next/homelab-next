@@ -180,6 +180,90 @@ def delegated_prefixes6(raw: Any) -> tuple[tuple[ipaddress.IPv6Network, ...], li
     return (tuple(nets) if not problems else ()), problems
 
 
+def _anycast64(addr: ipaddress.IPv6Address, net: ipaddress.IPv6Network) -> bool:
+    """``addr`` is /64 ``net``'s subnet-router anycast address or an RFC 2526 one (its top 128)."""
+    host = int(addr) - int(net.network_address)
+    return host == 0 or host >= (1 << 64) - 128
+
+
+def wan6_problems(raw: Any, zones6: Any = (), delegated6: Any = ()) -> list[str]:
+    """The problems of a router's ``wan6`` (site 1.6); absent (None) is none.
+
+    Exactly one of ``ra: true`` or ``static: {address, gateway}``.  A static ``address`` is the
+    router's on the WAN with its /64, canonical with no zone id, inside a prefix
+    :func:`delegated_prefix6_problem` would accept (global unicast, never unique-local,
+    documentation, special-purpose or IPv4-embedding), neither the /64's subnet-router anycast
+    address nor one of its RFC 2526 anycast addresses (the top 128), and overlapping no zone's
+    ``subnet6`` (``zones6``, prefixes) or ``delegated_prefixes6`` prefix (``delegated6``) -- the
+    WAN link is not a zone, and a delegated prefix numbers zones.  The ``gateway`` is
+    canonical with no zone id (it is the WAN's) and either link-local (fe80::/10) or another
+    usable address inside the WAN /64."""
+    if raw is None:
+        return []
+    if not isinstance(raw, dict) or len(raw) != 1 or not {*raw} <= {"ra", "static"}:
+        return ["router.wan6 is not exactly one of ra or static"]
+    if "ra" in raw:
+        return [] if raw["ra"] is True else ["router.wan6.ra is not true"]
+    st = raw["static"]
+    if not isinstance(st, dict):
+        return ["router.wan6.static is not an {address, gateway} mapping"]
+    out: list[str] = []
+    a_raw, g_raw = st.get("address"), st.get("gateway")
+    if not isinstance(a_raw, str) or "%" in a_raw or "/" not in a_raw:
+        return [f"router.wan6.static.address {a_raw!r} is not an IPv6 address with its /64"]
+    try:
+        iface = ipaddress.IPv6Interface(a_raw)
+    except ValueError as exc:
+        return [f"router.wan6.static.address {a_raw!r} is not an IPv6 address: {exc}"]
+    if str(iface) != a_raw:
+        out.append(
+            f"router.wan6.static.address {a_raw!r} is not in its canonical form; write {iface}"
+        )
+    net = iface.network
+    if net.prefixlen != 64:
+        return [
+            *out,
+            f"router.wan6.static.address {a_raw!r} is a /{net.prefixlen}; the WAN link is a /64",
+        ]
+    _, why = delegated_prefix6_problem(str(net))
+    if why is not None:
+        out.append(f"router.wan6.static.address {a_raw!r}: its /64 {why}")
+    if _anycast64(iface.ip, net):
+        out.append(
+            f"router.wan6.static.address {a_raw!r} is the /64's subnet-router or an RFC 2526 "
+            "anycast address, never a router's own"
+        )
+    for z in zones6:
+        if net.overlaps(z):
+            out.append(f"router.wan6.static.address {a_raw!r} lies in zone prefix {z}")
+    for d in delegated6:
+        if net.overlaps(d):
+            out.append(f"router.wan6.static.address {a_raw!r} lies in delegated prefix {d}")
+    if not isinstance(g_raw, str) or "%" in g_raw:
+        return [
+            *out,
+            f"router.wan6.static.gateway {g_raw!r} is not an IPv6 address without a zone id",
+        ]
+    try:
+        gw = ipaddress.IPv6Address(g_raw)
+    except ValueError as exc:
+        return [*out, f"router.wan6.static.gateway {g_raw!r} is not an IPv6 address: {exc}"]
+    if str(gw) != g_raw:
+        out.append(f"router.wan6.static.gateway {g_raw!r} is not in its canonical form; write {gw}")
+    if gw.is_link_local:
+        return out
+    if gw not in net:
+        out.append(
+            f"router.wan6.static.gateway {g_raw!r} is neither link-local (fe80::/10) nor inside "
+            f"the WAN's {net}"
+        )
+    elif gw == iface.ip:
+        out.append(f"router.wan6.static.gateway {g_raw!r} is the router's own WAN address")
+    elif _anycast64(gw, net):
+        out.append(f"router.wan6.static.gateway {g_raw!r} is an anycast address of the WAN's {net}")
+    return out
+
+
 def schema_problems(doc: Any) -> list[str]:
     import jsonschema
 
@@ -286,7 +370,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         if clash is not None:
             r.error(f"zones {clash} and {zid}: subnet6 {nets6[clash]} and {net6} overlap")
         nets6[zid] = net6
-    for msg in delegated_prefixes6(doc.get("delegated_prefixes6"))[1]:
+    delegated6, problems = delegated_prefixes6(doc.get("delegated_prefixes6"))
+    for msg in problems:
         r.error(msg)
 
     for zid, net in nets.items():
@@ -352,6 +437,14 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         )
     if "tls_pin" not in router:
         r.warn("router.tls_pin is absent; the console certificate will not be pinned")
+    for msg in wan6_problems(router.get("wan6"), nets6.values(), delegated6):
+        r.error(msg)
+    network_adapter = doc.get("adapters", {}).get("network", router["model"])
+    if "wan6" in router and network_adapter != "linux":
+        r.warn(
+            f"router.wan6 is rendered by the linux adapter only; {network_adapter} ignores it, "
+            "so configure the router's WAN IPv6 on the router itself"
+        )
 
     switch_ids: set[str] = set()
     macs: dict[str, str] = {}

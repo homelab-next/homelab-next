@@ -1,0 +1,441 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.6",
+  "title": "HomelabNext site / network model (site.yml)",
+  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason). 1.3 adds the mirror port kind (a SPAN destination for a sensor) and mirror_from, the ports it copies. 1.4 adds a zone's optional subnet6, its IPv6 prefix (a /48 to a /64), which a guest's IPv6 extra address is held against. 1.5 adds delegated_prefixes6, the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), inside which a zone's global subnet6 is the lab's. 1.6 adds router.wan6, the router's own IPv6 on its WAN: a static address and default gateway, or router advertisements accepted on the WAN only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["site_version", "site", "zones", "router", "firewall"],
+  "properties": {
+    "site_version": {"const": 1},
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "domain"],
+      "properties": {
+        "id": {"$ref": "#/$defs/slug"},
+        "domain": {"$ref": "#/$defs/fqdn"},
+        "timezone": {"type": "string", "pattern": "^(UTC|[A-Z][A-Za-z]+/[A-Za-z_+-]+)$", "default": "UTC", "description": "UTC unless there is a reason; schedules elsewhere are UTC-only."}
+      }
+    },
+    "zones": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/zone"}
+    },
+    "router": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "model", "mgmt_endpoint"],
+      "properties": {
+        "id": {"$ref": "#/$defs/slug"},
+        "model": {"$ref": "#/$defs/adapter_name", "description": "Network adapter that realises the policy (see `hnx site render --adapter`)."},
+        "mgmt_endpoint": {"$ref": "#/$defs/svc_ref", "description": "Registry service for the management console; never a URL."},
+        "tls_pin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sha256"],
+          "properties": {
+            "sha256": {"type": "string", "pattern": "^(REPLACE_WITH_[A-Z_]+|[0-9a-f]{64})$", "description": "Fingerprint of the console certificate, or a REPLACE_WITH_* placeholder (reported as a warning)."}
+          }
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reads": {"$ref": "#/$defs/auth_ref"},
+            "writes": {"$ref": "#/$defs/auth_ref"}
+          }
+        },
+        "power": {"$ref": "#/$defs/power_ref"},
+        "wan6": {
+          "type": "object",
+          "description": "1.6: the router's own IPv6 on its WAN, which carries the zones' routed IPv6 to the internet. Exactly one of static (an address and a default gateway) or ra: true (router advertisements are accepted on the WAN, and only there: SLAAC address and default route, no DHCPv6). Prefix delegation is not expressed here. Rendered by the linux adapter; another router adapter ignores it with a validation warning. Absent: the router has no WAN IPv6 and the site renders exactly as before.",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "static": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["address", "gateway"],
+              "properties": {
+                "address": {"type": "string", "pattern": "^[0-9a-f:]{2,39}/64$", "description": "The router's WAN address with its /64, canonical, global unicast: never unique-local, documentation, link-local or special-purpose (hnx site validate)."},
+                "gateway": {"type": "string", "pattern": "^[0-9a-f:]{2,39}$", "description": "The default gateway: a link-local address (fe80::/10, no zone id: it is the WAN's) or another address inside the WAN /64."}
+              }
+            },
+            "ra": {"const": true, "description": "Accept router advertisements on the WAN (and only there): the address by SLAAC and the default route."}
+          }
+        }
+      }
+    },
+    "switches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "model", "port_assignments"],
+        "properties": {
+          "id": {"$ref": "#/$defs/slug"},
+          "model": {"$ref": "#/$defs/adapter_name"},
+          "device_mac": {"$ref": "#/$defs/mac"},
+          "uplink_port": {"type": "integer", "minimum": 1, "maximum": 512},
+          "port_assignments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "#/$defs/port_assignment"}
+          },
+          "power": {"$ref": "#/$defs/power_ref"}
+        }
+      }
+    },
+    "edge": {
+      "type": "array",
+      "minItems": 1,
+      "description": "(1.1) The uplink chain, outermost first (internet, modem, router, ...). An entry whose id is the router's or a switch's is that device (declare its power there).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind"],
+        "properties": {
+          "id": {"$ref": "#/$defs/slug"},
+          "kind": {"enum": ["internet", "modem", "ont", "router", "firewall", "switch", "other"]},
+          "model": {"$ref": "#/$defs/device_model"},
+          "power": {"$ref": "#/$defs/power_ref"}
+        }
+      }
+    },
+    "power": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "(1.1) The site's UPSes, and the power of a device that declares none (homelabnext/power.py).",
+      "properties": {
+        "ups": {"type": "array", "items": {"$ref": "#/$defs/ups"}},
+        "default": {"$ref": "#/$defs/power_ref"}
+      }
+    },
+    "tailnet": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "(1.2) The site's tailnet facts beyond the per-zone node tags (homelabnext/tailnet.py).",
+      "properties": {
+        "deploy": {"$ref": "#/$defs/deploy_access"}
+      }
+    },
+    "delegated_prefixes6": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "1.5: the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), each with the reason. In the lab-only rule (a model runtime's outbound_allow), a destination network inside one of these counts as the lab's, whether a zone's global-unicast subnet6 or a literal CIDR; without them a global-unicast destination reaches the internet. hnx site validate requires each canonical, a /48 to a /64 (what an ISP delegates to a site), global unicast outside 2001::/23, the retired 6bone block 3ffe::/16, the reserved 2000::/16 and documentation space, and no two overlapping. A unique-local or documentation prefix needs no declaration. This is the site's word, not a proof: it is reviewed only where the overlay's branch rules require code-owner review of lab/site.yml.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["prefix", "why"],
+        "properties": {
+          "prefix": {"$ref": "#/$defs/cidr6"},
+          "why": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "\\S", "description": "Why the site holds this prefix (who delegated it, and since when)."}
+        }
+      }
+    },
+    "dhcp_reservations": {
+      "type": "array",
+      "description": "Pin a registry host to a hardware address. Hosts in a DHCP zone without an entry are matched by name.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "mac"],
+        "properties": {
+          "host": {"$ref": "#/$defs/slug"},
+          "mac": {"$ref": "#/$defs/mac"}
+        }
+      }
+    },
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_action"],
+      "properties": {
+        "default_action": {"const": "deny", "description": "Fail closed: anything not listed below is denied."},
+        "zone_to_zone": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "action"],
+            "properties": {
+              "from": {"$ref": "#/$defs/slug"},
+              "to": {"$ref": "#/$defs/slug_or_any"},
+              "action": {"enum": ["allow", "deny"]},
+              "ports": {"$ref": "#/$defs/ports"},
+              "protocols": {"$ref": "#/$defs/protocols"},
+              "one_way_contract": {"type": "boolean", "description": "Marks the deny-everything-outward rule of a one-way zone."},
+              "notes": {"type": "string"}
+            }
+          }
+        },
+        "service_exceptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "action"],
+            "properties": {
+              "from": {"oneOf": [{"$ref": "#/$defs/zone_ref"}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/zone_ref"}}]},
+              "to": {"$ref": "#/$defs/svc_ref"},
+              "action": {"enum": ["allow", "deny"]},
+              "ports": {"$ref": "#/$defs/ports", "description": "Overrides the registry port."},
+              "notes": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resolvers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "host"],
+            "properties": {
+              "id": {"$ref": "#/$defs/slug"},
+              "model": {"$ref": "#/$defs/adapter_name"},
+              "host": {"$ref": "#/$defs/svc_ref"},
+              "authoritative_for": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/fqdn"}},
+              "bind_mode": {"enum": ["all", "host_ip_only"]}
+            }
+          }
+        },
+        "records": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "static": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["fqdn", "type", "value"],
+                "properties": {
+                  "fqdn": {"$ref": "#/$defs/fqdn"},
+                  "type": {"enum": ["A", "CNAME"]},
+                  "value": {"type": "string", "minLength": 1}
+                }
+              }
+            }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "split_horizon": {"type": "boolean", "default": false, "description": "Answer public hostnames of registry services with the internal address."},
+            "ttl_default": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 60}
+          }
+        }
+      }
+    },
+    "adapters": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Site-wide adapter choices; a capability not pinned here is inferred from router.model.",
+      "properties": {
+        "network": {"$ref": "#/$defs/adapter_name"},
+        "dns": {"$ref": "#/$defs/adapter_name"},
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "linux": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "flavor": {"enum": ["networkd", "ifupdown"], "default": "networkd"},
+                "trunk_interface": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,14}$", "default": "trunk0"},
+                "wan_interface": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,14}$", "default": "wan0"},
+                "wan_network": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@-]{0,55}\\.network$", "description": "1.6: the name of the WAN's own systemd-networkd .network file, which router.wan6 extends with a drop-in (<wan_network>.d/50-hnx-wan6.conf). Default 10-<wan_interface>.network."}
+              }
+            },
+            "zonefile": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "serial": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "SOA serial; derived from the content when absent."}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "deploy_access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owners", "zones"],
+      "description": "(1.2) What the CI deploy's ephemeral tailnet key may reach: TCP 22 on the tailnet nodes of the listed zones (tag:zone-<zone>), and each exception's ports with its reason. No wildcard destination; the tailscale-acl target renders it with policy tests.",
+      "properties": {
+        "tag": {"type": "string", "pattern": "^tag:[a-z0-9][a-z0-9-]{0,62}$", "default": "tag:ci-deploy", "description": "The tag the deploy's key carries; never a zone tag (tag:zone-...)."},
+        "owners": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Who may mint keys for the tag (its tagOwners entry): a user login, a group: or an admin autogroup:, never a tag (a tag owner lets every node carrying it apply the deploy tag to itself).",
+          "items": {"type": "string", "pattern": "^(autogroup:(admin|owner|it-admin|network-admin)|group:[a-z0-9][a-z0-9-]*|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)$"}
+        },
+        "zones": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Site zones the deploy reaches on SSH, by id (no '*', no 'any').",
+          "items": {"$ref": "#/$defs/slug"}
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/deploy_exception"}
+        }
+      }
+    },
+    "deploy_exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zones", "ports", "reason"],
+      "description": "(1.2) A port beyond SSH the deploy needs on some of its zones, and why.",
+      "properties": {
+        "zones": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/slug"}},
+        "ports": {"anyOf": [{"const": "*"}, {"$ref": "#/$defs/ports"}]},
+        "reason": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"}
+      }
+    },
+    "power_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ups"],
+      "description": "(1.1) What feeds a device: one or more UPS ids of power.ups, or none with a reason. A VM or container never declares one: it inherits its hypervisor's.",
+      "properties": {
+        "ups": {"anyOf": [{"const": "none"}, {"$ref": "#/$defs/slug"}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/slug"}}]},
+        "reason": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"}
+      },
+      "if": {"properties": {"ups": {"const": "none"}}},
+      "then": {"required": ["reason"]}
+    },
+    "ups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/slug", "description": "The logical id every power declaration names ('none' is reserved)."},
+        "model": {"$ref": "#/$defs/device_model"},
+        "monitored_by": {"enum": ["nut", "snmp", "usb", "none"], "default": "none", "description": "How the power monitor reads it."},
+        "nut_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$", "description": "The UPS name the power monitor queries (NUT upsname)."},
+        "serial": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$"},
+        "mac": {"$ref": "#/$defs/mac", "description": "Only for a UPS with a network card."}
+      }
+    },
+    "device_model": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,63}$"},
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "maxLength": 32},
+    "slug_or_any": {"type": "string", "pattern": "^(any|[a-z][a-z0-9]*(-[a-z0-9]+)*)$", "maxLength": 32},
+    "adapter_name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+    "fqdn": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"},
+    "zone_ref": {"type": "string", "pattern": "^zone:[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "svc_ref": {"type": "string", "pattern": "^svc:[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "secret_ref": {"type": "string", "pattern": "^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*$", "description": "A name in the secret store; the value is never in this file."},
+    "ipv4": {"type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$"},
+    "cidr6": {"type": "string", "pattern": "^[0-9a-f:]{2,39}/(4[89]|5[0-9]|6[0-4])$", "description": "An IPv6 prefix, lower case, /48 to /64; hnx site validate requires its canonical form and refuses a special-purpose or IPv4-embedding one."},
+    "cidr4": {"type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$"},
+    "mac": {"type": "string", "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$"},
+    "ports": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+    },
+    "protocols": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["tcp", "udp", "icmp"]}
+    },
+    "auth_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "secret_ref"],
+      "properties": {
+        "mode": {"enum": ["api_key", "session_mfa", "local_admin", "token"]},
+        "secret_ref": {"$ref": "#/$defs/secret_ref"}
+      }
+    },
+    "port_assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ports", "kind"],
+      "properties": {
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 512}, {"type": "string", "pattern": "^[0-9]{1,3}-[0-9]{1,3}$"}]}
+        },
+        "kind": {"enum": ["access", "trunk", "mirror"], "description": "mirror (1.3): a SPAN destination; it carries no VLAN of its own and receives a copy of the traffic of the ports in mirror_from."},
+        "vlan": {"type": "integer", "minimum": 1, "maximum": 4094, "description": "access: the VLAN; trunk: the native (untagged) VLAN, optional."},
+        "vlans": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 4094}, "description": "trunk: tagged VLANs."},
+        "mirror_from": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"oneOf": [{"type": "integer", "minimum": 1, "maximum": 512}, {"type": "string", "pattern": "^[0-9]{1,3}-[0-9]{1,3}$"}]},
+          "description": "mirror (1.3): the source ports, on the same switch, whose traffic this port receives a copy of. hnx site validate requires it on a mirror port and refuses it on any other."
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "access"}}}, "then": {"required": ["vlan"], "not": {"required": ["vlans"]}}},
+        {"if": {"properties": {"kind": {"const": "trunk"}}}, "then": {"required": ["vlans"]}}
+      ]
+    },
+    "zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "vlan_id", "subnet", "gateway", "egress"],
+      "properties": {
+        "id": {"$ref": "#/$defs/slug"},
+        "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "vlan_id": {"type": "integer", "minimum": 1, "maximum": 4094},
+        "subnet": {"$ref": "#/$defs/cidr4"},
+        "subnet6": {"$ref": "#/$defs/cidr6", "description": "1.4: the zone's IPv6 prefix, optional. A guest's IPv6 network.extra_addresses must sit inside its own zone's subnet6 and in no other zone's; no IPv6 literal appears elsewhere in this document."},
+        "gateway": {"$ref": "#/$defs/ipv4"},
+        "dhcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["range"],
+          "properties": {
+            "range": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/ipv4"}},
+            "lease_hours": {"type": "integer", "minimum": 1, "maximum": 720, "default": 12}
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resolvers"],
+          "properties": {
+            "resolvers": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/svc_ref"}}
+          }
+        },
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["internet"],
+          "properties": {
+            "internet": {"enum": ["allow", "deny"]},
+            "inter_zone": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {"default": {"const": "deny"}}
+            },
+            "one_way": {"type": "boolean", "default": false, "description": "Nothing may be initiated into this zone; it may only send out through listed service exceptions."}
+          }
+        },
+        "tags": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9:_-]{0,31}$"}}
+      }
+    }
+  }
+}

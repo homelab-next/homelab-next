@@ -28,6 +28,7 @@ prefix: nothing translates IPv6, and a unique-local or documentation source has 
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import ipaddress
 import json
@@ -137,6 +138,9 @@ class RouterPlan:
     mgmt_alias: str  # the alias FQDN of the console service, never an address
     tls_pin: str | None
     auth: dict[str, dict[str, str]]
+    #: site 1.6: the router's own IPv6 on its WAN, ``{"ra": True}`` or ``{"static": {address,
+    #: gateway}}``; empty when the site declares none
+    wan6: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,8 @@ class NetworkIR:
             for r in d["policy"]["rules"]:
                 for side in ("src", "dst"):
                     del r[side]["zone"]
+        if not self.router.wan6:
+            del d["router"]["wan6"]  # a site without one digests exactly as before site 1.6
         return d
 
 
@@ -343,6 +349,7 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
             reg.alias(reg.services[ref_id(router["mgmt_endpoint"])].capability),
             pin,
             {k: dict(v) for k, v in router.get("auth", {}).items()},
+            copy.deepcopy(router.get("wan6", {})),
         ),
         options=options,
     )
