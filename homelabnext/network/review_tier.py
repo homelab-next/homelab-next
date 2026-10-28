@@ -138,6 +138,9 @@ TRUST_PATHS = {
     "lab/model_roles.json": "the model role table: a binding's leaves_lab and a role's fallback "
     "decide which modules need grants.cloud_models, and no pin shows them",
     "lab/swaps/": "the swap records that cover a change to the model role table",
+    "lab/model-serving/model_store.json": "the model store: what a swap's rebind vouches for",
+    "lab/model_roles.eval.json": "the evaluation report a rebind's live canary must pass",
+    "lab/model-evals/": "the evaluation reports that vouch for a model a swap rebinds to",
 }
 _FIREWALL_LISTS = ("zone_to_zone", "service_exceptions")
 LAB_NAMESPACES = "lab_table_namespaces"

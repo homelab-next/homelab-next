@@ -487,6 +487,9 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         "/lab/modules.lock",
         "/lab/model_roles.json",
         "/lab/swaps/",
+        "/lab/model-serving/model_store.json",
+        "/lab/model_roles.eval.json",
+        "/lab/model-evals/",
     ):
         assert rules.get(path), path
 

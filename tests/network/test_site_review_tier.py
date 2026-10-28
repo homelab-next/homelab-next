@@ -477,6 +477,18 @@ def test_the_overlays_role_table_and_swap_records_are_human(lab, path):
     assert "role table" in r.changes[0].why and len(problems) == 1  # no owner in this fixture
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["lab/model-serving/model_store.json", "lab/model_roles.eval.json", "lab/model-evals/x.json"],
+)
+def test_the_overlays_swap_evidence_is_human(lab, path):
+    """What vouches for a model a swap rebinds to, as the module tier rates the repository's."""
+    root, base = lab
+    _write(root, path, "{}\n")
+    (r,), _ = rt.review(root, base)
+    assert (r.path, r.tier) == (path, rt.HUMAN)
+
+
 def test_a_link_or_an_oversized_file_at_the_head_is_human(lab, tmp_path):
     root, base = lab
     (root / rt.SITE).unlink()
