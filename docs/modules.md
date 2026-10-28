@@ -713,12 +713,15 @@ lab_table_namespaces: [{namespace, why}]          # the lake namespaces that are
 
 `lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every
 module and the core (the full profile lists `archive` and `scratch`); the runtime check judges a
-gathered table in any other namespace that no module id binds (see "Lake tables, from the
-catalog"). The loader refuses a namespace listed twice, the core's (`ocsf`), or a module id's (the
-id with `-` read as `_`, any module the tree holds): listing one would let a table there pass as
-the lab's instead of being judged as that module's or the core's. In the private overlay, adding a
-namespace or dropping the list is human-approve (`hnx site review-tier`), removing a namespace
-owner.
+gathered table in any other namespace that no module id binds (see "Lake tables, from the catalog").
+The loader refuses a namespace listed twice, the core's (`ocsf`), or a module id's (the id with `-`
+read as `_`, any module the tree holds): listing one would let a table there pass as the lab's
+instead of being judged as that module's or the core's; a module that was read and failed its own
+validation counts too (one `discover` refused, a manifest it could not read, is reported there and
+is not in the tree). In the private overlay, adding a namespace or dropping the list is
+human-approve (`hnx site review-tier`); removing a namespace, changing a `why` or declaring the list
+where it was absent (every other namespace is then judged) is owner, and a list that is not a list
+of distinct `{namespace, why}` at either end (a `null` included) fails the gate.
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive
