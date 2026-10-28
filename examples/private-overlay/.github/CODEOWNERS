@@ -14,6 +14,9 @@
 /ansible.cfg                  @lab-owner-fake
 /ansible/playbooks/           @lab-owner-fake
 /locks/                       @lab-owner-fake
+# what the lab claims as its own: the site's delegated IPv6 prefixes (a model runtime's lab-only
+# rule trusts them), its zones and its scope
+/lab/site.yml                 @lab-owner-fake
 # what must be sealed, and to whom
 /.sops.yaml                   @lab-owner-fake
 /.hnx-private-overlay.yml     @lab-owner-fake

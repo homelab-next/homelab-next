@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.4",
+  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.5",
   "title": "HomelabNext site / network model (site.yml)",
-  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason). 1.3 adds the mirror port kind (a SPAN destination for a sensor) and mirror_from, the ports it copies. 1.4 adds a zone's optional subnet6, its IPv6 prefix (a /48 to a /64), which a guest's IPv6 extra address is held against.",
+  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason). 1.3 adds the mirror port kind (a SPAN destination for a sensor) and mirror_from, the ports it copies. 1.4 adds a zone's optional subnet6, its IPv6 prefix (a /48 to a /64), which a guest's IPv6 extra address is held against. 1.5 adds delegated_prefixes6, the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), inside which a zone's global subnet6 is the lab's.",
   "type": "object",
   "additionalProperties": false,
   "required": ["site_version", "site", "zones", "router", "firewall"],
@@ -101,6 +101,20 @@
       "description": "(1.2) The site's tailnet facts beyond the per-zone node tags (homelabnext/tailnet.py).",
       "properties": {
         "deploy": {"$ref": "#/$defs/deploy_access"}
+      }
+    },
+    "delegated_prefixes6": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "1.5: the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), each with the reason. In the lab-only rule (a model runtime's outbound_allow), a destination network inside one of these counts as the lab's, whether a zone's global-unicast subnet6 or a literal CIDR; without them a global-unicast destination reaches the internet. hnx site validate requires each canonical, a /48 to a /64 (what an ISP delegates to a site), global unicast outside 2001::/23, the retired 6bone block 3ffe::/16, the reserved 2000::/16 and documentation space, and no two overlapping. A unique-local or documentation prefix needs no declaration. This is the site's word, not a proof: it is reviewed only where the overlay's branch rules require code-owner review of lab/site.yml.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["prefix", "why"],
+        "properties": {
+          "prefix": {"$ref": "#/$defs/cidr6"},
+          "why": {"type": "string", "minLength": 10, "maxLength": 300, "pattern": "\\S", "description": "Why the site holds this prefix (who delegated it, and since when)."}
+        }
       }
     },
     "dhcp_reservations": {

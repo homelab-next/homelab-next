@@ -390,8 +390,12 @@ itself**, so a pull request can rewrite `checks.yml` to pass. What actually gate
 
 * **Branch protection on `main`** with a required approving review and **"Require review from
   Code Owners"** (the skeleton's `.github/CODEOWNERS` covers `.github/`, `bin/`, `runner/`,
-  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml` and the marker), so nothing reaches
-  `main`, and so nothing a dispatch runs, without the owner's approval. Both are available for
+  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker and `lab/site.yml`), so
+  nothing reaches `main`, and so nothing a dispatch runs, without the owner's approval.
+  `lab/site.yml` is there because it carries claims the checks trust rather than prove: above
+  all `delegated_prefixes6` (site 1.5), the global IPv6 prefixes a model runtime's lab-only rule
+  counts as the lab's ([network model](network-model.md#delegated-ipv6-prefixes-15)). Without the
+  Code Owners rule that entry is an ordinary, unreviewed edit. Both are available for
   private repositories on Pro.
 * **The Environment's deployment-branch policy** (`main` only), so a workflow on any other ref
   gets no secret and, through federation, no tailnet node.
