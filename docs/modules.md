@@ -1494,7 +1494,11 @@ and `meaning_changes` is recorded, never checked.
   file of the change. The overlay template's `checks.yml` job `swap-gate` runs
   `hnx modules swap-gate --overlay . --ci-base` on every pull request and push, with the pinned
   `HNX_REF` (refused unless a full SHA), a refusal of an `hnx/` the change carries, a full-history
-  checkout for the base, and no secret. `swap-check` still refuses `--overlay`.
+  checkout for the base, and no secret. `swap-check` still refuses `--overlay`. Two things for an
+  operator: add `swap-gate` to the overlay's required status checks with the template's other
+  jobs (a job no rule requires gates nothing), and the change that adds an overlay's **first**
+  `lab/model_roles.json` cannot pass the gate (there is no base table to hold it against, so it
+  exits 2): merge that one change by an owner override, after which every later change is gated.
 
   **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
   version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
