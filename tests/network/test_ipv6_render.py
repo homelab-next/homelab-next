@@ -176,7 +176,16 @@ def test_the_linux_router_takes_no_advertisement_and_checks_the_reverse_path(ir6
     assert "meta nfproto ipv6 fib saddr . iif oif missing drop" in nft
     assert "meta l4proto ipv6-icmp accept" not in nft  # only the ICMPv6 a router must take
     assert "icmpv6 type { destination-unreachable, packet-too-big," in nft
-    assert "icmpv6 type echo-request limit rate 10/second accept" in nft
+    inp = nft.split("chain input {", 1)[1].split("\n    }", 1)[0]
+    # echo has a budget per side, so a flood from the WAN does not starve the zones'
+    assert 'iifname != "wan0" icmpv6 type echo-request limit rate 10/second accept' in inp
+    assert 'iifname "wan0" icmpv6 type echo-request limit rate 5/second accept' in inp
+    # a router solicitation only from a zone; an MLD query only from a link-local router
+    assert 'iifname != "wan0" icmpv6 type nd-router-solicit accept' in inp
+    assert "ip6 saddr fe80::/10 ip6 hoplimit 1 icmpv6 type mld-listener-query accept" in inp
+    unfiltered = [ln for ln in inp.splitlines() if ln.strip().startswith("icmpv6 type")]
+    assert not any(t in ln for ln in unfiltered for t in ("router-solicit", "listener-query"))
+    assert not any("echo-request" in ln and "iifname" not in ln for ln in inp.splitlines())
     assert "nd-router-advert" not in nft.split("chain input {", 1)[1].split("}\n\n", 1)[0]
     assert "set z_mgmt_6 {" in nft and "type ipv6_addr" in nft
     sysctl = files["etc/sysctl.d/90-hnx-routing.conf"]

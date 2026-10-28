@@ -91,8 +91,7 @@ def nft_rule(rule: Rule, wan: str, six: bool = False) -> str:
 ONLINK_SOURCES = "{ ::, fe80::/10 }"
 ICMPV6_INPUT = (
     "{ destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-reply, "
-    "nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query, "
-    "mld2-listener-report }"
+    "nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report }"
 )
 
 
@@ -270,10 +269,21 @@ class LinuxAdapter(Adapter):
         out.append('        iifname "lo" accept\n        ip protocol icmp accept\n')
         if pol.zones6 or ir.router.wan6:
             # the ICMPv6 a router must take (RFC 4890 section 4.4): errors, neighbour discovery,
-            # MLD, and echo at a limited rate; a router advertisement only on the WAN, when wan6
-            # says to take one
+            # MLD (a query only from a link-local router at hop limit 1), a router solicitation
+            # only from a zone it advertises to, and echo at a limited rate, the WAN's its own so
+            # a flood from outside does not starve the zones'; a router advertisement only on the
+            # WAN, when wan6 says to take one
             out.append(f"        icmpv6 type {ICMPV6_INPUT} accept\n")
-            out.append("        icmpv6 type echo-request limit rate 10/second accept\n")
+            out.append(
+                "        ip6 saddr fe80::/10 ip6 hoplimit 1 icmpv6 type mld-listener-query accept\n"
+            )
+            out.append(f'        iifname != "{wan}" icmpv6 type nd-router-solicit accept\n')
+            out.append(
+                f'        iifname != "{wan}" icmpv6 type echo-request limit rate 10/second accept\n'
+            )
+            out.append(
+                f'        iifname "{wan}" icmpv6 type echo-request limit rate 5/second accept\n'
+            )
             if ra:
                 out.append(f'        {wan_ra} comment "router.wan6.ra: the WAN only"\n')
         out.append('        iifname "vlan*" udp dport { 53, 67 } accept\n')
