@@ -1,6 +1,6 @@
 ---
 summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
-summary_of: outline:sha256:70aee595eafdcd0f
+summary_of: outline:sha256:4f4bead7bc3a3c24
 ---
 # Site / network model
 
@@ -37,7 +37,7 @@ authentication is a `secret:<name>` reference to an entry in the secret store.
 |---|---|
 | `site` | `id`, `domain`, `timezone` (UTC unless there is a reason) |
 | `zones[]` | `id`, `purpose`, `vlan_id`, `subnet`, `gateway`, optional `dhcp.range`, `dns.resolvers`, `egress`, `tags` |
-| `router` | `id`, `model` (the adapter), `mgmt_endpoint` (a `svc:` reference), optional `tls_pin`, `auth.reads` / `auth.writes` as `{mode, secret_ref}`, `power` (1.1) |
+| `router` | `id`, `model` (the adapter), `mgmt_endpoint` (a `svc:` reference), optional `tls_pin`, `auth.reads` / `auth.writes` as `{mode, secret_ref}`, `power` (1.1), `wan6` (1.6: the router's own IPv6 on the WAN, see [The WAN's IPv6](#the-wans-ipv6-16)) |
 | `switches[]` | `id`, `model`, `device_mac`, `uplink_port`, `port_assignments` (access, trunk or mirror (1.3), ports and ranges), `power` (1.1) |
 | `edge[]` (1.1) | the uplink chain, outermost first: `{id, kind: internet \| modem \| ont \| router \| firewall \| switch \| other, model, power}`; an entry whose `id` is the router's or a switch's is that device |
 | `power` (1.1) | `ups[]` (`id`, the logical id everything names; `model`, `monitored_by: nut \| snmp \| usb \| none`, `nut_name` (what the power monitor queries), `serial`, `mac` only for a UPS with a network card) and `default` (the power of a device that declares none) |
@@ -286,7 +286,7 @@ A zone with a `subnet6` gets, from the adapter that routes it:
 
 | Adapter | Addressing | Policy |
 |---|---|---|
-| `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement itself (`accept_ra = 0`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain; to the router itself only the ICMPv6 RFC 4890 says a router must take (errors, neighbour discovery and MLD, never a router advertisement; echo at 10 a second), and SSH from the management zone in IPv6 too; and a strict reverse-path check: IPv6 has no `rp_filter`, so a packet whose source does not route back out the interface it came in on is dropped. Only on-link control traffic skips the check: neighbour discovery (hop limit 255) and MLD reports (hop limit 1) from the unspecified or a link-local source, which duplicate-address detection needs and which is never forwarded. Without the check a host could claim another zone's source and match that zone's rules. No IPv6 translation |
+| `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement on a zone (`accept_ra = 0`; on the WAN only with `router.wan6` `ra`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain; to the router itself only the ICMPv6 RFC 4890 says a router must take (errors, neighbour discovery and MLD, a router advertisement only on the WAN with `router.wan6` `ra`; echo at 10 a second), and SSH from the management zone in IPv6 too; and a strict reverse-path check: IPv6 has no `rp_filter`, so a packet whose source does not route back out the interface it came in on is dropped. Only on-link control traffic skips the check: neighbour discovery (hop limit 255) and MLD reports (hop limit 1) from the unspecified or a link-local source, which duplicate-address detection needs and which is never forwarded. Without the check a host could claim another zone's source and match that zone's rules. No IPv6 translation. The WAN's own IPv6 is `router.wan6` (1.6) |
 | `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default. IPv6 rules number from the same base as IPv4 (2000 to 2999; they are separate rule sets) and name their protocol in `protocol_v6`. Traffic to the gateway itself (`LANv6_LOCAL`) and the controller's anti-spoofing for IPv6 sources are left to the controller's defaults, as `LAN_LOCAL` is for IPv4. The index range, `protocol_v6` and these defaults are unverified offline and checked on the server |
 | `dnsmasq`, `zonefile` | unchanged: no DHCPv6 (addressing is SLAAC from the router) and no AAAA records (the registry's hosts have IPv4 addresses only) | none |
 | `opnsense` | deferred | deferred |
@@ -297,11 +297,54 @@ Two consequences of the IPv6 forms, both closing rather than opening:
   it denies the same traffic to the host's whole zone. Where it is followed by a wider allow to that
   zone, IPv4 closes only the host and IPv6 closes the zone: the later allow is shadowed in IPv6.
   Give the host's zone its own rules, or accept the narrower IPv6 reach.
-- **The WAN's IPv6 route is not rendered.** The router takes no advertisement (`accept_ra = 0`, all
-  interfaces), so it learns no default route on the WAN, and nothing here renders a static one or
-  DHCPv6 prefix delegation. Give the router a static IPv6 default route, or configure prefix
-  delegation outside these files. Without one, the reverse-path check drops every WAN-sourced IPv6
-  packet and IPv6 to the internet does not work: it fails closed.
+- **The WAN's IPv6 needs `router.wan6`.** Without it the router takes no advertisement
+  (`accept_ra = 0`), so it has no IPv6 default route, the reverse-path check drops every
+  WAN-sourced IPv6 packet, and IPv6 to the internet does not work: it fails closed. See
+  [The WAN's IPv6](#the-wans-ipv6-16).
+
+### The WAN's IPv6 (1.6)
+
+`router.wan6` gives the router its own IPv6 on the WAN, which the zones' routed prefixes reach the
+internet by. It is exactly one of:
+
+- `static: {address, gateway}`: the router's WAN address with its /64 and the default gateway.
+  `hnx site validate` requires the address canonical, with no zone id, global unicast (never
+  unique-local, documentation, link-local, special-purpose or IPv4-embedding: the rules of a
+  delegated prefix), neither the /64's subnet-router anycast address nor one of its top 128
+  (RFC 2526), and outside every zone's `subnet6`; the gateway canonical, with no zone id (it is the
+  WAN's), and either link-local or another usable address in the WAN /64.
+- `ra: true`: router advertisements are accepted on the WAN, and only there: the address by SLAAC
+  and the default route from the advertisement. No DHCPv6: an upstream that numbers its customers
+  by DHCPv6 only needs `static`.
+
+Prefix delegation (DHCPv6-PD) is not expressed. networkd could ask for one, but ifupdown has no
+clean way to, and a delegated prefix would number zones whose `subnet6` the site already states;
+declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
+
+| Flavor | `ra` | `static` |
+|---|---|---|
+| networkd | `IPv6AcceptRA=yes` (`[IPv6AcceptRA]` `DHCPv6Client=no`, `UseDNS=no`) | `Address=`, `IPv6AcceptRA=no` and a `[Route]` with `Gateway=` |
+| ifupdown | `iface <wan> inet6 auto` with `accept_ra 2`, `dhcp 0` | `iface <wan> inet6 static` with `address`, `gateway`, `accept_ra 0` |
+
+- networkd gets a drop-in for the WAN's own `.network` file,
+  `etc/systemd/network/<wan_network>.d/50-hnx-wan6.conf` (`adapters.options.linux.wan_network`,
+  default `10-<wan_interface>.network`), never a second file for the WAN: networkd applies only
+  the first `.network` file that matches an interface, so a second one would replace the WAN's
+  IPv4 or be ignored. **A drop-in whose file does not exist is ignored**: name the WAN's file, or
+  the WAN has no IPv6 and IPv6 fails closed. ifupdown gets `etc/network/interfaces.d/hnx-wan6`,
+  an `inet6` stanza; the WAN's `auto` line and IPv4 stanza stay the operator's.
+- The sysctl file sets the WAN's `accept_ra` after `all`'s: 2 for `ra` (so forwarding does not
+  switch advertisements off) and 0 for `static`. A WAN name with a dot (a VLAN) is written with
+  slashes (`net/ipv6/conf/<wan>/accept_ra`). The zones keep `IPv6AcceptRA=no` / `accept_ra 0`.
+- nftables: once the router has any IPv6 it takes the ICMPv6 a router must (above). With `ra`,
+  the input chain also takes a router advertisement from a link-local source at hop limit 255 on
+  the WAN, and nowhere else, and the reverse-path check exempts that same packet. Legitimate WAN
+  traffic passes the check by the default route. The forward chain and NAT are unchanged.
+- Other adapters do not render `wan6`. `hnx site validate` warns when the site's network adapter
+  is not `linux`, and `hnx site render|plan --adapter` does when another adapter renders a site
+  whose own adapter is. Configure the WAN's IPv6 on that router itself.
+- A site without `wan6` renders byte for byte as before, and its IR digest is unchanged. A change
+  to `router` is human-approve in `hnx site review-tier`.
 
 ### The UniFi adapter is a dry run
 
