@@ -62,6 +62,16 @@ def nft_rule(rule: Rule, wan: str, six: bool = False) -> str:
     return " ".join(p for p in parts if p)
 
 
+# sources on-link control traffic comes from: duplicate-address detection uses the unspecified
+# address, and neighbour discovery and MLD otherwise a link-local one
+ONLINK_SOURCES = "{ ::, fe80::/10 }"
+ICMPV6_INPUT = (
+    "{ destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-reply, "
+    "nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query, "
+    "mld2-listener-report }"
+)
+
+
 class LinuxAdapter(Adapter):
     name = "linux"
     summary = (
@@ -156,11 +166,15 @@ class LinuxAdapter(Adapter):
             )
         if pol.zones6:
             # IPv6 has no rp_filter: a packet whose source does not route back out the interface
-            # it came in on is dropped (neighbour discovery and MLD, which may come from ::, are let by)
+            # it came in on is dropped.  Only on-link control traffic skips the check: neighbour
+            # discovery (hop limit 255) and MLD (hop limit 1) from the unspecified or a link-local
+            # source, which duplicate-address detection needs and a router never forwards
             out.append(
                 "    chain prerouting {\n"
                 "        type filter hook prerouting priority filter; policy accept;\n"
-                "        icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept\n"
+                f"        ip6 saddr {ONLINK_SOURCES} ip6 hoplimit 255 icmpv6 type"
+                " { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept\n"
+                f"        ip6 saddr {ONLINK_SOURCES} ip6 hoplimit 1 icmpv6 type mld2-listener-report accept\n"
                 "        meta nfproto ipv6 fib saddr . iif oif missing drop\n    }\n\n"
             )
         mgmt = [i.zone for i in ir.interfaces if i.purpose == "management"]
@@ -170,7 +184,10 @@ class LinuxAdapter(Adapter):
         out.append("        ct state established,related accept\n        ct state invalid drop\n")
         out.append('        iifname "lo" accept\n        ip protocol icmp accept\n')
         if pol.zones6:
-            out.append("        meta l4proto ipv6-icmp accept\n")
+            # the ICMPv6 a router must take (RFC 4890 section 4.4): errors, neighbour discovery,
+            # MLD, and echo at a limited rate; never a router advertisement (it takes none)
+            out.append(f"        icmpv6 type {ICMPV6_INPUT} accept\n")
+            out.append("        icmpv6 type echo-request limit rate 10/second accept\n")
         out.append('        iifname "vlan*" udp dport { 53, 67 } accept\n')
         out.append('        iifname "vlan*" tcp dport 53 accept\n')
         for z in mgmt:

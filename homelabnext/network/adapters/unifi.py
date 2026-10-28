@@ -22,8 +22,15 @@ A zone with a ``subnet6`` gets the network's static IPv6 settings (``ipv6_interf
 ``ipv6_subnet``, router advertisements) and the policy again in the controller's IPv6 rule sets
 (``LANv6_IN``, ``WANv6_OUT``, ``NETv6`` network types): every rule that has an IPv6 form
 (:func:`~homelabnext.network.ir.ipv6_form`), and the same allow-established, drop-invalid and
-default-deny frame, so IPv6 is closed by default exactly as IPv4 is.  The IPv6 shapes are pinned
-by the golden files like the IPv4 ones, and checked on the server like them.
+default-deny frame, so IPv6 is closed by default exactly as IPv4 is.  Both families number their
+rules from ``RULE_BASE`` (2000) up to ``RULE_BASE + 999``: the IPv6 rule sets are separate rule
+sets, so no offset is needed, and the range stays inside the custom-rule indexes the IPv4 rules
+already use.  An IPv6 rule names its protocol in ``protocol_v6`` (``icmpv6`` for ICMP), the field
+the controller's legacy object carries for IPv6 rule sets.  None of this is verified offline: the
+index range, ``protocol_v6`` and its values are checked on the server, like every other shape here.
+The IPv6 rule sets cover forwarded traffic only.  Traffic to the gateway itself
+(``LANv6_LOCAL``) and the controller's anti-spoofing for IPv6 sources are left to the
+controller's defaults, as ``LAN_LOCAL`` is for IPv4, and are checked on the server too.
 """
 
 from __future__ import annotations
@@ -131,7 +138,8 @@ class UnifiAdapter(Adapter):
     def _ruleset(self, ir: NetworkIR, rules: list[Rule], v6: str) -> list[dict]:
         """One family's rules: ``v6`` is "" for IPv4 and "v6" for IPv6 (the rule set names)."""
         lan = f"LAN{v6}_IN"
-        base = RULE_BASE + (5000 if v6 else 0)
+        base = RULE_BASE  # each family's rules are their own rule sets, so both start at the base
+        proto = "protocol_v6" if v6 else "protocol"
         tag = f"{v6}-" if v6 else ""
         out: list[dict] = [
             {
@@ -140,7 +148,7 @@ class UnifiAdapter(Adapter):
                 "ruleset": lan,
                 "rule_index": base,
                 "action": "accept",
-                "protocol": "all",
+                proto: "all",
                 "state_established": True,
                 "state_related": True,
                 "logging": False,
@@ -151,7 +159,7 @@ class UnifiAdapter(Adapter):
                 "ruleset": lan,
                 "rule_index": base + 1,
                 "action": "drop",
-                "protocol": "all",
+                proto: "all",
                 "state_invalid": True,
                 "logging": False,
             },
@@ -169,7 +177,7 @@ class UnifiAdapter(Adapter):
                 "ruleset": lan,
                 "rule_index": base + 999,
                 "action": "drop",
-                "protocol": "all",
+                proto: "all",
                 "logging": False,
                 "description": "firewall.default_action: deny",
             }
@@ -187,7 +195,7 @@ class UnifiAdapter(Adapter):
             "ruleset": f"WAN{v6}_OUT" if rule.dst.kind == "internet" else f"LAN{v6}_IN",
             "rule_index": index,
             "action": "accept" if rule.action == "allow" else "drop",
-            "protocol": protocol,
+            "protocol_v6" if v6 else "protocol": protocol,
             "src_networkconf_type": net,
             "src_networkconf_id": net_ref(rule.src.name),
             "logging": False,

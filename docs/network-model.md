@@ -283,10 +283,22 @@ A zone with a `subnet6` gets, from the adapter that routes it:
 
 | Adapter | Addressing | Policy |
 |---|---|---|
-| `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement itself (`accept_ra = 0`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain, ICMPv6 to the router (neighbour discovery), SSH from the management zone in IPv6 too, and a strict reverse-path check: IPv6 has no `rp_filter`, so a forwarded packet whose source does not route back out the interface it came in on is dropped. Without that check a host could claim another zone's source and match that zone's rules. No IPv6 translation |
-| `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default |
+| `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement itself (`accept_ra = 0`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain; to the router itself only the ICMPv6 RFC 4890 says a router must take (errors, neighbour discovery and MLD, never a router advertisement; echo at 10 a second), and SSH from the management zone in IPv6 too; and a strict reverse-path check: IPv6 has no `rp_filter`, so a packet whose source does not route back out the interface it came in on is dropped. Only on-link control traffic skips the check: neighbour discovery (hop limit 255) and MLD reports (hop limit 1) from the unspecified or a link-local source, which duplicate-address detection needs and which is never forwarded. Without the check a host could claim another zone's source and match that zone's rules. No IPv6 translation |
+| `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default. IPv6 rules number from the same base as IPv4 (2000 to 2999; they are separate rule sets) and name their protocol in `protocol_v6`. Traffic to the gateway itself (`LANv6_LOCAL`) and the controller's anti-spoofing for IPv6 sources are left to the controller's defaults, as `LAN_LOCAL` is for IPv4. The index range, `protocol_v6` and these defaults are unverified offline and checked on the server |
 | `dnsmasq`, `zonefile` | unchanged: no DHCPv6 (addressing is SLAAC from the router) and no AAAA records (the registry's hosts have IPv4 addresses only) | none |
 | `opnsense` | deferred | deferred |
+
+Two consequences of the IPv6 forms, both closing rather than opening:
+
+- **IPv6 can be stricter than IPv4.** A deny naming a host has no host address to name in IPv6, so
+  it denies the same traffic to the host's whole zone. Where it is followed by a wider allow to that
+  zone, IPv4 closes only the host and IPv6 closes the zone: the later allow is shadowed in IPv6.
+  Give the host's zone its own rules, or accept the narrower IPv6 reach.
+- **The WAN's IPv6 route is not rendered.** The router takes no advertisement (`accept_ra = 0`, all
+  interfaces), so it learns no default route on the WAN, and nothing here renders a static one or
+  DHCPv6 prefix delegation. Give the router a static IPv6 default route, or configure prefix
+  delegation outside these files. Without one, the reverse-path check drops every WAN-sourced IPv6
+  packet and IPv6 to the internet does not work: it fails closed.
 
 ### The UniFi adapter is a dry run
 

@@ -174,7 +174,10 @@ def test_the_linux_router_takes_no_advertisement_and_checks_the_reverse_path(ir6
     files = render("linux", ir6)
     nft = files["etc/nftables.d/50-hnx-site.nft"]
     assert "meta nfproto ipv6 fib saddr . iif oif missing drop" in nft
-    assert "meta l4proto ipv6-icmp accept" in nft  # neighbour discovery to the router
+    assert "meta l4proto ipv6-icmp accept" not in nft  # only the ICMPv6 a router must take
+    assert "icmpv6 type { destination-unreachable, packet-too-big," in nft
+    assert "icmpv6 type echo-request limit rate 10/second accept" in nft
+    assert "nd-router-advert" not in nft.split("chain input {", 1)[1].split("}\n\n", 1)[0]
     assert "set z_mgmt_6 {" in nft and "type ipv6_addr" in nft
     sysctl = files["etc/sysctl.d/90-hnx-routing.conf"]
     assert "net.ipv6.conf.all.forwarding = 1" in sysctl and "accept_ra = 0" in sysctl
@@ -245,3 +248,84 @@ def test_the_ipv6_nftables_file_passes_nft_check(ir6, tmp_path):
         ["unshare", "-rn", "nft", "-c", "-f", str(f)], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stderr
+
+
+def _first_match(rules: list[Rule], src: str, dst: str) -> str:
+    """The verdict IPv6 first-match gives traffic from zone ``src`` to zone ``dst``."""
+    for r in rules:
+        if r.src.name == src and r.dst.kind == "zone" and r.dst.name == dst:
+            return r.action
+    return "deny"  # the default
+
+
+def test_a_deny_with_no_ipv6_form_never_precedes_a_wider_ipv6_allow():
+    """Mixed prefixes: a deny loses its IPv6 form only where the traffic it denies has no IPv6
+    address in the first place, so the wider allow after it can never let that traffic through."""
+    rules = [
+        _rule(_z("a"), Selector("host", "h", (), "c"), "deny"),  # h's zone c has no prefix
+        _rule(_z("c"), _z("b"), "deny"),  # source c has no prefix
+        _rule(_z("a"), _z("b")),
+        _rule(_z("c"), _z("a")),
+    ]
+    six = [f for f in (ipv6_form(r, ZONES6) for r in rules) if f]
+    assert [(r.action, r.src.name, r.dst.name) for r in six] == [("allow", "a", "b")]
+    # zone c has no IPv6 address, so nothing denied above exists in IPv6
+    assert all("c" not in (r.src.name, r.dst.name) for r in six)
+
+
+def test_a_host_deny_before_a_zone_allow_makes_ipv6_stricter_than_ipv4():
+    """IPv4: deny a -> host h, then allow a -> zone b (h's zone): only h is closed.  IPv6 has no
+    host address, so the deny closes the whole zone and the later allow is shadowed."""
+    rules = [_rule(_z("a"), Selector("host", "h", (), "b"), "deny"), _rule(_z("a"), _z("b"))]
+    six = [f for f in (ipv6_form(r, ZONES6) for r in rules) if f]
+    assert [r.action for r in six] == ["deny", "allow"]
+    assert _first_match(six, "a", "b") == "deny"
+
+
+def test_the_reverse_path_exemption_covers_on_link_control_traffic_only(ir6):
+    nft = render("linux", ir6)["etc/nftables.d/50-hnx-site.nft"]
+    pre = nft.split("chain prerouting {", 1)[1].split("\n    }", 1)[0]
+    accepts = [ln.strip() for ln in pre.splitlines() if ln.strip().endswith("accept")]
+    assert accepts == [
+        "ip6 saddr { ::, fe80::/10 } ip6 hoplimit 255 icmpv6 type"
+        " { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept",
+        "ip6 saddr { ::, fe80::/10 } ip6 hoplimit 1 icmpv6 type mld2-listener-report accept",
+    ]
+    assert pre.rstrip().endswith("meta nfproto ipv6 fib saddr . iif oif missing drop")
+
+
+def test_no_router_advertisement_goes_out_the_wan(doc6, registry):
+    ir = build_ir(doc6, registry)
+    wan = ir.options["linux"]["wan_interface"]
+    trunk = ir.options["linux"]["trunk_interface"]
+    vlans = {i.name for i in ir.interfaces}
+    files = render("linux", ir)
+    senders = {
+        p for p, text in files.items() if "IPv6SendRA=yes" in text and p.endswith(".network")
+    }
+    assert senders == {
+        f"etc/systemd/network/20-{i.name}.network" for i in ir.interfaces if i.subnet6
+    }
+    assert not any(wan in p or trunk in p for p in senders)
+    doc6["adapters"]["options"]["linux"]["flavor"] = "ifupdown"
+    radvd = render("linux", build_ir(doc6, registry))["etc/radvd.conf"]
+    named = {ln.split()[1] for ln in radvd.splitlines() if ln.startswith("interface ")}
+    assert named <= vlans and wan not in named and trunk not in named
+
+
+def test_the_controllers_ipv6_rules_stay_in_the_ipv4_index_range_and_name_protocol_v6(ir6):
+    rules = json.loads(render(CONTROLLER, ir6)["firewall-rules.json"])["objects"]
+    for r in rules:
+        assert 2000 <= r["rule_index"] <= 2999, r
+    v6 = [r for r in rules if "v6" in r["ruleset"]]
+    assert v6 and all("protocol_v6" in r and "protocol" not in r for r in v6)
+    assert all("protocol" in r and "protocol_v6" not in r for r in rules if r not in v6)
+    assert {r["protocol_v6"] for r in v6} <= {"all", "tcp", "udp", "tcp_udp", "icmpv6"}
+
+
+def test_an_ipv4_only_site_digests_as_before_ipv6(ir):
+    """The IPv6 fields are left out of an IPv4-only site's IR, so its digest is unchanged."""
+    d = ir.to_dict()
+    assert "zones6" not in d["policy"]
+    assert all("subnet6" not in i and "address6" not in i for i in d["interfaces"])
+    assert all("zone" not in r["dst"] for r in d["policy"]["rules"])

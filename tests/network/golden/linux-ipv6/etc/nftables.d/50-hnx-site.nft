@@ -59,7 +59,8 @@ table inet hnx_site {
 
     chain prerouting {
         type filter hook prerouting priority filter; policy accept;
-        icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept
+        ip6 saddr { ::, fe80::/10 } ip6 hoplimit 255 icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } accept
+        ip6 saddr { ::, fe80::/10 } ip6 hoplimit 1 icmpv6 type mld2-listener-report accept
         meta nfproto ipv6 fib saddr . iif oif missing drop
     }
 
@@ -69,7 +70,8 @@ table inet hnx_site {
         ct state invalid drop
         iifname "lo" accept
         ip protocol icmp accept
-        meta l4proto ipv6-icmp accept
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-reply, nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query, mld2-listener-report } accept
+        icmpv6 type echo-request limit rate 10/second accept
         iifname "vlan*" udp dport { 53, 67 } accept
         iifname "vlan*" tcp dport 53 accept
         ip saddr @z_mgmt tcp dport 22 accept comment "ssh from management zone mgmt"

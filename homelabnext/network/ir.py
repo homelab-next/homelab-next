@@ -167,7 +167,16 @@ class NetworkIR:
     digest: str = ""
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not self.policy.zones6:
+            # an IPv4-only site serialises (and digests) exactly as before site 1.4's subnet6
+            del d["policy"]["zones6"]
+            for i in d["interfaces"]:
+                del i["address6"], i["subnet6"]
+            for r in d["policy"]["rules"]:
+                for side in ("src", "dst"):
+                    del r[side]["zone"]
+        return d
 
 
 def service_l4(protocol: str) -> tuple[str, ...]:
