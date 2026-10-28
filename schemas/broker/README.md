@@ -40,6 +40,10 @@ of a request naming none, default 60 s; `max_live_tokens_per_actor`, default 4; 
 ended execution's tokens are kept, default 7) and two transport
 roles, `runners` (a peer and the `svc:` id it issues tokens as) and `sandboxes` (a peer that may
 only present a token, optionally one `sandbox_id`); a peer is listed once across all four roles.
+Manifest 1.8 adds `operators` (`[{uid | user}]`, empty by default): the peers that may ask a host
+operator's read-only `agents` (the agent keys the broker serves, for the deploy's census); no peer
+is an operator unless listed, root included, and a peer is listed once across all five roles.
+Audit 1.4 adds the operation `agents`.
 Audit 1.3 adds the operations `token-issue`, `token-pause` and `token-spend` and `token_id` and
 `execution_id`,
 carried by every record of a call made with a token (`docs/broker.md`, "Code Mode capability

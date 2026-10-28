@@ -547,7 +547,11 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
     templated secret). The census of what runs follows, always
     (`hnx/ansible/playbooks/module_census.yml`, read-only on every host, into a fresh directory of
     the runner's, with `systemctl` pinned on the command line so the overlay's `group_vars` cannot
-    replace it).
+    replace it). On the host that runs the broker, set `module_census_broker_socket` (its socket,
+    under `/run/`) in the overlay's `host_vars` and list root (`{uid: 0}`) in that broker's
+    manifest `operators` (broker manifest 1.8), and the census also asks the broker, as root, which
+    agents it serves; without the socket `agents` is noted as not gathered, and without the
+    operator entry the broker refuses and the census fails.
 11. **What runs**: `hnx modules gather` builds the inventory from that census and `hnx modules
     check --deploy --running` compares it with what the lab declares (with an empty selection, any
     running unit of a module is a mismatch); a mismatch fails the run after the deploy has applied

@@ -31,9 +31,18 @@ leaves its file missing, which fails too: the census must cover every host the p
 What a host reports is believed: a host whose root is compromised can hide a unit or claim one,
 and no census read from the host itself can rule that out.
 
-Kinds the hosts cannot report (service rows that answer, MCP servers, agents, tables) are named
-in the inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that
-merely leaves a kind out is refused by its schema, never read as "nothing runs".
+**Agents.**  On a host that runs the broker (the role's ``module_census_broker_socket``), the role
+also asks the running broker, as root, which agents it serves (``hnx broker agents``: the
+operator's operation, :mod:`homelabnext.broker.server`), and the answer carries ``agents``, one
+agent key per line.  ``agents`` is gathered when at least one host answered it (the union of the
+keys every broker serves) and stays in ``not_gathered`` otherwise: a lab whose census asked no
+broker has not shown which agents run, which is never read as "none".  Each line must be one
+inventory name; anything else fails the census, like a unit line.  A broker host's answer is
+believed as a unit line is: it is that host's broker answering its root.
+
+Kinds the hosts cannot report (service rows that answer, MCP servers, tables) are named in the
+inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that merely
+leaves a kind out is refused by its schema, never read as "nothing runs".
 """
 
 from __future__ import annotations
@@ -116,6 +125,20 @@ def parse_units(lines: Any, host: str, active: bool = False) -> tuple[set[str], 
     return names, templates
 
 
+def parse_agents(lines: Any, host: str) -> set[str]:
+    """The agent keys one host's broker serves: one inventory name per line, nothing else."""
+    if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+        raise CensusError(f"{host}: the agents are not a list of lines")
+    if len(lines) > MAX_LINES:
+        raise CensusError(f"{host}: over {MAX_LINES} agent lines")
+    keys: set[str] = set()
+    for i, line in enumerate(lines, 1):
+        if len(line) > 64 or not NAME_RE.fullmatch(line):
+            raise CensusError(f"{host}: agent line {i} is not an agent key: {ld._shown(line)}")
+        keys.add(line)
+    return keys
+
+
 def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     """The inventory the census in ``directory`` describes, and notes on what it does not cover.
 
@@ -143,29 +166,43 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     if missing:
         raise CensusError(f"no answer from {', '.join(map(ld._shown, missing))}")
     units: set[str] = set()
+    agents: set[str] = set()
+    brokers = 0
     templates = 0
+    base = {"host", "enabled", "active"}
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
-        if not isinstance(doc, dict) or set(doc) != {"host", "enabled", "active"}:
-            raise CensusError(f"{file}: not {{host, enabled, active}}")
+        if not isinstance(doc, dict) or set(doc) not in (base, base | {"agents"}):
+            raise CensusError(
+                f"{file}: not {{host, enabled, active}} (and agents on a broker host)"
+            )
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
         for active in (False, True):
             names, t = parse_units(doc["active" if active else "enabled"], host, active)
             units |= names
             templates += t
+        if "agents" in doc:
+            agents |= parse_agents(doc["agents"], host)
+            brokers += 1
     notes = [
         f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
     ]
+    if brokers:
+        notes.append(f"asked {brokers} broker(s): {len(agents)} agent(s) served")
+    else:
+        notes.append(
+            "no host's census asked a broker (module_census_broker_socket): agents not gathered"
+        )
     if templates:
         notes.append(
             f"{templates} template unit(s) or instance(s) (hnx-<name>@...) left out: an instance "
             "is not a unit a manifest declares"
         )
-    inventory = {
-        "schema_version": "1.0",
-        "units": sorted(units),
-        "not_gathered": [k for k in ld.INVENTORY_KINDS if k != "units"],
-    }
+    gathered = {"units", "agents"} if brokers else {"units"}
+    inventory: dict[str, Any] = {"schema_version": "1.0", "units": sorted(units)}
+    if brokers:
+        inventory["agents"] = sorted(agents)
+    inventory["not_gathered"] = [k for k in ld.INVENTORY_KINDS if k not in gathered]
     return inventory, notes

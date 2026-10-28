@@ -189,6 +189,11 @@ class BrokerClient:
         """The last ``tail`` audit records matching ``match`` (relay only)."""
         return self.request("audit", tail=tail, **match)["records"]
 
+    # ---------------------------------------------------------------- the operator
+    def agents(self) -> list[str]:
+        """The agent keys the broker serves (an operator only: manifest 1.8 ``operators``)."""
+        return self.request("agents")["agents"]
+
     # ---------------------------------------------------------------- Code Mode (manifest 1.7)
     def token_issue(
         self,

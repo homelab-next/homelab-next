@@ -527,6 +527,21 @@ refuses to start there rather than accept an unauthenticated caller.
 - **Only a relay approves or denies**, for the human it names; an agent's peer gets
   `not-an-approval-relay`, a relay asking to act gets `not-a-caller`.
 - **Every audit record carries the peer** as `via: uid:<n>`.
+- **An operator is only a peer the manifest lists** in `operators` (manifest 1.8, `[{uid | user}]`,
+  empty by default). No peer is an operator otherwise, root included: an unlisted uid 0 (a
+  rootful container's root, a sandbox or helper run as root) is an unmapped peer, refused
+  `unknown-caller` like any other. An operator may ask one thing, `agents`
+  (`hnx broker agents --socket PATH`): the agent keys the broker serves, each profile the
+  manifest both maps a transport peer to and grants something, as `<key>`, names only (no uid,
+  grant, action or token). It exists so the deploy's census (role `module_census`,
+  [modules](modules.md)) can ask the *running* broker without a secret: the census host's manifest
+  lists root (`{uid: 0}`) as an operator. Do not assume every root can read what the answer comes
+  from: the lab keeps the manifest and state from container root deliberately, which is why the
+  role is opt-in. Each answer is audited (`operation: agents`, outcome `ok`; the record names no
+  key), and so is each refusal. Anyone else asking gets `not-the-operator`, and an operator asking
+  anything else is refused. A peer is listed once, so a uid listed as an operator and in another
+  role is refused by `hnx broker validate`; root listed as a caller (or any other role) is that
+  role, never an operator.
 
 ```sh
 hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-broker/state \

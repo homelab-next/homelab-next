@@ -36,12 +36,17 @@ The request commands work two ways:
     approve|deny REQUEST_ID --as ISSUER:SUBJECT [--note TEXT]
     pending [--mine [--as ACTOR]]
     audit [--action A] [--caller C] [--request R] [--outcome O] [--operation P] [--tail N]
+    agents
     import-proposals DIR [--apply] [--action proposal.file] [--default-risk R]
                      [--default-rollback TEXT] [--as ACTOR]
 
 ``import-proposals`` reads a directory of vault-style proposal Markdown files (front-matter) and
 files each as a ``proposal.file`` lane record through the broker (dry run unless ``--apply``),
 reporting what it could not map (:mod:`homelabnext.broker.importer`).
+
+``agents`` (an operator's: a peer the manifest lists in ``operators``, over ``--socket``) prints
+the agent keys the running broker serves, one per line; without a socket it reads them from the
+manifest.
 
 ``--json`` prints machine-readable output.
 
@@ -200,6 +205,7 @@ def _parser() -> argparse.ArgumentParser:
         a.add_argument(f"--{f}")
     a.add_argument("--request", dest="request_id")
     a.add_argument("--tail", type=int, help="only the last N records")
+    sub.add_parser("agents", help="the agent keys the broker serves (an operator, over --socket)")
     imp = sub.add_parser(
         "import-proposals", help="file a directory of vault-style proposals through the broker"
     )
@@ -445,6 +451,9 @@ class _Local:
     def audit(self, **match):
         return self.svc.audit_documents(**match)
 
+    def agents(self):
+        return self.svc.served_agents()
+
 
 class _Remote:
     """The request commands against a running broker; the broker knows who this process is."""
@@ -486,6 +495,9 @@ class _Remote:
 
     def audit(self, **match):
         return self.c.audit(tail=500, **match)
+
+    def agents(self):
+        return self.c.agents()
 
 
 def _run(args) -> int:
@@ -539,6 +551,9 @@ def _run(args) -> int:
             for r in rows
         )
         _out(args, rows, text or ("nothing pending" if args.mine else "nothing awaiting approval"))
+    elif args.cmd == "agents":
+        keys = b.agents()
+        _out(args, {"agents": keys}, "\n".join(keys))
     else:  # audit
         match = {
             k: getattr(args, k) for k in ("action", "caller", "outcome", "operation", "request_id")
@@ -725,6 +740,14 @@ def _mcp(args) -> int:
     return 0
 
 
+#: refusals of ``agents`` that mean this process is not one of the manifest's operators
+_OPERATOR_HINTED = frozenset({"not-the-operator", "unknown-caller"})
+_OPERATOR_HINT = (
+    "hnx broker agents: only a peer the broker's manifest lists in operators (manifest 1.8) may"
+    " ask; list this uid there, and in no other role"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "validate":
@@ -745,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "json", False):
             print(json.dumps({"error": reason, "message": str(exc)}, indent=2))
         print(f"hnx broker {args.cmd}: refused ({reason}): {exc}", file=sys.stderr)
+        if args.cmd == "agents" and reason in _OPERATOR_HINTED:
+            print(_OPERATOR_HINT, file=sys.stderr)
         return 1
     except ValueError as exc:
         print(f"hnx broker {args.cmd}: {exc}", file=sys.stderr)

@@ -1003,11 +1003,12 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    look alike (controls, no-break and other spaces, zero-width and bidirectional marks), in the
    manifest and the inventory alike. A kind the inventory names in `not_gathered` is not
    compared, and the report says so; one it merely leaves out is refused by the schema, never
-   read as "nothing runs". The fleet units come from the hosts
-   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers, agents,
-   tables and recovery pairs are not reported by the hosts, so a gathered inventory names the
-   first four in `not_gathered` and leaves `notify_pairs` out, and only a hand-written one
-   compares them.
+   read as "nothing runs". The fleet units come from the hosts, and the agents from the running
+   broker where the census asks one
+   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers, tables
+   and recovery pairs are not reported by the hosts, so a gathered inventory names the first
+   three in `not_gathered` and leaves `notify_pairs` out, and only a hand-written one compares
+   them.
 
 ### The loader at deploy time
 
@@ -1088,16 +1089,32 @@ answers: the census is an alarm against drift and mistakes, not a gate against a
 which already has root on every host through `site.yml`. Review of the overlay itself (its
 `ansible.cfg`, inventory and roles are its code owners') is what guards against that.
 
-**Why only units are gathered.** The census lists only what a host, or a query the runner can make
-without new credentials, reports truthfully and in full; a kind it cannot measure stays in
+**Agents, from the running broker.** On a host whose inventory sets `module_census_broker_socket`
+(the broker's socket, under `/run/`), the census also asks the broker, as root, which agents it
+serves: `hnx broker agents --socket PATH`, the broker's one **operator** operation
+([broker](broker.md)). The broker host's manifest must list the census identity, root
+(`{uid: 0}`), in `operators` (broker manifest 1.8); no peer is an operator otherwise, root
+included. The answer is the agent keys whose profile the manifest both maps a transport peer to
+and grants something, names only, and it is audited. An agent, a relay, the Code Mode runner and
+a sandbox are refused it (`not-the-operator`), and an unlisted root `unknown-caller`; `hnx`
+then names the `operators` key. Only that one task becomes root (`module_census_hnx_cli`, an
+absolute path, default `/opt/hnx/bin/hnx`); the systemctl queries stay unprivileged. A broker that
+refuses fails the census, never passes it. Each answered line must be one agent key, or the census is unreadable; `agents` is
+the union over every broker asked, and stays in `not_gathered` when no host's census asked one (a
+lab whose inventory sets no socket has not shown which agents run, which is never read as
+"none"). What the broker answers is believed, like a unit line: an overlay that sets no socket
+leaves `agents` not compared, and the gather says so.
+
+**Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
+can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in
 `not_gathered` (recovery pairs, which are not an inventory kind, are left out of the inventory), so
-the loader says it was not compared instead of judging the declarations against themselves. As of this release no other kind has such a source:
+the loader says it was not compared instead of judging the declarations against themselves. As of
+this release these kinds have no such source:
 
 | Kind | What exists today | What a census of it would need |
 |---|---|---|
 | `rows` (service rows that answer) | the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
 | `mcp_servers` (registered) | `hnx mcp catalog render` writes client files from the catalog; no core role installs them and nothing lists what a client registered | the agent runtime writing, root-owned and read-only, the servers it registered, or a read-only listing the census can query on the agent host |
-| `agents` (a compiled profile and a lane) | the broker answers each caller about itself (`actions`, `pending-for-me`) over its peer-credential socket; no operation lists the agents it serves | a read-only broker operation for an operator identity that lists the agent keys with a compiled profile and a lane |
 | `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
 | `notify_pairs` | the pairs live in the notifier's memory (`Notifier.register_pair`); its state store keeps message states, not pairs | the notifier persisting its registered pairs, or a read-only endpoint the census can query |
 
@@ -1432,8 +1449,9 @@ listed as deferred.
    before the deploy, and again after it against the fleet units gathered from the hosts by role
    `module_census` and `hnx modules gather`; see
    [The loader at deploy time](#the-loader-at-deploy-time)). Not done: it has not run at a real
-   lab's deploy yet; service rows, MCP servers, agents, tables and recovery pairs are not gathered
-   from the hosts (a gathered inventory names the first four in `not_gathered`). The core's own
+   lab's deploy yet; service rows, MCP servers, tables and recovery pairs are not gathered from
+   the hosts (a gathered inventory names the first three in `not_gathered`; agents are gathered
+   from the running broker). The core's own
    units are read from its roles and generators, so a running unit that is no module's or the
    core's is a problem.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
