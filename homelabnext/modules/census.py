@@ -66,7 +66,7 @@ present and the server names it registers.  Every name is one a client registers
 a record's id, or its instance name (``instance:`` in the catalog record), which the loader
 matches back to the record.  An absent file registers nothing.  ``mcp_servers`` is gathered when
 at least one host listed a configuration and stays in ``not_gathered`` otherwise.  A server name
-that is not an inventory name, or a file that does not parse, fails the census (one host's stray
+that is not a valid MCP server name, or a file that does not parse, fails the census (one host's stray
 name fails it for the whole fleet).  The file is what the client reads, so a home that lost an
 entry, or one a hand added, shows; what a client did with it after it started (a server that
 failed to launch) does not, nor what a client reads from files the host does not list (a user's
@@ -209,7 +209,7 @@ def parse_units(lines: Any, host: str, active: bool = False) -> tuple[set[str], 
         name = m["name"]
         if len(name) > 64 or not NAME_RE.fullmatch(name):
             raise CensusError(
-                f"{host}: {what} line {i}: {ld._shown(name)} is not an inventory name"
+                f"{host}: {what} line {i}: {ld._shown(name)} is not a valid MCP server name"
             )
         names.add(name)
     return names, templates
@@ -263,7 +263,7 @@ def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
                 or not MCP_NAME_RE.fullmatch(name)
             ):
                 raise CensusError(
-                    f"{host}: {ld._shown(path)}: server {ld._clipped(name)} is not an inventory name"
+                    f"{host}: {ld._shown(path)}: server {ld._clipped(name)} is not a valid MCP server name"
                 )
             names.add(name)
     return names, notes
