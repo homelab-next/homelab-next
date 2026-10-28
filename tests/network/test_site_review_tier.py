@@ -467,6 +467,16 @@ def test_a_new_or_removed_file_is_human(lab):
     assert r.tier == rt.HUMAN and "new in this change" in r.changes[0].why
 
 
+@pytest.mark.parametrize("path", ["lab/model_roles.json", "lab/swaps/rebind.json"])
+def test_the_overlays_role_table_and_swap_records_are_human(lab, path):
+    """S4: the overlay's role table (``leaves_lab``, ``fallback``) and its swap records."""
+    root, base = lab
+    _write(root, path, "{}\n")
+    (r,), problems = rt.review(root, base)
+    assert (r.path, r.tier) == (path, rt.HUMAN)
+    assert "role table" in r.changes[0].why and len(problems) == 1  # no owner in this fixture
+
+
 def test_a_link_or_an_oversized_file_at_the_head_is_human(lab, tmp_path):
     root, base = lab
     (root / rt.SITE).unlink()

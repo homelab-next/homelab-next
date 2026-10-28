@@ -37,7 +37,9 @@ Files outside the site and selection decide what the lab trusts too, and each ch
 human-approve as a whole (:data:`TRUST_PATHS`): the registry (``lab/services.yml``, what a
 ``svc:`` allow renders to), the guests (``lab/guests/``: a guest's zone, addresses and
 ``outbound_allow``), and the overlay's own modules and lock (``lab/modules/``,
-``lab/modules.lock``), which ``hnx modules review-tier`` does not read (its roots are the
+``lab/modules.lock``), the model role table (``lab/model_roles.json``: ``leaves_lab`` and
+``fallback`` decide who needs ``grants.cloud_models``) and its swap records (``lab/swaps/``), which
+``hnx modules review-tier`` does not read for the overlay (its roots are the
 repository's ``modules/`` and ``examples/modules/``).
 
 Everything fails closed: a file new at the head, removed from it, unreadable at either end (not
@@ -133,6 +135,9 @@ TRUST_PATHS = {
     "lab/modules/": "the overlay's own modules (manifests, roles, units), which hnx modules "
     "review-tier does not read",
     "lab/modules.lock": "what each fetched module is pinned to",
+    "lab/model_roles.json": "the model role table: a binding's leaves_lab and a role's fallback "
+    "decide which modules need grants.cloud_models, and no pin shows them",
+    "lab/swaps/": "the swap records that cover a change to the model role table",
 }
 _FIREWALL_LISTS = ("zone_to_zone", "service_exceptions")
 LAB_NAMESPACES = "lab_table_namespaces"
