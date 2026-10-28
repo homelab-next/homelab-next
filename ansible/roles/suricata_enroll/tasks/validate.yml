@@ -4,7 +4,8 @@
 # as the guest model's own rules allow (the hnx_enroll_address_problems filter,
 # ansible/plugins/filter/hnx_address.py): canonical, never loopback, link-local, multicast,
 # metadata or an IPv4 address written inside IPv6; ip IPv4; an extra address inside the guest's
-# zone subnet (the row's subnet, which the baseline playbook carries) or the shared overlay range,
+# zone subnet (the row's subnet, which the baseline playbook carries; never the zone's gateway nor
+# inside its DHCP pool, when the row carries gateway and dhcp_range) or the shared overlay range,
 # else, in a hand-written row without a subnet, only private, shared or documentation space; IPv6
 # extras never an anycast address of their /64, and inside the row's subnet6 (the zone's IPv6
 # prefix) when it gives one, else unique-local or documentation.  Refuse an empty list (HOME_NET

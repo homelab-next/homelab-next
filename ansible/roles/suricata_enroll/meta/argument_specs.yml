@@ -6,7 +6,7 @@ argument_specs:
       suricata_enroll_guests:
         type: list
         elements: dict
-        description: The guests to monitor, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}, plus extra_addresses, the zone's IPv4 subnet and, when the zone gives one, its IPv6 subnet6 when a guest names other addresses it sends from); every address is HOME_NET, so each is held to the guest model's rules first (hnx_enroll_address_problems).
+        description: The guests to monitor, as the baseline-playbook target passes them ({id, name, fqdn, ip, zone}; a guest that names other addresses it sends from also carries extra_addresses, the zone's IPv4 subnet and, each when the zone has one, its IPv6 subnet6, its gateway and its dhcp_range [first, last]); every address is HOME_NET, so each is held to the guest model's rules first (hnx_enroll_address_problems).
         required: true
       suricata_enroll_config_dir: &dir
         type: path

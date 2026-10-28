@@ -110,6 +110,7 @@ beside `plugins/lookup` (and a private overlay's names the checkout's).
 The filter re-implements those rules with the standard library (the controller need not have
 `homelabnext` installed); `tests/roles/test_hnx_address_parity.py` runs one corpus through both and
 fails on any difference, so a hand-written row is never held to looser rules than the generator's.
+A row also carries the zone's `gateway` and `dhcp_range` (`[first, last]`) when the zone gives them, and an IPv4 extra address that is the gateway or inside the pool is refused; a hand-written row without them is judged as before.
 What one row cannot show it cannot check: whether another zone's subnet or prefix holds the
 address, or whether two zones' prefixes overlap. And a row's `subnet` and `subnet6` are a sanity
 check, not proof that the zone owns them: the filter trusts the row to name its own zone. IPv4

@@ -453,6 +453,13 @@ def _swap_gate(args: argparse.Namespace) -> int:
         if not args.overlay.is_dir():
             raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
         root = args.overlay.resolve()
+        shown = se.git_toplevel(root)
+        if shown != root:
+            raise ld.LoaderError(
+                f"--overlay {args.overlay}: not the root of a git checkout"
+                + (f" (its root is {shown})" if shown else "")
+                + "; the gate reads the base commit from it"
+            )
         layout = se.OVERLAY
     else:
         root = _root(args.root)

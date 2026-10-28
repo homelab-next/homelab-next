@@ -1489,7 +1489,8 @@ and `meaning_changes` is recorded, never checked.
   repository's: the evidence is the base commit's, the head table goes through the symlink-checked
   reader, a record must be added or changed in the change, and every unreadable input is exit 2.
   `--root` and `--roles` are refused with `--overlay` (the layout is fixed), and so is a
-  `DIR` that is not a directory. The one difference is the golden suites: an overlay carries none,
+  `DIR` that is not a directory or is not the root of its git checkout
+  (`git -C DIR rev-parse --show-toplevel` must be `DIR` resolved; a subdirectory is exit 2). The one difference is the golden suites: an overlay carries none,
   so the reports are checked with the installed package's
   (`homelabnext.golden.pins.DEFAULT_SUITES`), the code CI installs from the pinned commit, never a
   file of the change. The overlay template's `checks.yml` job `swap-gate` runs
@@ -1505,7 +1506,9 @@ and `meaning_changes` is recorded, never checked.
   version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
   require `grants.cloud_models`), a role's `fallback` (which it follows) or any other field. The
   gate therefore also compares each role both tables have field by field, pins aside (the role's
-  own keys, and the keys each binding carries beside its pin). Every role that differs that way
+  own keys, and the keys each binding carries beside its pin, kept with that binding's pin, so a flag
+  that moves to another binding is a change; a binding's `leaves_lab` counts as the rules read it,
+  only `true`, so `false` and an absent key are the same). Every role that differs that way
   must be named in the new optional **`model_role_changes`** of a record in the change (`mdl:<role>`
   aliases; schema `platform/module_swap`); a record that rebinds or names other roles covers
   nothing for it, and a name whose role did not change is refused. A role with both a rebind and

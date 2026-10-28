@@ -199,23 +199,120 @@ def test_the_corpus_has_both_verdicts():
     assert verdicts == {True, False}
 
 
+GATEWAY = "198.51.100.1"
+POOL = ("198.51.100.100", "198.51.100.150")
+#: around the gateway and both ends of the pool, in and out of both
+PINNED = (
+    GATEWAY,
+    "198.51.100.2",
+    "198.51.100.99",
+    POOL[0],
+    "198.51.100.101",
+    "198.51.100.125",
+    "198.51.100.149",
+    POOL[1],
+    "198.51.100.151",
+    "198.51.100.200",
+)
+ZONE_ROUTING = (
+    (None, None),
+    (GATEWAY, None),
+    (None, POOL),
+    (GATEWAY, POOL),
+    ("198.51.100.200", POOL),  # a gateway that is not the first address
+    (GATEWAY, ("198.51.100.1", "198.51.100.1")),  # a pool of one, on the gateway
+    ("203.0.113.1", ("203.0.113.100", "203.0.113.150")),  # both in another zone's space
+)
+
+
+def _routed_model_accepts(extra, gateway, pool) -> bool:
+    zone = ZoneInfo(id="data", subnet=SUBNET, gateway=gateway, dhcp_range=pool)
+    guest = SimpleNamespace(id="guest:bus-core", zone="data", network={"gateway": "inherit"})
+    fleet = SimpleNamespace(site_addresses={}, fqdn=lambda g: "bus-core.example.internal")
+    key, _ = _extra_address_problem(extra, guest, [zone], {}, fleet)
+    return key is not None
+
+
+def _routed_filter_accepts(extra, gateway, pool) -> bool:
+    row = {"name": "bus-core", "ip": "198.51.100.50", "zone": "data", "subnet": SUBNET}
+    if gateway is not None:
+        row["gateway"] = gateway
+    if pool is not None:
+        row["dhcp_range"] = list(pool)
+    row["extra_addresses"] = [extra]
+    msgs = _plugin().enroll_address_problems([row])
+    return not any(m.startswith(f"guest bus-core: extra address {extra!r} ") for m in msgs)
+
+
+@pytest.mark.parametrize(("gateway", "pool"), ZONE_ROUTING, ids=repr)
+def test_the_filter_and_the_guest_model_agree_on_the_gateway_and_the_dhcp_pool(gateway, pool):
+    differ = [
+        (e, m)
+        for e in PINNED
+        if (m := _routed_model_accepts(e, gateway, pool))
+        != _routed_filter_accepts(e, gateway, pool)
+    ]
+    assert not differ, f"(extra, accepted by the guest model) where the filter disagrees: {differ}"
+
+
+def test_the_gateway_and_the_pool_corpus_has_both_verdicts():
+    verdicts = {_routed_model_accepts(e, g, p) for e in PINNED for g, p in ZONE_ROUTING}
+    assert verdicts == {True, False}
+
+
+def test_a_row_without_the_zone_routing_is_judged_as_before():
+    """Backward compatibility: a hand-written row with no gateway or dhcp_range names no
+    refusal on them, so the same address is accepted with or without the zone's routing only
+    where the row says nothing."""
+    assert _routed_filter_accepts(GATEWAY, None, None)
+    assert not _routed_filter_accepts(GATEWAY, GATEWAY, None)
+    assert _routed_filter_accepts(POOL[0], GATEWAY, None)
+    assert not _routed_filter_accepts(POOL[0], None, POOL)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("gateway", "not an address"),
+        ("gateway", 5),
+        ("gateway", "2001:db8::1"),
+        ("gateway", "198.51.100.001"),
+        ("gateway", "198.51.100.1/24"),
+        ("dhcp_range", "198.51.100.100-198.51.100.150"),
+        ("dhcp_range", ["198.51.100.100"]),
+        ("dhcp_range", ["198.51.100.150", "198.51.100.100"]),
+        ("dhcp_range", ["198.51.100.100", "2001:db8::1"]),
+        ("dhcp_range", ["198.51.100.100", None]),
+        ("dhcp_range", None),
+    ],
+    ids=repr,
+)
+def test_an_unreadable_gateway_or_pool_is_a_problem_of_its_own(field, value):
+    row = {
+        "name": "bus-core",
+        "ip": "198.51.100.50",
+        "zone": "data",
+        "subnet": SUBNET,
+        "extra_addresses": ["198.51.100.51"],
+        field: value,
+    }
+    msgs = _plugin().enroll_address_problems([row])
+    assert [m for m in msgs if m.startswith(f"guest bus-core: {field} ")], msgs
+
+
 def test_what_one_row_cannot_show_is_the_guest_models_alone():
-    """The filter's docstring names what it does not check: a row has no gateway, DHCP pool or
-    other zone, so the guest model refuses these and the filter, by design, cannot."""
-    gateway, pooled, other_ula = "198.51.100.1", "198.51.100.101", v6(ULA | 5)
-    zone = ZoneInfo(
-        id="data",
-        subnet=SUBNET,
-        gateway=gateway,
-        dhcp_range=("198.51.100.100", "198.51.100.150"),
-    )
+    """The filter's docstring names what it still does not check: a row names no other zone, so
+    an IPv6 extra inside another zone's prefix is the guest model's refusal alone (the gateway
+    and the DHCP pool the row now carries, and the filter holds it to them)."""
+    other_ula = v6(ULA | 5)
+    zone = ZoneInfo(id="data", subnet=SUBNET)
     elsewhere = ZoneInfo(id="edge", subnet="203.0.113.0/24", subnet6=net6(ULA, 64))
     guest = SimpleNamespace(id="guest:bus-core", zone="data", network={"gateway": "inherit"})
     fleet = SimpleNamespace(site_addresses={}, fqdn=lambda g: "bus-core.example.internal")
-    for extra in (gateway, pooled, other_ula):
-        key, why = _extra_address_problem(extra, guest, [zone, elsewhere], {}, fleet)
-        assert key is None and why, extra  # the guest model refuses it
-        assert _filter_accepts(extra, None), extra  # a row cannot say why it is wrong
+    key, why = _extra_address_problem(other_ula, guest, [zone, elsewhere], {}, fleet)
+    assert key is None and why  # the guest model refuses it
+    assert _filter_accepts(other_ula, None)  # a row cannot say why it is wrong
     doc = _plugin().__doc__
-    for limit in ("gateway", "DHCP pool", "another zone's prefix"):
-        assert limit in doc, f"the filter's docstring no longer says it does not check {limit}"
+    assert "another zone's prefix" in doc, "the docstring no longer says the filter cannot"
+    for held in ("gateway", "DHCP pool"):
+        assert held in doc
