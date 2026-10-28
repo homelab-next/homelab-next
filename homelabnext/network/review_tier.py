@@ -114,15 +114,14 @@ FIELDS = {
 #: the site's top-level keys that widen no reach, and why (every other changed key is human)
 SITE_OWNER = {
     "site_version": "the schema version the file is written to",
-    "site": "the site's id, domain and timezone: names, not reach",
+    "site": "the site's id and timezone: names, not reach",
     "edge": "the uplink chain's devices and their power: a description, not a rule",
     "power": "the UPSes and a device's default power",
 }
 #: a zone's keys that widen no reach, and why (``dhcp.lease_hours`` too; every other is human)
-ZONE_OWNER = {
-    "purpose": "a description",
-    "tags": "labels no rule reads",
-}
+ZONE_OWNER = {"tags": "labels no rule reads"}
+# ``purpose`` is not here: ``management`` opens SSH to the router from the zone (the linux
+# adapter) and makes its mirrored traffic sensitive (validation), so it is human like the rest
 #: the selection's paths that widen no reach (``hosts.<host>.capacity``), and why
 SELECTION_OWNER = {"hosts.*.capacity": "the resources a host offers: a limit, not reach"}
 #: files and directories whose every change is human-approve as a whole, and why
@@ -373,6 +372,24 @@ def site_changes(old: Any, new: Any) -> list[Change]:
     judged = {"delegated_prefixes6", "zones", "firewall", "tailnet"}
     rest = sorted(k for k in {*o, *n} - judged if _canon(o.get(k)) != _canon(n.get(k)))
     for k in rest:
+        os_, ns_ = o.get(k), n.get(k)
+        if k == "site" and not (isinstance(os_, dict) and isinstance(ns_, dict)):
+            # added, removed or not a mapping: the domain cannot be compared (fail closed)
+            changes.append(_fail("site", "not a mapping at both ends"))
+            continue
+        if (
+            k == "site"
+            and isinstance(os_, dict)
+            and isinstance(ns_, dict)
+            and _canon(os_.get("domain")) != _canon(ns_.get("domain"))
+        ):
+            # the DNS authority: dnsmasq answers it locally for every client and DHCP pushes it
+            # as the search domain, so a public domain here would be resolved in the lab
+            changes.append(Change("site.domain", HUMAN, "the domain the lab's DNS answers for"))
+            os_ = {kk: v for kk, v in os_.items() if kk != "domain"}
+            ns_ = {kk: v for kk, v in ns_.items() if kk != "domain"}
+            if _canon(os_) == _canon(ns_):
+                continue
         if k in SITE_OWNER:
             changes.append(Change(k, OWNER, SITE_OWNER[k]))
         else:

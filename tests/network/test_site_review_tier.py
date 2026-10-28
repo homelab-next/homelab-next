@@ -120,13 +120,51 @@ def test_tailnet_is_human_and_a_field_that_widens_nothing_is_owner():
     assert tiers(rt.site_changes(SITE, doc)) == {"tailnet": rt.HUMAN}
     doc = copy.deepcopy(SITE)
     doc["site"]["timezone"] = "Europe/London"
-    doc["zones"][0]["purpose"] = "another description"
+    doc["zones"][0]["tags"] = ["renamed"]
     doc["zones"][0]["dhcp"]["lease_hours"] = 4
     assert tiers(rt.site_changes(SITE, doc)) == {
         "site": rt.OWNER,
-        "zones.mgmt.purpose": rt.OWNER,
+        "zones.mgmt.tags": rt.OWNER,
         "zones.mgmt.dhcp.lease_hours": rt.OWNER,
     }
+
+
+def test_the_sites_domain_is_human():
+    """The domain is DNS authority: dnsmasq answers it locally for every client and DHCP pushes
+    it as the search domain, so renaming it to a public domain would resolve that domain in the
+    lab; the id and timezone stay owner."""
+    doc = copy.deepcopy(SITE)
+    doc["site"]["domain"] = "example.com"
+    assert tiers(rt.site_changes(SITE, doc)) == {"site.domain": rt.HUMAN}
+    doc["site"]["timezone"] = "Europe/London"
+    assert tiers(rt.site_changes(SITE, doc)) == {"site.domain": rt.HUMAN, "site": rt.OWNER}
+
+
+@pytest.mark.parametrize("site", [None, "lab", "no-domain", "absent"])
+def test_a_site_block_that_cannot_be_compared_is_human(site):
+    """Removing, adding or replacing ``site`` with a non-mapping would carry a domain change past
+    the split above, so it fails closed; a domain dropped from the mapping is the domain's."""
+    doc = copy.deepcopy(SITE)
+    if site == "absent":
+        del doc["site"]
+    elif site == "no-domain":
+        del doc["site"]["domain"]
+        site = doc["site"]
+    else:
+        doc["site"] = site
+    got = rt.site_changes(SITE, doc)
+    assert tiers(got) == {("site.domain" if isinstance(site, dict) else "site"): rt.HUMAN}
+    assert tiers(rt.site_changes(doc, SITE)) == tiers(got)
+
+
+def test_a_zones_purpose_is_human():
+    """``purpose: management`` opens SSH to the router from the zone (the linux adapter) and
+    makes its mirrored traffic sensitive, so it is no description: making the internet-facing
+    zone a management one would let the internet's side reach the router's SSH."""
+    doc = copy.deepcopy(SITE)
+    edge = next(z for z in doc["zones"] if z["id"] == "edge")
+    edge["purpose"] = "management"
+    assert tiers(rt.site_changes(SITE, doc)) == {"zones.edge.purpose": rt.HUMAN}
 
 
 def test_every_field_not_listed_as_widening_nothing_is_human():
@@ -161,7 +199,7 @@ def test_every_field_not_listed_as_widening_nothing_is_human():
 
 def test_only_the_listed_keys_are_owner():
     assert set(rt.SITE_OWNER) == {"site_version", "site", "edge", "power"}
-    assert set(rt.ZONE_OWNER) == {"purpose", "tags"}
+    assert set(rt.ZONE_OWNER) == {"tags"}
 
 
 def test_internet_other_than_deny_opens_egress():
