@@ -443,7 +443,7 @@ These are owner, because they widen no reach:
 | `site` (`id`, `domain`, `timezone`) | names, not reach |
 | `edge` | the uplink chain's devices and their power: a description, not a rule |
 | `power` | the UPSes and a device's default power |
-| `zones[].purpose`, `zones[].tags` | a description, and labels no rule reads |
+| `zones[].tags` | labels no rule reads (a zone's `purpose` is human: `management` opens SSH to the router from the zone) |
 | `zones[].dhcp.lease_hours` | a lease time |
 | `hosts.<host>.capacity` (selection) | the resources a host offers: a limit, not reach |
 

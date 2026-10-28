@@ -119,10 +119,9 @@ SITE_OWNER = {
     "power": "the UPSes and a device's default power",
 }
 #: a zone's keys that widen no reach, and why (``dhcp.lease_hours`` too; every other is human)
-ZONE_OWNER = {
-    "purpose": "a description",
-    "tags": "labels no rule reads",
-}
+ZONE_OWNER = {"tags": "labels no rule reads"}
+# ``purpose`` is not here: ``management`` opens SSH to the router from the zone (the linux
+# adapter) and makes its mirrored traffic sensitive (validation), so it is human like the rest
 #: the selection's paths that widen no reach (``hosts.<host>.capacity``), and why
 SELECTION_OWNER = {"hosts.*.capacity": "the resources a host offers: a limit, not reach"}
 #: files and directories whose every change is human-approve as a whole, and why
