@@ -490,7 +490,8 @@ def _lab_namespaces(o: dict, n: dict) -> list[Change]:
     (no unbound table is judged); a namespace removed, a ``why`` changed or the list declared
     where it was absent narrows."""
     key = LAB_NAMESPACES
-    if (key in o) == (key in n) and _canon(o.get(key)) == _canon(n.get(key)):
+    unchanged = (key in o) == (key in n) and _canon(o.get(key)) == _canon(n.get(key))
+    if unchanged and o.get(key, []) is not None:  # a null list fails closed even unchanged
         return []
 
     def index(side: dict) -> dict[str, Any] | None:

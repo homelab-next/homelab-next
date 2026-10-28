@@ -335,7 +335,14 @@ def test_a_lab_namespace_list_that_cannot_be_compared_is_human(odd):
     """A ``null`` list fails closed too, at either end, whatever the schema says of it."""
     one = _lab_ns(("archive", "old tables"))
     after = {**one, "lab_table_namespaces": odd}
-    for old, new in ((one, after), (after, one)):
+    pairs = [(one, after), (after, one)]
+    if odd is None:  # and against an absent list, and unchanged
+        pairs += [
+            ({"profile": "small-lab"}, after),
+            (after, {"profile": "small-lab"}),
+            (after, after),
+        ]
+    for old, new in pairs:
         (c,) = rt.scope_changes(old, new)
         assert (c.field, c.tier) == ("lab_table_namespaces", rt.HUMAN) and "fail closed" in c.why
 
