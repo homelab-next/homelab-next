@@ -176,8 +176,9 @@ file.
   follow those ADRs as they change; the module selection is a draft schema. ADR-0027 withholds its
   own acceptance until its loader and pilot have run; this ADR has no mechanism to run, and the
   enforcement it lacks is stated in decision 8 rather than waited for.
-- `main` has no branch protection, so the CI checks in decision 6 are advisory until it does
-  (ADR-0027 records the same limit).
+- `main` is protected by a ruleset that requires the CI checks in decision 6 before a merge, but
+  no pull-request review: a change a check passes needs no second person (ADR-0027 records the
+  same limit).
 - Deploy-time authority waits on the loader (decision 8): the follow-up is ADR-0027's item 9.
 
 ## Alternatives

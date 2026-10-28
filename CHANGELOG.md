@@ -126,6 +126,7 @@ has no section below.
 
 ### Changed
 
+- The docs no longer say `main` is unprotected: a ruleset requires the CI checks, `trusted-gates` among them, before a merge (ADR-0027, ADR-0028), though not a pull-request review. F-08's observable reads a ruleset (`rules/branches/main`) as well as classic protection, whose endpoint answers 404 for a branch a ruleset alone protects.
 - `tests/roles` starts at most 8 first role runs at once (one per CPU below that); `HNX_ROLERUN_WORKERS=N` sets the number, and anything but a positive integer is refused (CONTRIBUTING.md, "Time budgets").
 - A registered MCP server name is bounded and printed clipped: such a name may be a secret pasted where a name belongs, and the census checks names only for shape (`docs/modules.md`, "MCP servers, from the installed clients"). A name over 48 characters is refused on the host and by `gather`, so it is never returned or persisted; every problem and refusal that names a server keeps the owning module's id whole and shows only the first 8 characters of a rest over 16, with the name's length.
 - The module census still gathers only fleet units: `docs/modules.md` ("Why the other kinds are not gathered") records, for service rows, MCP servers and tables, that no host or runner-side query reports them truthfully and in full today, and what each would need. They stay in `not_gathered`, so the loader notes each as not compared (agents and recovery pairs: see Added).

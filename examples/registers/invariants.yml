@@ -336,9 +336,12 @@ criteria:
     scan on every change, is decided from the checkout by Q-01 and Q-06.
   observable: >-
     with a token that may read the repository's settings:
+    gh api repos/OWNER/REPO/rules/branches/main --jq '[.[] | select(.type ==
+    "required_status_checks") | .parameters.required_status_checks[].context]' (a ruleset) or
     gh api repos/OWNER/REPO/branches/main/protection --jq '.required_status_checks.contexts'
-    lists the ci.yml jobs (lint, test, coverage, schemas, secret-scan, ...); a 404 "Branch not
-    protected" is a fail
+    (classic protection) lists the ci.yml jobs (test-ok, lint, coverage, schemas, secret-scan,
+    ...); empty from both is a fail. Classic protection's endpoint answers 404 "Branch not
+    protected" for a branch a ruleset alone protects, so a 404 there is not a fail by itself
   remediation: >-
     In the repository settings, add a branch protection rule (or ruleset) for main that requires
     the ci.yml checks to pass before a merge; without it every gate in CI is advisory, because a
