@@ -30,7 +30,8 @@ generator's rows:
   shared range a zone-less overlay such as a tailnet uses; a row without ``subnet`` (hand-written)
   may name only private, shared or documentation addresses;
 * ``subnet6`` is a canonical IPv6 prefix (no zone id) of /48 to /64 from the space zones are numbered from
-  (unique-local, or global unicast less the IETF protocol assignments 2001::/23), never one that
+  (unique-local, or global unicast less the IETF protocol assignments 2001::/23, the retired 6bone
+  3ffe::/16 and the reserved 2000::/16), never one that
   writes IPv4 inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo);
 * an IPv6 extra address never writes around an IPv4 one and is never an anycast address of its /64
   (the subnet-router one, with no host part, or one RFC 2526 reserves at its top); it is inside
@@ -80,7 +81,7 @@ EMBEDDED_V4 = (
 )
 #: the space a zone's IPv6 prefix is numbered from, less the IETF protocol assignments
 ZONE_V6 = (_v6((0xFC00,), 7), _v6((0x2000,), 3))
-SPECIAL_V6 = _v6((0x2001,), 23)
+SPECIAL_V6 = (_v6((0x2001,), 23), _v6((0x3FFE,), 16), _v6((0x2000,), 16))  # IETF, 6bone, reserved
 PREFIX_EMBEDS_V4 = (*EMBEDDED_V4, _v6((0x2002,), 16), _v6((0x2001, 0), 32))  # ... 6to4, Teredo
 #: RFC 2526's reserved subnet anycast interface identifiers, the top 128 of a /64: written in
 #: EUI-64 form (the identifier starts 0xfdff) and in the form a non-EUI-64 identifier takes (all ones)
@@ -157,10 +158,10 @@ def _subnet6(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
         return None, "is not a /48 to /64"
     if any(net.overlaps(n) for n in PREFIX_EMBEDS_V4):
         return None, "writes IPv4 addresses inside IPv6 (mapped, NAT64, 6to4, Teredo and the like)"
-    if net.subnet_of(SPECIAL_V6) or not any(net.subnet_of(n) for n in ZONE_V6):
+    if any(net.subnet_of(s) for s in SPECIAL_V6) or not any(net.subnet_of(n) for n in ZONE_V6):
         return None, (
             "is not unique-local or global unicast space (less the IETF protocol assignments "
-            "2001::/23)"
+            "2001::/23, the retired 6bone 3ffe::/16 and the reserved 2000::/16)"
         )
     return net, None
 

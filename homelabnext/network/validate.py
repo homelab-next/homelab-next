@@ -54,9 +54,18 @@ ZONE_V6: tuple[ipaddress.IPv6Network, ...] = (
     ipaddress.IPv6Network((0xFC00 << 112, 7)),  # unique-local
     ipaddress.IPv6Network((0x2000 << 112, 3)),  # global unicast (holds 2001:db8::/32, 3fff::/20)
 )
-#: ...less the IETF protocol assignments (benchmarking, ORCHID, AMT, Teredo and the rest), which
-#: no zone is numbered from
-SPECIAL_V6: tuple[ipaddress.IPv6Network, ...] = (ipaddress.IPv6Network((0x2001 << 112, 23)),)
+#: ...less what no zone is numbered from and no ISP delegates: the IETF protocol assignments
+#: (benchmarking, ORCHID, AMT, Teredo and the rest), the retired 6bone block and the reserved /16
+#: at the start of global unicast
+SPECIAL_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network((0x2001 << 112, 23)),  # IETF protocol assignments
+    ipaddress.IPv6Network((0x3FFE << 112, 16)),  # the 6bone, returned to IANA (RFC 3701)
+    ipaddress.IPv6Network((0x2000 << 112, 16)),  # reserved by IANA, never allocated
+)
+#: how SPECIAL_V6 reads in a problem
+SPECIAL_V6_TEXT = (
+    "the IETF protocol assignments 2001::/23, the retired 6bone 3ffe::/16 or 2000::/16"
+)
 
 
 def _prefix6_problem(raw: Any, lo: int, hi: int) -> tuple[ipaddress.IPv6Network | None, str | None]:
@@ -106,8 +115,8 @@ def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]
         return None, why
     if any(net.subnet_of(s) for s in SPECIAL_V6) or not any(net.subnet_of(a) for a in ZONE_V6):
         return None, (
-            "is not unique-local (fc00::/7), global unicast (2000::/3, less the IETF protocol "
-            "assignments 2001::/23) or documentation space"
+            f"is not unique-local (fc00::/7), global unicast (2000::/3, less {SPECIAL_V6_TEXT}) "
+            "or documentation space"
         )
     return net, None
 
@@ -122,17 +131,19 @@ DOC_V6: tuple[ipaddress.IPv6Network, ...] = (
 def delegated_prefix6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
     """``(prefix, None)`` for one ``delegated_prefixes6`` prefix (site 1.5), else ``(None, why)``.
 
-    The site's statement that a global-unicast prefix is its own (an ISP delegation): a /32 to a
-    /64 that passes the shared prefix rules and is global unicast (2000::/3), not an IETF protocol
-    assignment (2001::/23) and not documentation space, which is the lab's already and is never
-    delegated.  Unique-local space needs no declaration."""
-    net, why = _prefix6_problem(raw, 32, 64)
+    The site's statement that a global-unicast prefix is its own (an ISP delegation): a /48 to a
+    /64, what an ISP delegates to one site (a /32 is an ISP's own allocation, 2^96 addresses of
+    which the site holds a sliver), that passes the shared prefix rules and is global unicast
+    (2000::/3) outside :data:`SPECIAL_V6` and documentation space, which is the lab's already and
+    is never delegated.  Unique-local space needs no declaration.  A site that holds more than a
+    /48 declares the /48s it numbers zones from."""
+    net, why = _prefix6_problem(raw, 48, 64)
     if net is None:
         return None, why
     if any(net.subnet_of(s) for s in SPECIAL_V6) or not net.subnet_of(ZONE_V6[1]):
         return None, (
-            "is not global unicast (2000::/3, less the IETF protocol assignments 2001::/23); a "
-            "unique-local prefix needs no declaration"
+            f"is not global unicast (2000::/3, less {SPECIAL_V6_TEXT}); a unique-local prefix "
+            "needs no declaration"
         )
     if any(net.overlaps(d) for d in DOC_V6):
         return None, "is documentation space, which is never delegated and needs no declaration"

@@ -1062,8 +1062,8 @@ def test_a_global_prefix_inside_a_delegated_one_is_the_labs(tmp_path):
     still reaches the internet."""
     import ipaddress
 
-    global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))
-    delegated = str(ipaddress.IPv6Network((0x2600_0010 << 96, 32)))  # holds global6
+    global6 = str(ipaddress.IPv6Network((0x2600_0010_0000_0010 << 64, 64)))
+    delegated = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))  # holds global6
     zones = _zones6(mgmt=global6)
     fleet = load_fleet(fleet_dir(tmp_path), zones, delegated6=_delegated(delegated))
     hv = yaml.safe_load(render(fleet, "inventory")["host_vars/infer-core.example.internal.yml"])
@@ -1083,11 +1083,31 @@ def test_a_global_prefix_inside_a_delegated_one_is_the_labs(tmp_path):
     assert "firewall_rules.wide: dest any reaches the internet" in str(ei.value)
 
 
+def test_a_zone_prefix_is_the_only_ipv6_destination_a_rule_can_name(tmp_path):
+    """The lab-only rule judges every destination network, but a guest's outbound_allow names an
+    IPv6 network only through a zone (the schema takes a literal CIDR in IPv4 alone), so a
+    delegated prefix becomes the lab's only for a zone's subnet6 inside it: a literal IPv6 CIDR,
+    even one inside a declared prefix, is refused before any judgement."""
+    import ipaddress
+
+    inside = str(ipaddress.IPv6Network((0x2600_0010_0000_0020 << 64, 64)))
+    delegated = _delegated(str(ipaddress.IPv6Network((0x2600_0010 << 96, 48))))
+
+    def to_inside(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "lab6", "proto": "tcp", "ports": "443", "dest": inside}
+        )
+
+    with pytest.raises(ComputeError) as ei:
+        load_fleet(fleet_dir(tmp_path, "infer-core", to_inside), STUB, delegated6=delegated)
+    assert "firewall_rules/outbound_allow/3/dest: does not match" in str(ei.value)
+
+
 def test_a_global_prefix_outside_every_delegated_one_reaches_the_internet(tmp_path):
     import ipaddress
 
     global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))
-    elsewhere = str(ipaddress.IPv6Network((0x2A00_0020 << 96, 32)))  # holds no zone's prefix
+    elsewhere = str(ipaddress.IPv6Network((0x2A00_0020 << 96, 48)))  # holds no zone's prefix
     with pytest.raises(ComputeError) as ei:
         load_fleet(fleet_dir(tmp_path), _zones6(mgmt=global6), delegated6=_delegated(elsewhere))
     assert "firewall_rules.dns: dest zone:mgmt reaches the internet" in str(ei.value)
@@ -1099,7 +1119,14 @@ def test_a_global_prefix_outside_every_delegated_one_reaches_the_internet(tmp_pa
         "not a list",
         [{"prefix": "2001:db8::/32", "why": "documentation space is never delegated"}],
         # a global /32 with a zone id, built from an integer so no such literal is in the tree
-        [{"prefix": f"{ipaddress.IPv6Address(0x2600_0010 << 96)}%eth0/32", "why": "a zone id"}],
+        [{"prefix": f"{ipaddress.IPv6Address(0x2600_0010 << 96)}%eth0/48", "why": "a zone id"}],
+        # an ISP's /32, wider than any one site's delegation
+        [
+            {
+                "prefix": str(ipaddress.IPv6Network((0x2600_0010 << 96, 32))),
+                "why": "too wide a claim",
+            }
+        ],
         [{"why": "no prefix at all"}],
     ],
 )

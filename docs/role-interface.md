@@ -101,7 +101,8 @@ shared range a tailnet uses, and, in a hand-written row with no `subnet`, privat
 documentation space only; an IPv6 extra never an anycast address of its /64 (the subnet-router
 one, or one RFC 2526 reserves at its top), and inside the row's `subnet6` (the zone's IPv6 prefix,
 site 1.4, carried when the zone gives one; itself held to the site's prefix rules: canonical, a /48
-to a /64, unique-local or global unicast less the IETF protocol assignments 2001::/23, never one
+to a /64, unique-local or global unicast less the IETF protocol assignments 2001::/23, the retired
+6bone 3ffe::/16 and the reserved 2000::/16, never one
 that writes IPv4 inside IPv6), else unique-local or documentation. An unusable `subnet` holds no
 extra address, and an unusable `subnet6` no IPv6 one. `ansible.cfg` names `plugins/filter`
 beside `plugins/lookup` (and a private overlay's names the checkout's).

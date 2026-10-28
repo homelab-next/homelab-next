@@ -335,8 +335,12 @@ What is enforced:
   while a global-unicast one reaches the internet, as an IPv4 zone subnet in public space does
   (nothing proves the site owns it, and a typo or a copied prefix would otherwise open a model
   runtime's egress to third-party space), unless it lies inside a prefix the site declares its own
-  (`delegated_prefixes6`, site 1.5: an ISP delegation with its reason; see
-  [network model](network-model.md#delegated-ipv6-prefixes-15)). No guest's `outbound_allow` may hold a cloud metadata address either, since the
+  (`delegated_prefixes6`, site 1.5: an ISP's /48 to /64 with its reason; see
+  [network model](network-model.md#delegated-ipv6-prefixes-15)). The rule judges every
+  destination network, so any destination inside a declared prefix is the lab's; since a guest's
+  `outbound_allow` names IPv6 only through a zone, that is a zone's global `subnet6`. The
+  declaration is trusted, not proved, and is reviewed only where the overlay's branch rules
+  require code-owner review of `lab/site.yml`. No guest's `outbound_allow` may hold a cloud metadata address either, since the
   guest firewall refuses those ahead of every allow and the rule could only mislead. What it
   needs (the lab resolver, time, the model store, the gateway or broker) is listed; anything on
   the internet is reached through the gateway, never directly. The example lab's `infer-core`

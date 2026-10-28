@@ -451,6 +451,7 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
     for path in ("/.github/", "/bin/", "/runner/", "/ansible.cfg", "/.sops.yaml", "/locks/"):
         assert rules.get(path), path
     assert "/.hnx-private-overlay.yml" in rules
+    assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
 
 
 # ---- the vault password client -----------------------------------------------------------------
