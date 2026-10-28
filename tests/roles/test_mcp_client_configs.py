@@ -247,10 +247,15 @@ def test_only_the_names_leave_the_host_never_a_secret(mod, tmp_path):
         ("claude-code", '{"mcpServers": []}', "mcpServers is not a mapping"),
         ("claude-code", '{"mcpServers": {"Upper": {}}}', "a server name is not an inventory name"),
         ("claude-code", '{"mcpServers": {"snake_case": {}}}', "not an inventory name"),
+        # past MCP_NAME_MAX a name is more likely a pasted secret: refused here, never returned
+        ("claude-code", '{"mcpServers": {"%s": {}}}' % ("x" * 49), "not an inventory name"),
         ("claude-code", "[" * 100000 + "]" * 100000, "does not parse"),
         ("hermes", "mcp_servers: &a {x: 1}\nmore: *a\n", "does not parse"),
         ("hermes", "mcp_servers: {a: 1, a: 2}\n", "does not parse"),
         ("hermes", "mcp_servers: [a]\n", "mcp_servers is not a mapping"),
+        # a complex key (a sequence as a mapping key) cannot be hashed: a refusal, not a crash
+        ("hermes", "mcp_servers:\n  ? [secret-a, secret-b]\n  : 1\n", "does not parse"),
+        ("hermes", "mcp_servers:\n  ? {secret-a: 1}\n  : 1\n", "does not parse"),
     ],
 )
 def test_a_configuration_is_parsed_strictly(mod, client, text, why):
@@ -258,6 +263,7 @@ def test_a_configuration_is_parsed_strictly(mod, client, text, why):
         mod.server_names(text, client, "/p")
     # a message names the path and a reason, never the text
     assert str(err.value).startswith("/p") and "NaN" not in str(err.value)
+    assert "secret" not in str(err.value)
 
 
 def test_too_many_servers_are_refused(mod):
@@ -285,3 +291,4 @@ def test_the_role_module_and_census_name_the_same_clients(mod):
     assert sorted(listed) == sorted(census.MCP_CLIENTS) == sorted(mod.BASENAMES)
     assert mod.SERVERS_KEY == census.MCP_CLIENTS
     assert mod.NAME_RE.pattern == census.NAME_RE.pattern
+    assert mod.MCP_NAME_MAX == census.MCP_NAME_MAX

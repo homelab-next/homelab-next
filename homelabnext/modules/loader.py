@@ -139,6 +139,20 @@ def _shown(text: str) -> str:
     return s if plain and s.isascii() else repr(s)
 
 
+def _clipped(name: str, owner: str | None = None, keep: int = 8, longest: int = 16) -> str:
+    """An MCP server name a host reported, as a problem prints it: it passes the name shape, so it
+    may be a secret pasted where a name belongs.  The part after the owning module's id (the whole
+    name when no module owns it) is printed whole up to ``longest`` characters; a longer part shows
+    only its first ``keep`` and the name's length.  The owner's id stays whole: it says which
+    module the name was bound to."""
+    s = str(name)
+    head = f"{owner}-" if owner and s.startswith(f"{owner}-") else ""
+    rest = s[len(head) :]
+    if len(rest) <= longest:
+        return _shown(s)
+    return f"{_shown(head + rest[:keep])}... ({len(s)} chars)"
+
+
 @dataclass(frozen=True, order=True)
 class Problem:
     where: str  # a module id, ``site``, ``lock``, ``running``, ``registry`` or a file
@@ -1063,18 +1077,20 @@ def _running_mcp(
             if len(hits) == 1:
                 seen |= hits
             else:
-                why = f"mcp_servers {name} is ambiguous: {', '.join(sorted(hits))} all match it"
+                shown = _clipped(name, owner)
+                why = f"mcp_servers {shown} is ambiguous: {', '.join(sorted(hits))} all match it"
                 out.append(Problem("running", why))
             continue
         if owner is None:
             if core is not None and core.mcp_known and not core.is_mcp(name):
-                why = f"mcp_servers {name} runs but is no module's or the core's"
+                why = f"mcp_servers {_clipped(name)} runs but is no module's or the core's"
                 out.append(Problem("running", why))
             continue
+        shown = _clipped(name, owner)
         if owner not in sel:
-            why = f"mcp_servers {name} runs for {owner}, which the site does not select"
+            why = f"mcp_servers {shown} runs for {owner}, which the site does not select"
         else:
-            why = f"mcp_servers {name} runs but {owner} declares no such entry"
+            why = f"mcp_servers {shown} runs but {owner} declares no such entry"
         out.append(Problem("running", why))
     for sid in sorted(set(declared) - seen):
         why = f"mcp_servers {sid} ({declared[sid]}) is declared but not running"

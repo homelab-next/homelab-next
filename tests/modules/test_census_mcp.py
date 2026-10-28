@@ -113,12 +113,22 @@ def test_an_absent_configuration_still_gathers_the_kind_as_registering_nothing(t
         ([cfg("/a", "claude-code", ["Upper"])], "is not an inventory name"),
         ([cfg("/a", "claude-code", ["snake_case"])], "is not an inventory name"),
         ([cfg("/a", "claude-code", ["x" * 65])], "is not an inventory name"),
+        # past census.MCP_NAME_MAX a name is more likely a pasted secret: refused, never persisted
+        ([cfg("/a", "claude-code", ["x" * 49])], "is not an inventory name"),
         ([cfg("/a", "claude-code", [5])], "is not an inventory name"),
     ],
 )
 def test_a_configuration_the_host_reports_malformed_fails_the_census(tmp_path, configs, why):
     with pytest.raises(census.CensusError, match=re.escape(why)):
         census.gather(write(tmp_path / "c", {"a": configs}))
+
+
+def test_a_long_name_that_is_not_an_inventory_name_is_not_echoed_in_full(tmp_path):
+    token = "GHP" + "q7" * 20  # what a secret pasted where a server name belongs looks like
+    with pytest.raises(census.CensusError) as err:
+        census.gather(write(tmp_path / "c", {"a": [cfg("/a", "claude-code", [token])]}))
+    assert token not in str(err.value)
+    assert f"{token[:8]}... ({len(token)} chars)" in str(err.value)
 
 
 def test_an_answer_with_an_unknown_key_still_fails(tmp_path):
@@ -202,6 +212,24 @@ def test_a_registered_name_no_record_matches_is_judged_by_its_module(tmp_path):
         f"running: mcp_servers {PROBE}-extra runs but external-collector declares no such entry",
         "running: mcp_servers publishing-feed runs for publishing, which the site does not select",
     ]
+
+
+def test_a_long_name_bound_to_a_module_keeps_the_module_and_clips_the_rest(tmp_path):
+    # a secret pasted after a real module's id is bound to that module: the problem keeps the id
+    # (which module) and shows only the first 8 characters of the rest and the name's length
+    tree, root = tree_with(tmp_path, None)
+    token = "q7" * 12
+    mine, theirs = f"external-collector-{token}", f"publishing-{token}"
+    inv = copy.deepcopy(INVENTORY)
+    inv["mcp_servers"] = [PROBE, mine, theirs]
+    out = check(tree, root, inv)
+    assert out == [
+        f"running: mcp_servers external-collector-{token[:8]}... ({len(mine)} chars) runs but "
+        "external-collector declares no such entry",
+        f"running: mcp_servers publishing-{token[:8]}... ({len(theirs)} chars) runs for "
+        "publishing, which the site does not select",
+    ]
+    assert all(token not in line for line in out)
 
 
 def test_a_name_bound_to_no_module_must_be_one_of_the_cores_records(tmp_path):
@@ -312,3 +340,23 @@ def test_a_template_that_begins_with_another_placeholder_is_refused(tmp_path):
         mcp=[("lead.yml", {"id": "lead", "instance": "{profile}-lead"})],
     )
     assert any("begins with a placeholder other than {id}" in str(p) for p in found), found
+
+
+def test_a_long_name_that_is_no_ones_is_shown_clipped(tmp_path):
+    # a secret pasted as a server name passes the name shape: the problem shows its first 8
+    # characters and its length, never all of it
+    tree, root = tree_with(tmp_path, None)
+    core, _ = ld.core_names(
+        ld.load_yaml(ROOT / "examples" / "services.yml"),
+        mcp=[("hnx-broker.yml", {"id": "hnx-broker"})],
+    )
+    token = "ghp-" + "q7" * 20
+    inv = copy.deepcopy(INVENTORY)
+    inv["mcp_servers"] = [PROBE, token, "short-rogue"]
+    out = check(tree, root, inv, core)
+    assert out == [
+        f"running: mcp_servers {token[:8]}... ({len(token)} chars) runs but is no module's or "
+        "the core's",
+        "running: mcp_servers short-rogue runs but is no module's or the core's",
+    ]
+    assert all(token not in line for line in out)

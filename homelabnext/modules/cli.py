@@ -423,7 +423,9 @@ def _gather(args: argparse.Namespace) -> int:
         inventory, notes = census.gather(args.census)
     except census.CensusError as exc:
         raise ld.LoaderError(f"census {args.census}: {exc}") from None
-    with open(args.out, "x", encoding="utf-8") as fh:
+    # the runner's alone, like the census answers it is gathered from (mode 0600)
+    fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with open(fd, "w", encoding="utf-8") as fh:
         json.dump(inventory, fh, indent=2)
         fh.write("\n")
     for n in notes:

@@ -103,6 +103,23 @@ def _run_one(job):
         return None, e
 
 
+MAX_WORKERS = 8  # first runs started at once: enough for CI's runners, gentle on a large box
+
+
+def workers(env=None, cpus=None) -> int:
+    """How many first runs start at once: ``HNX_ROLERUN_WORKERS`` (a positive integer of up to
+    four digits, any size the operator asks for: only the default is capped) when it is set, else
+    the CPUs this process may use, at most :data:`MAX_WORKERS`."""
+    env = os.environ if env is None else env
+    raw = env.get("HNX_ROLERUN_WORKERS")
+    if raw is not None:
+        if not re.fullmatch(r"[1-9][0-9]{0,3}", raw.strip()):
+            raise ValueError(f"HNX_ROLERUN_WORKERS is a positive integer, not {raw!r}")
+        return int(raw)
+    cpus = len(os.sched_getaffinity(0)) if cpus is None else cpus
+    return max(1, min(cpus, MAX_WORKERS))
+
+
 def _raise(e):
     def runner(_tmp):
         raise e
@@ -136,8 +153,7 @@ def prefetch_first_runs(request, tmp_path_factory):
                 todo.append((item.nodeid, tmp, case(tmp, **params)))
             except Exception as e:  # a bad setup fails its own test only
                 todo.append((item.nodeid, tmp, {"runner": _raise(e)}))
-        workers = max(1, len(os.sched_getaffinity(0)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with ThreadPoolExecutor(max_workers=workers()) as pool:
             done = list(pool.map(_run_one, todo))
         for (nid, tmp, spec), (r, err) in zip(todo, done, strict=True):
             _FIRST_RUNS[nid] = FirstRun((r, tmp))
