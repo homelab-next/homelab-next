@@ -538,7 +538,7 @@ What it does not do:
   holds only when the report passes this check, live by the checker's default policy, and the new
   binding is on the instance the leg moves. `hnx modules swap-check` reads that evidence from the
   repository, and everything that vouches for the new model from the base commit: the role table
-  before, the store, these reports (`examples/model-evals/` holds the live report of a proposed
+  before, the store, these reports (`examples/model-evals/`, a path `swap_evidence.EVALS` names and the first vetting change creates, will hold the live report of a proposed
   table) and the golden suites; only the table after is the working tree's. So vetting a model
   (its store entry and its live report, human-approve) is one change and the rebind a later one.
   `hnx modules swap-gate` makes CI refuse a role-table change that no swap record in the change

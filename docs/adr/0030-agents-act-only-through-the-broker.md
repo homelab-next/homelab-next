@@ -44,7 +44,7 @@ observable ran one test file, so none of this could turn it red.
    - a granted MCP server with a tool in a `broker_only` class is refused unless it is **the
      broker's own MCP front**: the record says `acts_via: broker`, *and* it is structurally that
      front, fixed in code (`servers.broker_front_problems`: id `hnx-broker`, first-party
-     `homelabnext/broker/mcp_tools.py`, launched as `hnx broker-mcp`, with exactly the tools that
+     `homelabnext/broker/mcp_tools.py`, launched as `hnx broker mcp` (`broker-mcp` is the internal name of that entry in `homelabnext/mcp/servers.py`, `HNX_ENTRIES`, not a command), with exactly the tools that
      module registers), *and* it carries the reviews its status needs for its current content.
      No other record can claim `broker`: not a relabelled `ssh`, not a vendor package under a new
      id, not the broker record grown a `raw_shell`;

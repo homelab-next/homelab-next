@@ -155,12 +155,14 @@ file.
    are held by the selected `projects` backend (ADR-0020 decisions 3 and 4), not by Veritas, even
    where the reference backend keeps them as files: they are operational state that changes as
    work moves, and nothing is generated or checked from them.
-8. **Not yet enforced at deploy time.** Nothing compares Veritas with what actually runs. The
-   loader's two-way check (every running unit, row, MCP server, agent, table and recovery pair has
-   a manifest entry, and every entry a running thing) is **specified, not implemented**
-   (ADR-0027, `docs/modules.md` "What the loader checks", item 4). Until it exists, Veritas is
-   authoritative for what is committed and generated, not for what a host is running: a change
-   made by hand on a host is invisible to every check above.
+8. **Not yet proven at a real lab's deploy.** The loader's two-way check (every running unit, row,
+   MCP server, agent, table and recovery pair has a manifest entry, and every entry a running
+   thing) is implemented (ADR-0027 follow-up 9: `hnx modules check --deploy`, `hnx modules
+   gather`, the `module_census` role; `docs/modules.md` "The loader at deploy time"). What
+   remains is that it has not run at a real lab's deploy yet. Until it has, Veritas is
+   authoritative for what is committed and generated, and only as far as that check has been
+   exercised for what a host is running: a change made by hand on a host is invisible to every
+   other check above.
 
 ## Consequences
 

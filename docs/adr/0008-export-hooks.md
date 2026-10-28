@@ -7,6 +7,7 @@ summary_of: outline:sha256:2fdd5ae7b30885dd
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0004, ADR-0005
+- **Status note (2026-10-28):** decisions 1 and 2 are not yet met as written; the decision is unchanged. Today `ansible/roles/compose_app/tasks/export.yml` exports a tar.gz of the live data directory, not an open-format dump (JSON, STIX, SQL), and the `restore_drill` role runs the backup product's image-level drill (`restore_drill_cli`), not a restore from an export.
 
 ## Context
 
