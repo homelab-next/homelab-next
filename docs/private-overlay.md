@@ -1,6 +1,6 @@
 ---
-summary: 'The public repo and the private overlay: what lives where, how hnx finds private data, encryption, bootstrapping a server, the runner, reviews and deploys.'
-summary_of: outline:sha256:0553d9b74b8038f4
+summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, review tiers and deploys.'
+summary_of: outline:sha256:abc61770a4181b65
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
@@ -390,7 +390,8 @@ itself**, so a pull request can rewrite `checks.yml` to pass. What actually gate
 
 * **Branch protection on `main`** with a required approving review and **"Require review from
   Code Owners"** (the skeleton's `.github/CODEOWNERS` covers `.github/`, `bin/`, `runner/`,
-  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker and `lab/site.yml`), so
+  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker, `lab/site.yml` and
+  `lab/modules.yml`), so
   nothing reaches `main`, and so nothing a dispatch runs, without the owner's approval.
   `lab/site.yml` is there because it carries claims the checks trust rather than prove: above
   all `delegated_prefixes6` (site 1.5), the global IPv6 prefixes a model runtime's lab-only rule
@@ -408,6 +409,39 @@ collaborator, not against the owner's own account. Add a second writer only with
 and CODEOWNERS on, and turn administrator bypass off once there is a second reviewer. Anyone with
 write access can still start a deploy of what is on `main`; keep the writer list to people you
 would trust to do that.
+
+## What a change to the lab claims
+
+A few fields of `lab/site.yml` and `lab/modules.yml` widen what the lab trusts or what a guest may
+reach. `hnx site review-tier --ci-base` (the `site-review-tier` job of `checks.yml`, run by the
+pinned `hnx` with no secret and the base read through git) compares them with the pull request's
+base and rates each change: **human-approve** when it widens, **owner** otherwise.
+
+| Field | Human-approve when | Why |
+|---|---|---|
+| `delegated_prefixes6` | a prefix is added or changed | a declared prefix is the lab's to a model runtime's lab-only rule |
+| `zones` | a zone is added | a new range every `zone:` allow and the lab-only rule count as the lab |
+| `zones[].subnet`, `zones[].subnet6` | a range is changed or added | what a `zone:` allow renders to, and the lab to the lab-only rule |
+| `zones[].egress` | `internet` turns to `allow`, or `one_way` turns off | opens a zone outward |
+| `firewall.zone_to_zone`, `firewall.service_exceptions` | an `allow` is added or changed, a `deny` is removed or changed | lets one zone reach another, or a service |
+| `tailnet` | anything changes | what the CI deploy's tailnet key reaches |
+| `scope.trusted` (selection) | an address is added | the lab itself: never an outsider, and the lab to the egress generator |
+| `scope.target` (selection) | an address is added | what assessment tooling may touch |
+| `scope.exclude` (selection) | an address is removed, or a part declared where it was absent | the carve-outs every reader honours (absent fails closed; `[]` excludes nothing) |
+| `grants` (selection) | any grant is added | what a selected module may do beyond its own slot |
+
+A removal or a narrowing of any of these, and every other field, is owner. A file new at the head
+or removed from it, one that does not read at either end (not YAML, a symbolic link, not a regular
+file, over the size cap), and a listed field whose shape cannot be compared are human-approve
+(fail closed). The rest of the selection is the loader's to check (`module-loader`), and each
+selected module's own manifest has its own tiers (`hnx modules review-tier`).
+
+**What enforces the approval is not this check.** Like `hnx modules review-tier`, it fails only
+when a human-approve change has **no valid `CODEOWNERS` owner as of the base**; the approval itself
+is the pull request's Code Owners review, which binds only where `main`'s branch rules require it
+([Writers and reviews](#writers-and-reviews)). With a single writer and no such rule, a
+human-approve change is merely visible, in the job log and the step summary; the check reads no
+approval and authenticates no reviewer.
 
 ## GitHub plans
 

@@ -323,6 +323,32 @@ def test_the_loader_also_runs_on_every_pull_request():
                for s in job["steps"] if "actions/checkout" in s.get("uses", ""))  # fmt: skip
 
 
+def test_the_site_review_tier_runs_on_every_pull_request():
+    """checks.yml rates each change to what the lab claims, with the pinned hnx, the base read
+    through git (a full-history checkout) and no secret."""
+    checks = yaml.safe_load((SKELETON / ".github" / "workflows" / "checks.yml").read_text())
+    job = checks["jobs"]["site-review-tier"]
+    assert job["steps"][0]["name"] == "refuse an unpinned hnx"
+    (step,) = [
+        s
+        for s in job["steps"]
+        if s.get("name") == "the review tier of this change to the lab's site and selection"
+    ]
+    assert step["run"].strip() == "hnx site review-tier --root . --ci-base"
+    assert step["env"] == {
+        "HNX_PR_BASE": "${{ github.event.pull_request.base.sha }}",
+        "HNX_PUSH_BEFORE": "${{ github.event.before }}",
+    }
+    assert "continue-on-error" not in step and "if" not in step
+    assert "secrets." not in yaml.safe_dump(job)
+    checkouts = [s for s in job["steps"] if "actions/checkout" in s.get("uses", "")]
+    assert all(s["with"]["persist-credentials"] is False for s in checkouts)
+    (own,) = [s for s in checkouts if "repository" not in s["with"]]
+    assert own["with"]["fetch-depth"] == 0
+    (hnx,) = [s for s in checkouts if s["with"].get("repository") == "homelab-next/homelab-next"]
+    assert hnx["with"]["ref"] == "${{ vars.HNX_REF }}"
+
+
 def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str]:
     """Run the template's loader step: in an overlay with ``lab_files``, with an ``hnx`` that
     exits ``hnx_exit`` and logs its arguments.  Returns (exit, what it ran and printed)."""
@@ -452,6 +478,7 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         assert rules.get(path), path
     assert "/.hnx-private-overlay.yml" in rules
     assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
+    assert rules.get("/lab/modules.yml")  # the selection's scope and grants widen trust too
 
 
 # ---- the vault password client -----------------------------------------------------------------

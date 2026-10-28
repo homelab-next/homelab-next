@@ -10,10 +10,12 @@ job ``trusted-gates``; docs/modules.md, "Swap record 1.2")."""
 
 from __future__ import annotations
 
+import argparse
+import os
 import subprocess
 from pathlib import Path
 
-__all__ = ["ZERO_SHA", "ci_base"]
+__all__ = ["ZERO_SHA", "add_base_arguments", "ci_base", "ci_base_from_env"]
 
 ZERO_SHA = "0" * 40
 
@@ -62,3 +64,26 @@ def ci_base(root: Path, event: str, pr_base: str, before: str) -> tuple[str | No
     if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
         raise ValueError(f"{why}, and the checkout is shallow (check out with fetch-depth: 0)")
     return None, f"none: a root commit ({why})"
+
+
+def ci_base_from_env(root: Path) -> tuple[str | None, str]:
+    """:func:`ci_base` with the event and commits CI passes in the environment
+    (``GITHUB_EVENT_NAME``, ``HNX_PR_BASE``, ``HNX_PUSH_BEFORE``)."""
+    return ci_base(
+        root,
+        os.environ.get("GITHUB_EVENT_NAME", ""),
+        os.environ.get("HNX_PR_BASE", ""),
+        os.environ.get("HNX_PUSH_BEFORE", ""),
+    )
+
+
+def add_base_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--base REV`` or ``--ci-base`` (one required): the commit a check compares with."""
+    which = parser.add_mutually_exclusive_group(required=True)
+    which.add_argument("--base", help="the commit to compare with")
+    which.add_argument(
+        "--ci-base",
+        action="store_true",
+        help="pick the base like tools/schema_check.py --ci-base (GITHUB_EVENT_NAME, "
+        "HNX_PR_BASE, HNX_PUSH_BEFORE)",
+    )
