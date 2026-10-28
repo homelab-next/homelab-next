@@ -128,6 +128,15 @@ GOVERNANCE = (
     "homelabnext/golden/pins.py",
     "homelabnext/models/store.py",
     "homelabnext/registry/models.py",
+    # the commands that run them and set the exit code CI reads, and the readers every parse goes
+    # through (the duplicate-key YAML loader, the scope reader); their wider import tree is not
+    # listed: CI runs the gates with the base commit's code, so a pull request cannot weaken its
+    # own gate, and this list is what a later change needs a human for
+    "homelabnext/cli.py",
+    "homelabnext/modules/cli.py",
+    "homelabnext/network/cli.py",
+    "homelabnext/_yaml.py",
+    "homelabnext/modules/scope.py",
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
 )

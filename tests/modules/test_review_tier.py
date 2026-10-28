@@ -913,6 +913,9 @@ def test_governance_lists_every_module_the_tiers_and_the_gate_import():
     missing = sorted(derived - set(rt.GOVERNANCE))
     assert not missing, f"imported by the tiers or the gate, yet not in GOVERNANCE: {missing}"
     for must in (
+        "homelabnext/modules/cli.py",  # the gate's entry: it picks the base and sets the exit code
+        "homelabnext/network/cli.py",
+        "homelabnext/_yaml.py",  # parse_yaml's duplicate-key loader
         "homelabnext/modules/loader.py",
         "homelabnext/modules/swap_evidence.py",
         "homelabnext/modules/swap.py",

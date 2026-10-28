@@ -395,6 +395,50 @@ def test_a_frozen_name_no_live_schema_carries_is_refused(tmp_path):
     assert any("frozen platform/capability is carried by no live schema" in m for m in probs)
 
 
+def test_a_new_frozen_file_must_be_a_copy_of_its_live_schema(tmp_path):
+    """Negative: with --base, what is new under _frozen/ is what --freeze writes (a byte copy of
+    the live schema at its own version), never arbitrary content or another file type, which
+    would be a baseline for the additive check and outside the lints that skip the frozen tree."""
+    import shutil
+    import subprocess
+
+    _copy_schemas(tmp_path)
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", "schemas")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+    live = tmp_path / "schemas/platform/capability.schema.json"
+    major, minor = sc.parse_id(json.loads(live.read_text()))[1:]
+    frozen = tmp_path / "schemas/_frozen"
+    good = frozen / f"{major}.{minor}" / "platform" / "capability-copy.schema.json"
+    good.parent.mkdir(parents=True, exist_ok=True)
+    # a copy under a name no live schema has is not a copy of its live schema
+    shutil.copy(live, good)
+    other = frozen / f"{major}.{minor}" / "platform" / "notes.md"
+    other.write_text("anything\n")
+    wrong_version = frozen / "9.9" / "platform" / "capability.schema.json"
+    wrong_version.parent.mkdir(parents=True)
+    shutil.copy(live, wrong_version)
+    edited = frozen / f"{major}.{minor}" / "platform" / "guest.schema.json"
+    probs = {p.where: p.message for p in sc.frozen_added(tmp_path, "HEAD")}
+    assert "not a copy of the live" in probs[good.relative_to(tmp_path).as_posix()]
+    assert "only a frozen copy" in probs[other.relative_to(tmp_path).as_posix()]
+    assert "is not version 9.9" in probs[wrong_version.relative_to(tmp_path).as_posix()]
+    assert edited.relative_to(tmp_path).as_posix() not in probs  # at the base: not new
+    # what --freeze writes passes
+    for f in (good, other, wrong_version):
+        f.unlink()
+    exact = frozen / f"{major}.{minor}" / "platform" / "capability.schema.json"
+    if exact.exists():
+        exact.unlink()
+        git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "drop")
+    shutil.copy(live, exact)
+    assert sc.frozen_added(tmp_path, "HEAD") == []
+
+
 def test_frozen_is_append_only_against_the_base(tmp_path):
     """Negative: with --base, deleting capability 1.0's only frozen copy (which lifts the gate for a
     draft) or editing a frozen file is refused; adding one is not."""

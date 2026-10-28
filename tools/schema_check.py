@@ -731,6 +731,64 @@ def frozen_lost(root: Path, base: str) -> list[Problem]:
     return probs
 
 
+def frozen_added(root: Path, base: str) -> list[Problem]:
+    """A file new under ``_frozen/`` since ``base`` is what ``--freeze`` writes, or a problem: a
+    ``.json`` schema at ``_frozen/<major>.<minor>/<rel>`` whose ``$id`` carries that version and
+    whose bytes equal the live ``schemas/<rel>``.  Without this, anything added there (any
+    content, any file type) would be a baseline for the additive check and outside every lint
+    that skips the frozen tree."""
+    try:
+        old = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                base,
+                "--",
+                "schemas/_frozen",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except subprocess.CalledProcessError as exc:
+        return [Problem("schemas/_frozen", f"cannot read base {base}: {exc.stderr.strip()}")]
+    before = set(filter(None, old.split("\0")))
+    frozen = root / "schemas" / "_frozen"
+    probs = []
+    for f in sorted(frozen.rglob("*")) if frozen.is_dir() else ():
+        if f.is_dir():
+            continue
+        rel = f.relative_to(root).as_posix()
+        if rel in before:
+            continue
+        parts = f.relative_to(frozen).parts
+        live = root / "schemas" / Path(*parts[1:]) if len(parts) > 1 else None
+        if f.suffix != ".json" or live is None:
+            probs.append(Problem(rel, "only a frozen copy of a live .json schema belongs here"))
+            continue
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError) as exc:
+            probs.append(Problem(rel, f"a new frozen file that does not parse: {exc}"))
+            continue
+        ident = parse_id(doc) if isinstance(doc, dict) else None
+        if ident is None or f"{ident[1]}.{ident[2]}" != parts[0]:
+            probs.append(Problem(rel, f"a new frozen file whose $id is not version {parts[0]}"))
+        elif not live.is_file() or live.read_bytes() != f.read_bytes():
+            probs.append(
+                Problem(
+                    rel,
+                    f"a new frozen file that is not a copy of the live schemas/{Path(*parts[1:]).as_posix()}",
+                )
+            )
+    return probs
+
+
 # ---------------------------------------------------------------- repo check
 @functools.lru_cache(maxsize=1024)
 def _metaschema_error(text: str) -> str | None:
@@ -868,7 +926,7 @@ def check_repo(
             continue
         probs += check_schema(root, p, registry, strict, index)
     if base:
-        probs += frozen_lost(root, base)
+        probs += frozen_lost(root, base) + frozen_added(root, base)
     return probs
 
 

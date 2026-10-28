@@ -413,13 +413,17 @@ that decide the tier are read **as of the base commit**: the module schema; the 
 union of the base's and the head's privileged slots, so neither side can drop one); and
 CODEOWNERS. A change to any of those, to the two `review_tier.py` files, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
-human-approve, and so is a change to the code they import from this repository, which decides
-what they decide: `homelabnext/modules/loader.py` (`parse_yaml`, `contributed_files`,
+human-approve, and so is a change to the code they import directly from this repository, which
+decides what they decide: `homelabnext/modules/loader.py` (`parse_yaml`, `contributed_files`,
 `read_tree_file`), `swap_evidence.py` (the base reader and the swap gate), `swap.py`, `rules.py`,
-`homelabnext/golden/pins.py`, `homelabnext/models/store.py` and `homelabnext/registry/models.py`.
-`GOVERNANCE` in `review_tier.py` lists them all, and a test derives the list from the imports of
-the two tiers, `swap_evidence.py` and `swap.py`, so a new import that is not listed fails the
-suite. So is a change to what vouches for a model a swap rebinds to (the model store, the
+`homelabnext/golden/pins.py`, `homelabnext/models/store.py` and `homelabnext/registry/models.py`;
+to the commands that run them and set the exit code (`homelabnext/cli.py`,
+`homelabnext/modules/cli.py`, `homelabnext/network/cli.py`); and to the readers every parse goes
+through (`homelabnext/_yaml.py`, `homelabnext/modules/scope.py`). `GOVERNANCE` in `review_tier.py`
+lists them all, and a test derives the direct imports of the two tiers, `swap_evidence.py` and
+`swap.py`, so a new import that is not listed fails the suite. Their wider import tree is not
+listed: CI runs the gates with the base commit's code (the `trusted-gates` job), so a pull request
+cannot weaken its own gate. So is a change to what vouches for a model a swap rebinds to (the model store, the
 evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist
 until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"), and so
 is a change to the model role table (`examples/model_roles.json`) or to a swap record
