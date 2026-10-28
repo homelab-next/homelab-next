@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import shutil
 from pathlib import Path
 
@@ -1049,6 +1050,98 @@ def test_a_global_prefix_still_renders_where_no_lab_only_rule_applies(tmp_path):
     hv = yaml.safe_load(render(fleet, "inventory")["host_vars/lake-core.example.internal.yml"])
     sources = [r["source"] for r in hv["hnx_firewall"]["inbound_allow"] if r["name"] == "ssh-mgmt"]
     assert sources == ["192.0.2.0/24", global6]
+
+
+def _delegated(prefix: str) -> list[dict]:
+    return [{"prefix": prefix, "why": "the upstream ISP delegated it with the circuit"}]
+
+
+def test_a_global_prefix_inside_a_delegated_one_is_the_labs(tmp_path):
+    """A zone's global prefix inside a prefix the site declares its own (``delegated_prefixes6``,
+    site 1.5) is the lab's: the model runtime's zone allow is accepted and rendered, while ``any``
+    still reaches the internet."""
+    import ipaddress
+
+    global6 = str(ipaddress.IPv6Network((0x2600_0010_0000_0010 << 64, 64)))
+    delegated = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))  # holds global6
+    zones = _zones6(mgmt=global6)
+    fleet = load_fleet(fleet_dir(tmp_path), zones, delegated6=_delegated(delegated))
+    hv = yaml.safe_load(render(fleet, "inventory")["host_vars/infer-core.example.internal.yml"])
+    assert global6 in [r["dest"] for r in hv["hnx_firewall"]["outbound_allow"]]
+
+    def any_out(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "wide", "proto": "tcp", "ports": "443", "dest": "any"}
+        )
+
+    with pytest.raises(ComputeError) as ei:
+        load_fleet(
+            fleet_dir(tmp_path / "b", "infer-core", any_out),
+            zones,
+            delegated6=_delegated(delegated),
+        )
+    assert "firewall_rules.wide: dest any reaches the internet" in str(ei.value)
+
+
+def test_a_zone_prefix_is_the_only_ipv6_destination_a_rule_can_name(tmp_path):
+    """The lab-only rule judges every destination network, but a guest's outbound_allow names an
+    IPv6 network only through a zone (the schema takes a literal CIDR in IPv4 alone), so a
+    delegated prefix becomes the lab's only for a zone's subnet6 inside it: a literal IPv6 CIDR,
+    even one inside a declared prefix, is refused before any judgement."""
+    import ipaddress
+
+    inside = str(ipaddress.IPv6Network((0x2600_0010_0000_0020 << 64, 64)))
+    delegated = _delegated(str(ipaddress.IPv6Network((0x2600_0010 << 96, 48))))
+
+    def to_inside(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "lab6", "proto": "tcp", "ports": "443", "dest": inside}
+        )
+
+    with pytest.raises(ComputeError) as ei:
+        load_fleet(fleet_dir(tmp_path, "infer-core", to_inside), STUB, delegated6=delegated)
+    assert "firewall_rules/outbound_allow/3/dest: does not match" in str(ei.value)
+
+
+def test_a_global_prefix_outside_every_delegated_one_reaches_the_internet(tmp_path):
+    import ipaddress
+
+    global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))
+    elsewhere = str(ipaddress.IPv6Network((0x2A00_0020 << 96, 48)))  # holds no zone's prefix
+    with pytest.raises(ComputeError) as ei:
+        load_fleet(fleet_dir(tmp_path), _zones6(mgmt=global6), delegated6=_delegated(elsewhere))
+    assert "firewall_rules.dns: dest zone:mgmt reaches the internet" in str(ei.value)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not a list",
+        [{"prefix": "2001:db8::/32", "why": "documentation space is never delegated"}],
+        # a global /32 with a zone id, built from an integer so no such literal is in the tree
+        [{"prefix": f"{ipaddress.IPv6Address(0x2600_0010 << 96)}%eth0/48", "why": "a zone id"}],
+        # an ISP's /32, wider than any one site's delegation
+        [
+            {
+                "prefix": str(ipaddress.IPv6Network((0x2600_0010 << 96, 32))),
+                "why": "too wide a claim",
+            }
+        ],
+        [{"why": "no prefix at all"}],
+    ],
+)
+def test_an_unusable_delegation_holds_nothing_as_the_labs(tmp_path, raw):
+    """The site file reaches the compute path unvalidated: a declaration that does not read is a
+    site problem and holds nothing, so the model runtime's zone allow to the global prefix is
+    still refused (fail closed)."""
+    import ipaddress
+
+    global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))
+    with pytest.raises(ComputeError) as ei:
+        load_fleet(fleet_dir(tmp_path), _zones6(mgmt=global6), delegated6=raw)
+    msg = str(ei.value)
+    assert "delegated_prefixes6" in msg and "no prefix is held as the lab's" in msg
+    assert "firewall_rules.dns: dest zone:mgmt reaches the internet" in msg
 
 
 def test_a_model_runtime_zone_allow_with_a_unique_local_prefix_is_accepted(tmp_path):

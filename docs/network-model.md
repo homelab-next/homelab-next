@@ -1,6 +1,6 @@
 ---
 summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
-summary_of: outline:sha256:032d47f118c8a720
+summary_of: outline:sha256:5b0b6c6c2ba9f211
 ---
 # Site / network model
 
@@ -176,19 +176,49 @@ bits), a /48 to a /64, and none of: link-local, multicast, loopback or unspecifi
 that writes an IPv4 address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo),
 where the address a collector sees is the IPv4 one. It must come from the space zones are
 numbered from: unique-local (`fc00::/7`), global unicast (`2000::/3`, less the IETF protocol
-assignments `2001::/23`: benchmarking, ORCHID, AMT, Teredo and the rest) or documentation space;
-discard-only, deprecated site-local and any other special-purpose range is refused. Two zones'
+assignments `2001::/23`: benchmarking, ORCHID, AMT, Teredo and the rest; the retired 6bone
+`3ffe::/16`; and the reserved `2000::/16`) or documentation space; discard-only, deprecated
+site-local and any other special-purpose range is refused. Two zones'
 prefixes may not overlap.
 
 A guest firewall rule that names the zone (`zone:<id>`) reaches its IPv6 hosts by it: the
 `.fw` file and the inventory's `hnx_firewall` carry the rule once per address family (the IPv6
 one as `ip6` in the guest's own nftables ruleset, an ICMP allow as ICMPv6), and egress validation
 judges the prefix as it judges an IPv4 subnet: a unique-local or documentation prefix is the
-lab's, a global-unicast one reaches the internet, so a model runtime (whose egress is lab-only)
-may not allow it ([compute model](compute-model.md#firewall-on-by-default)); an opt-in for an
-owned, delegated global prefix is a follow-up. Other guests' rules render either kind. A rule that names a zone whose
-`subnet6` does not read is refused. Nothing else is configured from it yet: the router and switch
-adapters still speak IPv4 only.
+lab's, a global-unicast one reaches the internet unless it lies inside a prefix the site
+declares its own (below), so without one a model runtime (whose egress is lab-only) may not
+allow it ([compute model](compute-model.md#firewall-on-by-default)). Other guests' rules render
+either kind. A rule that names a zone whose `subnet6` does not read is refused. Nothing else is
+configured from it yet: the router and switch adapters still speak IPv4 only.
+
+### Delegated IPv6 prefixes (1.5)
+
+`delegated_prefixes6` is the site's statement that a global-unicast prefix is its own (an ISP
+delegation): a list of `{prefix, why}`, the reason required. In the lab-only rule, a destination
+network inside a declared prefix is the lab's, so a model runtime (a VM, a container or a physical
+host) may allow it. The rule judges every destination network, but a guest's `outbound_allow` names
+an IPv6 network only through a zone (the guest schema takes a literal CIDR in IPv4 alone), so today
+that means a zone's global `subnet6` inside a declared prefix.
+
+`hnx site validate` requires each prefix canonical, a /48 to a /64 (what an ISP delegates to one
+site; a /32 is an ISP's own allocation, and a site that holds more than a /48 declares the /48s it
+numbers zones from), global unicast (`2000::/3`) outside the IETF protocol assignments
+(`2001::/23`), the retired 6bone (`3ffe::/16`), the reserved `2000::/16` and documentation space,
+with no zone id and nothing IPv4-embedding, and no two overlapping. A unique-local or documentation
+prefix needs no declaration (it is the lab's already). The compute path reads the site file without
+`hnx site validate`, so it judges the list again: a declaration that does not read is a problem,
+and then no prefix is held as the lab's.
+
+The declaration is the site's word, not a proof: nothing checks the prefix against the ISP, so a
+wrong one opens a model runtime's egress to that space, and the `why` it carries is a note, not a
+control. The only control is review: the private overlay's `CODEOWNERS` template names
+`lab/site.yml` ([private overlay](private-overlay.md)), which gates the edit **only** where the
+overlay's branch rules require an approving Code Owners review. Without that rule the declaration
+is unreviewed site configuration. A check that flags any change to `delegated_prefixes6` against
+the base commit as human-approve (as `hnx modules review-tier` does for module manifests) is a
+follow-up. It changes only the lab-only judgement: which prefixes a zone may use, which IPv6 extra
+addresses a guest may name (its zone's `subnet6`, as before) and what the roles render are
+unchanged.
 
 ### One-way zones
 

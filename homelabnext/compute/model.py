@@ -315,6 +315,11 @@ class Fleet:
     #: (:func:`homelabnext.compute.zones.site_addresses`: its static DNS ``A`` records), address ->
     #: the names it holds; no guest may claim one as an extra address unless the name is its own
     site_addresses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: the site's ``delegated_prefixes6`` (site 1.5) as read, unvalidated
+    #: (:func:`homelabnext.compute.zones.site_delegated6`): the global-unicast IPv6 prefixes the
+    #: site declares its own; None = it declares none.  Validation judges it (the site file is
+    #: read without ``hnx site validate``), and anything it cannot read holds nothing as the lab's
+    delegated6: Any = None
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""
