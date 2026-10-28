@@ -35,7 +35,7 @@ def write(d: Path, mcp: dict[str, list[dict] | None]) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     (d / "_hosts.json").write_text(json.dumps(sorted(mcp)))
     for host, configs in mcp.items():
-        doc = {"host": host, "enabled": [], "active": [], "pairs": NOPAIRS}
+        doc = {"host": host, "enabled": [], "active": [], "pairs": NOPAIRS, "listening": []}
         if configs is not None:
             doc["mcp"] = configs
         (d / f"{host}.json").write_text(json.dumps(doc))
@@ -125,7 +125,9 @@ def test_an_answer_with_an_unknown_key_still_fails(tmp_path):
     d = write(tmp_path / "c", {"a": None})
     doc = json.loads((d / "a.json").read_text())
     (d / "a.json").write_text(json.dumps({**doc, "mcp_servers": []}))
-    with pytest.raises(census.CensusError, match=re.escape("not {host, enabled, active, pairs}")):
+    with pytest.raises(
+        census.CensusError, match=re.escape("not {host, enabled, active, pairs, listening}")
+    ):
         census.gather(d)
 
 

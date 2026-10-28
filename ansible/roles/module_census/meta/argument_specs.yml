@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 argument_specs:
   main:
-    short_description: List each host's enabled and active fleet units (read-only) and write the answers on the controller.
+    short_description: List each host's enabled and active fleet units and the sockets it listens on (read-only) and write the answers on the controller.
     options:
       module_census_dir: &dir
         type: path

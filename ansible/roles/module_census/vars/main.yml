@@ -6,3 +6,6 @@ module_census_pair_owners: [broker, status]
 module_census_pairs_max_bytes: 262144
 module_census_mcp_clients: [claude-code, generic, hermes]
 module_census_mcp_max_bytes: 1048576
+# the kernel's socket tables (library/listening_sockets.py); a role var, so an inventory's
+# group_vars cannot repoint it (a test overrides it with an extra var)
+module_census_socket_tables: /proc/net
