@@ -1090,15 +1090,16 @@ which already has root on every host through `site.yml`. Review of the overlay i
 `ansible.cfg`, inventory and roles are its code owners') is what guards against that.
 
 **Agents, from the running broker.** On a host whose inventory sets `module_census_broker_socket`
-(the broker's socket), the census also asks the broker, as root, which agents it serves:
-`hnx broker agents --socket PATH`, the broker's one **operator** operation
-([broker](broker.md)). Root on the broker's host, listed in no peer role, is the operator: the
-answer is the agent keys whose profile the manifest both maps a transport peer to and grants
-something, names only, and root could already read the manifest and state they come from, so
-asking needs no secret and discloses nothing new. An agent, a relay, the Code Mode runner and a
-sandbox are refused it (`not-the-operator`). The census play must run with become (as the deploy
-does): asked as any other user the broker refuses, `hnx` exits non-zero and the census fails,
-never passes. Each answered line must be one agent key, or the census is unreadable; `agents` is
+(the broker's socket, under `/run/`), the census also asks the broker, as root, which agents it
+serves: `hnx broker agents --socket PATH`, the broker's one **operator** operation
+([broker](broker.md)). The broker host's manifest must list the census identity, root
+(`{uid: 0}`), in `operators` (broker manifest 1.8); no peer is an operator otherwise, root
+included. The answer is the agent keys whose profile the manifest both maps a transport peer to
+and grants something, names only, and it is audited. An agent, a relay, the Code Mode runner and
+a sandbox are refused it (`not-the-operator`), and an unlisted root `unknown-caller`; `hnx`
+then names the `operators` key. Only that one task becomes root (`module_census_hnx_cli`, an
+absolute path, default `/opt/hnx/bin/hnx`); the systemctl queries stay unprivileged. A broker that
+refuses fails the census, never passes it. Each answered line must be one agent key, or the census is unreadable; `agents` is
 the union over every broker asked, and stays in `not_gathered` when no host's census asked one (a
 lab whose inventory sets no socket has not shown which agents run, which is never read as
 "none"). What the broker answers is believed, like a unit line: an overlay that sets no socket

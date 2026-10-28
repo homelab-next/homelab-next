@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read-only on the hosts: two systemctl queries each (enabled unit files, active units), and on a
 # host that runs the broker (module_census_broker_socket set) one more, the broker's operator
-# answer of the agents it serves (hnx broker agents, as root).  The answers are written on the controller
+# answer of the agents it serves (hnx broker agents, as root, which the broker's manifest must list
+# in operators).  The answers are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
 - name: Validate the inputs
@@ -9,10 +10,10 @@
     that:
       - module_census_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_dir
       - module_census_systemctl_cli is match('^[A-Za-z0-9._/-]+\Z')
-      - module_census_hnx_cli is match('^[A-Za-z0-9._/-]+\Z')
-      - module_census_broker_socket == '' or (module_census_broker_socket is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_broker_socket)
+      - module_census_hnx_cli is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_hnx_cli
+      - module_census_broker_socket == '' or (module_census_broker_socket is match('^/run/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_broker_socket)
       - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z')
-    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl and hnx commands plain paths, the broker socket empty or an absolute path, and the host name a plain name (it names the host's answer file)"
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, and the host name a plain name (it names the host's answer file)"
 
 - name: Look at the census directory on the controller
   ansible.builtin.stat:
@@ -71,8 +72,10 @@
   # list-units exits 0 with nothing printed when no unit matches; anything else is a failure
   failed_when: module_census_active.rc != 0
 
-# The broker answers root as its operator (homelabnext.broker.server): the agent keys it serves,
-# one per line, and nothing else.  A broker that does not answer fails the census.
+# The broker answers a peer its manifest lists in operators (homelabnext.broker.server, manifest
+# 1.8): the agent keys it serves, one per line, and nothing else.  This one task runs as root, the
+# identity the census host's manifest lists; the others stay unprivileged.  A broker that does not
+# answer, or does not count root an operator, fails the census.
 - name: Ask the running broker which agents it serves
   ansible.builtin.command:
     argv:
@@ -83,6 +86,8 @@
       - "{{ module_census_broker_socket }}"
   register: module_census_agents
   changed_when: false
+  become: true
+  become_user: root
   when: module_census_broker_socket != ''
 
 - name: Write this host's answer on the controller

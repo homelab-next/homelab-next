@@ -46,14 +46,45 @@ AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
 
 
 def _hnx(tmp_path) -> str:
-    """A stand-in hnx whose broker answers the operator's agents (and logs the call)."""
+    """A stand-in hnx whose broker answers the operator's agents (and logs the call); it fails
+    unless it was reached through become as root (the stand-in sudo below says so)."""
+    out = (
+        "if os.environ.get('HNX_TEST_BECOME_USER') != 'root':\n"
+        "    sys.exit('hnx broker agents: not run as root')\n"
+        f"sys.stdout.write({AGENTS!r})"
+    )
     body = (
         LOGGER.replace("LOG", repr(str(tmp_path / "calls.log")))
         .replace("NAME", repr("hnx"))
         .replace("FAIL", repr(str(tmp_path / "hnx.fails")))
-        .replace("OUT", f"sys.stdout.write({AGENTS!r})")
+        .replace("OUT", out)
     )
     return fake(tmp_path / "hnx", body)
+
+
+# A stand-in sudo (become_exe): it logs the user it was asked to become, says so to what it runs,
+# and runs it as this user; a task that does not become never reaches it.
+SUDO = r"""
+import os, sys
+args, user, i = sys.argv[1:], None, 0
+while i < len(args) and args[i].startswith("-"):
+    if args[i] == "-u":
+        user = args[i + 1]
+        i += 1
+    i += 1
+open(LOG, "a").write("sudo -u " + str(user) + "\n")
+os.environ["HNX_TEST_BECOME_USER"] = str(user)
+os.execvp(args[i], args[i:])
+"""
+
+
+# ansible skips become when it already runs as the user asked for (root, on a box that runs the
+# tests as root): allowing the same user keeps the stand-in sudo in the path either way
+BECOME_ENV = {"ANSIBLE_BECOME_ALLOW_SAME_USER": "True"}
+
+
+def _sudo(tmp_path) -> str:
+    return fake(tmp_path / "sudo", SUDO.replace("LOG", repr(str(tmp_path / "calls.log"))))
 
 
 def _first(tmp_path):
@@ -65,8 +96,16 @@ def _first(tmp_path):
         # this host runs the broker: the census asks it for the agents it serves
         "module_census_broker_socket": "/run/hnx-broker/broker.sock",
         "module_census_hnx_cli": _hnx(tmp_path),
+        # the broker task becomes root (the identity the broker's manifest lists as operator)
+        "ansible_become_exe": _sudo(tmp_path),
     }
-    return {"role": "module_census", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+    return {
+        "role": "module_census",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "env": BECOME_ENV,
+        "setup": {"v": v},
+    }
 
 
 @needs_ansible
@@ -76,12 +115,14 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
     # three read-only queries, by argument vector: the pattern reaches systemctl unexpanded,
-    # and the broker host's broker is asked for its agents over its socket
+    # and the broker host's broker is asked for its agents over its socket, as root (the one
+    # task that becomes)
     assert calls(tmp_path) == [
         "systemctl list-unit-files --no-legend --plain --no-pager --type=service,timer "
         "--state=enabled hnx-*",
         "systemctl list-units --no-legend --plain --no-pager --type=service,timer "
         "--state=active hnx-*",
+        "sudo -u root",
         "hnx broker agents --socket /run/hnx-broker/broker.sock",
     ]
     out = tmp_path / "census"
@@ -135,13 +176,17 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"inventory_hostname": "../x"},
             {"inventory_hostname": "a/b"},
             {"inventory_hostname": ".hidden"},
-            # the broker's socket is an absolute plain path and hnx a plain command; a broker that
-            # does not answer fails the census
+            # the broker's socket is a plain path under /run/ and hnx an absolute plain path (it
+            # runs as root); a broker that does not answer fails the census
             {"module_census_broker_socket": "run/broker.sock"},
             {"module_census_broker_socket": "/run/../etc/broker.sock"},
+            {"module_census_broker_socket": "/tmp/broker.sock"},
             {"module_census_hnx_cli": "hnx; true"},
+            {"module_census_hnx_cli": "hnx"},
+            {"module_census_hnx_cli": "-hnx"},
             {"module_census_hnx_cli": fake(tmp_path / "hnx-fails", "import sys\nsys.exit(1)\n")},
         ],
+        env=BECOME_ENV,
     )
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
     assert results[1][0] and "is not a directory on the controller" in results[1][1]
@@ -150,6 +195,6 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     assert results[5][0], results
     for failed, said in results[6:9]:
         assert failed and "the host name a plain name" in said, results
-    for failed, said in results[9:12]:
-        assert failed and "the broker socket empty or an absolute path" in said, results
-    assert results[12][0], results
+    for failed, said in results[9:15]:
+        assert failed and "the broker socket empty or a path under /run/" in said, results
+    assert results[15][0], results

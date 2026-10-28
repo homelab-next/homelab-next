@@ -3,7 +3,7 @@
 
 ``hnx broker serve`` (ADR-0017, stage 2a).  Identity is authenticated by the kernel: the server
 reads the connecting process's credentials (``SO_PEERCRED``; Linux only, see below) and maps its
-uid through the manifest (``schemas/broker/manifest`` 1.7):
+uid through the manifest (``schemas/broker/manifest`` 1.8):
 
 * ``callers: [{uid | user, profile}]`` - an agent's process; it acts as exactly that profile;
 * ``approval_relays: [{uid | user, issuer}]`` - a process that authenticated a human (the hub
@@ -22,12 +22,13 @@ uid through the manifest (``schemas/broker/manifest`` 1.7):
   :data:`UNKNOWN_TOKEN_FACTOR` times the limit.  The runner is exempt from the limit, like a
   relay.
 
-* the **operator**: root (uid 0), when the manifest lists it in no role above.  It may ask one
-  thing, ``agents``: the agent keys the broker serves.  Root on the broker's host can already read
-  the manifest and the state directory the answer comes from, so it learns nothing it could not
-  read; the operation exists so the deploy's census (``module_census``) can ask the *running*
-  broker without a secret of its own.  An agent, a relay, the runner and a sandbox are refused it
-  (``not-the-operator``), and the operator is refused everything else.
+* ``operators: [{uid | user}]`` (1.8) - a host operator: it may ask one thing, ``agents``, the
+  agent keys the broker serves (names only), so the deploy's census (``module_census``) can ask
+  the *running* broker without a secret of its own.  No peer is an operator unless the manifest
+  lists it, root included: an unlisted uid 0 (a rootful container's root, a sandbox run as root)
+  is an unknown caller like any other.  An agent, a relay, the runner and a sandbox are refused
+  ``agents`` (``not-the-operator``), and an operator is refused everything else.  The answer is
+  audited (operation ``agents``).
 
 A peer in none of these is refused (``unknown-caller``) before its request is read, and audited;
 the server answers at once and closes without waiting for, or parsing, anything it sent.
@@ -193,12 +194,10 @@ RELAY_OPS: dict[str, frozenset[str]] = {
     "pending": frozenset(),
     "audit": frozenset({"action", "caller", "outcome", "operation", "request_id", "tail"}),
 }
-#: what the operator (root on the broker's host, see the module doc) may ask
+#: what an operator (manifest 1.8 ``operators``) may ask
 OPERATOR_OPS: dict[str, frozenset[str]] = {
     "agents": frozenset(),
 }
-#: the operator's uid: root, unless the manifest gives it a role of its own
-OPERATOR_UID = 0
 #: what a Code Mode runner may ask (manifest 1.7 ``codemode.runners``)
 RUNNER_OPS: dict[str, frozenset[str]] = {
     "token-issue": frozenset({"request_id", "sandbox_id", "actions", "max_calls", "ttl_s"}),
@@ -226,7 +225,18 @@ FORBIDDEN_FIELDS = frozenset(
 )
 #: operations the audit schema knows; anything else is audited as ``connect``
 _AUDIT_OPS = frozenset(
-    {"call", "submit", "status", "run", "cancel", "approve", "deny", "token-issue", "token-spend"}
+    {
+        "call",
+        "submit",
+        "status",
+        "run",
+        "cancel",
+        "approve",
+        "deny",
+        "token-issue",
+        "token-spend",
+        "agents",
+    }
 )
 #: a transport refusal of a token op is audited as the operation it carries
 _AUDITED_AS = {"token-call": "call", "token-submit": "submit", "token-run": "run"}
@@ -251,8 +261,8 @@ def peer_credentials(conn: socket.socket) -> tuple[int, int, int]:
 @dataclass(frozen=True)
 class Identity:
     """Who a peer is: a ``caller`` acting as ``profile``, a ``relay`` for ``issuer``, a Code Mode
-    ``runner`` known as ``service``, a ``sandbox`` (``sandbox_id`` when it is one sandbox), or the
-    ``operator`` (root, listed in no other role)."""
+    ``runner`` known as ``service``, a ``sandbox`` (``sandbox_id`` when it is one sandbox), or an
+    ``operator`` (manifest 1.8)."""
 
     role: str
     uid: int
@@ -263,8 +273,8 @@ class Identity:
 
 
 class PeerMap:
-    """The manifest's ``callers``, ``approval_relays`` and ``codemode`` runners and sandboxes by
-    uid; user names resolved once."""
+    """The manifest's ``callers``, ``approval_relays``, ``operators`` and ``codemode`` runners and
+    sandboxes by uid; user names resolved once.  A uid none of them lists is no one."""
 
     def __init__(
         self,
@@ -279,6 +289,7 @@ class PeerMap:
         for where, role, entries in (
             ("callers", "caller", manifest.get("callers", [])),
             ("approval_relays", "relay", manifest.get("approval_relays", [])),
+            ("operators", "operator", manifest.get("operators", [])),
             ("codemode.runners", "runner", cm.get("runners", [])),
             ("codemode.sandboxes", "sandbox", cm.get("sandboxes", [])),
         ):
@@ -306,10 +317,7 @@ class PeerMap:
             raise ManifestError(problems)
 
     def lookup(self, uid: int) -> Identity | None:
-        who = self._by_uid.get(uid)
-        if who is None and uid == OPERATOR_UID:
-            return Identity("operator", uid)
-        return who
+        return self._by_uid.get(uid)
 
     def __len__(self) -> int:
         return len(self._by_uid)
@@ -617,7 +625,7 @@ def _handle(
         elif who.role == "runner":
             result = _runner_op(svc, who, op, body)
         elif who.role == "operator":
-            result = {"agents": svc.served_agents()}
+            result = {"agents": svc.list_agents(f"uid:{uid}")}
         else:
             result = _sandbox_op(svc, who, op, body, bearer)
     except BrokerError as exc:

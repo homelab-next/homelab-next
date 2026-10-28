@@ -191,7 +191,7 @@ class BrokerClient:
 
     # ---------------------------------------------------------------- the operator
     def agents(self) -> list[str]:
-        """The agent keys the broker serves (operator only: root on the broker's host)."""
+        """The agent keys the broker serves (an operator only: manifest 1.8 ``operators``)."""
         return self.request("agents")["agents"]
 
     # ---------------------------------------------------------------- Code Mode (manifest 1.7)

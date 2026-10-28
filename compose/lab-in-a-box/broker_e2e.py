@@ -31,7 +31,8 @@ Subcommands:
 The scenario, step by step (each is one line of the report): the agent's MCP tools are listed;
 ``memory_write`` lands in its own lane directory, owner-only; ``proposal_file`` files a records
 note named after the agent; an approval-gated action is submitted and refused before approval;
-an unmapped uid is refused (``unknown-caller``); the agent cannot approve its own request
+an unmapped uid is refused (``unknown-caller``; root included, which is no operator
+unless the manifest lists it in ``operators``, manifest 1.8); the agent cannot approve its own request
 (``not-an-approval-relay``); the hub refuses a request without the front-door secret; the
 approver reads the page (token and digest from the form) and approves through
 ``POST /approvals/decide``; the agent runs the request once; a second run is refused
