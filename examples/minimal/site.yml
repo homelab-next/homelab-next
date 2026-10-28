@@ -16,6 +16,8 @@ zones:
     purpose: management
     vlan_id: 10
     subnet: 192.0.2.0/26
+    # its IPv6 prefix (site 1.4): a firewall rule naming zone:mgmt reaches these hosts too
+    subnet6: 2001:db8:0:10::/64
     gateway: 192.0.2.1
     dhcp: {range: [192.0.2.32, 192.0.2.62]}
     dns: {resolvers: [svc:dns]}

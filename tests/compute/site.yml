@@ -2,7 +2,7 @@
 # Synthetic site model (zones only): documentation ranges, example.internal.
 site: {id: northwind, domain: example.internal, timezone: UTC}
 zones:
-  - {id: mgmt, vlan_id: 10, subnet: 192.0.2.0/24, gateway: 192.0.2.1}
+  - {id: mgmt, vlan_id: 10, subnet: 192.0.2.0/24, subnet6: 2001:db8:0:10::/64, gateway: 192.0.2.1}
   - {id: data, vlan_id: 20, subnet: 198.51.100.0/25, gateway: 198.51.100.1,
      dhcp: {range: [198.51.100.100, 198.51.100.126]}}
   - {id: compute, vlan_id: 30, subnet: 198.51.100.128/25, gateway: 198.51.100.129}

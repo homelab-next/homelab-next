@@ -927,3 +927,112 @@ def test_a_filtered_by_host_that_states_an_open_outbound_policy_filters_nothing(
     else:
         msg = "filtered_by: guest:hv-a lets its own outbound traffic through (policy_out ACCEPT)"
         assert msg in problems(d)
+
+
+# ---------------------------------------------------------------- a zone's IPv6 prefix (site 1.4)
+MGMT6 = "2001:db8:0:10::/64"
+
+
+def _zones6(**prefixes: str) -> MappingZones:
+    """The stub zones, with ``subnet6`` set on the zones named."""
+    import dataclasses
+
+    return MappingZones(
+        [
+            dataclasses.replace(z, subnet6=prefixes.get(z.id))
+            for z in (STUB.zone(i) for i in ("mgmt", "data", "compute", "edge"))
+        ]
+    )
+
+
+def _ping_from_mgmt(doc):
+    doc["firewall_rules"].setdefault("inbound_allow", []).append(
+        {"name": "ping-mgmt", "proto": "icmp", "source": "zone:mgmt"}
+    )
+
+
+def test_a_zone_rule_reaches_the_zones_ipv6_prefix(tmp_path):
+    """A rule naming a zone with a subnet6 is a line per family in the .fw file and a row per
+    family in hnx_firewall, the IPv6 one right after the IPv4 one; ICMP is ICMPv6 there."""
+    fleet = load_fleet(fleet_dir(tmp_path, "infer-core", _ping_from_mgmt), _zones6(mgmt=MGMT6))
+    fw = render(fleet, "firewall-rules")["firewall/230.fw"].splitlines()
+    i = fw.index("OUT ACCEPT -p udp -dport 53 -dest 192.0.2.0/24 -log nolog # dns")
+    assert fw[i + 1] == f"OUT ACCEPT -p udp -dport 53 -dest {MGMT6} -log nolog # dns"
+    assert "IN ACCEPT -p icmp -source 192.0.2.0/24 -log nolog # ping-mgmt" in fw
+    assert f"IN ACCEPT -p ipv6-icmp -source {MGMT6} -log nolog # ping-mgmt" in fw
+    # a zone without one (data) and a literal CIDR stay a single IPv4 line
+    assert sum("# model-store" in ln for ln in fw) == 1
+    hv = yaml.safe_load(render(fleet, "inventory")["host_vars/infer-core.example.internal.yml"])
+    dns = [r for r in hv["hnx_firewall"]["outbound_allow"] if r["name"] == "dns"]
+    assert [r["dest"] for r in dns] == ["192.0.2.0/24", MGMT6]
+    assert [
+        r["dest"] for r in hv["hnx_firewall"]["outbound_allow"] if r["name"] == "model-store"
+    ] == ["198.51.100.0/25"]
+
+
+def test_without_a_prefix_a_zone_rule_is_ipv4_only(good):
+    for text in render(good, "firewall-rules").values():
+        assert "ipv6-icmp" not in text
+        for ln in text.splitlines():
+            if ln.startswith(("IN ", "OUT ")):
+                assert ":" not in ln.split("#", 1)[0], ln
+
+
+def test_an_any_rule_does_not_change_meaning_with_a_prefix(tmp_path):
+    """``any`` names no address in either file, prefix or not: it is not narrowed to the zones or
+    widened by them."""
+
+    def https_out(doc):
+        doc["firewall_rules"]["policy_out"] = "DROP"
+        doc["firewall_rules"]["outbound_allow"] = [
+            {"name": "https-out", "proto": "tcp", "ports": "443", "dest": "any"}
+        ]
+
+    zones = _zones6(mgmt=MGMT6, edge="2001:db8:0:40::/64")
+    fleet = load_fleet(fleet_dir(tmp_path, "edge-core", https_out), zones)
+    fw = render(fleet, "firewall-rules")["firewall/110.fw"]
+    assert fw.count("# https-out") == 1
+    assert "OUT ACCEPT -p tcp -dport 443 -log nolog # https-out" in fw
+
+
+def test_a_zone_prefix_that_does_not_read_is_refused_for_its_rules(tmp_path):
+    msg = problems(fleet_dir(tmp_path), _zones6(mgmt="2001:db8:0:10:0::/64"))
+    assert (
+        "firewall_rules.dns: dest zone 'mgmt' has a subnet6 that is not in its canonical form"
+        in (msg)
+    )
+    assert "firewall_rules.ssh-mgmt: source zone 'mgmt' has a subnet6" in msg
+
+
+def test_a_zone_prefix_holding_a_metadata_address_is_refused(tmp_path):
+    """The IPv6 metadata service sits in unique-local space, which a zone may be numbered from:
+    an allow naming such a zone would hold it, so it is refused as a literal one is."""
+    from homelabnext.modules.egress import METADATA
+
+    meta6 = next(a for a in METADATA if a.version == 6)
+    import ipaddress
+
+    prefix = str(ipaddress.IPv6Network((int(meta6) >> 64 << 64, 64)))
+    msg = problems(fleet_dir(tmp_path), _zones6(mgmt=prefix))
+    assert f"firewall_rules.dns: dest zone:mgmt holds the cloud metadata address {meta6}" in msg
+
+
+def test_a_model_runtime_zone_allow_with_a_global_prefix_is_accepted(tmp_path):
+    """A zone's IPv6 prefix is the lab's even in global unicast space (the site gives it to the
+    zone): a model runtime's zone allow is accepted, while ``any`` still reaches the internet."""
+    import ipaddress
+
+    global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))  # a global /48, never a literal
+    zones = _zones6(mgmt=global6)
+    fleet = load_fleet(fleet_dir(tmp_path), zones)
+    hv = yaml.safe_load(render(fleet, "inventory")["host_vars/infer-core.example.internal.yml"])
+    assert global6 in [r["dest"] for r in hv["hnx_firewall"]["outbound_allow"]]
+
+    def any_out(doc):
+        doc["firewall_rules"]["outbound_allow"].append(
+            {"name": "wide", "proto": "tcp", "ports": "443", "dest": "any"}
+        )
+
+    assert "firewall_rules.wide: dest any reaches the internet" in problems(
+        fleet_dir(tmp_path / "b", "infer-core", any_out), zones
+    )

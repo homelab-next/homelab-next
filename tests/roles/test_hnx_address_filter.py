@@ -254,5 +254,31 @@ def test_an_unusable_ipv4_subnet_holds_no_ipv6_extra_either():
 def test_the_filter_is_registered():
     mod = _plugin()
     assert mod.FilterModule().filters() == {
-        "hnx_enroll_address_problems": mod.enroll_address_problems
+        "hnx_enroll_address_problems": mod.enroll_address_problems,
+        "hnx_rule_prefix6_problems": mod.rule_prefix6_problems,
     }
+
+
+# ---------------------------------------------------------------- firewall-rule IPv6 addresses
+@pytest.mark.parametrize(
+    ("value", "why"),
+    [
+        ("2001:db8::/32", "is not a /48 to /64"),
+        ("2001:DB8:0:10::/64", "canonical form"),
+        ("2001:db8:0:10:0::/64", "canonical form"),
+        ("fe80::/64", "unique-local or global unicast"),
+        ("2001:db8:0:10::/64%eth0", "zone id"),
+        (f"{a(0xFFFF_C000_0200, True)}/120", "is not a /48 to /64"),
+        (5, "is not a string"),
+    ],
+)
+def test_an_ipv6_rule_address_is_a_zone_prefix(value, why):
+    (msg,) = _plugin().rule_prefix6_problems(["any", "192.0.2.0/26", value])
+    assert why in msg, msg
+
+
+def test_a_zone_prefix_rule_address_has_no_problems():
+    assert _plugin().rule_prefix6_problems(["any", "192.0.2.0/26", "2001:db8:0:10::/64"]) == []
+    assert _plugin().rule_prefix6_problems("2001:db8:0:10::/64") == [
+        "the rule addresses are not a list"
+    ]

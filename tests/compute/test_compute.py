@@ -37,7 +37,7 @@ GOLDEN = HERE / "golden"
 # A stub site model: the compute model never needs W13's real one.
 STUB = MappingZones(
     [
-        ZoneInfo("mgmt", "192.0.2.0/24", "192.0.2.1", None, 10),
+        ZoneInfo("mgmt", "192.0.2.0/24", "192.0.2.1", None, 10, subnet6="2001:db8:0:10::/64"),
         ZoneInfo(
             "data", "198.51.100.0/25", "198.51.100.1", ("198.51.100.100", "198.51.100.126"), 20
         ),

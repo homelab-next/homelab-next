@@ -4,7 +4,10 @@
     {{ suricata_enroll_guests | hnx_enroll_address_problems }}
 
 returns one message per problem (an empty list when the rows are sound), so a role's assert can
-name every bad entry at once.  A row is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}``
+name every bad entry at once.  ``{{ addresses | hnx_rule_prefix6_problems }}`` does the same for
+the IPv6 addresses of firewall rules (``hnx_firewall``), each of which is a zone's ``subnet6``
+written as the generator resolves ``zone:`` (``homelabnext/compute/gen/firewall_rules.py``): the
+``subnet6`` rule below, so a hand-written rule names no wider or odder IPv6 network than a zone.  A row is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}``
 as the baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet``
 is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``, and
 ``subnet6`` its IPv6 prefix (site 1.4), carried too when the zone gives one.
@@ -234,6 +237,24 @@ def enroll_address_problems(guests: Any) -> list[str]:
     return out
 
 
+def rule_prefix6_problems(addresses: Any) -> list[str]:
+    """One message per IPv6 firewall-rule address that is not a zone prefix (the ``subnet6``
+    rule); a non-IPv6 value (``any``, an IPv4 CIDR, which the role's own pattern judges) is skipped."""
+    if not isinstance(addresses, list):
+        return ["the rule addresses are not a list"]
+    out = []
+    for raw in addresses:
+        if isinstance(raw, str) and ":" not in raw:
+            continue
+        _, why = _subnet6(raw)
+        if why:
+            out.append(f"rule address {raw!r} {why}")
+    return out
+
+
 class FilterModule:
     def filters(self) -> dict[str, Any]:
-        return {"hnx_enroll_address_problems": enroll_address_problems}
+        return {
+            "hnx_enroll_address_problems": enroll_address_problems,
+            "hnx_rule_prefix6_problems": rule_prefix6_problems,
+        }

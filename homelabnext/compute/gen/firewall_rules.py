@@ -7,8 +7,9 @@ silently ignored.  Inbound is default **drop**; outbound follows ``firewall_rule
 (``ACCEPT`` unless the guest asks for default-deny egress with ``DROP`` or ``REJECT``); then
 exactly the guest file's ``inbound_allow`` and ``outbound_allow`` entries, in file order.  A guest
 with no rules gets the policies and nothing else: silence is never an implicit allow.  Rule
-sources and destinations are ``any``, ``zone:<id>`` (the zone's subnet from the site model) or a
-CIDR.
+sources and destinations are ``any``, ``zone:<id>`` (the zone's subnet from the site model, and
+its ``subnet6`` too where the zone has one: one line per address family, an ICMP allow as ICMPv6
+on the IPv6 line) or a CIDR.
 
 Guest rules only take effect while the datacenter firewall is on (``enable: 1`` in the
 ``[OPTIONS]`` of ``cluster.fw``).  That file also holds the operator's own cluster rules, so it is
@@ -27,26 +28,44 @@ from homelabnext.generators.safe import checked
 from ._text import HEADER
 
 
-def resolve_address(fleet: Fleet, ref: str) -> str | None:
-    """A rule's ``any`` (None), ``zone:<id>`` (the zone's subnet) or CIDR (as written)."""
+def resolve_addresses(fleet: Fleet, ref: str) -> list[str | None]:
+    """A rule's ``any`` (``[None]``: no address match, either family), CIDR (as written), or
+    ``zone:<id>``: the zone's subnet, then its ``subnet6`` (site 1.4) where it has one, so an allow
+    naming a zone reaches the zone's IPv6 hosts too.  A ``subnet6`` that is not a zone prefix
+    (:func:`homelabnext.network.validate.subnet6_problem`) is refused, never rendered."""
     if ref == "any":
-        return None
-    if ref.startswith("zone:"):
-        return str(fleet.zones.zone(ref[5:]).network)  # type: ignore[union-attr]
-    return ref
+        return [None]
+    if not ref.startswith("zone:"):
+        return [ref]
+    from homelabnext.network.validate import subnet6_problem
+
+    z = fleet.zones.zone(ref[5:])
+    if z is None:
+        raise ComputeError(f"{ref}: no such zone")
+    out: list[str | None] = [str(z.network)]
+    if z.subnet6 is not None:
+        net, why = subnet6_problem(z.subnet6)
+        if net is None:
+            raise ComputeError(f"{ref}: the zone's subnet6 {z.subnet6!r} {why}")
+        out.append(str(net))
+    return out
 
 
-def _rule_line(fleet: Fleet, rule: dict, direction: str) -> str:
-    parts = [f"{direction} ACCEPT", f"-p {rule['proto']}"]
-    if rule.get("ports"):
-        parts.append(f"-dport {rule['ports']}")
+def _rule_lines(fleet: Fleet, rule: dict, direction: str) -> list[str]:
     side, ref = ("-source", rule["source"]) if direction == "IN" else ("-dest", rule["dest"])
-    addr = resolve_address(fleet, ref)
-    if addr:
-        parts.append(f"{side} {addr}")
-    parts.append("-log nolog")
-    line = " ".join(parts) + f" # {rule['name']}"
-    return checked(line, f"firewall rule {rule['name']}")
+    out = []
+    for addr in resolve_addresses(fleet, ref):
+        v6 = addr is not None and ":" in addr
+        proto = "ipv6-icmp" if v6 and rule["proto"] == "icmp" else rule["proto"]
+        parts = [f"{direction} ACCEPT", f"-p {proto}"]
+        if rule.get("ports"):
+            parts.append(f"-dport {rule['ports']}")
+        if addr:
+            parts.append(f"{side} {addr}")
+        parts.append("-log nolog")
+        line = " ".join(parts) + f" # {rule['name']}"
+        out.append(checked(line, f"firewall rule {rule['name']}"))
+    return out
 
 
 def fw_name(g: Guest) -> str:
@@ -68,8 +87,8 @@ def guest_file(fleet: Fleet, g: Guest) -> str:
     if g.policy_out != "ACCEPT":
         L.append("log_level_out: nolog")
     L += ["", "[RULES]"]
-    L += [_rule_line(fleet, dict(r), "IN") for r in g.firewall_rules]
-    L += [_rule_line(fleet, dict(r), "OUT") for r in g.outbound_rules]
+    L += [line for r in g.firewall_rules for line in _rule_lines(fleet, dict(r), "IN")]
+    L += [line for r in g.outbound_rules for line in _rule_lines(fleet, dict(r), "OUT")]
     return "\n".join(L) + "\n"
 
 

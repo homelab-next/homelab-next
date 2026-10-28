@@ -3,6 +3,9 @@
 # ruleset its own way; a guest using one is exempted from the control with a reason instead).
 nftables_host_conflicting_units: [pve-firewall.service, ufw.service, firewalld.service]
 nftables_host_cidr: '^(?:any|[0-9]{1,3}(?:\.[0-9]{1,3}){3}/[0-9]{1,2})\Z'
+# A rule's source or dest: any, an IPv4 CIDR, or (a zone's subnet6, resolved by the generator) an
+# IPv6 prefix, whose shape this allows and the hnx_rule_prefix6_problems filter then judges.
+nftables_host_rule_addr: '^(?:any|[0-9]{1,3}(?:\.[0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-f:]{2,39}/[0-9]{1,3})\Z'
 # Fixed, not settings: destinations no rule may reopen (the output chain refuses them first,
 # whatever policy_out says): cloud instance metadata services, which a lab host never needs and an
 # agent or model has been seen probing (docs/compute-model.md, "Model runtimes").

@@ -9,5 +9,7 @@ log_level_out: nolog
 
 [RULES]
 OUT ACCEPT -p udp -dport 53 -dest 192.0.2.0/24 -log nolog # dns
+OUT ACCEPT -p udp -dport 53 -dest 2001:db8:0:10::/64 -log nolog # dns
 OUT ACCEPT -p udp -dport 123 -dest 192.0.2.0/24 -log nolog # time
+OUT ACCEPT -p udp -dport 123 -dest 2001:db8:0:10::/64 -log nolog # time
 OUT ACCEPT -p tcp -dport 443 -dest 198.51.100.0/25 -log nolog # model-store

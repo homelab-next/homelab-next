@@ -18,7 +18,7 @@ from homelabnext.compute.baselines import resolve, role_vars
 from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q, qlist
-from .firewall_rules import resolve_address
+from .firewall_rules import resolve_addresses
 
 
 def baseline_group(name: str) -> str:
@@ -29,16 +29,22 @@ def control_group(control: str) -> str:
     return "control_" + control.replace("-", "_")
 
 
-def _fw_rule(fleet: Fleet, rule: dict, side: str) -> str:
-    row = {"name": rule["name"], "proto": rule["proto"]}
-    if rule.get("ports"):
-        row["ports"] = rule["ports"]
-    row[side] = resolve_address(fleet, rule[side]) or "any"
-    return "{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}"
+def _fw_rules(fleet: Fleet, rule: dict, side: str) -> list[str]:
+    """One row per address the rule names: a ``zone:`` with a ``subnet6`` is two rows of the same
+    name, the IPv4 subnet's and the IPv6 prefix's."""
+    out = []
+    for addr in resolve_addresses(fleet, rule[side]):
+        row = {"name": rule["name"], "proto": rule["proto"]}
+        if rule.get("ports"):
+            row["ports"] = rule["ports"]
+        row[side] = addr or "any"
+        out.append("{" + ", ".join(f"{k}: {q(v)}" for k, v in row.items()) + "}")
+    return out
 
 
 def firewall_vars(fleet: Fleet, g: Guest) -> list[str]:
-    """``hnx_firewall``: the guest's firewall rules with zones resolved to subnets."""
+    """``hnx_firewall``: the guest's firewall rules with zones resolved to subnets (and to the
+    zone's IPv6 prefix as a second row of the same name, where it has one)."""
     L = ["hnx_firewall:", f"  policy_out: {q(g.policy_out)}"]
     for key, rules, side in (
         ("inbound_allow", g.firewall_rules, "source"),
@@ -48,7 +54,7 @@ def firewall_vars(fleet: Fleet, g: Guest) -> list[str]:
             L.append(f"  {key}: []")
             continue
         L.append(f"  {key}:")
-        L += [f"    - {_fw_rule(fleet, dict(r), side)}" for r in rules]
+        L += [f"    - {row}" for r in rules for row in _fw_rules(fleet, dict(r), side)]
     return L
 
 

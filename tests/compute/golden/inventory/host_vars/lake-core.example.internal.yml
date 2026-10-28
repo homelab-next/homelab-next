@@ -18,6 +18,7 @@ hnx_firewall:
   inbound_allow:
     - {name: "query-api", proto: "tcp", ports: "8443", source: "198.51.100.128/25"}
     - {name: "ssh-mgmt", proto: "tcp", ports: "22", source: "192.0.2.0/24"}
+    - {name: "ssh-mgmt", proto: "tcp", ports: "22", source: "2001:db8:0:10::/64"}
     - {name: "ping", proto: "icmp", source: "192.0.2.0/24"}
   outbound_allow: []
 hnx_baselines: ["base", "server", "sensitive"]
