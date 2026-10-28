@@ -25,8 +25,12 @@ module role's processes open.  :func:`render` returns, per placed host (``<host>
   - ``internet``: global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
     so the role resolves through the lab's resolvers), and never a lab host: every special-purpose range (private,
     shared, loopback, link-local, documentation, benchmarking, multicast, reserved, NAT64 and the
-    other IPv4-embedding IPv6 prefixes), ``scope.trusted.nets`` and every host's ``addresses`` are
-    excluded;
+    other IPv4-embedding IPv6 prefixes), ``scope.trusted.nets``, every host's ``addresses`` and,
+    when the network model is given (``hnx modules render --network FILE``), every zone's
+    ``subnet6`` and every ``delegated_prefixes6`` prefix are excluded.  Over IPv6 the accept also
+    requires ``2000::/3`` (global unicast), so nothing outside it passes whatever the deny-list
+    holds.  Without the network model a lab guest's IPv6 address that is in none of those lists
+    (a SLAAC address, say) is treated as the internet; the render says so, here and in the README;
 
   and logs (rate-limited) and drops the rest.  An ``isolated`` role gets an empty chain.  Any
   other socket in ``hnx.slice`` is dropped too; nothing outside ``hnx.slice`` is touched.  The file
@@ -203,11 +207,46 @@ def _allow(addr, proto: str | None, port: int | None) -> Allow:
     return Allow("ip" if addr.version == 4 else "ip6", str(addr), proto, port)
 
 
+def _lab_prefixes6(network: Any) -> list[ipaddress.IPv6Network]:
+    """Every zone ``subnet6`` and every ``delegated_prefixes6`` prefix of the network model
+    (site 1.4, 1.5), judged as ``hnx site validate`` judges them; an unusable one is refused,
+    never read as "none"."""
+    from homelabnext.network.validate import delegated_prefixes6, subnet6_problem
+
+    if not isinstance(network, dict):
+        raise EgressError("the network model is not a mapping")
+    zones = network.get("zones")
+    if not isinstance(zones, list):
+        raise EgressError("the network model has no zones list")
+    out: list[ipaddress.IPv6Network] = []
+    for z in zones:
+        raw = z.get("subnet6") if isinstance(z, dict) else None
+        if raw is None:
+            continue
+        net, why = subnet6_problem(raw)
+        if net is None:
+            zid = z.get("id")
+            raise EgressError(f"network model: zone {zid!r:.40} has a subnet6 that {why}")
+        out.append(net)
+    nets, problems = delegated_prefixes6(network.get("delegated_prefixes6"))
+    if problems:
+        raise EgressError(f"network model: delegated_prefixes6: {problems[0]}")
+    return [*out, *nets]
+
+
 class _Site:
     """The selection, read once: who is placed where, every host's addresses and every row."""
 
-    def __init__(self, site: Doc, mods: dict[str, Doc], rows: Callable[[str], dict[str, Doc]]):
+    def __init__(
+        self,
+        site: Doc,
+        mods: dict[str, Doc],
+        rows: Callable[[str], dict[str, Doc]],
+        network: Doc | None = None,
+    ):
         self.site = site
+        self.network = network
+        self.prefixes6 = _lab_prefixes6(network) if network is not None else []
         try:
             self.sel = selected(site, mods)
             self.placed = _placed(site, self.sel)
@@ -317,7 +356,7 @@ class _Site:
             if "missing" not in str(exc):
                 raise EgressError(str(exc)) from None
             trusted = []
-        nets: list[Network] = [*NOT_INTERNET, *trusted]
+        nets: list[Network] = [*NOT_INTERNET, *trusted, *self.prefixes6]
         for addrs in self.addresses.values():
             nets += [ipaddress.ip_network(a) for a in addrs]
         v4 = [n for n in nets if n.version == 4]
@@ -426,7 +465,7 @@ def _nft(host: str, roles: list[tuple[str, str, list[Allow], bool]], lab4, lab6)
                 f'{dot} limit rate 10/minute log prefix "hnx-egress {mod}/{role} dot " drop',
                 f"{dot} drop",
                 "    ip daddr != @not_internet4 accept",
-                "    ip6 daddr != @not_internet6 accept",
+                "    ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept",
             ]
         out += [
             f'    limit rate 10/minute log prefix "hnx-egress {mod}/{role} " drop',
@@ -502,11 +541,14 @@ def render(
     mods: dict[str, Doc],
     rows: Callable[[str], dict[str, Doc]],
     units: Callable[[str], set[str]] | None = None,
+    network: Doc | None = None,
 ) -> dict[str, str]:
     """``{relative path: content}`` for every lab host a module role is placed on, plus
     ``README.md``.  ``rows(module)`` returns a module's contributed service rows (required);
-    ``units(module)`` its fleet unit names, which then start only after the policy loads."""
-    s = _Site(site, mods, rows)
+    ``units(module)`` its fleet unit names, which then start only after the policy loads.
+    ``network``: the site's network model (zones, ``delegated_prefixes6``); its IPv6 prefixes join
+    the never-internet set.  Without it, a lab IPv6 address outside the listed ones is internet."""
+    s = _Site(site, mods, rows, network)
     lab4, lab6 = s.not_internet()
     per_host: dict[str, list[tuple[str, str, list[Allow], bool]]] = {}
     placed_on: dict[str, set[str]] = {}
@@ -542,18 +584,18 @@ def render(
             _checked("unit", u)
             for host in sorted(placed_on[mod]):
                 files[f"{host}/{UNIT_PREFIX}{u}.service.d/50-hnx-egress.conf"] = _unit_dropin()
-    files["README.md"] = _readme(per_host)
+    files["README.md"] = _readme(per_host, network is not None)
     return dict(sorted(files.items()))
 
 
-def _readme(per_host) -> str:
+def _readme(per_host, with_network: bool = False) -> str:
     out = [
         "<!-- Generated by homelabnext.modules.egress from the site selection. Do not edit. -->",
         "# Module egress",
         "",
         "Each module role placed on a lab host may open connections only to what it declared:",
         "DNS, the slots it requires or prefers, its `svc:` targets and, when granted, global",
-        "unicast addresses outside the lab. Install per host, after the module limits (the role",
+        "unicast addresses outside the lab (IPv6 only inside 2000::/3). Install per host, after the module limits (the role",
         "slices): `hnx-egress.nft` as `/etc/hnx/egress/hnx-egress.nft` (owned by root, mode 0644,",
         "its directory 0755 root), the service, timer and drop-ins under `/etc/systemd/system/`,",
         "then `systemctl daemon-reload` and `systemctl enable --now hnx-egress.service",
@@ -570,6 +612,8 @@ def _readme(per_host) -> str:
         "Place modules that must not reach each other on different hosts, and run them",
         "unprivileged.",
         "",
+        *_lab_note(with_network),
+        "",
         "| Host | Module | Host role | May reach |",
         "|---|---|---|---|",
     ]
@@ -584,6 +628,19 @@ def _readme(per_host) -> str:
     if not per_host:
         out.append("| - | - | - | - |")
     return "\n".join(out) + "\n"
+
+
+def _lab_note(with_network: bool) -> list[str]:
+    if with_network:
+        return [
+            "Never the internet: the special-purpose ranges, `scope.trusted.nets`, every host's",
+            "`addresses`, and the network model's zone `subnet6` and `delegated_prefixes6` prefixes.",
+        ]
+    return [
+        "Rendered with no network model (`hnx modules render --network FILE`): a lab IPv6 address",
+        "in none of the special-purpose ranges, `scope.trusted.nets` or a host's `addresses` (a",
+        "guest's SLAAC address, say) is treated as the internet.",
+    ]
 
 
 def write(files: dict[str, str], out: Path) -> None:

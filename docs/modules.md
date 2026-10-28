@@ -602,8 +602,13 @@ role's chain, which accepts:
 - with `internet`, global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
   so the role resolves through the lab's resolvers): every special-purpose range (private, shared, loopback,
   link-local, documentation, benchmarking, multicast, reserved, NAT64 and the other
-  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader) and every
-  host's `addresses` are never the internet.
+  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader), every
+  host's `addresses` and, when `hnx modules render --network FILE` (or `egress.render(...,
+  network=)`) gives the network model, every zone's `subnet6` and every `delegated_prefixes6`
+  prefix are never the internet. Over IPv6 the accept also requires `2000::/3`, so nothing
+  outside global unicast passes whatever the deny-list holds. **Without the network model**
+  a lab IPv6 address in none of those lists (a guest's SLAAC address, say) is treated as the
+  internet: the render prints a note and the generated README says so.
 
 It logs and drops the rest; an `isolated` role reaches nothing, and any other socket in
 `hnx.slice` is dropped. Hosts carry their own `addresses` in the selection
@@ -928,8 +933,8 @@ names, ids) are printed quoted and escaped when they are not plain identifiers, 
 carry a terminal escape, a line break or a CI workflow command. Whatever the loader did not check
 (no site, no inventory, the kinds below it does not validate) and every input it took from the
 repository's examples instead of the overlay (the role table, the core registry, an empty
-public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE --out
-DIR` writes the footprint limits and the egress policy, only for a site that checks clean and
+public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE [--network
+FILE] --out DIR` writes the footprint limits and the egress policy, only for a site that checks clean and
 only into a new or empty directory (stale files from an earlier render never mix in; a file
 there is a usage error); with `--json`, a generator's refusal is the output's `error`. The rules
 (`homelabnext/modules/rules.py`):

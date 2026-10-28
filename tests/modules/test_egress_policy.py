@@ -109,7 +109,7 @@ def test_internet_is_everything_outside_the_lab_and_only_when_declared():
     nft = files[f"{host}/hnx-egress.nft"]
     pub = chain(nft, "publishing", "publisher")
     assert "ip daddr != @not_internet4 accept" in pub
-    assert "ip6 daddr != @not_internet6 accept" in pub
+    assert "ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept" in pub
     lab4 = re.search(r"set not_internet4 \{.*?elements = \{ (.*?) \}", nft, re.S).group(1)
     assert "192.0.2.0/24" in lab4 and "169.254.0.0/16" in lab4  # scope.trusted.nets is the lab
     for name in re.findall(r"chain (m_\S+) \{", nft):
@@ -383,4 +383,94 @@ def test_an_internet_role_never_reaches_dns_over_tls_or_quic_outside_the_lab():
     pub = chain(render("full")[f"{host}/hnx-egress.nft"], "publishing", "publisher")
     drop = pub.index("meta l4proto { tcp, udp } th dport 853 drop")
     assert drop < pub.index("ip daddr != @not_internet4 accept")
-    assert drop < pub.index("ip6 daddr != @not_internet6 accept")
+    assert drop < pub.index("ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept")
+
+
+def _global6(zone: int, host: int | None = None) -> str:
+    """A global IPv6 built from integers (no literal): the /64 of ``zone``, or its host ``host``."""
+    base = (0x2600 << 112) | (zone << 64)
+    return str(
+        ipaddress.IPv6Address(base | host) if host is not None else ipaddress.IPv6Address(base)
+    )
+
+
+def _network(*, delegated: str | None = None) -> dict:
+    doc: dict = {"zones": [{"id": "lab", "subnet6": f"{_global6(0x30)}/64"}]}
+    if delegated:
+        doc["delegated_prefixes6"] = [{"prefix": delegated, "why": "the ISP delegation"}]
+    return doc
+
+
+def _render_net(network, site="full"):
+    return eg.render(SITES[site], MODULES, rows, None, network=network)
+
+
+def _host_nft(files, site="full"):
+    return files[
+        f"{SITES[site]['features']['publishing']['placement']['publisher']}/hnx-egress.nft"
+    ]
+
+
+def test_an_unlisted_guest_in_a_zone_prefix_is_never_the_internet():
+    """S3: a guest's SLAAC address in a zone's global prefix is not in any host's ``addresses``;
+    with the network model given, the whole prefix is the lab."""
+    site = copy.deepcopy(SITES["full"])
+    site["hosts"]["runtime-core"]["addresses"] = ["192.0.2.13", _global6(0x30, 0x13)]
+    nft = _host_nft(eg.render(site, MODULES, rows, None, network=_network()), "full")
+    _, v6 = _sets(nft)
+    ip = ipaddress.ip_address(_global6(0x30, 0xABCD))  # SLAAC: listed nowhere
+    assert any(ip in n for n in v6)
+    assert not any(ipaddress.ip_address(_global6(0x31, 1)) in n for n in v6)  # another prefix
+
+
+def test_a_delegated_prefix_is_never_the_internet():
+    delegated = f"{_global6(0x40)}/60"
+    v6 = _sets(_host_nft(_render_net(_network(delegated=delegated))))[1]
+    assert any(ipaddress.ip_address(_global6(0x4F, 7)) in n for n in v6)
+
+
+def test_without_the_network_model_the_readme_says_lab_ipv6_may_be_the_internet():
+    readme = _render_net(None)["README.md"]
+    assert "no network model" in readme and "treated as the internet" in readme
+    with_net = _render_net(_network())["README.md"]
+    assert "no network model" not in with_net and "zone `subnet6`" in with_net
+
+
+@pytest.mark.parametrize(
+    "network, match",
+    [
+        ({"zones": "x"}, "zones"),
+        ({"zones": [{"id": "a", "subnet6": "fe80::/64"}]}, "subnet6"),
+        ({"zones": [], "delegated_prefixes6": "x"}, "delegated_prefixes6"),
+    ],
+)
+def test_a_bad_network_model_is_refused(network, match):
+    with pytest.raises(eg.EgressError, match=match):
+        _render_net(network)
+
+
+def test_the_ipv6_internet_accept_is_global_unicast_only():
+    """The docs promise global unicast: the accept needs ``2000::/3`` as well as the deny-list."""
+    nft = _host_nft(_render_net(None))
+    pub = chain(nft, "publishing", "publisher")
+    assert "ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept" in pub
+
+
+def test_render_cli_notes_the_missing_network_model(tmp_path, capsys):
+    from homelabnext.modules import cli as mcli
+
+    site = tmp_path / "site.yml"
+    site.write_text(yaml.safe_dump(SITES["small-lab"]), encoding="utf-8")
+    argv = ["render", "--root", str(ROOT), "--examples", "--site", str(site)]
+    mcli.main([*argv, "--out", str(tmp_path / "a")])
+    assert "no network model" in capsys.readouterr().out
+    net = tmp_path / "net.yml"
+    net.write_text(yaml.safe_dump(_network()), encoding="utf-8")
+    code = mcli.main([*argv, "--network", str(net), "--out", str(tmp_path / "b")])
+    assert "no network model" not in capsys.readouterr().out
+    assert code == 0
+    nfts = sorted((tmp_path / "b/egress").glob("*/hnx-egress.nft"))
+    assert nfts
+    for f in nfts:
+        _, v6 = _sets(f.read_text())
+        assert any(ipaddress.ip_address(_global6(0x30, 9)) in n for n in v6)
