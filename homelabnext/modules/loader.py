@@ -966,7 +966,10 @@ def _declared(
             out["rows"].update(dict.fromkeys(ins.rows[n], n))
         out["mcp_servers"].update(dict.fromkeys(mr._mcp_ids(m, d, load), n))
         out["agents"].update({a["key"]: n for a in mr._agents(m)})
-        out["tables"].update({x["table"]: n for x in m.get("data", []) if "table" in x})
+        # one definition of a module's tables for the running check and the core-collision check:
+        # a lake table declared only as a ``contributes.lake_tables`` record is as declared as
+        # one named in ``data``
+        out["tables"].update(dict.fromkeys(_module_tables(m, d, load), n))
     return out
 
 
