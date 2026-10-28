@@ -78,6 +78,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
       - name: homelab-next at the pinned commit (roles, lookup plugin, tools)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

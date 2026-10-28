@@ -323,6 +323,32 @@ def test_the_loader_also_runs_on_every_pull_request():
                for s in job["steps"] if "actions/checkout" in s.get("uses", ""))  # fmt: skip
 
 
+def test_the_site_review_tier_runs_on_every_pull_request():
+    """checks.yml rates each change to what the lab claims, with the pinned hnx, the base read
+    through git (a full-history checkout) and no secret."""
+    checks = yaml.safe_load((SKELETON / ".github" / "workflows" / "checks.yml").read_text())
+    job = checks["jobs"]["site-review-tier"]
+    assert job["steps"][0]["name"] == "refuse an unpinned hnx"
+    (step,) = [
+        s
+        for s in job["steps"]
+        if s.get("name") == "the review tier of this change to the lab's site and selection"
+    ]
+    assert step["run"].strip() == "hnx site review-tier --root . --ci-base"
+    assert step["env"] == {
+        "HNX_PR_BASE": "${{ github.event.pull_request.base.sha }}",
+        "HNX_PUSH_BEFORE": "${{ github.event.before }}",
+    }
+    assert "continue-on-error" not in step and "if" not in step
+    assert "secrets." not in yaml.safe_dump(job)
+    checkouts = [s for s in job["steps"] if "actions/checkout" in s.get("uses", "")]
+    assert all(s["with"]["persist-credentials"] is False for s in checkouts)
+    (own,) = [s for s in checkouts if "repository" not in s["with"]]
+    assert own["with"]["fetch-depth"] == 0
+    (hnx,) = [s for s in checkouts if s["with"].get("repository") == "homelab-next/homelab-next"]
+    assert hnx["with"]["ref"] == "${{ vars.HNX_REF }}"
+
+
 def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str]:
     """Run the template's loader step: in an overlay with ``lab_files``, with an ``hnx`` that
     exits ``hnx_exit`` and logs its arguments.  Returns (exit, what it ran and printed)."""
@@ -452,6 +478,28 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         assert rules.get(path), path
     assert "/.hnx-private-overlay.yml" in rules
     assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
+    assert rules.get("/lab/modules.yml")  # the selection's scope and grants widen trust too
+    # the rest of what the lab trusts: hnx site review-tier rates every change to these human
+    for path in ("/lab/services.yml", "/lab/guests/", "/lab/modules/", "/lab/modules.lock"):
+        assert rules.get(path), path
+
+
+@pytest.mark.parametrize("workflow", ["checks.yml", "deploy.yml"])
+def test_every_pinned_checkout_refuses_an_hnx_the_change_carries(workflow):
+    """The pinned homelab-next is checked out to hnx/ and installed from there: each job first
+    fails when the overlay's own tree has an hnx/ (a file, a directory or a link)."""
+    doc = yaml.safe_load((SKELETON / ".github" / "workflows" / workflow).read_text())
+    pinned = 0
+    for name, job in doc["jobs"].items():
+        steps = job.get("steps") or []
+        for i, step in enumerate(steps):
+            if (step.get("with") or {}).get("path") != "hnx":
+                continue
+            pinned += 1
+            guard = steps[i - 1]
+            assert guard.get("name") == "refuse an hnx/ the change itself carries", name
+            assert "[ -e hnx ] || [ -L hnx ]" in guard["run"] and "exit 1" in guard["run"], name
+    assert pinned >= 1
 
 
 # ---- the vault password client -----------------------------------------------------------------

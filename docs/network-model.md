@@ -215,9 +215,12 @@ wrong one opens a model runtime's egress to that space, and the `why` it carries
 control. The only control is review: the private overlay's `CODEOWNERS` template names
 `lab/site.yml` ([private overlay](private-overlay.md)), which gates the edit **only** where the
 overlay's branch rules require an approving Code Owners review. Without that rule the declaration
-is unreviewed site configuration. A check that flags any change to `delegated_prefixes6` against
-the base commit as human-approve (as `hnx modules review-tier` does for module manifests) is a
-follow-up. It changes only the lab-only judgement: which prefixes a zone may use, which IPv6 extra
+is unreviewed site configuration. `hnx site review-tier`, which the overlay's `checks.yml` runs on
+every pull request, rates a declared prefix added or changed as human-approve against the base
+commit and fails when no code owner as of the base would approve it ([private
+overlay](private-overlay.md#what-a-change-to-the-lab-claims)); that makes the change visible and
+gives the Code Owners rule an owner to bind, and it is no more than that. The declaration changes
+only the lab-only judgement: which prefixes a zone may use, which IPv6 extra
 addresses a guest may name (its zone's `subnet6`, as before) and what the roles render are
 unchanged.
 

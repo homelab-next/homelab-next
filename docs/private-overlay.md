@@ -1,6 +1,6 @@
 ---
-summary: 'The public repo and the private overlay: what lives where, how hnx finds private data, encryption, bootstrapping a server, the runner, reviews and deploys.'
-summary_of: outline:sha256:0553d9b74b8038f4
+summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, review tiers and deploys.'
+summary_of: outline:sha256:abc61770a4181b65
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
@@ -208,8 +208,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    * **Branch protection on `main`** (a ruleset or classic protection; both exist for private
      repositories on Pro): pull requests required, the `checks` job required, **one approving
      review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` names
-     `.github/`, `bin/`, `runner/`, `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml` and
-     the marker), and no force pushes. See [writers and reviews](#writers-and-reviews).
+     `.github/`, `bin/`, `runner/`, `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`,
+     the marker and what the lab trusts under `lab/`), and no force pushes. See [writers and reviews](#writers-and-reviews).
 7. **Host keys.** Record each host's public SSH key in `ansible/known_hosts` after checking its
    fingerprint out of band (or one `@cert-authority` line for an SSH host CA).
 8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
@@ -390,7 +390,8 @@ itself**, so a pull request can rewrite `checks.yml` to pass. What actually gate
 
 * **Branch protection on `main`** with a required approving review and **"Require review from
   Code Owners"** (the skeleton's `.github/CODEOWNERS` covers `.github/`, `bin/`, `runner/`,
-  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker and `lab/site.yml`), so
+  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker, `lab/site.yml`,
+  `lab/modules.yml`, `lab/services.yml`, `lab/guests/`, `lab/modules/` and `lab/modules.lock`), so
   nothing reaches `main`, and so nothing a dispatch runs, without the owner's approval.
   `lab/site.yml` is there because it carries claims the checks trust rather than prove: above
   all `delegated_prefixes6` (site 1.5), the global IPv6 prefixes a model runtime's lab-only rule
@@ -408,6 +409,73 @@ collaborator, not against the owner's own account. Add a second writer only with
 and CODEOWNERS on, and turn administrator bypass off once there is a second reviewer. Anyone with
 write access can still start a deploy of what is on `main`; keep the writer list to people you
 would trust to do that.
+
+## What a change to the lab claims
+
+`lab/site.yml`, `lab/modules.yml` and a few other files decide what the lab trusts and what a
+guest may reach. `hnx site review-tier --ci-base` (the `site-review-tier` job of `checks.yml`, run
+by the pinned `hnx` with no secret and the base read through git) compares them with the pull
+request's base and rates each change **human-approve** or **owner**. The default is human-approve:
+a change is owner only where the check knows why it widens nothing.
+
+These fields are judged by their own rules; a narrowing of one is owner:
+
+| Field | Human-approve when | Why |
+|---|---|---|
+| `delegated_prefixes6` | a prefix is added or changed | a declared prefix is the lab's to a model runtime's lab-only rule |
+| `zones` | a zone is added | a new range every `zone:` allow and the lab-only rule count as the lab |
+| `zones[].subnet`, `zones[].subnet6` | a range is changed or added | what a `zone:` allow renders to, and the lab to the lab-only rule |
+| `zones[].egress` | `internet` turns to anything but `deny`, `one_way` turns off, any other key changes | opens a zone outward |
+| `firewall.zone_to_zone` | an `allow` is added or changed, a `deny` is removed or changed | lets one zone reach another (one rule per zone pair, so order is free) |
+| `firewall.service_exceptions` | the same, or the list is reordered | lets a zone reach a service; first match wins, in document order |
+| `tailnet` | anything changes | what the CI deploy's tailnet key reaches |
+| `scope.trusted` (selection) | an address is added | the lab itself: never an outsider, and the lab to the egress generator |
+| `scope.target` (selection) | an address is added | what assessment tooling may touch |
+| `scope.exclude` (selection) | an address is removed, or a part declared where it was absent | the carve-outs every reader honours (absent fails closed; `[]` excludes nothing) |
+| `grants` (selection) | any grant is added | what a selected module may do beyond its own slot |
+
+These are owner, because they widen no reach:
+
+| Field | Why |
+|---|---|
+| `site_version` | the schema version the file is written to |
+| `site` (`id`, `domain`, `timezone`) | names, not reach |
+| `edge` | the uplink chain's devices and their power: a description, not a rule |
+| `power` | the UPSes and a device's default power |
+| `zones[].purpose`, `zones[].tags` | a description, and labels no rule reads |
+| `zones[].dhcp.lease_hours` | a lease time |
+| `hosts.<host>.capacity` (selection) | the resources a host offers: a limit, not reach |
+
+Every other changed key is human-approve, with its path: among them a zone's `vlan_id`, `gateway`,
+`dns` and `dhcp.range`, the `router`, the `switches` and their ports, the site's `dns` and
+`dhcp_reservations`, the `adapters` (which adapter renders the firewall, and which interface is the
+WAN), and in the selection the `profile`, the `hosts` (their `addresses`, which the egress
+generator never counts as the internet, and `isolated`), the `slots`, `features`, `core` and
+`providers` and their placements.
+
+Every change to these files is human-approve as a whole: the registry `lab/services.yml` (the
+hosts, addresses, ports and zones every `svc:` allow and route renders to), anything under
+`lab/guests/` (a guest's zone, addresses and `outbound_allow`), and the overlay's own modules
+under `lab/modules/` and `lab/modules.lock` (which `hnx modules review-tier` does not read: its
+roots are the repository's `modules/` and `examples/modules/`). The `CODEOWNERS` template names
+all of them.
+
+A file new at the head or removed from it, one that does not read at either end (not YAML, an
+alias or a duplicate key, a symbolic link, not a regular file, over the size cap), a sealed one (a
+top-level `sops` key: its values cannot be judged), one with a mapping key that is not text, and a
+judged field whose shape cannot be compared are human-approve (fail closed). The module loader
+checks the selection as a whole (`module-loader`), and each selected module's own manifest has its
+own tiers (`hnx modules review-tier`).
+
+Each job that checks out the pinned `hnx` into `hnx/` first fails if the overlay itself carries an
+`hnx/`, so a pull request cannot put its own files where the pinned checker is installed from.
+
+**What enforces the approval is not this check.** Like `hnx modules review-tier`, it fails only
+when a human-approve change has **no valid `CODEOWNERS` owner as of the base**; the approval itself
+is the pull request's Code Owners review, which binds only where `main`'s branch rules require it
+([Writers and reviews](#writers-and-reviews)). With a single writer and no such rule, a
+human-approve change is merely visible, in the job log and the step summary; the check reads no
+approval and authenticates no reviewer.
 
 ## GitHub plans
 

@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.gitbase import add_base_arguments
 from homelabnext.modules import loader as ld
 
 #: what a lab names when it takes up modules: with none of them, ``--deploy`` checks an empty
@@ -251,14 +252,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     t = sub.add_parser("review-tier", help="the review tier of each manifest changed since a base")
     t.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
-    which = t.add_mutually_exclusive_group(required=True)
-    which.add_argument("--base", help="the commit to compare with")
-    which.add_argument(
-        "--ci-base",
-        action="store_true",
-        help="pick the base like tools/schema_check.py --ci-base (GITHUB_EVENT_NAME, "
-        "HNX_PR_BASE, HNX_PUSH_BEFORE)",
-    )
+    add_base_arguments(t)
     t.add_argument("--json", action="store_true")
     w = sub.add_parser("swap-check", help="a swap record against the repository's evidence")
     w.add_argument("record", type=Path, help="the swap record (platform/module_swap, JSON or YAML)")
@@ -307,18 +301,11 @@ def _ci_base(root: Path, prog: str = "review-tier") -> str:
     """The base CI compares with (:func:`homelabnext.gitbase.ci_base`: a pull request's base; a
     push's previous tip, else ``HEAD^``; a root commit, the empty tree).  The rule is the
     package's, never a file loaded from the checkout."""
-    import os
-
-    from homelabnext.gitbase import ci_base
+    from homelabnext.gitbase import ci_base_from_env
     from homelabnext.modules import review_tier as rt
 
     try:
-        base, why = ci_base(
-            root,
-            os.environ.get("GITHUB_EVENT_NAME", ""),
-            os.environ.get("HNX_PR_BASE", ""),
-            os.environ.get("HNX_PUSH_BEFORE", ""),
-        )
+        base, why = ci_base_from_env(root)
     except ValueError as exc:
         raise ld.LoaderError(f"--ci-base: {exc}") from None
     print(f"hnx modules {prog}: base {base or 'the empty tree'} ({why})", file=sys.stderr)
@@ -328,8 +315,6 @@ def _ci_base(root: Path, prog: str = "review-tier") -> str:
 def _review_tier(args: argparse.Namespace) -> int:
     """Print each changed manifest's tier and its fields; fail (1) when a human-approve change
     has no valid code owner as of the base, since the code-owner review is the human approval."""
-    import os
-
     from homelabnext.modules import review_tier as rt
 
     root = _root(args.root)
@@ -340,39 +325,14 @@ def _review_tier(args: argparse.Namespace) -> int:
         results, problems = rt.review(root, base)
     except ValueError as exc:
         raise ld.LoaderError(str(exc)) from None
-    rows = [
-        {
-            "path": r.path,
-            "tier": r.tier,
-            "owners": r.owners,
-            "changes": [{"field": c.field, "tier": c.tier, "why": c.why} for c in r.changes],
-        }
-        for r in results
-    ]
-    if args.json:
-        print(json.dumps({"manifests": rows, "problems": problems}, indent=2))
-    else:
-        for r in rows:
-            print(f"{r['path']}: {r['tier']} (owners: {' '.join(r['owners']) or 'none'})")
-            for c in r["changes"]:
-                print(f"  {c['tier']}: {c['field']}: {c['why']}")
-        for p in problems:
-            print(p)
-        human = sum(r["tier"] == rt.HUMAN for r in rows)
-        print(
-            f"hnx modules review-tier: {len(rows)} changed path(s), {human} human-approve, "
-            f"{len(problems)} problem(s)"
-        )
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary and rows:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write("### Module review tiers\n\n| path | tier | fields |\n|---|---|---|\n")
-            for r in rows:
-                fields = ", ".join(
-                    f"`{c['field']}`" for c in r["changes"] if c["tier"] == r["tier"]
-                )
-                fh.write(f"| `{r['path']}` | {r['tier']} | {fields} |\n")
-    return 1 if problems else 0
+    return rt.report(
+        results,
+        problems,
+        as_json=args.json,
+        prog="hnx modules review-tier",
+        key="manifests",
+        title="Module review tiers",
+    )
 
 
 def _swap_check(args: argparse.Namespace) -> int:
