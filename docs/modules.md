@@ -413,7 +413,11 @@ union of the base's and the head's privileged slots, so neither side can drop on
 CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
 human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
-the evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2").
+the evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2"), and so
+is a change to the model role table (`examples/model_roles.json`) or to a swap record
+(`examples/swaps/`): `leaves_lab` and `fallback` are in no pin, yet they decide which modules need
+`grants.cloud_models`. The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
+`hnx site review-tier` ([private-overlay.md](private-overlay.md)).
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
 the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;
@@ -1460,7 +1464,20 @@ and `meaning_changes` is recorded, never checked.
   `examples/swaps/` (JSON or YAML; untracked ones count, a record already on the base does not)
   must cover it: each must validate and its `model_roles` legs must hold against the base's
   evidence, live required, which also means a leg for every role the change rebinds. An unchanged
-  table passes. The module, site and migration rules are `swap-check`'s, which needs a site. A
+  table passes.
+
+  **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
+  version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
+  require `grants.cloud_models`), a role's `fallback` (which it follows) or any other field. The
+  gate therefore also compares each role both tables have field by field, pins aside (the role's
+  own keys, and the keys each binding carries beside its pin). Every role that differs that way
+  must be named in the new optional **`model_role_changes`** of a record in the change (`mdl:<role>`
+  aliases; schema `platform/module_swap`); a record that rebinds or names other roles covers
+  nothing for it, and a name whose role did not change is refused. A role with both a rebind and
+  such a change needs its leg and its name. Names are not checked by `swap-check` (it sees no
+  second table), only by the gate. Any role field counts (a `description` too), since the gate
+  cannot tell which fields a future rule reads. A role present in only one table is refused as
+  before. The module, site and migration rules are `swap-check`'s, which needs a site. A
   rebind within one provider module has no record type of its own, so for now any change to the
   example role table goes through a swap record.
 

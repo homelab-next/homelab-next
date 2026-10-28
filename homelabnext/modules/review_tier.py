@@ -16,7 +16,9 @@ both the base and the head, every slot change are human-approve.  A change to wh
 tier (the slot registry, the module schema, CODEOWNERS, this module) is human-approve too, and so
 is a change to what vouches for a model a swap rebinds to (:data:`EVIDENCE`, :data:`EVIDENCE_DIRS`:
 the model store, the evaluation reports and the golden suites, which the swap check reads from the
-base, so vetting a model is its own reviewed change).
+base, so vetting a model is its own reviewed change), and so is a change to the model role table
+or to a swap record (:data:`MODEL_TRUST`, :data:`MODEL_TRUST_DIRS`): ``leaves_lab`` and ``fallback``
+are in no pin, yet they decide which modules need ``grants.cloud_models``.
 
 The approval itself is the pull request's code-owner review: :func:`review` reads CODEOWNERS **as
 of the base commit** (the rules GitHub applies to the pull request) and reports a problem for every
@@ -43,6 +45,8 @@ __all__ = [
     "EVIDENCE_DIRS",
     "GOVERNANCE",
     "HUMAN",
+    "MODEL_TRUST",
+    "MODEL_TRUST_DIRS",
     "OWNER",
     "Change",
     "Result",
@@ -121,6 +125,11 @@ GOVERNANCE = (
 EVIDENCE = (_se.STORE, *_se.REPORTS, *_se.SUITES)
 #: directories whose every file vouches the same way: the live reports of proposed tables
 EVIDENCE_DIRS = (_se.EVALS,)
+#: the model role table and the swap records: a binding's ``leaves_lab`` and a role's ``fallback``
+#: decide which modules need ``grants.cloud_models`` (``rules.cloud_roles``), and neither is in a
+#: pin, so only a human reviewing the table (and the record that covers it) catches a change
+MODEL_TRUST = (_se.ROLES,)
+MODEL_TRUST_DIRS = (_se.SWAPS,)
 #: git's empty tree, the base of a root commit
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -610,7 +619,7 @@ def changed_paths(root: Path, base: str) -> list[str]:
     changes against ``base`` (a rename is a removal and an addition), untracked files included."""
     if _git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{tree}}").returncode:
         raise ValueError(f"--base {base}: not a commit here")
-    spec = [*MODULE_ROOTS, *GOVERNANCE, *EVIDENCE, *EVIDENCE_DIRS]
+    spec = [*MODULE_ROOTS, *GOVERNANCE, *EVIDENCE, *EVIDENCE_DIRS, *MODEL_TRUST, *MODEL_TRUST_DIRS]
     r = _git(root, "diff", "--no-renames", "--name-only", "-z", base, "--", *spec)
     if r.returncode:
         raise ValueError(f"git diff against {base} failed")
@@ -658,6 +667,13 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
             continue
         if rel in EVIDENCE or any(rel.startswith(d + "/") for d in EVIDENCE_DIRS):
             why = "vouches for a model a later swap rebinds to (read from the base)"
+            results[rel] = Result(rel, [Change(rel, HUMAN, why)])
+            continue
+        if rel in MODEL_TRUST or any(rel.startswith(d + "/") for d in MODEL_TRUST_DIRS):
+            why = (
+                "the model role table or a swap record: leaves_lab and fallback decide "
+                "grants.cloud_models and no pin shows them"
+            )
             results[rel] = Result(rel, [Change(rel, HUMAN, why)])
             continue
         d = _module_dir(rel)

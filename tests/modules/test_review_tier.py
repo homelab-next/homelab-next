@@ -676,6 +676,18 @@ def test_what_vouches_for_a_model_is_human_approve(repo, capsys, path):
     assert "vouches for a model" in out["manifests"][0]["changes"][0]["why"]
 
 
+@pytest.mark.parametrize("path", ["examples/model_roles.json", "examples/swaps/rebind.json"])
+def test_the_role_table_and_the_swap_records_are_human_approve(repo, capsys, path):
+    """S4: a role binding's ``leaves_lab`` and ``fallback`` decide which modules need
+    grants.cloud_models, so a change to the table or to a swap record is a human's to approve."""
+    f = repo / path
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("{}\n")
+    _, out = _run(repo, capsys)
+    assert _by_path(out) == {path: rt.HUMAN}
+    assert "role table" in out["manifests"][0]["changes"][0]["why"]
+
+
 def test_the_schema_is_read_as_of_the_base(repo, capsys):
     """S2: a pull request that adds a key to the schema still has its use judged undefined."""
     schema = json.loads((repo / rt.SCHEMA).read_text())
