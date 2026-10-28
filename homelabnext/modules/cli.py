@@ -37,7 +37,8 @@ checks").
     the same check, then (only when it is clean) the footprint limits and the egress policy for
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
     empty: a render never mixes with stale files from an earlier one.  ``--network`` is the
-    network model (``site.yml``): its zone ``subnet6`` and ``delegated_prefixes6`` prefixes are
+    network model (``site.yml``; with ``--overlay``, ``DIR/lab/site.yml`` by default): its zone
+    ``subnet6`` and ``delegated_prefixes6`` prefixes are
     then never the internet for a role with ``internet``; without it the render prints a note
     that a lab IPv6 address outside the listed host addresses and ``scope.trusted.nets`` is
     treated as the internet.
