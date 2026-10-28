@@ -1088,6 +1088,22 @@ answers: the census is an alarm against drift and mistakes, not a gate against a
 which already has root on every host through `site.yml`. Review of the overlay itself (its
 `ansible.cfg`, inventory and roles are its code owners') is what guards against that.
 
+**Why only units are gathered.** The census lists only what a host, or a query the runner can make
+without new credentials, reports truthfully and in full; a kind it cannot measure stays in
+`not_gathered` (recovery pairs, which are not an inventory kind, are left out of the inventory), so
+the loader says it was not compared instead of judging the declarations against themselves. As of this release no other kind has such a source:
+
+| Kind | What exists today | What a census of it would need |
+|---|---|---|
+| `rows` (service rows that answer) | the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
+| `mcp_servers` (registered) | `hnx mcp catalog render` writes client files from the catalog; no core role installs them and nothing lists what a client registered | the agent runtime writing, root-owned and read-only, the servers it registered, or a read-only listing the census can query on the agent host |
+| `agents` (a compiled profile and a lane) | the broker answers each caller about itself (`actions`, `pending-for-me`) over its peer-credential socket; no operation lists the agents it serves | a read-only broker operation for an operator identity that lists the agent keys with a compiled profile and a lane |
+| `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
+| `notify_pairs` | the pairs live in the notifier's memory (`Notifier.register_pair`); its state store keeps message states, not pairs | the notifier persisting its registered pairs, or a read-only endpoint the census can query |
+
+Reading these back from the manifests, the role table or the core's `core_pairs` would only restate
+what is declared, so none is.
+
 ## How a swap works, end to end
 
 Swapping the `samples` object store from `example-object-store` to `other-object-store` (same shared
