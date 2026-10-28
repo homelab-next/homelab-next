@@ -421,8 +421,9 @@ human-approve change has no valid owner (`@user`, `@org/team` or an email) in CO
 the base, matched by GitHub's rules (the last matching line wins, `*` within a segment, `**`
 across them, no character classes). It does not read approvals, so the guarantee is only as
 strong as the branch ruleset's "Require review from Code Owners". **Today the check is
-near-vacuous**: CODEOWNERS's first line, `*`, gives every path an owner, and the one owner reviews
-everything; the tier is the record of what needs care, and it starts to bite when ownership is
+near-vacuous**: `main`'s ruleset requires the CI checks but no review at all, so the approval is
+given by convention, not enforced; and CODEOWNERS's first line, `*`, gives every path an owner,
+and the one owner reviews everything; the tier is the record of what needs care, and it starts to bite when ownership is
 split. `make modules-review-tier` runs it locally against `BASE` (default `origin/main`); it is not
 part of `make gates`, which has no base to compare with. The gates this table marks as implemented are rules
 (`homelabnext/modules/rules.py`) that the loader runs (`hnx modules check`, over the examples in
@@ -1461,7 +1462,8 @@ and `meaning_changes` is recorded, never checked.
   checkout's own package never on the path, which the job asserts), reading the change only as data
   (`--root`). A pull request run still takes the workflow file and the dependency constraints from
   the change, so this rests on both being human-approve (`.github/workflows/ci.yml` is governance,
-  `constraints/` is in CODEOWNERS); `pull_request_target` is never used. Until a base carries
+  `constraints/` is in CODEOWNERS), a review `main`'s ruleset does not yet require;
+  `pull_request_target` is never used. Until a base carries
   `swap-gate` (the change that adds it), the job runs the change's own and says so.
 
   What none of this proves: a report's `live` is the claim of whoever ran it, now one a code owner
@@ -1623,7 +1625,8 @@ listed as deferred.
    (`homelabnext.modules.review_tier`, `hnx modules review-tier`, run in CI; see
    [Trust tiers](#trust-tiers-what-selecting-a-module-grants)); the approval itself is the pull
    request's code-owner review as of the base, so it is only as strong as the branch ruleset that
-   requires it, and with today's `*` owner line it is near-vacuous.
+   requires it: today's ruleset requires the CI checks but no review, and with the `*` owner line
+   it would be near-vacuous even if it did.
 5. **Supply chain**: implemented (see [Supply chain](#supply-chain)); the loader runs the check.
 6. **The egress generator**: implemented (see [Egress and publishing](#egress-and-publishing));
    `hnx modules render` writes it for a site that checks clean.
