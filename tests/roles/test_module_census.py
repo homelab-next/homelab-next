@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Role module_census (docs/modules.md, "What the loader checks"): each host's enabled and active
 fleet units, its notifier owners' pairs records and its installed MCP client configurations,
-read-only, and on a broker host the agents its broker serves, written on the controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
+read-only, on a broker host the agents its broker serves and on a lake catalog host the tables its
+catalog lists, written on the controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
 play runs on localhost, which is then both the host and the controller."""
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import os
 import shutil
 
 import pytest
-from rolerun import LOGGER, calls, fake, first_run, run_cases
+from rolerun import LOGGER, calls, fake, first_run, logging_fake, run_cases
 
 from homelabnext.modules import census
 from homelabnext.notify import record as nr
@@ -52,15 +53,21 @@ MCP_JSON = json.dumps(
     {"mcpServers": {"hnx-broker": {"type": "stdio", "command": "hnx", "env": {"T": MCP_SECRET}}}}
 )
 AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
+#: what hnx modules catalog-tables prints on the catalog host: names only
+TABLES_FOUND = {"tables": ["lab_own.x", "ocsf.authentication"], "left_out": 1}
+CATALOG = "http://127.0.0.1:8181"  # no-raw-endpoint: allow loopback, a stand-in answers
+NAMED = "http://localhost:8181"  # no-raw-endpoint: allow refused, a name not an IP literal
+OFF_HOST = "http://192.0.2.8:8181"  # no-raw-endpoint: allow RFC 5737, refused off loopback
 
 
 def _hnx(tmp_path) -> str:
-    """A stand-in hnx whose broker answers the operator's agents (and logs the call); it fails
-    unless it was reached through become as root (the stand-in sudo below says so)."""
+    """A stand-in hnx whose broker answers the operator's agents and whose catalog listing
+    answers the tables (and logs each call); each fails unless it was reached through become as
+    root (the stand-in sudo below says so)."""
     out = (
         "if os.environ.get('HNX_TEST_BECOME_USER') != 'root':\n"
-        "    sys.exit('hnx broker agents: not run as root')\n"
-        f"sys.stdout.write({AGENTS!r})"
+        "    sys.exit('hnx: not run as root')\n"
+        f"sys.stdout.write({AGENTS!r} if sys.argv[1] == 'broker' else {json.dumps(TABLES_FOUND)!r})"
     )
     body = (
         LOGGER.replace("LOG", repr(str(tmp_path / "calls.log")))
@@ -144,6 +151,10 @@ def _first(tmp_path):
         "module_census_hnx_cli": _hnx(tmp_path),
         # the broker task becomes root (the identity the broker's manifest lists as operator)
         "ansible_become_exe": _sudo(tmp_path),
+        # this host runs the lake catalog, whose token is root's: the listing task becomes root
+        "module_census_catalog_url": CATALOG,
+        "module_census_catalog_warehouse": "lab",
+        "module_census_catalog_token_file": "/etc/hnx/catalog.token",
         "module_census_mcp_configs": [
             {"path": str(agent / ".mcp.json"), "client": "claude-code"},
             {"path": str(agent / "hermes" / "config.yaml"), "client": "hermes"},
@@ -174,6 +185,9 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "--state=active hnx-*",
         "sudo -u root",
         "hnx broker agents --socket /run/hnx-broker/broker.sock",
+        "sudo -u root",
+        f"hnx modules catalog-tables --url {CATALOG} --warehouse lab --api-root /catalog "
+        "--token-file /etc/hnx/catalog.token",
     ]
     out = tmp_path / "census"
     assert json.loads((out / "_hosts.json").read_text()) == ["localhost"]
@@ -205,6 +219,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
                 "servers": [],
             },
         ],
+        "tables": TABLES_FOUND,
     }
     # a configuration is parsed on the host: no value of its env block reaches the answer, nor
     # anything the run printed
@@ -216,7 +231,8 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "units": ["external-collector-pull", "lake-compact", "stray"],
         "agents": ["core-staff-scorecard", "external-collector-analyst"],
         "mcp_servers": ["hnx-broker"],
-        "not_gathered": ["rows", "tables"],
+        "tables": ["table:lab_own.x", "table:ocsf.authentication"],
+        "not_gathered": ["rows"],
         "notify_pairs": [PAIR],
         "listening": [{"host": "localhost", "sockets": ["tcp/8443", "tcp/9000", "udp/53"]}],
     }
@@ -300,6 +316,18 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             },
             # a file not named as its client's configuration is never opened
             {"module_census_mcp_configs": [{"path": "/etc/shadow", "client": "claude-code"}]},
+            # the catalog is listed from its own host: a loopback IP literal, and plain values
+            {"module_census_catalog_url": NAMED},
+            {"module_census_catalog_url": OFF_HOST},
+            {"module_census_catalog_url": CATALOG + "/catalog"},
+            {"module_census_catalog_warehouse": ""},
+            {"module_census_catalog_warehouse": "--url=x"},
+            {"module_census_catalog_api_root": "/../x"},
+            {"module_census_catalog_token_file": "etc/token"},
+            # no token file: the listing does not become root (the stand-in refuses it then)
+            {"module_census_catalog_token_file": ""},
+            # a listing that is not JSON fails the census
+            {"module_census_hnx_cli": logging_fake(tmp_path, "hnx-prints", "lab_own.x\n")},
         ],
         env=BECOME_ENV,
     )
@@ -324,6 +352,11 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     assert results[18][0] and "module_census_mcp_configs" in results[18][1], results
     assert results[19][0] and "is not a regular file of at most 1048576 bytes" in results[19][1]
     assert results[20][0] and "is not named as a claude-code configuration" in results[20][1]
+    for failed, said in results[21:28]:
+        assert failed and "the lake catalog empty or http(s)://<loopback IP>" in said, results
+    said = "module_census: the lake catalog was not listed: hnx: not run as root"
+    assert results[28] == (True, said), results
+    assert results[29][0], results
 
 
 def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):

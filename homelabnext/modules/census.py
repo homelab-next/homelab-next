@@ -83,16 +83,29 @@ which is derived, from what the host reports and what the row and the placement 
 whose port is held by another program reads as answering, and a row nobody declared is never
 seen.
 
-Kinds the hosts cannot report (service rows by name, tables) are named in the
-inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that merely
-leaves a kind out is refused by its schema, never read as "nothing runs".
+**Lake tables.**  On the host that runs the lake catalog (the role's
+``module_census_catalog_url``, a loopback IP literal, and ``module_census_catalog_warehouse``),
+the role runs ``hnx modules catalog-tables`` there (:func:`catalog_tables`): the Iceberg REST
+catalog's namespaces and tables, by GET requests only, with the token (when the catalog wants
+one) read on that host from a file its reader's alone (:func:`read_token`) and sent to the
+loopback address alone; only names come back.  ``tables`` is gathered when at least one host
+listed a catalog (the union, as ``table:<namespace>.<name>``) and stays in ``not_gathered``
+otherwise; a name that is not ``<namespace>.<name>`` fails the census.  What the catalog lists is
+believed, like a unit line.
+
+Kinds the hosts cannot report (service rows by name) are named in the inventory's
+``not_gathered``, and the loader notes each as not compared; an inventory that merely leaves a
+kind out is refused by its schema, never read as "nothing runs".
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
 import re
 import stat
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +145,13 @@ MAX_LINES = 4096
 #: secret pasted where a name belongs than a name, so it is refused and never persisted
 MCP_NAME_MAX = 48
 MAX_SOCKETS = 16384
+#: one lake table as the catalog listing reports it, ``<namespace>.<name>`` (the inventory's
+#: ``table:<namespace>.<name>`` without its prefix: ``platform/module_inventory``, at most 129)
+TABLE_RE = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
+TABLE_PART_RE = re.compile(r"[a-z][a-z0-9_]*")
+TABLE_MAX = 129 - len("table:")
+#: a bearer token as the catalog listing sends it (RFC 6750 ``b64token``): one line, no space
+TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{1,4096}")
 
 
 class CensusError(ValueError):
@@ -232,6 +252,115 @@ def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
     return names, notes
 
 
+def parse_tables(found: Any, host: str) -> tuple[set[str], int]:
+    """The lake tables one host's catalog listing reports, as ``table:<namespace>.<name>``, and
+    how many names it left out (:func:`catalog_tables`)."""
+    if not isinstance(found, dict) or set(found) != {"tables", "left_out"}:
+        raise CensusError(f"{host}: the lake tables are not {{tables, left_out}}")
+    tables, left = found["tables"], found["left_out"]
+    if not isinstance(tables, list) or not all(isinstance(x, str) for x in tables):
+        raise CensusError(f"{host}: the lake tables are not a list of text")
+    if len(tables) > MAX_LINES:
+        raise CensusError(f"{host}: over {MAX_LINES} lake tables")
+    if not isinstance(left, int) or isinstance(left, bool) or left < 0:
+        raise CensusError(f"{host}: the lake tables' left_out is not a count")
+    out: set[str] = set()
+    for i, name in enumerate(tables, 1):
+        if len(name) > TABLE_MAX or not TABLE_RE.fullmatch(name):
+            raise CensusError(
+                f"{host}: lake table {i} is not <namespace>.<name>: {ld._shown(name)}"
+            )
+        out.add(f"table:{name}")
+    return out, left
+
+
+def read_token(path: str | Path) -> str:
+    """The bearer token in ``path``, read in one step: never through a link, a regular file with
+    a single link, owned by this process's user, which its group and others may neither read nor
+    write, one line of :data:`TOKEN_RE`.  The token is never part of an error."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as exc:
+        raise CensusError(f"token file: cannot be opened ({exc.strerror})") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise CensusError("token file: not a regular file with a single link")
+        if st.st_uid != os.geteuid() or st.st_mode & 0o077:
+            raise CensusError("token file: not this user's alone (owner only, no group or other)")
+        if st.st_size > 4097:
+            raise CensusError("token file: larger than a token")
+        raw = os.read(fd, 4098)
+    finally:
+        os.close(fd)
+    text = raw.decode("ascii", "replace")
+    text = text[:-1] if text.endswith("\n") else text
+    if not TOKEN_RE.fullmatch(text):
+        raise CensusError("token file: not one line of token characters")
+    return text
+
+
+def catalog_tables(
+    url: str,
+    warehouse: str,
+    *,
+    token_file: str | Path | None = None,
+    api_root: str = "/catalog",
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """The lake tables the Iceberg REST catalog at ``url`` (the lake-catalog slot's contract,
+    :class:`homelabnext.lake.rest_catalog.RestCatalog`) lists in ``warehouse``: GET requests
+    only, to a loopback IP literal (the census runs on the catalog's own host), with the token in
+    ``token_file`` (:func:`read_token`) sent to that address alone (no redirect followed, no
+    proxy).  ``{"tables": ["<namespace>.<name>", ...], "left_out": n}``: a namespace or a table
+    whose name is not of the inventory's shape is left out and counted (no module's table can
+    have such a name); a namespace nested in another is not listed.  More than
+    :data:`MAX_LINES` namespaces or tables fails."""
+    from homelabnext._http import credential_opener
+    from homelabnext.lake import LakeError
+    from homelabnext.lake.rest_catalog import RestCatalog
+
+    try:
+        parts = urllib.parse.urlsplit(url)
+        local = (
+            parts.scheme in ("http", "https")
+            and parts.username is None
+            and ipaddress.ip_address(parts.hostname or "").is_loopback
+        )
+    except ValueError:
+        local = False
+    if not local:
+        raise CensusError("the catalog URL is not http(s) on a loopback address (an IP literal)")
+    token = read_token(token_file) if token_file is not None else None
+    catalog = RestCatalog(
+        url,
+        warehouse=warehouse,
+        api_root=api_root,
+        auth=(lambda: f"Bearer {token}") if token else None,
+        timeout=timeout,
+        max_bytes=1 << 20,
+        opener=credential_opener(),
+    )
+    tables: list[str] = []
+    left = 0
+    try:
+        for ns in catalog.list_namespaces(limit=MAX_LINES):
+            if len(ns) != 1 or not TABLE_PART_RE.fullmatch(ns[0]):
+                left += 1
+                continue
+            for name in catalog.list_tables(ns[0], limit=MAX_LINES):
+                full = f"{ns[0]}.{name}"
+                if len(full) > TABLE_MAX or not TABLE_RE.fullmatch(full):
+                    left += 1
+                    continue
+                tables.append(full)
+                if len(tables) > MAX_LINES:
+                    raise CensusError(f"the catalog lists over {MAX_LINES} tables")
+    except LakeError as exc:
+        raise CensusError(str(exc)) from None
+    return {"tables": sorted(set(tables)), "left_out": left}
+
+
 def parse_listening(found: Any, host: str) -> list[str]:
     """The sockets one host listens on: each ``tcp/<port>`` or ``udp/<port>``, a port 1 to
     65535, with ``@lo`` when bound only to loopback, listed once."""
@@ -289,13 +418,17 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     mcp: set[str] = set()
     mcp_hosts = 0
     listening: list[dict[str, Any]] = []
+    tables: set[str] = set()
+    catalogs = 0
+    tables_left = 0
     base = {"host", "enabled", "active", "pairs", "listening"}
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
-        if not isinstance(doc, dict) or not base <= set(doc) <= base | {"agents", "mcp"}:
+        if not isinstance(doc, dict) or not base <= set(doc) <= base | {"agents", "mcp", "tables"}:
             raise CensusError(
                 f"{file}: not {{host, enabled, active, pairs, listening}} (and agents on a "
-                "broker host, mcp where MCP client configurations are installed)"
+                "broker host, mcp where MCP client configurations are installed, tables on a "
+                "lake catalog host)"
             )
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
@@ -317,6 +450,13 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
             mcp |= found_mcp
             stale_notes += absent
             mcp_hosts += 1
+        if "tables" in doc:
+            found_tables, left = parse_tables(doc["tables"], host)
+            tables |= found_tables
+            tables_left += left
+            catalogs += 1
+            if len(tables) > MAX_LINES:
+                raise CensusError(f"the lake catalogs list over {MAX_LINES} tables")
     notes = [
         f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
@@ -339,19 +479,36 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
             "no host lists an installed MCP client configuration (module_census_mcp_configs): "
             "MCP servers not gathered"
         )
+    if catalogs:
+        notes.append(f"listed {catalogs} lake catalog(s): {len(tables)} table(s)")
+        if tables_left:
+            notes.append(
+                f"{tables_left} catalog namespace(s) or table(s) not of the inventory's shape "
+                "(<namespace>.<name>, lowercase) left out: no module's table has such a name"
+            )
+    else:
+        notes.append(
+            "no host's census listed a lake catalog (module_census_catalog_url): tables not "
+            "gathered"
+        )
     if templates:
         notes.append(
             f"{templates} template unit(s) or instance(s) (hnx-<name>@...) left out: an instance "
             "is not a unit a manifest declares"
         )
     gathered = (
-        {"units"} | ({"agents"} if brokers else set()) | ({"mcp_servers"} if mcp_hosts else set())
+        {"units"}
+        | ({"agents"} if brokers else set())
+        | ({"mcp_servers"} if mcp_hosts else set())
+        | ({"tables"} if catalogs else set())
     )
     inventory: dict[str, Any] = {"schema_version": "1.0", "units": sorted(units)}
     if mcp_hosts:
         inventory["mcp_servers"] = sorted(mcp)
     if brokers:
         inventory["agents"] = sorted(agents)
+    if catalogs:
+        inventory["tables"] = sorted(tables)
     inventory["not_gathered"] = [k for k in ld.INVENTORY_KINDS if k not in gathered]
     inventory["listening"] = listening
     if records:

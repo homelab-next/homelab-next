@@ -11,8 +11,8 @@ One server answers both APIs the adapter speaks:
   value the adapter failed to encode as one literal breaks the parse instead of slipping through.
   SQL runs on a per-namespace SQLite database (``FakeLake``); INSERTs add an Iceberg-style
   snapshot whose summary carries ``trino_query_id`` and ``total-records``.
-* the Iceberg REST catalog under ``/catalog/v1``: config (prefix), table listing with paging,
-  table metadata (schema in Iceberg JSON with Trino's nullability: nested fields optional) and
+* the Iceberg REST catalog under ``/catalog/v1``: config (prefix), namespace and table listing
+  with paging, table metadata (schema in Iceberg JSON with Trino's nullability: nested fields optional) and
   ``set-properties``/``remove-properties`` commits guarded by ``assert-table-uuid``.
 
 A statement longer than ``max_query_length`` (Trino's ``query.max-length``, 1,000,000 by default)
@@ -424,6 +424,13 @@ class FakeLab:
             return self._json(
                 h, 200, {"defaults": {}, "overrides": {"prefix": f"wh-{q['warehouse']}"}}
             )
+        if len(parts) == 2 and parts[1] == "namespaces":
+            names = sorted(self.lakes)
+            start = int(q.get("pageToken", "0"))
+            doc = {"namespaces": [[n] for n in names[start : start + self.list_page]]}
+            if start + self.list_page < len(names):
+                doc["next-page-token"] = str(start + self.list_page)
+            return self._json(h, 200, doc)
         if len(parts) >= 4 and parts[1] == "namespaces" and parts[3] == "tables":
             ns = parts[2]
             if ns not in self.lakes:

@@ -169,10 +169,13 @@ with no schema, generator or check in any form):
    examples in place of a lab input; a lab that takes up no modules is an empty selection, never
    skipped) before anything changes on a host and on every pull request, and again after the
    deploy against the fleet units gathered from the hosts, enabled or active (role
-   `module_census`, `hnx modules gather`). Not done: it has not run at a real lab's deploy yet; service rows, MCP servers,
-   agents, tables and recovery pairs are not gathered from the hosts (the core's own units are
-   read from its roles and generators, so a running unit that is no module's or the core's is a
-   problem);
+   `module_census`, `hnx modules gather`), with the agents from the running broker, the MCP
+   servers from the installed client configurations, the lake tables from the catalog on its own
+   host and the recovery pairs from the notifiers' records, where the overlay names their sources.
+   Not done: it has not run at a real lab's deploy yet; service rows are not gathered by name (each
+   is judged by whether its placed host listens on its port), and the core's own units are read
+   from its roles and generators, so a running unit that is no module's or the core's is a
+   problem;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks.
 

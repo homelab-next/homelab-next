@@ -1289,8 +1289,11 @@ def running_problems(
     selects; every declared name runs.  A unit bound to no module id must be one of the core's
     own (:attr:`CoreNames.units`, when ``core`` knows them): any other ``hnx-*`` unit runs but is
     no module's or the core's, and so must an MCP server name (:func:`_running_mcp`, which
-    matches a name back to its record by the record's instance template).  Another kind's name
-    bound to no module id is the core's and is not judged here.  A kind the inventory names in
+    matches a name back to its record by the record's instance template).  A table bound to no
+    module id that sits in the core's namespace (:attr:`CoreNames.table_namespace`) must be one
+    of the core's OCSF tables; one in any other namespace is the lab's own (a catalog holds more
+    than the fleet's tables) and is not judged.  Another kind's name bound to no module id is the
+    core's and is not judged here.  A kind the inventory names in
     ``not_gathered`` is not compared.  With the inventory's ``notify_pairs``, the same for
     recovery pairs (:func:`running_pair_problems`)."""
     load = load or module_reader(tree)
@@ -1312,6 +1315,11 @@ def running_problems(
                 if known and not core.is_unit(name):
                     why = f"units {name} runs but is no module's or the core's"
                     out.append(Problem("running", why))
+                if kind == "tables" and core is not None and core.table_namespace:
+                    schema = name.removeprefix("table:").split(".", 1)[0]
+                    if schema == core.table_namespace and name not in core.tables:
+                        why = f"tables {name} is in the core's namespace but is no core table"
+                        out.append(Problem("running", why))
                 continue
             if owner not in sel:
                 why = f"{kind} {name} runs for {owner}, which the site does not select"
@@ -1476,6 +1484,10 @@ def _runtime(
     if "units" not in inventory.get("not_gathered", []) and not (core and core.units_known):
         notes.append(
             "the core's own units were not read: a running unit bound to no module was not judged"
+        )
+    if "tables" not in inventory.get("not_gathered", []) and not (core and core.table_namespace):
+        notes.append(
+            "the core's OCSF tables were not read: a table bound to no module was not judged"
         )
     skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
     if skipped:

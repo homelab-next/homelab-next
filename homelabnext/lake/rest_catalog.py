@@ -43,6 +43,7 @@ class RestCatalog:
         auth: Callable[[], str | None] | None = None,
         timeout: float = 15.0,
         max_bytes: int = 16 << 20,
+        opener: urllib.request.OpenerDirector | None = None,
     ):
         parts = urllib.parse.urlsplit(base_url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -53,6 +54,9 @@ class RestCatalog:
         self._timeout = timeout
         self.max_bytes = max_bytes
         self._prefix: str | None = None
+        #: how requests are sent: by default same-origin redirects only; a caller that sends a
+        #: credential passes :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
+        self._opener = opener
 
     def __repr__(self) -> str:
         return f"RestCatalog(<endpoint>, warehouse={self.warehouse!r})"
@@ -70,7 +74,8 @@ class RestCatalog:
                 headers["Authorization"] = tok
         req = urllib.request.Request(self.root + path, data=data, headers=headers, method=method)
         try:
-            with safe_urlopen(req, timeout=self._timeout) as resp:
+            send = self._opener.open if self._opener is not None else safe_urlopen
+            with send(req, timeout=self._timeout) as resp:
                 raw = read_bounded(resp, self.max_bytes)
         except urllib.error.HTTPError as exc:
             detail = exc.read(4000)
@@ -113,7 +118,29 @@ class RestCatalog:
         return f"/v1/{_q(self.prefix)}/namespaces/{_q(namespace)}"
 
     # ---------------------------------------------------------------- API
-    def list_tables(self, namespace: str) -> list[str]:
+    def list_namespaces(self, limit: int | None = None) -> list[list[str]]:
+        """Every top-level namespace of the warehouse, each as its levels (``["ocsf"]``); more
+        than ``limit`` fails."""
+        names: list[list[str]] = []
+        token: str | None = None
+        for _ in range(10_000):
+            path = f"/v1/{_q(self.prefix)}/namespaces"
+            if token:
+                path += f"?pageToken={_q(token)}"
+            doc = self._call("GET", path) or {}
+            for ns in doc.get("namespaces") or []:
+                if not isinstance(ns, list) or not all(isinstance(p, str) for p in ns):
+                    raise LakeError("catalog namespace listing: a namespace is not a list of text")
+                names.append(ns)
+            if limit is not None and len(names) > limit:
+                raise LakeError(f"catalog namespace listing: over {limit} namespaces")
+            token = doc.get("next-page-token")
+            if not token:
+                return names
+        raise LakeError("catalog namespace listing did not terminate")
+
+    def list_tables(self, namespace: str, limit: int | None = None) -> list[str]:
+        """The tables of ``namespace``; more than ``limit`` fails."""
         names: list[str] = []
         token: str | None = None
         for _ in range(10_000):
@@ -121,7 +148,12 @@ class RestCatalog:
             if token:
                 path += f"?pageToken={_q(token)}"
             doc = self._call("GET", path) or {}
-            names += [str(i["name"]) for i in doc.get("identifiers") or []]
+            for ident in doc.get("identifiers") or []:
+                if not isinstance(ident, dict) or not isinstance(ident.get("name"), str):
+                    raise LakeError("catalog table listing: an identifier names no table")
+                names.append(ident["name"])
+            if limit is not None and len(names) > limit:
+                raise LakeError(f"catalog table listing: over {limit} tables")
             token = doc.get("next-page-token")
             if not token:
                 return names

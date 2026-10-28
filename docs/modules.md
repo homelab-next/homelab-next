@@ -1206,6 +1206,43 @@ read. The file is what the client reads at start, so a home that lost an entry, 
 added, shows; whether a server then launched does not, nor anything a client reads from files the
 host does not list (a user-level or a project's own configuration, a managed policy file).
 
+**Lake tables, from the catalog.** On the host that runs the lake catalog (the lake-catalog
+slot's contract is the Iceberg REST catalog), the inventory may set `module_census_catalog_url`
+(in `host_vars`: `http(s)://<loopback IP literal>:<port>`, the catalog as its own host reaches it)
+and `module_census_catalog_warehouse`, with `module_census_catalog_api_root` (default `/catalog`)
+and, when the catalog wants a bearer token, `module_census_catalog_token_file`, a file on that host.
+The census then runs `hnx modules catalog-tables` there
+(`homelabnext.modules.census.catalog_tables`): it lists the warehouse's top-level namespaces and
+each one's tables with **GET requests only**, so it can change nothing whatever rights the token
+carries; to a loopback IP literal only (a name such as `localhost` is refused: it resolves to what
+the resolver says); with no redirect followed and no proxy, so the token goes to that address
+alone. The token file is read in one step: never through a link, a regular file with a single
+link, owned by the reading user and readable or writable by no one else, one line of token
+characters; the token is never printed or part of an error. Only that task becomes root, and only
+when a token file is named (to read it); without one it runs as the connection user. **The token
+never leaves the catalog host**: the runner holds no catalog credential, and the answer carries
+names only. Each page of a listing is read to at most 1 MiB, and more than 4,096 namespaces or
+tables fails the census rather than being cut short.
+
+The host prints `{"tables": ["<namespace>.<name>", ...], "left_out": n}`: a namespace or table
+whose name is not of the inventory's shape (`[a-z][a-z0-9_]*` each, at most 129 characters as
+`table:<namespace>.<name>`) is left out and counted, and the gather notes the count; a namespace
+nested in another is not listed. No module's table can have such a name (its manifest's schema refuses it), so
+leaving one out hides no module's table. `gather` reads each name again strictly, and `tables` is
+the union over every catalog listed (at most 4,096); it stays in `not_gathered` when no host's
+census listed a catalog. A catalog that cannot be listed (unreachable, a refused token, a reply
+that is not the contract's) fails the census.
+
+`hnx modules check --running` judges each listed table like any running name: `table:<id_>.<name>`
+is bound to the module whose id, with `-` read as `_`, is `<id_>`, which must declare it and be
+selected; every selected module's declared table must exist. A table in the core's namespace
+(`ocsf`) is the core's and must be one of its OCSF tables (`tables table:ocsf.<name> is in the
+core's namespace but is no core table`), when the core's tables were read; without them the check
+says so. A table in any other namespace that no module id binds is the lab's own (a catalog
+usually holds more than the fleet's tables: an archive, a scratch namespace) and is not judged.
+What the catalog lists is believed, as a host's `systemctl` output is: it says which tables the
+catalog holds, not whether anything writes to them.
+
 **Service rows, by what listens.** Each host's answer also carries the sockets it listens on: the
 role's `listening_sockets` module reads the kernel's own socket tables (`/proc/net/tcp`, `tcp6`,
 `udp`, `udp6`, never a command's output, each read to a fixed size) and reports each listening TCP
@@ -1241,13 +1278,12 @@ is one way. Its limits:
 **Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
 can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in
 `not_gathered`, so the loader says it was not compared instead of judging the declarations against
-themselves. Beside the fleet units, only the recovery pairs, the agents and the MCP servers have such a
-source, and service rows are judged by what listens (above); for the rest:
+themselves. Beside the fleet units, the recovery pairs, the agents, the MCP servers and the lake
+tables have such a source, and service rows are judged by what listens (above); for the rest:
 
 | Kind | What exists today | What a census of it would need |
 |---|---|---|
 | `rows` by name (service rows that answer) | the listening sockets judge each declared row (above), but name none; the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
-| `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
 
 Reading these back from the manifests or the role table would only restate what is declared, so
 none is.
@@ -1580,9 +1616,11 @@ listed as deferred.
    before the deploy, and again after it against the fleet units gathered from the hosts by role
    `module_census` and `hnx modules gather`; see
    [The loader at deploy time](#the-loader-at-deploy-time)). Not done: it has not run at a real
-   lab's deploy yet; service rows, MCP servers and tables are not gathered from the hosts (a
-   gathered inventory names them in `not_gathered`; the agents come from the running broker and the
-   recovery pairs from the notifiers' records). The core's own
+   lab's deploy yet; service rows are not gathered by name (a gathered inventory names them in
+   `not_gathered` and judges each by what its host listens on); the agents come from the running
+   broker, the MCP servers from the installed client configurations, the lake tables from the
+   catalog on its own host (where the overlay names one) and the recovery pairs from the notifiers'
+   records. The core's own
    units are read from its roles and generators, so a running unit that is no module's or the
    core's is a problem.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
