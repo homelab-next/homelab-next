@@ -16,14 +16,14 @@ reaches it from its own prefix, which only a routed (global) prefix can do.
 
 ``router.wan6`` (site 1.6) gives the router its own IPv6 on the WAN, which the zones' routed IPv6
 leaves by: a static address and default gateway, or router advertisements accepted on the WAN and
-only there (``accept_ra = 2`` for the WAN, so forwarding does not switch them off; SLAAC only, no
-DHCPv6).  networkd gets a drop-in for the WAN's own ``.network`` file
+only there (``accept_ra = 2`` for the WAN, so forwarding does not switch them off where the
+kernel takes them, with ifupdown; networkd takes them itself; SLAAC only, no DHCPv6).  networkd gets a drop-in for the WAN's own ``.network`` file
 (``<wan_network>.d/50-hnx-wan6.conf``, never a second file for the WAN: networkd applies only the
 first ``.network`` file that matches an interface), ifupdown an ``inet6`` stanza for the WAN.  The
 router's input takes the ICMPv6 a router must take once it has any IPv6, and a router
 advertisement only on the WAN, from a link-local source at hop limit 255.  Zones never take one,
 and the forward chain drops IPv6 to a zone's prefix that would leave by the WAN (a route a WAN
-neighbour advertised).
+neighbour advertised), and so does an output chain for the router's own.
 """
 
 from __future__ import annotations
@@ -290,14 +290,15 @@ class LinuxAdapter(Adapter):
         out.append(
             "    chain forward {\n        type filter hook forward priority filter; policy drop;\n"
         )
-        if ir.router.wan6 and pol.zones6:
-            # before established: a route a WAN neighbour advertised (a prefix inside a zone's)
-            # must not carry a zone's traffic, return traffic included, out the WAN
-            prefixes = ", ".join(pol.zones6.values())
-            out.append(
-                f'        oifname "{wan}" ip6 daddr {{ {prefixes} }} drop'
-                ' comment "router.wan6: a zone prefix never leaves by the WAN"\n'
-            )
+        # before established: a route a WAN neighbour advertised (a prefix inside a zone's) must
+        # not carry a zone's traffic, return traffic included, out the WAN; nor the router's own
+        guard = (
+            f'        oifname "{wan}" ip6 daddr {{ {", ".join(pol.zones6.values())} }} drop'
+            ' comment "router.wan6: a zone prefix never leaves by the WAN"\n'
+            if ir.router.wan6 and pol.zones6
+            else ""
+        )
+        out.append(guard)
         out.append("        ct state established,related accept\n        ct state invalid drop\n")
         for rule in pol.rules:
             if rule.dst.kind == "internet" and rule.action == "deny":
@@ -306,7 +307,14 @@ class LinuxAdapter(Adapter):
             six = ipv6_form(rule, pol.zones6)
             if six:
                 out.append("        " + nft_rule(six, wan, six=True) + "\n")
-        out.append("    }\n}\n")
+        out.append("    }\n")
+        if guard:
+            out.append(
+                "\n    chain output {\n"
+                "        type filter hook output priority filter; policy accept;\n"
+                f"{guard}    }}\n"
+            )
+        out.append("}\n")
         masq = [
             pol.zones[r.src.name]
             for r in pol.rules

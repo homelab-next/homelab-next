@@ -338,7 +338,8 @@ declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
   later takes neither: without a zone prefix forwarding is off, and then it would), then
   `all.accept_ra = 0`, then for the WAN `accept_redirects = 0`, `accept_ra_rt_info_max_plen = 0`
   (no route-information option) and last its `accept_ra`: 2 for `ra` (so forwarding does not
-  switch advertisements off) and 0 for `static`. A WAN name with a dot (a VLAN) is written with
+  switch advertisements off where the kernel takes them, with ifupdown; networkd takes them
+  itself and sets the kernel's to 0) and 0 for `static`. A WAN name with a dot (a VLAN) is written with
   slashes (`net/ipv6/conf/<wan>/accept_ra`). Every zone takes no advertisement: `accept_ra 0`
   with ifupdown, and with networkd `IPv6AcceptRA=no` on every zone's file, a zone without a
   `subnet6` included (networkd takes advertisements by default while forwarding is off).
@@ -346,12 +347,15 @@ declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
   the input chain also takes a router advertisement from a link-local source at hop limit 255 on
   the WAN, and nowhere else, and the reverse-path check exempts that same packet. Legitimate WAN
   traffic passes the check by the default route. The forward chain gains one rule, before
-  `established,related`: IPv6 to a zone's `subnet6` never leaves by the WAN. A neighbour on the
+  `established,related`: IPv6 to a zone's `subnet6` never leaves by the WAN; a new output chain
+  (policy accept) holds the same rule for the router's own traffic. A neighbour on the
   WAN that can send advertisements can still take the router's default route (an `ra` WAN trusts
   its link, as every SLAAC host does), but a prefix it advertises inside a zone's, which would
   route that zone's traffic, return traffic included, out the WAN, only drops it
-  (`UseOnLinkPrefix=no` keeps networkd from installing such a route at all; the kernel, with
-  ifupdown, installs it). NAT is unchanged.
+  (`UseOnLinkPrefix=no`, systemd 248 or later, keeps networkd from installing such a route at
+  all, so a WAN neighbour other than the gateway is reached through the gateway; an older
+  networkd ignores the key with a warning, and the kernel, with ifupdown, installs the route).
+  NAT is unchanged.
 - Other adapters do not render `wan6`. `hnx site validate` warns when the site's network adapter
   is not `linux`, and `hnx site render|plan --adapter` does when another adapter renders a site
   whose own adapter is. Configure the WAN's IPv6 on that router itself.

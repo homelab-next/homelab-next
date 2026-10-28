@@ -105,6 +105,11 @@ table inet hnx_site {
         ip saddr @z_compute oifname "wan0" accept comment "egress.internet:compute: compute -> internet"
         ip saddr @z_edge oifname "wan0" accept comment "egress.internet:edge: edge -> internet"
     }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+        oifname "wan0" ip6 daddr { 2001:db8:0:10::/64, 2001:db8:0:20::/64, 2001:db8:0:30::/64, 2001:db8:0:40::/64 } drop comment "router.wan6: a zone prefix never leaves by the WAN"
+    }
 }
 
 table ip hnx_nat

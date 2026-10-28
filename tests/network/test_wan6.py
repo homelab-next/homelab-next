@@ -160,7 +160,11 @@ def test_the_forward_chain_gains_only_the_zone_prefix_guard_and_nat_is_unchanged
         # traffic either
         head = "\n        type filter hook forward priority filter; policy drop;\n"
         assert tail(nft).startswith(head + GUARD + "        ct state established,related accept\n")
-        assert tail(nft).replace(GUARD, "", 1) == tail(plain)
+        output = "\n    chain output {\n        type filter hook output priority filter; policy accept;\n"
+        assert tail(nft).replace(GUARD, "", 1).replace(output + GUARD + "    }\n", "") == tail(
+            plain
+        )
+        assert output + GUARD in nft  # and the router's own traffic
 
 
 def test_a_wan_without_zone_prefixes_takes_no_advertisement_elsewhere(doc, registry):
