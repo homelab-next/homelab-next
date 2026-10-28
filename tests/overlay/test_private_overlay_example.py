@@ -480,7 +480,17 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
     assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
     assert rules.get("/lab/modules.yml")  # the selection's scope and grants widen trust too
     # the rest of what the lab trusts: hnx site review-tier rates every change to these human
-    for path in ("/lab/services.yml", "/lab/guests/", "/lab/modules/", "/lab/modules.lock"):
+    for path in (
+        "/lab/services.yml",
+        "/lab/guests/",
+        "/lab/modules/",
+        "/lab/modules.lock",
+        "/lab/model_roles.json",
+        "/lab/swaps/",
+        "/lab/model-serving/model_store.json",
+        "/lab/model_roles.eval.json",
+        "/lab/model-evals/",
+    ):
         assert rules.get(path), path
 
 
