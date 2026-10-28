@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read-only on the hosts: two systemctl queries each (enabled unit files, active units) and the
-# notify pairs records at one fixed directory (one file per notifier owner, never a glob).  The answers are written on the controller
+# notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
+# step by the role's notify_pairs_records module.  The answers are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
 - name: Validate the inputs
@@ -69,30 +70,13 @@
   # list-units exits 0 with nothing printed when no unit matches; anything else is a failure
   failed_when: module_census_active.rc != 0
 
-- name: Look at each notifier owner's pairs record (homelabnext.notify.record), never through a link
-  ansible.builtin.stat:
-    path: "{{ module_census_pairs_dir }}/{{ item }}.json"
-    follow: false
-    get_checksum: false
-  loop: "{{ module_census_pair_owners }}"
-  register: module_census_pairs_stat
-
-- name: Fail unless each record present is a small regular file
-  ansible.builtin.assert:
-    that:
-      - module_census_pairs_present | rejectattr('stat.isreg') | list | length == 0
-      - module_census_pairs_present | selectattr('stat.size', 'gt', module_census_pairs_max_bytes) | list | length == 0
-    fail_msg: "module_census: a notify pairs record ({{ module_census_pairs_present | map(attribute='item') | join(', ') }} under {{ module_census_pairs_dir }}) is not a regular file of at most {{ module_census_pairs_max_bytes }} bytes"
-  vars:
-    module_census_pairs_present: "{{ module_census_pairs_stat.results | selectattr('stat.exists') | list }}"
-
-- name: Read each record present
-  ansible.builtin.slurp:
-    src: "{{ item.stat.path }}"
-  loop: "{{ module_census_pairs_stat.results | selectattr('stat.exists') | list }}"
-  loop_control:
-    label: "{{ item.item }}"
-  register: module_census_pairs_read
+# One step (library/notify_pairs_records.py): nothing can be swapped between a check and a read.
+- name: Read each notifier owner's pairs record, never through a link
+  notify_pairs_records:
+    dir: "{{ module_census_pairs_dir }}"
+    owners: "{{ module_census_pair_owners }}"
+    max_bytes: "{{ module_census_pairs_max_bytes }}"
+  register: module_census_pairs
 
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
@@ -100,11 +84,7 @@
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
   vars:
-    # owner -> the record's text, or null where the host holds none
-    module_census_pairs_found: >-
-      {{ dict(module_census_pair_owners | zip([none] * (module_census_pair_owners | length)))
-         | combine(dict(module_census_pairs_read.results | map(attribute='item.item')
-                        | zip(module_census_pairs_read.results | map(attribute='content')
-                              | map('b64decode')))) }}
+    # the host's boot id and clock, and per owner the record's text and whether its process runs
+    module_census_pairs_found: "{{ {'boot_id': module_census_pairs.boot_id, 'now': module_census_pairs.now, 'records': module_census_pairs.records} }}"
   delegate_to: localhost  # workstation-ref: allow the census is the deploy run's own (the runner), never a runtime dependency
   become: false

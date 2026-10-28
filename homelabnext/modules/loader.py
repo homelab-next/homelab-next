@@ -1237,6 +1237,11 @@ def _runtime(
         )
     if "notify_pairs" not in inventory:
         notes.append("the inventory names no notify_pairs: the recovery pairs were not compared")
+    elif not (core and core.pairs):
+        notes.append(
+            "the core's own notify pairs were not read: a running pair bound to no module was "
+            "not judged"
+        )
 
 
 def units_fn(ins: Inputs) -> Callable[[str], set[str]]:

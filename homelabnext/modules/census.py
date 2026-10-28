@@ -35,15 +35,19 @@ Kinds the hosts cannot report (service rows that answer, MCP servers, agents, ta
 in the inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that
 merely leaves a kind out is refused by its schema, never read as "nothing runs".
 
-**Notify pairs.**  Each answer also carries ``pairs``: for every notifier owner
-(:data:`homelabnext.notify.record.OWNERS`), the text of its pairs record at the fixed directory
-(:data:`~homelabnext.notify.record.RECORD_DIR`), or null where the host holds none.  Each record
-is read strictly (:func:`homelabnext.notify.record.parse_record`), and the inventory's
-``notify_pairs`` is every pair some record holds, each listed once (two owners holding one pair
-alike are one; one title held with two recoveries is listed twice, which the loader refuses).
-When no host holds a record at all, ``notify_pairs`` is left out and the pairs are not compared:
-the census cannot tell "no notifier records its pairs" from "no pair runs".  A record is the
-owning service's word about its own pairs, believed as a host's ``systemctl`` output is.
+**Notify pairs.**  Each answer also carries ``pairs``: the host's boot id and clock, and for
+every notifier owner (:data:`homelabnext.notify.record.OWNERS`) the text of its record under the
+fixed directory (:data:`~homelabnext.notify.record.RECORD_DIR`) with the start time now of the
+process the record names, or null where the host holds none.  Each record is read strictly
+(:func:`homelabnext.notify.record.parse_record`), and one that no longer says what runs
+(:func:`~homelabnext.notify.record.stale`: written before the host's last boot, a broker whose
+process is gone, a status pass older than its window) is noted and not counted: a leftover is
+never read as running.  The inventory's ``notify_pairs`` is every pair some counted record holds,
+each listed once (two owners holding one pair alike are one; one title held with two recoveries
+is listed twice, which the loader refuses).  When no record counts, ``notify_pairs`` is left out
+and the pairs are not compared: the census cannot tell "no notifier records its pairs" from "no
+pair runs".  A record is the owning service's word about its own pairs, believed as a host's
+``systemctl`` output is.
 """
 
 from __future__ import annotations
@@ -157,6 +161,7 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     templates = 0
     pairs: set[tuple[str, str, str | None]] = set()
     records = 0
+    stale_notes: list[str] = []
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
         if not isinstance(doc, dict) or set(doc) != {"host", "enabled", "active", "pairs"}:
@@ -167,7 +172,8 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
             names, t = parse_units(doc["active" if active else "enabled"], host, active)
             units |= names
             templates += t
-        found = parse_pairs(doc["pairs"], host)
+        found, left = parse_pairs(doc["pairs"], host)
+        stale_notes += left
         records += len(found)
         for held in found:
             pairs |= {(p["problem"], p["recovery"], p.get("module")) for p in held}
@@ -194,26 +200,48 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     else:
         notes.insert(
             2,
-            "no host holds a notify pairs record: the recovery pairs were not compared (a "
-            "notifier records them with --notify-pairs-dir)",
+            "no host holds a notify pairs record that counts: the recovery pairs were not "
+            "compared (a notifier records them with --notify-pairs-dir)",
         )
-    return inventory, notes
+    return inventory, notes + stale_notes
 
 
-def parse_pairs(found: Any, host: str) -> list[list[dict[str, str]]]:
-    """The pairs records one host answered (owner -> the record's text, or null where it holds
-    none), each read strictly."""
-    if not isinstance(found, dict) or set(found) != set(nr.OWNERS):
-        raise CensusError(f"{host}: the pairs are not one entry per owner ({', '.join(nr.OWNERS)})")
-    out = []
+_PAIRS_KEYS = {"boot_id", "now", "records"}
+
+
+def parse_pairs(found: Any, host: str) -> tuple[list[list[dict[str, str]]], list[str]]:
+    """The pairs records one host answered that still count, each read strictly, and a note for
+    each that does not (:func:`homelabnext.notify.record.stale`)."""
+    if not isinstance(found, dict) or set(found) != _PAIRS_KEYS:
+        raise CensusError(f"{host}: the pairs are not {{boot_id, now, records}}")
+    boot, now, records = found["boot_id"], found["now"], found["records"]
+    if boot is not None and not (isinstance(boot, str) and len(boot) <= 64):
+        raise CensusError(f"{host}: the host's boot id is not text or null")
+    if not isinstance(now, int) or isinstance(now, bool) or now < 0:
+        raise CensusError(f"{host}: the host's clock is not a time")
+    if not isinstance(records, dict) or set(records) != set(nr.OWNERS):
+        raise CensusError(
+            f"{host}: the records are not one entry per owner ({', '.join(nr.OWNERS)})"
+        )
+    out, notes = [], []
     for owner in nr.OWNERS:
-        text = found[owner]
-        if text is None:
+        entry = records[owner]
+        if entry is None:
             continue
+        if not isinstance(entry, dict) or set(entry) != {"text", "pid_started"}:
+            raise CensusError(f"{host}: the {owner} pairs record is not {{text, pid_started}}")
+        text, started = entry["text"], entry["pid_started"]
         if not isinstance(text, str):
             raise CensusError(f"{host}: the {owner} pairs record is not text")
+        if started is not None and (not isinstance(started, int) or isinstance(started, bool)):
+            raise CensusError(f"{host}: the {owner} record's process start time is not a number")
         try:
-            out.append(nr.parse_record(text, owner))
+            record = nr.parse_record(text, owner)
         except nr.RecordError as exc:
             raise CensusError(f"{host}: pairs record {exc}") from None
-    return out
+        why = nr.stale(record, boot, now, started)
+        if why is not None:
+            notes.append(f"{host}: the {owner} pairs record does not count ({why})")
+            continue
+        out.append(record.pairs)
+    return out, notes

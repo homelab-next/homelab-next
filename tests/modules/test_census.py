@@ -21,7 +21,20 @@ EXAMPLES = ROOT / "examples" / "modules"
 SMALL_LAB = EXAMPLES / "sites" / "small-lab.yml"
 
 
-NOPAIRS = {"broker": None, "status": None}
+#: the host's facts in every census answer here: a boot id, a clock, and the start time of the
+#: process every record below names (pid 4242, started 1000: still running)
+BOOT = "00000000-0000-4000-8000-000000000001"
+NOW = 1_800_000_000
+STARTED = 1000
+NOPAIRS = {"boot_id": BOOT, "now": NOW, "records": {"broker": None, "status": None}}
+
+
+def answer_pairs(records: dict[str, str | None], **over) -> dict:
+    """A host's pairs answer: owner -> the record's text (its process running), or None."""
+    held = {
+        o: None if t is None else {"text": t, "pid_started": STARTED} for o, t in records.items()
+    }
+    return {**NOPAIRS, "records": {**NOPAIRS["records"], **held}, **over}
 
 
 def write_census(
@@ -41,7 +54,7 @@ def write_census(
             "host": host,
             "enabled": lines,
             "active": (active or {}).get(host, []),
-            "pairs": {**NOPAIRS, **(pairs or {}).get(host, {})},
+            "pairs": answer_pairs((pairs or {}).get(host, {})),
         }
         (d / f"{host}.json").write_text(json.dumps(doc))
     return d
@@ -71,8 +84,8 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
     assert notes == [
         "gathered from 3 host(s): 2 fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
-        "no host holds a notify pairs record: the recovery pairs were not compared (a notifier "
-        "records them with --notify-pairs-dir)",
+        "no host holds a notify pairs record that counts: the recovery pairs were not compared "
+        "(a notifier records them with --notify-pairs-dir)",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")
@@ -277,8 +290,15 @@ MODULE_PAIR = {
 }
 
 
-def _record(owner, *pairs):
-    return json.dumps({"schema_version": 1, "owner": owner, "pairs": list(pairs)})
+def _record(owner, *pairs, ago=10, **over):
+    import time
+
+    doc = {
+        "schema_version": 2, "owner": owner,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - ago)),
+        "boot_id": BOOT, "pid": 4242, "started": STARTED, "pairs": list(pairs), **over,
+    }  # fmt: skip
+    return json.dumps(doc)
 
 
 def test_notify_pairs_are_every_pair_some_record_holds_each_once(tmp_path):
@@ -309,34 +329,115 @@ def test_one_title_held_with_two_recoveries_is_listed_twice_for_the_loader(tmp_p
     assert inventory["notify_pairs"] == [CORE, other]
 
 
+def test_one_pair_held_for_two_modules_is_listed_twice_for_the_loader(tmp_path):
+    unbound = {k: v for k, v in MODULE_PAIR.items() if k != "module"}
+    d = write_census(
+        tmp_path / "c",
+        {"a": [], "b": []},
+        pairs={
+            "a": {"status": _record("status", MODULE_PAIR)},
+            "b": {"status": _record("status", unbound)},
+        },
+    )
+    inventory, _ = census.gather(d)
+    assert inventory["notify_pairs"] == [unbound, MODULE_PAIR]
+
+
 def test_without_any_record_the_pairs_are_left_out_and_not_compared(tmp_path):
     inventory, notes = census.gather(write_census(tmp_path / "c", {"a": []}))
     assert "notify_pairs" not in inventory
-    assert any("no host holds a notify pairs record" in n for n in notes)
+    assert any("no host holds a notify pairs record that counts" in n for n in notes)
+
+
+def _gather_one(tmp_path, pairs):
+    d = tmp_path / "c"
+    d.mkdir()
+    (d / "_hosts.json").write_text('["a"]')
+    (d / "a.json").write_text(
+        json.dumps({"host": "a", "enabled": [], "active": [], "pairs": pairs})
+    )
+    return census.gather(d)
 
 
 @pytest.mark.parametrize(
     "pairs, why",
     [
-        ({"broker": None}, "not one entry per owner"),
-        ({"broker": None, "status": None, "relay": None}, "not one entry per owner"),
-        ({"broker": 3, "status": None}, "the broker pairs record is not text"),
-        ({"broker": "{", "status": None}, "pairs record broker: not JSON"),
-        ({"broker": _record("status"), "status": None}, "written for another owner"),
+        # a broker's record counts while its process runs, however old
+        (answer_pairs({"broker": _record("broker", CORE, ago=86_400)}), None),
         (
-            {"broker": _record("broker", {"problem": "A\nB", "recovery": "B"}), "status": None},
+            {
+                **NOPAIRS,
+                "records": {
+                    "broker": {"text": _record("broker", CORE), "pid_started": None},
+                    "status": None,
+                },
+            },
+            "the broker pairs record does not count (its process (pid 4242) is not running)",
+        ),
+        (
+            {
+                **NOPAIRS,
+                "records": {
+                    "broker": {"text": _record("broker", CORE), "pid_started": 7},
+                    "status": None,
+                },
+            },
+            "its process (pid 4242) is not running",
+        ),  # the pid reused by another process
+        (
+            answer_pairs(
+                {"broker": _record("broker", CORE)}, boot_id="00000000-0000-4000-8000-0000000000ff"
+            ),
+            "written before the host's last boot",
+        ),
+        (answer_pairs({"broker": _record("broker", CORE)}, boot_id=None), "boot cannot be told"),
+        # a status pass's record counts while it is at most 900 s old
+        (answer_pairs({"status": _record("status", CORE, ago=900)}), None),
+        (answer_pairs({"status": _record("status", CORE, ago=901)}), "written 901s ago"),
+    ],
+)
+def test_a_leftover_record_is_noted_and_never_read_as_running(tmp_path, pairs, why):
+    inventory, notes = _gather_one(tmp_path, pairs)
+    if why is None:
+        assert inventory["notify_pairs"] == [CORE]
+    else:
+        assert "notify_pairs" not in inventory
+        assert any(why in n and n.startswith("a: the ") for n in notes), notes
+
+
+@pytest.mark.parametrize(
+    "pairs, why",
+    [
+        ({"broker": None, "status": None}, "not {boot_id, now, records}"),
+        ({**NOPAIRS, "extra": 1}, "not {boot_id, now, records}"),
+        ({**NOPAIRS, "boot_id": 3}, "boot id is not text or null"),
+        ({**NOPAIRS, "now": "soon"}, "clock is not a time"),
+        ({**NOPAIRS, "now": True}, "clock is not a time"),
+        ({**NOPAIRS, "records": {"broker": None}}, "not one entry per owner"),
+        (
+            {**NOPAIRS, "records": {"broker": None, "status": None, "relay": None}},
+            "not one entry per owner",
+        ),
+        ({**NOPAIRS, "records": {"broker": "text", "status": None}}, "is not {text, pid_started}"),
+        (
+            {**NOPAIRS, "records": {"broker": {"text": 3, "pid_started": None}, "status": None}},
+            "the broker pairs record is not text",
+        ),
+        (
+            {**NOPAIRS, "records": {"broker": {"text": "{}", "pid_started": "1"}, "status": None}},
+            "process start time is not a number",
+        ),
+        (answer_pairs({"broker": "{"}), "pairs record broker: not JSON"),
+        (answer_pairs({"broker": _record("status")}), "written for another owner"),
+        (
+            answer_pairs({"broker": _record("broker", {"problem": "A\nB", "recovery": "B"})}),
             "not one line of text",
         ),
     ],
 )
 def test_a_pairs_answer_off_the_shape_makes_the_census_unreadable(tmp_path, pairs, why):
-    d = tmp_path / "c"
-    d.mkdir()
-    (d / "_hosts.json").write_text('["a"]')
-    doc = {"host": "a", "enabled": [], "active": [], "pairs": pairs}
-    (d / "a.json").write_text(json.dumps(doc))
     with pytest.raises(census.CensusError, match=re.escape(why)):
-        census.gather(d)
+        _gather_one(tmp_path, pairs)
 
 
 def _check_pairs(pairs, core):
@@ -349,6 +450,7 @@ def _check_pairs(pairs, core):
         tree, slots=slots, roles=roles, in_tree_roots=(ROOT / "modules", EXAMPLES),
         site=ld.load_yaml(SMALL_LAB), inventory=inventory, core=core,
     )  # fmt: skip
+    _check_pairs.notes = report.notes
     return [str(p) for p in report.problems]
 
 
@@ -367,8 +469,13 @@ def test_a_pair_bound_to_no_module_must_be_one_of_the_cores_with_its_recovery():
         "running: notify pair 'UPS on battery' with recovery 'UPS fine' runs but is no module's "
         "or the core's"
     ]
-    # without the core's pairs to compare with, an unbound pair is not judged
+    assert not any("core's own notify pairs" in n for n in _check_pairs.notes)
+    # without the core's pairs to compare with, an unbound pair is not judged, and the report says so
     assert _check_pairs([MODULE_PAIR, stray], ld.CoreNames()) == []
+    assert (
+        "the core's own notify pairs were not read: a running pair bound to no module was not judged"
+        in _check_pairs.notes
+    )
 
 
 # ----------------------------------------------------------------------------- the loader

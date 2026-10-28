@@ -245,10 +245,10 @@ def test_serve_records_the_notify_pairs_it_holds_for_the_census(tmp_path, monkey
         cmd="serve", notify_pairs_dir=str(pairs),
     )  # fmt: skip
     _service(args)
-    held = parse_record((pairs / "broker.json").read_text(), "broker")
+    held = parse_record((pairs / "broker" / "pairs.json").read_text(), "broker").pairs
     want = [BROKER_APPROVAL, BROKER_LANE_QUOTA]
     assert [{"problem": p, "recovery": r} for p, r in sorted(want)] == held
-    with pytest.raises(ValueError, match="is not a directory"):
+    with pytest.raises(ValueError, match="is not a directory reached without a link"):
         _service(argparse.Namespace(**{**vars(args), "notify_pairs_dir": str(tmp_path / "x")}))
 
 

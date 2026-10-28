@@ -1070,20 +1070,53 @@ compare one with; that is a known limit.
 
 **Notify pairs.** A process that owns a notifier (`hnx broker serve`, `hnx status collect
 --notify-topic`) given `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) writes the pairs it
-holds to `DIR/broker.json` or `DIR/status.json` (`homelabnext.notify.record`): when it starts and
-after each registration, the whole set each time (a crash-safe replace under the state library's
-lock, mode `0644`: titles are not secrets), so the file is what this process registered, never a
-leftover of an earlier one; a write that fails stops the process instead of starting it quietly.
-A pair carries the module it was loaded from only when its registrant names one
-(`register_pair(..., module=...)`); the notifier never guesses one. The census reads each owner's
-file at the fixed directory `/var/lib/homelabnext/notify-pairs` (`module_census_pairs_dir`; no
-glob, never through a link, a regular file of at most 256 KiB or the census fails), and `gather`
-parses each strictly and lists every pair some record holds, once (one title held with two
-recoveries is listed twice, which the loader refuses). With no record on any host, `notify_pairs`
-is left out and the pairs are not compared: the census cannot tell "no notifier records its pairs"
-from "no pair runs". The deploy creates the directory (`0755`, writable by the owners' service
-users); a record is the owning service's word about its own pairs, believed as a host's
-`systemctl` output is about its units.
+holds to `DIR/broker/pairs.json` or `DIR/status/pairs.json` (`homelabnext.notify.record`), when it
+starts and after each registration, the whole set each time. The record also carries when it was
+written (UTC), the host's boot id, and the writer's pid and start time.
+
+- **Where it is written.** `DIR` and `DIR/<owner>` are opened once, never through a link at any
+  step, and each must be owned by root or by the writing process's user and writable by no one
+  else (group or other), or the process refuses to start. Every later step (the `flock` on the
+  owner's directory itself, the temp file, the replace) is relative to that open directory, so a
+  path swapped or a link planted after start cannot redirect a write, and there is no lock file to
+  plant. **No role in this repository deploys the broker or the status hub**, so the operator
+  makes the directories: `/var/lib/homelabnext/notify-pairs` owned by root, mode `0755`; and
+  `broker` and `status` beneath it, each owned by that service's user (or root), mode `0755` (a
+  process running as root creates its own). A unit that writes there names its own `DIR/<owner>`
+  in `ReadWritePaths`.
+- **When it fails.** The first write, at start, stops the process: one that cannot say what it
+  holds is not started quietly. A later write that fails is logged; the pair is still held
+  (alerting goes on), and the whole set is written again at the next registration or report until
+  a write succeeds.
+- **What it discloses.** The record is mode `0644`: it tells the host's local users which pairs,
+  and which module ids, run there. Titles are code constants and manifest strings, not secrets.
+- **Modules.** A pair carries the module it was loaded from only when its registrant names one
+  (`register_pair(..., module=...)`); the notifier never guesses one. **Nothing in the core passes
+  `module=` yet**: until a module loader registers a module's pairs with it, a module's pair seen
+  running is bound to no module, and the loader reports it as no module's or the core's.
+
+The census reads each owner's record at the fixed directory `/var/lib/homelabnext/notify-pairs`
+(`module_census_pairs_dir`; no glob) in one step, with the role's `notify_pairs_records` module, so
+nothing can be swapped between a check and a read. No link is followed at any step; each directory
+on the way must be writable by no one but its owner; the record must be a regular file of at most
+256 KiB (a FIFO never blocks the read); otherwise the census fails. Beside each record the host
+reports its boot id, its clock, and the start time now of the process the record names. `gather`
+parses each record strictly, and **a record that no longer says what runs is noted and not
+counted**:
+- one written before the host's last boot, or where the boot cannot be told;
+- a broker record whose process (that pid, with that start time) is not running: the broker is
+  long-running, so its record counts however old it is while its process runs;
+- a status record older than 900 s: `hnx status collect` is one pass per timer run, and every run
+  rewrites its record, so 15 minutes outlasts a few missed runs of a timer that fires every few
+  minutes. A status record says what the last pass held, not what a live process holds.
+
+A process that stops leaves its file; the census, not the file, decides whether it still counts.
+`gather` lists every pair a counted record holds, once (one title held with two recoveries, or for
+two modules, is listed twice, which the loader refuses). With no counted record on any host,
+`notify_pairs` is left out and the pairs are not compared: the census cannot tell "no notifier
+records its pairs" from "no pair runs". When the core's own pairs were not read, the loader does
+not judge a pair bound to no module and says so. A record is the owning service's word about its
+own pairs, believed as a host's `systemctl` output is about its units.
 
 **Binding and trust.** The gatherer binds nothing: a running name belongs to a module by its name
 alone (`<id>` or `<id>-...`), the rule the loader applies to a hand-written inventory too, so no

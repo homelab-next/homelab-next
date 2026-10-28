@@ -13,7 +13,7 @@ argument_specs:
         default: systemctl
       module_census_pairs_dir:
         type: path
-        description: "Where the notifier owners write the notify pairs they hold, one file each (broker.json, status.json; homelabnext.notify.record): a record present is read, never through a link, and one missing means the host runs no recording notifier of that owner."
+        description: "Where the notifier owners write the notify pairs they hold, <dir>/<owner>/pairs.json (owners broker and status; homelabnext.notify.record): read in one step by the role's notify_pairs_records module, never through a link at any step, from directories no one but their owner may write; a record missing means the host holds none of that owner."
         default: /var/lib/homelabnext/notify-pairs
   health:
     short_description: Fail unless the host answers systemctl --version.

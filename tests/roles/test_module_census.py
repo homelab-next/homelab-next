@@ -6,12 +6,14 @@ stand-in here; the play runs on localhost, which is then both the host and the c
 from __future__ import annotations
 
 import json
+import os
 import shutil
 
 import pytest
 from rolerun import LOGGER, calls, fake, first_run, run_cases
 
 from homelabnext.modules import census
+from homelabnext.notify import record as nr
 from homelabnext.notify.record import PairsRecord
 
 needs_ansible = pytest.mark.skipif(
@@ -49,12 +51,14 @@ def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
     pairs = tmp_path / "pairs"
-    pairs.mkdir()
+    pairs.mkdir(mode=0o755)
+    os.chmod(pairs, 0o755)
+    # this process writes it, so the record's process is running while the role reads it
     PairsRecord(pairs, "broker").write({PAIR["problem"]: (PAIR["recovery"], None)})
     v = {
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
-        "module_census_pairs_dir": str(pairs),  # broker.json present, status.json absent
+        "module_census_pairs_dir": str(pairs),  # broker's record present, status's absent
     }
     return {"role": "module_census", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
@@ -75,11 +79,17 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     out = tmp_path / "census"
     assert json.loads((out / "_hosts.json").read_text()) == ["localhost"]
     answer = json.loads((out / "localhost.json").read_text())
+    text = (tmp_path / "pairs" / "broker" / "pairs.json").read_text()
+    started = nr.parse_record(text, "broker").started
     assert answer == {
         "host": "localhost",
         "enabled": ENABLED.splitlines(),
         "active": ACTIVE.splitlines(),
-        "pairs": {"broker": (tmp_path / "pairs" / "broker.json").read_text(), "status": None},
+        "pairs": {
+            "boot_id": nr.boot_id(),
+            "now": answer["pairs"]["now"],
+            "records": {"broker": {"text": text, "pid_started": started}, "status": None},
+        },
     }
     inventory, notes = census.gather(out)
     assert inventory == {
@@ -107,13 +117,25 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         tmp_path / "systemctl-active-fails",
         "import sys\nsys.exit(1 if sys.argv[1] == 'list-units' else 0)\n",
     )
-    # a record is read only as a small regular file, never through a link
-    linked = tmp_path / "linked-pairs"
-    linked.mkdir()
-    (linked / "broker.json").symlink_to(tmp_path / "pairs" / "broker.json")
-    big = tmp_path / "big-pairs"
-    big.mkdir()
-    (big / "status.json").write_text(" " * (256 * 1024 + 1))
+
+    # a record is read only as a small regular file, never through a link, in a directory no
+    # one else may write; a FIFO never blocks the read
+    def plain(name, owner, mode=0o755):
+        d = tmp_path / name
+        (d / owner).mkdir(parents=True)
+        for x in (d, d / owner):
+            os.chmod(x, mode)
+        return d
+
+    linked = plain("linked-pairs", "broker")
+    (linked / "broker" / "pairs.json").symlink_to(tmp_path / "pairs" / "broker" / "pairs.json")
+    big = plain("big-pairs", "status")
+    (big / "status" / "pairs.json").write_text(" " * (256 * 1024 + 1))
+    fifo = plain("fifo-pairs", "status")
+    os.mkfifo(fifo / "status" / "pairs.json")
+    loose = plain("loose-pairs", "broker", 0o777)
+    via = tmp_path / "via"
+    via.symlink_to(tmp_path / "pairs")
     results = run_cases(
         tmp_path,
         "module_census",
@@ -123,6 +145,9 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_pairs_dir": "relative/pairs"},
             {"module_census_pairs_dir": str(linked)},
             {"module_census_pairs_dir": str(big)},
+            {"module_census_pairs_dir": str(fifo)},
+            {"module_census_pairs_dir": str(loose)},
+            {"module_census_pairs_dir": str(via)},
             {"module_census_dir": "relative/census"},
             {"module_census_dir": str(tmp_path / "absent")},
             {"module_census_systemctl_cli": failing},
@@ -136,9 +161,11 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         ],
     )
     assert results[0][0] and "the notify pairs directory an absolute" in results[0][1]
-    for failed, said in results[1:3]:
+    for failed, said in results[1:4]:
         assert failed and "is not a regular file of at most 262144 bytes" in said, results
-    results = results[3:]
+    assert results[4][0] and "is writable by its group or others" in results[4][1], results
+    assert results[5][0] and "reached without a link" in results[5][1], results
+    results = results[6:]
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
     assert results[1][0] and "is not a directory on the controller" in results[1][1]
     assert results[2][0] and results[3][0], results

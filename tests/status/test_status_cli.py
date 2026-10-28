@@ -97,6 +97,6 @@ def test_collect_records_the_notify_pairs_it_holds_for_the_census(tmp_path, caps
     assert main(collect) == 0
     # the file sources page nothing here, so no message leaves; the pairs are recorded anyway
     assert "notifications sent: 0" in capsys.readouterr().out
-    held = parse_record((pairs / "status.json").read_text(), "status")
+    held = parse_record((pairs / "status" / "pairs.json").read_text(), "status").pairs
     assert {"problem": STATUS_ITEM[0], "recovery": STATUS_ITEM[1]} in held
-    assert not (pairs / "broker.json").exists()
+    assert not (pairs / "broker").exists()
