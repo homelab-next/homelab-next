@@ -445,6 +445,21 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
             f"router.wan6 is rendered by the linux adapter only; {network_adapter} ignores it, "
             "so configure the router's WAN IPv6 on the router itself"
         )
+    linux = doc.get("adapters", {}).get("options", {}).get("linux", {})
+    if (
+        "wan6" in router
+        and network_adapter == "linux"
+        and linux.get("flavor", "networkd") == "networkd"
+        and "wan_network" not in linux
+    ):
+        # networkd ignores a drop-in whose .network file does not exist, so a guessed name leaves
+        # the WAN without IPv6 and nothing says so
+        r.warn(
+            "router.wan6 extends the WAN's networkd file by a drop-in, and "
+            "adapters.options.linux.wan_network is not stated, so the default "
+            f"10-{linux.get('wan_interface', 'wan0')}.network is assumed; networkd ignores a "
+            "drop-in for a file that does not exist, so name the WAN's own file"
+        )
 
     switch_ids: set[str] = set()
     macs: dict[str, str] = {}

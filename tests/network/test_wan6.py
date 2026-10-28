@@ -269,6 +269,7 @@ def test_the_wan6_nftables_file_passes_nft_check(doc6, registry, wan6, tmp_path)
 def test_a_sound_wan6_validates(doc6, registry, wan6):
     d = copy.deepcopy(doc6)
     d["router"]["wan6"] = wan6
+    d["adapters"]["options"]["linux"]["wan_network"] = "10-wan0.network"
     rep = validate(d, registry)
     assert rep.ok, rep.errors
     assert not any("wan6" in w for w in rep.warnings)
@@ -334,6 +335,20 @@ def test_the_schema_refuses_what_is_not_exactly_one_of_ra_or_static(doc6, wan6):
     d["router"]["wan6"] = wan6
     assert any("router/wan6" in p for p in schema_problems(d))
     assert wan6_problems(wan6)  # and the semantic check, without the schema, refuses it too
+
+
+@pytest.mark.parametrize("flavor", ["networkd", "ifupdown"])
+def test_a_networkd_wan6_without_the_wans_file_named_warns(doc6, registry, flavor):
+    """A drop-in for a file that does not exist is ignored, so a guessed name is said."""
+    d = copy.deepcopy(doc6)
+    d["router"]["wan6"] = {"ra": True}
+    d["adapters"]["options"]["linux"]["flavor"] = flavor
+    rep = validate(d, registry)
+    assert rep.ok, rep.errors
+    warned = [w for w in rep.warnings if "wan_network is not stated" in w]
+    assert len(warned) == (flavor == "networkd"), rep.warnings
+    if warned:
+        assert "10-wan0.network is assumed" in warned[0]
 
 
 def test_another_router_adapter_warns_that_it_ignores_wan6(doc, registry):
