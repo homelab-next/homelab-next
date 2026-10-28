@@ -197,3 +197,25 @@ def test_the_corpus_has_both_verdicts():
     """A corpus every address of which both refuse (or both accept) would prove nothing."""
     verdicts = {_model_accepts(e, p) for e in EXTRAS for p in ZONE_PREFIXES}
     assert verdicts == {True, False}
+
+
+def test_what_one_row_cannot_show_is_the_guest_models_alone():
+    """The filter's docstring names what it does not check: a row has no gateway, DHCP pool or
+    other zone, so the guest model refuses these and the filter, by design, cannot."""
+    gateway, pooled, other_ula = "198.51.100.1", "198.51.100.101", v6(ULA | 5)
+    zone = ZoneInfo(
+        id="data",
+        subnet=SUBNET,
+        gateway=gateway,
+        dhcp_range=("198.51.100.100", "198.51.100.150"),
+    )
+    elsewhere = ZoneInfo(id="edge", subnet="203.0.113.0/24", subnet6=net6(ULA, 64))
+    guest = SimpleNamespace(id="guest:bus-core", zone="data", network={"gateway": "inherit"})
+    fleet = SimpleNamespace(site_addresses={}, fqdn=lambda g: "bus-core.example.internal")
+    for extra in (gateway, pooled, other_ula):
+        key, why = _extra_address_problem(extra, guest, [zone, elsewhere], {}, fleet)
+        assert key is None and why, extra  # the guest model refuses it
+        assert _filter_accepts(extra, None), extra  # a row cannot say why it is wrong
+    doc = _plugin().__doc__
+    for limit in ("gateway", "DHCP pool", "another zone's prefix"):
+        assert limit in doc, f"the filter's docstring no longer says it does not check {limit}"

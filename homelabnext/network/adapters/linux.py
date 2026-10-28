@@ -57,8 +57,11 @@ def _ports(ports: tuple[int, ...]) -> str:
     return str(ports[0]) if len(ports) == 1 else "{ " + ", ".join(str(p) for p in ports) + " }"
 
 
-def _match(sel: Selector, direction: str, wan: str, six: bool = False) -> str:
-    """nft match fragment for one side of a rule ('s' source, 'd' destination)."""
+def _match(
+    sel: Selector, direction: str, wan: str, six: bool = False, lan: tuple[str, ...] = ()
+) -> str:
+    """nft match fragment for one side of a rule ('s' source, 'd' destination); ``lan`` names the
+    zones' own interfaces, which ``intranet`` matches."""
     if sel.kind == "any":
         return ""
     if sel.kind == "zone":
@@ -67,12 +70,19 @@ def _match(sel: Selector, direction: str, wan: str, six: bool = False) -> str:
         return f"ip {direction}addr {sel.cidrs[0].split('/')[0]}"
     if sel.kind == "internet":
         return f'oifname "{wan}"'
+    if sel.kind == "intranet":
+        # named positively: "not the WAN" would let a second uplink, a tunnel or a VPN
+        # interface carry a source the internet must never see
+        if not lan:
+            raise ValueError("an intranet selector needs the zones' interfaces")
+        return "oifname { " + ", ".join(f'"{name}"' for name in lan) + " }"
     raise ValueError(f"unknown selector kind {sel.kind!r}")
 
 
-def nft_rule(rule: Rule, wan: str, six: bool = False) -> str:
-    """One nft rule; ``six`` renders a rule :func:`~homelabnext.network.ir.ipv6_form` returned."""
-    parts = [_match(rule.src, "s", wan, six), _match(rule.dst, "d", wan, six)]
+def nft_rule(rule: Rule, wan: str, six: bool = False, lan: tuple[str, ...] = ()) -> str:
+    """One nft rule; ``six`` renders a rule :func:`~homelabnext.network.ir.ipv6_form` returned,
+    ``lan`` the zones' interfaces an ``intranet`` destination is limited to."""
+    parts = [_match(rule.src, "s", wan, six, lan), _match(rule.dst, "d", wan, six, lan)]
     if rule.protocol in ("tcp", "udp"):
         parts.append(
             f"{rule.protocol} dport {_ports(rule.ports)}"
@@ -316,7 +326,8 @@ class LinuxAdapter(Adapter):
             out.append("        " + nft_rule(rule, wan) + "\n")
             six = ipv6_form(rule, pol.zones6)
             if six:
-                out.append("        " + nft_rule(six, wan, six=True) + "\n")
+                lan = tuple(i.name for i in ir.interfaces)
+                out.append("        " + nft_rule(six, wan, six=True, lan=lan) + "\n")
         out.append("    }\n")
         if guard:
             out.append(

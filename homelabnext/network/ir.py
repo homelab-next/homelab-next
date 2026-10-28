@@ -87,7 +87,7 @@ class DnsRecord:
 class Selector:
     """One side of a rule: a zone, a single host, anything, or "not in any zone"."""
 
-    kind: str  # zone | host | any | internet
+    kind: str  # zone | host | any | internet | intranet (IPv6 forms only: any but the internet)
     name: str = ""
     cidrs: tuple[str, ...] = ()
     zone: str = ""  # a host side: the zone the host is in
@@ -218,8 +218,18 @@ def ipv6_form(rule: Rule, zones6: dict[str, str]) -> Rule | None:
     src, dst = side(rule.src), side(rule.dst)
     if src is None or dst is None or "zone" not in (src.kind, dst.kind):
         return None
-    if dst.kind == "internet" and not ipaddress.IPv6Network(zones6[src.name]).is_global:
-        return None
+    # only a global prefix reaches the internet in IPv6 (nothing translates it), so a unique-local
+    # or documentation source has no IPv6 internet allow; a deny is kept, so every adapter closes
+    # the internet to that zone in IPv6 exactly as in IPv4
+    if (
+        rule.action == "allow"
+        and src.kind == "zone"
+        and not ipaddress.IPv6Network(zones6[src.name]).is_global
+    ):
+        if dst.kind == "internet":
+            return None
+        if dst.kind == "any":  # "anything" includes the internet: everything but that
+            dst = Selector("intranet")
     return replace(rule, id=f"{rule.id}:v6", src=src, dst=dst)
 
 

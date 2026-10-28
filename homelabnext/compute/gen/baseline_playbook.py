@@ -18,6 +18,10 @@ variables (the ``inventory`` target writes them), so its play names only the rol
 A control whose ``role`` is null has no product yet: it is written as a commented block that names
 the guests waiting for it, never dropped.  A control no guest needs is listed as such.  The
 product is chosen in one place, the control's ``role`` in the baseline set (ADR-0016).
+
+With no baseline set, or no control bound to a role, the file is one play on ``localhost`` that
+gathers no facts and has no tasks, with the reason as a comment: a valid playbook that does
+nothing, since ``ansible-playbook`` refuses a file with no play.
 """
 
 from __future__ import annotations
@@ -31,6 +35,11 @@ from ._text import HEADER, q, qlist
 from .inventory import control_group
 
 FILE = "baseline.yml"
+
+#: what stands in for the plays when there are none: ``ansible-playbook`` refuses an empty list
+#: ("A playbook must contain at least one play"), so a fleet with nothing to apply gets one play
+#: on the control node that does nothing and gathers nothing
+NO_OP = ["- name: no baseline control to apply", "  hosts: localhost", "  gather_facts: false"]
 
 
 def enrolled(fleet: Fleet, guest_ids: list[str], control: str | None = None) -> list[dict]:
@@ -75,7 +84,7 @@ def render(fleet: Fleet) -> dict[str, str]:
     L = [f"# {HEADER}"]
     bs = fleet.baselines
     if bs is None:
-        L += ["# no baseline set (_baselines.yml): nothing to apply", "[]"]
+        L += ["# no baseline set (_baselines.yml): nothing to apply", *NO_OP]
         return {FILE: "\n".join(L) + "\n"}
     report = coverage(fleet.sorted(), bs)
     L += [
@@ -135,5 +144,5 @@ def render(fleet: Fleet) -> dict[str, str]:
                     )
                 L += ["  roles:", f"    - role: {role}"]
     if not plays:
-        L += ["", "# no control is bound to a role yet", "[]"]
+        L += ["", "# no control is bound to a role yet", *NO_OP]
     return {FILE: "\n".join(L) + "\n"}

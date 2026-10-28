@@ -17,8 +17,14 @@ is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addre
 ``subnet6`` its IPv6 prefix (site 1.4), carried too when the zone gives one.
 
 The addresses are parsed, never pattern-matched, and held to the guest model's own rules
-(``homelabnext/compute/validate.py``), so a hand-written inventory gets no further than the
-generator's rows:
+(``homelabnext/compute/validate.py``) so far as one row can show them, so a hand-written
+inventory gets no further than the generator's rows on what follows.  A row carries one zone's
+``subnet`` and ``subnet6`` and nothing else of the site, so three refusals of the guest model are
+NOT made here, and a role's own assert must not be read as making them: an IPv4 extra address that
+is the zone's gateway, or inside its DHCP pool (the row has neither), and an IPv6 one inside
+another zone's prefix (the row names no other zone: a row without ``subnet6`` accepts any
+unique-local or documentation address).  Those stay the generator's, which refuses them before a
+row exists:
 
 * every address is in its canonical form (IPv4 dotted quad without leading zeros, IPv6 lower case
   and compressed, with no zone id ``%scope``), and never loopback, unspecified, multicast, reserved, link-local, this-network
