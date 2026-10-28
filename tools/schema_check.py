@@ -350,6 +350,19 @@ def _local(node: Any, root: Any) -> Any:
     return node
 
 
+def _numbers_as_floats(value: Any) -> Any:
+    """``value`` with every number a float: JSON Schema compares 1 and 1.0 as equal."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list):
+        return [_numbers_as_floats(x) for x in value]
+    if isinstance(value, dict):
+        return {k: _numbers_as_floats(v) for k, v in value.items()}
+    return value
+
+
 def _discriminated(branches: Any, root: Any) -> bool:
     """Every branch of a ``oneOf`` requires one property and pins it to a ``const`` no other branch
     pins it to: no document can match two branches however each one widens (the ``kind: header``
@@ -366,7 +379,7 @@ def _discriminated(branches: Any, root: Any) -> bool:
             prop = (b.get("properties") or {}).get(k)
             if not isinstance(prop, dict) or "const" not in prop:
                 break
-            consts.append(json.dumps(prop["const"], sort_keys=True))
+            consts.append(json.dumps(_numbers_as_floats(prop["const"]), sort_keys=True))
         else:
             if len(set(consts)) == len(consts):
                 return True
@@ -402,30 +415,51 @@ def _within(keyword: str | None):
         _NON_MONOTONE.reset(token)
 
 
+#: the name :func:`_strict_defs` returns for a local ``$ref`` that is no definition (``#``,
+#: ``#/properties/p``): such a pointer below a non-monotone keyword cannot be followed, so the
+#: whole schema is held unchanged (``/`` never occurs in a definition's name, so it cannot clash)
+OPAQUE_LOCAL = "#/"
+
+
 def _strict_defs(*docs: Any) -> frozenset[str]:
     """The local def names (``#/$defs/<name>``, ``#/definitions/<name>``) a ``$ref`` below a
-    non-monotone keyword of any of ``docs`` names."""
+    non-monotone keyword of any of ``docs`` names, followed through the definitions they name
+    in turn until nothing new is found, plus :data:`OPAQUE_LOCAL` when such a ``$ref`` is a local
+    pointer that is no definition."""
     found: set[str] = set()
 
-    def walk(node: Any, strict: bool) -> None:
+    def names(node: Any, strict: bool, out: set[str]) -> None:
         if isinstance(node, list):
             for x in node:
-                walk(x, strict)
+                names(x, strict, out)
             return
         if not isinstance(node, dict):
             return
         ref = node.get("$ref")
-        if strict and isinstance(ref, str):
+        if strict and isinstance(ref, str) and ref.startswith("#"):
             for prefix in ("#/$defs/", "#/definitions/"):
                 if ref.startswith(prefix):
-                    found.add(ref[len(prefix) :].split("/", 1)[0])
+                    out.add(ref[len(prefix) :].split("/", 1)[0])
+                    break
+            else:
+                out.add(OPAQUE_LOCAL)
         for key, sub in node.items():
-            walk(sub, strict or _non_monotone_keyword(key, node, node) is not None)
+            names(sub, strict or _non_monotone_keyword(key, node, node) is not None, out)
 
     for d in docs:
         token = _ROOTS.set((d, d))
         try:
-            walk(d, False)
+            names(d, False, found)
+            todo = set(found)
+            while todo:  # a used definition is strict throughout, its own references too
+                more: set[str] = set()
+                for name in todo - {OPAQUE_LOCAL}:
+                    for defs in ("$defs", "definitions"):
+                        sub = (d.get(defs) or {}).get(name) if isinstance(d, dict) else None
+                        if sub is not None:
+                            names(sub, True, more)
+                todo = more - found
+                found |= more
         finally:
             _ROOTS.reset(token)
     return frozenset(found)
@@ -488,7 +522,15 @@ def is_additive(
     if _STRICT_DEFS.get() is None:
         roots = _ROOTS.set((old, new))
         try:
-            token = _STRICT_DEFS.set(_strict_defs(old, new))
+            strict = _strict_defs(old, new)
+            if OPAQUE_LOCAL in strict and json.dumps(old, sort_keys=True) != json.dumps(
+                new, sort_keys=True
+            ):
+                return [
+                    f"{path}: a local $ref that is no definition sits under a non-monotone "
+                    "keyword; only an unchanged schema is provably additive"
+                ]
+            token = _STRICT_DEFS.set(strict)
             try:
                 return is_additive(old, new, path)
             finally:

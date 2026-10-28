@@ -852,8 +852,30 @@ def test_a_ref_retargeted_to_a_later_minor_of_the_same_schema_is_additive():
             {"$defs": {"x": {"enum": ["a"]}}, "not": {"$ref": "#/$defs/x"}},
             {"$defs": {"x": {"enum": ["a", "b"]}}, "not": {"$ref": "#/$defs/x"}},
         ),
+        # a definition the used one refers to in turn
+        (
+            {
+                "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"enum": ["a"]}},
+                "not": {"$ref": "#/$defs/a"},
+            },
+            {
+                "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"enum": ["a", "b"]}},
+                "not": {"$ref": "#/$defs/a"},
+            },
+        ),
+        # a local pointer that is no definition
+        (
+            {"properties": {"p": {"enum": ["a"]}}, "not": {"$ref": "#/properties/p"}},
+            {"properties": {"p": {"enum": ["a", "b"]}}, "not": {"$ref": "#/properties/p"}},
+        ),
     ],
-    ids=["not-enum-widened", "oneOf-branches-overlap", "defs-used-under-not"],
+    ids=[
+        "not-enum-widened",
+        "oneOf-branches-overlap",
+        "defs-used-under-not",
+        "defs-chain-under-not",
+        "non-def-pointer-under-not",
+    ],
 )
 def test_any_change_where_widening_narrows_is_not_additive(old, new):
     """Below not, if, oneOf (or a capped contains) only an unchanged subschema is provably
@@ -880,6 +902,11 @@ def test_a_discriminated_one_of_widens_like_any_monotone_position():
     assert sc.is_additive(old, new, known=_ENV_KNOWN) == []
     for doc in (old, new):  # the same kind on both branches: no longer discriminated
         doc["$defs"]["a"]["properties"]["kind"]["const"] = "job"
+    assert sc.is_additive(old, new, known=_ENV_KNOWN)
+    old, new = _kinds({"$ref": _ENV_REF.format("1.0")}), _kinds({"$ref": _ENV_REF.format("1.1")})
+    for doc in (old, new):  # 1 and 1.0 are the same const: not discriminated
+        doc["$defs"]["a"]["properties"]["kind"]["const"] = 1
+        doc["$defs"]["job"]["properties"]["kind"]["const"] = 1.0
     assert sc.is_additive(old, new, known=_ENV_KNOWN)
     old, new = _kinds({"$ref": _ENV_REF.format("1.0")}), _kinds({"$ref": _ENV_REF.format("1.1")})
     for doc in (old, new):  # kind not required on one branch: not discriminated either
