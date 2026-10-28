@@ -366,20 +366,52 @@ def test_an_ipv6_allow_to_any_from_a_non_global_prefix_cannot_leave_by_the_wan()
 def test_the_linux_router_never_forwards_a_ula_allow_to_any_out_the_wan(doc6, registry):
     nft = render("linux", _ula_any_ir(doc6, registry))["etc/nftables.d/50-hnx-site.nft"]
     six = [ln.strip() for ln in nft.splitlines() if "zone_to_zone[5]:v6" in ln]
-    assert len(six) == 1 and all('oifname != "wan0"' in ln for ln in six), six
+    # named positively: the zones' own interfaces, so a second uplink or a tunnel is never "not
+    # the WAN"
+    assert len(six) == 1 and "oifname { " in six[0] and '"vlan10"' in six[0], six
+    assert "wan0" not in six[0] and "!=" not in six[0]
     # IPv4 is untouched: any is any
     v4 = [ln for ln in nft.splitlines() if "ip saddr @z_compute " in ln and "any" in ln]
     assert v4 and not any("oifname" in ln for ln in v4)
 
 
-def test_the_controller_renders_a_ula_allow_to_any_as_it_does_in_ipv4(doc6, registry):
+def test_the_controller_keeps_a_ula_allow_to_any_off_the_internet(doc6, registry):
+    """The legacy LANv6_IN also sees routed LAN-to-WAN traffic, so the accept is preceded by a
+    WANv6_OUT drop for the same source."""
     rules = json.loads(render(CONTROLLER, _ula_any_ir(doc6, registry))["firewall-rules.json"])
     mine = [r for r in rules["objects"] if r["name"] == "hnx-zone_to_zone-5-v6"]
     assert len(mine) == 1 and mine[0]["ruleset"] == "LANv6_IN"
     assert "dst_address" not in mine[0] and "dst_networkconf_id" not in mine[0]
+    drop = [r for r in rules["objects"] if r["name"] == "hnx-zone_to_zone-5-v6-wan"]
+    assert len(drop) == 1 and (drop[0]["ruleset"], drop[0]["action"]) == ("WANv6_OUT", "drop")
+    assert drop[0]["rule_index"] < mine[0]["rule_index"]
     assert not any(
         r["ruleset"] == "WANv6_OUT" and r["action"] == "accept" for r in rules["objects"]
     )
+
+
+@pytest.mark.parametrize("adapter", ["linux", CONTROLLER])
+def test_an_unknown_selector_kind_fails_in_every_rule_adapter(doc6, registry, adapter):
+    """An adapter that met a kind it does not know and rendered it as ``any`` would widen it."""
+    from homelabnext.network import ir as irmod
+
+    real = irmod.ipv6_form
+
+    def odd(rule, zones6):
+        six = real(rule, zones6)
+        return six and irmod.Rule(**{**six.__dict__, "dst": Selector("elsewhere")})
+
+    import homelabnext.network.adapters.linux as lin
+    import homelabnext.network.adapters.unifi as uni
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(lin, "ipv6_form", odd, raising=False)
+        mp.setattr(uni, "ipv6_form", odd, raising=False)
+        with pytest.raises(ValueError, match="unknown selector kind"):
+            render(adapter, build_ir(doc6, registry))
+    finally:
+        mp.undo()
 
 
 def test_the_controller_drops_a_ula_zones_ipv6_internet_deny(doc6, registry):

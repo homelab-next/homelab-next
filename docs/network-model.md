@@ -272,8 +272,10 @@ so first match is the same in each family:
   drops it);
 * an allow to `any` from a non-global prefix reads, in IPv6, as "anything but the internet"
   (the IR's `intranet` selector): `any` includes the internet, which that source cannot reach.
-  The Linux router renders it with `oifname != "<wan>"`; the controller's rule sits in
-  `LANv6_IN`, which never carries WAN-bound traffic, so it renders as the `any` rule does. A
+  The Linux router renders it as `oifname { <the zones' interfaces> }`, named positively so a
+  second uplink, a tunnel or a VPN interface is never "not the WAN"; the controller renders the
+  `any` rule in `LANv6_IN` preceded by a `WANv6_OUT` drop for the same source, since its legacy
+  `LANv6_IN` also sees routed LAN-to-WAN traffic (unverified offline, like its other shapes). A
   deny to `any`, and any rule from a global prefix, keep `any`.
 
 ## Adapters

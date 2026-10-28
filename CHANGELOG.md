@@ -153,7 +153,7 @@ has no section below.
 
 ### Fixed
 
-- An IPv6 allow to `any` from a zone whose prefix is not global (unique-local or documentation) no longer reaches the WAN on the Linux router: `ipv6_form` now gives it the new `intranet` destination ("anything but the internet"), rendered as `oifname != "<wan>"` in nftables (the controller renders it as `any`, in `LANv6_IN`, as before).
+- An IPv6 allow to `any` from a zone whose prefix is not global (unique-local or documentation) no longer reaches the WAN on the Linux router: `ipv6_form` now gives it the new `intranet` destination ("anything but the internet"), rendered in nftables as an outbound match on the zones' own interfaces (named positively, so a second uplink or a tunnel is never "not the WAN"); the controller renders the `any` rule in `LANv6_IN` preceded by a `WANv6_OUT` drop for the same source, since its legacy `LANv6_IN` also sees routed LAN-to-WAN traffic.
 - The controller adapter now renders the `WANv6_OUT` drop for a zone denied the internet whose prefix is unique-local or documentation: `ipv6_form` gave a deny to the internet no IPv6 form from such a prefix, leaving the controller's default to decide. An internet allow from such a prefix still has none.
 - `hnx guests render --target baseline-playbook` renders a valid no-op play (`localhost`, no facts, no tasks) instead of `[]` for a fleet with no baseline set or no control bound to a role; `ansible-playbook` refuses an empty list ("A playbook must contain at least one play").
 - The `hnx_address` filter's docstring claimed to hold addresses to the guest model's own rules; it now says which it does not check (a zone gateway, a DHCP pool address and another zone's IPv6 prefix, none of which a row carries), and a test pins the gap.

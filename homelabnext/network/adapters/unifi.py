@@ -28,8 +28,9 @@ sets, so no offset is needed, and the range stays inside the custom-rule indexes
 already use.  An IPv6 rule names its protocol in ``protocol_v6`` (``icmpv6`` for ICMP), the field
 the controller's legacy object carries for IPv6 rule sets.  An allow to ``any`` from
 a source without a global prefix is the ``intranet`` selector in IPv6 (everything but the
-internet); the controller renders it as it does ``any``, in ``LANv6_IN``, which never carries
-traffic bound for the WAN.  A zone denied the internet gets its ``WANv6_OUT`` drop whatever its
+internet); the controller renders it as it does ``any``, in ``LANv6_IN``, preceded by a ``WANv6_OUT`` drop
+for the same source: the legacy ``LANv6_IN`` also sees routed LAN-to-WAN traffic, so the accept
+alone would not keep it off the internet.  A zone denied the internet gets its ``WANv6_OUT`` drop whatever its
 prefix, so the controller's default never decides.  None of this is verified offline: the
 index range, ``protocol_v6`` and its values are checked on the server, like every other shape here.
 The IPv6 rule sets cover forwarded traffic only.  Traffic to the gateway itself
@@ -172,6 +173,11 @@ class UnifiAdapter(Adapter):
         for rule in rules:
             if rule.dst.kind == "internet" and rule.action == "allow":
                 continue  # the controller's default LAN -> WAN behaviour already allows it
+            if v6 and rule.dst.kind == "intranet" and rule.action == "allow":
+                # the controller's LANv6_IN also sees routed LAN -> WAN traffic, so the accept
+                # alone would let this source reach the internet: drop it on the way out first
+                out.append(self._internet_drop(rule, index, v6))
+                index += 10
             out.append(self._rule(rule, index, v6))
             index += 10
         out.append(
@@ -187,6 +193,22 @@ class UnifiAdapter(Adapter):
             }
         )
         return out
+
+    def _internet_drop(self, rule: Rule, index: int, v6: str) -> dict:
+        """The ``WANv6_OUT`` drop for the source of an ``intranet`` allow: its prefix is not global,
+        so nothing it sends belongs on the internet."""
+        return {
+            "name": PREFIX + rule.id.replace("[", "-").replace("]", "").replace(":", "-") + "-wan",
+            "enabled": True,
+            "ruleset": f"WAN{v6}_OUT",
+            "rule_index": index,
+            "action": "drop",
+            "protocol_v6": "all",
+            "src_networkconf_type": "NETv6",
+            "src_networkconf_id": net_ref(rule.src.name),
+            "logging": False,
+            "description": f"{rule.comment} (never the internet: no global prefix)",
+        }
 
     def _rule(self, rule: Rule, index: int, v6: str = "") -> dict:
         net = "NETv6" if v6 else "NETv4"
@@ -210,6 +232,8 @@ class UnifiAdapter(Adapter):
             obj["dst_networkconf_id"] = net_ref(rule.dst.name)
         elif rule.dst.kind == "host":
             obj["dst_address"] = rule.dst.cidrs[0].split("/")[0]
+        elif rule.dst.kind not in ("any", "internet", "intranet"):
+            raise ValueError(f"unknown selector kind {rule.dst.kind!r}")
         if rule.ports:
             obj["dst_port"] = ",".join(str(p) for p in rule.ports)
         return obj
