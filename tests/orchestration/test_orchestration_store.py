@@ -618,6 +618,8 @@ def test_retention_inside_the_range_is_accepted(tmp_path, days):
 SCHEMA_ID = json.loads(
     (EXAMPLES.parent / "agent.job.finished.schema.json").read_text(encoding="utf-8")
 )["allOf"][1]["properties"]["dataschema"]["const"]
+# the pin never moves with the schema's minors: a 1.0 producer must stay valid
+assert SCHEMA_ID.endswith("/agent.job.finished/1.0"), SCHEMA_ID
 
 
 @pytest.mark.parametrize(

@@ -307,8 +307,15 @@ _NON_MONOTONE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "non_monotone", default=None
 )
 
-#: keywords whose subschema, once WIDENED, can make the schema holding it accept LESS, so that a
-#: wider ``$ref`` target there is not "additive".  Everything below one of these is non-monotone
+#: the local ``$defs``/``definitions`` names some non-monotone position refers to (``#/$defs/x``
+#: under ``not``, say): an entry there is held as strictly as the position that uses it.  Set once
+#: per top-level :func:`is_additive` call (``None`` until then).
+_STRICT_DEFS: contextvars.ContextVar[frozenset[str] | None] = contextvars.ContextVar(
+    "strict_defs", default=None
+)
+
+#: keywords whose subschema, once WIDENED, can make the schema holding it accept LESS, so that
+#: any change there (a wider ``$ref`` target included) is not "additive".  Everything below one of these is non-monotone
 #: too (the walk is sticky: a nested position never restores monotonicity).
 #:
 #: * ``not``: accepts exactly what the subschema rejects, so a wider subschema narrows it.
@@ -321,14 +328,60 @@ _NON_MONOTONE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 #: ``allOf``, ``anyOf``, ``then``, ``else``, ``properties``, ``patternProperties``,
 #: ``additionalProperties``, ``items``, ``prefixItems``, ``propertyNames`` (a wider names schema
 #: admits more names, never fewer), ``dependentSchemas``, ``unevaluated*`` and bare ``contains`` or
-#: ``minContains`` (more matches only helps).  Not tracked: a ``$defs`` entry is judged where it
-#: is defined, not where a local ``$ref`` uses it (a def referenced from under ``not`` is not
-#: caught); no repository schema nests a cross-schema ``$ref`` that way.
+#: ``minContains`` (more matches only helps).  Below a non-monotone keyword only an unchanged
+#: subschema is additive (the check cannot tell widening from narrowing there, so it fails
+#: closed), and a ``$defs`` entry a local ``$ref`` uses from such a position is held the same way
+#: (:data:`_STRICT_DEFS`; one level of local reference is followed).
 NON_MONOTONE_KEYWORDS = frozenset({"not", "if", "oneOf"})
 
 
+#: the two top-level schemas being compared, for resolving a local ``$ref`` (``#/$defs/x``) while
+#: deciding whether a ``oneOf`` is discriminated
+_ROOTS: contextvars.ContextVar[tuple[Any, ...]] = contextvars.ContextVar("roots", default=())
+
+
+def _local(node: Any, root: Any) -> Any:
+    """``node``, or the local definition its ``$ref`` names (one level)."""
+    ref = node.get("$ref") if isinstance(node, dict) else None
+    if isinstance(ref, str) and isinstance(root, dict):
+        for prefix, defs in (("#/$defs/", "$defs"), ("#/definitions/", "definitions")):
+            if ref.startswith(prefix) and "/" not in ref[len(prefix) :]:
+                return (root.get(defs) or {}).get(ref[len(prefix) :], node)
+    return node
+
+
+def _discriminated(branches: Any, root: Any) -> bool:
+    """Every branch of a ``oneOf`` requires one property and pins it to a ``const`` no other branch
+    pins it to: no document can match two branches however each one widens (the ``kind: header``
+    / ``kind: job`` / ``kind: turn`` shape)."""
+    if not isinstance(branches, list) or len(branches) < 2:
+        return False
+    resolved = [_local(b, root) for b in branches]
+    if not all(isinstance(b, dict) for b in resolved):
+        return False
+    shared = set.intersection(*(set(b.get("required") or []) for b in resolved))
+    for k in sorted(shared):
+        consts = []
+        for b in resolved:
+            prop = (b.get("properties") or {}).get(k)
+            if not isinstance(prop, dict) or "const" not in prop:
+                break
+            consts.append(json.dumps(prop["const"], sort_keys=True))
+        else:
+            if len(set(consts)) == len(consts):
+                return True
+    return False
+
+
 def _non_monotone_keyword(key: str, old: dict, new: dict) -> str | None:
-    """``key`` when widening the subschema under ``key`` of ``old``/``new`` can narrow the whole."""
+    """``key`` when widening the subschema under ``key`` of ``old``/``new`` can narrow the whole.
+    A ``oneOf`` whose branches are discriminated by a required ``const`` at both ends is
+    monotone: a wider branch can never make a document match a second one."""
+    if key == "oneOf":
+        roots = _ROOTS.get() or (None, None)
+        if _discriminated(old.get(key), roots[0]) and _discriminated(new.get(key), roots[-1]):
+            return None
+        return key
     if key in NON_MONOTONE_KEYWORDS:
         return key
     if key == "contains" and ("maxContains" in old or "maxContains" in new):
@@ -347,6 +400,35 @@ def _within(keyword: str | None):
         yield
     finally:
         _NON_MONOTONE.reset(token)
+
+
+def _strict_defs(*docs: Any) -> frozenset[str]:
+    """The local def names (``#/$defs/<name>``, ``#/definitions/<name>``) a ``$ref`` below a
+    non-monotone keyword of any of ``docs`` names."""
+    found: set[str] = set()
+
+    def walk(node: Any, strict: bool) -> None:
+        if isinstance(node, list):
+            for x in node:
+                walk(x, strict)
+            return
+        if not isinstance(node, dict):
+            return
+        ref = node.get("$ref")
+        if strict and isinstance(ref, str):
+            for prefix in ("#/$defs/", "#/definitions/"):
+                if ref.startswith(prefix):
+                    found.add(ref[len(prefix) :].split("/", 1)[0])
+        for key, sub in node.items():
+            walk(sub, strict or _non_monotone_keyword(key, node, node) is not None)
+
+    for d in docs:
+        token = _ROOTS.set((d, d))
+        try:
+            walk(d, False)
+        finally:
+            _ROOTS.reset(token)
+    return frozenset(found)
 
 
 def _later_minor_ref(old: Any, new: Any) -> bool:
@@ -395,7 +477,7 @@ def is_additive(
     (checked structurally and conservatively): properties/enum members/types may
     be added; nothing may be removed, required, or tightened.  ``known`` is the set of ``$id``
     values a later-minor ``$ref`` may resolve to (:data:`_KNOWN_IDS`); a call without it keeps the
-    enclosing call's.
+    enclosing call's (:func:`additive_problems` always sets it, empty when not given).
     """
     if known is not None:
         token = _KNOWN_IDS.set(frozenset(known))
@@ -403,6 +485,23 @@ def is_additive(
             return is_additive(old, new, path)
         finally:
             _KNOWN_IDS.reset(token)
+    if _STRICT_DEFS.get() is None:
+        roots = _ROOTS.set((old, new))
+        try:
+            token = _STRICT_DEFS.set(_strict_defs(old, new))
+            try:
+                return is_additive(old, new, path)
+            finally:
+                _STRICT_DEFS.reset(token)
+        finally:
+            _ROOTS.reset(roots)
+    keyword = _NON_MONOTONE.get()
+    if keyword is not None:
+        # a wider subschema here can narrow the schema that holds it: only an unchanged one is
+        # provably additive (descriptions included: the comparison does not try to be clever)
+        if json.dumps(old, sort_keys=True) == json.dumps(new, sort_keys=True):
+            return []
+        return [f"{path}: changed under '{keyword}', where a wider subschema can accept less"]
     if isinstance(old, bool) or isinstance(new, bool):
         return [] if (new is True or old == new) else [f"{path}: schema became {new}"]
     if _widened_to_any_of(old, new):
@@ -471,10 +570,13 @@ def is_additive(
             elif isinstance(ov, dict) and isinstance(nv, dict):
                 out += is_additive(ov, nv, p)
         elif key in {"properties", "$defs", "definitions", "patternProperties"}:
+            strict = _STRICT_DEFS.get() or frozenset()
             for name, osub in ov.items():
                 if name not in nv:
                     out.append(f"{p}.{name}: removed")
-                else:
+                    continue
+                used = key in {"$defs", "definitions"} and name in strict
+                with _within(f"a {key} entry used from a non-monotone position" if used else None):
                     out += is_additive(osub, nv[name], f"{p}.{name}")
         elif key in {"items", "contains", "not", "if", "then", "else", "propertyNames"}:
             if isinstance(ov, (dict, bool)):

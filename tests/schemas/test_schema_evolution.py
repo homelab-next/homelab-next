@@ -837,6 +837,66 @@ def test_a_ref_retargeted_to_a_later_minor_of_the_same_schema_is_additive():
     assert sc.is_additive(old, other, known=_ENV_KNOWN)
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # a wider negated subschema narrows: "b" was accepted, now it is refused
+        ({"not": {"enum": ["a"]}}, {"not": {"enum": ["a", "b"]}}),
+        # disjoint branches that now share "c": a "c" matches both and fails oneOf
+        (
+            {"oneOf": [{"enum": ["a"]}, {"enum": ["b"]}]},
+            {"oneOf": [{"enum": ["a", "c"]}, {"enum": ["b", "c"]}]},
+        ),
+        # the same, reached through a local definition the negation uses
+        (
+            {"$defs": {"x": {"enum": ["a"]}}, "not": {"$ref": "#/$defs/x"}},
+            {"$defs": {"x": {"enum": ["a", "b"]}}, "not": {"$ref": "#/$defs/x"}},
+        ),
+    ],
+    ids=["not-enum-widened", "oneOf-branches-overlap", "defs-used-under-not"],
+)
+def test_any_change_where_widening_narrows_is_not_additive(old, new):
+    """Below not, if, oneOf (or a capped contains) only an unchanged subschema is provably
+    additive, and a local definition such a position uses is held the same way."""
+    assert sc.is_additive(old, new), (old, new)
+    assert sc.is_additive(old, json.loads(json.dumps(old))) == []
+
+
+def _kinds(job_ref):
+    branch = {"type": "object", "required": ["kind"]}
+    return {
+        "$defs": {
+            "a": {**branch, "properties": {"kind": {"const": "a"}}},
+            "job": {**branch, "properties": {"kind": {"const": "job"}, "event": job_ref}},
+        },
+        "oneOf": [{"$ref": "#/$defs/a"}, {"$ref": "#/$defs/job"}],
+    }
+
+
+def test_a_discriminated_one_of_widens_like_any_monotone_position():
+    """Branches that each require ``kind`` pinned to a distinct const can never both match, so a
+    later-minor ``$ref`` bump inside one is additive; without the discriminator it is not."""
+    old, new = _kinds({"$ref": _ENV_REF.format("1.0")}), _kinds({"$ref": _ENV_REF.format("1.1")})
+    assert sc.is_additive(old, new, known=_ENV_KNOWN) == []
+    for doc in (old, new):  # the same kind on both branches: no longer discriminated
+        doc["$defs"]["a"]["properties"]["kind"]["const"] = "job"
+    assert sc.is_additive(old, new, known=_ENV_KNOWN)
+    old, new = _kinds({"$ref": _ENV_REF.format("1.0")}), _kinds({"$ref": _ENV_REF.format("1.1")})
+    for doc in (old, new):  # kind not required on one branch: not discriminated either
+        doc["$defs"]["a"]["required"] = []
+    assert sc.is_additive(old, new, known=_ENV_KNOWN)
+
+
+def test_a_def_used_under_not_is_strict_also_for_a_later_minor_ref():
+    old = {"$defs": {"x": {"$ref": _ENV_REF.format("1.0")}}, "not": {"$ref": "#/$defs/x"}}
+    new = {"$defs": {"x": {"$ref": _ENV_REF.format("1.1")}}, "not": {"$ref": "#/$defs/x"}}
+    assert sc.is_additive(old, new, known=_ENV_KNOWN)
+    # the same definition used only from a monotone position stays additive
+    mono_old = {"$defs": {"x": {"$ref": _ENV_REF.format("1.0")}}, "allOf": [{"$ref": "#/$defs/x"}]}
+    mono_new = {"$defs": {"x": {"$ref": _ENV_REF.format("1.1")}}, "allOf": [{"$ref": "#/$defs/x"}]}
+    assert sc.is_additive(mono_old, mono_new, known=_ENV_KNOWN) == []
+
+
 def test_a_later_minor_ref_must_name_a_live_or_frozen_schema():
     old, ghost = _env_bump(lambda r: {"allOf": [r]}, "1.9")
     assert sc.is_additive(old, ghost, known=_ENV_KNOWN)  # 1.9 exists nowhere
