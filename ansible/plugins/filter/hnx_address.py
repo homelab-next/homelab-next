@@ -20,10 +20,12 @@ as ``[first, last]``, each carried too when the zone gives one.
 The addresses are parsed, never pattern-matched, and held to the guest model's own rules
 (``homelabnext/compute/validate.py``) so far as one row can show them, so a hand-written
 inventory gets no further than the generator's rows on what follows.  A row carries one zone's
-``subnet``, ``subnet6``, ``gateway`` and ``dhcp_range`` and nothing else of the site, so one
-refusal of the guest model is NOT made here, and a role's own assert must not be read as making
-it: an IPv6 extra address inside another zone's prefix (the row names no other zone: a row without
-``subnet6`` accepts any unique-local or documentation address).  That stays the generator's, which
+``subnet``, ``subnet6``, ``gateway`` and ``dhcp_range`` and nothing else of the site, so two
+refusals of the guest model are NOT made here, and a role's own assert must not be read as making
+them: an IPv6 extra address inside another zone's prefix (the row names no other zone: a row
+without ``subnet6`` accepts any unique-local or documentation address), and an extra address that
+is the guest's own ``network.gateway`` override (the row carries the zone's gateway, not the
+guest's).  That stays the generator's, which
 refuses it before a row exists.  The gateway and the DHCP pool are held when the row carries them,
 and a hand-written row without them is judged as before (a row cannot be refused for what it does
 not say):
