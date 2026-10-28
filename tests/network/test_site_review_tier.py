@@ -328,13 +328,23 @@ def test_the_lab_namespaces_declared_is_owner_and_dropped_human():
         ["archive"],
         [{"namespace": "a", "why": "x"}, {"namespace": "a", "why": "y"}],
         [{"why": "x"}],
+        None,
     ],
 )
 def test_a_lab_namespace_list_that_cannot_be_compared_is_human(odd):
+    """A ``null`` list fails closed too, at either end, whatever the schema says of it."""
     one = _lab_ns(("archive", "old tables"))
     after = {**one, "lab_table_namespaces": odd}
-    (c,) = rt.scope_changes(one, after)
-    assert (c.field, c.tier) == ("lab_table_namespaces", rt.HUMAN) and "fail closed" in c.why
+    pairs = [(one, after), (after, one)]
+    if odd is None:  # and against an absent list, and unchanged
+        pairs += [
+            ({"profile": "small-lab"}, after),
+            (after, {"profile": "small-lab"}),
+            (after, after),
+        ]
+    for old, new in pairs:
+        (c,) = rt.scope_changes(old, new)
+        assert (c.field, c.tier) == ("lab_table_namespaces", rt.HUMAN) and "fail closed" in c.why
 
 
 def test_the_rest_of_the_selection_is_human_but_a_hosts_capacity():

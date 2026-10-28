@@ -190,6 +190,24 @@ def test_a_lab_namespace_that_is_a_module_s_the_core_s_or_listed_twice_is_refuse
     assert messages(check(tree, site=site)) == [f"site: {message}"]
 
 
+def test_a_lab_namespace_that_is_a_module_that_failed_validation_is_refused_too(tmp_path):
+    """A module left out for its own problems still binds its namespace at run time, so the lab
+    may not claim it either: the refusal is reported beside the module's own problem."""
+    examples(tmp_path)
+    manifest = tmp_path / "fixtures" / "external-collector" / "module.yml"
+    doc = ld.load_yaml(manifest)
+    doc["manifest_version"] = "0.0"
+    manifest.write_text(yaml.safe_dump(doc))
+    site, _ = _lab_tables(["external_collector"])
+    tree, _ = ld.discover(fixtures=tmp_path / "fixtures")
+    found = messages(check(tree, roots=(tmp_path / "fixtures",), site=site))
+    assert any(m.startswith("external-collector: ") for m in found), found
+    assert (
+        "site: lab_table_namespaces: external_collector is module external-collector's "
+        "namespace, never the lab's"
+    ) in found
+
+
 def _listening(*hosts):
     """The small lab's inventory with the hosts' listening sockets, its rows left ungathered (as
     a census leaves them): ``hosts`` are ``(census host, sockets)``."""
