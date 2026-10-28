@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.5",
+  "$id": "https://schemas.example.internal/homelabnext/platform/site/1.6",
   "title": "HomelabNext site / network model (site.yml)",
-  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason). 1.3 adds the mirror port kind (a SPAN destination for a sensor) and mirror_from, the ports it copies. 1.4 adds a zone's optional subnet6, its IPv6 prefix (a /48 to a /64), which a guest's IPv6 extra address is held against. 1.5 adds delegated_prefixes6, the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), inside which a zone's global subnet6 is the lab's.",
+  "description": "Vendor-neutral description of one site: zones (VLANs and subnets), the router and switches, the zone-to-zone and service-level firewall intent, DNS policy and the adapters that realise it. Zones and services are referenced by id (zone:<id>, svc:<id>); no endpoint literal and no secret value appears here. Schema version 1; evolve additively. 1.1 adds power (the site's UPSes and a default) and the edge chain, and a power declaration on the router, the switches and the edge devices. 1.2 adds tailnet.deploy (the CI deploy tag's tailnet access: SSH to listed zones, other ports only as exceptions with a reason). 1.3 adds the mirror port kind (a SPAN destination for a sensor) and mirror_from, the ports it copies. 1.4 adds a zone's optional subnet6, its IPv6 prefix (a /48 to a /64), which a guest's IPv6 extra address is held against. 1.5 adds delegated_prefixes6, the global-unicast IPv6 prefixes the site declares its own (an ISP delegation), inside which a zone's global subnet6 is the lab's. 1.6 adds router.wan6, the router's own IPv6 on its WAN: a static address and default gateway, or router advertisements accepted on the WAN only.",
   "type": "object",
   "additionalProperties": false,
   "required": ["site_version", "site", "zones", "router", "firewall"],
@@ -47,7 +47,26 @@
             "writes": {"$ref": "#/$defs/auth_ref"}
           }
         },
-        "power": {"$ref": "#/$defs/power_ref"}
+        "power": {"$ref": "#/$defs/power_ref"},
+        "wan6": {
+          "type": "object",
+          "description": "1.6: the router's own IPv6 on its WAN, which carries the zones' routed IPv6 to the internet. Exactly one of static (an address and a default gateway) or ra: true (router advertisements are accepted on the WAN, and only there: SLAAC address and default route, no DHCPv6). Prefix delegation is not expressed here. Rendered by the linux adapter; another router adapter ignores it with a validation warning. Absent: the router has no WAN IPv6 and the site renders exactly as before.",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "static": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["address", "gateway"],
+              "properties": {
+                "address": {"type": "string", "pattern": "^[0-9a-f:]{2,39}/64$", "description": "The router's WAN address with its /64, canonical, global unicast: never unique-local, documentation, link-local or special-purpose (hnx site validate)."},
+                "gateway": {"type": "string", "pattern": "^[0-9a-f:]{2,39}$", "description": "The default gateway: a link-local address (fe80::/10, no zone id: it is the WAN's) or another address inside the WAN /64."}
+              }
+            },
+            "ra": {"const": true, "description": "Accept router advertisements on the WAN (and only there): the address by SLAAC and the default route."}
+          }
+        }
       }
     },
     "switches": {
@@ -235,7 +254,8 @@
               "properties": {
                 "flavor": {"enum": ["networkd", "ifupdown"], "default": "networkd"},
                 "trunk_interface": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,14}$", "default": "trunk0"},
-                "wan_interface": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,14}$", "default": "wan0"}
+                "wan_interface": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,14}$", "default": "wan0"},
+                "wan_network": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@-]{0,55}\\.network$", "description": "1.6: the name of the WAN's own systemd-networkd .network file, which router.wan6 extends with a drop-in (<wan_network>.d/50-hnx-wan6.conf). Default 10-<wan_interface>.network."}
               }
             },
             "zonefile": {
