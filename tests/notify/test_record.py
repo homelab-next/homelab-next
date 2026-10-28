@@ -40,8 +40,8 @@ def _doc(path):
 
 def _pairs_dir(tmp_path, name="pairs"):
     d = tmp_path / name
-    d.mkdir(mode=0o755)
-    os.chmod(d, 0o755)  # whatever the umask: writable by its owner only
+    d.mkdir(mode=0o700)
+    os.chmod(d, 0o700)  # whatever the umask: its owner's only
     return d
 
 
@@ -172,19 +172,36 @@ def test_a_record_names_a_known_owner_and_a_plain_directory(tmp_path):
 
 def test_a_directory_others_may_write_is_refused(tmp_path):
     d = _pairs_dir(tmp_path)
-    os.chmod(d, 0o775)
+    os.chmod(d, 0o770)  # its group may write
     with pytest.raises(ValueError, match="writable by no one else"):
         PairsRecord(d, "broker")
-    os.chmod(d, 0o755)
+    os.chmod(d, 0o700)
     (d / "broker").mkdir()
-    os.chmod(d / "broker", 0o757)
+    os.chmod(d / "broker", 0o770)
     with pytest.raises(ValueError, match="writable by no one else"):
         PairsRecord(d, "broker")
-    os.chmod(d / "broker", 0o755)
+    os.chmod(d / "broker", 0o700)
     rec = PairsRecord(d, "broker")
-    os.chmod(d / "broker", 0o775)  # loosened after start: the next write refuses
+    os.chmod(d / "broker", 0o770)  # loosened after start: the next write refuses
     with pytest.raises(ValueError, match="writable by no one else"):
         rec.write({})
+
+
+@pytest.mark.parametrize(
+    ("mode", "uid", "refused"),
+    [
+        (0o40700, 1000, False),  # its owner's only
+        (0o40755, 1000, False),  # readable by all, writable by its owner only
+        (0o40755, 0, False),  # root's
+        (0o40775, 1000, True),  # its group may write
+        (0o40757, 1000, True),  # others may write
+        (0o40777, 1000, True),
+        (0o41777, 1000, True),  # sticky does not make it safe
+        (0o40700, 2000, True),  # someone else's
+    ],
+)
+def test_the_mode_rule_refuses_group_or_other_write_and_other_owners(mode, uid, refused):
+    assert nr._mode_problem(mode, uid, 1000) is refused
 
 
 def test_a_planted_link_or_fifo_never_redirects_or_blocks_a_write(tmp_path):

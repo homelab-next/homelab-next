@@ -136,9 +136,15 @@ def _open_dir(path: str | os.PathLike) -> int:
     return fd
 
 
+def _mode_problem(st_mode: int, st_uid: int, euid: int) -> bool:
+    """True when a directory with this mode and owner may not hold a record: owned by someone
+    other than root or ``euid``, or writable by its group or others."""
+    return st_uid not in (0, euid) or bool(st_mode & 0o022)
+
+
 def _check_owned(fd: int, shown: Any) -> None:
     st = os.fstat(fd)
-    if st.st_uid not in (0, os.geteuid()) or st.st_mode & 0o022:
+    if _mode_problem(st.st_mode, st.st_uid, os.geteuid()):
         raise ValueError(
             f"notify pairs record: {shown} must be owned by root or this process's user and "
             "writable by no one else"

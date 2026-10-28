@@ -51,8 +51,8 @@ def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
     pairs = tmp_path / "pairs"
-    pairs.mkdir(mode=0o755)
-    os.chmod(pairs, 0o755)
+    pairs.mkdir(mode=0o700)
+    os.chmod(pairs, 0o700)
     # this process writes it, so the record's process is running while the role reads it
     PairsRecord(pairs, "broker").write({PAIR["problem"]: (PAIR["recovery"], None)})
     v = {
@@ -120,7 +120,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
 
     # a record is read only as a small regular file, never through a link, in a directory no
     # one else may write; a FIFO never blocks the read
-    def plain(name, owner, mode=0o755):
+    def plain(name, owner, mode=0o700):
         d = tmp_path / name
         (d / owner).mkdir(parents=True)
         for x in (d, d / owner):
@@ -133,7 +133,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     (big / "status" / "pairs.json").write_text(" " * (256 * 1024 + 1))
     fifo = plain("fifo-pairs", "status")
     os.mkfifo(fifo / "status" / "pairs.json")
-    loose = plain("loose-pairs", "broker", 0o777)
+    loose = plain("loose-pairs", "broker", 0o770)
     via = tmp_path / "via"
     via.symlink_to(tmp_path / "pairs")
     results = run_cases(
