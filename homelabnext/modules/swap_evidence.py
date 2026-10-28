@@ -139,6 +139,14 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def git_toplevel(path: Path) -> Path | None:
+    """The resolved top of the git checkout ``path`` is in (``rev-parse --show-toplevel``), or None
+    when it is in none."""
+    r = _git(path, "rev-parse", "--show-toplevel")
+    out = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+    return Path(out).resolve() if out else None
+
+
 def _rel(rel: str) -> str:
     if not rel or rel.startswith("/") or ".." in PurePosixPath(rel).parts:
         raise EvidenceError(f"{rel!r}: not a path inside the repository")
@@ -337,19 +345,52 @@ def _roles_changed(before: RoleTable, after: RoleTable) -> list[str]:
 _PIN_KEYS = ("backend", "model_id", "version", "digest")
 
 
+def _read_as_rules(binding: dict[str, Any]) -> dict[str, Any]:
+    """The binding as :func:`~homelabnext.modules.rules.cloud_roles` reads it: ``leaves_lab``
+    counts only when it is ``True``, so absent, ``false`` and any other value are the same and the
+    key is dropped."""
+    return {k: v for k, v in binding.items() if k != "leaves_lab" or v is True}
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Whether two parsed documents are the same JSON, types included (``1`` is not ``true``)."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def _normalised(doc: Any) -> Any:
+    """``doc`` (a role table) with every role's bindings :func:`_read_as_rules`."""
+    roles = doc.get("roles") if isinstance(doc, dict) else None
+    if not isinstance(roles, dict):
+        return doc
+    out = {}
+    for name, role in roles.items():
+        if isinstance(role, dict) and isinstance(role.get("bindings"), list):
+            role = {
+                **role,
+                "bindings": [
+                    _read_as_rules(b) if isinstance(b, dict) else b for b in role["bindings"]
+                ],
+            }
+        out[name] = role
+    return {**doc, "roles": out}
+
+
 def _trust_view(role: Any) -> dict[str, Any]:
     """What of a role is not a pin: its own keys but ``bindings``, and the keys each binding
-    carries beside the pin (``leaves_lab``, ``priority``, ...) as a sorted multiset, so rebinding
-    leaves it unchanged and flagging a binding ``leaves_lab`` does not."""
+    carries beside the pin (``leaves_lab``, ``priority``, ...) keyed by that binding's pin, as a
+    sorted multiset of (pin, extras), so a flag that moves to another binding is a change while
+    the order of the bindings is not, and ``leaves_lab: false`` is the key being absent."""
     if not isinstance(role, dict):
         return {"": role}
     view = {k: v for k, v in role.items() if k != "bindings"}
-    extras = [
-        {k: v for k, v in b.items() if k not in _PIN_KEYS}
-        for b in role.get("bindings", [])
-        if isinstance(b, dict)
-    ]
-    view["bindings[]"] = sorted(json.dumps(e, sort_keys=True) for e in extras if e)
+    entries = []
+    for b in role.get("bindings", []):
+        if isinstance(b, dict) and (
+            extras := {k: v for k, v in _read_as_rules(b).items() if k not in _PIN_KEYS}
+        ):
+            pin = [b.get(k) for k in _PIN_KEYS]
+            entries.append(json.dumps({"pin": pin, "extras": extras}, sort_keys=True))
+    view["bindings[]"] = sorted(entries)
     return view
 
 
@@ -369,11 +410,13 @@ def _trust_changes(old: Any, new: Any) -> dict[str, list[str]]:
         if "bindings[]" in fields:
             pairs = [
                 Counter(
-                    (k, json.dumps(v)) for x in view["bindings[]"] for k, v in json.loads(x).items()
+                    (json.dumps(e["pin"]), k, json.dumps(v))
+                    for e in map(json.loads, view["bindings[]"])
+                    for k, v in e["extras"].items()
                 )
                 for view in (b, a)
             ]
-            keys = sorted({k for k, _ in (pairs[0] - pairs[1]) + (pairs[1] - pairs[0])})
+            keys = sorted({k for _, k, _ in (pairs[0] - pairs[1]) + (pairs[1] - pairs[0])})
             fields = [f for f in fields if f != "bindings[]"] + [f"bindings[].{k}" for k in keys]
         if fields:
             out[name] = fields
@@ -400,8 +443,13 @@ def gate(
     old = read_base(root, sha, roles, missing_ok=True)
     if head is None and old is None:
         return [], f"no {roles} at either end"
-    if head is not None and old is not None and _json(head, roles) == _json(old, roles):
-        return [], f"{roles} is unchanged since {sha[:12]}"
+    if head is not None and old is not None:
+        # compared as canonical JSON text, never with ==: in Python 1 == True and 0 == False, so a
+        # leaves_lab of 1 turned into true (which the rules read as cloud) would read as unchanged
+        if _same(_json(head, roles), _json(old, roles)):
+            return [], f"{roles} is unchanged since {sha[:12]}"
+        if _same(_normalised(_json(head, roles)), _normalised(_json(old, roles))):
+            return [], f"{roles} reads the same as at {sha[:12]} (leaves_lab false is absent)"
     with tempfile.TemporaryDirectory(prefix="hnx-swap-gate-") as tmp:
         ev = from_git(
             root,
