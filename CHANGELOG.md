@@ -156,6 +156,7 @@ has no section below.
 - OpenFGA (`authz`) from the lab-in-a-box: it backed no capability or conformance suite, and authorisation in this design is the identity provider plus the broker's allowlists and bound approvals.
 
 ### Fixed
+- The baseline playbook's central-role rows carry the guest's zone `gateway` and `dhcp_range` (`[first, last]`) after `subnet`/`subnet6`, and `hnx_enroll_address_problems` refuses a row's IPv4 extra address that is the gateway or inside the DHCP pool, as guest validation does; a hand-written row without them is judged as before, and an IPv6 extra inside another zone's prefix stays the generator's refusal alone (a row names no other zone).
 
 - The swap gate compared the role tables with Python `==`, where `1 == True`: a `leaves_lab` of `1` changed to `true` (which the rules read as a binding whose prompts leave the lab) read as unchanged and needed no record. It now compares them as canonical JSON, types included.
 - The swap gate sees a `leaves_lab` that moves from one binding of a role to another: a role's non-pin binding keys are now compared per binding, keyed by its pin, not as a bare multiset (`homelabnext/modules/swap_evidence.py`).

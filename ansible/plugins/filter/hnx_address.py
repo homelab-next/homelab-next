@@ -11,20 +11,24 @@ be a well-formed IPv6 prefix by the ``subnet6`` rule below (a unique-local or gl
 doing (it resolves ``zone:`` to the zone's ``subnet6``, ``homelabnext/compute/gen/firewall_rules.py``),
 so a hand-written rule names no wider or odder IPv6 network than a zone could have.
 
-A row of guests is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}`` as the baseline
-playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet``
-is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``, and
-``subnet6`` its IPv6 prefix (site 1.4), carried too when the zone gives one.
+A row of guests is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?, gateway?,
+dhcp_range?}`` as the baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``):
+``subnet`` is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``,
+``subnet6`` its IPv6 prefix (site 1.4), ``gateway`` its gateway and ``dhcp_range`` its DHCP pool
+as ``[first, last]``, each carried too when the zone gives one.
 
 The addresses are parsed, never pattern-matched, and held to the guest model's own rules
 (``homelabnext/compute/validate.py``) so far as one row can show them, so a hand-written
 inventory gets no further than the generator's rows on what follows.  A row carries one zone's
-``subnet`` and ``subnet6`` and nothing else of the site, so three refusals of the guest model are
-NOT made here, and a role's own assert must not be read as making them: an IPv4 extra address that
-is the zone's gateway, or inside its DHCP pool (the row has neither), and an IPv6 one inside
-another zone's prefix (the row names no other zone: a row without ``subnet6`` accepts any
-unique-local or documentation address).  Those stay the generator's, which refuses them before a
-row exists:
+``subnet``, ``subnet6``, ``gateway`` and ``dhcp_range`` and nothing else of the site, so two
+refusals of the guest model are NOT made here, and a role's own assert must not be read as making
+them: an IPv6 extra address inside another zone's prefix (the row names no other zone: a row
+without ``subnet6`` accepts any unique-local or documentation address), and an extra address that
+is the guest's own ``network.gateway`` override (the row carries the zone's gateway, not the
+guest's).  That stays the generator's, which
+refuses it before a row exists.  The gateway and the DHCP pool are held when the row carries them,
+and a hand-written row without them is judged as before (a row cannot be refused for what it does
+not say):
 
 * every address is in its canonical form (IPv4 dotted quad without leading zeros, IPv6 lower case
   and compressed, with no zone id ``%scope``), and never loopback, unspecified, multicast, reserved, link-local, this-network
@@ -34,7 +38,9 @@ row exists:
   private, shared (CGNAT) and documentation space is no wider than /24;
 * an IPv4 extra address is inside ``subnet`` (never its network or broadcast address) or in the
   shared range a zone-less overlay such as a tailnet uses; a row without ``subnet`` (hand-written)
-  may name only private, shared or documentation addresses;
+  may name only private, shared or documentation addresses; when the row gives ``gateway`` it is
+  not the zone's gateway, and when it gives ``dhcp_range`` it is not in that pool (the gateway is
+  an IPv4 address and the range two, the first no later than the last, or the row is refused);
 * ``subnet6`` is a canonical IPv6 prefix (no zone id) of /48 to /64 from the space zones are numbered from
   (unique-local, or global unicast less the IETF protocol assignments 2001::/23, the retired 6bone
   3ffe::/16 and the reserved 2000::/16), never one that
@@ -192,8 +198,35 @@ def _extra6(ip: ipaddress.IPv6Address, net6: ipaddress.IPv6Network | None) -> st
     )
 
 
+def _gateway(raw: Any) -> tuple[ipaddress.IPv4Address | None, str | None]:
+    ip, why = _address(raw)
+    if ip is not None and not isinstance(ip, ipaddress.IPv4Address):
+        return None, "is not IPv4"
+    return ip, why
+
+
+def _dhcp_range(
+    raw: Any,
+) -> tuple[tuple[ipaddress.IPv4Address, ipaddress.IPv4Address] | None, str | None]:
+    if not isinstance(raw, list | tuple) or len(raw) != 2:
+        return None, "is not a [first, last] pair"
+    ends = []
+    for end in raw:
+        ip, why = _gateway(end)
+        if ip is None:
+            return None, f"has an end {end!r} that {why}"
+        ends.append(ip)
+    if ends[0] > ends[1]:
+        return None, "ends before it starts"
+    return (ends[0], ends[1]), None
+
+
 def _extra(
-    ip: Address, net: ipaddress.IPv4Network | None, net6: ipaddress.IPv6Network | None
+    ip: Address,
+    net: ipaddress.IPv4Network | None,
+    net6: ipaddress.IPv6Network | None,
+    gateway: ipaddress.IPv4Address | None = None,
+    pool: tuple[ipaddress.IPv4Address, ipaddress.IPv4Address] | None = None,
 ) -> str | None:
     """Why an otherwise sound extra address is not this guest's to name, else None."""
     if isinstance(ip, ipaddress.IPv6Address):
@@ -201,6 +234,11 @@ def _extra(
     if net is not None:
         if ip in (net.network_address, net.broadcast_address):
             return f"is the network or broadcast address of the zone subnet {net}"
+        if ip in net:
+            if ip == gateway:
+                return "is the zone's gateway, which every guest it routes leaves by"
+            if pool is not None and pool[0] <= ip <= pool[1]:
+                return "is inside the zone's DHCP pool, so another host may lease it"
         if ip in net or ip in SHARED_V4:
             return None
         return f"is outside the zone subnet {net} (and outside the shared range)"
@@ -234,6 +272,16 @@ def enroll_address_problems(guests: Any) -> list[str]:
             net6, why = _subnet6(row["subnet6"])
             if why:
                 out.append(f"{who}: subnet6 {row['subnet6']!r} {why}")
+        gateway: ipaddress.IPv4Address | None = None
+        if "gateway" in row:
+            gateway, why = _gateway(row["gateway"])
+            if why:
+                out.append(f"{who}: gateway {row['gateway']!r} {why}")
+        pool = None
+        if "dhcp_range" in row:
+            pool, why = _dhcp_range(row["dhcp_range"])
+            if why:
+                out.append(f"{who}: dhcp_range {row['dhcp_range']!r} {why}")
         extras = row.get("extra_addresses", [])
         if not isinstance(extras, list):
             out.append(f"{who}: extra_addresses is not a list")
@@ -247,7 +295,7 @@ def enroll_address_problems(guests: Any) -> list[str]:
                 elif v6 and "subnet6" in row and net6 is None:
                     why = "cannot be held against the row's unusable subnet6"
                 else:
-                    why = _extra(extra, net, net6)
+                    why = _extra(extra, net, net6, gateway, pool)
             if why:
                 out.append(f"{who}: extra address {raw!r} {why}")
     return out
