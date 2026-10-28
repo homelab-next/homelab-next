@@ -373,6 +373,10 @@ def site_changes(old: Any, new: Any) -> list[Change]:
     rest = sorted(k for k in {*o, *n} - judged if _canon(o.get(k)) != _canon(n.get(k)))
     for k in rest:
         os_, ns_ = o.get(k), n.get(k)
+        if k == "site" and not (isinstance(os_, dict) and isinstance(ns_, dict)):
+            # added, removed or not a mapping: the domain cannot be compared (fail closed)
+            changes.append(_fail("site", "not a mapping at both ends"))
+            continue
         if (
             k == "site"
             and isinstance(os_, dict)

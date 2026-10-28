@@ -140,6 +140,23 @@ def test_the_sites_domain_is_human():
     assert tiers(rt.site_changes(SITE, doc)) == {"site.domain": rt.HUMAN, "site": rt.OWNER}
 
 
+@pytest.mark.parametrize("site", [None, "lab", "no-domain", "absent"])
+def test_a_site_block_that_cannot_be_compared_is_human(site):
+    """Removing, adding or replacing ``site`` with a non-mapping would carry a domain change past
+    the split above, so it fails closed; a domain dropped from the mapping is the domain's."""
+    doc = copy.deepcopy(SITE)
+    if site == "absent":
+        del doc["site"]
+    elif site == "no-domain":
+        del doc["site"]["domain"]
+        site = doc["site"]
+    else:
+        doc["site"] = site
+    got = rt.site_changes(SITE, doc)
+    assert tiers(got) == {("site.domain" if isinstance(site, dict) else "site"): rt.HUMAN}
+    assert tiers(rt.site_changes(doc, SITE)) == tiers(got)
+
+
 def test_a_zones_purpose_is_human():
     """``purpose: management`` opens SSH to the router from the zone (the linux adapter) and
     makes its mirrored traffic sensitive, so it is no description: making the internet-facing
