@@ -6,6 +6,7 @@ printed; only names leave the host."""
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import threading
@@ -21,21 +22,40 @@ from homelabnext.modules import cli as mcli
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 TOKEN = "census-catalog-token-0003"
 #: the catalog's namespaces and their tables: one namespace and one table of no inventory shape
-#: (left out and counted), one nested namespace (left out), and the lab's own namespace
+#: (left out and counted), one namespace nested in another (left out and counted, never listed),
+#: and the lab's own namespace; four at the top, so the second page holds ``a``
 CATALOG = {
     ("ocsf",): ["authentication", "dns_activity", "Mixed"],
     ("lab_own",): ["x"],
     ("Upper",): ["t"],
+    ("a",): ["t"],
     ("a", "b"): ["t"],
 }
 
 
+@pytest.fixture(autouse=True)
+def _token_dir(tmp_path, monkeypatch):
+    # the token's directory, for the tests (on a host it is /etc/homelabnext)
+    monkeypatch.setattr(census, "TOKEN_DIR", str(tmp_path))
+
+
 class FakeCatalog:
     """An Iceberg REST catalog on loopback that pages its listings two at a time, wants
-    ``Bearer TOKEN`` (when ``token`` is set) and records every request's method and path."""
+    ``Bearer TOKEN`` (when ``token`` is set; ``echo``: its refusal repeats the credential it
+    got) and records every request's method and path; the tables of a namespace in ``gone`` are
+    a 404 (dropped after it was listed)."""
 
-    def __init__(self, token: str | None = TOKEN, redirect: str | None = None):
+    def __init__(
+        self,
+        token: str | None = TOKEN,
+        redirect: str | None = None,
+        *,
+        catalog: dict = CATALOG,
+        echo: bool = False,
+        gone: frozenset = frozenset(),
+    ):
         self.token, self.redirect = token, redirect
+        self.catalog, self.echo, self.gone = catalog, echo, gone
         self.seen: list[tuple[str, str, str | None]] = []
         outer = self
 
@@ -91,17 +111,26 @@ class FakeCatalog:
             h.end_headers()
             return
         if self.token is not None and auth != f"Bearer {self.token}":
-            return self._json(h, 401, {"error": {"type": "NotAuthorized", "message": "no"}})
+            said = f"credential {auth} refused" if self.echo else "no"
+            return self._json(h, 401, {"error": {"type": "NotAuthorized", "message": said}})
         u = urllib.parse.urlsplit(h.path)
         q = dict(urllib.parse.parse_qsl(u.query))
         parts = [urllib.parse.unquote(p) for p in u.path.split("/")[3:]]
         if parts == ["config"] and q.get("warehouse") == "lab":
             return self._json(h, 200, {"defaults": {}, "overrides": {"prefix": "wh"}})
         if parts == ["wh", "namespaces"]:
-            return self._json(h, 200, self._page([list(n) for n in CATALOG], q, "namespaces"))
+            parent = tuple(q["parent"].split("\x1f")) if "parent" in q else ()
+            names = [
+                list(n)
+                for n in self.catalog
+                if len(n) == len(parent) + 1 and n[: len(parent)] == parent
+            ]
+            return self._json(h, 200, self._page(names, q, "namespaces"))
         if len(parts) == 4 and parts[:2] == ["wh", "namespaces"] and parts[3] == "tables":
             ns = tuple(parts[2].split("\x1f"))
-            ids = [{"namespace": list(ns), "name": t} for t in CATALOG.get(ns, [])]
+            if ns not in self.catalog or ns in self.gone:
+                return self._json(h, 404, {"error": {"type": "NoSuchNamespace", "message": "no"}})
+            ids = [{"namespace": list(ns), "name": t} for t in self.catalog[ns]]
             return self._json(h, 200, self._page(ids, q, "identifiers"))
         return self._json(h, 404, {"error": {"type": "NoSuchNamespace", "message": "no"}})
 
@@ -118,22 +147,63 @@ def test_the_listing_is_names_only_by_get_with_the_token_sent_to_the_catalog_alo
     with FakeCatalog() as cat:
         found = census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
     assert found == {
-        "tables": ["lab_own.x", "ocsf.authentication", "ocsf.dns_activity"],
-        # ocsf.Mixed, the namespace Upper and a two-level a.b at the top: never asked for tables
+        # a.t is on the second page of namespaces: the page tokens were followed
+        "tables": ["a.t", "lab_own.x", "ocsf.authentication", "ocsf.dns_activity"],
+        # ocsf.Mixed, the namespace Upper and a.b nested in a: never asked for tables
         "left_out": 3,
     }
     assert {m for m, _, _ in cat.seen} == {"GET"}
     assert {a for _, _, a in cat.seen} == {f"Bearer {TOKEN}"}
-    # the namespaces of no inventory shape are never asked for their tables
+    # the namespaces of no inventory shape are never asked for their tables, nor a nested one
+    # for its own children
     assert not any("Upper" in p or "a%1Fb" in p for _, p, _ in cat.seen)
-    # and the page tokens were followed: four namespaces, two to a page
     assert any(p.endswith("/namespaces?pageToken=2") for _, p, _ in cat.seen)
+    assert any(p.endswith("/namespaces?parent=a") for _, p, _ in cat.seen)
+
+
+def test_nested_namespaces_are_counted_page_by_page_never_listed(tmp_path):
+    nested = {("lab_own",): ["x"], **{("lab_own", f"n{i}"): ["t"] for i in range(5)}}
+    with FakeCatalog(catalog=nested) as cat:
+        found = census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
+    assert found == {"tables": ["lab_own.x"], "left_out": 5}
+    assert any(p.endswith("/namespaces?parent=lab_own&pageToken=4") for _, p, _ in cat.seen)
+    assert not any("n0" in p for _, p, _ in cat.seen)
+
+
+def test_a_namespace_gone_before_its_tables_are_listed_is_left_out(tmp_path):
+    with FakeCatalog(gone=frozenset({("lab_own",)})) as cat:
+        found = census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
+    assert found == {
+        "tables": ["a.t", "ocsf.authentication", "ocsf.dns_activity"],
+        "left_out": 4,
+    }
+
+
+def test_the_listing_stops_at_its_deadline(tmp_path):
+    clock = itertools.count(0, 50).__next__  # fifty seconds pass at every look
+    with FakeCatalog() as cat, pytest.raises(census.CensusError, match="past its deadline"):
+        census.catalog_tables(
+            cat.url, "lab", token_file=_token(tmp_path), deadline=120.0, clock=clock
+        )
+    # the deadline is the listing's, not one request's: two were sent before it ran out
+    assert len(cat.seen) == 2
+
+
+def test_the_proxy_the_environment_names_is_never_used(tmp_path, monkeypatch):
+    with FakeCatalog() as proxy, FakeCatalog() as cat:
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(name, proxy.url)
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(name, raising=False)
+        found = census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
+    assert found["tables"][0] == "a.t"
+    assert proxy.seen == []
 
 
 def test_a_catalog_without_a_token_is_listed_without_one(tmp_path):
     with FakeCatalog(token=None) as cat:
         found = census.catalog_tables(cat.url, "lab")
-    assert found["tables"][0] == "lab_own.x"
+    assert found["tables"][0] == "a.t"
     assert {a for _, _, a in cat.seen} == {None}
 
 
@@ -144,13 +214,14 @@ def test_a_catalog_without_a_token_is_listed_without_one(tmp_path):
         "http://192.0.2.8:8181",  # no-raw-endpoint: allow RFC 5737, not loopback
         "http://catalog.example.internal:8181",  # no-raw-endpoint: allow refused, never contacted
         "ftp://127.0.0.1:8181",  # no-raw-endpoint: allow loopback, never contacted
+        "https://127.0.0.1:8181",  # no-raw-endpoint: allow loopback, http only (never leaves)
         "http://user@127.0.0.1:8181",  # no-raw-endpoint: allow loopback, never contacted
         "http://[unclosed",  # urlsplit refuses it
         "",
     ],
 )
 def test_a_catalog_off_loopback_is_refused_before_any_request(tmp_path, url):
-    with pytest.raises(census.CensusError, match="not http\\(s\\) on a loopback address"):
+    with pytest.raises(census.CensusError, match="not http on a loopback address"):
         census.catalog_tables(url, "lab", token_file=_token(tmp_path))
 
 
@@ -172,9 +243,49 @@ def test_a_catalog_that_refuses_the_token_fails_and_never_shows_it(tmp_path):
     assert TOKEN not in str(exc.value)
 
 
-def test_too_many_tables_fail_never_cut_short(tmp_path, monkeypatch):
+def test_a_refusal_that_echoes_the_token_never_shows_it_nor_the_catalogs_words(tmp_path, capsys):
+    path = _token(tmp_path)
+    with FakeCatalog(token="another", echo=True) as cat:
+        with pytest.raises(census.CensusError) as exc:
+            census.catalog_tables(cat.url, "lab", token_file=path)
+        argv = ["catalog-tables", "--url", cat.url, "--warehouse", "lab"]
+        assert mcli.main([*argv, "--token-file", str(path)]) == 2
+    said = str(exc.value)
+    assert said == "catalog GET /v1/config: HTTP 401"
+    err = capsys.readouterr().err
+    assert TOKEN not in err and "refused" not in err and "HTTP 401" in err
+
+
+def test_an_error_is_reported_without_the_token_control_characters_or_length():
+    said = census._plain(f"cannot reach {TOKEN}\x1b[2J\n" + "x" * 500, TOKEN)
+    assert said.startswith("cannot reach <token>[2J") and len(said) == census.ERROR_MAX
+
+
+@pytest.mark.parametrize("where", ["sub/catalog.token", "../catalog.token", "-catalog.token"])
+def test_a_token_file_outside_its_directory_is_refused_unread(tmp_path, where):
+    (tmp_path / "sub").mkdir()
+    _token(tmp_path / "sub")
+    url = "http://127.0.0.1:1"  # no-raw-endpoint: allow loopback, never contacted
+    with pytest.raises(census.CensusError, match="not a plain name in"):
+        census.catalog_tables(url, "lab", token_file=f"{tmp_path}/{where}")
+
+
+def test_too_many_namespaces_fail_never_cut_short(tmp_path, monkeypatch):
+    monkeypatch.setattr(census, "MAX_LINES", 3)
+    with FakeCatalog() as cat, pytest.raises(census.CensusError, match="over 3 namespaces"):
+        census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "catalog, said",
+    [
+        ({("n",): ["a", "b", "c"]}, "over 2 tables"),  # one namespace's
+        ({("m",): ["a", "b"], ("n",): ["c"]}, "lists over 2 tables"),  # the warehouse's
+    ],
+)
+def test_too_many_tables_fail_never_cut_short(tmp_path, monkeypatch, catalog, said):
     monkeypatch.setattr(census, "MAX_LINES", 2)
-    with FakeCatalog() as cat, pytest.raises(census.CensusError, match="over 2"):
+    with FakeCatalog(catalog=catalog) as cat, pytest.raises(census.CensusError, match=said):
         census.catalog_tables(cat.url, "lab", token_file=_token(tmp_path))
 
 
@@ -245,5 +356,6 @@ def test_hnx_modules_catalog_tables_prints_the_listing_as_json(tmp_path, capsys)
         assert mcli.main(argv) == 2
         err = capsys.readouterr().err
         assert "catalog-tables: catalog GET" in err and "HTTP 401" in err
+        assert "NotAuthorized" not in err
     off = "http://192.0.2.8:1"  # no-raw-endpoint: allow RFC 5737 documentation address
     assert mcli.main(["catalog-tables", "--url", off, "--warehouse", "lab"]) == 2

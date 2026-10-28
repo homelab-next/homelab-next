@@ -105,6 +105,7 @@ import json
 import os
 import re
 import stat
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -152,6 +153,13 @@ TABLE_PART_RE = re.compile(r"[a-z][a-z0-9_]*")
 TABLE_MAX = 129 - len("table:")
 #: a bearer token as the catalog listing sends it (RFC 6750 ``b64token``): one line, no space
 TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]{1,4096}")
+#: the one directory a catalog token file may sit in (one plain name below it)
+TOKEN_DIR = "/etc/homelabnext"
+TOKEN_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+#: the longest the catalog listing may take, every request included
+CATALOG_DEADLINE = 120.0
+#: the longest error the catalog listing reports
+ERROR_MAX = 200
 
 
 class CensusError(ValueError):
@@ -300,6 +308,29 @@ def read_token(path: str | Path) -> str:
     return text
 
 
+class _Deadline:
+    """An opener that refuses a request once ``deadline`` seconds have passed on ``clock`` since
+    it was made, and gives no request longer than what is left."""
+
+    def __init__(self, opener: Any, deadline: float, clock: Any) -> None:
+        self._opener = opener
+        self._clock = clock
+        self._end = clock() + deadline
+
+    def open(self, req: Any, timeout: float | None = None) -> Any:
+        left = self._end - self._clock()
+        if left <= 0:
+            raise CensusError("the catalog listing ran past its deadline")
+        return self._opener.open(req, timeout=min(timeout, left) if timeout else left)
+
+
+def _plain(text: str, token: str | None) -> str:
+    """``text`` fit to report: the token replaced, control characters dropped, short."""
+    if token:
+        text = text.replace(token, "<token>")
+    return re.sub(r"[^ -~]", "", text)[:ERROR_MAX]
+
+
 def catalog_tables(
     url: str,
     warehouse: str,
@@ -307,31 +338,42 @@ def catalog_tables(
     token_file: str | Path | None = None,
     api_root: str = "/catalog",
     timeout: float = 15.0,
+    deadline: float = CATALOG_DEADLINE,
+    clock: Any = time.monotonic,
 ) -> dict[str, Any]:
     """The lake tables the Iceberg REST catalog at ``url`` (the lake-catalog slot's contract,
     :class:`homelabnext.lake.rest_catalog.RestCatalog`) lists in ``warehouse``: GET requests
-    only, to a loopback IP literal (the census runs on the catalog's own host), with the token in
-    ``token_file`` (:func:`read_token`) sent to that address alone (no redirect followed, no
-    proxy).  ``{"tables": ["<namespace>.<name>", ...], "left_out": n}``: a namespace or a table
-    whose name is not of the inventory's shape is left out and counted (no module's table can
-    have such a name); a namespace nested in another is not listed.  More than
-    :data:`MAX_LINES` namespaces or tables fails."""
+    only, over plain http to a loopback IP literal (the census runs on the catalog's own host),
+    with the token in ``token_file`` (a plain name in :data:`TOKEN_DIR`, :func:`read_token`) sent
+    to that address alone (no redirect followed, no proxy), all of it within ``deadline`` seconds.
+    ``{"tables": ["<namespace>.<name>", ...], "left_out": n}``: a namespace or a table whose name
+    is not of the inventory's shape is left out and counted (no module's table can have such a
+    name), as is each namespace directly under a listed one (its tables are not listed) and a
+    namespace that is gone by the time its tables are asked for.  More than :data:`MAX_LINES`
+    namespaces or tables fails.  An error names the request and its HTTP status, never what the
+    catalog answered."""
     from homelabnext._http import credential_opener
     from homelabnext.lake import LakeError
+    from homelabnext.lake.errors import UnknownTable
     from homelabnext.lake.rest_catalog import RestCatalog
 
     try:
         parts = urllib.parse.urlsplit(url)
         local = (
-            parts.scheme in ("http", "https")
+            parts.scheme == "http"
             and parts.username is None
             and ipaddress.ip_address(parts.hostname or "").is_loopback
         )
     except ValueError:
         local = False
     if not local:
-        raise CensusError("the catalog URL is not http(s) on a loopback address (an IP literal)")
-    token = read_token(token_file) if token_file is not None else None
+        raise CensusError("the catalog URL is not http on a loopback address (an IP literal)")
+    token = None
+    if token_file is not None:
+        where = Path(token_file)
+        if where.parent != Path(TOKEN_DIR) or not TOKEN_NAME_RE.fullmatch(where.name):
+            raise CensusError(f"token file: not a plain name in {TOKEN_DIR}")
+        token = read_token(where)
     catalog = RestCatalog(
         url,
         warehouse=warehouse,
@@ -339,7 +381,7 @@ def catalog_tables(
         auth=(lambda: f"Bearer {token}") if token else None,
         timeout=timeout,
         max_bytes=1 << 20,
-        opener=credential_opener(),
+        opener=_Deadline(credential_opener(), deadline, clock),
     )
     tables: list[str] = []
     left = 0
@@ -348,7 +390,18 @@ def catalog_tables(
             if len(ns) != 1 or not TABLE_PART_RE.fullmatch(ns[0]):
                 left += 1
                 continue
-            for name in catalog.list_tables(ns[0], limit=MAX_LINES):
+            try:
+                children = catalog.list_namespaces(limit=MAX_LINES, parent=ns)
+                names = catalog.list_tables(ns[0], limit=MAX_LINES)
+            except UnknownTable:
+                # listed a moment ago and gone now: nothing of it to count but itself
+                left += 1
+                continue
+            for child in children:
+                if len(child) != 2 or child[0] != ns[0]:
+                    raise CensusError(f"the catalog lists a namespace not under {ns[0]!r}")
+            left += len(children)
+            for name in names:
                 full = f"{ns[0]}.{name}"
                 if len(full) > TABLE_MAX or not TABLE_RE.fullmatch(full):
                     left += 1
@@ -357,7 +410,7 @@ def catalog_tables(
                 if len(tables) > MAX_LINES:
                     raise CensusError(f"the catalog lists over {MAX_LINES} tables")
     except LakeError as exc:
-        raise CensusError(str(exc)) from None
+        raise CensusError(_plain(getattr(exc, "bare", None) or str(exc), token)) from None
     return {"tables": sorted(set(tables)), "left_out": left}
 
 

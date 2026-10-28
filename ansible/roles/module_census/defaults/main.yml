@@ -18,12 +18,13 @@ module_census_hnx_cli: /opt/hnx/bin/hnx
 # census does not look.
 module_census_mcp_configs: []
 # On a host that runs the lake catalog (the lake-catalog slot: an Iceberg REST catalog): its
-# address, http(s)://<loopback IP>:<port> (the census lists it from its own host), the warehouse
+# address, http://<loopback IP>:<port> (the census lists it from its own host), the warehouse
 # whose tables it lists, and the catalog's API root.  Empty: this host runs no catalog, and the
 # census does not ask.
 module_census_catalog_url: ""
 module_census_catalog_warehouse: ""
 module_census_catalog_api_root: /catalog
-# The bearer token the catalog wants, a file on this host root's alone (mode 0600): read there as
-# root and sent only to the loopback address above, never to the controller.  Empty: no token.
+# The bearer token the catalog wants, a file in /etc/homelabnext on this host, root's alone (mode
+# 0600): read there as root and sent only to the loopback address above, never to the controller.
+# Empty: no token.  Set only with module_census_catalog_url.
 module_census_catalog_token_file: ""

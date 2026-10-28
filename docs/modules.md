@@ -1208,27 +1208,36 @@ host does not list (a user-level or a project's own configuration, a managed pol
 
 **Lake tables, from the catalog.** On the host that runs the lake catalog (the lake-catalog
 slot's contract is the Iceberg REST catalog), the inventory may set `module_census_catalog_url`
-(in `host_vars`: `http(s)://<loopback IP literal>:<port>`, the catalog as its own host reaches it)
+(in `host_vars`: `http://<loopback IP literal>:<port>`, the catalog as its own host reaches it)
 and `module_census_catalog_warehouse`, with `module_census_catalog_api_root` (default `/catalog`)
-and, when the catalog wants a bearer token, `module_census_catalog_token_file`, a file on that host.
-The census then runs `hnx modules catalog-tables` there
-(`homelabnext.modules.census.catalog_tables`): it lists the warehouse's top-level namespaces and
-each one's tables with **GET requests only**, so it can change nothing whatever rights the token
-carries; to a loopback IP literal only (a name such as `localhost` is refused: it resolves to what
-the resolver says); with no redirect followed and no proxy, so the token goes to that address
-alone. The token file is read in one step: never through a link, a regular file with a single
-link, owned by the reading user and readable or writable by no one else, one line of token
-characters; the token is never printed or part of an error. Only that task becomes root, and only
-when a token file is named (to read it); without one it runs as the connection user. **The token
-never leaves the catalog host**: the runner holds no catalog credential, and the answer carries
-names only. Each page of a listing is read to at most 1 MiB, and more than 4,096 namespaces or
-tables fails the census rather than being cut short.
+and, when the catalog wants a bearer token, `module_census_catalog_token_file`, a plain file name
+in `/etc/homelabnext` on that host (set only with the URL). The census then runs `hnx modules
+catalog-tables` there (`homelabnext.modules.census.catalog_tables`): it lists the warehouse's
+top-level namespaces and each one's tables with **GET requests only**, so it can change nothing
+whatever rights the token carries; over plain `http` to a loopback IP literal only (`https` is
+refused: the request never leaves the host, so TLS would add a certificate to manage and protect
+nothing; a name such as `localhost` is refused: it resolves to what the resolver says); with no
+redirect followed and no proxy, so the token goes to that address alone. The token file must be a
+plain name directly in `/etc/homelabnext` (the role's assert and the command both refuse any other
+path, so the task that becomes root can be pointed at no other file) and is read in one step:
+never through a link, a regular file with a single link, owned by the reading user and readable or
+writable by no one else, one line of token characters. The token is never printed, and an error
+names the request and its HTTP status only, **never what the catalog answered** (a refusal can echo
+the request, its credential included); the role reports that line with control characters removed
+and cut to 200 characters. Only that task becomes root, and only when a token file is named (to
+read it); without one it runs as the connection user. **The token never leaves the catalog host**:
+the runner holds no catalog credential, and the answer carries names only. Each page of a listing
+is read to at most 1 MiB, more than 4,096 namespaces or tables fails the census rather than being
+cut short, and the whole listing gives up after two minutes (the task's own timeout, three, backs
+that).
 
 The host prints `{"tables": ["<namespace>.<name>", ...], "left_out": n}`: a namespace or table
 whose name is not of the inventory's shape (`[a-z][a-z0-9_]*` each, at most 129 characters as
-`table:<namespace>.<name>`) is left out and counted, and the gather notes the count; a namespace
-nested in another is not listed. No module's table can have such a name (its manifest's schema refuses it), so
-leaving one out hides no module's table. `gather` reads each name again strictly, and `tables` is
+`table:<namespace>.<name>`) is left out and counted, and the gather notes the count. Each namespace
+directly under a listed one (`GET /namespaces?parent=<ns>`, paged like the rest) is counted there
+too, and neither its tables nor its own children are listed; a namespace the catalog drops between
+listing it and listing its tables (a 404) is counted and skipped. No module's table can have such
+a name (its manifest's schema refuses it), so leaving one out hides no module's table. `gather` reads each name again strictly, and `tables` is
 the union over every catalog listed (at most 4,096); it stays in `not_gathered` when no host's
 census listed a catalog. A catalog that cannot be listed (unreachable, a refused token, a reply
 that is not the contract's) fails the census.
@@ -1240,6 +1249,9 @@ selected; every selected module's declared table must exist. A table in the core
 core's namespace but is no core table`), when the core's tables were read; without them the check
 says so. A table in any other namespace that no module id binds is the lab's own (a catalog
 usually holds more than the fleet's tables: an archive, a scratch namespace) and is not judged.
+So the check judges only `ocsf.*` and the `<id_>.*` of a module id the tree knows: a table a
+retired module left behind, in a namespace no current module id names, is not judged either. A
+site-level list of the lab's own namespaces (anything else unbound a problem) is a follow-up.
 What the catalog lists is believed, as a host's `systemctl` output is: it says which tables the
 catalog holds, not whether anything writes to them.
 

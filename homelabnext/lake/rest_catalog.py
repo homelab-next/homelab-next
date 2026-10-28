@@ -85,12 +85,13 @@ class RestCatalog:
                 msg = f"{err.get('type', '')}: {err.get('message', '')}".strip(": ")
             except (ValueError, AttributeError):
                 pass
-            text = f"catalog {method} {path.split('?')[0]}: HTTP {exc.code} {msg}"
-            if exc.code == 404:
-                raise UnknownTable(text) from None
-            if exc.code == 409:
-                raise CommitConflict(text) from None
-            raise LakeError(text) from None
+            bare = f"catalog {method} {path.split('?')[0]}: HTTP {exc.code}"
+            cls = {404: UnknownTable, 409: CommitConflict}.get(exc.code, LakeError)
+            err_out = cls(f"{bare} {msg}")
+            # the status line alone, without the server's words, for a caller that must not
+            # repeat them (a reply can echo the request, its credential included)
+            err_out.bare = bare  # type: ignore[attr-defined]
+            raise err_out from None
         except ResponseTooLarge as exc:
             raise LakeError(f"catalog reply: {exc}") from None
         except (urllib.error.URLError, OSError) as exc:
@@ -118,15 +119,22 @@ class RestCatalog:
         return f"/v1/{_q(self.prefix)}/namespaces/{_q(namespace)}"
 
     # ---------------------------------------------------------------- API
-    def list_namespaces(self, limit: int | None = None) -> list[list[str]]:
-        """Every top-level namespace of the warehouse, each as its levels (``["ocsf"]``); more
-        than ``limit`` fails."""
+    def list_namespaces(
+        self, limit: int | None = None, parent: list[str] | None = None
+    ) -> list[list[str]]:
+        """Every top-level namespace of the warehouse (or every namespace directly under
+        ``parent``), each as its levels (``["ocsf"]``); more than ``limit`` fails."""
         names: list[list[str]] = []
         token: str | None = None
         for _ in range(10_000):
             path = f"/v1/{_q(self.prefix)}/namespaces"
+            query = []
+            if parent:
+                query.append(f"parent={_q(chr(0x1F).join(parent))}")
             if token:
-                path += f"?pageToken={_q(token)}"
+                query.append(f"pageToken={_q(token)}")
+            if query:
+                path += "?" + "&".join(query)
             doc = self._call("GET", path) or {}
             for ns in doc.get("namespaces") or []:
                 if not isinstance(ns, list) or not all(isinstance(p, str) for p in ns):

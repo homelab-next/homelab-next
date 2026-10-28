@@ -30,7 +30,7 @@ argument_specs:
         default: []
       module_census_catalog_url:
         type: str
-        description: "On a host that runs the lake catalog (the lake-catalog slot's Iceberg REST catalog), its address, http(s)://<loopback IP literal>:<port>: the census lists the warehouse's tables from the catalog's own host (hnx modules catalog-tables: GET requests only, names only, no redirect followed, no proxy). Empty: the host runs no catalog, and tables are gathered from no host here."
+        description: "On a host that runs the lake catalog (the lake-catalog slot's Iceberg REST catalog), its address, http://<loopback IP literal>:<port> (plain http: the request never leaves the host): the census lists the warehouse's tables from the catalog's own host (hnx modules catalog-tables: GET requests only, names only, no redirect followed, no proxy, two minutes at most). Empty: the host runs no catalog, and tables are gathered from no host here."
         default: ""
       module_census_catalog_warehouse:
         type: str
@@ -42,7 +42,7 @@ argument_specs:
         default: /catalog
       module_census_catalog_token_file:
         type: str
-        description: "A file on the catalog host holding the bearer token the catalog wants, root's alone (mode 0600, a single link, never through a link): the listing task becomes root to read it, and the token goes only to the loopback address, never to the controller. Empty: the catalog takes no token, and the task does not become."
+        description: "A file in /etc/homelabnext on the catalog host (a plain name, set only with module_census_catalog_url) holding the bearer token the catalog wants, root's alone (mode 0600, a single link, never through a link): the listing task becomes root to read it, and the token goes only to the loopback address, never to the controller. Empty: the catalog takes no token, and the task does not become."
         default: ""
   health:
     short_description: Fail unless the host answers systemctl --version.

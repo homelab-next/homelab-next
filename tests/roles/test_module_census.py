@@ -58,6 +58,15 @@ TABLES_FOUND = {"tables": ["lab_own.x", "ocsf.authentication"], "left_out": 1}
 CATALOG = "http://127.0.0.1:8181"  # no-raw-endpoint: allow loopback, a stand-in answers
 NAMED = "http://localhost:8181"  # no-raw-endpoint: allow refused, a name not an IP literal
 OFF_HOST = "http://192.0.2.8:8181"  # no-raw-endpoint: allow RFC 5737, refused off loopback
+TLS = "https://127.0.0.1:8181"  # no-raw-endpoint: allow refused, http only on loopback
+
+
+#: a stand-in hnx whose broker answers and whose catalog listing fails with a long, raw line
+NOISY = (
+    "import sys\n"
+    f"if sys.argv[1] == 'broker':\n    sys.stdout.write({AGENTS!r})\n"
+    "else:\n    sys.exit('noisy\\x1b[2J' + 'x' * 400)\n"
+)
 
 
 def _hnx(tmp_path) -> str:
@@ -154,7 +163,7 @@ def _first(tmp_path):
         # this host runs the lake catalog, whose token is root's: the listing task becomes root
         "module_census_catalog_url": CATALOG,
         "module_census_catalog_warehouse": "lab",
-        "module_census_catalog_token_file": "/etc/hnx/catalog.token",
+        "module_census_catalog_token_file": "/etc/homelabnext/catalog.token",
         "module_census_mcp_configs": [
             {"path": str(agent / ".mcp.json"), "client": "claude-code"},
             {"path": str(agent / "hermes" / "config.yaml"), "client": "hermes"},
@@ -187,7 +196,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "hnx broker agents --socket /run/hnx-broker/broker.sock",
         "sudo -u root",
         f"hnx modules catalog-tables --url {CATALOG} --warehouse lab --api-root /catalog "
-        "--token-file /etc/hnx/catalog.token",
+        "--token-file /etc/homelabnext/catalog.token",
     ]
     out = tmp_path / "census"
     assert json.loads((out / "_hosts.json").read_text()) == ["localhost"]
@@ -324,10 +333,18 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_catalog_warehouse": "--url=x"},
             {"module_census_catalog_api_root": "/../x"},
             {"module_census_catalog_token_file": "etc/token"},
+            {"module_census_catalog_url": TLS},
+            # the token file is a plain name in /etc/homelabnext, and only with a catalog
+            {"module_census_catalog_token_file": "/etc/hnx/catalog.token"},
+            {"module_census_catalog_token_file": "/etc/homelabnext/../shadow"},
+            {"module_census_catalog_token_file": "/etc/homelabnext/sub/catalog.token"},
+            {"module_census_catalog_url": ""},
             # no token file: the listing does not become root (the stand-in refuses it then)
             {"module_census_catalog_token_file": ""},
             # a listing that is not JSON fails the census
             {"module_census_hnx_cli": logging_fake(tmp_path, "hnx-prints", "lab_own.x\n")},
+            # a refusal is reported printable and short, whatever the listing wrote
+            {"module_census_hnx_cli": fake(tmp_path / "hnx-noisy", NOISY)},
         ],
         env=BECOME_ENV,
     )
@@ -352,11 +369,13 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     assert results[18][0] and "module_census_mcp_configs" in results[18][1], results
     assert results[19][0] and "is not a regular file of at most 1048576 bytes" in results[19][1]
     assert results[20][0] and "is not named as a claude-code configuration" in results[20][1]
-    for failed, said in results[21:28]:
-        assert failed and "the lake catalog empty or http(s)://<loopback IP>" in said, results
+    for failed, said in results[21:33]:
+        assert failed and "the lake catalog empty or http://<loopback IP>" in said, results
     said = "module_census: the lake catalog was not listed: hnx: not run as root"
-    assert results[28] == (True, said), results
-    assert results[29][0], results
+    assert results[33] == (True, said), results
+    assert results[34][0], results
+    said = "module_census: the lake catalog was not listed: " + ("noisy[2J" + "x" * 400)[:200]
+    assert results[35] == (True, said), results
 
 
 def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):

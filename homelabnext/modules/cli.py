@@ -26,11 +26,13 @@ checks").
     not cover every host the play targeted.
 ``hnx modules catalog-tables --url URL --warehouse NAME [--token-file FILE] [--api-root PATH]``
     run by the ``module_census`` role on a lake catalog host: the tables the Iceberg REST catalog
-    at ``URL`` (a loopback IP literal: the catalog's own host) lists in the warehouse, as JSON
+    at ``URL`` (plain http to a loopback IP literal: the catalog's own host) lists in the
+    warehouse, within two minutes, as JSON
     ``{"tables": ["<namespace>.<name>", ...], "left_out": n}``
     (:func:`homelabnext.modules.census.catalog_tables`).  GET requests only; the token in
-    ``FILE`` (owner only, the caller's own) is sent to that address alone and never printed.
-    Exit 2 when the catalog cannot be listed.
+    ``FILE`` (a plain name in ``/etc/homelabnext``, owner only, the caller's own) is sent to that
+    address alone and never printed.  Exit 2 when the catalog cannot be listed; the error names
+    the request and its HTTP status, never what the catalog answered.
 ``hnx modules render --site FILE --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
@@ -258,9 +260,13 @@ def _parser() -> argparse.ArgumentParser:
         "--out", type=Path, required=True, help="the inventory to write (must not exist)"
     )
     k = sub.add_parser("catalog-tables", help="the lake tables a loopback catalog lists (JSON)")
-    k.add_argument("--url", required=True, help="the catalog, http(s) on a loopback IP literal")
+    k.add_argument("--url", required=True, help="the catalog, http on a loopback IP literal")
     k.add_argument("--warehouse", required=True, help="the warehouse whose tables are listed")
-    k.add_argument("--token-file", type=Path, help="a bearer token, the caller's own (mode 0600)")
+    k.add_argument(
+        "--token-file",
+        type=Path,
+        help="a bearer token in /etc/homelabnext, the caller's own (0600)",
+    )
     k.add_argument(
         "--api-root", default="/catalog", help="the catalog's API root (default /catalog)"
     )
