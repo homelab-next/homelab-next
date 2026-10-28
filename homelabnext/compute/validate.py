@@ -284,7 +284,8 @@ def _ipv6_ownership_problem(
     refused, however the zone that does not read is used); the guest's own zone must be one of
     them; the address must not be an anycast address of its /64 (the subnet-router one, with no
     host part, or one RFC 2526 reserves at its top); it must not be inside another zone's prefix;
-    with a prefix on the guest's own zone it must be inside it; without one, only unique-local or
+    with a prefix on the guest's own zone it must be inside it and not the router's address there
+    (the prefix's ``::1``, which the network adapters give the router); without one, only unique-local or
     documentation IPv6 (:data:`UNOWNED_V6`) is accepted."""
     from homelabnext.network.validate import subnet6_problem
 
@@ -312,6 +313,8 @@ def _ipv6_ownership_problem(
     if own is not None:
         if ip not in own:
             return f"is outside zone {g.zone}'s IPv6 prefix {own} (subnet6)"
+        if ip == own[1]:  # homelabnext.network.ir.router_address6
+            return f"is the router's address in zone {g.zone}'s IPv6 prefix {own} (its ::1)"
         return None
     if any(ip in n for n in UNOWNED_V6):
         return None

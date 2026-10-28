@@ -17,13 +17,27 @@ source port) and no profile. The field names are the controller's (``DevicePortO
 go-unifi, generated from the controller's field definitions); that the destination port's
 override names the source follows the controller UI and is checked on the server.  Objects that refer to each
 other use ``${network:<name>}`` placeholders, resolved to controller ids at apply time.
+
+A zone with a ``subnet6`` gets the network's static IPv6 settings (``ipv6_interface_type``,
+``ipv6_subnet``, router advertisements) and the policy again in the controller's IPv6 rule sets
+(``LANv6_IN``, ``WANv6_OUT``, ``NETv6`` network types): every rule that has an IPv6 form
+(:func:`~homelabnext.network.ir.ipv6_form`), and the same allow-established, drop-invalid and
+default-deny frame, so IPv6 is closed by default exactly as IPv4 is.  Both families number their
+rules from ``RULE_BASE`` (2000) up to ``RULE_BASE + 999``: the IPv6 rule sets are separate rule
+sets, so no offset is needed, and the range stays inside the custom-rule indexes the IPv4 rules
+already use.  An IPv6 rule names its protocol in ``protocol_v6`` (``icmpv6`` for ICMP), the field
+the controller's legacy object carries for IPv6 rule sets.  None of this is verified offline: the
+index range, ``protocol_v6`` and its values are checked on the server, like every other shape here.
+The IPv6 rule sets cover forwarded traffic only.  Traffic to the gateway itself
+(``LANv6_LOCAL``) and the controller's anti-spoofing for IPv6 sources are left to the
+controller's defaults, as ``LAN_LOCAL`` is for IPv4, and are checked on the server too.
 """
 
 from __future__ import annotations
 
 import json
 
-from ..ir import NetworkIR, Rule
+from ..ir import NetworkIR, Rule, ipv6_form
 from .base import Adapter, Rendered
 
 PREFIX = "hnx-"
@@ -105,68 +119,90 @@ class UnifiAdapter(Adapter):
                         obj[f"dhcpd_dns_{n}"] = addr
             else:
                 obj["dhcpd_enabled"] = False
+            if i.subnet6:
+                obj.update(
+                    ipv6_interface_type="static",
+                    ipv6_subnet=f"{i.address6}/{i.subnet6.split('/')[1]}",
+                    ipv6_ra_enabled=True,
+                )
             out.append(obj)
         return out
 
     def _rules(self, ir: NetworkIR) -> list[dict]:
+        out = self._ruleset(ir, list(ir.policy.rules), "")
+        if ir.policy.zones6:
+            six = [f for f in (ipv6_form(r, ir.policy.zones6) for r in ir.policy.rules) if f]
+            out += self._ruleset(ir, six, "v6")
+        return out
+
+    def _ruleset(self, ir: NetworkIR, rules: list[Rule], v6: str) -> list[dict]:
+        """One family's rules: ``v6`` is "" for IPv4 and "v6" for IPv6 (the rule set names)."""
+        lan = f"LAN{v6}_IN"
+        base = RULE_BASE  # each family's rules are their own rule sets, so both start at the base
+        proto = "protocol_v6" if v6 else "protocol"
+        tag = f"{v6}-" if v6 else ""
         out: list[dict] = [
             {
-                "name": PREFIX + "allow-established",
+                "name": PREFIX + tag + "allow-established",
                 "enabled": True,
-                "ruleset": "LAN_IN",
-                "rule_index": RULE_BASE,
+                "ruleset": lan,
+                "rule_index": base,
                 "action": "accept",
-                "protocol": "all",
+                proto: "all",
                 "state_established": True,
                 "state_related": True,
                 "logging": False,
             },
             {
-                "name": PREFIX + "drop-invalid",
+                "name": PREFIX + tag + "drop-invalid",
                 "enabled": True,
-                "ruleset": "LAN_IN",
-                "rule_index": RULE_BASE + 1,
+                "ruleset": lan,
+                "rule_index": base + 1,
                 "action": "drop",
-                "protocol": "all",
+                proto: "all",
                 "state_invalid": True,
                 "logging": False,
             },
         ]
-        index = RULE_BASE + 10
-        for rule in ir.policy.rules:
+        index = base + 10
+        for rule in rules:
             if rule.dst.kind == "internet" and rule.action == "allow":
                 continue  # the controller's default LAN -> WAN behaviour already allows it
-            out.append(self._rule(rule, index))
+            out.append(self._rule(rule, index, v6))
             index += 10
         out.append(
             {
-                "name": PREFIX + "default-deny",
+                "name": PREFIX + tag + "default-deny",
                 "enabled": True,
-                "ruleset": "LAN_IN",
-                "rule_index": RULE_BASE + 999,
+                "ruleset": lan,
+                "rule_index": base + 999,
                 "action": "drop",
-                "protocol": "all",
+                proto: "all",
                 "logging": False,
                 "description": "firewall.default_action: deny",
             }
         )
         return out
 
-    def _rule(self, rule: Rule, index: int) -> dict:
+    def _rule(self, rule: Rule, index: int, v6: str = "") -> dict:
+        net = "NETv6" if v6 else "NETv4"
+        protocol = rule.protocol if rule.protocol != "any" else "all"
+        if v6 and protocol == "icmp":
+            protocol = "icmpv6"
         obj: dict = {
             "name": PREFIX + rule.id.replace("[", "-").replace("]", "").replace(":", "-"),
             "enabled": True,
-            "ruleset": "WAN_OUT" if rule.dst.kind == "internet" else "LAN_IN",
+            "ruleset": f"WAN{v6}_OUT" if rule.dst.kind == "internet" else f"LAN{v6}_IN",
             "rule_index": index,
             "action": "accept" if rule.action == "allow" else "drop",
-            "protocol": rule.protocol if rule.protocol != "any" else "all",
-            "src_networkconf_type": "NETv4",
+            "protocol_v6" if v6 else "protocol": protocol,
+            "src_networkconf_type": net,
             "src_networkconf_id": net_ref(rule.src.name),
             "logging": False,
             "description": rule.comment,
         }
         if rule.dst.kind == "zone":
-            obj["dst_networkconf_type"] = "NETv4"
+            obj["dst_networkconf_type"] = net
             obj["dst_networkconf_id"] = net_ref(rule.dst.name)
         elif rule.dst.kind == "host":
             obj["dst_address"] = rule.dst.cidrs[0].split("/")[0]
