@@ -470,23 +470,32 @@ def _metadata_allows(g: Guest, fleet: Fleet) -> list[Problem]:
     return out
 
 
+def _delegated6(fleet: Fleet) -> tuple[ipaddress.IPv6Network, ...]:
+    """The site's ``delegated_prefixes6`` (site 1.5), judged as ``hnx site validate`` judges them
+    (the site file reaches this path unvalidated); empty when it declares none or when any entry
+    does not read, so a broken declaration holds nothing as the lab's (:func:`validate` reports
+    it)."""
+    from homelabnext.network.validate import delegated_prefixes6
+
+    return delegated_prefixes6(fleet.delegated6)[0]
+
+
 def _internet_allows(g: Guest, fleet: Fleet) -> list[str]:
     """Outbound allows that reach beyond the lab: ``any``, or a network (a CIDR, or a ``zone:``'s
     subnet from the site model) not inside the never-internet ranges
     (:data:`homelabnext.modules.egress.NOT_INTERNET`).  A ``zone:``'s IPv6 prefix is judged like
-    its IPv4 subnet: a unique-local or documentation prefix is the lab's, a global-unicast one
-    reaches the internet (nothing proves the site owns it; a typo or a copied prefix would
-    otherwise open a model runtime's egress to third-party space)."""
+    its IPv4 subnet: a unique-local or documentation prefix is the lab's, and a global-unicast one
+    reaches the internet (a typo or a copied prefix would otherwise open a model runtime's egress
+    to third-party space) unless it lies inside a prefix the site declares its own
+    (``delegated_prefixes6``, site 1.5)."""
     from homelabnext.modules.egress import NOT_INTERNET
 
+    lab = (*NOT_INTERNET, *_delegated6(fleet))
     out = []
     for r in g.outbound_rules:
         nets = _dest_nets(r, fleet)
-        # an unknown zone or a bad CIDR is _check_firewall's problem
-        if any(
-            not any(net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET)
-            for net in nets
-        ):
+        # an unknown zone or a bad CIDR is _check_firewall's problem; ``any`` is ::/0, inside none
+        if any(not any(net.version == n.version and net.subnet_of(n) for n in lab) for net in nets):
             out.append(
                 f"firewall_rules.{r['name']}: dest {r['dest']} reaches the internet; a model "
                 "runtime's outbound_allow names a lab zone or CIDR (reach the internet through the "
@@ -674,6 +683,10 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
     seen_ip: dict[str, str] = {}
     zones, unlisted = _known_zones(fleet)
     taken = _taken_addresses(fleet)
+    from homelabnext.network.validate import delegated_prefixes6
+
+    for msg in delegated_prefixes6(fleet.delegated6)[1]:  # the site file is read unvalidated here
+        out.append(Problem("site", f"{msg}; no prefix is held as the lab's while it stands"))
     if unlisted and any(g.extra_addresses for g in fleet.guests):
         out.append(
             Problem(

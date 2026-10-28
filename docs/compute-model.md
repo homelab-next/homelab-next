@@ -334,8 +334,9 @@ What is enforced:
   site model and its IPv6 `subnet6` alike: a unique-local or documentation prefix is the lab's,
   while a global-unicast one reaches the internet, as an IPv4 zone subnet in public space does
   (nothing proves the site owns it, and a typo or a copied prefix would otherwise open a model
-  runtime's egress to third-party space). An explicit opt-in for an owned, ISP-delegated global
-  prefix (a site-level delegated prefix) is a follow-up. No guest's `outbound_allow` may hold a cloud metadata address either, since the
+  runtime's egress to third-party space), unless it lies inside a prefix the site declares its own
+  (`delegated_prefixes6`, site 1.5: an ISP delegation with its reason; see
+  [network model](network-model.md#delegated-ipv6-prefixes-15)). No guest's `outbound_allow` may hold a cloud metadata address either, since the
   guest firewall refuses those ahead of every allow and the rule could only mislead. What it
   needs (the lab resolver, time, the model store, the gateway or broker) is listed; anything on
   the internet is reached through the gateway, never directly. The example lab's `infer-core`

@@ -59,29 +59,28 @@ ZONE_V6: tuple[ipaddress.IPv6Network, ...] = (
 SPECIAL_V6: tuple[ipaddress.IPv6Network, ...] = (ipaddress.IPv6Network((0x2001 << 112, 23)),)
 
 
-def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
-    """``(prefix, None)`` for a zone's ``subnet6`` (site 1.4), else ``(None, why)``.
-
-    A guest's IPv6 extra address is held against it (``homelabnext.compute.validate``), so it must
-    be one prefix that names this zone only: canonical (no host bits, lower case, compressed), a
-    /48 to a /64, without a zone id (``%scope``), not link-local, multicast, loopback, unspecified or one that writes an IPv4
-    address inside IPv6 (mapped, compatible, translated, NAT64, 6to4, Teredo), where the address
-    a collector sees is the IPv4 one, and from the space zones are numbered from
-    (:data:`ZONE_V6` less :data:`SPECIAL_V6`)."""
+def _prefix6_problem(raw: Any, lo: int, hi: int) -> tuple[ipaddress.IPv6Network | None, str | None]:
+    """The rules a zone's prefix and a delegated prefix share: one canonical IPv6 prefix (no host
+    bits, lower case, compressed) of a /``lo`` to a /``hi``, with no zone id (``%scope``), that is
+    not link-local, multicast, loopback or unspecified and writes no IPv4 address inside IPv6
+    (mapped, compatible, translated, NAT64, 6to4, Teredo), where the address a collector sees is
+    the IPv4 one."""
     from homelabnext.modules.scope import EMBEDDED_V4
 
-    if "%" in str(raw):  # Python parses a zone id into the prefix; no zone's prefix carries one
-        return None, "names an IPv6 zone id (%scope), which a zone's prefix never carries"
+    if not isinstance(raw, str):
+        return None, "is not an IPv6 prefix written as text"
+    if "%" in raw:  # Python parses a zone id into the prefix; no prefix of the site carries one
+        return None, "names an IPv6 zone id (%scope), which a prefix never carries"
     try:
-        net = ipaddress.ip_network(str(raw), strict=True)
+        net = ipaddress.ip_network(raw, strict=True)
     except ValueError as exc:
         return None, f"is not an IPv6 prefix without host bits: {exc}"
     if net.version != 6:
         return None, "is not an IPv6 prefix"
     if str(net) != raw:
         return None, f"is not in its canonical form; write {net}"
-    if not 48 <= net.prefixlen <= 64:
-        return None, f"is a /{net.prefixlen}; a zone's IPv6 prefix is a /48 to a /64"
+    if not lo <= net.prefixlen <= hi:
+        return None, f"is a /{net.prefixlen}; it must be a /{lo} to a /{hi}"
     addr = net.network_address
     if addr.is_link_local or addr.is_multicast or addr.is_loopback or addr.is_unspecified:
         return None, "is link-local, multicast, loopback or unspecified"
@@ -92,12 +91,82 @@ def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]
     )
     if any(net.overlaps(e) for e in embedding):
         return None, "embeds IPv4 addresses (mapped, compatible, translated, NAT64, 6to4, Teredo)"
+    return net, None  # type: ignore[return-value]
+
+
+def subnet6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
+    """``(prefix, None)`` for a zone's ``subnet6`` (site 1.4), else ``(None, why)``.
+
+    A guest's IPv6 extra address is held against it (``homelabnext.compute.validate``), so it must
+    be one prefix that names this zone only: a /48 to a /64 that passes the shared prefix rules
+    (canonical, no zone id, nothing special-purpose or IPv4-embedding) and comes from the space
+    zones are numbered from (:data:`ZONE_V6` less :data:`SPECIAL_V6`)."""
+    net, why = _prefix6_problem(raw, 48, 64)
+    if net is None:
+        return None, why
     if any(net.subnet_of(s) for s in SPECIAL_V6) or not any(net.subnet_of(a) for a in ZONE_V6):
         return None, (
             "is not unique-local (fc00::/7), global unicast (2000::/3, less the IETF protocol "
             "assignments 2001::/23) or documentation space"
         )
-    return net, None  # type: ignore[return-value]
+    return net, None
+
+
+#: documentation space (RFC 3849, RFC 9637): never a prefix an ISP delegates
+DOC_V6: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network((0x2001_0DB8 << 96, 32)),
+    ipaddress.IPv6Network((0x3FFF << 112, 20)),
+)
+
+
+def delegated_prefix6_problem(raw: Any) -> tuple[ipaddress.IPv6Network | None, str | None]:
+    """``(prefix, None)`` for one ``delegated_prefixes6`` prefix (site 1.5), else ``(None, why)``.
+
+    The site's statement that a global-unicast prefix is its own (an ISP delegation): a /32 to a
+    /64 that passes the shared prefix rules and is global unicast (2000::/3), not an IETF protocol
+    assignment (2001::/23) and not documentation space, which is the lab's already and is never
+    delegated.  Unique-local space needs no declaration."""
+    net, why = _prefix6_problem(raw, 32, 64)
+    if net is None:
+        return None, why
+    if any(net.subnet_of(s) for s in SPECIAL_V6) or not net.subnet_of(ZONE_V6[1]):
+        return None, (
+            "is not global unicast (2000::/3, less the IETF protocol assignments 2001::/23); a "
+            "unique-local prefix needs no declaration"
+        )
+    if any(net.overlaps(d) for d in DOC_V6):
+        return None, "is documentation space, which is never delegated and needs no declaration"
+    return net, None
+
+
+def delegated_prefixes6(raw: Any) -> tuple[tuple[ipaddress.IPv6Network, ...], list[str]]:
+    """``(prefixes, problems)`` for a site's ``delegated_prefixes6`` (site 1.5): absent (None) is
+    no declaration; anything else must be a list of ``{prefix, why}`` whose prefixes each pass
+    :func:`delegated_prefix6_problem` and do not overlap.  The prefixes come back only when there
+    are no problems, so a caller that sees any problem holds nothing as delegated."""
+    if raw is None:
+        return (), []
+    if not isinstance(raw, list):
+        return (), ["delegated_prefixes6 is not a list of {prefix, why}"]
+    nets: list[ipaddress.IPv6Network] = []
+    problems: list[str] = []
+    for i, entry in enumerate(raw):
+        where = f"delegated_prefixes6[{i}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not a {{prefix, why}} mapping")
+            continue
+        why = entry.get("why")
+        if not isinstance(why, str) or not why.strip():
+            problems.append(f"{where} gives no reason (why)")
+        net, bad = delegated_prefix6_problem(entry.get("prefix"))
+        if net is None:
+            problems.append(f"{where}: prefix {entry.get('prefix')!r} {bad}")
+            continue
+        clash = next((n for n in nets if n.overlaps(net)), None)
+        if clash is not None:
+            problems.append(f"{where}: prefix {net} overlaps {clash}")
+        nets.append(net)
+    return (tuple(nets) if not problems else ()), problems
 
 
 def schema_problems(doc: Any) -> list[str]:
@@ -206,6 +275,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         if clash is not None:
             r.error(f"zones {clash} and {zid}: subnet6 {nets6[clash]} and {net6} overlap")
         nets6[zid] = net6
+    for msg in delegated_prefixes6(doc.get("delegated_prefixes6"))[1]:
+        r.error(msg)
 
     for zid, net in nets.items():
         z = zone_ids[zid]
