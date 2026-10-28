@@ -46,7 +46,11 @@ def _systemctl(tmp_path) -> str:
 
 
 PAIR = {"problem": "UPS on battery", "recovery": "UPS back on line power"}
-MCP_JSON = json.dumps({"mcpServers": {"hnx-broker": {"type": "stdio", "command": "hnx"}}})
+#: a value in a configuration's env block: it never leaves the host (only names do)
+MCP_SECRET = "s3cr3t-census-token-0002"
+MCP_JSON = json.dumps(
+    {"mcpServers": {"hnx-broker": {"type": "stdio", "command": "hnx", "env": {"T": MCP_SECRET}}}}
+)
 AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
 
 
@@ -117,7 +121,7 @@ def _first(tmp_path):
         "ansible_become_exe": _sudo(tmp_path),
         "module_census_mcp_configs": [
             {"path": str(agent / ".mcp.json"), "client": "claude-code"},
-            {"path": str(agent / "absent.yaml"), "client": "hermes"},
+            {"path": str(agent / "hermes" / "config.yaml"), "client": "hermes"},
         ],
     }
     return {
@@ -165,11 +169,21 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {
                 "path": v["module_census_mcp_configs"][0]["path"],
                 "client": "claude-code",
-                "text": MCP_JSON,
+                "present": True,
+                "servers": ["hnx-broker"],
             },
-            {"path": v["module_census_mcp_configs"][1]["path"], "client": "hermes", "text": None},
+            {
+                "path": v["module_census_mcp_configs"][1]["path"],
+                "client": "hermes",
+                "present": False,
+                "servers": [],
+            },
         ],
     }
+    # a configuration is parsed on the host: no value of its env block reaches the answer, nor
+    # anything the run printed
+    assert MCP_SECRET not in (out / "localhost.json").read_text()
+    assert MCP_SECRET not in r.stdout + r.stderr
     inventory, notes = census.gather(out)
     assert inventory == {
         "schema_version": "1.0",
@@ -218,7 +232,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     via.symlink_to(tmp_path / "pairs")
     # an MCP client configuration is an absolute plain path of a known client, read never
     # through a link
-    (tmp_path / "agent" / "link.json").symlink_to(tmp_path / "agent" / ".mcp.json")
+    (tmp_path / "agent" / "link.mcp.json").symlink_to(tmp_path / "agent" / ".mcp.json")
     results = run_cases(
         tmp_path,
         "module_census",
@@ -254,9 +268,11 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_mcp_configs": ["/srv/a.json"]},
             {
                 "module_census_mcp_configs": [
-                    {"path": str(tmp_path / "agent" / "link.json"), "client": "generic"}
+                    {"path": str(tmp_path / "agent" / "link.mcp.json"), "client": "generic"}
                 ]
             },
+            # a file not named as its client's configuration is never opened
+            {"module_census_mcp_configs": [{"path": "/etc/shadow", "client": "claude-code"}]},
         ],
         env=BECOME_ENV,
     )
@@ -280,6 +296,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     # an entry that is not a mapping: the role's argument spec refuses it first
     assert results[18][0] and "module_census_mcp_configs" in results[18][1], results
     assert results[19][0] and "is not a regular file of at most 1048576 bytes" in results[19][1]
+    assert results[20][0] and "is not named as a claude-code configuration" in results[20][1]
 
 
 def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):

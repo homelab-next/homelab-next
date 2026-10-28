@@ -56,18 +56,21 @@ pair runs".  A record is the owning service's word about its own pairs, believed
 
 **MCP servers.**  On a host that lists the MCP client configurations it has installed (the role's
 ``module_census_mcp_configs``: each ``{path, client}``, what ``hnx mcp catalog render`` wrote and
-the deploy put in place), the role reads each one in one step (no link at any step, from
-directories its group and others may not write, a small regular file) and the answer carries
-``mcp``, per file its client and text, or null where it is absent.  Each is parsed for its client
-(:data:`MCP_CLIENTS`: the ``mcpServers`` object of a JSON client file, the ``mcp_servers`` mapping
-of a Hermes YAML one, read with the loader's strict YAML reader) and every server name it holds is
-one name the client registers when it starts: a record's id, or its instance name
-(``instance:`` in the catalog record), which the loader matches back to the record.  An absent
-file registers nothing.  ``mcp_servers`` is gathered when at least one host listed a
-configuration and stays in ``not_gathered`` otherwise.  A server name that is not an inventory
-name, or a file that does not parse, fails the census.  The file is what the client reads, so a
-home that lost an entry, or one a hand added, shows; what a client did with it after it started
-(a server that failed to launch) does not.
+the deploy put in place, trusted overlay input), the role reads each one in one step (no link at
+any step, root's or the connection user's, from directories its group and others may not write, a
+small regular file with a single link, named as its client's configuration) and parses it on the
+host, for its client (:data:`MCP_CLIENTS`: the ``mcpServers`` object of a JSON client file, the
+``mcp_servers`` mapping of a Hermes YAML one, both strict).  A configuration can hold secrets, so
+its text never leaves the host: the answer carries ``mcp``, per file its client, whether it is
+present and the server names it registers.  Every name is one a client registers when it starts:
+a record's id, or its instance name (``instance:`` in the catalog record), which the loader
+matches back to the record.  An absent file registers nothing.  ``mcp_servers`` is gathered when
+at least one host listed a configuration and stays in ``not_gathered`` otherwise.  A server name
+that is not an inventory name, or a file that does not parse, fails the census (one host's stray
+name fails it for the whole fleet).  The file is what the client reads, so a home that lost an
+entry, or one a hand added, shows; what a client did with it after it started (a server that
+failed to launch) does not, nor what a client reads from files the host does not list (a user's
+or a project's own configuration, a managed policy file).
 
 Kinds the hosts cannot report (service rows that answer, tables) are named in the
 inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that merely
@@ -177,32 +180,31 @@ def parse_agents(lines: Any, host: str) -> set[str]:
 
 def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
     """The MCP server names one host's installed client configurations register, and a note for
-    each configuration that is absent (it registers nothing)."""
+    each configuration that is absent (it registers nothing).  The host parsed each file for its
+    client and sent only the names (a configuration can hold secrets); here the shape and every
+    name are checked again."""
     if not isinstance(configs, list) or not configs or len(configs) > MAX_LINES:
         raise CensusError(f"{host}: the MCP client configurations are not a non-empty list")
     names: set[str] = set()
     notes: list[str] = []
     for i, entry in enumerate(configs, 1):
-        if not isinstance(entry, dict) or set(entry) != {"path", "client", "text"}:
-            raise CensusError(f"{host}: MCP client configuration {i} is not {{path, client, text}}")
-        path, client, text = entry["path"], entry["client"], entry["text"]
+        if not isinstance(entry, dict) or set(entry) != {"path", "client", "present", "servers"}:
+            raise CensusError(
+                f"{host}: MCP client configuration {i} is not {{path, client, present, servers}}"
+            )
+        path, client = entry["path"], entry["client"]
+        present, servers = entry["present"], entry["servers"]
         if not isinstance(path, str) or client not in MCP_CLIENTS:
             raise CensusError(f"{host}: MCP client configuration {i} names no known client")
-        if text is None:
+        if not isinstance(present, bool) or not isinstance(servers, list):
+            raise CensusError(f"{host}: {ld._shown(path)}: present or servers is malformed")
+        if not present:
+            if servers:
+                raise CensusError(f"{host}: {ld._shown(path)} is absent yet registers servers")
             notes.append(f"{host}: {ld._shown(path)} is absent: {client} registers nothing from it")
             continue
-        if not isinstance(text, str):
-            raise CensusError(f"{host}: {ld._shown(path)} is not text")
-        try:
-            doc = ld.parse_yaml(text) if client == "hermes" else json.loads(text)
-        except (ld.Unreadable, ValueError, RecursionError) as exc:
-            why = exc if not isinstance(exc, RecursionError) else "nested too deeply"
-            raise CensusError(f"{host}: {ld._shown(path)} does not parse ({why})") from None
-        if not isinstance(doc, dict):
-            raise CensusError(f"{host}: {ld._shown(path)} is not a {client} configuration")
-        servers = doc.get(MCP_CLIENTS[client], {})
-        if not isinstance(servers, dict):
-            raise CensusError(f"{host}: {ld._shown(path)}: {MCP_CLIENTS[client]} is not a mapping")
+        if len(servers) > MAX_LINES or len(set(map(str, servers))) != len(servers):
+            raise CensusError(f"{host}: {ld._shown(path)}: the server names are not a set")
         for name in servers:
             if not isinstance(name, str) or len(name) > 64 or not NAME_RE.fullmatch(name):
                 raise CensusError(

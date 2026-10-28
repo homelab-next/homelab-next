@@ -92,14 +92,24 @@
     max_bytes: "{{ module_census_pairs_max_bytes }}"
   register: module_census_pairs
 
-# One step (library/mcp_client_configs.py): each installed MCP client configuration, the servers
-# that client registers when it starts; hnx modules gather parses it per client.
+# One step (library/mcp_client_configs.py): each installed MCP client configuration is read and
+# parsed on the host, and only the server names it registers come back, never its text (a
+# configuration can hold secrets).  no_log keeps the task's arguments and result out of every log
+# and callback; a refusal is reported by the next task from the registered message, which names
+# a path and a reason only.
 - name: Read the installed MCP client configurations, never through a link
   mcp_client_configs:
     files: "{{ module_census_mcp_configs }}"
     max_bytes: "{{ module_census_mcp_max_bytes }}"
   register: module_census_mcp
+  no_log: true
+  failed_when: false
   when: module_census_mcp_configs | length > 0
+
+- name: Stop on an MCP client configuration the census refuses
+  ansible.builtin.fail:
+    msg: "{{ module_census_mcp.msg | default('module_census: the MCP client configurations were not read') }}"
+  when: module_census_mcp_configs | length > 0 and (module_census_mcp.failed | default(false) or module_census_mcp.configs is not defined)
 
 # The broker answers a peer its manifest lists in operators (homelabnext.broker.server, manifest
 # 1.8): the agent keys it serves, one per line, and nothing else.  This one task runs as root, the
@@ -124,6 +134,7 @@
     content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {}) | combine({'mcp': module_census_mcp.configs} if module_census_mcp_configs | length > 0 else {})) | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
+  no_log: true  # the answer is names only, but never shown in a diff or a callback either
   vars:
     # the host's boot id and clock, and per owner the record's text and whether its process runs
     module_census_pairs_found: "{{ {'boot_id': module_census_pairs.boot_id, 'now': module_census_pairs.now, 'records': module_census_pairs.records} }}"

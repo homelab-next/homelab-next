@@ -704,7 +704,10 @@ def core_names(
             out.append(Problem("registry", why))
         mcp_ids.add(sid)
         template = rec.get("instance")
-        mcp_instances[sid] = template if isinstance(template, str) and template else "{id}"
+        template = template if isinstance(template, str) and template else "{id}"
+        if why := template_problem(template):
+            out.append(Problem("registry", f"mcp/{_shown(fname)}: {why}"))
+        mcp_instances[sid] = template
     agents: set[str] = set()
     if keyring is not None:
         principals = keyring.get("principals") if isinstance(keyring, dict) else None
@@ -970,7 +973,10 @@ def instance_pattern(sid: str, template: str) -> re.Pattern[str]:
     ``instance`` template (default ``{id}``), with ``{id}`` the record's id and every other
     placeholder (``{profile}``, ``{lane}``, ``{home}``, a parameter) one or more inventory-name
     segments.  A name a client registers is matched back to its record by this, never guessed
-    from a prefix."""
+    from a prefix (and a template that begins with any other placeholder matches nothing: see
+    :func:`template_problem`)."""
+    if template_problem(template):
+        return re.compile(r"(?!)")
     out, last = [], 0
     for m in _PLACEHOLDER.finditer(template):
         out.append(re.escape(template[last : m.start()]))
@@ -978,6 +984,24 @@ def instance_pattern(sid: str, template: str) -> re.Pattern[str]:
         last = m.end()
     out.append(re.escape(template[last:]))
     return re.compile("".join(out))
+
+
+def template_problem(template: str) -> str | None:
+    """Why an instance template cannot be matched back to its record, or None: one that begins
+    with a placeholder other than ``{id}`` (``{profile}-x``) would claim any name ending in its
+    tail."""
+    m = _PLACEHOLDER.match(template)
+    if m and m[1] != "id":
+        return f"instance template {_shown(template)} begins with a placeholder other than {{id}}"
+    return None
+
+
+def _literal_prefix(sid: str, template: str) -> int:
+    """How much of a name a template fixes before its first placeholder other than ``{id}``: the
+    longer, the more specific (the tie-break between two records that match one name)."""
+    m = next((m for m in _PLACEHOLDER.finditer(template) if m[1] != "id"), None)
+    head = template if m is None else template[: m.start()]
+    return len(head.replace("{id}", sid))
 
 
 def _mcp_instances(doc: Doc, mod_dir: Path, load) -> dict[str, str]:
@@ -1004,24 +1028,44 @@ def _running_mcp(
 ) -> list[Problem]:
     """The MCP server names the installed clients register, against the selected modules'
     records: a name is a record's when its instance template matches it
-    (:func:`instance_pattern`).  A name no selected record matches is judged as any other
-    kind's: bound by its module prefix, else the core's, which (when the core's catalog was read)
-    must be one of the core's records."""
-    patterns = {
-        sid: instance_pattern(sid, t)
-        for n in sel
-        for sid, t in _mcp_instances(sel[n], tree.dirs[n], load).items()
-        if sid in declared
-    }
+    (:func:`instance_pattern`).  A name bound by its prefix to a module is matched against that
+    module's records only (another module's template never claims it); a name bound to no module
+    against every selected record.  Of several records that match one name, an exact id wins, then
+    the template that fixes the longest prefix; a name still matched by several is ambiguous.  A
+    name no record matches is judged as any other kind's: bound by its module prefix, else the
+    core's, which (when the core's catalog was read) must be one of the core's records."""
+    records: dict[str, tuple[str, str, re.Pattern[str]]] = {}
+    out = []
+    for n in sel:
+        for sid, t in _mcp_instances(sel[n], tree.dirs[n], load).items():
+            if sid not in declared:
+                continue
+            if why := template_problem(t):
+                out.append(Problem(n, f"mcp_servers {sid}: {why}"))
+                continue
+            records[sid] = (n, t, instance_pattern(sid, t))
     ids = set(tree.mods)
     seen: set[str] = set()
-    out = []
     for name in sorted(running):
-        hits = {name} & set(patterns) or {sid for sid, p in patterns.items() if p.fullmatch(name)}
-        if hits:
-            seen |= hits
-            continue
         owner = _bound_to("mcp_servers", name, ids)
+        hits = {
+            sid
+            for sid, (n, _, p) in records.items()
+            if (owner is None or n == owner) and p.fullmatch(name)
+        }
+        if hits:
+            exact = {sid for sid in hits if sid == name}
+            if exact:
+                hits = exact
+            else:
+                best = max(_literal_prefix(sid, records[sid][1]) for sid in hits)
+                hits = {sid for sid in hits if _literal_prefix(sid, records[sid][1]) == best}
+            if len(hits) == 1:
+                seen |= hits
+            else:
+                why = f"mcp_servers {name} is ambiguous: {', '.join(sorted(hits))} all match it"
+                out.append(Problem("running", why))
+            continue
         if owner is None:
             if core is not None and core.mcp_known and not core.is_mcp(name):
                 why = f"mcp_servers {name} runs but is no module's or the core's"
@@ -1142,8 +1186,9 @@ def running_problems(
     own (:attr:`CoreNames.units`, when ``core`` knows them): any other ``hnx-*`` unit runs but is
     no module's or the core's, and so must an MCP server name (:func:`_running_mcp`, which
     matches a name back to its record by the record's instance template).  Another kind's name
-    bound to no module id is the core's and is not judged here.  A kind the inventory names in ``not_gathered`` is not compared.  With the
-    inventory's ``notify_pairs``, the same for recovery pairs (:func:`running_pair_problems`)."""
+    bound to no module id is the core's and is not judged here.  A kind the inventory names in
+    ``not_gathered`` is not compared.  With the inventory's ``notify_pairs``, the same for
+    recovery pairs (:func:`running_pair_problems`)."""
     load = load or module_reader(tree)
     declared = _declared(tree, ins, site, sel, load)
     ids = set(tree.mods)

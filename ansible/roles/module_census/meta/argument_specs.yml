@@ -26,7 +26,7 @@ argument_specs:
       module_census_mcp_configs:
         type: list
         elements: dict
-        description: "The MCP client configurations installed on this host (what hnx mcp catalog render wrote and the deploy installed), each {path, client}: path absolute, client one of claude-code, generic, hermes (a fleet host's clients). Each is read in one step by the role's mcp_client_configs module, never through a link at any step, from directories its group and others may not write; an absent file is read as a client that registers nothing. Empty: the host has none, and the census does not look."
+        description: "The MCP client configurations installed on this host (what hnx mcp catalog render wrote and the deploy installed), each {path, client}: path absolute, client one of claude-code, generic, hermes (a fleet host's clients), the file named as that client's configuration (claude-code [name].mcp.json, generic [name.]mcp.json, hermes config.yaml). Trusted overlay input: it names files the census reads on the host. Each is read and parsed on the host by the role's mcp_client_configs module (never through a link, from files and directories root's or the connection user's that their group and others may not write, the file a single link) and only the server names it registers are returned, never its text; an absent file is read as a client that registers nothing. Empty: the host has none, and the census does not look."
         default: []
   health:
     short_description: Fail unless the host answers systemctl --version.
