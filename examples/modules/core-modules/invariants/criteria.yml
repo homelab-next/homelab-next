@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Core criteria about modules (registers/invariant 1.1 ids, <module id>/<slug>). They are owned by
 # the core, so removing the module they protect cannot remove them. Deferred: the loader whose
-# check they run does not exist yet.
+# check they run exists (hnx modules check) but has not yet run on a real lab.
 criteria:
 - id: core-modules/egress-publish-grant
   statement: Only a module the overlay grants publish requires, prefers or falls back to the static-hosting slot.
@@ -9,7 +9,7 @@ criteria:
   observable: the module loader's grant check over the site's selection and the overlay's grants
   expected: every module reaching cap:static-hosting is named in grants.publish
   status: deferred
-  note: the module loader is not built yet; tests/schemas/test_module_1_0.py applies the rule to the examples
+  note: the module loader exists but has not yet run on a real lab, so this stays deferred; tests/schemas/test_module_1_0.py applies the rule to the examples
   remediation: >-
     Remove the other module's requirement and have it offer publishable-output instead; a second
     egress path bypasses the TLP check and the deny-list scan.
@@ -19,7 +19,7 @@ criteria:
   observable: the module loader's interface check over every available manifest
   expected: one definition per (interface, version); every provider references it
   status: deferred
-  note: the module loader is not built yet; tests/schemas/test_module_1_0.py applies the rule to the examples
+  note: the module loader exists but has not yet run on a real lab, so this stays deferred; tests/schemas/test_module_1_0.py applies the rule to the examples
   remediation: >-
     Keep the definition in the owning module (the consumer for a gate interface) and make the other
     modules reference it; two schemas under one id leave nobody owning the contract.
