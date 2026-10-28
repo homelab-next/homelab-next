@@ -71,7 +71,8 @@ checks").
 For ``check`` and ``render``, defaults follow the overlay layout: with ``--overlay DIR`` the site
 is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
 ``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json``, the core registry
-``DIR/lab/services.yml`` when they exist, otherwise the repository's examples
+``DIR/lab/services.yml`` and, for ``render``, the network model ``DIR/lab/site.yml`` when they
+exist, otherwise the repository's examples
 (``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.
 The core's own names (:class:`homelabnext.modules.loader.CoreNames`) are read from the registry,
 the MCP catalog, the keyring's agent principals, the OCSF tables and the core's notify pairs.
@@ -591,13 +592,16 @@ def _run(args: argparse.Namespace) -> int:
     site = _read(site_path, "site selection", budget) if site_path else None
     network = None
     if args.cmd == "render":
-        if args.network is not None:
-            network = _read(args.network, "network model", budget)
+        # the overlay's own network model by default, as the role table and registry are
+        network_path = args.network or _existing(lab and lab / "site.yml")
+        if network_path is not None:
+            network = _read(network_path, "network model", budget)
             if not isinstance(network, dict):
                 raise ld.LoaderError("the network model is not a mapping")
         else:
             notes.append(
-                "no network model (--network): the egress policy cannot exclude the lab's IPv6 "
+                "no network model (--network, or --overlay with lab/site.yml): the egress "
+                "policy cannot exclude the lab's IPv6 "
                 "zone and delegated prefixes, so a lab IPv6 address outside the listed host "
                 "addresses and scope.trusted.nets is treated as the internet"
             )

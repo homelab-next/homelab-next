@@ -595,8 +595,8 @@ def _readme(per_host, with_network: bool = False) -> str:
         "",
         "Each module role placed on a lab host may open connections only to what it declared:",
         "DNS, the slots it requires or prefers, its `svc:` targets and, when granted, global",
-        "unicast addresses outside the lab (IPv6 only inside 2000::/3). Install per host, after the module limits (the role",
-        "slices): `hnx-egress.nft` as `/etc/hnx/egress/hnx-egress.nft` (owned by root, mode 0644,",
+        "unicast addresses outside the lab (IPv6 only inside 2000::/3). Install per host, after",
+        "the module limits (the role slices): `hnx-egress.nft` as `/etc/hnx/egress/hnx-egress.nft` (owned by root, mode 0644,",
         "its directory 0755 root), the service, timer and drop-ins under `/etc/systemd/system/`,",
         "then `systemctl daemon-reload` and `systemctl enable --now hnx-egress.service",
         "hnx-egress.timer`. It needs the unified cgroup v2 hierarchy and refuses to load",
@@ -634,7 +634,8 @@ def _lab_note(with_network: bool) -> list[str]:
     if with_network:
         return [
             "Never the internet: the special-purpose ranges, `scope.trusted.nets`, every host's",
-            "`addresses`, and the network model's zone `subnet6` and `delegated_prefixes6` prefixes.",
+            "`addresses`, and the network model's zone `subnet6` and `delegated_prefixes6`",
+            "prefixes.",
         ]
     return [
         "Rendered with no network model (`hnx modules render --network FILE`): a lab IPv6 address",

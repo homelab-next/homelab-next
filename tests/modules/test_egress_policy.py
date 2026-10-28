@@ -401,6 +401,17 @@ def _network(*, delegated: str | None = None) -> dict:
     return doc
 
 
+def test_a_zone_prefix_inside_a_delegated_prefix_leaves_no_overlapping_elements():
+    """nft refuses overlapping elements in an interval set, so a zone numbered from a delegated
+    prefix (the usual case) must collapse into it rather than fail the whole ruleset's load."""
+    net = _network(delegated=f"{_global6(0)}/56")  # holds the zone's {_global6(0x30)}/64
+    for text in _render_net(net).values():
+        if "not_internet6" not in text:
+            continue
+        _, v6 = _sets(text)
+        assert all(not a.overlaps(b) for i, a in enumerate(v6) for b in v6[i + 1 :]), v6
+
+
 def _render_net(network, site="full"):
     return eg.render(SITES[site], MODULES, rows, None, network=network)
 
@@ -454,6 +465,28 @@ def test_the_ipv6_internet_accept_is_global_unicast_only():
     nft = _host_nft(_render_net(None))
     pub = chain(nft, "publishing", "publisher")
     assert "ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept" in pub
+
+
+def test_render_reads_the_overlays_network_model_by_default(tmp_path, capsys):
+    """With --overlay the network model is lab/site.yml, as the role table and registry default
+    to the overlay's own: the protection does not depend on remembering a flag."""
+    from homelabnext.modules import cli as mcli
+
+    lab = tmp_path / "ov" / "lab"
+    lab.mkdir(parents=True)
+    (lab / "modules.yml").write_text(yaml.safe_dump(SITES["small-lab"]), encoding="utf-8")
+    (lab / "site.yml").write_text(yaml.safe_dump(_network()), encoding="utf-8")
+    (lab / "mcp").mkdir()
+    (lab / "keyring").mkdir()
+    (lab / "keyring" / "keyring.json").write_text('{"principals": []}', encoding="utf-8")
+    argv = ["render", "--root", str(ROOT), "--examples", "--overlay", str(lab.parent)]
+    assert mcli.main([*argv, "--out", str(tmp_path / "out")]) == 0
+    assert "no network model" not in capsys.readouterr().out
+    nfts = sorted((tmp_path / "out/egress").glob("*/hnx-egress.nft"))
+    assert nfts
+    for f in nfts:
+        _, v6 = _sets(f.read_text())
+        assert any(ipaddress.ip_address(_global6(0x30, 9)) in n for n in v6)
 
 
 def test_render_cli_notes_the_missing_network_model(tmp_path, capsys):
