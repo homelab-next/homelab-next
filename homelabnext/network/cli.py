@@ -24,7 +24,7 @@ from .adapters.base import AdapterError, UnknownAdapter
 from .ir import build_ir
 from .loader import SiteError, SiteUnreadable, load_registry, load_site
 from .plan import compute_plan, write_rendered
-from .validate import validate
+from .validate import validate, wan_network_unstated
 
 EXIT_INVALID = 1
 EXIT_USAGE = 2
@@ -208,6 +208,8 @@ def _run(args, out, err) -> int:
             f"warning: router.wan6 is rendered by the linux adapter only; {name} ignores it",
             file=err,
         )
+    if name == "linux" and own != "linux" and (msg := wan_network_unstated(doc)):
+        print(f"warning: {msg}", file=err)  # validation warned only for the site's own adapter
     rendered = adapter.render(ir)
 
     if args.cmd == "render":

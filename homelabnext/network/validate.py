@@ -186,6 +186,27 @@ def _anycast64(addr: ipaddress.IPv6Address, net: ipaddress.IPv6Network) -> bool:
     return host == 0 or host >= (1 << 64) - 128
 
 
+def wan_network_unstated(doc: dict) -> str | None:
+    """The warning for a site whose ``router.wan6`` the linux adapter renders as a networkd drop-in
+    for a guessed file (``adapters.options.linux.wan_network`` unstated), else None.  networkd
+    ignores a drop-in whose ``.network`` file does not exist, so a wrong guess leaves the WAN
+    without IPv6 and nothing says so; stating the name, even the default, silences it."""
+    linux = doc.get("adapters", {}).get("options", {}).get("linux", {})
+    if (
+        "wan6" not in doc.get("router", {})
+        or linux.get("flavor", "networkd") != "networkd"
+        or "wan_network" in linux
+    ):
+        return None
+    return (
+        "router.wan6 extends the WAN's networkd file by a drop-in, and "
+        "adapters.options.linux.wan_network is not stated, so the default "
+        f"10-{linux.get('wan_interface', 'wan0')}.network is assumed; networkd ignores a "
+        "drop-in for a file that does not exist, so set adapters.options.linux.wan_network to "
+        "the WAN's own file"
+    )
+
+
 def wan6_problems(raw: Any, zones6: Any = (), delegated6: Any = ()) -> list[str]:
     """The problems of a router's ``wan6`` (site 1.6); absent (None) is none.
 
@@ -445,6 +466,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
             f"router.wan6 is rendered by the linux adapter only; {network_adapter} ignores it, "
             "so configure the router's WAN IPv6 on the router itself"
         )
+    if network_adapter == "linux" and (msg := wan_network_unstated(doc)):
+        r.warn(msg)
 
     switch_ids: set[str] = set()
     macs: dict[str, str] = {}

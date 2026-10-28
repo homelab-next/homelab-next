@@ -269,6 +269,7 @@ def test_the_wan6_nftables_file_passes_nft_check(doc6, registry, wan6, tmp_path)
 def test_a_sound_wan6_validates(doc6, registry, wan6):
     d = copy.deepcopy(doc6)
     d["router"]["wan6"] = wan6
+    d["adapters"]["options"]["linux"]["wan_network"] = "10-wan0.network"
     rep = validate(d, registry)
     assert rep.ok, rep.errors
     assert not any("wan6" in w for w in rep.warnings)
@@ -334,6 +335,42 @@ def test_the_schema_refuses_what_is_not_exactly_one_of_ra_or_static(doc6, wan6):
     d["router"]["wan6"] = wan6
     assert any("router/wan6" in p for p in schema_problems(d))
     assert wan6_problems(wan6)  # and the semantic check, without the schema, refuses it too
+
+
+@pytest.mark.parametrize("flavor", ["networkd", "ifupdown"])
+def test_a_networkd_wan6_without_the_wans_file_named_warns(doc6, registry, flavor):
+    """A drop-in for a file that does not exist is ignored, so a guessed name is said."""
+    d = copy.deepcopy(doc6)
+    d["router"]["wan6"] = {"ra": True}
+    d["adapters"]["options"]["linux"]["flavor"] = flavor
+    rep = validate(d, registry)
+    assert rep.ok, rep.errors
+    warned = [w for w in rep.warnings if "wan_network is not stated" in w]
+    assert len(warned) == (flavor == "networkd"), rep.warnings
+    if warned:
+        assert "10-wan0.network is assumed" in warned[0]
+    # the assumed name follows the WAN interface, and stating any name silences it
+    d["adapters"]["options"]["linux"]["wan_interface"] = "eth1"
+    if flavor == "networkd":
+        assert any("10-eth1.network is assumed" in w for w in validate(d, registry).warnings)
+    d["adapters"]["options"]["linux"]["wan_network"] = "10-eth1.network"
+    assert not any("wan_network" in w for w in validate(d, registry).warnings)
+
+
+def test_rendering_another_adapters_site_with_linux_warns_of_an_unstated_wan_network(
+    doc, registry_path, tmp_path
+):
+    """Validation warns only for the site's own adapter; rendering a site whose own adapter is
+    not linux with ``--adapter linux`` writes the drop-in too, so the render says it."""
+    d = copy.deepcopy(doc)
+    d["router"]["wan6"] = {"ra": True}
+    site = tmp_path / "site.yml"
+    site.write_text(yaml.safe_dump(d))
+    argv = ["render", str(site), "--registry", str(registry_path), "--out", str(tmp_path / "o")]
+    for adapter, warned in (("linux", True), (CONTROLLER, False)):
+        out, err = io.StringIO(), io.StringIO()
+        assert cli.main([*argv, "--adapter", adapter], out=out, err=err) == 0
+        assert ("wan_network is not stated" in err.getvalue()) is warned, err.getvalue()
 
 
 def test_another_router_adapter_warns_that_it_ignores_wan6(doc, registry):

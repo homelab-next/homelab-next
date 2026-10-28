@@ -332,7 +332,10 @@ declare an ISP delegation in `delegated_prefixes6` and number the zones from it.
   default `10-<wan_interface>.network`), never a second file for the WAN: networkd applies only
   the first `.network` file that matches an interface, so a second one would replace the WAN's
   IPv4 or be ignored. **A drop-in whose file does not exist is ignored**: name the WAN's file, or
-  the WAN has no IPv6 and IPv6 fails closed. ifupdown gets `etc/network/interfaces.d/hnx-wan6`,
+  the WAN has no IPv6 and IPv6 fails closed. `hnx site validate` (and `hnx site render|plan --adapter linux`
+  on a site whose own adapter is another) warns when a networkd site sets `wan6` without stating
+  `wan_network`, naming the assumed default file; stating the name, even the default, silences
+  it. ifupdown gets `etc/network/interfaces.d/hnx-wan6`,
   an `inet6` stanza; the WAN's `auto` line and IPv4 stanza stay the operator's.
 - The sysctl file sets `default.accept_ra` and `default.accept_redirects` to 0 (an interface made
   later takes neither: without a zone prefix forwarding is off, and then it would), then
