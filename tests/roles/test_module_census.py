@@ -250,9 +250,14 @@ def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(mon
     # the reader's own mode rule, on reported modes: no real directory is made writable by
     # others (the playbook cases above cover links, size and the FIFO)
     import importlib.util
+    import sys
     import types
 
-    pytest.importorskip("ansible")
+    # the reader imports only AnsibleModule, which main() alone uses: a stand-in keeps this test
+    # free of an Ansible install (the repository's own ansible/ directory is not the package)
+    for name in ("ansible", "ansible.module_utils", "ansible.module_utils.basic"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["ansible.module_utils.basic"].AnsibleModule = object
     path = os.path.join(
         os.path.dirname(__file__),
         "..",
