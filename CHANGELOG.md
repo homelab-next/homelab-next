@@ -157,6 +157,7 @@ has no section below.
 
 ### Fixed
 
+- The swap gate compared the role tables with Python `==`, where `1 == True`: a `leaves_lab` of `1` changed to `true` (which the rules read as a binding whose prompts leave the lab) read as unchanged and needed no record. It now compares them as canonical JSON, types included.
 - The swap gate sees a `leaves_lab` that moves from one binding of a role to another: a role's non-pin binding keys are now compared per binding, keyed by its pin, not as a bare multiset (`homelabnext/modules/swap_evidence.py`).
 - The swap gate no longer asks for a record when `leaves_lab: false` replaces an absent key (or the reverse): a binding's `leaves_lab` is read as `rules.cloud_roles` reads it (only `true` counts), so the no-op is no change.
 - `hnx modules swap-gate --overlay DIR` refuses (exit 2) a `DIR` that is not the root of its git checkout, instead of checking only that it is a directory (docs/modules.md, "The overlay's gate").

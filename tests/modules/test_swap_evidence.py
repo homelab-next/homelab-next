@@ -580,9 +580,12 @@ def test_a_leaves_lab_the_rules_do_not_read_as_true_equals_the_key_absent(value,
     assert (rc, out["problems"]) == (0, []) and "reads the same" in out["decided"]
 
 
-def test_true_against_false_is_still_a_change(repo, capsys):
+@pytest.mark.parametrize("before", [False, 1, 1.0])
+def test_true_against_a_value_the_rules_do_not_read_as_true_is_a_change(before, repo, capsys):
+    """``1 == True`` in Python, so a raw ``==`` would read 1 -> true as unchanged, while the rules
+    read only ``true`` as a binding whose prompts leave the lab."""
     base = json.loads(ROLES.read_text(encoding="utf-8"))
-    base["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = False
+    base["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = before
     head = json.loads(ROLES.read_text(encoding="utf-8"))
     head["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = True
     _trust_pair(repo, base, head)

@@ -352,6 +352,11 @@ def _read_as_rules(binding: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in binding.items() if k != "leaves_lab" or v is True}
 
 
+def _same(a: Any, b: Any) -> bool:
+    """Whether two parsed documents are the same JSON, types included (``1`` is not ``true``)."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
 def _normalised(doc: Any) -> Any:
     """``doc`` (a role table) with every role's bindings :func:`_read_as_rules`."""
     roles = doc.get("roles") if isinstance(doc, dict) else None
@@ -439,9 +444,11 @@ def gate(
     if head is None and old is None:
         return [], f"no {roles} at either end"
     if head is not None and old is not None:
-        if _json(head, roles) == _json(old, roles):
+        # compared as canonical JSON text, never with ==: in Python 1 == True and 0 == False, so a
+        # leaves_lab of 1 turned into true (which the rules read as cloud) would read as unchanged
+        if _same(_json(head, roles), _json(old, roles)):
             return [], f"{roles} is unchanged since {sha[:12]}"
-        if _normalised(_json(head, roles)) == _normalised(_json(old, roles)):
+        if _same(_normalised(_json(head, roles)), _normalised(_json(old, roles))):
             return [], f"{roles} reads the same as at {sha[:12]} (leaves_lab false is absent)"
     with tempfile.TemporaryDirectory(prefix="hnx-swap-gate-") as tmp:
         ev = from_git(
