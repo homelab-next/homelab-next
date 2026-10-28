@@ -114,7 +114,9 @@ that has a frozen baseline, found by the `$id` name; that holds while the baseli
 its `--base` check enforces in CI by keeping `schemas/_frozen/` append-only: against a pull
 request's base (unreadable is an error), or a push's previous tip, or `HEAD^` when that tip is zero
 or gone (a new branch, a force-push), so a push compared with `HEAD^` sees only its last commit;
-`main` has no branch protection, so these gates are advisory until it does), their generator (`python -m homelabnext.schemas`, checked in CI), the
+`main` is protected by a ruleset requiring the CI checks, these and `trusted-gates` among them,
+though not a pull-request review, so a human-approve tier is given by a reviewer, not enforced by
+the ruleset), their generator (`python -m homelabnext.schemas`, checked in CI), the
 fictional examples, and the loader's rules as pure functions applied to those examples by the
 contract tests (`homelabnext/modules/rules.py`), each shown refusing a planted defect. The loader
 (follow-up 9 below) runs them, and the private overlay's deploy workflow runs the loader at deploy
