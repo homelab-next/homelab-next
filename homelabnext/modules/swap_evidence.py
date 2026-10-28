@@ -57,6 +57,7 @@ __all__ = [
     "SUITES",
     "SWAPS",
     "EvidenceError",
+    "changed_paths",
     "changed_records",
     "from_git",
     "gate",
@@ -256,19 +257,30 @@ def from_git(
     return ev
 
 
+def changed_paths(root: Path, sha: str | None, spec: list[str]) -> list[str]:
+    """The paths under pathspecs ``spec`` the working tree adds, changes or removes against commit
+    ``sha`` (a rename is a removal and an addition), untracked ones included; with ``sha`` None
+    (a root commit) every one there."""
+    if sha is None:
+        cmds = [("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *spec)]
+    else:
+        cmds = [
+            ("diff", "--no-renames", "--name-only", "-z", sha, "--", *spec),
+            ("ls-files", "--others", "--exclude-standard", "-z", "--", *spec),
+        ]
+    rels: set[str] = set()
+    for args in cmds:
+        r = _git(root, *args)
+        if r.returncode:
+            raise EvidenceError(f"git {args[0]} against {(sha or 'the root')[:12]} failed")
+        rels |= {x for x in r.stdout.decode("utf-8", "replace").split("\0") if x}
+    return sorted(rels)
+
+
 def changed_records(root: Path, base: str) -> list[str]:
     """The swap records (``*.json``, ``*.yml``, ``*.yaml`` under :data:`SWAPS`) the working tree
     adds or changes against ``base``, untracked ones included; a removed record covers nothing."""
-    sha = resolve_base(root, base)
-    rels: set[str] = set()
-    for args in (
-        ("diff", "--no-renames", "--name-only", "-z", sha, "--", SWAPS),
-        ("ls-files", "--others", "--exclude-standard", "-z", "--", SWAPS),
-    ):
-        r = _git(root, *args)
-        if r.returncode:
-            raise EvidenceError(f"git {args[0]} against {sha[:12]} failed")
-        rels |= {x for x in r.stdout.decode("utf-8", "replace").split("\0") if x}
+    rels = changed_paths(root, resolve_base(root, base), [SWAPS])
     return sorted(r for r in rels if r.endswith(_RECORD_SUFFIXES) and (root / r).exists())
 
 

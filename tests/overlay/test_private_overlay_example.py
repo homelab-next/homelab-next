@@ -479,6 +479,27 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
     assert "/.hnx-private-overlay.yml" in rules
     assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
     assert rules.get("/lab/modules.yml")  # the selection's scope and grants widen trust too
+    # the rest of what the lab trusts: hnx site review-tier rates every change to these human
+    for path in ("/lab/services.yml", "/lab/guests/", "/lab/modules/", "/lab/modules.lock"):
+        assert rules.get(path), path
+
+
+@pytest.mark.parametrize("workflow", ["checks.yml", "deploy.yml"])
+def test_every_pinned_checkout_refuses_an_hnx_the_change_carries(workflow):
+    """The pinned homelab-next is checked out to hnx/ and installed from there: each job first
+    fails when the overlay's own tree has an hnx/ (a file, a directory or a link)."""
+    doc = yaml.safe_load((SKELETON / ".github" / "workflows" / workflow).read_text())
+    pinned = 0
+    for name, job in doc["jobs"].items():
+        steps = job.get("steps") or []
+        for i, step in enumerate(steps):
+            if (step.get("with") or {}).get("path") != "hnx":
+                continue
+            pinned += 1
+            guard = steps[i - 1]
+            assert guard.get("name") == "refuse an hnx/ the change itself carries", name
+            assert "[ -e hnx ] || [ -L hnx ]" in guard["run"] and "exit 1" in guard["run"], name
+    assert pinned >= 1
 
 
 # ---- the vault password client -----------------------------------------------------------------

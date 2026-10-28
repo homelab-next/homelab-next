@@ -19,6 +19,13 @@
 # grants (hnx site review-tier, in checks.yml, rates each widening human-approve)
 /lab/site.yml                 @lab-owner-fake
 /lab/modules.yml              @lab-owner-fake
+# what the rest of the lab trusts (hnx site review-tier rates every change to these human-approve):
+# the registry every svc: allow renders to, the guests' zones, addresses and outbound allows, and
+# the overlay's own modules and the lock that pins the fetched ones
+/lab/services.yml             @lab-owner-fake
+/lab/guests/                  @lab-owner-fake
+/lab/modules/                 @lab-owner-fake
+/lab/modules.lock             @lab-owner-fake
 # what must be sealed, and to whom
 /.sops.yaml                   @lab-owner-fake
 /.hnx-private-overlay.yml     @lab-owner-fake

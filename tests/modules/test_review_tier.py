@@ -795,3 +795,31 @@ def test_the_step_summary_lists_each_path(repo, capsys, monkeypatch, tmp_path):
     _change(repo, lambda d: d.update(title="changed"))
     _run(repo, capsys)
     assert "| `modules/external-collector/module.yml` | owner | `title` |" in summary.read_text()
+
+
+def test_the_cli_output_is_the_one_it_had_before_the_report_moved(repo, capsys):
+    """Golden: the text and JSON of ``hnx modules review-tier`` are byte for byte what they
+    were before the reporting moved to ``review_tier.report`` (checked against that commit)."""
+    _change(repo, lambda d: d.update(egress=[{"from": "receiver", "to": "internet"}], title="x"))
+    assert mcli.main(["review-tier", "--root", str(repo), "--base", "HEAD"]) == 0
+    assert capsys.readouterr().out == (
+        "modules/external-collector/module.yml: human-approve (owners: @owner)\n"
+        "  human-approve: egress: egress is human-approve\n"
+        "  owner: title: title\n"
+        "hnx modules review-tier: 1 changed path(s), 1 human-approve, 0 problem(s)\n"
+    )
+    rc, out = _run(repo, capsys)
+    assert rc == 0 and out == {
+        "manifests": [
+            {
+                "path": "modules/external-collector/module.yml",
+                "tier": "human-approve",
+                "owners": ["@owner"],
+                "changes": [
+                    {"field": "egress", "tier": "human-approve", "why": "egress is human-approve"},
+                    {"field": "title", "tier": "owner", "why": "title"},
+                ],
+            }
+        ],
+        "problems": [],
+    }

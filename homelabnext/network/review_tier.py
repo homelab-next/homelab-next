@@ -1,19 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The review tier of a change to the lab's site and module selection (``hnx site review-tier``;
-docs/private-overlay.md, "What a change to the lab claims").
+"""The review tier of a change to the lab's site, its module selection and the other files that
+decide what the lab trusts (``hnx site review-tier``; docs/private-overlay.md, "What a change to
+the lab claims").
 
-A few site fields widen what the lab trusts or what a guest may reach.  A change that widens one
-needs a **human approve**; every other change, and every narrowing of one, needs only the
-**owner**.  The fields, each with the reason it is on the list (:data:`FIELDS`):
+The default is **human approve**: a change is **owner** only where this module says why it widens
+nothing.  That is the narrowing of a judged field (:data:`FIELDS`), or a change to one of the few
+fields listed as widening no reach (:data:`SITE_OWNER`, :data:`ZONE_OWNER`,
+:data:`SELECTION_OWNER`).  Every other changed key, of the site, a zone or the selection, is
+human-approve with its path.  The judged fields, each with the reason it is on the list:
 
 - ``delegated_prefixes6`` (site 1.5): a declared prefix is counted as the lab's by the model
   runtimes' lab-only rule, so declaring one is what lets a model runtime reach it.
 - ``zones`` (a new zone) and ``zones[].subnet`` / ``zones[].subnet6`` (a changed or added range):
   a zone's ranges are what every ``zone:`` firewall allow renders to and what the lab-only rule
   counts as the lab (a private subnet, a unique-local or delegated ``subnet6``).
-- ``zones[].egress``: ``internet`` turned to ``allow``, or ``one_way`` turned off.
-- ``firewall.zone_to_zone`` / ``firewall.service_exceptions``: an ``allow`` added or changed, or a
-  ``deny`` removed or changed.
+- ``zones[].egress``: ``internet`` turned to anything but ``deny``, ``one_way`` turned off, or any
+  other egress key changed.
+- ``firewall.zone_to_zone`` / ``firewall.service_exceptions``: an ``allow`` added or changed, a
+  ``deny`` removed or changed, and the service exceptions reordered (first match wins, in
+  document order; one rule per zone pair keeps ``zone_to_zone`` order free).
 - ``tailnet``: what the CI deploy's tailnet key may reach.
 - the selection's ``scope`` (``lab/modules.yml``): an address added to ``trusted`` (the lab
   itself, never an outsider; ``trusted.nets`` is the lab to the egress generator) or ``target``
@@ -21,10 +26,21 @@ needs a **human approve**; every other change, and every narrowing of one, needs
   part declared where it was absent (absent fails closed; ``[]`` excludes nothing).
 - the selection's ``grants``: any grant added (a grant is what lets a selected module reach the
   internet, publish, take shared config or a secret, run privileged units).
+- the rest of the selection (``hosts``, with their ``addresses`` and ``isolated``, ``slots``,
+  ``features``, ``core``, ``providers`` and their placements): any change but a host's
+  ``capacity``.
 
-Everything fails closed: a file new at the head, removed from it, unreadable at either end
-(not UTF-8 or YAML, a symbolic link, not a regular file, over the size cap), or a value of a
-listed field whose shape cannot be compared is human-approve.
+Files outside the site and selection decide what the lab trusts too, and each changed one is
+human-approve as a whole (:data:`TRUST_PATHS`): the registry (``lab/services.yml``, what a
+``svc:`` allow renders to), the guests (``lab/guests/``: a guest's zone, addresses and
+``outbound_allow``), and the overlay's own modules and lock (``lab/modules/``,
+``lab/modules.lock``), which ``hnx modules review-tier`` does not read (its roots are the
+repository's ``modules/`` and ``examples/modules/``).
+
+Everything fails closed: a file new at the head, removed from it, unreadable at either end (not
+UTF-8 or YAML, a symbolic link, not a regular file, over the size cap), sealed (a top-level
+``sops`` key: the values cannot be judged), with a mapping key that is not text, or a value of a
+judged field whose shape cannot be compared is human-approve.
 
 **What enforces the approval** is not this check.  Like ``hnx modules review-tier`` it reports
 every change with its tier and fails (exit 1) only when a human-approve change has **no valid
@@ -55,7 +71,11 @@ __all__ = [
     "HUMAN",
     "OWNER",
     "SELECTION",
+    "SELECTION_OWNER",
     "SITE",
+    "SITE_OWNER",
+    "TRUST_PATHS",
+    "ZONE_OWNER",
     "Change",
     "Result",
     "review",
@@ -76,14 +96,39 @@ FIELDS = {
     "zones": "a new zone is a new range every zone: allow and the lab-only rule count as the lab",
     "zones[].subnet": "the range a zone: allow renders to, and the lab to the lab-only rule",
     "zones[].subnet6": "the range a zone: allow renders to, and the lab to the lab-only rule",
-    "zones[].egress": "internet: allow, or one_way off, opens a zone outward",
+    "zones[].egress": "internet other than deny, one_way off, or another key opens a zone outward",
     "firewall.zone_to_zone": "an allow lets one zone reach another",
-    "firewall.service_exceptions": "an allow lets a zone reach a service",
+    "firewall.service_exceptions": "an allow lets a zone reach a service; first match wins",
     "tailnet": "what the CI deploy's tailnet key reaches",
     "scope.trusted": "the lab itself: never an outsider, and the lab to the egress generator",
     "scope.target": "what assessment tooling may touch",
     "scope.exclude": "the carve-outs every reader honours",
     "grants": "what a selected module may do beyond its own slot",
+    "selection": "hosts (addresses, isolated), slots, features, core and providers and their "
+    "placement decide what runs where and what it may reach",
+}
+#: the site's top-level keys that widen no reach, and why (every other changed key is human)
+SITE_OWNER = {
+    "site_version": "the schema version the file is written to",
+    "site": "the site's id, domain and timezone: names, not reach",
+    "edge": "the uplink chain's devices and their power: a description, not a rule",
+    "power": "the UPSes and a device's default power",
+}
+#: a zone's keys that widen no reach, and why (``dhcp.lease_hours`` too; every other is human)
+ZONE_OWNER = {
+    "purpose": "a description",
+    "tags": "labels no rule reads",
+}
+#: the selection's paths that widen no reach (``hosts.<host>.capacity``), and why
+SELECTION_OWNER = {"hosts.*.capacity": "the resources a host offers: a limit, not reach"}
+#: files and directories whose every change is human-approve as a whole, and why
+TRUST_PATHS = {
+    "lab/services.yml": "the registry: the hosts, addresses, ports and zones every svc: allow "
+    "and route renders to",
+    "lab/guests/": "a guest's zone, addresses, extra addresses and outbound_allow",
+    "lab/modules/": "the overlay's own modules (manifests, roles, units), which hnx modules "
+    "review-tier does not read",
+    "lab/modules.lock": "what each fetched module is pinned to",
 }
 _FIREWALL_LISTS = ("zone_to_zone", "service_exceptions")
 _TRUSTED = ("wan", "nets", "tooling")
@@ -91,7 +136,49 @@ _EXCLUDE = ("unattended_mutation", "offensive")
 
 
 def _canon(value: Any) -> str:
+    """A comparable text of a parsed document (its mapping keys are text: :func:`_odd_key`)."""
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def _odd_key(value: Any) -> bool:
+    """True when a mapping anywhere in ``value`` has a key that is not text (``1:``, ``no:``):
+    compared as text it could equal another key, so such a document is not judged."""
+    if isinstance(value, dict):
+        return any(not isinstance(k, str) or _odd_key(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_odd_key(v) for v in value)
+    return False
+
+
+def _diff(old: Any, new: Any, path: str) -> list[tuple[str, str]]:
+    """(path, how) for each difference of ``new`` from ``old``: a mapping key ``added``,
+    ``removed`` or ``changed`` below it; a list item ``added`` or ``removed`` (as a multiset), or
+    the list ``reordered``; a scalar ``changed``."""
+    if _canon(old) == _canon(new):
+        return []
+    if isinstance(old, dict) and isinstance(new, dict):
+        out: list[tuple[str, str]] = []
+        for k in sorted({*old, *new}):
+            sub = f"{path}.{k}"
+            if k not in old:
+                out.append((sub, "added"))
+            elif k not in new:
+                out.append((sub, "removed"))
+            else:
+                out += _diff(old[k], new[k], sub)
+        return out
+    if isinstance(old, list) and isinstance(new, list):
+        added, removed = _added_removed(old, new) or ([], [])
+        hows = ["added"] * len(added) + ["removed"] * len(removed)
+        return [(path, how) for how in dict.fromkeys(hows)] or [(path, "reordered")]
+    return [(path, "changed")]
+
+
+def _human(old: Any, new: Any, path: str, why: str) -> list[Change]:
+    return [Change(p, HUMAN, f"{how}: {why}") for p, how in _diff(old, new, path)]
+
+
+_DEFAULT = "a field not listed as widening no reach (only listed fields are owner)"
 
 
 def _shape(value: Any) -> str:
@@ -159,26 +246,62 @@ def _zones(old: Any, new: Any) -> list[Change]:
         changes.append(Change(f"zones.{zid}", OWNER, "a zone removed"))
     for zid in sorted(o.keys() & n.keys()):
         a, b = o[zid], n[zid]
+        where = f"zones.{zid}"
         for key in ("subnet", "subnet6"):
             if _canon(a.get(key)) == _canon(b.get(key)):
                 continue
             if b.get(key) is None:
-                changes.append(Change(f"zones.{zid}.{key}", OWNER, f"the zone's {key} removed"))
+                changes.append(Change(f"{where}.{key}", OWNER, f"the zone's {key} removed"))
             else:
-                changes.append(Change(f"zones.{zid}.{key}", HUMAN, FIELDS[f"zones[].{key}"]))
-        ea, eb = a.get("egress"), b.get("egress")
-        if _canon(ea) != _canon(eb):
-            if not isinstance(ea, dict) or not isinstance(eb, dict):
-                changes.append(_fail(f"zones.{zid}.egress", "not a mapping at both ends"))
-            elif (eb.get("internet") == "allow" and ea.get("internet") != "allow") or (
-                ea.get("one_way") is True and eb.get("one_way") is not True
-            ):
-                changes.append(Change(f"zones.{zid}.egress", HUMAN, FIELDS["zones[].egress"]))
+                changes.append(Change(f"{where}.{key}", HUMAN, FIELDS[f"zones[].{key}"]))
+        changes += _egress(a.get("egress"), b.get("egress"), f"{where}.egress")
+        da, db = a.get("dhcp"), b.get("dhcp")
+        if _canon(da) != _canon(db):
+            if not isinstance(da, dict) or not isinstance(db, dict):
+                changes += _human(da, db, f"{where}.dhcp", _DEFAULT)
             else:
-                changes.append(Change(f"zones.{zid}.egress", OWNER, "narrows the zone's egress"))
-        rest = {k for k in (*a, *b) if k not in ("id", "subnet", "subnet6", "egress")}
-        if any(_canon(a.get(k)) != _canon(b.get(k)) for k in rest):
-            changes.append(Change(f"zones.{zid}", OWNER, "a field that widens no reach"))
+                for k in sorted({*da, *db}):
+                    if _canon(da.get(k)) == _canon(db.get(k)):
+                        continue
+                    if k == "lease_hours":
+                        changes.append(Change(f"{where}.dhcp.lease_hours", OWNER, "a lease time"))
+                    else:
+                        changes += _human(da.get(k), db.get(k), f"{where}.dhcp.{k}", _DEFAULT)
+        rest = {k for k in (*a, *b) if k not in ("id", "subnet", "subnet6", "egress", "dhcp")}
+        for k in sorted(rest):
+            if _canon(a.get(k)) == _canon(b.get(k)):
+                continue
+            if k in ZONE_OWNER:
+                changes.append(Change(f"{where}.{k}", OWNER, ZONE_OWNER[k]))
+            else:
+                changes += _human(a.get(k), b.get(k), f"{where}.{k}", _DEFAULT)
+    return changes
+
+
+def _egress(old: Any, new: Any, where: str) -> list[Change]:
+    """``internet`` other than exactly ``deny`` widens (the schema's enum is only enforced where
+    the site is validated, and this check does not validate it), ``one_way`` off widens, any
+    other key changed widens; ``internet: deny`` and ``one_way`` on narrow."""
+    if _canon(old) == _canon(new):
+        return []
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return [_fail(where, "not a mapping at both ends")]
+    changes: list[Change] = []
+    for k in sorted({*old, *new}):
+        a, b = old.get(k), new.get(k)
+        if _canon(a) == _canon(b):
+            continue
+        if k == "internet":
+            wider = b != "deny"
+        elif k == "one_way":
+            wider = a is True and b is not True
+        else:
+            changes += _human(a, b, f"{where}.{k}", FIELDS["zones[].egress"])
+            continue
+        if wider:
+            changes.append(Change(where, HUMAN, FIELDS["zones[].egress"]))
+        else:
+            changes.append(Change(where, OWNER, "narrows the zone's egress"))
     return changes
 
 
@@ -195,6 +318,10 @@ def _firewall(old: Any, new: Any) -> list[Change]:
             changes.append(_fail(field, "not a list at both ends"))
             continue
         added, removed = diff
+        if key == "service_exceptions" and not added and not removed:
+            if _canon(o.get(key) or []) != _canon(n.get(key) or []):
+                changes.append(Change(field, HUMAN, "reordered: first match wins"))
+            continue
         for e in added:
             action = e.get("action") if isinstance(e, dict) else None
             if action == "deny":
@@ -221,6 +348,8 @@ def site_changes(old: Any, new: Any) -> list[Change]:
     n = {} if new is None else new
     if not isinstance(o, dict) or not isinstance(n, dict):
         return [_fail("site", f"not a mapping ({_shape(old)} to {_shape(new)})")]
+    if early := _unjudged("site", o, n):
+        return early
     changes: list[Change] = []
     diff = _added_removed(o.get("delegated_prefixes6"), n.get("delegated_prefixes6"))
     if diff is None:
@@ -239,25 +368,56 @@ def site_changes(old: Any, new: Any) -> list[Change]:
     judged = {"delegated_prefixes6", "zones", "firewall", "tailnet"}
     rest = sorted(k for k in {*o, *n} - judged if _canon(o.get(k)) != _canon(n.get(k)))
     for k in rest:
-        changes.append(Change(str(k), OWNER, "a field that widens no reach"))
+        if k in SITE_OWNER:
+            changes.append(Change(k, OWNER, SITE_OWNER[k]))
+        else:
+            changes += _human(o.get(k), n.get(k), k, _DEFAULT)
     return changes
+
+
+def _unjudged(name: str, o: dict, n: dict) -> list[Change]:
+    """A human-approve change when either end cannot be judged: sealed, or a key not text."""
+    if "sops" in o or "sops" in n:
+        return [_fail(name, "sealed: cannot judge")]
+    if _odd_key(o) or _odd_key(n):
+        return [_fail(name, "a mapping key that is not text")]
+    return []
 
 
 # ------------------------------------------------------------------------------- the selection
 
 
 def scope_changes(old: Any, new: Any) -> list[Change]:
-    """The tiered changes to the ``scope`` and ``grants`` of module selection ``old`` to ``new``
-    (None is an absent selection); the rest of a selection is the loader's to check."""
+    """The tiered changes from module selection ``old`` to ``new`` (None is an absent
+    selection): its ``scope`` and ``grants`` by their rules, every other key human-approve but a
+    host's ``capacity``."""
     o = {} if old is None else old
     n = {} if new is None else new
     if not isinstance(o, dict) or not isinstance(n, dict):
         return [_fail("selection", f"not a mapping ({_shape(old)} to {_shape(new)})")]
+    if early := _unjudged("selection", o, n):
+        return early
+    return _scope(o, n) + _grants(o, n) + _selection_rest(o, n)
+
+
+def _selection_rest(o: dict, n: dict) -> list[Change]:
+    changes: list[Change] = []
+    for k in sorted({*o, *n} - {"scope", "grants"}):
+        for path, how in _diff(o.get(k), n.get(k), k):
+            parts = path.split(".")
+            if len(parts) >= 3 and parts[0] == "hosts" and parts[2] == "capacity":
+                changes.append(Change(path, OWNER, SELECTION_OWNER["hosts.*.capacity"]))
+            else:
+                changes.append(Change(path, HUMAN, f"{how}: {FIELDS['selection']}"))
+    return changes
+
+
+def _scope(o: dict, n: dict) -> list[Change]:
     changes: list[Change] = []
     so = {} if o.get("scope") is None else o.get("scope")
     sn = {} if n.get("scope") is None else n.get("scope")
     if not isinstance(so, dict) or not isinstance(sn, dict):
-        return [_fail("scope", "not a mapping at both ends"), *_grants(o, n)]
+        return [_fail("scope", "not a mapping at both ends")]
     to = {} if so.get("trusted") is None else so.get("trusted")
     tn = {} if sn.get("trusted") is None else sn.get("trusted")
     if not isinstance(to, dict) or not isinstance(tn, dict):
@@ -317,7 +477,7 @@ def scope_changes(old: Any, new: Any) -> list[Change]:
     rest = {k for k in (*so, *sn) if k not in ("trusted", "target", "exclude")}
     if any(_canon(so.get(k)) != _canon(sn.get(k)) for k in rest):
         changes.append(_fail("scope", "a scope part this check does not judge"))
-    return changes + _grants(o, n)
+    return changes
 
 
 def _grants(o: dict, n: dict) -> list[Change]:
@@ -387,6 +547,9 @@ def review(
             changes = judge(old, new)
         if changes:
             results.append(Result(rel, changes))
+    for rel in se.changed_paths(root, sha, list(TRUST_PATHS)):
+        why = next(w for p, w in TRUST_PATHS.items() if rel == p or rel.startswith(p))
+        results.append(Result(rel, [Change(rel, HUMAN, f"changed: {why}")]))
     rules: list[tuple[str, list[str]]] = []
     owners_from = None
     for rel in rt.CODEOWNERS_PATHS:

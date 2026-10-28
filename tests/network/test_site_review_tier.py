@@ -119,9 +119,90 @@ def test_tailnet_is_human_and_a_field_that_widens_nothing_is_owner():
     doc["tailnet"]["deploy"]["zones"] = ["mgmt", "data", "compute"]
     assert tiers(rt.site_changes(SITE, doc)) == {"tailnet": rt.HUMAN}
     doc = copy.deepcopy(SITE)
-    doc["dns"]["policy"]["ttl_default"] = 600
-    doc["zones"][0]["vlan_id"] = 11
-    assert tiers(rt.site_changes(SITE, doc)) == {"dns": rt.OWNER, "zones.mgmt": rt.OWNER}
+    doc["site"]["timezone"] = "Europe/London"
+    doc["zones"][0]["purpose"] = "another description"
+    doc["zones"][0]["dhcp"]["lease_hours"] = 4
+    assert tiers(rt.site_changes(SITE, doc)) == {
+        "site": rt.OWNER,
+        "zones.mgmt.purpose": rt.OWNER,
+        "zones.mgmt.dhcp.lease_hours": rt.OWNER,
+    }
+
+
+def test_every_field_not_listed_as_widening_nothing_is_human():
+    """The default is human approve: a VLAN swap, a gateway, a zone's DNS or DHCP range, the
+    router, the switches' ports, the site's DNS and reservations, the adapters."""
+    edits = {
+        "zones.mgmt.vlan_id": lambda d: d["zones"][0].update(vlan_id=11),
+        "zones.mgmt.gateway": lambda d: d["zones"][0].update(gateway="192.0.2.2"),
+        "zones.mgmt.dns.resolvers": lambda d: (
+            d["zones"][0].setdefault("dns", {}).update(resolvers=["svc:other"])
+        ),
+        "zones.mgmt.dhcp.range": lambda d: d["zones"][0]["dhcp"].update(
+            range=["192.0.2.100", "192.0.2.200"]
+        ),
+        "zones.mgmt.egress.inter_zone": lambda d: d["zones"][0]["egress"].update(
+            inter_zone={"default": "allow"}
+        ),
+        "dns.policy.ttl_default": lambda d: d["dns"]["policy"].update(ttl_default=600),
+        "router.tls_pin": lambda d: d["router"].update(tls_pin="sha256/" + "A" * 43 + "="),
+        "adapters": lambda d: d.update(adapters={"network": "linux"}),
+        "dhcp_reservations": lambda d: d.update(dhcp_reservations=[]),
+        "switches": lambda d: d.update(switches=[]),
+        "unknown_key": lambda d: d.update(unknown_key=1),
+    }
+    for path, edit in edits.items():
+        doc = copy.deepcopy(SITE)
+        edit(doc)
+        t = tiers(rt.site_changes(SITE, doc))
+        assert any(f == path or f.startswith(path + ".") for f in t), (path, t)
+        assert set(t.values()) == {rt.HUMAN}, (path, t)
+
+
+def test_only_the_listed_keys_are_owner():
+    assert set(rt.SITE_OWNER) == {"site_version", "site", "edge", "power"}
+    assert set(rt.ZONE_OWNER) == {"purpose", "tags"}
+
+
+def test_internet_other_than_deny_opens_egress():
+    for value in ("Allow", "yes", True, None, "deny "):
+        doc = copy.deepcopy(SITE)
+        doc["zones"][0]["egress"]["internet"] = value
+        assert tiers(rt.site_changes(SITE, doc)) == {"zones.mgmt.egress": rt.HUMAN}, value
+    doc = copy.deepcopy(SITE)
+    doc["zones"][0]["egress"]["internet"] = "allow"
+    assert tiers(rt.site_changes(doc, SITE)) == {"zones.mgmt.egress": rt.OWNER}
+
+
+def test_service_exceptions_reordered_is_human_zone_to_zone_reordered_nothing():
+    base = copy.deepcopy(SITE)
+    base["firewall"]["service_exceptions"] = [
+        {"from": "zone:edge", "to": "svc:events", "action": "deny"},
+        {"from": "zone:edge", "to": "svc:events", "action": "allow", "ports": [443]},
+    ]
+    swapped = copy.deepcopy(base)
+    swapped["firewall"]["service_exceptions"].reverse()
+    (c,) = rt.site_changes(base, swapped)
+    assert (c.field, c.tier) == ("firewall.service_exceptions", rt.HUMAN)
+    assert "first match wins" in c.why
+    doc = copy.deepcopy(SITE)
+    doc["firewall"]["zone_to_zone"].reverse()
+    assert rt.site_changes(SITE, doc) == []
+
+
+def test_a_sealed_or_an_odd_keyed_document_is_human():
+    sealed = {**copy.deepcopy(SITE), "sops": {"version": "3.9"}}
+    (c,) = rt.site_changes(SITE, sealed)
+    assert c.tier == rt.HUMAN and "sealed" in c.why
+    (c,) = rt.scope_changes(_sel(SCOPE), {**_sel(SCOPE), "sops": {}})
+    assert c.tier == rt.HUMAN and "sealed" in c.why
+    odd = copy.deepcopy(SITE)
+    odd["power"] = {1: "a", "b": 2}  # mixed key types would not even sort
+    (c,) = rt.site_changes(SITE, odd)
+    assert c.tier == rt.HUMAN and "not text" in c.why
+    odd["power"] = {False: "a"}  # what an unquoted ``no:`` key parses to
+    (c,) = rt.site_changes(SITE, odd)
+    assert c.tier == rt.HUMAN and "not text" in c.why
 
 
 def test_a_shape_that_cannot_be_compared_is_human():
@@ -201,8 +282,34 @@ def test_a_grant_added_is_human_and_removed_owner():
         "grants.egress.collector.core": rt.HUMAN
     }
     assert tiers(rt.scope_changes(_sel(grants=after), _sel(grants=before))) == {"grants": rt.OWNER}
-    # the rest of a selection is the loader's
-    assert rt.scope_changes({"profile": "a"}, {"profile": "b"}) == []
+
+
+def test_the_rest_of_the_selection_is_human_but_a_hosts_capacity():
+    host = {"kind": "vm", "capacity": {"cpu": 2}, "addresses": ["192.0.2.40"], "isolated": True}
+    before = {"profile": "small-lab", "hosts": {"edge-1": host}}
+    t = tiers(rt.scope_changes(before, {"profile": "other", "hosts": {"edge-1": host}}))
+    assert t == {"profile": rt.HUMAN}
+    for edit, path in (
+        ({"addresses": ["192.0.2.40", "198.51.100.7"]}, "hosts.edge-1.addresses"),
+        ({"isolated": False}, "hosts.edge-1.isolated"),
+        ({"capacity": {"cpu": 8}}, "hosts.edge-1.capacity.cpu"),
+    ):
+        after = copy.deepcopy(before)
+        after["hosts"]["edge-1"].update(edit)
+        want = rt.OWNER if "capacity" in path else rt.HUMAN
+        assert tiers(rt.scope_changes(before, after)) == {path: want}
+    # isolated dropped is the default (not isolated): human too
+    after = copy.deepcopy(before)
+    del after["hosts"]["edge-1"]["isolated"]
+    assert tiers(rt.scope_changes(before, after)) == {"hosts.edge-1.isolated": rt.HUMAN}
+    slots = {"inference": [{"provider": "a", "instance": "x"}, {"provider": "b", "instance": "y"}]}
+    swapped = {
+        "inference": [{"provider": "a", "instance": "y"}, {"provider": "b", "instance": "x"}]
+    }
+    t = tiers(rt.scope_changes({**before, "slots": slots}, {**before, "slots": swapped}))
+    assert t == {"slots.inference": rt.HUMAN}  # a provider moved to another instance
+    t = tiers(rt.scope_changes(before, {**before, "features": {"collector": {"placement": {}}}}))
+    assert t == {"features": rt.HUMAN}
 
 
 # ---- the review, against a base read through git ---------------------------------------------
@@ -276,7 +383,7 @@ def test_owners_are_the_bases_not_the_changes(lab):
 def test_an_owner_change_alone_raises_no_problem_without_an_owner(lab):
     root, base = lab
     doc = _site()
-    doc["dns"]["policy"]["ttl_default"] = 600
+    doc["site"]["timezone"] = "Europe/London"
     _write(root, rt.SITE, doc)
     _write(root, ".github/CODEOWNERS", "")
     (r,), problems = rt.review(root, base)
@@ -402,3 +509,68 @@ def test_the_cli_takes_other_paths(lab):
     _write(root, "examples/site.yml", doc)
     code, out, _ = _run("--root", str(root), "--base", base, "--site", "examples/site.yml")
     assert code == 1 and "human-approve: tailnet" in out  # no owner for that path
+
+
+# ---- the other files that decide what the lab trusts ----------------------------------------
+
+
+def test_a_change_to_the_registry_guests_or_the_overlays_modules_is_human(lab):
+    root, base = lab
+    for rel in ("lab/services.yml", "lab/guests/edge-1.yml", "lab/modules/m/module.yml"):
+        _write(root, rel, {"x": 1})
+    _write(root, "lab/modules.lock", "{}\n")
+    _write(root, "lab/registers/r.yml", {"x": 1})  # not a trust path
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "the trust files")
+    base = _git(root, "rev-parse", "HEAD")
+    assert rt.review(root, base) == ([], [])
+    _write(root, "lab/services.yml", {"x": 2})
+    _write(root, "lab/guests/edge-2.yml", {"x": 1})  # untracked counts
+    (root / "lab/modules/m/module.yml").unlink()  # a removal counts
+    _write(root, "lab/modules.lock", "{ }\n")
+    _write(root, "lab/registers/r.yml", {"x": 2})
+    results, problems = rt.review(root, base)
+    assert {r.path: r.tier for r in results} == {
+        "lab/services.yml": rt.HUMAN,
+        "lab/guests/edge-2.yml": rt.HUMAN,
+        "lab/modules/m/module.yml": rt.HUMAN,
+        "lab/modules.lock": rt.HUMAN,
+    }
+    # CODEOWNERS (the fixture's) names none of them: each is a problem
+    assert len(problems) == 4
+    # lab/modules.yml is judged by its fields, not as a trust path
+    assert not any(r.path == rt.SELECTION for r in results)
+
+
+def test_a_root_commit_lists_every_trust_path(lab):
+    root, _ = lab
+    _write(root, "lab/guests/edge-1.yml", {"x": 1})
+    results, _ = rt.review(root, None)
+    assert "lab/guests/edge-1.yml" in {r.path for r in results}
+
+
+def test_the_real_reader_refuses_an_alias_and_a_duplicate_and_expands_a_merge_key(lab):
+    root, base = lab
+    text = yaml.safe_dump(SITE)
+    _write(root, rt.SITE, "x: &a 1\ny: *a\n")
+    (r,), _ = rt.review(root, base)
+    assert r.tier == rt.HUMAN and "fail closed" in r.changes[0].why
+    _write(root, rt.SITE, text + "tailnet: {}\n")  # a second tailnet key
+    (r,), _ = rt.review(root, base)
+    assert r.tier == rt.HUMAN and "fail closed" in r.changes[0].why
+    doc = yaml.safe_load(text)
+    mgmt = next(z for z in doc["zones"] if z["id"] == "mgmt")
+    del mgmt["egress"]
+    merged = yaml.safe_dump(doc).replace(
+        "  id: mgmt\n", "  id: mgmt\n  egress:\n    <<: {internet: allow}\n", 1
+    )
+    assert "<<:" in merged
+    _write(root, rt.SITE, merged)
+    (r,), _ = rt.review(root, base)
+    assert {c.field: c.tier for c in r.changes}.get("zones.mgmt.egress") == rt.HUMAN
+
+
+def test_a_path_outside_the_root_is_human(lab):
+    root, base = lab
+    (r,), _ = rt.review(root, base, site="../x.yml")
+    assert r.tier == rt.HUMAN and "fail closed" in r.changes[0].why
