@@ -1181,7 +1181,10 @@ so does the one that writes the answer. `gather` checks each name again; every o
 client registers when it starts; an absent file registers nothing, and the gather says so. A name
 that is not an inventory name, or a file that does not parse, fails the census, for the whole
 fleet: one host's stray name stops it. `mcp_servers` is gathered when at least one host lists a
-configuration and stays in `not_gathered` otherwise.
+configuration and stays in `not_gathered` otherwise. The names themselves are only checked for
+shape, so a secret pasted where a server name belongs (lower case, digits and hyphens pass) comes
+back like any name; a name over 24 characters that is no one's, or that is not an inventory name,
+is printed as its first 12 characters and its length, never whole.
 
 The loader matches each registered name back to its catalog record by the record's instance
 template (`instance:`, default `{id}`: `{id}` is the record's id and every other placeholder one

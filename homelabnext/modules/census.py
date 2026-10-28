@@ -222,7 +222,7 @@ def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
         for name in servers:
             if not isinstance(name, str) or len(name) > 64 or not NAME_RE.fullmatch(name):
                 raise CensusError(
-                    f"{host}: {ld._shown(path)}: server {ld._shown(name)} is not an inventory name"
+                    f"{host}: {ld._shown(path)}: server {ld._clipped(name)} is not an inventory name"
                 )
             names.add(name)
     return names, notes

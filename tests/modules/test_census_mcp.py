@@ -121,6 +121,14 @@ def test_a_configuration_the_host_reports_malformed_fails_the_census(tmp_path, c
         census.gather(write(tmp_path / "c", {"a": configs}))
 
 
+def test_a_long_name_that_is_not_an_inventory_name_is_not_echoed_in_full(tmp_path):
+    token = "GHP" + "q7" * 20  # what a secret pasted where a server name belongs looks like
+    with pytest.raises(census.CensusError) as err:
+        census.gather(write(tmp_path / "c", {"a": [cfg("/a", "claude-code", [token])]}))
+    assert token not in str(err.value)
+    assert f"{token[:12]}... ({len(token)} chars)" in str(err.value)
+
+
 def test_an_answer_with_an_unknown_key_still_fails(tmp_path):
     d = write(tmp_path / "c", {"a": None})
     doc = json.loads((d / "a.json").read_text())
@@ -312,3 +320,23 @@ def test_a_template_that_begins_with_another_placeholder_is_refused(tmp_path):
         mcp=[("lead.yml", {"id": "lead", "instance": "{profile}-lead"})],
     )
     assert any("begins with a placeholder other than {id}" in str(p) for p in found), found
+
+
+def test_a_long_name_that_is_no_ones_is_shown_clipped(tmp_path):
+    # a secret pasted as a server name passes the name shape: the problem shows its first 12
+    # characters and its length, never all of it
+    tree, root = tree_with(tmp_path, None)
+    core, _ = ld.core_names(
+        ld.load_yaml(ROOT / "examples" / "services.yml"),
+        mcp=[("hnx-broker.yml", {"id": "hnx-broker"})],
+    )
+    token = "ghp-" + "q7" * 20
+    inv = copy.deepcopy(INVENTORY)
+    inv["mcp_servers"] = [PROBE, token, "short-rogue"]
+    out = check(tree, root, inv, core)
+    assert out == [
+        f"running: mcp_servers {token[:12]}... ({len(token)} chars) runs but is no module's or "
+        "the core's",
+        "running: mcp_servers short-rogue runs but is no module's or the core's",
+    ]
+    assert all(token not in line for line in out)

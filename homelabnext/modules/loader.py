@@ -139,6 +139,15 @@ def _shown(text: str) -> str:
     return s if plain and s.isascii() else repr(s)
 
 
+def _clipped(name: str, keep: int = 12, longest: int = 24) -> str:
+    """An MCP server name a host reported that is bound to no module, as it is printed: it may be
+    a secret pasted where a name belongs (it passes the name shape), so one over ``longest``
+    characters shows only its first ``keep`` and its length.  A name bound to a module begins with
+    the module's id and is printed whole."""
+    s = str(name)
+    return _shown(s) if len(s) <= longest else f"{_shown(s[:keep])}... ({len(s)} chars)"
+
+
 @dataclass(frozen=True, order=True)
 class Problem:
     where: str  # a module id, ``site``, ``lock``, ``running``, ``registry`` or a file
@@ -1068,7 +1077,7 @@ def _running_mcp(
             continue
         if owner is None:
             if core is not None and core.mcp_known and not core.is_mcp(name):
-                why = f"mcp_servers {name} runs but is no module's or the core's"
+                why = f"mcp_servers {_clipped(name)} runs but is no module's or the core's"
                 out.append(Problem("running", why))
             continue
         if owner not in sel:
