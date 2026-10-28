@@ -456,10 +456,15 @@ generator never counts as the internet, and `isolated`), the `slots`, `features`
 
 Every change to these files is human-approve as a whole: the registry `lab/services.yml` (the
 hosts, addresses, ports and zones every `svc:` allow and route renders to), anything under
-`lab/guests/` (a guest's zone, addresses and `outbound_allow`), and the overlay's own modules
+`lab/guests/` (a guest's zone, addresses and `outbound_allow`), the overlay's own modules
 under `lab/modules/` and `lab/modules.lock` (which `hnx modules review-tier` does not read: its
-roots are the repository's `modules/` and `examples/modules/`). The `CODEOWNERS` template names
-all of them.
+roots are the repository's `modules/` and `examples/modules/`), and the model role table
+`lab/model_roles.json` with the swap records under `lab/swaps/` (a binding's `leaves_lab` and a
+role's `fallback` decide which modules need `grants.cloud_models`, and no pin shows them; the
+overlay's swap gate is `hnx modules swap-gate --root`, see [modules.md](modules.md)), and what
+vouches for a model a swap rebinds to (`lab/model-serving/model_store.json`,
+`lab/model_roles.eval.json` and `lab/model-evals/`, as the module tier rates the repository's).
+The `CODEOWNERS` template names all of them.
 
 A file new at the head or removed from it, one that does not read at either end (not YAML, an
 alias or a duplicate key, a symbolic link, not a regular file, over the size cap), a sealed one (a

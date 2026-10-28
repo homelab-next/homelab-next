@@ -395,7 +395,9 @@ change is **human-approve** when it reaches anything the table gives an approver
 module's owner (`credentials`, `control_plane`, `egress`, `data`, `lifecycle`, `interfaces`, an
 agent (its definition, or `needs` that grow), roles, entry points, fleet units, service rows, MCP
 records, `shared_config`, preflight hooks and workflow packs, a privileged slot it provides,
-requires, prefers or falls back to), or the module's `id`, `kind` or `origin`; a file in the module
+requires, prefers or falls back to, `requires.hosts` (which host roles its roles run on as root,
+and their exposure and footprint) and `requires.scope` (the scope parts it may act on)), or the
+module's `id`, `kind` or `origin`; a file in the module
 takes the tier of the contributions that name it (directly or as a directory above it) **in the base
 manifest**, and a file no contribution names there (code, an adapter) is human-approve. A file new
 in the pull request is human-approve unless the base names a directory above it; the head's
@@ -412,7 +414,12 @@ union of the base's and the head's privileged slots, so neither side can drop on
 CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
 human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
-the evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist until a first vetting change adds a report) and the golden suites; see "Swap record 1.2").
+the evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not
+exist until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"),
+and so is a change to the model role table (`examples/model_roles.json`) or to a swap record
+(`examples/swaps/`): `leaves_lab` and `fallback` are in no pin, yet they decide which modules need
+`grants.cloud_models`. The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
+`hnx site review-tier` ([private-overlay.md](private-overlay.md)).
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
 the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;
@@ -604,8 +611,13 @@ role's chain, which accepts:
 - with `internet`, global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
   so the role resolves through the lab's resolvers): every special-purpose range (private, shared, loopback,
   link-local, documentation, benchmarking, multicast, reserved, NAT64 and the other
-  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader) and every
-  host's `addresses` are never the internet.
+  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader), every
+  host's `addresses` and, when `hnx modules render --network FILE` (or `egress.render(...,
+  network=)`) gives the network model, every zone's `subnet6` and every `delegated_prefixes6`
+  prefix are never the internet. Over IPv6 the accept also requires `2000::/3`, so nothing
+  outside global unicast passes whatever the deny-list holds. **Without the network model**
+  a lab IPv6 address in none of those lists (a guest's SLAAC address, say) is treated as the
+  internet: the render prints a note and the generated README says so.
 
 It logs and drops the rest; an `isolated` role reaches nothing, and any other socket in
 `hnx.slice` is dropped. Hosts carry their own `addresses` in the selection
@@ -930,8 +942,8 @@ names, ids) are printed quoted and escaped when they are not plain identifiers, 
 carry a terminal escape, a line break or a CI workflow command. Whatever the loader did not check
 (no site, no inventory, the kinds below it does not validate) and every input it took from the
 repository's examples instead of the overlay (the role table, the core registry, an empty
-public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE --out
-DIR` writes the footprint limits and the egress policy, only for a site that checks clean and
+public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE [--network
+FILE] --out DIR` writes the footprint limits and the egress policy, only for a site that checks clean and
 only into a new or empty directory (stale files from an earlier render never mix in; a file
 there is a usage error); with `--json`, a generator's refusal is the output's `error`. The rules
 (`homelabnext/modules/rules.py`):
@@ -1455,7 +1467,20 @@ and `meaning_changes` is recorded, never checked.
   `examples/swaps/` (`swap_evidence.SWAPS`; the directory does not exist yet, the first role-table change creates it; JSON or YAML; untracked ones count, a record already on the base does not)
   must cover it: each must validate and its `model_roles` legs must hold against the base's
   evidence, live required, which also means a leg for every role the change rebinds. An unchanged
-  table passes. The module, site and migration rules are `swap-check`'s, which needs a site. A
+  table passes.
+
+  **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
+  version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
+  require `grants.cloud_models`), a role's `fallback` (which it follows) or any other field. The
+  gate therefore also compares each role both tables have field by field, pins aside (the role's
+  own keys, and the keys each binding carries beside its pin). Every role that differs that way
+  must be named in the new optional **`model_role_changes`** of a record in the change (`mdl:<role>`
+  aliases; schema `platform/module_swap`); a record that rebinds or names other roles covers
+  nothing for it, and a name whose role did not change is refused. A role with both a rebind and
+  such a change needs its leg and its name. Names are not checked by `swap-check` (it sees no
+  second table), only by the gate. Any role field counts (a `description` too), since the gate
+  cannot tell which fields a future rule reads. A role present in only one table is refused as
+  before. The module, site and migration rules are `swap-check`'s, which needs a site. A
   rebind within one provider module has no record type of its own, so for now any change to the
   example role table goes through a swap record.
 

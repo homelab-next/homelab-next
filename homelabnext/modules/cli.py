@@ -33,10 +33,14 @@ checks").
     ``FILE`` (a plain name in ``/etc/homelabnext``, owner only, the caller's own) is sent to that
     address alone and never printed.  Exit 2 when the catalog cannot be listed; the error names
     the request and its HTTP status, never what the catalog answered.
-``hnx modules render --site FILE --out DIR [...]``
+``hnx modules render --site FILE [--network FILE] --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
-    empty: a render never mixes with stale files from an earlier one.
+    empty: a render never mixes with stale files from an earlier one.  ``--network`` is the
+    network model (``site.yml``): its zone ``subnet6`` and ``delegated_prefixes6`` prefixes are
+    then never the internet for a role with ``internet``; without it the render prints a note
+    that a lab IPv6 address outside the listed host addresses and ``scope.trusted.nets`` is
+    treated as the internet.
 
 ``hnx modules review-tier --base REV | --ci-base [--json]``
     the review tier of every module path the working tree changes against the base
@@ -67,7 +71,8 @@ checks").
 For ``check`` and ``render``, defaults follow the overlay layout: with ``--overlay DIR`` the site
 is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
 ``DIR/lab/review-policy.yml``, the role table ``DIR/lab/model_roles.json``, the core registry
-``DIR/lab/services.yml`` when they exist, otherwise the repository's examples
+``DIR/lab/services.yml`` and, for ``render``, the network model ``DIR/lab/site.yml`` when they
+exist, otherwise the repository's examples
 (``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.
 The core's own names (:class:`homelabnext.modules.loader.CoreNames`) are read from the registry,
 the MCP catalog, the keyring's agent principals, the OCSF tables and the core's notify pairs.
@@ -253,6 +258,12 @@ def _parser() -> argparse.ArgumentParser:
                 help="the deploy's check: the overlay's own inputs only, never the examples",
             )
         else:
+            p.add_argument(
+                "--network",
+                type=Path,
+                help="the network model (site.yml): its zone subnet6 and delegated_prefixes6 "
+                "prefixes are never the internet for egress",
+            )
             p.add_argument("--out", type=Path, required=True, help="a new or empty directory")
     c = sub.add_parser("gather", help="the inventory of what runs, from the hosts' census")
     c.add_argument("census", type=Path, help="the directory the module_census role wrote")
@@ -499,6 +510,7 @@ def _run(args: argparse.Namespace) -> int:
     ):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
+    _given(getattr(args, "network", None), "--network")
     if args.cmd == "render" and (args.out.exists() or args.out.is_symlink()):
         if not args.out.is_dir() or args.out.is_symlink():
             raise ld.LoaderError(f"--out {args.out}: not a directory")
@@ -578,6 +590,21 @@ def _run(args: argparse.Namespace) -> int:
             "in-tree modules load"
         )
     site = _read(site_path, "site selection", budget) if site_path else None
+    network = None
+    if args.cmd == "render":
+        # the overlay's own network model by default, as the role table and registry are
+        network_path = args.network or _existing(lab and lab / "site.yml")
+        if network_path is not None:
+            network = _read(network_path, "network model", budget)
+            if not isinstance(network, dict):
+                raise ld.LoaderError("the network model is not a mapping")
+        else:
+            notes.append(
+                "no network model (--network, or --overlay with lab/site.yml): the egress "
+                "policy cannot exclude the lab's IPv6 "
+                "zone and delegated prefixes, so a lab IPv6 address outside the listed host "
+                "addresses and scope.trusted.nets is treated as the internet"
+            )
     if args.cmd == "render" and site is None:
         raise ld.LoaderError(
             "render needs a site selection (--site, or --overlay with lab/modules.yml)"
@@ -604,7 +631,7 @@ def _run(args: argparse.Namespace) -> int:
     written: dict[str, int] = {}
     error = None
     if not found and args.cmd == "render":
-        written, error = _render(args, tree, site)
+        written, error = _render(args, tree, site, network)
     if args.json:
         doc = {"problems": [str(p) for p in found], "notes": notes, "modules": len(tree.mods)}
         if args.cmd == "render":
@@ -631,7 +658,7 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _render(
-    args: argparse.Namespace, tree: ld.Tree, site: dict
+    args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
     from homelabnext.modules import egress, limits
@@ -639,7 +666,7 @@ def _render(
     ins = ld.inputs(tree)
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
-        egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins))
+        egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
     except (limits.LimitsError, egress.EgressError) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
