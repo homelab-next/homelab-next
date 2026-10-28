@@ -251,6 +251,8 @@ def test_only_the_names_leave_the_host_never_a_secret(mod, tmp_path):
         ("hermes", "mcp_servers: &a {x: 1}\nmore: *a\n", "does not parse"),
         ("hermes", "mcp_servers: {a: 1, a: 2}\n", "does not parse"),
         ("hermes", "mcp_servers: [a]\n", "mcp_servers is not a mapping"),
+        # a complex key (a sequence as a mapping key) cannot be hashed: a refusal, not a crash
+        ("hermes", "mcp_servers:\n  ? [secret-a, secret-b]\n  : 1\n", "does not parse"),
     ],
 )
 def test_a_configuration_is_parsed_strictly(mod, client, text, why):
@@ -258,6 +260,7 @@ def test_a_configuration_is_parsed_strictly(mod, client, text, why):
         mod.server_names(text, client, "/p")
     # a message names the path and a reason, never the text
     assert str(err.value).startswith("/p") and "NaN" not in str(err.value)
+    assert "secret" not in str(err.value)
 
 
 def test_too_many_servers_are_refused(mod):

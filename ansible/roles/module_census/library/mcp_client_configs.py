@@ -222,7 +222,8 @@ def server_names(text: str, client: str, path: str) -> list[str]:
                 raise Refused(f"{path} does not parse ({type(exc).__name__})") from None
         else:
             doc = json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
-    except (ValueError, RecursionError) as exc:
+    # TypeError: a complex key (a sequence or mapping as a key) cannot be hashed
+    except (ValueError, TypeError, RecursionError) as exc:
         why = "nested too deeply" if isinstance(exc, RecursionError) else type(exc).__name__
         raise Refused(f"{path} does not parse ({why})") from None
     key = SERVERS_KEY[client]
