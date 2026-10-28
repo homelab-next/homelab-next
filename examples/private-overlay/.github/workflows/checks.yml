@@ -38,6 +38,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
       - name: homelab-next at the pinned commit (the check and the secret patterns)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -80,6 +87,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
       - name: homelab-next at the pinned commit (the loader)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -101,3 +115,58 @@ jobs:
 
       - name: the module loader over this lab's own selection
         run: hnx modules check --root hnx --overlay . --deploy
+
+  # The review tier of a change to what the lab claims (docs/private-overlay.md, "What a change to
+  # the lab claims"): every change to the site, the selection, the registry, the guests and the
+  # overlay's modules is human-approve but those the check knows widen nothing.  Each needs a code
+  # owner as of the pull request's base (CODEOWNERS names every one of those files);
+  # the approval itself is that code-owner review, which binds only where main's branch rules
+  # require it.  hnx is the pinned commit, the base is read through git, no secret.
+  site-review-tier:
+    name: site review tier
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: refuse an unpinned hnx
+        env:
+          HNX_REF: ${{ vars.HNX_REF }}
+        run: |
+          set -euo pipefail
+          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # the base commit
+          persist-credentials: false
+
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
+      - name: homelab-next at the pinned commit (the check)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ vars.HNX_REF }}
+          path: hnx
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: hnx, hash-pinned bootstrap
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
+          python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML jsonschema referencing setuptools
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
+
+      - name: the review tier of this change to the lab's site and selection
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: hnx site review-tier --root . --ci-base

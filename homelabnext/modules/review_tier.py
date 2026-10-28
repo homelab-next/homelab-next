@@ -27,8 +27,10 @@ authenticates a reviewer.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,7 @@ __all__ = [
     "codeowners_for",
     "parse_codeowners",
     "privileged_slots",
+    "report",
     "review",
     "schema_keys",
     "tier_of",
@@ -100,6 +103,7 @@ GOVERNANCE = (
     SCHEMA,
     *CODEOWNERS_PATHS,
     "homelabnext/modules/review_tier.py",
+    "homelabnext/network/review_tier.py",  # the site's review tier, which the overlay runs
     "homelabnext/gitbase.py",  # the base rule --ci-base takes
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
@@ -700,3 +704,51 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
             )
         out.append(r)
     return out, problems
+
+
+def report(
+    results: list[Result],
+    problems: list[str],
+    *,
+    as_json: bool,
+    prog: str,
+    key: str,
+    title: str,
+    out=None,
+) -> int:
+    """Print each result's tier and fields (``key`` names the list in ``--json``), append a table
+    to the step summary when CI gives one, and return the exit: 1 when there are problems."""
+    out = out or sys.stdout
+    rows = [
+        {
+            "path": r.path,
+            "tier": r.tier,
+            "owners": r.owners,
+            "changes": [{"field": c.field, "tier": c.tier, "why": c.why} for c in r.changes],
+        }
+        for r in results
+    ]
+    if as_json:
+        print(json.dumps({key: rows, "problems": problems}, indent=2), file=out)
+    else:
+        for r in rows:
+            print(f"{r['path']}: {r['tier']} (owners: {' '.join(r['owners']) or 'none'})", file=out)
+            for c in r["changes"]:
+                print(f"  {c['tier']}: {c['field']}: {c['why']}", file=out)
+        for p in problems:
+            print(p, file=out)
+        human = sum(r["tier"] == HUMAN for r in rows)
+        print(
+            f"{prog}: {len(rows)} changed path(s), {human} human-approve, {len(problems)} problem(s)",
+            file=out,
+        )
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary and rows:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(f"### {title}\n\n| path | tier | fields |\n|---|---|---|\n")
+            for r in rows:
+                fields = ", ".join(
+                    f"`{c['field']}`" for c in r["changes"] if c["tier"] == r["tier"]
+                )
+                fh.write(f"| `{r['path']}` | {r['tier']} | {fields} |\n")
+    return 1 if problems else 0
