@@ -9,3 +9,4 @@ log_level_in: nolog
 [RULES]
 IN ACCEPT -p tcp -dport 443 -log nolog # https-public
 IN ACCEPT -p tcp -dport 22 -source 192.0.2.0/24 -log nolog # ssh-mgmt
+IN ACCEPT -p tcp -dport 22 -source 2001:db8:0:10::/64 -log nolog # ssh-mgmt

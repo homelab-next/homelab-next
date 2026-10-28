@@ -180,9 +180,15 @@ assignments `2001::/23`: benchmarking, ORCHID, AMT, Teredo and the rest) or docu
 discard-only, deprecated site-local and any other special-purpose range is refused. Two zones'
 prefixes may not overlap.
 
-Nothing is configured from it yet: the router and switch adapters, the guests' firewall renders
-(`zone:` references) and the egress policy still speak IPv4 only, so a `zone:` allow does not
-reach the zone's IPv6 hosts (an allow that is missing, never one too wide).
+A guest firewall rule that names the zone (`zone:<id>`) reaches its IPv6 hosts by it: the
+`.fw` file and the inventory's `hnx_firewall` carry the rule once per address family (the IPv6
+one as `ip6` in the guest's own nftables ruleset, an ICMP allow as ICMPv6), and egress validation
+judges the prefix as it judges an IPv4 subnet: a unique-local or documentation prefix is the
+lab's, a global-unicast one reaches the internet, so a model runtime (whose egress is lab-only)
+may not allow it ([compute model](compute-model.md#firewall-on-by-default)); an opt-in for an
+owned, delegated global prefix is a follow-up. Other guests' rules render either kind. A rule that names a zone whose
+`subnet6` does not read is refused. Nothing else is configured from it yet: the router and switch
+adapters still speak IPv4 only.
 
 ### One-way zones
 

@@ -16,6 +16,7 @@ hnx_firewall:
   inbound_allow:
     - {name: "https-public", proto: "tcp", ports: "443", source: "any"}
     - {name: "ssh-mgmt", proto: "tcp", ports: "22", source: "192.0.2.0/24"}
+    - {name: "ssh-mgmt", proto: "tcp", ports: "22", source: "2001:db8:0:10::/64"}
   outbound_allow: []
 hnx_baselines: ["base", "server", "exposed"]
 hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan", "backup-verify", "network-sensor", "remote-access"]

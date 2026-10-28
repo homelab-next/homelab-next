@@ -591,8 +591,13 @@ FIREWALL = {
         {"name": "query-api", "proto": "tcp", "ports": "8443:8444", "source": "198.51.100.128/25"},
         {"name": "ping", "proto": "icmp", "source": "192.0.2.0/24"},
         {"name": "https-public", "proto": "tcp", "ports": "443", "source": "any"},
+        # a zone with a subnet6 (site 1.4): the inventory carries the rule once per family
+        {"name": "ping", "proto": "icmp", "source": "2001:db8:0:10::/64"},
     ],
-    "outbound_allow": [{"name": "dns", "proto": "udp", "ports": "53", "dest": "192.0.2.0/26"}],
+    "outbound_allow": [
+        {"name": "dns", "proto": "udp", "ports": "53", "dest": "192.0.2.0/26"},
+        {"name": "dns", "proto": "udp", "ports": "53", "dest": "2001:db8:0:10::/64"},
+    ],
 }
 
 
@@ -635,6 +640,13 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(first):
         in text
     )
     assert 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"' in text
+    # the zone's IPv6 prefix: ip6, and ICMP as ICMPv6, never an IPv4 match on an IPv6 address
+    assert 'ip6 saddr 2001:db8:0:10::/64 meta l4proto ipv6-icmp accept comment "ping"' in text
+    out = text.split("chain output {", 1)[1]
+    assert 'ip6 daddr 2001:db8:0:10::/64 udp dport 53 accept comment "dns"' in out
+    # the metadata refusal still comes first, IPv6 included, ahead of the IPv6 allow
+    refused = "ip6 daddr { fd00:ec2::254 } drop"  # scrub-allow: cloud metadata, refused
+    assert out.index(refused) < out.index("ip6 daddr 2001:db8:0:10::/64")
     assert text.rstrip().endswith(
         'log prefix "hnx-egress-drop: " level warn\n'
         "\t\treject with icmpx type admin-prohibited\n\t}\n}"
@@ -810,6 +822,7 @@ def test_nftables_host_holds_forwarded_traffic_to_the_outbound_allows(first):
         'accept comment "homelabnext-bridge-local"'
     )
     assert lines[8] == 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"'
+    assert lines[9] == 'ip6 daddr 2001:db8:0:10::/64 udp dport 53 accept comment "dns"'
     assert lines[-1] == "reject with icmpx type admin-prohibited"
     assert forward_verdict(fwd, "203.0.113.10") == "drop"
     assert forward_verdict(fwd, "169.254.169.254") == "drop"  # scrub-allow: cloud metadata, refused
@@ -893,6 +906,30 @@ def _first(tmp_path):
                     "outbound_allow": [{"name": "x", "proto": "udp", "ports": "53"}],
                 }
             },
+            # a rule address is any, an IPv4 CIDR or a well-formed IPv6 prefix (/48 to /64):
+            # nothing wider, odder or written otherwise, and nothing that is neither family
+            *(
+                {
+                    "nftables_host_firewall": {
+                        **FIREWALL,
+                        "outbound_allow": [
+                            {"name": "x", "proto": "udp", "ports": "53", "dest": bad}
+                        ],
+                    }
+                }
+                for bad in (
+                    "2001:db8::/32",
+                    "2001:DB8:0:10::/64",
+                    "2001:db8:0:10:0::/64",
+                    "fe80::/64",
+                    "2001:db8:0:10::/64 accept",
+                    "2001:db8:0:10::/64%eth0",
+                    "::ffff:192.0.2.0/120",
+                    "10/8",
+                    "abc/8",
+                    "ff/0",
+                )
+            ),
         ],
     }
 

@@ -242,7 +242,7 @@ network:
   firewall: enabled              # the default; spelled out here for clarity
 firewall_rules:
   inbound_allow:
-    - {name: query-api, proto: tcp, ports: "8443", source: "zone:compute"}   # zone id -> its subnet
+    - {name: query-api, proto: tcp, ports: "8443", source: "zone:compute"}   # zone id -> its subnet(s)
     - {name: ssh-admin, proto: tcp, ports: "22",   source: "192.0.2.0/24"}   # or a CIDR
     - {name: ping,      proto: icmp,               source: any}
 ```
@@ -251,7 +251,12 @@ firewall_rules:
 `<vmid>.fw` because that is the name the hypervisor reads from `/etc/pve/firewall/` (a file named
 after the guest is ignored): `policy_in: DROP`, the outbound policy, then exactly the allow rules
 above in file order. A guest with no rules gets the policies and nothing else; silence is never an
-implicit allow.
+implicit allow. A `zone:` source or destination is the zone's IPv4 `subnet` and, where the zone
+has one (site 1.4), its IPv6 `subnet6`: the rule is then two lines, the IPv6 one right after the
+IPv4 one (an ICMP allow as `ipv6-icmp` there), and the inventory's `hnx_firewall` two rows of the
+same name, which the guest's own nftables ruleset writes as `ip` and `ip6` matches. A CIDR is one
+line as written, and `any` names no address in either family, prefix or not. A rule naming a zone
+whose `subnet6` does not read (`hnx site validate`'s rule) is refused, never rendered without it.
 
 Egress is `policy_out: ACCEPT` unless the guest asks for default-deny (1.2):
 
@@ -326,7 +331,11 @@ What is enforced:
   physical `host`) whose `policy_out` is `ACCEPT` (the table above), and refuses an `outbound_allow` whose `dest`
   reaches the internet: `any`, a `/0`, or any network not inside the never-internet ranges
   (`homelabnext.modules.egress.NOT_INTERNET`), a `zone:` destination judged by its subnet in the
-  site model. No guest's `outbound_allow` may hold a cloud metadata address either, since the
+  site model and its IPv6 `subnet6` alike: a unique-local or documentation prefix is the lab's,
+  while a global-unicast one reaches the internet, as an IPv4 zone subnet in public space does
+  (nothing proves the site owns it, and a typo or a copied prefix would otherwise open a model
+  runtime's egress to third-party space). An explicit opt-in for an owned, ISP-delegated global
+  prefix (a site-level delegated prefix) is a follow-up. No guest's `outbound_allow` may hold a cloud metadata address either, since the
   guest firewall refuses those ahead of every allow and the rule could only mislead. What it
   needs (the lab resolver, time, the model store, the gateway or broker) is listed; anything on
   the internet is reached through the gateway, never directly. The example lab's `infer-core`

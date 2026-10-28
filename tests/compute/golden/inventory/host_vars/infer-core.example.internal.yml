@@ -16,7 +16,9 @@ hnx_firewall:
   inbound_allow: []
   outbound_allow:
     - {name: "dns", proto: "udp", ports: "53", dest: "192.0.2.0/24"}
+    - {name: "dns", proto: "udp", ports: "53", dest: "2001:db8:0:10::/64"}
     - {name: "time", proto: "udp", ports: "123", dest: "192.0.2.0/24"}
+    - {name: "time", proto: "udp", ports: "123", dest: "2001:db8:0:10::/64"}
     - {name: "model-store", proto: "tcp", ports: "443", dest: "198.51.100.0/25"}
 hnx_baselines: ["base", "server"]
 hnx_controls: ["time-sync", "patching", "ssh-hardening", "host-firewall", "siem-agent", "vuln-scan"]

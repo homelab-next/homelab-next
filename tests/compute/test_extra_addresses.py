@@ -84,9 +84,9 @@ def test_every_address_of_a_guest_is_in_the_table_with_its_value(tmp_path):
             "capability": "cap:inference",
         }
     # a guest that runs no model labels its extra address none
-    site = _site(tmp_path / "b", ["2001:db8:0:50::14"], guest="ops-core")
+    site = _site(tmp_path / "b", ["2001:db8:0:10::14"], guest="ops-core")
     (text,) = render(_load(site), "runtime-labels").values()
-    assert json.loads(text)["addresses"]["2001:db8:0:50::14"]["value"] == "none"
+    assert json.loads(text)["addresses"]["2001:db8:0:10::14"]["value"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -318,13 +318,14 @@ def test_an_address_inside_another_zones_prefix_is_refused(tmp_path):
 
 def test_an_unreadable_prefix_refuses_every_ipv6_extra_and_no_ipv4_one(tmp_path):
     """open_site does not run hnx site validate: a prefix it would refuse is read here with the
-    same rule, and no IPv6 address is held against a zone list it cannot read."""
+    same rule, and no IPv6 address is held against a zone list it cannot read.  (On a zone no
+    firewall rule names: a rule naming it reaches its IPv6 hosts by it, so that is refused too.)"""
     site = _site(tmp_path, [EXTRA])
-    _subnet6(site, "mgmt", "2001:db8:0:10:0::/64")
-    with pytest.raises(ComputeError, match=r"cannot be held against zone mgmt: its subnet6"):
+    _subnet6(site, "edge", "2001:db8:0:40:0::/64")
+    with pytest.raises(ComputeError, match=r"cannot be held against zone edge: its subnet6"):
         _load(site)
     site = _site(tmp_path / "v4", ["192.0.2.150"])
-    _subnet6(site, "mgmt", "2001:db8:0:10:0::/64")
+    _subnet6(site, "edge", "2001:db8:0:40:0::/64")
     assert (
         "192.0.2.150"
         in next(g for g in _load(site).sorted() if g.id == "guest:infer-core").addresses
