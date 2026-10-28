@@ -26,4 +26,4 @@
     fail_msg: >-
       nftables_host: policy_out ACCEPT, DROP or REJECT (not ACCEPT when the guest needs
       egress-filter), at least one SSH source, bridge-local CIDRs (never any), and rules of the guest schema's shape (name, tcp,
-      udp or icmp, ports for tcp and udp, any, an IPv4 CIDR or a zone's IPv6 prefix)
+      udp or icmp, ports for tcp and udp, any, an IPv4 CIDR or a well-formed IPv6 /48 to /64)

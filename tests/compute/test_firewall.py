@@ -1017,16 +1017,50 @@ def test_a_zone_prefix_holding_a_metadata_address_is_refused(tmp_path):
     assert f"firewall_rules.dns: dest zone:mgmt holds the cloud metadata address {meta6}" in msg
 
 
-def test_a_model_runtime_zone_allow_with_a_global_prefix_is_accepted(tmp_path):
-    """A zone's IPv6 prefix is the lab's even in global unicast space (the site gives it to the
-    zone): a model runtime's zone allow is accepted, while ``any`` still reaches the internet."""
+def test_a_model_runtime_zone_allow_with_a_global_prefix_reaches_the_internet(tmp_path):
+    """A zone's global-unicast IPv6 prefix is judged like an IPv4 subnet in public space: nothing
+    proves the site owns it (a typo or a copied prefix would open third-party space), so a model
+    runtime's zone allow to it reaches the internet and is refused."""
     import ipaddress
 
     global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))  # a global /48, never a literal
-    zones = _zones6(mgmt=global6)
+    msg = problems(fleet_dir(tmp_path), _zones6(mgmt=global6))
+    assert "firewall_rules.dns: dest zone:mgmt reaches the internet" in msg
+    assert "firewall_rules.time: dest zone:mgmt reaches the internet" in msg
+
+
+def test_a_global_prefix_still_renders_where_no_lab_only_rule_applies(tmp_path):
+    """Only the model-runtime judgement changes: with the runtime's zone allows pointed elsewhere,
+    another guest's inbound ``zone:`` rule renders the global prefix in the ``.fw`` file and the
+    inventory, after the IPv4 subnet."""
+    import ipaddress
+
+    global6 = str(ipaddress.IPv6Network((0x2600_0010 << 96, 48)))
+
+    def lab_cidr(doc):
+        for r in doc["firewall_rules"]["outbound_allow"]:
+            if r["dest"] == "zone:mgmt":
+                r["dest"] = "192.0.2.0/24"
+
+    fleet = load_fleet(fleet_dir(tmp_path, "infer-core", lab_cidr), _zones6(mgmt=global6))
+    fw = render(fleet, "firewall-rules")["firewall/140.fw"].splitlines()
+    v4 = fw.index("IN ACCEPT -p tcp -dport 22 -source 192.0.2.0/24 -log nolog # ssh-mgmt")
+    assert fw[v4 + 1] == f"IN ACCEPT -p tcp -dport 22 -source {global6} -log nolog # ssh-mgmt"
+    hv = yaml.safe_load(render(fleet, "inventory")["host_vars/lake-core.example.internal.yml"])
+    sources = [r["source"] for r in hv["hnx_firewall"]["inbound_allow"] if r["name"] == "ssh-mgmt"]
+    assert sources == ["192.0.2.0/24", global6]
+
+
+def test_a_model_runtime_zone_allow_with_a_unique_local_prefix_is_accepted(tmp_path):
+    """A unique-local zone prefix is the lab's: the model runtime's zone allow is accepted and
+    rendered, while ``any`` still reaches the internet."""
+    import ipaddress
+
+    ula6 = str(ipaddress.IPv6Network((0xFD00_0010 << 96, 64)))  # a unique-local /64
+    zones = _zones6(mgmt=ula6)
     fleet = load_fleet(fleet_dir(tmp_path), zones)
     hv = yaml.safe_load(render(fleet, "inventory")["host_vars/infer-core.example.internal.yml"])
-    assert global6 in [r["dest"] for r in hv["hnx_firewall"]["outbound_allow"]]
+    assert ula6 in [r["dest"] for r in hv["hnx_firewall"]["outbound_allow"]]
 
     def any_out(doc):
         doc["firewall_rules"]["outbound_allow"].append(

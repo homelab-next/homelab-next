@@ -270,6 +270,10 @@ def test_the_filter_is_registered():
         ("2001:db8:0:10::/64%eth0", "zone id"),
         (f"{a(0xFFFF_C000_0200, True)}/120", "is not a /48 to /64"),
         (5, "is not a string"),
+        # neither any, an IPv4 CIDR nor an IPv6 prefix: judged as one, never skipped
+        ("10/8", "not an IPv6 prefix"),
+        ("abc/8", "not an IPv6 prefix"),
+        ("ff/0", "not an IPv6 prefix"),
     ],
 )
 def test_an_ipv6_rule_address_is_a_zone_prefix(value, why):

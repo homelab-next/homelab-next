@@ -423,30 +423,29 @@ def _review_date(raw: Any) -> dt.date | None:
 Net = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
-def _dest_nets(r: Any, fleet: Fleet) -> tuple[list[Net], list[Net]]:
-    """An outbound rule's destination as ``(networks, declared)``: ``any`` as the whole address
-    space of both families; a CIDR as written; a ``zone:`` as the zone's subnet through the site
-    model and its ``subnet6`` (site 1.4) where it has one, the IPv6 prefix also in ``declared``
-    (the site gives it to the zone, so it is the lab's whatever space it is from).  Nothing that
-    cannot be read: another rule reports that."""
+def _dest_nets(r: Any, fleet: Fleet) -> list[Net]:
+    """An outbound rule's destination as networks: ``any`` as the whole address space of both
+    families; a CIDR as written; a ``zone:`` as the zone's subnet through the site model and its
+    ``subnet6`` (site 1.4) where it has one.  Nothing that cannot be read: another rule reports
+    that."""
     from homelabnext.network.validate import subnet6_problem
 
     dest = r["dest"]
     if dest == "any":
-        return [ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0")], []
+        return [ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0")]
     if dest.startswith("zone:"):
         z = fleet.zones.zone(dest[5:])
         if z is None:
-            return [], []
+            return []
         nets: list[Net] = []
         with contextlib.suppress(ValueError):
             nets.append(z.network)
         net6, _ = subnet6_problem(z.subnet6) if z.subnet6 is not None else (None, None)
-        return ([*nets, net6], [net6]) if net6 is not None else (nets, [])
+        return [*nets, net6] if net6 is not None else nets
     try:
-        return [ipaddress.ip_network(dest, strict=True)], []
+        return [ipaddress.ip_network(dest, strict=True)]
     except ValueError:
-        return [], []
+        return []
 
 
 def _metadata_allows(g: Guest, fleet: Fleet) -> list[Problem]:
@@ -458,7 +457,7 @@ def _metadata_allows(g: Guest, fleet: Fleet) -> list[Problem]:
     for r in g.outbound_rules:
         if r["dest"] == "any":
             continue
-        nets, _ = _dest_nets(r, fleet)
+        nets = _dest_nets(r, fleet)
         held = [str(a) for net in nets for a in METADATA if a.version == net.version and a in net]
         if held:
             out.append(
@@ -474,18 +473,18 @@ def _metadata_allows(g: Guest, fleet: Fleet) -> list[Problem]:
 def _internet_allows(g: Guest, fleet: Fleet) -> list[str]:
     """Outbound allows that reach beyond the lab: ``any``, or a network (a CIDR, or a ``zone:``'s
     subnet from the site model) not inside the never-internet ranges
-    (:data:`homelabnext.modules.egress.NOT_INTERNET`).  A ``zone:``'s IPv6 prefix is the lab's
-    even where it is global unicast: the site model gives it to the zone (IPv6 numbers hosts from
-    global space without a NAT in front), and validation holds it to being a zone prefix."""
+    (:data:`homelabnext.modules.egress.NOT_INTERNET`).  A ``zone:``'s IPv6 prefix is judged like
+    its IPv4 subnet: a unique-local or documentation prefix is the lab's, a global-unicast one
+    reaches the internet (nothing proves the site owns it; a typo or a copied prefix would
+    otherwise open a model runtime's egress to third-party space)."""
     from homelabnext.modules.egress import NOT_INTERNET
 
     out = []
     for r in g.outbound_rules:
-        nets, declared = _dest_nets(r, fleet)
+        nets = _dest_nets(r, fleet)
         # an unknown zone or a bad CIDR is _check_firewall's problem
         if any(
-            net not in declared
-            and not any(net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET)
+            not any(net.version == n.version and net.subnet_of(n) for n in NOT_INTERNET)
             for net in nets
         ):
             out.append(

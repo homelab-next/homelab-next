@@ -906,7 +906,8 @@ def _first(tmp_path):
                     "outbound_allow": [{"name": "x", "proto": "udp", "ports": "53"}],
                 }
             },
-            # an IPv6 rule address is a zone's subnet6, nothing wider, odder or written otherwise
+            # a rule address is any, an IPv4 CIDR or a well-formed IPv6 prefix (/48 to /64):
+            # nothing wider, odder or written otherwise, and nothing that is neither family
             *(
                 {
                     "nftables_host_firewall": {
@@ -922,6 +923,11 @@ def _first(tmp_path):
                     "2001:db8:0:10:0::/64",
                     "fe80::/64",
                     "2001:db8:0:10::/64 accept",
+                    "2001:db8:0:10::/64%eth0",
+                    "::ffff:192.0.2.0/120",
+                    "10/8",
+                    "abc/8",
+                    "ff/0",
                 )
             ),
         ],

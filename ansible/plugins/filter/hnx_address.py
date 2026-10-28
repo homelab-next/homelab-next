@@ -5,10 +5,14 @@
 
 returns one message per problem (an empty list when the rows are sound), so a role's assert can
 name every bad entry at once.  ``{{ addresses | hnx_rule_prefix6_problems }}`` does the same for
-the IPv6 addresses of firewall rules (``hnx_firewall``), each of which is a zone's ``subnet6``
-written as the generator resolves ``zone:`` (``homelabnext/compute/gen/firewall_rules.py``): the
-``subnet6`` rule below, so a hand-written rule names no wider or odder IPv6 network than a zone.  A row is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}``
-as the baseline playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet``
+every firewall-rule address (``hnx_firewall``) that is neither ``any`` nor an IPv4 CIDR: it must
+be a well-formed IPv6 prefix by the ``subnet6`` rule below (a unique-local or global-unicast /48 to
+/64).  That is all a role can prove from one rule; that the prefix is a zone's is the generator's
+doing (it resolves ``zone:`` to the zone's ``subnet6``, ``homelabnext/compute/gen/firewall_rules.py``),
+so a hand-written rule names no wider or odder IPv6 network than a zone could have.
+
+A row of guests is ``{name, ip, zone, extra_addresses?, subnet?, subnet6?}`` as the baseline
+playbook writes it (``homelabnext/compute/gen/baseline_playbook.py``): ``subnet``
 is the guest's zone's IPv4 subnet, carried in every row that names ``extra_addresses``, and
 ``subnet6`` its IPv6 prefix (site 1.4), carried too when the zone gives one.
 
@@ -39,6 +43,7 @@ Standard library only (the controller needs nothing beyond Ansible).
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -237,14 +242,18 @@ def enroll_address_problems(guests: Any) -> list[str]:
     return out
 
 
+_V4_CIDR = re.compile(r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}/[0-9]{1,2}\Z")
+
+
 def rule_prefix6_problems(addresses: Any) -> list[str]:
-    """One message per IPv6 firewall-rule address that is not a zone prefix (the ``subnet6``
-    rule); a non-IPv6 value (``any``, an IPv4 CIDR, which the role's own pattern judges) is skipped."""
+    """One message per firewall-rule address that is neither ``any`` nor shaped as an IPv4 CIDR
+    (the role's own pattern judges those) and is not a well-formed IPv6 prefix by the ``subnet6``
+    rule; so ``10/8`` or ``abc/8`` is refused here as well as by the pattern."""
     if not isinstance(addresses, list):
         return ["the rule addresses are not a list"]
     out = []
     for raw in addresses:
-        if isinstance(raw, str) and ":" not in raw:
+        if isinstance(raw, str) and (raw == "any" or _V4_CIDR.match(raw)):
             continue
         _, why = _subnet6(raw)
         if why:
