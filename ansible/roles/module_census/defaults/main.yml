@@ -5,3 +5,9 @@ module_census_systemctl_cli: systemctl
 # where the notifier owners write the pairs they hold, <dir>/<owner>/pairs.json
 # (homelabnext.notify.record.RECORD_DIR)
 module_census_pairs_dir: /var/lib/homelabnext/notify-pairs
+# On a host that runs the broker: its socket, under /run/, which the census asks as root for the
+# agents it serves; the broker's manifest lists root in operators (manifest 1.8).  Empty: this
+# host runs no broker, and the census does not ask.
+module_census_broker_socket: ""
+# The hnx command a broker host runs, an absolute path (a test points it at a stand-in).
+module_census_hnx_cli: /opt/hnx/bin/hnx

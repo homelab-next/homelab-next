@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Read-only on the hosts: two systemctl queries each (enabled unit files, active units) and the
+# Read-only on the hosts: two systemctl queries each (enabled unit files, active units), the
 # notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
-# step by the role's notify_pairs_records module.  The answers are written on the controller
+# step by the role's notify_pairs_records module, and on a host that runs the broker
+# (module_census_broker_socket set) one more, the broker's operator answer of the agents it serves
+# (hnx broker agents, as root, which the broker's manifest must list in operators).  The answers
+# are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
 - name: Validate the inputs
@@ -9,9 +12,11 @@
     that:
       - module_census_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_dir
       - module_census_systemctl_cli is match('^[A-Za-z0-9._/-]+\Z')
+      - module_census_hnx_cli is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_hnx_cli
+      - module_census_broker_socket == '' or (module_census_broker_socket is match('^/run/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_broker_socket)
       - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z')
       - module_census_pairs_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_pairs_dir
-    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the host name a plain name (it names the host's answer file), and the notify pairs directory an absolute path of [A-Za-z0-9._/-]"
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, the host name a plain name (it names the host's answer file), and the notify pairs directory an absolute path of [A-Za-z0-9._/-]"
 
 - name: Look at the census directory on the controller
   ansible.builtin.stat:
@@ -78,9 +83,27 @@
     max_bytes: "{{ module_census_pairs_max_bytes }}"
   register: module_census_pairs
 
+# The broker answers a peer its manifest lists in operators (homelabnext.broker.server, manifest
+# 1.8): the agent keys it serves, one per line, and nothing else.  This one task runs as root, the
+# identity the census host's manifest lists; the others stay unprivileged.  A broker that does not
+# answer, or does not count root an operator, fails the census.
+- name: Ask the running broker which agents it serves
+  ansible.builtin.command:
+    argv:
+      - "{{ module_census_hnx_cli }}"
+      - broker
+      - agents
+      - --socket
+      - "{{ module_census_broker_socket }}"
+  register: module_census_agents
+  changed_when: false
+  become: true
+  become_user: root
+  when: module_census_broker_socket != ''
+
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
-    content: "{{ {'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | to_json }}\n"
+    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {})) | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
   vars:

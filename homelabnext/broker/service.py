@@ -424,6 +424,7 @@ def _manifest_names(manifest: Mapping[str, Any]) -> list[tuple[str, Any]]:
         "approvers": ("issuer", "subject"),
         "callers": ("user", "profile"),
         "approval_relays": ("user", "issuer"),
+        "operators": ("user",),
     }
     for key, names in fields.items():
         for i, entry in enumerate(manifest.get(key, [])):
@@ -464,15 +465,17 @@ def _overlapping_lanes(lanes: Sequence[_lanes.Lane]) -> list[str]:
 
 
 def _peer_problems(manifest: Mapping[str, Any]) -> list[str]:
-    """Each transport peer (uid or user) is listed once, as a caller, a relay, a Code Mode runner
-    *or* a sandbox: one peer, one identity, so an agent's process can never also be the relay that
-    approves for a human, nor the runner that issues its own tokens or a sandbox holding them."""
+    """Each transport peer (uid or user) is listed once, as a caller, a relay, an operator, a Code
+    Mode runner *or* a sandbox: one peer, one identity, so an agent's process can never also be the
+    relay that approves for a human, the operator that lists the agents, nor the runner that issues
+    its own tokens or a sandbox holding them."""
     seen: dict[str, str] = {}
     out = []
     cm = manifest.get("codemode") or {}
     for where, entries in (
         ("callers", manifest.get("callers", [])),
         ("approval_relays", manifest.get("approval_relays", [])),
+        ("operators", manifest.get("operators", [])),
         ("codemode.runners", cm.get("runners", [])),
         ("codemode.sandboxes", cm.get("sandboxes", [])),
     ):
@@ -1514,6 +1517,26 @@ class BrokerService:
             {k: r[k] for k in fields}
             for r in self._open_rows(lambda rec: rec["request"]["actor"] == caller)
         ]
+
+    def served_agents(self) -> list[str]:
+        """The agent keys this broker serves: each profile (``profile:<key>``) that the manifest
+        both maps a transport peer to (``callers``) and grants something (``grants``), as
+        ``<key>``, sorted.  Names only: no uid, grant, action or token (what an operator's
+        ``agents`` answers, for the deploy's census; :meth:`list_agents` is the audited ask)."""
+        peers = {c.get("profile") for c in self.manifest.get("callers", [])}
+        granted = {g.get("profile") for g in self.manifest.get("grants", [])}
+        return sorted(
+            p.removeprefix("profile:")
+            for p in peers & granted
+            if isinstance(p, str) and p.startswith("profile:")
+        )
+
+    def list_agents(self, operator: str) -> list[str]:
+        """:meth:`served_agents` for an operator over the socket (``uid:<n>``), audited as
+        operation ``agents``, outcome ``ok``; the record names no key."""
+        keys = self.served_agents()
+        self._audit(operator, "", "agents", "ok")
+        return keys
 
     def actions_for(self, caller: str) -> list[dict[str, Any]]:
         """What ``caller`` may ask for: every action a grant of its names that :func:`decide`

@@ -86,10 +86,67 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
         "the census is a union across hosts: a unit is not checked against the host it runs on",
         "no host holds a notify pairs record that counts: the recovery pairs were not compared "
         "(a notifier records them with --notify-pairs-dir)",
+        "no host's census asked a broker (module_census_broker_socket): agents not gathered",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")
     assert ld._errors(schema, inventory) == []
+
+
+def _with_agents(d: Path, host: str, agents) -> None:
+    """Give ``host``'s answer the broker's agents, as the role writes it on a broker host."""
+    doc = json.loads((d / f"{host}.json").read_text())
+    doc["agents"] = agents
+    (d / f"{host}.json").write_text(json.dumps(doc))
+
+
+def test_agents_are_gathered_from_the_brokers_that_answered(tmp_path):
+    d = write_census(tmp_path / "c", {"agent-core": [], "edge": [], "lake": []})
+    _with_agents(d, "agent-core", ["core-staff-scorecard", "external-collector-analyst"])
+    _with_agents(d, "lake", ["core-staff-scorecard"])  # a second broker: the union
+    inventory, notes = census.gather(d)
+    assert inventory["agents"] == ["core-staff-scorecard", "external-collector-analyst"]
+    assert inventory["not_gathered"] == ["rows", "mcp_servers", "tables"]
+    assert "asked 2 broker(s): 2 agent(s) served" in notes
+    assert ld._errors(ld._schema("platform", "module_inventory.schema.json"), inventory) == []
+
+
+def test_a_broker_that_serves_no_agent_is_an_empty_list_not_not_gathered(tmp_path):
+    d = write_census(tmp_path / "c", {"agent-core": []})
+    _with_agents(d, "agent-core", [])
+    inventory, _ = census.gather(d)
+    assert inventory["agents"] == [] and "agents" not in inventory["not_gathered"]
+
+
+@pytest.mark.parametrize(
+    "agents",
+    [
+        "core-staff-scorecard",  # not a list of lines
+        [7],
+        ["Core-Staff"],
+        ["core staff"],
+        ["profile:core-staff"],  # a key, never the profile id
+        [""],
+        ["a" * 65],
+        ["../x"],
+        ["ok\nhnx-x.service enabled"],
+        ["k"] * (census.MAX_LINES + 1),
+    ],
+)
+def test_an_agent_line_that_is_not_one_key_fails_the_census(tmp_path, agents):
+    d = write_census(tmp_path / "c", {"agent-core": []})
+    _with_agents(d, "agent-core", agents)
+    with pytest.raises(census.CensusError):
+        census.gather(d)
+
+
+def test_an_answer_with_another_extra_key_fails_the_census(tmp_path):
+    d = write_census(tmp_path / "c", {"agent-core": []})
+    doc = json.loads((d / "agent-core.json").read_text())
+    doc["tables"] = []
+    (d / "agent-core.json").write_text(json.dumps(doc))
+    with pytest.raises(census.CensusError, match="not \\{host, enabled, active, pairs\\}"):
+        census.gather(d)
 
 
 def test_a_template_unit_is_left_out_and_noted(tmp_path):
@@ -602,6 +659,27 @@ def test_an_empty_selection_judges_every_running_unit_of_a_module():
         "not select"
     ]
     assert "an empty selection: the site selects no module" in report.notes
+
+
+def test_gathered_agents_are_judged_like_any_running_name(tmp_path):
+    """A broker's answer reaches the loader: an agent of a module the site does not select is a
+    problem, and agents is no longer noted as not compared."""
+    d = write_census(tmp_path / "c", {"agent-core": []})
+    _with_agents(d, "agent-core", ["external-collector-analyst"])
+    inventory, _ = census.gather(d)
+    tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
+    slots = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
+    roles = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
+    report = ld.check(
+        tree, slots=slots, roles=roles, in_tree_roots=(ROOT / "modules", EXAMPLES),
+        inventory=inventory, empty_selection=True,
+    )  # fmt: skip
+    running = [str(p) for p in report.problems if p.where == "running"]
+    assert running == [
+        "running: agents external-collector-analyst runs for external-collector, which the site "
+        "does not select"
+    ]
+    assert not any("agents" in n and "not compared" in n for n in report.notes)
 
 
 def test_the_deploy_check_refuses_problems_in_the_lab(tmp_path, capsys):
