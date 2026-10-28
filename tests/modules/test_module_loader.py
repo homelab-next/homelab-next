@@ -121,6 +121,99 @@ def test_a_running_name_must_be_declared_selected_and_every_declared_one_must_ru
     ]
 
 
+def _listening(*hosts):
+    """The small lab's inventory with the hosts' listening sockets, its rows left ungathered (as
+    a census leaves them): ``hosts`` are ``(census host, sockets)``."""
+    inv = {k: v for k, v in INVENTORY.items() if k != "rows"}
+    inv["not_gathered"] = ["rows"]
+    inv["listening"] = [{"host": h, "sockets": list(s)} for h, s in hosts]
+    return inv
+
+
+def test_a_selected_modules_row_is_judged_by_what_its_placed_host_listens_on():
+    """Derived, one way: the receiver (feature row, host role receiver) and the samples store (a
+    provider's row under its instance, host role store) are both placed on the small lab's data
+    host, which the census knows by its full name; each must listen on its row's port."""
+    tree, _ = examples()
+    site = SITES["small-lab"]
+    clean = check(
+        tree,
+        site=site,
+        inventory=_listening(
+            ("data.example.internal", ["tcp/8443", "tcp/9000"]), ("core", ["udp/53"])
+        ),
+    )
+    assert clean.problems == []
+    assert not any(n.startswith("service rows not judged") for n in clean.notes)
+    got = messages(
+        check(
+            tree,
+            site=site,
+            inventory=_listening(
+                ("data.example.internal", ["tcp/8443", "udp/9000"]), ("core", ["tcp/9000"])
+            ),
+        )
+    )
+    # a UDP socket is not the HTTPS row's, and the core host's TCP 9000 is not the data host's
+    assert got == [
+        "running: rows samples (example-object-store) is declared on data but "
+        "data.example.internal listens on no tcp/9000"
+    ]
+
+
+def test_a_row_whose_placed_host_the_census_cannot_name_is_noted_not_judged():
+    tree, _ = examples()
+    site = SITES["small-lab"]
+    for hosts, why in (
+        ((("core", []),), "no census host has that name"),
+        ((("data.a.example", []), ("data.b.example", [])), "two census hosts share that name"),
+    ):
+        report = check(tree, site=site, inventory=_listening(*hosts))
+        assert report.problems == []
+        note = next(n for n in report.notes if n.startswith("service rows not judged"))
+        assert f"samples (example-object-store) on data: {why}" in note
+
+
+def test_each_provider_entry_is_judged_on_its_own_placed_host():
+    """Two instances of one provider, placed on different hosts: each instance's row is judged on
+    the host its own entry places it on, never on another entry's."""
+    tree, _ = examples()
+    site = copy.deepcopy(SITES["small-lab"])
+    site["slots"]["object-store"].append(
+        {"provider": "example-object-store", "instance": "archive", "placement": {"store": "core"}}
+    )
+    hosts = (("data.example.internal", ["tcp/8443", "tcp/9000"]), ("core", ["udp/53"]))
+    assert messages(check(tree, site=site, inventory=_listening(*hosts))) == [
+        "running: rows archive (example-object-store) is declared on core but core listens on "
+        "no tcp/9000"
+    ]
+    hosts = (("data.example.internal", ["tcp/8443"]), ("core", ["udp/53", "tcp/9000"]))
+    assert messages(check(tree, site=site, inventory=_listening(*hosts))) == [
+        "running: rows samples (example-object-store) is declared on data but "
+        "data.example.internal listens on no tcp/9000"
+    ]
+
+
+def test_a_socket_bound_only_to_loopback_answers_no_other_host():
+    tree, _ = examples()
+    hosts = (("data.example.internal", ["tcp/8443", "tcp/9000@lo"]), ("core", ["udp/53"]))
+    assert messages(check(tree, site=SITES["small-lab"], inventory=_listening(*hosts))) == [
+        "running: rows samples (example-object-store) is declared on data but "
+        "data.example.internal listens on no tcp/9000 (only on loopback: tcp/9000)"
+    ]
+    # bound to loopback and to every address is the every-address socket's
+    hosts = (("data.example.internal", ["tcp/8443", "tcp/9000", "tcp/9000@lo"]), ("core", []))
+    assert check(tree, site=SITES["small-lab"], inventory=_listening(*hosts)).problems == []
+
+
+def test_a_census_host_name_matches_whatever_its_case():
+    tree, _ = examples()
+    hosts = (("Data.Example.Internal", ["tcp/8443", "tcp/9000"]), ("CORE", ["udp/53"]))
+    report = check(tree, site=SITES["small-lab"], inventory=_listening(*hosts))
+    assert report.problems == []
+    assert not any(n.startswith("service rows not judged") for n in report.notes)
+
+
 PAIR = {
     "problem": "External data collector: no new sessions",
     "recovery": "External data collector: sessions arriving again",

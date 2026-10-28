@@ -91,6 +91,30 @@ def _sudo(tmp_path) -> str:
     return fake(tmp_path / "sudo", SUDO.replace("LOG", repr(str(tmp_path / "calls.log"))))
 
 
+#: the kernel's socket tables, as a host shows them (``/proc/net``): a TCP port listening (8443,
+#: on every address, and 9000, on IPv6), a TCP connection (not a service), a bound UDP port
+#: (53) and a connected UDP socket (a client's); the address fields are the kernel's hex
+_HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid\n"
+TABLES = {
+    "tcp": _HEAD
+    + "   0: 00000000:20FB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0\n"
+    + "   1: 00000000:A3F2 00000000:01BB 01 00000000:00000000 00:00000000 00000000 0\n",
+    "tcp6": _HEAD
+    + "   0: 00000000000000000000000000000000:2328 00000000000000000000000000000000:0000 0A 0\n",
+    "udp": _HEAD
+    + "   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000 0\n"
+    + "   1: 00000000:D431 00000000:0035 01 00000000:00000000 00:00000000 00000000 0\n",
+}
+
+
+def _tables(tmp_path) -> str:
+    d = tmp_path / "net"
+    d.mkdir()
+    for name, text in TABLES.items():  # no udp6: IPv6 off for UDP reads as no table, not a failure
+        (d / name).write_text(text)
+    return str(d)
+
+
 def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
@@ -103,6 +127,7 @@ def _first(tmp_path):
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
         "module_census_pairs_dir": str(pairs),  # broker's record present, status's absent
+        "module_census_socket_tables": _tables(tmp_path),
         # this host runs the broker: the census asks it for the agents it serves
         "module_census_broker_socket": "/run/hnx-broker/broker.sock",
         "module_census_hnx_cli": _hnx(tmp_path),
@@ -149,6 +174,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             "now": answer["pairs"]["now"],
             "records": {"broker": {"text": text, "pid_started": started}, "status": None},
         },
+        "listening": ["tcp/8443", "tcp/9000", "udp/53"],
         "agents": AGENTS.splitlines(),
     }
     inventory, notes = census.gather(out)
@@ -158,6 +184,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "agents": ["core-staff-scorecard", "external-collector-analyst"],
         "not_gathered": ["rows", "mcp_servers", "tables"],
         "notify_pairs": [PAIR],
+        "listening": [{"host": "localhost", "sockets": ["tcp/8443", "tcp/9000", "udp/53"]}],
     }
     assert any("template unit" in n for n in notes)
 
@@ -278,3 +305,100 @@ def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(mon
                 mod.guarded(3, "/x")
         else:
             mod.guarded(3, "/x")
+
+
+def _socket_module(monkeypatch):
+    """The role's listening_sockets module, loaded with a stand-in for AnsibleModule (only main()
+    uses it; the repository's own ansible/ directory is not the package)."""
+    import importlib.util
+    import sys
+    import types
+
+    for name in ("ansible", "ansible.module_utils", "ansible.module_utils.basic"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules["ansible.module_utils.basic"].AnsibleModule = object
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "ansible",
+        "roles",
+        "module_census",
+        "library",
+        "listening_sockets.py",
+    )
+    spec = importlib.util.spec_from_file_location("listening_sockets", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_socket_reader_takes_listening_tcp_and_bound_udp_only(tmp_path, monkeypatch):
+    mod = _socket_module(monkeypatch)
+    root = _tables(tmp_path)
+    # a connection and a connected UDP socket are clients, not services
+    assert mod.sockets(root) == ["tcp/8443", "tcp/9000", "udp/53"]
+    # no IPv4 TCP table is a failure; an oversized table is refused, never cut short
+    (tmp_path / "net" / "tcp").unlink()
+    with pytest.raises(mod.Refused, match="cannot be read"):
+        mod.sockets(root)
+    (tmp_path / "net" / "tcp").write_text(TABLES["tcp"])
+    monkeypatch.setattr(mod, "MAX_BYTES", 16)
+    with pytest.raises(mod.Refused, match="is over 16 bytes"):
+        mod.sockets(root)
+
+
+#: IPv4 loopback and a documentation address, built from integers (no address literal)
+_LOOPBACK4, _DOC4 = 0x7F000001, 0xC000020A
+
+
+def _kernel_hex(address) -> str:
+    """An address (text or ``ipaddress`` object) as the kernel writes it in its socket tables:
+    32-bit words in host order."""
+    import ipaddress
+    import sys
+
+    packed = ipaddress.ip_address(address).packed
+    return "".join(
+        int.from_bytes(packed[i : i + 4], "big").to_bytes(4, sys.byteorder).hex().upper()
+        for i in range(0, len(packed), 4)
+    )
+
+
+def test_a_socket_bound_only_to_loopback_is_marked_and_a_bad_line_skipped(tmp_path, monkeypatch):
+    import ipaddress
+
+    mod = _socket_module(monkeypatch)
+    d = tmp_path / "net"
+    d.mkdir()
+    any4, any6 = _kernel_hex("0.0.0.0"), _kernel_hex("::")
+
+    def line(local, port, state="0A", remote=None):
+        return f"   0: {local}:{port:04X} {remote or local}:0000 {state} 0 0 0\n"
+
+    (d / "tcp").write_text(
+        _HEAD
+        + line(_kernel_hex(ipaddress.IPv4Address(_LOOPBACK4)), 631)  # loopback only
+        + line(_kernel_hex(ipaddress.IPv4Address(_DOC4)), 8443)  # one of the host's addresses
+        + line(any4, 22)
+        + "   0: ZZZZZZZZ:0050 00000000:0000 0A 0\n"  # not the kernel's hex: skipped
+        + "   0: 00000000:50 00000000:0000 0A 0\n"  # a short port: skipped
+        + line(any4, 0)  # port 0: no service
+    )
+    (d / "tcp6").write_text(
+        _HEAD
+        + line(_kernel_hex("::1"), 5432)
+        + line(_kernel_hex(ipaddress.IPv6Address((0xFFFF << 32) | _LOOPBACK4)), 6379)  # mapped
+        + line(any6, 22)
+    )
+    assert mod.sockets(str(d)) == [
+        "tcp/22",
+        "tcp/631@lo",
+        "tcp/5432@lo",
+        "tcp/6379@lo",
+        "tcp/8443",
+    ]
+    # more sockets than the census takes fails, never cut short
+    monkeypatch.setattr(mod, "MAX_SOCKETS", 4)
+    with pytest.raises(mod.Refused, match="holds 5 sockets, over the 4 the census takes"):
+        mod.sockets(str(d))

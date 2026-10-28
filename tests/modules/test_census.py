@@ -43,10 +43,11 @@ def write_census(
     hosts: list[str] | None = None,
     active: dict[str, list[str]] | None = None,
     pairs: dict[str, dict[str, str | None]] | None = None,
+    listening: dict[str, list[str]] | None = None,
 ) -> Path:
     """A census as the role writes it: ``answers`` the enabled unit files per host, ``active``
     the active units (none by default), ``pairs`` the pairs records per host (owner -> text;
-    none by default)."""
+    none by default), ``listening`` the sockets each host listens on (none by default)."""
     d.mkdir(parents=True, exist_ok=True)
     (d / "_hosts.json").write_text(json.dumps(sorted(answers) if hosts is None else hosts))
     for host, lines in answers.items():
@@ -55,6 +56,7 @@ def write_census(
             "enabled": lines,
             "active": (active or {}).get(host, []),
             "pairs": answer_pairs((pairs or {}).get(host, {})),
+            "listening": (listening or {}).get(host, []),
         }
         (d / f"{host}.json").write_text(json.dumps(doc))
     return d
@@ -80,17 +82,64 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
         "schema_version": "1.0",
         "units": ["egress", "external-collector-pull"],
         "not_gathered": ["rows", "mcp_servers", "agents", "tables"],
+        "listening": [
+            {"host": "gpu-1", "sockets": []},
+            {"host": "infer-core.example", "sockets": []},
+            {"host": "quiet", "sockets": []},
+        ],
     }
     assert notes == [
         "gathered from 3 host(s): 2 fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
         "no host holds a notify pairs record that counts: the recovery pairs were not compared "
         "(a notifier records them with --notify-pairs-dir)",
+        "service rows are not gathered by name: each selected module's row is judged by whether "
+        "its placed host listens on its port (derived from the hosts' sockets)",
         "no host's census asked a broker (module_census_broker_socket): agents not gathered",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")
     assert ld._errors(schema, inventory) == []
+
+
+def test_each_hosts_listening_sockets_are_listed_once_and_in_order(tmp_path):
+    d = write_census(
+        tmp_path / "c",
+        {"a": [], "b": []},
+        listening={"a": ["udp/53", "tcp/9000", "tcp/443@lo", "tcp/443", "tcp/443"], "b": []},
+    )
+    inventory, _ = census.gather(d)
+    assert inventory["listening"] == [
+        {"host": "a", "sockets": ["tcp/443", "tcp/443@lo", "tcp/9000", "udp/53"]},
+        {"host": "b", "sockets": []},
+    ]
+    assert "rows" in inventory["not_gathered"]  # a socket names no row
+
+
+@pytest.mark.parametrize(
+    "found",
+    [
+        "tcp/80",  # not a list
+        [80],
+        ["tcp/0"],
+        ["tcp/65536"],
+        ["tcp/080"],
+        ["sctp/80"],
+        ["tcp/80 "],
+        ["tcp/80\n"],
+        ["tcp/80@local"],
+        ["tcp/80@"],
+        ["tcp/65536@lo"],
+        ["tcp/80"] * (census.MAX_SOCKETS + 1),
+    ],
+)
+def test_a_listening_answer_of_another_shape_fails_the_census(tmp_path, found):
+    d = write_census(tmp_path / "c", {"a": []})
+    doc = json.loads((d / "a.json").read_text())
+    doc["listening"] = found
+    (d / "a.json").write_text(json.dumps(doc))
+    with pytest.raises(census.CensusError, match="listening socket"):
+        census.gather(d)
 
 
 def _with_agents(d: Path, host: str, agents) -> None:
@@ -145,7 +194,9 @@ def test_an_answer_with_another_extra_key_fails_the_census(tmp_path):
     doc = json.loads((d / "agent-core.json").read_text())
     doc["tables"] = []
     (d / "agent-core.json").write_text(json.dumps(doc))
-    with pytest.raises(census.CensusError, match="not \\{host, enabled, active, pairs\\}"):
+    with pytest.raises(
+        census.CensusError, match="not \\{host, enabled, active, pairs, listening\\}"
+    ):
         census.gather(d)
 
 
@@ -250,7 +301,9 @@ def test_without_a_host_list_the_census_is_unreadable(tmp_path):
 def test_an_entry_that_is_no_listed_hosts_answer_is_refused(tmp_path):
     d = write_census(tmp_path / "c", {"a": []})
     (d / "forged.json").write_text(
-        json.dumps({"host": "forged", "enabled": [], "active": [], "pairs": NOPAIRS})
+        json.dumps(
+            {"host": "forged", "enabled": [], "active": [], "pairs": NOPAIRS, "listening": []}
+        )
     )
     with pytest.raises(
         census.CensusError, match=re.escape("not a listed host's answer: forged.json")
@@ -261,7 +314,7 @@ def test_an_entry_that_is_no_listed_hosts_answer_is_refused(tmp_path):
 def test_an_answer_written_for_another_host_is_refused(tmp_path):
     d = write_census(tmp_path / "c", {"a": [], "b": []})
     (d / "a.json").write_text(
-        json.dumps({"host": "b", "enabled": [], "active": [], "pairs": NOPAIRS})
+        json.dumps({"host": "b", "enabled": [], "active": [], "pairs": NOPAIRS, "listening": []})
     )
     with pytest.raises(census.CensusError, match=re.escape("a.json: written for b")):
         census.gather(d)
@@ -273,14 +326,21 @@ def test_an_answer_written_for_another_host_is_refused(tmp_path):
         {"host": "a"},
         {"host": "a", "enabled": []},  # both queries' answers, always
         {"host": "a", "systemctl": []},  # the shape before the active units were asked for
-        {"host": "a", "enabled": "hnx-x.service enabled", "active": [], "pairs": NOPAIRS},
-        {"host": "a", "enabled": [1], "active": [], "pairs": NOPAIRS},
-        {"host": "a", "enabled": [], "active": [None], "pairs": NOPAIRS},
+        {
+            "host": "a",
+            "enabled": "hnx-x.service enabled",
+            "active": [],
+            "pairs": NOPAIRS,
+            "listening": [],
+        },
+        {"host": "a", "enabled": [1], "active": [], "pairs": NOPAIRS, "listening": []},
+        {"host": "a", "enabled": [], "active": [None], "pairs": NOPAIRS, "listening": []},
         {
             "host": "a",
             "enabled": [],
             "active": [],
             "pairs": NOPAIRS,
+            "listening": [],
             "units": ["x"],
         },  # no finished list
         ["a"],
@@ -298,7 +358,13 @@ def test_a_linked_answer_or_directory_is_refused(tmp_path):
     real = tmp_path / "elsewhere.json"
     real.write_text(
         json.dumps(
-            {"host": "a", "enabled": ["hnx-x.service enabled"], "active": [], "pairs": NOPAIRS}
+            {
+                "host": "a",
+                "enabled": ["hnx-x.service enabled"],
+                "active": [],
+                "pairs": NOPAIRS,
+                "listening": [],
+            }
         )
     )
     (d / "a.json").unlink()
@@ -411,7 +477,7 @@ def _gather_one(tmp_path, pairs):
     d.mkdir()
     (d / "_hosts.json").write_text('["a"]')
     (d / "a.json").write_text(
-        json.dumps({"host": "a", "enabled": [], "active": [], "pairs": pairs})
+        json.dumps({"host": "a", "enabled": [], "active": [], "pairs": pairs, "listening": []})
     )
     return census.gather(d)
 

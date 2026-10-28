@@ -3,3 +3,6 @@
 # and the largest record read (homelabnext.notify.record.MAX_BYTES)
 module_census_pair_owners: [broker, status]
 module_census_pairs_max_bytes: 262144
+# the kernel's socket tables (library/listening_sockets.py); a role var, so an inventory's
+# group_vars cannot repoint it (a test overrides it with an extra var)
+module_census_socket_tables: /proc/net
