@@ -26,6 +26,9 @@ human-approve with its path.  The judged fields, each with the reason it is on t
   part declared where it was absent (absent fails closed; ``[]`` excludes nothing).
 - the selection's ``grants``: any grant added (a grant is what lets a selected module reach the
   internet, publish, take shared config or a secret, run privileged units).
+- the selection's ``lab_table_namespaces``: a namespace added (a gathered table there passes as
+  the lab's own and is never judged), or the list removed (no unbound table is judged).
+  Removing a namespace, changing only a ``why`` or declaring the list where it was absent narrows.
 - the rest of the selection (``hosts``, with their ``addresses`` and ``isolated``, ``slots``,
   ``features``, ``core``, ``providers`` and their placements): any change but a host's
   ``capacity``.
@@ -104,6 +107,7 @@ FIELDS = {
     "scope.target": "what assessment tooling may touch",
     "scope.exclude": "the carve-outs every reader honours",
     "grants": "what a selected module may do beyond its own slot",
+    "lab_table_namespaces": "a table in a listed namespace is the lab's own and is never judged",
     "selection": "hosts (addresses, isolated), slots, features, core and providers and their "
     "placement decide what runs where and what it may reach",
 }
@@ -131,6 +135,7 @@ TRUST_PATHS = {
     "lab/modules.lock": "what each fetched module is pinned to",
 }
 _FIREWALL_LISTS = ("zone_to_zone", "service_exceptions")
+LAB_NAMESPACES = "lab_table_namespaces"
 _TRUSTED = ("wan", "nets", "tooling")
 _EXCLUDE = ("unattended_mutation", "offensive")
 
@@ -397,12 +402,12 @@ def scope_changes(old: Any, new: Any) -> list[Change]:
         return [_fail("selection", f"not a mapping ({_shape(old)} to {_shape(new)})")]
     if early := _unjudged("selection", o, n):
         return early
-    return _scope(o, n) + _grants(o, n) + _selection_rest(o, n)
+    return _scope(o, n) + _grants(o, n) + _lab_namespaces(o, n) + _selection_rest(o, n)
 
 
 def _selection_rest(o: dict, n: dict) -> list[Change]:
     changes: list[Change] = []
-    for k in sorted({*o, *n} - {"scope", "grants"}):
+    for k in sorted({*o, *n} - {"scope", "grants", LAB_NAMESPACES}):
         for path, how in _diff(o.get(k), n.get(k), k):
             parts = path.split(".")
             if len(parts) >= 3 and parts[0] == "hosts" and parts[2] == "capacity":
@@ -477,6 +482,46 @@ def _scope(o: dict, n: dict) -> list[Change]:
     rest = {k for k in (*so, *sn) if k not in ("trusted", "target", "exclude")}
     if any(_canon(so.get(k)) != _canon(sn.get(k)) for k in rest):
         changes.append(_fail("scope", "a scope part this check does not judge"))
+    return changes
+
+
+def _lab_namespaces(o: dict, n: dict) -> list[Change]:
+    """A namespace added is human (its tables pass as the lab's), and so is the list removed
+    (no unbound table is judged); a namespace removed, a ``why`` changed or the list declared
+    where it was absent narrows."""
+    key = LAB_NAMESPACES
+    if (key in o) == (key in n) and _canon(o.get(key)) == _canon(n.get(key)):
+        return []
+
+    def index(value: Any) -> dict[str, Any] | None:
+        entries = [] if value is None else value
+        if not isinstance(entries, list):
+            return None
+        out: dict[str, Any] = {}
+        for e in entries:
+            ns = e.get("namespace") if isinstance(e, dict) else None
+            if not isinstance(ns, str) or ns in out:
+                return None
+            out[ns] = e.get("why")
+        return out
+
+    io, inew = index(o.get(key)), index(n.get(key))
+    if io is None or inew is None:
+        return [_fail(key, "not a list of distinct {namespace, why} at both ends")]
+    if key not in n:
+        return [Change(key, HUMAN, "the lab's namespaces no longer declared: no table is judged")]
+    if key not in o:
+        return [Change(key, OWNER, "the lab's namespaces declared: every other one is judged")]
+    changes = [Change(f"{key}.{ns}", HUMAN, FIELDS[key]) for ns in sorted(inew.keys() - io)]
+    changes += [
+        Change(f"{key}.{ns}", OWNER, "a namespace no longer the lab's")
+        for ns in sorted(io.keys() - inew)
+    ]
+    changes += [
+        Change(f"{key}.{ns}.why", OWNER, "a description")
+        for ns in sorted(io.keys() & inew.keys())
+        if _canon(io[ns]) != _canon(inew[ns])
+    ]
     return changes
 
 

@@ -762,6 +762,31 @@ def chosen(site: Doc) -> dict[str, list[Doc]]:
     return {"cap:" + s: c for s, c in site["slots"].items() if isinstance(c, list)}
 
 
+def lab_namespace_problems(site: Doc, mods: dict[str, Doc]) -> list[str]:
+    """The selection's ``lab_table_namespaces`` (the lake namespaces that are the lab's own): a
+    namespace listed twice, the core's (:data:`homelabnext.lake.tables.CORE_NAMESPACE`) or a
+    module id's (the id with ``-`` read as ``_``, any module in ``mods``) is refused: listing one
+    would let a table there pass as the lab's, never judged as the module's or the core's."""
+    from homelabnext.lake.tables import CORE_NAMESPACE
+
+    out: list[str] = []
+    seen: set[str] = set()
+    owners = {us(mid): mid for mid in mods}
+    for entry in site.get("lab_table_namespaces") or []:
+        ns = entry.get("namespace") if isinstance(entry, dict) else None
+        if not isinstance(ns, str):
+            continue  # the schema reports it
+        where = f"lab_table_namespaces: {ns}"
+        if ns in seen:
+            out.append(f"{where} is listed twice")
+        seen.add(ns)
+        if ns == CORE_NAMESPACE:
+            out.append(f"{where} is the core's namespace, never the lab's")
+        elif ns in owners:
+            out.append(f"{where} is module {owners[ns]}'s namespace, never the lab's")
+    return out
+
+
 def site_problems(
     site: Doc,
     mods: dict[str, Doc],
@@ -792,6 +817,7 @@ def site_problems(
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
+    out += lab_namespace_problems(site, mods)
     for m in sel.values():
         for need in m["requires"].get("scope", []):
             try:

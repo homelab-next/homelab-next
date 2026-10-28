@@ -284,6 +284,59 @@ def test_a_grant_added_is_human_and_removed_owner():
     assert tiers(rt.scope_changes(_sel(grants=after), _sel(grants=before))) == {"grants": rt.OWNER}
 
 
+def _lab_ns(*entries) -> dict:
+    return {
+        "profile": "small-lab",
+        "lab_table_namespaces": [{"namespace": n, "why": w} for n, w in entries],
+    }
+
+
+def test_a_lab_namespace_added_is_human_and_removed_owner():
+    one = _lab_ns(("archive", "old tables"))
+    two = _lab_ns(("archive", "old tables"), ("scratch", "ad hoc"))
+    assert tiers(rt.scope_changes(one, two)) == {"lab_table_namespaces.scratch": rt.HUMAN}
+    assert tiers(rt.scope_changes(two, one)) == {"lab_table_namespaces.scratch": rt.OWNER}
+    # a why reworded widens nothing; a namespace renamed is one added (human) and one removed
+    reworded = _lab_ns(("archive", "retired tables"))
+    assert tiers(rt.scope_changes(one, reworded)) == {"lab_table_namespaces.archive.why": rt.OWNER}
+    renamed = _lab_ns(("archive2", "old tables"))
+    assert tiers(rt.scope_changes(one, renamed)) == {
+        "lab_table_namespaces.archive": rt.OWNER,
+        "lab_table_namespaces.archive2": rt.HUMAN,
+    }
+    assert (
+        tiers(rt.scope_changes(two, _lab_ns(("scratch", "ad hoc"), ("archive", "old tables"))))
+        == {}
+    )
+
+
+def test_the_lab_namespaces_declared_is_owner_and_dropped_human():
+    """Declaring the list judges every other unbound namespace (narrower); dropping it leaves
+    every unbound table unjudged (wider), whatever it listed."""
+    absent = {"profile": "small-lab"}
+    one = _lab_ns(("archive", "old tables"))
+    assert tiers(rt.scope_changes(absent, one)) == {"lab_table_namespaces": rt.OWNER}
+    assert tiers(rt.scope_changes(absent, _lab_ns())) == {"lab_table_namespaces": rt.OWNER}
+    assert tiers(rt.scope_changes(one, absent)) == {"lab_table_namespaces": rt.HUMAN}
+    assert tiers(rt.scope_changes(_lab_ns(), absent)) == {"lab_table_namespaces": rt.HUMAN}
+
+
+@pytest.mark.parametrize(
+    "odd",
+    [
+        "archive",
+        ["archive"],
+        [{"namespace": "a", "why": "x"}, {"namespace": "a", "why": "y"}],
+        [{"why": "x"}],
+    ],
+)
+def test_a_lab_namespace_list_that_cannot_be_compared_is_human(odd):
+    one = _lab_ns(("archive", "old tables"))
+    after = {**one, "lab_table_namespaces": odd}
+    (c,) = rt.scope_changes(one, after)
+    assert (c.field, c.tier) == ("lab_table_namespaces", rt.HUMAN) and "fail closed" in c.why
+
+
 def test_the_rest_of_the_selection_is_human_but_a_hosts_capacity():
     host = {"kind": "vm", "capacity": {"cpu": 2}, "addresses": ["192.0.2.40"], "isolated": True}
     before = {"profile": "small-lab", "hosts": {"edge-1": host}}

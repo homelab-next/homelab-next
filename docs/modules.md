@@ -708,7 +708,17 @@ grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external
              units: {<module>: [<unit>]}, upstreams: {<module>: [cap:broker|cap:idp|cap:remote-admin]},
              cloud_models: {<module>: [mdl:<role>]}}
 scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
+lab_table_namespaces: [{namespace, why}]          # the lake namespaces that are the lab's own
 ```
+
+`lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every
+module and the core (the full profile lists `archive` and `scratch`); the runtime check judges a
+gathered table in any other namespace that no module id binds (see "Lake tables, from the
+catalog"). The loader refuses a namespace listed twice, the core's (`ocsf`), or a module id's (the
+id with `-` read as `_`, any module the tree holds): listing one would let a table there pass as
+the lab's instead of being judged as that module's or the core's. In the private overlay, adding a
+namespace or dropping the list is human-approve (`hnx site review-tier`), removing a namespace
+owner.
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive
@@ -1247,11 +1257,15 @@ is bound to the module whose id, with `-` read as `_`, is `<id_>`, which must de
 selected; every selected module's declared table must exist. A table in the core's namespace
 (`ocsf`) is the core's and must be one of its OCSF tables (`tables table:ocsf.<name> is in the
 core's namespace but is no core table`), when the core's tables were read; without them the check
-says so. A table in any other namespace that no module id binds is the lab's own (a catalog
-usually holds more than the fleet's tables: an archive, a scratch namespace) and is not judged.
-So the check judges only `ocsf.*` and the `<id_>.*` of a module id the tree knows: a table a
-retired module left behind, in a namespace no current module id names, is not judged either. A
-site-level list of the lab's own namespaces (anything else unbound a problem) is a follow-up.
+says so. A catalog usually holds more than the fleet's tables (an archive, a scratch namespace),
+so the selection names the lab's own namespaces in `lab_table_namespaces` (each `{namespace, why}`,
+`why` required; see [Site selection](#site-selection-platformmodule_selection-10-a-draft-schema)).
+With the list, a table in any other namespace that no module id binds is a problem (`tables
+table:stray.x runs in namespace stray, which is no module's, the core's or the lab's`): a table a
+retired module left behind, in a namespace no current module id names, is caught too, and `[]`
+says the lab keeps no namespace of its own. Without the list such a table is not judged, and the
+check says so (`the lab's own table namespaces are not declared`). Without the core's tables, a
+table in `ocsf` is not judged either way.
 What the catalog lists is believed, as a host's `systemctl` output is: it says which tables the
 catalog holds, not whether anything writes to them.
 

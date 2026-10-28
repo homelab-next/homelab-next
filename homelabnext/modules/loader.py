@@ -1276,6 +1276,40 @@ def listening_problems(
     return problems, notes
 
 
+def lab_table_namespaces(site: Doc) -> set[str] | None:
+    """The namespaces the selection declares as the lab's own (``lab_table_namespaces``), or
+    None when it declares none (the key absent): then a table in a namespace no module id binds,
+    outside the core's, is not judged."""
+    if "lab_table_namespaces" not in site:
+        return None
+    return {e["namespace"] for e in site["lab_table_namespaces"] or [] if isinstance(e, dict)}
+
+
+def _unbound_table(name: str, site: Doc, core: CoreNames | None) -> list[Problem]:
+    """A gathered table bound to no module id: in the core's namespace it must be one of the
+    core's OCSF tables (when ``core`` knows them); in any other it must be in one of the lab's
+    own namespaces, when the selection declares them.  Without the core's names the core's
+    namespace is :data:`homelabnext.lake.tables.CORE_NAMESPACE` and a table in it is not judged."""
+    schema = name.removeprefix("table:").split(".", 1)[0]
+    ns = core.table_namespace if core is not None else None
+    if schema == (ns or _core_namespace()):
+        if ns and name not in core.tables:
+            why = f"tables {name} is in the core's namespace but is no core table"
+            return [Problem("running", why)]
+        return []
+    lab = lab_table_namespaces(site)
+    if lab is None or schema in lab:
+        return []
+    why = f"tables {name} runs in namespace {schema}, which is no module's, the core's or the lab's"
+    return [Problem("running", why)]
+
+
+def _core_namespace() -> str:
+    from homelabnext.lake.tables import CORE_NAMESPACE
+
+    return CORE_NAMESPACE
+
+
 def running_problems(
     tree: Tree,
     ins: Inputs,
@@ -1291,8 +1325,9 @@ def running_problems(
     no module's or the core's, and so must an MCP server name (:func:`_running_mcp`, which
     matches a name back to its record by the record's instance template).  A table bound to no
     module id that sits in the core's namespace (:attr:`CoreNames.table_namespace`) must be one
-    of the core's OCSF tables; one in any other namespace is the lab's own (a catalog holds more
-    than the fleet's tables) and is not judged.  Another kind's name bound to no module id is the
+    of the core's OCSF tables; one in any other namespace must be in one of the lab's own (the
+    selection's ``lab_table_namespaces``), when the selection declares them: without the list it
+    is not judged (:func:`_unbound_table`).  Another kind's name bound to no module id is the
     core's and is not judged here.  A kind the inventory names in
     ``not_gathered`` is not compared.  With the inventory's ``notify_pairs``, the same for
     recovery pairs (:func:`running_pair_problems`)."""
@@ -1315,11 +1350,8 @@ def running_problems(
                 if known and not core.is_unit(name):
                     why = f"units {name} runs but is no module's or the core's"
                     out.append(Problem("running", why))
-                if kind == "tables" and core is not None and core.table_namespace:
-                    schema = name.removeprefix("table:").split(".", 1)[0]
-                    if schema == core.table_namespace and name not in core.tables:
-                        why = f"tables {name} is in the core's namespace but is no core table"
-                        out.append(Problem("running", why))
+                if kind == "tables":
+                    out += _unbound_table(name, site, core)
                 continue
             if owner not in sel:
                 why = f"{kind} {name} runs for {owner}, which the site does not select"
@@ -1488,6 +1520,11 @@ def _runtime(
     if "tables" not in inventory.get("not_gathered", []) and not (core and core.table_namespace):
         notes.append(
             "the core's OCSF tables were not read: a table bound to no module was not judged"
+        )
+    if "tables" not in inventory.get("not_gathered", []) and lab_table_namespaces(site) is None:
+        notes.append(
+            "the lab's own table namespaces are not declared (lab_table_namespaces): a table in a "
+            "namespace that is no module's or the core's was not judged"
         )
     skipped = [k for k in INVENTORY_KINDS if k in inventory.get("not_gathered", [])]
     if skipped:
