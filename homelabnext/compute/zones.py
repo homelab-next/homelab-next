@@ -262,6 +262,19 @@ def site_addresses(path: str | Path) -> dict[str, tuple[str, ...]]:
     return addresses_from_site(doc) if isinstance(doc, Mapping) else {}
 
 
+def site_delegated6(path: str | Path) -> Any:
+    """The site's ``delegated_prefixes6`` (site 1.5) as written, or None when it declares none:
+    returned unjudged, for compute validation to judge (an unusable value is a problem there,
+    never read as "no declaration")."""
+    from homelabnext.network.loader import SiteError, load_site
+
+    try:
+        doc = load_site(path)
+    except SiteError as exc:
+        raise _site_error(exc) from exc
+    return doc.get("delegated_prefixes6") if isinstance(doc, Mapping) else None
+
+
 def site_power(path: str | Path) -> dict[str, Any] | None:
     """The site's power facts (:func:`homelabnext.power.site_power`) for a site file, or None
     when it has no ``power`` section."""

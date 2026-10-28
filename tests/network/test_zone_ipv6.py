@@ -88,6 +88,8 @@ def test_a_canonical_48_to_64_is_a_prefix(prefix):
         (_net(0x2001_0020 << 96, 48), "is not unique-local"),  # ORCHIDv2
         (_net(0x5F00 << 112, 48), "is not unique-local"),  # SRv6 SIDs
         (_net(0x4000 << 112, 48), "is not unique-local"),  # unassigned
+        (_net(0x3FFE_0000_0005 << 80, 48), "3ffe::/16"),  # the retired 6bone
+        (_net(0x2000_0000_0005 << 80, 48), "2000::/16"),  # reserved, never allocated
     ],
 )
 def test_a_prefix_that_names_no_one_zone_is_refused(prefix, why):

@@ -66,6 +66,8 @@ PREFIXES = (
     net6(0x2001_0002 << 96, 48),  # benchmarking, inside 2001::/23
     net6(0x2001_01FF << 96, 48),  # the last /48 inside 2001::/23
     net6(0x2001_0200 << 96, 48),  # the first /48 past it
+    net6(0x3FFE_0000_0005 << 80, 48),  # inside the retired 6bone 3ffe::/16
+    net6(0x2000_0000_0005 << 80, 48),  # inside the reserved 2000::/16
     net6(0x2002 << 112, 48),  # 6to4
     net6(0x64_FF9B << 96, 64),  # NAT64, well-known
     net6(0x64_FF9B_0001 << 80, 48),  # NAT64, local use

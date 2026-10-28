@@ -668,6 +668,7 @@ def inputs(
         require_baselines=False,
         power=site_power(site_path),
         site_addresses=addresses_from_site(doc),
+        delegated6=doc.get("delegated_prefixes6"),
     )
     nodes_file = Path(guests_dir) / NODES_FILE
     nodes = load_nodes(nodes_file) if nodes_file.is_file() else {}
