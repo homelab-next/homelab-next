@@ -9,7 +9,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # the role tests' own helpers, beside this file
-from rolerun import prefetch_first_runs
+from rolerun import prefetch_first_runs, workers
+
+
+def pytest_configure(config):
+    # a bad HNX_ROLERUN_WORKERS fails the session once, here, not every first-run test later
+    try:
+        workers()
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from None
 
 
 @pytest.fixture

@@ -1182,9 +1182,14 @@ client registers when it starts; an absent file registers nothing, and the gathe
 that is not an inventory name, or a file that does not parse, fails the census, for the whole
 fleet: one host's stray name stops it. `mcp_servers` is gathered when at least one host lists a
 configuration and stays in `not_gathered` otherwise. The names themselves are only checked for
-shape, so a secret pasted where a server name belongs (lower case, digits and hyphens pass) comes
-back like any name; a name over 24 characters that is no one's, or that is not an inventory name,
-is printed as its first 12 characters and its length, never whole.
+shape, so a secret pasted where a server name belongs (lower case, digits and hyphens pass) could
+come back like any name. Three bounds limit that. A name over 48 characters is refused on the host
+and again by `gather`, so it is never returned, written to the census answer or persisted in the
+inventory. Every problem and refusal that names a server prints it clipped: the owning module's
+id whole (it says which module the name was bound to) and, when the rest is over 16 characters,
+only the first 8 of it and the name's length. What is persisted is the census answer per host and
+the gathered inventory's `mcp_servers`: names of at most 48 characters, in the name shape, which a
+short pasted secret could still be; both files are the runner's, mode 0600.
 
 The loader matches each registered name back to its catalog record by the record's instance
 template (`instance:`, default `{id}`: `{id}` is the record's id and every other placeholder one

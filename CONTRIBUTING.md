@@ -201,7 +201,8 @@ and an entry that no longer excuses anything fails the lint.
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
   `tests/roles` starts each module's independent first role runs together, one per CPU and at
-  most 8 at once; `HNX_ROLERUN_WORKERS=N` sets the number.
+  most 8 at once; `HNX_ROLERUN_WORKERS=N` sets the number (any positive integer of up to four
+  digits: an explicit value is not capped), and a bad value stops the session at start.
 - **Shards.** CI runs the suite as six jobs per Python version: `pytest --shard I/6
   --shard-report FILE` runs the tests whose node id hashes to the I-th sixth and writes what it
   collected, ran and timed. Each shard holds the budgets on its own share of each suite; the `test-ok` job

@@ -127,6 +127,10 @@ MCP_CLIENTS = {
 SOCKET_RE = re.compile(r"(?:tcp|udp)/[1-9][0-9]{0,4}(?:@lo)?")
 MAX_HOSTS = 4096
 MAX_LINES = 4096
+#: the longest MCP server name a census accepts (the role's reader refuses longer ones on the host):
+#: the longest instance name in the tree is 33 characters, and past 48 a name is more likely a
+#: secret pasted where a name belongs than a name, so it is refused and never persisted
+MCP_NAME_MAX = 48
 MAX_SOCKETS = 16384
 
 
@@ -220,7 +224,7 @@ def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
         if len(servers) > MAX_LINES or len(set(map(str, servers))) != len(servers):
             raise CensusError(f"{host}: {ld._shown(path)}: the server names are not a set")
         for name in servers:
-            if not isinstance(name, str) or len(name) > 64 or not NAME_RE.fullmatch(name):
+            if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not NAME_RE.fullmatch(name):
                 raise CensusError(
                     f"{host}: {ld._shown(path)}: server {ld._clipped(name)} is not an inventory name"
                 )

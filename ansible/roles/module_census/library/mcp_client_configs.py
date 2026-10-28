@@ -34,6 +34,7 @@ Ansible's own module_utils (and PyYAML, only for a Hermes file).
 
 from __future__ import annotations
 
+import collections.abc
 import errno
 import json
 import os
@@ -90,8 +91,11 @@ BASENAMES = {
 }
 #: where each client lists its servers
 SERVERS_KEY = {"claude-code": "mcpServers", "generic": "mcpServers", "hermes": "mcp_servers"}
-#: an inventory name (homelabnext.modules.census.NAME_RE), at most 64 characters
+#: an inventory name (homelabnext.modules.census.NAME_RE)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: the longest MCP server name (homelabnext.modules.census.MCP_NAME_MAX): a longer one is refused
+#: here, never returned, since past this length a name is more likely a pasted secret than a name
+MCP_NAME_MAX = 48
 #: the most server names one file may register
 MAX_SERVERS = 1024
 
@@ -198,6 +202,11 @@ def _yaml_loader():
             seen = set()
             for key_node, _ in node.value:
                 key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, collections.abc.Hashable):
+                    # a complex key (a sequence or mapping as a key): no configuration has one
+                    raise yaml.constructor.ConstructorError(
+                        None, None, "a key that is not a scalar", key_node.start_mark
+                    )
                 if key in seen:
                     raise yaml.constructor.ConstructorError(
                         None, None, f"a duplicate key {key!r}", key_node.start_mark
@@ -222,8 +231,7 @@ def server_names(text: str, client: str, path: str) -> list[str]:
                 raise Refused(f"{path} does not parse ({type(exc).__name__})") from None
         else:
             doc = json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
-    # TypeError: a complex key (a sequence or mapping as a key) cannot be hashed
-    except (ValueError, TypeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         why = "nested too deeply" if isinstance(exc, RecursionError) else type(exc).__name__
         raise Refused(f"{path} does not parse ({why})") from None
     key = SERVERS_KEY[client]
@@ -235,7 +243,7 @@ def server_names(text: str, client: str, path: str) -> list[str]:
     if len(servers) > MAX_SERVERS:
         raise Refused(f"{path} registers more than {MAX_SERVERS} servers")
     for name in servers:
-        if not isinstance(name, str) or len(name) > 64 or not NAME_RE.fullmatch(name):
+        if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not NAME_RE.fullmatch(name):
             raise Refused(f"{path}: a server name is not an inventory name")
     return sorted(servers)
 

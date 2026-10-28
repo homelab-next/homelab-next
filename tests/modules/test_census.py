@@ -634,6 +634,7 @@ def test_hnx_modules_gather_writes_a_new_inventory(tmp_path, capsys):
     out = tmp_path / "inventory.json"
     assert mcli.main(["gather", str(d), "--out", str(out)]) == 0
     assert json.loads(out.read_text())["units"] == ["egress"]
+    assert out.stat().st_mode & 0o777 == 0o600  # the runner's alone, like the census answers
     assert "1 unit(s) written" in capsys.readouterr().out
     # never over an existing file, and an unreadable census is a usage error (2), not an inventory
     assert mcli.main(["gather", str(d), "--out", str(out)]) == 2

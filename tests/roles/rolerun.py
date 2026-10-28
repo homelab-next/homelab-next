@@ -107,8 +107,9 @@ MAX_WORKERS = 8  # first runs started at once: enough for CI's runners, gentle o
 
 
 def workers(env=None, cpus=None) -> int:
-    """How many first runs start at once: ``HNX_ROLERUN_WORKERS`` (a positive integer) when it is
-    set, else the CPUs this process may use, at most :data:`MAX_WORKERS`."""
+    """How many first runs start at once: ``HNX_ROLERUN_WORKERS`` (a positive integer of up to
+    four digits, any size the operator asks for: only the default is capped) when it is set, else
+    the CPUs this process may use, at most :data:`MAX_WORKERS`."""
     env = os.environ if env is None else env
     raw = env.get("HNX_ROLERUN_WORKERS")
     if raw is not None:
