@@ -461,7 +461,7 @@ under `lab/modules/` and `lab/modules.lock` (which `hnx modules review-tier` doe
 roots are the repository's `modules/` and `examples/modules/`), and the model role table
 `lab/model_roles.json` with the swap records under `lab/swaps/` (a binding's `leaves_lab` and a
 role's `fallback` decide which modules need `grants.cloud_models`, and no pin shows them; the
-overlay's swap gate is `hnx modules swap-gate --root`, see [modules.md](modules.md)), and what
+overlay's swap gate is `hnx modules swap-gate --overlay .`, which `checks.yml`'s `swap-gate` job runs on every pull request; see [modules.md](modules.md)), and what
 vouches for a model a swap rebinds to (`lab/model-serving/model_store.json`,
 `lab/model_roles.eval.json` and `lab/model-evals/`, as the module tier rates the repository's).
 The `CODEOWNERS` template names all of them.

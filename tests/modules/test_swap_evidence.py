@@ -522,3 +522,144 @@ def test_a_rebind_record_does_not_cover_another_roles_trust_change(repo, report,
     assert rc == 1
     assert any("mdl:main-reasoner" in p for p in out["problems"]), out
     assert not any("mdl:fast-classifier" in p for p in out["problems"]), out
+
+
+# ------------------------------------------- the gate over a private overlay's lab/ layout
+
+LAB_ROLES = "lab/model_roles.json"
+LAB_STORE = "lab/model-serving/model_store.json"
+LAB_EVALS = "lab/model-evals"
+LAB_SWAPS = "lab/swaps"
+
+
+@pytest.fixture
+def overlay(tmp_path, report) -> Path:
+    """An overlay checkout: the base commit holds the role table, the store and the live report
+    under ``lab/`` (no golden suites: those are the installed hnx's); the working tree rebinds
+    ``mdl:fast-classifier``."""
+    root = tmp_path / "overlay"
+    (root / "lab" / "model-serving").mkdir(parents=True)
+    shutil.copy(ROLES, root / LAB_ROLES)
+    shutil.copy(STORE_FILE, root / LAB_STORE)
+    _write(root, f"{LAB_EVALS}/fast-classifier.json", report)
+    _git(root, "init", "-q")
+    _commit(root)
+    _write(root, LAB_ROLES, _rebound_doc())
+    return root
+
+
+def _ogate(root: Path, capsys, *extra: str, base: str = "HEAD") -> tuple[int, dict]:
+    rc = mcli.main(["swap-gate", "--overlay", str(root), "--base", base, "--json", *extra])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_an_overlay_change_covered_by_a_lab_record_passes(overlay, report, capsys):
+    _write(overlay, f"{LAB_SWAPS}/fast-classifier.json", _swap(report))
+    rc, out = _ogate(overlay, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+def test_the_same_overlay_change_uncovered_fails(overlay, capsys):
+    rc, out = _ogate(overlay, capsys)
+    assert rc == 1
+    (p,) = out["problems"]
+    assert f"{LAB_ROLES} changes" in p and f"no swap record under {LAB_SWAPS}/" in p
+    assert LAB_STORE in p and LAB_EVALS in p
+
+
+def test_a_record_under_the_repositorys_paths_covers_nothing_in_an_overlay(overlay, report, capsys):
+    _write(overlay, f"{se.SWAPS}/fast-classifier.json", _swap(report))
+    assert _ogate(overlay, capsys)[0] == 1
+
+
+def test_the_overlay_evidence_is_the_bases_not_the_changes(tmp_path, report, capsys):
+    """A store entry and a live report committed in the same change as the rebind vouch for
+    nothing: the base has neither."""
+    root = tmp_path / "overlay"
+    (root / "lab" / "model-serving").mkdir(parents=True)
+    shutil.copy(ROLES, root / LAB_ROLES)
+    _git(root, "init", "-q")
+    _commit(root)
+    _write(root, LAB_ROLES, _rebound_doc())
+    shutil.copy(STORE_FILE, root / LAB_STORE)
+    _write(root, f"{LAB_EVALS}/fast-classifier.json", report)
+    _write(root, f"{LAB_SWAPS}/fast-classifier.json", _swap(report))
+    rc = mcli.main(["swap-gate", "--overlay", str(root), "--base", "HEAD", "--json"])
+    err = capsys.readouterr().err
+    assert rc == 2 and f"{LAB_STORE} is not in" in err
+
+
+def test_an_overlay_report_added_in_the_change_does_not_hold_the_record(overlay, report, capsys):
+    other = {**report, "model": "someone-else"}
+    swap = _swap(other)  # pins a digest only the change's own (untracked) report would give
+    _write(overlay, f"{LAB_EVALS}/new.json", other)
+    _write(overlay, f"{LAB_SWAPS}/fast-classifier.json", swap)
+    rc, out = _ogate(overlay, capsys)
+    assert rc == 1 and any("is not supplied" in p for p in out["problems"])
+
+
+def test_the_overlay_head_table_is_not_read_through_a_link(overlay, tmp_path, capsys):
+    (overlay / LAB_ROLES).unlink()
+    (overlay / LAB_ROLES).symlink_to(_write(tmp_path, "t.json", _rebound_doc()))
+    rc = mcli.main(["swap-gate", "--overlay", str(overlay), "--base", "HEAD", "--json"])
+    assert rc == 2 and "a symbolic link" in capsys.readouterr().err
+
+
+def test_a_linked_lab_directory_in_the_overlay_is_refused(overlay, report, tmp_path):
+    real = tmp_path / "elsewhere"
+    _write(real, "fast-classifier.json", _swap(report))
+    (overlay / LAB_SWAPS).symlink_to(real)
+    rc = mcli.main(["swap-gate", "--overlay", str(overlay), "--base", "HEAD", "--json"])
+    assert rc == 1
+
+
+def test_an_overlay_without_a_role_table_at_the_base_is_refused(tmp_path, capsys):
+    root = tmp_path / "overlay"
+    root.mkdir()
+    (root / "README").write_text("x")
+    _git(root, "init", "-q")
+    _commit(root)
+    _write(root, LAB_ROLES, _rebound_doc())
+    rc = mcli.main(["swap-gate", "--overlay", str(root), "--base", "HEAD"])
+    assert rc == 2 and f"{LAB_ROLES} is not in" in capsys.readouterr().err
+
+
+def test_an_unchanged_overlay_table_passes(overlay, capsys):
+    _write(overlay, LAB_ROLES, json.loads(ROLES.read_text(encoding="utf-8")))
+    rc, out = _ogate(overlay, capsys)
+    assert (rc, out["problems"]) == (0, []) and "unchanged" in out["decided"]
+
+
+def test_the_overlay_takes_the_ci_base(overlay, report, capsys, monkeypatch):
+    _write(overlay, f"{LAB_SWAPS}/fast-classifier.json", _swap(report))
+    sha = _git(overlay, "rev-parse", "HEAD")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("HNX_PR_BASE", sha)
+    rc = mcli.main(["swap-gate", "--overlay", str(overlay), "--ci-base", "--json"])
+    assert rc == 0 and json.loads(capsys.readouterr().out)["problems"] == []
+
+
+@pytest.mark.parametrize("extra", [["--root"], ["--roles", "x.json"]])
+def test_overlay_refuses_root_and_roles(overlay, extra, tmp_path, capsys):
+    args = ["swap-gate", "--overlay", str(overlay), "--base", "HEAD", *extra]
+    if extra[0] == "--root":
+        args.append(str(tmp_path))
+    assert mcli.main(args) == 2 and "--overlay" in capsys.readouterr().err
+
+
+def test_overlay_must_be_a_directory(tmp_path, capsys):
+    rc = mcli.main(["swap-gate", "--overlay", str(tmp_path / "nope"), "--base", "HEAD"])
+    assert rc == 2 and "not a directory" in capsys.readouterr().err
+
+
+def test_repository_mode_paths_are_unchanged():
+    assert (se.ROLES, se.STORE, se.REPORTS, se.EVALS, se.SWAPS) == (
+        "examples/model_roles.json",
+        "examples/model-serving/model_store.json",
+        ("examples/model_roles.eval.json",),
+        "examples/model-evals",
+        "examples/swaps",
+    )
+    repo = se.Layout(se.ROLES, se.STORE, se.REPORTS, se.EVALS, se.SWAPS, se.SUITES)
+    assert repo == se.REPO
+    assert se.OVERLAY.suites is None  # the installed hnx's golden suites

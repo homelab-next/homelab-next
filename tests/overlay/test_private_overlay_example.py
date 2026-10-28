@@ -494,6 +494,31 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         assert rules.get(path), path
 
 
+def test_the_swap_gate_runs_on_every_pull_request():
+    """checks.yml runs the swap gate over the lab's own evidence (lab/), with the pinned hnx, the
+    base read through git (a full-history checkout), the same refusals as the other hnx jobs
+    and no secret."""
+    checks = yaml.safe_load((SKELETON / ".github" / "workflows" / "checks.yml").read_text())
+    job = checks["jobs"]["swap-gate"]
+    steps = job["steps"]
+    assert steps[0]["name"] == "refuse an unpinned hnx"
+    (step,) = [s for s in steps if s.get("name") == "a role-table change needs a swap record"]
+    assert step["run"].strip() == "hnx modules swap-gate --overlay . --ci-base"
+    assert step["env"] == {
+        "HNX_PR_BASE": "${{ github.event.pull_request.base.sha }}",
+        "HNX_PUSH_BEFORE": "${{ github.event.before }}",
+    }
+    assert "continue-on-error" not in step and "if" not in step
+    assert "secrets." not in yaml.safe_dump(job)
+    checkouts = [s for s in steps if "actions/checkout" in s.get("uses", "")]
+    assert all(s["with"]["persist-credentials"] is False for s in checkouts)
+    assert any(s["with"].get("fetch-depth") == 0 for s in checkouts)
+    (pinned,) = [s for s in checkouts if s["with"].get("path") == "hnx"]
+    assert pinned["with"]["repository"] == "homelab-next/homelab-next"
+    assert pinned["with"]["ref"] == "${{ vars.HNX_REF }}"
+    assert "--root" not in step["run"]  # the overlay is the checkout; hnx is only the code
+
+
 @pytest.mark.parametrize("workflow", ["checks.yml", "deploy.yml"])
 def test_every_pinned_checkout_refuses_an_hnx_the_change_carries(workflow):
     """The pinned homelab-next is checked out to hnx/ and installed from there: each job first

@@ -1480,6 +1480,27 @@ and `meaning_changes` is recorded, never checked.
   evidence, live required, which also means a leg for every role the change rebinds. An unchanged
   table passes.
 
+  **The overlay's gate: `hnx modules swap-gate --overlay DIR --base REV | --ci-base`.** `DIR` is
+  the overlay checkout and the git root; the gate reads the same files under `lab/` with the
+  repository's names: the role table `lab/model_roles.json`, the store
+  `lab/model-serving/model_store.json`, the reports `lab/model_roles.eval.json` and
+  `lab/model-evals/`, and the records `lab/swaps/` (`swap_evidence.OVERLAY`; the repository's
+  paths are `swap_evidence.REPO` and read nothing from the overlay). The guarantees are the
+  repository's: the evidence is the base commit's, the head table goes through the symlink-checked
+  reader, a record must be added or changed in the change, and every unreadable input is exit 2.
+  `--root` and `--roles` are refused with `--overlay` (the layout is fixed), and so is a
+  `DIR` that is not a directory. The one difference is the golden suites: an overlay carries none,
+  so the reports are checked with the installed package's
+  (`homelabnext.golden.pins.DEFAULT_SUITES`), the code CI installs from the pinned commit, never a
+  file of the change. The overlay template's `checks.yml` job `swap-gate` runs
+  `hnx modules swap-gate --overlay . --ci-base` on every pull request and push, with the pinned
+  `HNX_REF` (refused unless a full SHA), a refusal of an `hnx/` the change carries, a full-history
+  checkout for the base, and no secret. `swap-check` still refuses `--overlay`. Two things for an
+  operator: add `swap-gate` to the overlay's required status checks with the template's other
+  jobs (a job no rule requires gates nothing), and the change that adds an overlay's **first**
+  `lab/model_roles.json` cannot pass the gate (there is no base table to hold it against, so it
+  exits 2): merge that one change by an owner override, after which every later change is gated.
+
   **Fields that are not the pin.** `ModelEvidence` compares roles by their pins (backend, model id,
   version, digest), which do not show a binding's `leaves_lab` (what `rules.cloud_roles` reads to
   require `grants.cloud_models`), a role's `fallback` (which it follows) or any other field. The

@@ -64,10 +64,15 @@ checks").
     reports, the golden suites) from the base commit; live evidence required.  ``--report`` adds a
     report for a local run.  ``--overlay`` is refused: the evidence is read at the repository's
     fixed paths, so an overlay is checked from its own checkout (``--root``).
-``hnx modules swap-gate --base REV | --ci-base [--roles REL] [--json]``
+``hnx modules swap-gate --base REV | --ci-base [--roles REL | --overlay DIR] [--json]``
     the CI gate: when the role table differs from the base's, a swap record added or changed under
     ``examples/swaps/`` must cover it, its ``model_roles`` legs holding against the base's
-    evidence.  An unchanged table passes.
+    evidence.  An unchanged table passes.  ``--overlay DIR`` runs it over a private overlay
+    checkout (``DIR`` is the git root): the role table, the store, the reports and the swap
+    records are the overlay's ``lab/model_roles.json``, ``lab/model-serving/model_store.json``,
+    ``lab/model_roles.eval.json`` + ``lab/model-evals/`` and ``lab/swaps/``, with the same
+    guarantees; the golden suites are the installed package's.  It refuses ``--root`` and
+    ``--roles`` (the layout is fixed).
 
 For ``check`` and ``render``, defaults follow the overlay layout: with ``--overlay DIR`` the site
 is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
@@ -320,6 +325,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
     g.add_argument("--roles", default=None, help="the role table, relative to the root")
+    g.add_argument(
+        "--overlay",
+        type=Path,
+        help="a private overlay checkout (its git root): the evidence, swap records and role "
+        "table are its lab/ files (refuses --root and --roles)",
+    )
     which = g.add_mutually_exclusive_group(required=True)
     which.add_argument("--base", help="the commit the change starts from")
     which.add_argument(
@@ -432,9 +443,21 @@ def _swap_gate(args: argparse.Namespace) -> int:
     """1 when the role table changed and no passing swap record in the change covers it."""
     from homelabnext.modules import swap_evidence as se
 
-    root = _root(args.root)
+    layout = se.REPO
+    if args.overlay is not None:
+        if args.root is not None or args.roles is not None:
+            raise ld.LoaderError(
+                "--overlay: the overlay is the git root and its lab/ layout is fixed; "
+                "--root and --roles are refused"
+            )
+        if not args.overlay.is_dir():
+            raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
+        root = args.overlay.resolve()
+        layout = se.OVERLAY
+    else:
+        root = _root(args.root)
     base = _ci_base(root, "swap-gate") if args.ci_base else args.base
-    problems, what = se.gate(root, base or "", roles=args.roles or se.ROLES)
+    problems, what = se.gate(root, base or "", roles=args.roles, layout=layout)
     if args.json:
         print(json.dumps({"problems": problems, "decided": what}, indent=2))
     else:
