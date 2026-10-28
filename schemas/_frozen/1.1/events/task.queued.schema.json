@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/task.queued/1.1",
+  "title": "Event homelabnext.task.queued",
+  "description": "A unit of agent work entered the queue. idempotency_key makes re-queueing harmless.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.task.queued"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "profile": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "idempotency_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "shadow": {
+              "type": "boolean"
+            },
+            "deadline": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            }
+          },
+          "required": [
+            "task_id",
+            "profile",
+            "priority",
+            "idempotency_key"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

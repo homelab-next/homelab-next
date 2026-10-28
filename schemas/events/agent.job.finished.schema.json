@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.1",
   "title": "Event homelabnext.agent.job.finished",
   "description": "The usage record of one agent job (one run in the orchestration controller's queue) that reached a terminal state: completed, failed, cancelled or timed out. Published by the controller (source: the orchestration controller's service id; the status hub's consumer pins it by configuration and refuses any other source) through its durable outbox in the same transaction as the terminal transition, once per run; agent.job.failed is still emitted for failures (finished is the usage record of every outcome). The id derives from the run id, so a re-sent record is a duplicate. data holds names, counts, sizes and times only, NEVER prompt text, task text, tool input or output or model output (the same rule as agent.activity's summary tier): every object is closed (additionalProperties false), so a text field cannot ride along, subject, when sent, is the run id, and the status hub's consumer refuses an envelope attribute the envelope schema does not declare (a CloudEvents extension), so no free text rides on the envelope either. gateway_tag is the tag every model request of the job carries at the LLM gateway, which joins the gateway's per-turn records to the job (docs/orchestration-telemetry.md). Evolve additively.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {
@@ -18,7 +18,7 @@
         },
         "dataschema": {
           "const": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0",
-          "description": "when sent, this schema's $id, never anything else"
+          "description": "when sent, the id of this data contract as first published (1.0, kept across minors so a 1.0 producer stays valid), never anything else"
         },
         "data": {
           "type": "object",

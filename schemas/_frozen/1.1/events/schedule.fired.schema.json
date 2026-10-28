@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/schedule.fired/1.1",
+  "title": "Event homelabnext.schedule.fired",
+  "description": "A named schedule fired (a StackStorm CronTimer, docs/stackstorm.md). A scheduled workflow pack triggers on this type with a where condition on data.schedule. The id derives from the schedule and fired_at, so the same firing is the same event.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.schedule.fired"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "schedule": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "fired_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            },
+            "cron": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "required": [
+            "schedule",
+            "fired_at"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

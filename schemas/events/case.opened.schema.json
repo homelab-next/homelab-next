@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/case.opened/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/case.opened/1.1",
   "title": "Event homelabnext.case.opened",
   "description": "An alert (or several) was promoted to a case in the case-management capability.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

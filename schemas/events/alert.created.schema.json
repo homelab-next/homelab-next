@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/alert.created/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/alert.created/1.1",
   "title": "Event homelabnext.alert.created",
   "description": "A detection fired. Starts the reaction chain; carries the logical detection id, never an engine rule number.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

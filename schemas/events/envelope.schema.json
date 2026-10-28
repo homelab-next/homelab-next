@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/envelope/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/envelope/1.1",
   "title": "Event envelope (CloudEvents 1.0 compatible)",
   "description": "CloudEvents 1.0 structured-mode JSON envelope. Required: specversion, id, source, type, time. source is a logical id (never a URL). id is the idempotency key: redelivery of the same id is harmless. Extension attributes must be lower-case alphanumeric (CloudEvents naming rule) so new ones are additive. Enrichment adds the optional extension attributes assetid, assetowner and assetcriticality (additive).",
   "type": "object",

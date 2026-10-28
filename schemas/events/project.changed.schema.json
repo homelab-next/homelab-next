@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/project.changed/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/project.changed/1.1",
   "title": "Event homelabnext.project.changed",
   "description": "A project, step or task changed (the projects capability, docs/projects.md). One event per item version: the Markdown store's change journal and the OpenProject change feed (webhook and updatedAt poll) both emit it. The event id derives from the item's identity and version (Markdown: '<uid>:v<version>'; OpenProject: 'wp:<id>:v<lockVersion>'), so the webhook and the poll seeing the same version converge on one id. Identities are uids (UUIDv7), never display numbers.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

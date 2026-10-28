@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/proposal.decided/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/proposal.decided/1.1",
   "title": "Event homelabnext.proposal.decided",
   "description": "The approver decided a proposal. The only event that moves a note out of the inbox lane.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/decision.requested/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/decision.requested/1.1",
   "title": "Event homelabnext.decision.requested",
   "description": "A caller asked the decision service to judge a subject against a decision spec.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

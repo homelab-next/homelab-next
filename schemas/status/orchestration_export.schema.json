@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/status/orchestration_export/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/status/orchestration_export/1.1",
   "title": "Orchestration telemetry export line",
   "description": "One line of `hnx orchestration export` (homelabnext.orchestration.export/1, JSON lines; docs/orchestration-telemetry.md): the header first (the exporting store's job sources, retention and export time), then one line per job (its agent.job.finished envelope as consumed, or null for a job a store before exports kept without it, and when its turns settled) and one per turn (the neutral turn record, conformance/protocols/inference.py TURN_FIELDS; its patterns are the record's own, a test keeps them equal). Every object is closed. An import judges a job by the consumer, not by this schema. Evolve additively; an incompatible change is export/2.",
   "oneOf": [
@@ -74,7 +74,7 @@
         "event": {
           "anyOf": [
             {
-              "$ref": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0"
+              "$ref": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.1"
             },
             {
               "type": "null"

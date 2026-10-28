@@ -45,6 +45,8 @@ allow:
     reason: other gates' reviewed path lists; a path that names a product is counted where it lives
   - path: "tools/dup_check.baseline.json"
     reason: the duplication baseline lists paths; a path that names a product is counted where it lives
+  - path: "schemas/_frozen/*"
+    reason: frozen baselines are append-only byte copies of reviewed live schemas (schema_check.py --freeze), counted where the live schema lives; a copy of a schema that names a product in an enum or a description would otherwise double its debt
   - path: "NOTICE"
     reason: the attribution notice is prose
   - path: "tools/tests/test_product_name_lint.py"

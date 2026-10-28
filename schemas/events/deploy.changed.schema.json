@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/deploy.changed/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/deploy.changed/1.1",
   "title": "Event homelabnext.deploy.changed",
   "description": "A component was released or deployed: what changed, from which version to which. Emitted once per deploy by the release/deploy path (homelabnext.events.deploy); the changes list comes from the component's changelog section for the new version, so the event and the changelog never disagree.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {
