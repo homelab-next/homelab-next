@@ -87,6 +87,8 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
         "no host holds a notify pairs record that counts: the recovery pairs were not compared "
         "(a notifier records them with --notify-pairs-dir)",
         "no host's census asked a broker (module_census_broker_socket): agents not gathered",
+        "no host lists an installed MCP client configuration (module_census_mcp_configs): "
+        "MCP servers not gathered",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")

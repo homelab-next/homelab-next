@@ -551,7 +551,10 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
     under `/run/`) in the overlay's `host_vars` and list root (`{uid: 0}`) in that broker's
     manifest `operators` (broker manifest 1.8), and the census also asks the broker, as root, which
     agents it serves; without the socket `agents` is noted as not gathered, and without the
-    operator entry the broker refuses and the census fails.
+    operator entry the broker refuses and the census fails. On a host with installed MCP client
+    configurations, list them in `module_census_mcp_configs` (each `{path, client}`) in its
+    `host_vars`, and the census reads what each client registers; with none listed anywhere,
+    `mcp_servers` is noted as not gathered.
 11. **What runs**: `hnx modules gather` builds the inventory from that census and `hnx modules
     check --deploy --running` compares it with what the lab declares (with an empty selection, any
     running unit of a module is a mismatch); a mismatch fails the run after the deploy has applied

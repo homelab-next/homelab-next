@@ -23,6 +23,11 @@ argument_specs:
         type: str
         description: "The hnx command a broker host runs, an absolute path (a test points it at a stand-in)."
         default: /opt/hnx/bin/hnx
+      module_census_mcp_configs:
+        type: list
+        elements: dict
+        description: "The MCP client configurations installed on this host (what hnx mcp catalog render wrote and the deploy installed), each {path, client}: path absolute, client one of claude-code, generic, hermes (a fleet host's clients). Each is read in one step by the role's mcp_client_configs module, never through a link at any step, from directories its group and others may not write; an absent file is read as a client that registers nothing. Empty: the host has none, and the census does not look."
+        default: []
   health:
     short_description: Fail unless the host answers systemctl --version.
     options:

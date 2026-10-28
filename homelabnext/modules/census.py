@@ -54,7 +54,22 @@ and the pairs are not compared: the census cannot tell "no notifier records its 
 pair runs".  A record is the owning service's word about its own pairs, believed as a host's
 ``systemctl`` output is.
 
-Kinds the hosts cannot report (service rows that answer, MCP servers, tables) are named in the
+**MCP servers.**  On a host that lists the MCP client configurations it has installed (the role's
+``module_census_mcp_configs``: each ``{path, client}``, what ``hnx mcp catalog render`` wrote and
+the deploy put in place), the role reads each one in one step (no link at any step, from
+directories its group and others may not write, a small regular file) and the answer carries
+``mcp``, per file its client and text, or null where it is absent.  Each is parsed for its client
+(:data:`MCP_CLIENTS`: the ``mcpServers`` object of a JSON client file, the ``mcp_servers`` mapping
+of a Hermes YAML one, read with the loader's strict YAML reader) and every server name it holds is
+one name the client registers when it starts: a record's id, or its instance name
+(``instance:`` in the catalog record), which the loader matches back to the record.  An absent
+file registers nothing.  ``mcp_servers`` is gathered when at least one host listed a
+configuration and stays in ``not_gathered`` otherwise.  A server name that is not an inventory
+name, or a file that does not parse, fails the census.  The file is what the client reads, so a
+home that lost an entry, or one a hand added, shows; what a client did with it after it started
+(a server that failed to launch) does not.
+
+Kinds the hosts cannot report (service rows that answer, tables) are named in the
 inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that merely
 leaves a kind out is refused by its schema, never read as "nothing runs".
 """
@@ -88,6 +103,12 @@ ACTIVE_RE = re.compile(
 )
 #: an inventory name (``platform/module_inventory`` ``$defs.name``)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: the client formats the census reads, and the key of the server map each one holds
+MCP_CLIENTS = {
+    "claude-code": "mcpServers",
+    "generic": "mcpServers",
+    "hermes": "mcp_servers",
+}
 MAX_HOSTS = 4096
 MAX_LINES = 4096
 
@@ -154,6 +175,43 @@ def parse_agents(lines: Any, host: str) -> set[str]:
     return keys
 
 
+def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
+    """The MCP server names one host's installed client configurations register, and a note for
+    each configuration that is absent (it registers nothing)."""
+    if not isinstance(configs, list) or not configs or len(configs) > MAX_LINES:
+        raise CensusError(f"{host}: the MCP client configurations are not a non-empty list")
+    names: set[str] = set()
+    notes: list[str] = []
+    for i, entry in enumerate(configs, 1):
+        if not isinstance(entry, dict) or set(entry) != {"path", "client", "text"}:
+            raise CensusError(f"{host}: MCP client configuration {i} is not {{path, client, text}}")
+        path, client, text = entry["path"], entry["client"], entry["text"]
+        if not isinstance(path, str) or client not in MCP_CLIENTS:
+            raise CensusError(f"{host}: MCP client configuration {i} names no known client")
+        if text is None:
+            notes.append(f"{host}: {ld._shown(path)} is absent: {client} registers nothing from it")
+            continue
+        if not isinstance(text, str):
+            raise CensusError(f"{host}: {ld._shown(path)} is not text")
+        try:
+            doc = ld.parse_yaml(text) if client == "hermes" else json.loads(text)
+        except (ld.Unreadable, ValueError, RecursionError) as exc:
+            why = exc if not isinstance(exc, RecursionError) else "nested too deeply"
+            raise CensusError(f"{host}: {ld._shown(path)} does not parse ({why})") from None
+        if not isinstance(doc, dict):
+            raise CensusError(f"{host}: {ld._shown(path)} is not a {client} configuration")
+        servers = doc.get(MCP_CLIENTS[client], {})
+        if not isinstance(servers, dict):
+            raise CensusError(f"{host}: {ld._shown(path)}: {MCP_CLIENTS[client]} is not a mapping")
+        for name in servers:
+            if not isinstance(name, str) or len(name) > 64 or not NAME_RE.fullmatch(name):
+                raise CensusError(
+                    f"{host}: {ld._shown(path)}: server {ld._shown(name)} is not an inventory name"
+                )
+            names.add(name)
+    return names, notes
+
+
 def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     """The inventory the census in ``directory`` describes, and notes on what it does not cover.
 
@@ -187,12 +245,15 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     pairs: set[tuple[str, str, str | None]] = set()
     records = 0
     stale_notes: list[str] = []
+    mcp: set[str] = set()
+    mcp_hosts = 0
     base = {"host", "enabled", "active", "pairs"}
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
-        if not isinstance(doc, dict) or set(doc) not in (base, base | {"agents"}):
+        if not isinstance(doc, dict) or not base <= set(doc) <= base | {"agents", "mcp"}:
             raise CensusError(
-                f"{file}: not {{host, enabled, active, pairs}} (and agents on a broker host)"
+                f"{file}: not {{host, enabled, active, pairs}} (and agents on a broker host, mcp "
+                "where MCP client configurations are installed)"
             )
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
@@ -208,6 +269,11 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
         if "agents" in doc:
             agents |= parse_agents(doc["agents"], host)
             brokers += 1
+        if "mcp" in doc:
+            found_mcp, absent = parse_mcp(doc["mcp"], host)
+            mcp |= found_mcp
+            stale_notes += absent
+            mcp_hosts += 1
     notes = [
         f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
@@ -218,13 +284,27 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
         notes.append(
             "no host's census asked a broker (module_census_broker_socket): agents not gathered"
         )
+    if mcp_hosts:
+        notes.append(
+            f"read the MCP client configurations of {mcp_hosts} host(s): {len(mcp)} server "
+            "name(s) registered"
+        )
+    else:
+        notes.append(
+            "no host lists an installed MCP client configuration (module_census_mcp_configs): "
+            "MCP servers not gathered"
+        )
     if templates:
         notes.append(
             f"{templates} template unit(s) or instance(s) (hnx-<name>@...) left out: an instance "
             "is not a unit a manifest declares"
         )
-    gathered = {"units", "agents"} if brokers else {"units"}
+    gathered = (
+        {"units"} | ({"agents"} if brokers else set()) | ({"mcp_servers"} if mcp_hosts else set())
+    )
     inventory: dict[str, Any] = {"schema_version": "1.0", "units": sorted(units)}
+    if mcp_hosts:
+        inventory["mcp_servers"] = sorted(mcp)
     if brokers:
         inventory["agents"] = sorted(agents)
     inventory["not_gathered"] = [k for k in ld.INVENTORY_KINDS if k not in gathered]

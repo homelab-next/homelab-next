@@ -170,7 +170,7 @@
       "items": {
         "$ref": "#/$defs/name"
       },
-      "description": "MCP server ids that are registered."
+      "description": "MCP server names the installed clients register: a catalog record's id, or one of its instance names (instance:, which the loader matches back to the record)."
     },
     "agents": {
       "type": "array",

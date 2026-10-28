@@ -3,7 +3,8 @@
 # notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
 # step by the role's notify_pairs_records module, and on a host that runs the broker
 # (module_census_broker_socket set) one more, the broker's operator answer of the agents it serves
-# (hnx broker agents, as root, which the broker's manifest must list in operators).  The answers
+# (hnx broker agents, as root, which the broker's manifest must list in operators), and the MCP
+# client configurations the host lists (module_census_mcp_configs, read in one step).  The answers
 # are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
@@ -16,7 +17,15 @@
       - module_census_broker_socket == '' or (module_census_broker_socket is match('^/run/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_broker_socket)
       - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z')
       - module_census_pairs_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_pairs_dir
-    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, the host name a plain name (it names the host's answer file), and the notify pairs directory an absolute path of [A-Za-z0-9._/-]"
+      - module_census_mcp_configs is sequence and module_census_mcp_configs is not string
+      - module_census_mcp_configs | reject('mapping') | list | length == 0
+      - module_census_mcp_configs | rejectattr('path', 'defined') | list | length == 0
+      - module_census_mcp_configs | rejectattr('client', 'defined') | list | length == 0
+      - module_census_mcp_configs | map(attribute='path') | reject('string') | list | length == 0
+      - module_census_mcp_configs | map(attribute='path') | reject('match', '^/[A-Za-z0-9._/-]+\Z') | list | length == 0
+      - module_census_mcp_configs | map(attribute='path') | select('search', '\.\.') | list | length == 0
+      - module_census_mcp_configs | map(attribute='client') | reject('in', module_census_mcp_clients) | list | length == 0
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, the host name a plain name (it names the host's answer file), the notify pairs directory an absolute path of [A-Za-z0-9._/-], and each MCP client configuration {path, client} an absolute path of [A-Za-z0-9._/-] and one of {{ module_census_mcp_clients | join(', ') }}"
 
 - name: Look at the census directory on the controller
   ansible.builtin.stat:
@@ -83,6 +92,15 @@
     max_bytes: "{{ module_census_pairs_max_bytes }}"
   register: module_census_pairs
 
+# One step (library/mcp_client_configs.py): each installed MCP client configuration, the servers
+# that client registers when it starts; hnx modules gather parses it per client.
+- name: Read the installed MCP client configurations, never through a link
+  mcp_client_configs:
+    files: "{{ module_census_mcp_configs }}"
+    max_bytes: "{{ module_census_mcp_max_bytes }}"
+  register: module_census_mcp
+  when: module_census_mcp_configs | length > 0
+
 # The broker answers a peer its manifest lists in operators (homelabnext.broker.server, manifest
 # 1.8): the agent keys it serves, one per line, and nothing else.  This one task runs as root, the
 # identity the census host's manifest lists; the others stay unprivileged.  A broker that does not
@@ -103,7 +121,7 @@
 
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
-    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {})) | to_json }}\n"
+    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {}) | combine({'mcp': module_census_mcp.configs} if module_census_mcp_configs | length > 0 else {})) | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
   vars:
