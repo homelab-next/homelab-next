@@ -349,6 +349,28 @@ def test_a_networkd_wan6_without_the_wans_file_named_warns(doc6, registry, flavo
     assert len(warned) == (flavor == "networkd"), rep.warnings
     if warned:
         assert "10-wan0.network is assumed" in warned[0]
+    # the assumed name follows the WAN interface, and stating any name silences it
+    d["adapters"]["options"]["linux"]["wan_interface"] = "eth1"
+    if flavor == "networkd":
+        assert any("10-eth1.network is assumed" in w for w in validate(d, registry).warnings)
+    d["adapters"]["options"]["linux"]["wan_network"] = "10-eth1.network"
+    assert not any("wan_network" in w for w in validate(d, registry).warnings)
+
+
+def test_rendering_another_adapters_site_with_linux_warns_of_an_unstated_wan_network(
+    doc, registry_path, tmp_path
+):
+    """Validation warns only for the site's own adapter; rendering a site whose own adapter is
+    not linux with ``--adapter linux`` writes the drop-in too, so the render says it."""
+    d = copy.deepcopy(doc)
+    d["router"]["wan6"] = {"ra": True}
+    site = tmp_path / "site.yml"
+    site.write_text(yaml.safe_dump(d))
+    argv = ["render", str(site), "--registry", str(registry_path), "--out", str(tmp_path / "o")]
+    for adapter, warned in (("linux", True), (CONTROLLER, False)):
+        out, err = io.StringIO(), io.StringIO()
+        assert cli.main([*argv, "--adapter", adapter], out=out, err=err) == 0
+        assert ("wan_network is not stated" in err.getvalue()) is warned, err.getvalue()
 
 
 def test_another_router_adapter_warns_that_it_ignores_wan6(doc, registry):
