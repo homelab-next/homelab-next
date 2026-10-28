@@ -24,6 +24,15 @@ checks").
     units some host reports enabled or active; the kinds the hosts do not report are named in
     ``not_gathered``.  ``FILE`` must not exist.  Exit 2 when the census cannot be read or does
     not cover every host the play targeted.
+``hnx modules catalog-tables --url URL --warehouse NAME [--token-file FILE] [--api-root PATH]``
+    run by the ``module_census`` role on a lake catalog host: the tables the Iceberg REST catalog
+    at ``URL`` (plain http to a loopback IP literal: the catalog's own host) lists in the
+    warehouse, within two minutes, as JSON
+    ``{"tables": ["<namespace>.<name>", ...], "left_out": n}``
+    (:func:`homelabnext.modules.census.catalog_tables`).  GET requests only; the token in
+    ``FILE`` (a plain name in ``/etc/homelabnext``, owner only, the caller's own) is sent to that
+    address alone and never printed.  Exit 2 when the catalog cannot be listed; the error names
+    the request and its HTTP status, never what the catalog answered.
 ``hnx modules render --site FILE --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
     the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
@@ -250,6 +259,17 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument(
         "--out", type=Path, required=True, help="the inventory to write (must not exist)"
     )
+    k = sub.add_parser("catalog-tables", help="the lake tables a loopback catalog lists (JSON)")
+    k.add_argument("--url", required=True, help="the catalog, http on a loopback IP literal")
+    k.add_argument("--warehouse", required=True, help="the warehouse whose tables are listed")
+    k.add_argument(
+        "--token-file",
+        type=Path,
+        help="a bearer token in /etc/homelabnext, the caller's own (0600)",
+    )
+    k.add_argument(
+        "--api-root", default="/catalog", help="the catalog's API root (default /catalog)"
+    )
     t = sub.add_parser("review-tier", help="the review tier of each manifest changed since a base")
     t.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
     add_base_arguments(t)
@@ -434,9 +454,25 @@ def _gather(args: argparse.Namespace) -> int:
     return 0
 
 
+def _catalog_tables(args: argparse.Namespace) -> int:
+    """Print the tables a loopback lake catalog lists; 2 when it cannot be listed."""
+    from homelabnext.modules import census
+
+    try:
+        found = census.catalog_tables(
+            args.url, args.warehouse, token_file=args.token_file, api_root=args.api_root
+        )
+    except census.CensusError as exc:
+        raise ld.LoaderError(f"catalog-tables: {exc}") from None
+    print(json.dumps(found, separators=(",", ":")))
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.cmd == "gather":
         return _gather(args)
+    if args.cmd == "catalog-tables":
+        return _catalog_tables(args)
     if args.cmd == "review-tier":
         return _review_tier(args)
     if args.cmd == "swap-check":

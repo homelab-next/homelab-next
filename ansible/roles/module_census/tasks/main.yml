@@ -5,8 +5,10 @@
 # notify_pairs_records module, and on a host that runs the broker
 # (module_census_broker_socket set) one more, the broker's operator answer of the agents it serves
 # (hnx broker agents, as root, which the broker's manifest must list in operators), and the MCP
-# client configurations the host lists (module_census_mcp_configs, read in one step).  The answers
-# are written on the controller
+# client configurations the host lists (module_census_mcp_configs, read in one step), and on a lake
+# catalog host (module_census_catalog_url set) the tables its Iceberg REST catalog lists (hnx
+# modules catalog-tables: GET only, to a loopback address, the token read on the host and never
+# returned; as root when a token file is named).  The answers are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
 - name: Validate the inputs
@@ -26,7 +28,12 @@
       - module_census_mcp_configs | map(attribute='path') | reject('match', '^/[A-Za-z0-9._/-]+\Z') | list | length == 0
       - module_census_mcp_configs | map(attribute='path') | select('search', '\.\.') | list | length == 0
       - module_census_mcp_configs | map(attribute='client') | reject('in', module_census_mcp_clients) | list | length == 0
-    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, the host name a plain name (it names the host's answer file), the notify pairs directory an absolute path of [A-Za-z0-9._/-], and each MCP client configuration {path, client} an absolute path of [A-Za-z0-9._/-] and one of {{ module_census_mcp_clients | join(', ') }}"
+      - module_census_catalog_url == '' or module_census_catalog_url is match('^http://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]):[0-9]{1,5}\Z')
+      - module_census_catalog_url == '' or module_census_catalog_warehouse is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
+      - module_census_catalog_api_root is match('^/[A-Za-z0-9._/-]*\Z') and '..' not in module_census_catalog_api_root
+      - module_census_catalog_token_file == '' or module_census_catalog_token_file is match('^/etc/homelabnext/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
+      - module_census_catalog_token_file == '' or module_census_catalog_url != ''
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the hnx command an absolute path, the broker socket empty or a path under /run/, the host name a plain name (it names the host's answer file), the notify pairs directory an absolute path of [A-Za-z0-9._/-], and each MCP client configuration {path, client} an absolute path of [A-Za-z0-9._/-] and one of {{ module_census_mcp_clients | join(', ') }}, the lake catalog empty or http://<loopback IP>:<port> with a warehouse name, its API root a path of [A-Za-z0-9._/-] and its token file empty or a plain name in /etc/homelabnext (and only with a catalog)"
 
 - name: Look at the census directory on the controller
   ansible.builtin.stat:
@@ -138,9 +145,35 @@
   become_user: root
   when: module_census_broker_socket != ''
 
+# The lake-catalog slot's contract is the Iceberg REST catalog (homelabnext.lake.rest_catalog):
+# hnx modules catalog-tables lists its namespaces and tables with GET requests only, to the
+# catalog's own loopback address, and prints names only, as JSON.  The token, when the catalog
+# wants one, is read on this host from a file root's alone in /etc/homelabnext and sent to that
+# address alone (no redirect, no proxy): it never reaches the controller.  The task becomes root
+# only to read it.  The listing gives up after two minutes (the task's own timeout backs that).
+# no_log keeps its arguments and result out of every log and callback; a refusal is reported by
+# the next task from the command's own error line, which names the request and its HTTP status,
+# never the token or what the catalog answered (printable, and cut to 200 characters here).
+- name: List the lake tables the catalog on this host holds
+  ansible.builtin.command:
+    argv: "{{ [module_census_hnx_cli, 'modules', 'catalog-tables', '--url', module_census_catalog_url, '--warehouse', module_census_catalog_warehouse, '--api-root', module_census_catalog_api_root] + (['--token-file', module_census_catalog_token_file] if module_census_catalog_token_file != '' else []) }}"
+  register: module_census_tables
+  changed_when: false
+  failed_when: false
+  no_log: true
+  timeout: 180
+  become: "{{ module_census_catalog_token_file != '' }}"
+  become_user: root
+  when: module_census_catalog_url != ''
+
+- name: Stop on a lake catalog the census could not list
+  ansible.builtin.fail:
+    msg: "module_census: the lake catalog was not listed: {{ ((module_census_tables.stderr_lines | default([]) | last | default('no answer')) | regex_replace('[^ -~]', ''))[:200] }}"
+  when: module_census_catalog_url != '' and (module_census_tables.rc | default(1)) != 0
+
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
-    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found, 'listening': module_census_listening.sockets} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {}) | combine({'mcp': module_census_mcp.configs} if module_census_mcp_configs | length > 0 else {})) | to_json }}\n"
+    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found, 'listening': module_census_listening.sockets} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {}) | combine({'mcp': module_census_mcp.configs} if module_census_mcp_configs | length > 0 else {}) | combine({'tables': module_census_tables.stdout | from_json} if module_census_catalog_url != '' else {})) | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
   no_log: true  # the answer is names only, but never shown in a diff or a callback either

@@ -98,6 +98,7 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
         "no host's census asked a broker (module_census_broker_socket): agents not gathered",
         "no host lists an installed MCP client configuration (module_census_mcp_configs): "
         "MCP servers not gathered",
+        "no host's census listed a lake catalog (module_census_catalog_url): tables not gathered",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")
@@ -194,11 +195,75 @@ def test_an_agent_line_that_is_not_one_key_fails_the_census(tmp_path, agents):
 def test_an_answer_with_another_extra_key_fails_the_census(tmp_path):
     d = write_census(tmp_path / "c", {"agent-core": []})
     doc = json.loads((d / "agent-core.json").read_text())
-    doc["tables"] = []
+    doc["rows"] = []
     (d / "agent-core.json").write_text(json.dumps(doc))
     with pytest.raises(
         census.CensusError, match="not \\{host, enabled, active, pairs, listening\\}"
     ):
+        census.gather(d)
+
+
+def _with_tables(d: Path, host: str, found) -> None:
+    """Give ``host``'s answer its catalog's tables, as the role writes it on a catalog host."""
+    doc = json.loads((d / f"{host}.json").read_text())
+    doc["tables"] = found
+    (d / f"{host}.json").write_text(json.dumps(doc))
+
+
+def test_tables_are_gathered_from_the_catalogs_that_answered(tmp_path):
+    d = write_census(tmp_path / "c", {"lake": [], "lake-2": [], "edge": []})
+    _with_tables(d, "lake", {"tables": ["ocsf.authentication", "lab_own.x"], "left_out": 2})
+    _with_tables(d, "lake-2", {"tables": ["ocsf.authentication"], "left_out": 0})  # the union
+    inventory, notes = census.gather(d)
+    assert inventory["tables"] == ["table:lab_own.x", "table:ocsf.authentication"]
+    assert inventory["not_gathered"] == ["rows", "mcp_servers", "agents"]
+    assert "listed 2 lake catalog(s): 2 table(s)" in notes
+    assert any(n.startswith("2 catalog namespace(s) or table(s) not of the") for n in notes)
+    assert ld._errors(ld._schema("platform", "module_inventory.schema.json"), inventory) == []
+    # a catalog that holds no table is an empty list, never "not gathered"
+    d = write_census(tmp_path / "e", {"lake": []})
+    _with_tables(d, "lake", {"tables": [], "left_out": 0})
+    inventory, _ = census.gather(d)
+    assert inventory["tables"] == [] and "tables" not in inventory["not_gathered"]
+    # no catalog asked: tables stay not gathered, and the note says why
+    inventory, notes = census.gather(write_census(tmp_path / "n", {"edge": []}))
+    assert "tables" in inventory["not_gathered"] and "tables" not in inventory
+    assert any("module_census_catalog_url" in n for n in notes)
+
+
+@pytest.mark.parametrize(
+    "found",
+    [
+        ["ocsf.authentication"],  # not {tables, left_out}
+        {"tables": ["ocsf.authentication"]},
+        {"tables": ["ocsf.authentication"], "left_out": 0, "extra": 1},
+        {"tables": "ocsf.authentication", "left_out": 0},
+        {"tables": [7], "left_out": 0},
+        {"tables": [], "left_out": -1},
+        {"tables": [], "left_out": True},
+        {"tables": [], "left_out": "0"},
+        {"tables": ["table:ocsf.authentication"], "left_out": 0},  # the bare name, no prefix
+        {"tables": ["ocsf"], "left_out": 0},
+        {"tables": ["ocsf.a.b"], "left_out": 0},
+        {"tables": ["OCSF.authentication"], "left_out": 0},
+        {"tables": ["ocsf.authentication\nhnx-x.service enabled"], "left_out": 0},
+        {"tables": ["o." + "a" * 122], "left_out": 0},  # 130 with its prefix: over 129
+        {"tables": ["o.t"] * (census.MAX_LINES + 1), "left_out": 0},
+    ],
+)
+def test_a_tables_answer_off_the_shape_fails_the_census(tmp_path, found):
+    d = write_census(tmp_path / "c", {"lake": []})
+    _with_tables(d, "lake", found)
+    with pytest.raises(census.CensusError):
+        census.gather(d)
+
+
+def test_the_union_of_the_catalogs_is_capped_like_one(tmp_path):
+    d = write_census(tmp_path / "c", {"a": [], "b": []})
+    half = census.MAX_LINES // 2 + 1
+    _with_tables(d, "a", {"tables": [f"a.t{i}" for i in range(half)], "left_out": 0})
+    _with_tables(d, "b", {"tables": [f"b.t{i}" for i in range(half)], "left_out": 0})
+    with pytest.raises(census.CensusError, match="over 4096 tables"):
         census.gather(d)
 
 
@@ -749,6 +814,47 @@ def test_gathered_agents_are_judged_like_any_running_name(tmp_path):
         "does not select"
     ]
     assert not any("agents" in n and "not compared" in n for n in report.notes)
+
+
+def test_gathered_tables_are_judged_and_the_cores_namespace_holds_only_its_own(tmp_path):
+    """A catalog's answer reaches the loader: a module's table the site does not select is a
+    problem, a core OCSF table is the core's, a table in the core's namespace that is no core table
+    is a problem, and a table in the lab's own namespace is not judged."""
+    d = write_census(tmp_path / "c", {"lake": []})
+    found = ["external_collector.sessions", "ocsf.authentication", "ocsf.planted", "lab_own.x"]
+    _with_tables(d, "lake", {"tables": found, "left_out": 0})
+    inventory, _ = census.gather(d)
+    tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
+    slots = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
+    roles = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
+    core, problems = ld.core_names(
+        None, tables=["authentication", "dns_activity"], table_namespace="ocsf"
+    )
+    assert problems == []
+
+    def running(core):
+        report = ld.check(
+            tree, slots=slots, roles=roles, in_tree_roots=(ROOT / "modules", EXAMPLES),
+            inventory=inventory, empty_selection=True, core=core,
+        )  # fmt: skip
+        return [str(p) for p in report.problems if p.where == "running"], report.notes
+
+    problems, notes = running(core)
+    assert problems == [
+        "running: tables table:external_collector.sessions runs for external-collector, which "
+        "the site does not select",
+        "running: tables table:ocsf.planted is in the core's namespace but is no core table",
+    ]
+    assert not any("tables" in n and "not compared" in n for n in notes)
+    # without the core's tables nothing in its namespace is judged, and the check says so
+    problems, notes = running(None)
+    assert problems == [
+        "running: tables table:external_collector.sessions runs for external-collector, which "
+        "the site does not select"
+    ]
+    assert "the core's OCSF tables were not read: a table bound to no module was not judged" in (
+        notes
+    )
 
 
 def test_the_deploy_check_refuses_problems_in_the_lab(tmp_path, capsys):

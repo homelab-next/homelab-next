@@ -218,6 +218,29 @@ def test_list_tables_follows_page_tokens(lab):
     assert lake.list_tables() == sorted(lake._schemas)  # five tables, pages of two
 
 
+def test_namespace_listing_pages_and_both_listings_are_capped(lab):
+    _lake(lab, ns="a_ns")
+    _lake(lab, ns="b_ns")
+    _lake(lab, ns="c_ns")  # three namespaces, pages of two
+    cat = RestCatalog(lab.url, warehouse="lab")
+    assert cat.list_namespaces() == [["a_ns"], ["b_ns"], ["c_ns"]]
+    with pytest.raises(LakeError, match="over 2 namespaces"):
+        cat.list_namespaces(limit=2)
+    with pytest.raises(LakeError, match="over 4 tables"):
+        cat.list_tables("a_ns", limit=4)
+
+
+def test_a_malformed_listing_is_a_lake_error(lab):
+    cat = RestCatalog(lab.url, warehouse="lab")
+    lab._rest = lambda h, path, body: lab._json(
+        h, 200, {"defaults": {"prefix": "p"}, "namespaces": ["ocsf"], "identifiers": [{}]}
+    )
+    with pytest.raises(LakeError, match="not a list of text"):
+        cat.list_namespaces()  # a bare string would read as one namespace per character
+    with pytest.raises(LakeError, match="names no table"):
+        cat.list_tables("x")
+
+
 def test_a_drifted_table_is_refused(lab):
     lab.schema_override["dns_activity"] = [
         {"id": 1, "name": "uid", "required": True, "type": "long"}

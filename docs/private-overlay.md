@@ -557,7 +557,13 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
     registers: the file is parsed on the host and only server names leave it, never the file's
     text, which can hold secrets. The list is trusted input (it names files the census reads), so
     it is reviewed like the rest of the overlay; with none listed anywhere, `mcp_servers` is noted
-    as not gathered.
+    as not gathered. On the host that runs the lake catalog, set `module_census_catalog_url` (the
+    catalog over plain `http` on a loopback IP literal, as that host reaches it) and
+    `module_census_catalog_warehouse` in its `host_vars`, and, when the catalog wants a token,
+    `module_census_catalog_token_file`, a plain file name in `/etc/homelabnext` on that host, root's
+    alone (mode 0600): the census lists the warehouse's tables there with GET requests only and
+    returns names only, so the token never reaches the runner; without the URL `tables` is noted as
+    not gathered.
 11. **What runs**: `hnx modules gather` builds the inventory from that census and `hnx modules
     check --deploy --running` compares it with what the lab declares (with an empty selection, any
     running unit of a module is a mismatch); a mismatch fails the run after the deploy has applied
