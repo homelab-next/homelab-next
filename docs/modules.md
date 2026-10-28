@@ -408,10 +408,16 @@ define, a list it cannot key, keys it cannot compare, a path outside a module di
 without a readable slot registry at both ends, every slot change are human-approve. The inputs
 that decide the tier are read **as of the base commit**: the module schema; the slot registry (the
 union of the base's and the head's privileged slots, so neither side can drop one); and
-CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
+CODEOWNERS. A change to any of those, to the two `review_tier.py` files, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
-human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
-the evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2").
+human-approve, and so is a change to the code they import from this repository, which decides
+what they decide: `homelabnext/modules/loader.py` (`parse_yaml`, `contributed_files`,
+`read_tree_file`), `swap_evidence.py` (the base reader and the swap gate), `swap.py`, `rules.py`,
+`homelabnext/golden/pins.py`, `homelabnext/models/store.py` and `homelabnext/registry/models.py`.
+`GOVERNANCE` in `review_tier.py` lists them all, and a test derives the list from the imports of
+the two tiers, `swap_evidence.py` and `swap.py`, so a new import that is not listed fails the
+suite. So is a change to what vouches for a model a swap rebinds to (the model store, the
+evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2").
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
 the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;

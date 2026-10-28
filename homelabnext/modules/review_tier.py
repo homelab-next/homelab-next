@@ -105,6 +105,18 @@ GOVERNANCE = (
     "homelabnext/modules/review_tier.py",
     "homelabnext/network/review_tier.py",  # the site's review tier, which the overlay runs
     "homelabnext/gitbase.py",  # the base rule --ci-base takes
+    # the repository code the two tiers and the swap gate import (a change there changes what they
+    # decide; tests/modules/test_review_tier.py derives this from the imports and fails when one
+    # is missing): the loader (parse_yaml, contributed_files, read_tree_file), the base reader and
+    # the gate (swap_evidence), the swap record and the golden pins the gate checks, and what those
+    # read the model store, the role table and the selection rules through
+    "homelabnext/modules/loader.py",
+    "homelabnext/modules/swap_evidence.py",
+    "homelabnext/modules/swap.py",
+    "homelabnext/modules/rules.py",
+    "homelabnext/golden/pins.py",
+    "homelabnext/models/store.py",
+    "homelabnext/registry/models.py",
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
 )
