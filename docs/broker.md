@@ -510,7 +510,11 @@ stops it instead of failing every page; a send that fails later is logged at WAR
 every five minutes) and audited `notify-failed`. State lives in `<state>/notify.json` (a settled
 request's page is dropped from it); each agent may send 20 messages an hour on its own budget,
 and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
-refusal is logged at WARNING once per agent and lane instead.
+refusal is logged at WARNING once per agent and lane instead. With `--notify-pairs-dir DIR` (or
+`HNX_NOTIFY_PAIRS_DIR`), the notifier writes the pairs it holds to `DIR/broker.json` for the module
+census ([modules](modules.md#the-loader-at-deploy-time)); the census reads
+`/var/lib/homelabnext/notify-pairs`, so a unit names that directory and adds it to its
+`ReadWritePaths`.
 
 A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
 user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS

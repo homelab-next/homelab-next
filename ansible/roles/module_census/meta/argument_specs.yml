@@ -11,6 +11,10 @@ argument_specs:
         type: str
         description: "The systemctl command each host runs (a test points it at a stand-in)."
         default: systemctl
+      module_census_pairs_dir:
+        type: path
+        description: "Where the notifier owners write the notify pairs they hold, one file each (broker.json, status.json; homelabnext.notify.record): a record present is read, never through a link, and one missing means the host runs no recording notifier of that owner."
+        default: /var/lib/homelabnext/notify-pairs
   health:
     short_description: Fail unless the host answers systemctl --version.
     options:

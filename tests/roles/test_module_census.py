@@ -12,6 +12,7 @@ import pytest
 from rolerun import LOGGER, calls, fake, first_run, run_cases
 
 from homelabnext.modules import census
+from homelabnext.notify.record import PairsRecord
 
 needs_ansible = pytest.mark.skipif(
     shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
@@ -41,12 +42,19 @@ def _systemctl(tmp_path) -> str:
     return fake(tmp_path / "systemctl", body)
 
 
+PAIR = {"problem": "UPS on battery", "recovery": "UPS back on line power"}
+
+
 def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
+    pairs = tmp_path / "pairs"
+    pairs.mkdir()
+    PairsRecord(pairs, "broker").write({PAIR["problem"]: (PAIR["recovery"], None)})
     v = {
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
+        "module_census_pairs_dir": str(pairs),  # broker.json present, status.json absent
     }
     return {"role": "module_census", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
@@ -71,12 +79,14 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "host": "localhost",
         "enabled": ENABLED.splitlines(),
         "active": ACTIVE.splitlines(),
+        "pairs": {"broker": (tmp_path / "pairs" / "broker.json").read_text(), "status": None},
     }
     inventory, notes = census.gather(out)
     assert inventory == {
         "schema_version": "1.0",
         "units": ["external-collector-pull", "lake-compact", "stray"],
         "not_gathered": ["rows", "mcp_servers", "agents", "tables"],
+        "notify_pairs": [PAIR],
     }
     assert any("template unit" in n for n in notes)
 
@@ -97,12 +107,22 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         tmp_path / "systemctl-active-fails",
         "import sys\nsys.exit(1 if sys.argv[1] == 'list-units' else 0)\n",
     )
+    # a record is read only as a small regular file, never through a link
+    linked = tmp_path / "linked-pairs"
+    linked.mkdir()
+    (linked / "broker.json").symlink_to(tmp_path / "pairs" / "broker.json")
+    big = tmp_path / "big-pairs"
+    big.mkdir()
+    (big / "status.json").write_text(" " * (256 * 1024 + 1))
     results = run_cases(
         tmp_path,
         "module_census",
         "main",
         v,
         [
+            {"module_census_pairs_dir": "relative/pairs"},
+            {"module_census_pairs_dir": str(linked)},
+            {"module_census_pairs_dir": str(big)},
             {"module_census_dir": "relative/census"},
             {"module_census_dir": str(tmp_path / "absent")},
             {"module_census_systemctl_cli": failing},
@@ -115,6 +135,10 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"inventory_hostname": ".hidden"},
         ],
     )
+    assert results[0][0] and "the notify pairs directory an absolute" in results[0][1]
+    for failed, said in results[1:3]:
+        assert failed and "is not a regular file of at most 262144 bytes" in said, results
+    results = results[3:]
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
     assert results[1][0] and "is not a directory on the controller" in results[1][1]
     assert results[2][0] and results[3][0], results

@@ -21,18 +21,28 @@ EXAMPLES = ROOT / "examples" / "modules"
 SMALL_LAB = EXAMPLES / "sites" / "small-lab.yml"
 
 
+NOPAIRS = {"broker": None, "status": None}
+
+
 def write_census(
     d: Path,
     answers: dict[str, list[str]],
     hosts: list[str] | None = None,
     active: dict[str, list[str]] | None = None,
+    pairs: dict[str, dict[str, str | None]] | None = None,
 ) -> Path:
     """A census as the role writes it: ``answers`` the enabled unit files per host, ``active``
-    the active units (none by default)."""
+    the active units (none by default), ``pairs`` the pairs records per host (owner -> text;
+    none by default)."""
     d.mkdir(parents=True, exist_ok=True)
     (d / "_hosts.json").write_text(json.dumps(sorted(answers) if hosts is None else hosts))
     for host, lines in answers.items():
-        doc = {"host": host, "enabled": lines, "active": (active or {}).get(host, [])}
+        doc = {
+            "host": host,
+            "enabled": lines,
+            "active": (active or {}).get(host, []),
+            "pairs": {**NOPAIRS, **(pairs or {}).get(host, {})},
+        }
         (d / f"{host}.json").write_text(json.dumps(doc))
     return d
 
@@ -61,6 +71,8 @@ def test_units_are_the_union_of_what_every_host_reports_enabled(tmp_path):
     assert notes == [
         "gathered from 3 host(s): 2 fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
+        "no host holds a notify pairs record: the recovery pairs were not compared (a notifier "
+        "records them with --notify-pairs-dir)",
     ]
     # what it writes is a valid inventory
     schema = ld._schema("platform", "module_inventory.schema.json")
@@ -167,7 +179,9 @@ def test_without_a_host_list_the_census_is_unreadable(tmp_path):
 
 def test_an_entry_that_is_no_listed_hosts_answer_is_refused(tmp_path):
     d = write_census(tmp_path / "c", {"a": []})
-    (d / "forged.json").write_text(json.dumps({"host": "forged", "enabled": [], "active": []}))
+    (d / "forged.json").write_text(
+        json.dumps({"host": "forged", "enabled": [], "active": [], "pairs": NOPAIRS})
+    )
     with pytest.raises(
         census.CensusError, match=re.escape("not a listed host's answer: forged.json")
     ):
@@ -176,7 +190,9 @@ def test_an_entry_that_is_no_listed_hosts_answer_is_refused(tmp_path):
 
 def test_an_answer_written_for_another_host_is_refused(tmp_path):
     d = write_census(tmp_path / "c", {"a": [], "b": []})
-    (d / "a.json").write_text(json.dumps({"host": "b", "enabled": [], "active": []}))
+    (d / "a.json").write_text(
+        json.dumps({"host": "b", "enabled": [], "active": [], "pairs": NOPAIRS})
+    )
     with pytest.raises(census.CensusError, match=re.escape("a.json: written for b")):
         census.gather(d)
 
@@ -187,10 +203,16 @@ def test_an_answer_written_for_another_host_is_refused(tmp_path):
         {"host": "a"},
         {"host": "a", "enabled": []},  # both queries' answers, always
         {"host": "a", "systemctl": []},  # the shape before the active units were asked for
-        {"host": "a", "enabled": "hnx-x.service enabled", "active": []},
-        {"host": "a", "enabled": [1], "active": []},
-        {"host": "a", "enabled": [], "active": [None]},
-        {"host": "a", "enabled": [], "active": [], "units": ["x"]},  # no finished list
+        {"host": "a", "enabled": "hnx-x.service enabled", "active": [], "pairs": NOPAIRS},
+        {"host": "a", "enabled": [1], "active": [], "pairs": NOPAIRS},
+        {"host": "a", "enabled": [], "active": [None], "pairs": NOPAIRS},
+        {
+            "host": "a",
+            "enabled": [],
+            "active": [],
+            "pairs": NOPAIRS,
+            "units": ["x"],
+        },  # no finished list
         ["a"],
     ],
 )
@@ -204,7 +226,11 @@ def test_an_answer_of_another_shape_is_refused(tmp_path, doc):
 def test_a_linked_answer_or_directory_is_refused(tmp_path):
     d = write_census(tmp_path / "c", {"a": []})
     real = tmp_path / "elsewhere.json"
-    real.write_text(json.dumps({"host": "a", "enabled": ["hnx-x.service enabled"], "active": []}))
+    real.write_text(
+        json.dumps(
+            {"host": "a", "enabled": ["hnx-x.service enabled"], "active": [], "pairs": NOPAIRS}
+        )
+    )
     (d / "a.json").unlink()
     (d / "a.json").symlink_to(real)
     with pytest.raises(census.CensusError, match=re.escape("a.json: not a regular file")):
@@ -239,6 +265,110 @@ def test_too_many_lines_are_refused(tmp_path):
     d = write_census(tmp_path / "c2", {"a": []}, active={"a": active})
     with pytest.raises(census.CensusError, match=r"over .* active lines"):
         census.gather(d)
+
+
+# ----------------------------------------------------------------------------- notify pairs
+
+CORE = {"problem": "UPS on battery", "recovery": "UPS back on line power"}
+MODULE_PAIR = {
+    "problem": "External data collector: no new sessions",
+    "recovery": "External data collector: sessions arriving again",
+    "module": "external-collector",
+}
+
+
+def _record(owner, *pairs):
+    return json.dumps({"schema_version": 1, "owner": owner, "pairs": list(pairs)})
+
+
+def test_notify_pairs_are_every_pair_some_record_holds_each_once(tmp_path):
+    d = write_census(
+        tmp_path / "c",
+        {"hub": [], "broker-host": [], "quiet": []},
+        pairs={
+            "hub": {"status": _record("status", CORE, MODULE_PAIR)},
+            # the same pair held by two owners (or hosts) alike is one
+            "broker-host": {"broker": _record("broker", CORE)},
+        },
+    )
+    inventory, notes = census.gather(d)
+    assert inventory["notify_pairs"] == [MODULE_PAIR, CORE]
+    assert "2 notify pair(s) from 2 pairs record(s)" in notes
+    schema = ld._schema("platform", "module_inventory.schema.json")
+    assert ld._errors(schema, inventory) == []
+
+
+def test_one_title_held_with_two_recoveries_is_listed_twice_for_the_loader(tmp_path):
+    other = {**CORE, "recovery": "UPS fine"}
+    d = write_census(
+        tmp_path / "c",
+        {"a": [], "b": []},
+        pairs={"a": {"status": _record("status", CORE)}, "b": {"status": _record("status", other)}},
+    )
+    inventory, _ = census.gather(d)
+    assert inventory["notify_pairs"] == [CORE, other]
+
+
+def test_without_any_record_the_pairs_are_left_out_and_not_compared(tmp_path):
+    inventory, notes = census.gather(write_census(tmp_path / "c", {"a": []}))
+    assert "notify_pairs" not in inventory
+    assert any("no host holds a notify pairs record" in n for n in notes)
+
+
+@pytest.mark.parametrize(
+    "pairs, why",
+    [
+        ({"broker": None}, "not one entry per owner"),
+        ({"broker": None, "status": None, "relay": None}, "not one entry per owner"),
+        ({"broker": 3, "status": None}, "the broker pairs record is not text"),
+        ({"broker": "{", "status": None}, "pairs record broker: not JSON"),
+        ({"broker": _record("status"), "status": None}, "written for another owner"),
+        (
+            {"broker": _record("broker", {"problem": "A\nB", "recovery": "B"}), "status": None},
+            "not one line of text",
+        ),
+    ],
+)
+def test_a_pairs_answer_off_the_shape_makes_the_census_unreadable(tmp_path, pairs, why):
+    d = tmp_path / "c"
+    d.mkdir()
+    (d / "_hosts.json").write_text('["a"]')
+    doc = {"host": "a", "enabled": [], "active": [], "pairs": pairs}
+    (d / "a.json").write_text(json.dumps(doc))
+    with pytest.raises(census.CensusError, match=re.escape(why)):
+        census.gather(d)
+
+
+def _check_pairs(pairs, core):
+    tree, _ = ld.discover(ROOT / "modules", EXAMPLES, None)
+    inventory = {"schema_version": "1.0", "units": [], "notify_pairs": pairs,
+                 "not_gathered": ["rows", "mcp_servers", "agents", "tables"]}  # fmt: skip
+    slots = ld.load_yaml(EXAMPLES / "slots.yml")["slots"]
+    roles = json.loads((ROOT / "examples" / "model_roles.json").read_text())["roles"]
+    report = ld.check(
+        tree, slots=slots, roles=roles, in_tree_roots=(ROOT / "modules", EXAMPLES),
+        site=ld.load_yaml(SMALL_LAB), inventory=inventory, core=core,
+    )  # fmt: skip
+    return [str(p) for p in report.problems]
+
+
+def test_a_pair_bound_to_no_module_must_be_one_of_the_cores_with_its_recovery():
+    from homelabnext.notify.core_pairs import CORE_PAIRS
+
+    core = ld.CoreNames(pairs=dict(CORE_PAIRS))
+    assert _check_pairs([MODULE_PAIR, CORE], core) == []
+    stray = {"problem": "Quietly added", "recovery": "Quietly cleared"}
+    renamed = {**CORE, "recovery": "UPS fine"}
+    assert _check_pairs([MODULE_PAIR, CORE, stray], core) == [
+        "running: notify pair 'Quietly added' with recovery 'Quietly cleared' runs but is no "
+        "module's or the core's"
+    ]
+    assert _check_pairs([MODULE_PAIR, renamed], core) == [
+        "running: notify pair 'UPS on battery' with recovery 'UPS fine' runs but is no module's "
+        "or the core's"
+    ]
+    # without the core's pairs to compare with, an unbound pair is not judged
+    assert _check_pairs([MODULE_PAIR, stray], ld.CoreNames()) == []
 
 
 # ----------------------------------------------------------------------------- the loader

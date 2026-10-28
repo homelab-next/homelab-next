@@ -21,6 +21,11 @@ Rules the Notifier enforces (each exists because the opposite shipped once and h
 * **Quiet clear.**  :meth:`Notifier.clear` marks a key ``ok`` without sending its recovery (a
   problem its own reporter withdrew, which nobody needs paged about).
 * **A failed send is not recorded** (the exception propagates), so the next call retries.
+* **What it holds can be recorded.**  With a ``record`` (a
+  :class:`~homelabnext.notify.record.PairsRecord`), the notifier writes every pair it holds when
+  it is built and after each registration, the whole set each time, so the module census can
+  read what runs (a write that fails raises: a notifier that cannot say what it holds is not
+  started quietly).
 """
 
 from __future__ import annotations
@@ -80,6 +85,10 @@ class Sender(Protocol):
     def send(self, message: Message) -> None: ...
 
 
+class _Record(Protocol):
+    def write(self, pairs: dict[str, tuple[str, str | None]]) -> None: ...
+
+
 class _Store(Protocol):
     def get(self, key: str, default: Any = None) -> Any: ...
     def put(self, key: str, value: Any) -> None: ...
@@ -102,11 +111,21 @@ class Notifier:
     clock: Callable[[], float] = time.time
     rate_limit: RateLimit | None = None
     namespace: str = "notify"
+    #: where the pairs it holds are written (see the module); None: nowhere
+    record: _Record | None = None
     _pairs: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _modules: dict[str, str | None] = field(default_factory=dict, init=False, repr=False)
     suppressed_by_rate_limit: int = field(default=0, init=False)
 
+    def __post_init__(self) -> None:
+        self._write_record()  # a fresh process holds no pair until it registers one
+
     # ---------------------------------------------------------------- registration
-    def register_pair(self, problem_title: str, recovery_title: str) -> None:
+    def register_pair(
+        self, problem_title: str, recovery_title: str, *, module: str | None = None
+    ) -> None:
+        """Register a problem title and its recovery.  ``module``: the module the pair was
+        loaded from, written to the record for the census; None for the core's own."""
         if not problem_title or not recovery_title:
             raise ValueError("both titles are required")
         if problem_title == recovery_title:
@@ -118,7 +137,20 @@ class Notifier:
             raise ValueError(
                 f"problem title {problem_title!r} is already registered with recovery {held!r}"
             )
+        if held is not None and self._modules[problem_title] != module:
+            raise ValueError(
+                f"problem title {problem_title!r} is already registered for "
+                f"{self._modules[problem_title] or 'the core'}"
+            )
+        if held is not None:
+            return
         self._pairs[problem_title] = recovery_title
+        self._modules[problem_title] = module
+        self._write_record()
+
+    def _write_record(self) -> None:
+        if self.record is not None:
+            self.record.write({t: (r, self._modules[t]) for t, r in self._pairs.items()})
 
     def is_registered(self, problem_title: str) -> bool:
         return problem_title in self._pairs

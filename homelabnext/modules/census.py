@@ -34,6 +34,16 @@ and no census read from the host itself can rule that out.
 Kinds the hosts cannot report (service rows that answer, MCP servers, agents, tables) are named
 in the inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that
 merely leaves a kind out is refused by its schema, never read as "nothing runs".
+
+**Notify pairs.**  Each answer also carries ``pairs``: for every notifier owner
+(:data:`homelabnext.notify.record.OWNERS`), the text of its pairs record at the fixed directory
+(:data:`~homelabnext.notify.record.RECORD_DIR`), or null where the host holds none.  Each record
+is read strictly (:func:`homelabnext.notify.record.parse_record`), and the inventory's
+``notify_pairs`` is every pair some record holds, each listed once (two owners holding one pair
+alike are one; one title held with two recoveries is listed twice, which the loader refuses).
+When no host holds a record at all, ``notify_pairs`` is left out and the pairs are not compared:
+the census cannot tell "no notifier records its pairs" from "no pair runs".  A record is the
+owning service's word about its own pairs, believed as a host's ``systemctl`` output is.
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.modules import loader as ld
+from homelabnext.notify import record as nr
 
 HOSTS_FILE = "_hosts.json"
 #: an inventory host name as a file name: no path separator, no leading dot, never the host list
@@ -144,16 +155,22 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
         raise CensusError(f"no answer from {', '.join(map(ld._shown, missing))}")
     units: set[str] = set()
     templates = 0
+    pairs: set[tuple[str, str, str | None]] = set()
+    records = 0
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
-        if not isinstance(doc, dict) or set(doc) != {"host", "enabled", "active"}:
-            raise CensusError(f"{file}: not {{host, enabled, active}}")
+        if not isinstance(doc, dict) or set(doc) != {"host", "enabled", "active", "pairs"}:
+            raise CensusError(f"{file}: not {{host, enabled, active, pairs}}")
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
         for active in (False, True):
             names, t = parse_units(doc["active" if active else "enabled"], host, active)
             units |= names
             templates += t
+        found = parse_pairs(doc["pairs"], host)
+        records += len(found)
+        for held in found:
+            pairs |= {(p["problem"], p["recovery"], p.get("module")) for p in held}
     notes = [
         f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
@@ -163,9 +180,40 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
             f"{templates} template unit(s) or instance(s) (hnx-<name>@...) left out: an instance "
             "is not a unit a manifest declares"
         )
-    inventory = {
+    inventory: dict[str, Any] = {
         "schema_version": "1.0",
         "units": sorted(units),
         "not_gathered": [k for k in ld.INVENTORY_KINDS if k != "units"],
     }
+    if records:
+        inventory["notify_pairs"] = [
+            {"problem": t, "recovery": r, **({"module": m} if m is not None else {})}
+            for t, r, m in sorted(pairs, key=lambda x: (x[0], x[1], x[2] or ""))
+        ]
+        notes.insert(2, f"{len(pairs)} notify pair(s) from {records} pairs record(s)")
+    else:
+        notes.insert(
+            2,
+            "no host holds a notify pairs record: the recovery pairs were not compared (a "
+            "notifier records them with --notify-pairs-dir)",
+        )
     return inventory, notes
+
+
+def parse_pairs(found: Any, host: str) -> list[list[dict[str, str]]]:
+    """The pairs records one host answered (owner -> the record's text, or null where it holds
+    none), each read strictly."""
+    if not isinstance(found, dict) or set(found) != set(nr.OWNERS):
+        raise CensusError(f"{host}: the pairs are not one entry per owner ({', '.join(nr.OWNERS)})")
+    out = []
+    for owner in nr.OWNERS:
+        text = found[owner]
+        if text is None:
+            continue
+        if not isinstance(text, str):
+            raise CensusError(f"{host}: the {owner} pairs record is not text")
+        try:
+            out.append(nr.parse_record(text, owner))
+        except nr.RecordError as exc:
+            raise CensusError(f"{host}: pairs record {exc}") from None
+    return out

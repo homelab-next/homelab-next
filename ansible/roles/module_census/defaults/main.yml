@@ -2,3 +2,5 @@
 # The census of what runs (docs/modules.md, "What the loader checks"): read-only on the hosts;
 # module_census_dir, a fresh directory on the controller, is required and has no default.
 module_census_systemctl_cli: systemctl
+# where the notifier owners write the pairs they hold (homelabnext.notify.record.RECORD_DIR)
+module_census_pairs_dir: /var/lib/homelabnext/notify-pairs

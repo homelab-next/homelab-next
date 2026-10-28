@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the notifier owners that write a pairs record (homelabnext.notify.record.OWNERS)
+# and the largest record read (homelabnext.notify.record.MAX_BYTES)
+module_census_pair_owners: [broker, status]
+module_census_pairs_max_bytes: 262144

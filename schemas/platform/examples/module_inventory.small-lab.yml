@@ -7,11 +7,11 @@ rows: [external-collector-receiver, samples]
 mcp_servers: [external-collector-probe]
 agents: [core-staff-scorecard, external-collector-analyst]
 tables: ["table:external_collector.sessions"]
-# the running notifier's recovery pairs: a module's carries its id; one without is the core's,
-# which this check does not judge
+# the running notifier's recovery pairs: a module's carries its id; one without must be one of
+# the core's own (homelabnext.notify.core_pairs)
 notify_pairs:
   - problem: 'External data collector: no new sessions'
     recovery: 'External data collector: sessions arriving again'
     module: external-collector
-  - problem: 'Backup: a nightly job failed'
-    recovery: 'Backup: the nightly jobs succeed again'
+  - problem: 'UPS on battery'
+    recovery: 'UPS back on line power'

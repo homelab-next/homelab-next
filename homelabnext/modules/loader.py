@@ -987,11 +987,15 @@ def pair_problems(sel: Mapping[str, Doc]) -> list[Problem]:
     return out
 
 
-def running_pair_problems(tree: Tree, sel: Mapping[str, Doc], running: list[Doc]) -> list[Problem]:
+def running_pair_problems(
+    tree: Tree, sel: Mapping[str, Doc], running: list[Doc], core: CoreNames | None = None
+) -> list[Problem]:
     """The running notifier's pairs (``{problem, recovery, module?}``) against the selected
     modules' declared ones, compared exactly (both titles): a pair bound to a module is declared
     by that module, which the site selects, with the same recovery; every declared pair runs.  A
-    pair bound to no module is the core's and is not judged here."""
+    pair bound to no module must be one of the core's own (:attr:`CoreNames.pairs`, when
+    ``core`` knows them), with the same recovery: any other runs but is no module's or the
+    core's."""
     declared = {n: {p["problem"]: p["recovery"] for p in _pairs(m)} for n, m in sel.items()}
     out = []
     seen: set[tuple[str, str]] = set()
@@ -1003,6 +1007,12 @@ def running_pair_problems(tree: Tree, sel: Mapping[str, Doc], running: list[Doc]
             out.append(Problem("running", f"{what} runs twice (the notifier holds one per title)"))
         titles.add(title)
         if mid is None:
+            if core is not None and core.pairs and core.pairs.get(title) != r["recovery"]:
+                why = (
+                    f"{what} with recovery {_title(r['recovery'])} runs but is no module's or "
+                    "the core's"
+                )
+                out.append(Problem("running", why))
             continue
         seen.add((mid, title))
         if mid not in tree.mods:
@@ -1065,7 +1075,7 @@ def running_problems(
             why = f"{kind} {name} ({declared[kind][name]}) is declared but not running"
             out.append(Problem("running", why))
     if isinstance(inventory.get("notify_pairs"), list):
-        out += running_pair_problems(tree, sel, inventory["notify_pairs"])
+        out += running_pair_problems(tree, sel, inventory["notify_pairs"], core)
     return out
 
 

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# Read-only on the hosts: two systemctl queries each (enabled unit files, active units).  The answers are written on the controller
+# Read-only on the hosts: two systemctl queries each (enabled unit files, active units) and the
+# notify pairs records at one fixed directory (one file per notifier owner, never a glob).  The answers are written on the controller
 # (delegate_to: localhost, never as root), where hnx modules gather parses them strictly; the
 # binding of a unit to a module is its name, decided by the loader, never by anything written here.
 - name: Validate the inputs
@@ -8,7 +9,8 @@
       - module_census_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_dir
       - module_census_systemctl_cli is match('^[A-Za-z0-9._/-]+\Z')
       - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,252}\Z')
-    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, and the host name a plain name (it names the host's answer file)"
+      - module_census_pairs_dir is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in module_census_pairs_dir
+    fail_msg: "module_census: the census directory is an absolute path of [A-Za-z0-9._/-], the systemctl command a plain path, the host name a plain name (it names the host's answer file), and the notify pairs directory an absolute path of [A-Za-z0-9._/-]"
 
 - name: Look at the census directory on the controller
   ansible.builtin.stat:
@@ -67,10 +69,42 @@
   # list-units exits 0 with nothing printed when no unit matches; anything else is a failure
   failed_when: module_census_active.rc != 0
 
+- name: Look at each notifier owner's pairs record (homelabnext.notify.record), never through a link
+  ansible.builtin.stat:
+    path: "{{ module_census_pairs_dir }}/{{ item }}.json"
+    follow: false
+    get_checksum: false
+  loop: "{{ module_census_pair_owners }}"
+  register: module_census_pairs_stat
+
+- name: Fail unless each record present is a small regular file
+  ansible.builtin.assert:
+    that:
+      - module_census_pairs_present | rejectattr('stat.isreg') | list | length == 0
+      - module_census_pairs_present | selectattr('stat.size', 'gt', module_census_pairs_max_bytes) | list | length == 0
+    fail_msg: "module_census: a notify pairs record ({{ module_census_pairs_present | map(attribute='item') | join(', ') }} under {{ module_census_pairs_dir }}) is not a regular file of at most {{ module_census_pairs_max_bytes }} bytes"
+  vars:
+    module_census_pairs_present: "{{ module_census_pairs_stat.results | selectattr('stat.exists') | list }}"
+
+- name: Read each record present
+  ansible.builtin.slurp:
+    src: "{{ item.stat.path }}"
+  loop: "{{ module_census_pairs_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: module_census_pairs_read
+
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
-    content: "{{ {'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines} | to_json }}\n"
+    content: "{{ {'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
+  vars:
+    # owner -> the record's text, or null where the host holds none
+    module_census_pairs_found: >-
+      {{ dict(module_census_pair_owners | zip([none] * (module_census_pair_owners | length)))
+         | combine(dict(module_census_pairs_read.results | map(attribute='item.item')
+                        | zip(module_census_pairs_read.results | map(attribute='content')
+                              | map('b64decode')))) }}
   delegate_to: localhost  # workstation-ref: allow the census is the deploy run's own (the runner), never a runtime dependency
   become: false
