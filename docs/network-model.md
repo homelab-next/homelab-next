@@ -1,6 +1,6 @@
 ---
 summary: 'The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.'
-summary_of: outline:sha256:5b0b6c6c2ba9f211
+summary_of: outline:sha256:70aee595eafdcd0f
 ---
 # Site / network model
 
@@ -188,8 +188,9 @@ judges the prefix as it judges an IPv4 subnet: a unique-local or documentation p
 lab's, a global-unicast one reaches the internet unless it lies inside a prefix the site
 declares its own (below), so without one a model runtime (whose egress is lab-only) may not
 allow it ([compute model](compute-model.md#firewall-on-by-default)). Other guests' rules render
-either kind. A rule that names a zone whose `subnet6` does not read is refused. Nothing else is
-configured from it yet: the router and switch adapters still speak IPv4 only.
+either kind. A rule that names a zone whose `subnet6` does not read is refused. The router
+adapters configure it too ([IPv6 in the adapters](#ipv6-in-the-adapters)): the router's address
+is the prefix's `::1`, which no guest may name as an extra address.
 
 ### Delegated IPv6 prefixes (1.5)
 
@@ -248,6 +249,19 @@ Firewall rules are evaluated first match wins, in this order:
 Return traffic is allowed by connection state, not by rules. A registry service of protocol `dns`
 expands to both udp and tcp.
 
+The order holds for IPv6 too. A zone with a `subnet6` carries it, and its router address (the
+prefix's `::1`), in the IR (`Interface.subnet6`, `Interface.address6`, `Policy.zones6`), and every
+adapter renders each rule's IPv6 form (`homelabnext.network.ir.ipv6_form`) right after the rule,
+so first match is the same in each family:
+
+* a rule between zones has an IPv6 form when every zone it names has a prefix;
+* an allow that names a host has none: the registry's hosts have IPv4 addresses only, so IPv6 to
+  the host stays closed by the default deny;
+* a deny that names a host denies, in IPv6, the same traffic to the host's whole zone. Without
+  it a later, wider allow would let through in IPv6 what the deny refuses in IPv4;
+* an internet rule has an IPv6 form only from a routed (global) prefix. Nothing translates IPv6,
+  and a unique-local or documentation source has no business on the internet.
+
 ## Adapters
 
 `hnx site adapters` lists them.
@@ -262,6 +276,17 @@ expands to both udp and tcp.
 
 All adapters are pure and deterministic: the same IR yields the same bytes, file order is sorted,
 and nothing opens a socket (a test patches the socket module to prove it).
+
+### IPv6 in the adapters
+
+A zone with a `subnet6` gets, from the adapter that routes it:
+
+| Adapter | Addressing | Policy |
+|---|---|---|
+| `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement itself (`accept_ra = 0`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain, ICMPv6 to the router (neighbour discovery), SSH from the management zone in IPv6 too, and a strict reverse-path check: IPv6 has no `rp_filter`, so a forwarded packet whose source does not route back out the interface it came in on is dropped. Without that check a host could claim another zone's source and match that zone's rules. No IPv6 translation |
+| `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default |
+| `dnsmasq`, `zonefile` | unchanged: no DHCPv6 (addressing is SLAAC from the router) and no AAAA records (the registry's hosts have IPv4 addresses only) | none |
+| `opnsense` | deferred | deferred |
 
 ### The UniFi adapter is a dry run
 
@@ -306,6 +331,6 @@ adapter, 3 `plan --exit-code` found changes.
 ## Out of scope here (SERVER)
 
 Applying files to a router, switch or controller; reading live controller state; certificate
-pinning against a real console; IPv6 zones; reverse DNS zones. The adapter interface has an
+pinning against a real console; DHCPv6 and IPv6 DNS servers (RDNSS); IPv6 host addresses in the registry; reverse DNS zones. The adapter interface has an
 `apply` that raises `ServerOnly` for every adapter, so the seam exists and cannot be used by
 accident.

@@ -14,6 +14,16 @@ Firewall evaluation order (first match wins) is part of the contract:
 5. ``default_action`` (always deny).
 
 Return traffic is allowed by connection state, not by rules: the IR carries no "reply" rules.
+
+IPv6 (site 1.4 ``subnet6``): a zone with a prefix gets its router address at the prefix's
+``::1`` (:func:`router_address6`), and :attr:`Policy.zones6` names the prefix.  The policy above
+holds for both families: an adapter renders every rule once per family the rule can be written in,
+the IPv6 form right after the IPv4 one, so first-match order is the same in each.  A zone side
+needs the zone's prefix.  A ``host`` side has an IPv4 address only: an allow naming a host has no
+IPv6 form (the default deny keeps IPv6 to the host closed), and a deny naming a host denies, in
+IPv6, the same traffic to the host's whole zone, so a later, wider allow can never let through in
+IPv6 what the deny refuses in IPv4.  An internet rule has an IPv6 form only for a routed (global)
+prefix: nothing translates IPv6, and a unique-local or documentation source has no business there.
 """
 
 from __future__ import annotations
@@ -40,6 +50,8 @@ class Interface:
     subnet: str
     netmask: str
     purpose: str = ""
+    address6: str = ""  # the router's address in the zone's subnet6, "" when the zone has none
+    subnet6: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +89,7 @@ class Selector:
     kind: str  # zone | host | any | internet
     name: str = ""
     cidrs: tuple[str, ...] = ()
+    zone: str = ""  # a host side: the zone the host is in
 
 
 @dataclass(frozen=True)
@@ -96,6 +109,7 @@ class Policy:
     default_action: str
     zones: dict[str, str]  # zone id -> subnet
     rules: tuple[Rule, ...]
+    zones6: dict[str, str] = field(default_factory=dict)  # zone id -> subnet6, zones with one
 
 
 @dataclass(frozen=True)
@@ -165,6 +179,35 @@ def service_l4(protocol: str) -> tuple[str, ...]:
     return ("tcp",)
 
 
+def router_address6(subnet6: str) -> str:
+    """The router's address in a zone's IPv6 prefix: the prefix's ``::1``, never the
+    subnet-router anycast address (``::``) or one of the RFC 2526 anycast addresses at the top of
+    the /64 a validated prefix leaves the last 64 bits of."""
+    return str(ipaddress.IPv6Network(subnet6)[1])
+
+
+def ipv6_form(rule: Rule, zones6: dict[str, str]) -> Rule | None:
+    """The rule as it reads in IPv6, or ``None`` when it has no IPv6 form (see the module doc).
+
+    The one rule every adapter renders from, so no two adapters can disagree about IPv6."""
+
+    def side(sel: Selector) -> Selector | None:
+        if sel.kind == "zone":
+            return Selector("zone", sel.name, (zones6[sel.name],)) if sel.name in zones6 else None
+        if sel.kind == "host":
+            if rule.action != "deny" or sel.zone not in zones6:
+                return None
+            return Selector("zone", sel.zone, (zones6[sel.zone],))
+        return sel  # any | internet
+
+    src, dst = side(rule.src), side(rule.dst)
+    if src is None or dst is None or "zone" not in (src.kind, dst.kind):
+        return None
+    if dst.kind == "internet" and not ipaddress.IPv6Network(zones6[src.name]).is_global:
+        return None
+    return replace(rule, id=f"{rule.id}:v6", src=src, dst=dst)
+
+
 def _zone_selector(zid: str, nets: dict[str, str]) -> Selector:
     return Selector("zone", zid, (nets[zid],))
 
@@ -178,6 +221,7 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
     domain = doc["site"]["domain"]
     zones = doc["zones"]
     nets = {z["id"]: str(ipaddress.ip_network(z["subnet"])) for z in zones}
+    nets6 = {z["id"]: str(ipaddress.IPv6Network(z["subnet6"])) for z in zones if "subnet6" in z}
     host_addr = {name: h.address for name, h in reg.hosts.items()}
 
     def svc_address(ref: str) -> str:
@@ -197,6 +241,8 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
                 str(net),
                 str(net.netmask),
                 z.get("purpose", ""),
+                router_address6(nets6[z["id"]]) if z["id"] in nets6 else "",
+                nets6.get(z["id"], ""),
             )
         )
         dhcp = z.get("dhcp")
@@ -280,7 +326,7 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
         reservations=reservations,
         dns_records=tuple(records),
         resolvers=resolvers,
-        policy=Policy("deny", nets, tuple(rules)),
+        policy=Policy("deny", nets, tuple(rules), nets6),
         switches=switches,
         router=RouterPlan(
             router["id"],
@@ -302,7 +348,7 @@ def _rules(doc: dict, reg: Any, nets: dict[str, str], host_addr: dict[str, str])
     for i, exc in enumerate(fw.get("service_exceptions", [])):
         froms = exc["from"] if isinstance(exc["from"], list) else [exc["from"]]
         svc = reg.services[ref_id(exc["to"])]
-        dst = Selector("host", svc.host, (f"{host_addr[svc.host]}/32",))
+        dst = Selector("host", svc.host, (f"{host_addr[svc.host]}/32",), reg.hosts[svc.host].zone)
         ports = tuple(sorted(exc.get("ports", [svc.port])))
         for fref in froms:
             fz = ref_id(fref)
