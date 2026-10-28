@@ -32,7 +32,7 @@ are listed as such in [docs/checklist.md](docs/checklist.md).
   hash-chained records, the registry flip and its exact inverse, dual-write and parity tools, and a
   decommission scan; proven end to end between two in-memory lakes.
 * `hnx detections|registers|invariants|custom|schema-check`: detections as code, generated register
-  pages, standing invariants (X-01..X-10 plugins), customizations, schema contract checks.
+  pages, standing invariants (X-01..X-11 plugins), customizations, schema contract checks.
 * `make lab-smoke`: a pinned Docker Compose stack within a 4 GB budget, checked service by service
   (needs Docker; the compose smoke on a laptop-class host is the only live test so far).
 * `make check`: lint, tests, schemas, gates, detections, registers, SPDX, leak scan, changelog and a

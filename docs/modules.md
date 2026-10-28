@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:f314affd571d5884
+summary_of: outline:sha256:a8e41c11dee24067
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -22,7 +22,8 @@ summary_of: outline:sha256:f314affd571d5884
 >
 > Sections marked **specified, not implemented** describe a record, generator or check that does
 > not exist in any form yet, not even as a contract-test rule; [the follow-up
-> list](#specified-not-implemented-the-follow-ups) names each one.
+> list](#the-follow-ups-each-ones-status) says which of its items are implemented and what remains
+> of each.
 
 ## Why
 
@@ -258,8 +259,8 @@ mounts over existing files or a mount it did not make, finishes what a failed ru
 with the next module when one fails, and `--check` reports without changing anything (exit 3 while
 a cap is owed). A cap is not grown in place (move the data out and rerun); `disk_gb: 0` is no cap.
 Roles on `kind: external` hosts are listed, not rendered: those hosts are outside the lab. GPU
-memory has no systemd control and stays a placement sum. There is no CLI yet: the loader
-(follow-up 9) will render this from the overlay's selection.
+memory has no systemd control and stays a placement sum. `hnx modules render` writes these limits
+from the overlay's selection (`homelabnext/modules/cli.py`).
 
 ## Interfaces: one owner (`platform/interface` 1.0, a draft schema)
 
@@ -367,7 +368,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | Contribution class | What it can do | Gate | Approver |
 |---|---|---|---|
 | roles, playbooks, lifecycle | root on the module's placed hosts | role_lint; the review tier below | human (all modules) |
-| adapters, control-plane readers, entry points | code in core CLIs and runners | own package or the shared-adapter allowlist; tree digest | human for providers of privileged slots; owner otherwise |
+| adapters, control-plane readers, entry points | code in core CLIs and runners | own package or the shared-adapter allowlist; tree digest | human: `entry_points` is always human-approve, and so is any file no contribution names (code, an adapter); a provided slot is human only for a privileged slot, owner otherwise (`review_tier.py`) |
 | fleet units | scheduled jobs | `fleet_units` rules (dynamic user, full hardening); M-02/M-04 through the loader; a unit with `run_as_root`, `user: root` or `hardening_opt_out` needs `grants.units.<module>: [<unit>]` (a site rule: the module rules no longer refuse it, the overlay decides) | overlay owner |
 | service rows | routes, DNS, firewall edges | `public_hostname` needs `auth` other than `none` **and** `grants.public_routes`, whatever the auth; an upstream is a slot the module requires or prefers (following its fallback) or an instance it requires, and never `secrets`; a `broker`, `idp` or `remote-admin` upstream, or an instance that fills one of those slots, needs `grants.upstreams.<module>: [cap:broker\|cap:idp\|cap:remote-admin]`, judged by what the upstream reaches on the site (through a fallback too) | overlay owner |
 | model roles | prompts sent to a model | a role the module requires is an alias (ADR-0007), and a contributed agent's spec names only a role the module requires (so the grant covers the agent too); a role with a binding marked `leaves_lab` (`platform/model_roles` 1.3: a backend outside the lab), on the role or down its fallback chain, needs `grants.cloud_models.<module>: [mdl:<role>]` | overlay owner |
@@ -411,7 +412,7 @@ union of the base's and the head's privileged slots, so neither side can drop on
 CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
 human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
-the evaluation reports, `examples/model-evals/` and the golden suites; see "Swap record 1.2").
+the evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist until a first vetting change adds a report) and the golden suites; see "Swap record 1.2").
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
 the job summary in CI, where the `trusted-gates` job runs it with the base commit's own code;
@@ -574,11 +575,12 @@ host role, which runs outside the lab and so is egress by itself. Because the gr
 not roles, a manifest change that adds a target to a granted role is refused until the overlay
 lists it too. A host role inside the lab may be `internet-facing` only with
 `grants.internet_facing.<module>: [<role>]`. **Every grant** (egress, internet_facing,
-public_routes, publish, secrets, units, shared_config) names a selected module, and only what
+public_routes, publish, secrets, units, shared_config, upstreams, cloud_models) names a selected module, and only what
 exists for it: an egress target its entry lists, `external` for an external role, an
 internet-facing role inside the lab, a row with a `public_hostname` (checked when the rows are
 read), static hosting the module reaches, one of its units (when the unit specs are read), a
-`shared_config` target it declares, and a credential another selected module holds (a grant of
+`shared_config` target it declares, a broker, idp or remote-admin upstream it reaches
+(`upstreams`), a model role it requires whose prompts can leave the lab (`cloud_models`), and a credential another selected module holds (a grant of
 the module's own secret is redundant and refused). For secrets that is as far as the manifest
 goes: who actually reads a granted credential (an adapter, a gate's identity) is not visible in
 it, so an unused secrets grant is not detected. A grant waiting for a role, row or target to appear
@@ -1443,14 +1445,14 @@ and `meaning_changes` is recorded, never checked.
 
   **Vetting, then rebinding.** Since the base holds the evidence, a model reaches a role in two
   changes. The first adds its store entry and the live report for the proposed table (`make
-  models-eval`, copied to `examples/model-evals/<name>.json`); `hnx modules review-tier` rates the
+  models-eval`, copied to `examples/model-evals/<name>.json`, a directory that does not exist yet: `homelabnext.modules.swap_evidence.EVALS` names it and the first vetting change creates it); `hnx modules review-tier` rates the
   store, the reports, the report directory and the golden suites human-approve, so a code owner
   reviews the vetting. The second changes the role table and adds the swap record. A change cannot
   vouch for itself: a store entry or a live report in the same change counts for nothing.
 
   **`hnx modules swap-gate --base REV | --ci-base`** (`make swap-gate`) is the CI gate. When the
   role table differs from the base's, at least one swap record added or changed under
-  `examples/swaps/` (JSON or YAML; untracked ones count, a record already on the base does not)
+  `examples/swaps/` (`swap_evidence.SWAPS`; the directory does not exist yet, the first role-table change creates it; JSON or YAML; untracked ones count, a record already on the base does not)
   must cover it: each must validate and its `model_roles` legs must hold against the base's
   evidence, live required, which also means a leg for every role the change rebinds. An unchanged
   table passes. The module, site and migration rules are `swap-check`'s, which needs a site. A
@@ -1598,11 +1600,17 @@ Implemented as `tools/product_name_lint.py`, modelled on `tools/no_raw_endpoints
 Out of scope here: merging the several "product store" MCP servers into one mechanism (one
 mechanism, one server) belongs to the MCP catalog.
 
-## Specified, not implemented: the follow-ups
+## The follow-ups: each one's status
 
-Everything below is described on this page and exists in no form yet: no schema, generator or
-check, not even a contract-test rule. Each is a follow-up before the ADR can be accepted, or is
-listed as deferred.
+Each item below is a follow-up before the ADR can be accepted, or is listed as deferred. Most are
+now implemented (a schema, a generator or a check, named in the item): items 4 to 10 are, and items
+1 to 3 are implemented as draft schemas and rules, with folding into the released records waiting
+for acceptance. What remains is stated in each item as "Not done" or "waits for acceptance": the
+standalone interface loader (3), a provider that proves import validation (7), a run at a real
+lab's deploy (9), and the slot-level export/import round trip with a slot-keyed X-07 (listed at the
+end of this section, and in [`data:` and lifecycle safety](#data-and-lifecycle-safety)). The
+sections marked **specified, not implemented** elsewhere on this page are the ones that still
+exist in no form.
 
 1. **Capability descriptor 1.1**: the fields and rules exist as the draft `platform/slot` 1.0, and `slots.yml` is validated against it; folding them into the descriptor waits for acceptance.
 2. **Swap record 1.2**: `legs`, `selection_diff` and `dependants.report` are defined in the draft
@@ -1657,6 +1665,10 @@ listed as deferred.
    core's is a problem.
 10. **The product-name lint**: implemented (see [The product-name lint](#the-product-name-lint-rule-1));
     the core's existing product names are a baseline that only shrinks.
+11. **The slot-level round trip** (ADR-0027 decision 8): not done. Only the migration protocol
+    has `export` and `import_` (`conformance/protocols/migration.py`); no stateful slot's protocol
+    does, there is no MUST round-trip check per slot, and X-07 is not slot-keyed. See
+    [`data:` and lifecycle safety](#data-and-lifecycle-safety).
 
 ## Open questions
 

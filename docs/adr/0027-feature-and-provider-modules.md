@@ -122,8 +122,9 @@ contract tests (`homelabnext/modules/rules.py`), each shown refusing a planted d
 (follow-up 9 below) runs them, and the private overlay's deploy workflow runs the loader at deploy
 time; it has not run at a real lab's deploy yet.
 
-**Specified, not implemented** (described in [modules](../modules.md#specified-not-implemented-the-follow-ups),
-with no schema, generator or check in any form):
+**The follow-ups** (described in [modules](../modules.md#the-follow-ups-each-ones-status); most are
+implemented in whole or as a draft, as each item says, and what remains is marked "not done" or
+"waits for acceptance"; item 11 is the one with no schema, generator or check in any form):
 
 1. capability descriptor 1.1 (the slot registry): its fields and rules are now the draft schema
    `platform/slot` 1.0, against which `examples/modules/slots.yml` is validated; the descriptor
@@ -179,7 +180,10 @@ with no schema, generator or check in any form):
    from its roles and generators, so a running unit that is no module's or the core's is a
    problem;
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
-    gates` and CI), with the core's existing product names as a baseline that only shrinks.
+    gates` and CI), with the core's existing product names as a baseline that only shrinks;
+11. the slot-level round trip (decision 8): not done. Only the migration protocol has `export` and
+    `import_`; no stateful slot's protocol does, there is no per-slot MUST round-trip check, and
+    X-07 is not slot-keyed.
 
 These are the follow-ups. The ADR is not accepted, and the schemas are not frozen, until the loader
 has run at a real lab's deploy (the deploy workflow now runs it; no real deploy has yet) and the
