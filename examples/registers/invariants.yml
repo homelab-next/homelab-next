@@ -351,13 +351,15 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -c 'import importlib.metadata as m; m.version("homelabnext")' 2>/dev/null || exit 100;
     python3 tools/check_changelog.py &&
     python3 -m pytest -q -p no:cacheprovider tests/events/test_deploy.py
   expected: >-
     exit 0: CHANGELOG.md has an Unreleased section and one for the current version, and every
     deploy-event test passes with none skipped (the `homelabnext.deploy.changed` event is built
     from the version's changelog section and the release workflow emits it); exit 100 when a test
-    dependency is not installed, which is could-not-measure
+    dependency is not installed or the package itself is not (its `__version__` falls back to
+    `0.0.0+local` on a bare checkout, which has no changelog section), which is could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
   remediation: >-
@@ -786,12 +788,14 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -c 'import nats' 2>/dev/null || exit 100;
     python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker_relay.py
   expected: >-
     exit 0 with every selected test passed and none skipped (emit order, a lost PubAck, a crash
     between publish and mark, bus down then up, nothing secret logged); exit 100 when a test
     dependency is not installed, which is could-not-measure. The lab's `bus-relay` step runs it
-    against a real bus.
+    against a real bus. Also exit 100 when `nats` is not importable: the real-bus test skips
+    without it, and a skip is not a pass.
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
   remediation: >-
@@ -818,11 +822,13 @@ criteria:
   evidence: auto
   observable: >-
     python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -c 'import nats' 2>/dev/null || exit 100;
     python3 -m pytest -q -p no:cacheprovider tests/broker/test_broker_outbox.py
     tests/broker/test_broker_relay.py
   expected: >-
     exit 0 with every selected test passed and none skipped; exit 100 when a test dependency is
-    not installed, which is could-not-measure
+    not installed (`nats` included, whose absence skips the real-bus test), which is
+    could-not-measure
   expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
   slow: true
   remediation: >-

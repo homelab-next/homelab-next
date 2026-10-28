@@ -437,3 +437,39 @@ def test_g13_honours_a_direct_exception_its_ceiling_policy_makes(tmp_path, monke
         yaml.safe_dump({"ceilings": {"profile:actor": {**entry, "direct_mcp": ["shell"]}}})
     )
     assert _run(tmp_path, ["G-13"])["G-13"]["status"] == "pass"
+
+
+#: observables whose tests need something that is not always there, and the first statement that
+#: makes its absence could-not-measure (exit 100) rather than a failure of the invariant
+NEEDS = {
+    "F-15": 'import importlib.metadata as m; m.version("homelabnext")',  # __version__ is 0.0.0+local
+    "P-11": "import nats",  # the real-bus test skips without it, and a skip is not a pass
+    "P-13": "import nats",
+}
+
+
+@pytest.mark.parametrize("cid", sorted(NEEDS))
+def test_an_observable_that_needs_an_install_cannot_measure_without_it(cid, tmp_path, monkeypatch):
+    """F-15's test reads the installed version (``0.0.0+local`` on a bare checkout, so the
+    changelog section it looks for is missing) and P-11/P-13 skip their real-bus test without
+    ``nats``: each reported FAIL where the check could not be made.  The guard is the first
+    statement and its failure is exit 100 (``error``), never a pass or a fail."""
+    c = by_id()[cid]
+    obs = c["observable"]
+    at = obs.find(NEEDS[cid])
+    assert at >= 0, obs
+    assert re.match(r"[^|]*'\s*(2>/dev/null\s*)?\|\| exit 100;", obs[at:]), obs
+    work = min(i for i in (obs.find("check_changelog"), obs.find("-m pytest")) if i >= 0)
+    assert at < work, obs  # the guard runs before the work it guards
+    # a python3 on which that statement fails, as on a checkout that is not installed (any other
+    # statement runs on the real interpreter, so the other guards pass and this one decides)
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "python3").write_text(
+        f'#!/bin/sh\ncase "$*" in *\'{NEEDS[cid]}\'*) exit 1;; esac\nexec {sys.executable} "$@"\n'
+    )
+    (shim / "python3").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    probe = {**c, "observable": c["observable"], "slow": False}
+    r = run_criteria([probe], Context(REPO), only={cid})["results"][cid]
+    assert r["status"] == "error", r
