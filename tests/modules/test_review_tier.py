@@ -128,6 +128,24 @@ def test_an_unchanged_example_manifest_has_no_tier(mid):
         ("example-orchestrator", lambda d: d.update(surprise=1), "surprise"),
         ("example-orchestrator", lambda d: d["requires"].update(surprise=1), "requires.surprise"),
         (
+            # the receiver role (root code) moved onto the internet-facing host role
+            "external-collector",
+            lambda d: d["requires"]["hosts"][0].update(
+                roles=["role:external_collector_edge", "role:external_collector_receiver"]
+            ),
+            "requires.hosts",
+        ),
+        (
+            "external-collector",
+            lambda d: d["requires"]["hosts"][1].update(exposure="internet-facing"),
+            "requires.hosts",
+        ),
+        (
+            "external-collector",
+            lambda d: d["requires"]["scope"].append({"part": "target", "purpose": "acts on it"}),
+            "requires.scope",
+        ),
+        (
             "external-collector",
             lambda d: d["contributes"].update(surprise=[]),
             "contributes.surprise",
@@ -156,6 +174,9 @@ def test_an_unchanged_example_manifest_has_no_tier(mid):
         "id",
         "unknown-top-level-key",
         "unknown-block-key",
+        "host-role-roles",
+        "host-role-exposure",
+        "scope-parts",
         "unknown-contribution",
     ],
 )

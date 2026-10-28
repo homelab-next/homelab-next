@@ -394,7 +394,9 @@ change is **human-approve** when it reaches anything the table gives an approver
 module's owner (`credentials`, `control_plane`, `egress`, `data`, `lifecycle`, `interfaces`, an
 agent (its definition, or `needs` that grow), roles, entry points, fleet units, service rows, MCP
 records, `shared_config`, preflight hooks and workflow packs, a privileged slot it provides,
-requires, prefers or falls back to), or the module's `id`, `kind` or `origin`; a file in the module
+requires, prefers or falls back to, `requires.hosts` (which host roles its roles run on as root,
+and their exposure and footprint) and `requires.scope` (the scope parts it may act on)), or the
+module's `id`, `kind` or `origin`; a file in the module
 takes the tier of the contributions that name it (directly or as a directory above it) **in the base
 manifest**, and a file no contribution names there (code, an adapter) is human-approve. A file new
 in the pull request is human-approve unless the base names a directory above it; the head's

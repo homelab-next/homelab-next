@@ -88,6 +88,13 @@ HUMAN_CONTRIBUTIONS = frozenset(
     }
 )
 #: contributions the owner approves: rules, docs, criteria, tables, paging pairs, status sources
+#: ``requires`` keys whose change is human-approve, and why: which host roles the module's roles
+#: (root code) land on, their exposure, count and footprint; and the scope parts it needs, which
+#: keep the scope reader's ScopeUndeclared refusal in force
+HUMAN_REQUIRES = {
+    "hosts": "host roles: where its roles run as root, and their exposure and footprint",
+    "scope": "the scope parts it may act on",
+}
 OWNER_CONTRIBUTIONS = frozenset(
     {"detections", "docs", "invariants", "lake_tables", "notify_pairs", "status_sources"}
 )
@@ -301,6 +308,8 @@ def _block(block: str, old: Any, new: Any, keys: set[str], priv: set[str] | None
             out += _slots(a, b, priv)
         elif k == "interfaces":
             out.append(Change(f"{block}.{k}", HUMAN, "interfaces (a gate's ownership)"))
+        elif block == "requires" and k in HUMAN_REQUIRES:
+            out.append(Change(f"{block}.{k}", HUMAN, HUMAN_REQUIRES[k]))
         else:
             out.append(Change(f"{block}.{k}", OWNER, f"{block} {k}"))
     return out
