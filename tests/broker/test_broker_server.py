@@ -191,10 +191,15 @@ def test_the_reader_sees_only_its_grant_and_not_others_requests(broker):
 
 
 def test_an_unmapped_peer_is_refused_and_audited(tmp_path):
-    """Real SO_PEERCRED: this process's uid is in neither list."""
+    """Real SO_PEERCRED: this process's uid is in neither list.  Run as root it is the operator
+    instead, which may ask only for the agents: a call is refused it all the same."""
     svc = _service(tmp_path, callers=[{"uid": READER_UID, "profile": "profile:reader"}])
     with BrokerServer(svc, tmp_path / "run" / "b.sock") as srv, pytest.raises(Denied) as exc:
         BrokerClient(srv.path).call("memory.write", {"name": "a.md", "content": "x"})
+    if ME == 0:
+        assert exc.value.reason == "not-a-caller"
+        assert not (tmp_path / "data").exists()
+        return
     assert exc.value.reason == "unknown-caller"
     (rec,) = _audit(svc, reason="unknown-caller")
     assert (rec["caller"], rec["operation"], rec["outcome"]) == (f"uid:{ME}", "connect", "denied")
@@ -522,6 +527,73 @@ def test_handle_request_is_the_whole_protocol(tmp_path):
     assert resp["error"] == "unknown-caller"
     resp = handle_request(svc, peers, READER_UID, b'{"op": "actions"}')
     assert resp["ok"] and resp["result"]["caller"] == "profile:reader"
+
+
+#: the callers without this process's uid, which is root when the suite runs as root
+_NOT_ROOT = [
+    {"uid": 4_000_004, "profile": "profile:triage"},
+    {"uid": READER_UID, "profile": "profile:reader"},
+]
+
+
+def test_the_operator_lists_the_agents_the_broker_serves(tmp_path):
+    # root, listed in no role, is the operator: it may ask for the agent keys and nothing else
+    svc = _service(tmp_path, callers=_NOT_ROOT)
+    peers = PeerMap(svc.manifest)
+    resp = handle_request(svc, peers, 0, b'{"op": "agents"}')
+    assert resp == {"ok": True, "result": {"agents": ["reader", "triage"]}}
+    for op in ("actions", "pending", "audit", "token-status"):
+        resp = handle_request(svc, peers, 0, json.dumps({"op": op}).encode())
+        assert resp["ok"] is False and resp["kind"] == "Denied", (op, resp)
+    resp = handle_request(svc, peers, 0, b'{"op": "agents", "tail": 1}')
+    assert resp["error"] == "request-invalid"
+
+
+def test_only_the_operator_may_list_the_agents(tmp_path):
+    svc = _service(tmp_path, callers=_NOT_ROOT)
+    peers = PeerMap(svc.manifest)
+    for uid in (READER_UID, RELAY_UID):
+        resp = handle_request(svc, peers, uid, b'{"op": "agents"}')
+        assert resp["error"] == "not-the-operator", (uid, resp)
+    assert handle_request(svc, peers, STRANGER_UID, b'{"op": "agents"}')["error"] == (
+        "unknown-caller"
+    )
+
+
+def test_hnx_broker_agents_asks_the_running_broker_as_its_operator(tmp_path, monkeypatch, capsys):
+    # the census's own command, over a real socket: root's answer is the keys, one per line
+    monkeypatch.setenv("HNX_BROKER_SECRET_DEMO_API_TOKEN", "fake-socket-token")
+    srv = BrokerServer(_service(tmp_path, callers=_NOT_ROOT), tmp_path / "run" / "broker.sock")
+    srv.start()
+    try:
+        srv.credentials = lambda conn: (0, 0, 0)
+        assert main(["agents", "--socket", str(srv.path)]) == 0
+        assert capsys.readouterr().out == "reader\ntriage\n"
+        assert main(["agents", "--socket", str(srv.path), "--json"]) == 0
+        assert json.loads(capsys.readouterr().out) == {"agents": ["reader", "triage"]}
+        srv.credentials = lambda conn: (0, READER_UID, 0)  # an agent is refused it
+        assert main(["agents", "--socket", str(srv.path)]) == 1
+        assert "refused (not-the-operator)" in capsys.readouterr().err
+    finally:
+        srv.close()
+
+
+def test_root_listed_in_a_role_is_that_role_not_the_operator(tmp_path):
+    svc = _service(tmp_path, callers=[{"uid": 0, "profile": "profile:triage"}])
+    peers = PeerMap(svc.manifest)
+    assert handle_request(svc, peers, 0, b'{"op": "agents"}')["error"] == "not-the-operator"
+
+
+def test_an_agent_is_served_only_with_a_peer_and_a_grant(tmp_path):
+    # a granted profile no peer maps to, and a peer whose profile has no grant, are not served
+    svc = _service(
+        tmp_path,
+        callers=[
+            {"uid": READER_UID, "profile": "profile:reader"},
+            {"uid": STRANGER_UID, "profile": "profile:nobody"},
+        ],
+    )
+    assert svc.served_agents() == ["reader"]
 
 
 class _Clock:

@@ -11,6 +11,14 @@ argument_specs:
         type: str
         description: "The systemctl command each host runs (a test points it at a stand-in)."
         default: systemctl
+      module_census_broker_socket:
+        type: str
+        description: "On a host that runs the broker, its socket: the census asks it, as root (the broker's operator), for the agents it serves (hnx broker agents). Empty: the host runs no broker."
+        default: ""
+      module_census_hnx_cli:
+        type: str
+        description: "The hnx command a broker host runs (a test points it at a stand-in)."
+        default: hnx
   health:
     short_description: Fail unless the host answers systemctl --version.
     options:

@@ -36,12 +36,16 @@ The request commands work two ways:
     approve|deny REQUEST_ID --as ISSUER:SUBJECT [--note TEXT]
     pending [--mine [--as ACTOR]]
     audit [--action A] [--caller C] [--request R] [--outcome O] [--operation P] [--tail N]
+    agents
     import-proposals DIR [--apply] [--action proposal.file] [--default-risk R]
                      [--default-rollback TEXT] [--as ACTOR]
 
 ``import-proposals`` reads a directory of vault-style proposal Markdown files (front-matter) and
 files each as a ``proposal.file`` lane record through the broker (dry run unless ``--apply``),
 reporting what it could not map (:mod:`homelabnext.broker.importer`).
+
+``agents`` (the operator's: root on the broker's host, over ``--socket``) prints the agent keys
+the running broker serves, one per line; without a socket it reads them from the manifest.
 
 ``--json`` prints machine-readable output.
 
@@ -200,6 +204,9 @@ def _parser() -> argparse.ArgumentParser:
         a.add_argument(f"--{f}")
     a.add_argument("--request", dest="request_id")
     a.add_argument("--tail", type=int, help="only the last N records")
+    sub.add_parser(
+        "agents", help="the agent keys the broker serves (operator: root, over --socket)"
+    )
     imp = sub.add_parser(
         "import-proposals", help="file a directory of vault-style proposals through the broker"
     )
@@ -445,6 +452,9 @@ class _Local:
     def audit(self, **match):
         return self.svc.audit_documents(**match)
 
+    def agents(self):
+        return self.svc.served_agents()
+
 
 class _Remote:
     """The request commands against a running broker; the broker knows who this process is."""
@@ -486,6 +496,9 @@ class _Remote:
 
     def audit(self, **match):
         return self.c.audit(tail=500, **match)
+
+    def agents(self):
+        return self.c.agents()
 
 
 def _run(args) -> int:
@@ -539,6 +552,9 @@ def _run(args) -> int:
             for r in rows
         )
         _out(args, rows, text or ("nothing pending" if args.mine else "nothing awaiting approval"))
+    elif args.cmd == "agents":
+        keys = b.agents()
+        _out(args, {"agents": keys}, "\n".join(keys))
     else:  # audit
         match = {
             k: getattr(args, k) for k in ("action", "caller", "outcome", "operation", "request_id")

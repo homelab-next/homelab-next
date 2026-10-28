@@ -2,3 +2,8 @@
 # The census of what runs (docs/modules.md, "What the loader checks"): read-only on the hosts;
 # module_census_dir, a fresh directory on the controller, is required and has no default.
 module_census_systemctl_cli: systemctl
+# On a host that runs the broker: its socket, which the census asks as root (the broker's operator)
+# for the agents it serves.  Empty: this host runs no broker, and the census does not ask.
+module_census_broker_socket: ""
+# The hnx command a broker host runs (a test points it at a stand-in).
+module_census_hnx_cli: hnx

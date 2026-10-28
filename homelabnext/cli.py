@@ -231,7 +231,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
     ),
     "broker": (
         "the broker: validate|serve|relay|mcp|actions|call|submit|status|run|cancel|approve|deny|"
-        "pending|audit|import-proposals",
+        "pending|audit|agents|import-proposals",
         lambda a: importlib.import_module("homelabnext.broker.cli").main(a),
     ),
     "codemode": (

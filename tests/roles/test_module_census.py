@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Role module_census (docs/modules.md, "What the loader checks"): each host's enabled and active
-fleet units, read-only, written on the controller, where ``hnx modules gather`` reads them.  systemctl is a
-stand-in here; the play runs on localhost, which is then both the host and the controller."""
+fleet units, read-only, and on a broker host the agents its broker serves, written on the
+controller, where ``hnx modules gather`` reads them.  systemctl and hnx are stand-ins here; the
+play runs on localhost, which is then both the host and the controller."""
 
 from __future__ import annotations
 
@@ -41,12 +42,29 @@ def _systemctl(tmp_path) -> str:
     return fake(tmp_path / "systemctl", body)
 
 
+AGENTS = "core-staff-scorecard\nexternal-collector-analyst\n"
+
+
+def _hnx(tmp_path) -> str:
+    """A stand-in hnx whose broker answers the operator's agents (and logs the call)."""
+    body = (
+        LOGGER.replace("LOG", repr(str(tmp_path / "calls.log")))
+        .replace("NAME", repr("hnx"))
+        .replace("FAIL", repr(str(tmp_path / "hnx.fails")))
+        .replace("OUT", f"sys.stdout.write({AGENTS!r})")
+    )
+    return fake(tmp_path / "hnx", body)
+
+
 def _first(tmp_path):
     out = tmp_path / "census"
     out.mkdir()
     v = {
         "module_census_dir": str(out),
         "module_census_systemctl_cli": _systemctl(tmp_path),
+        # this host runs the broker: the census asks it for the agents it serves
+        "module_census_broker_socket": "/run/hnx-broker/broker.sock",
+        "module_census_hnx_cli": _hnx(tmp_path),
     }
     return {"role": "module_census", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
@@ -57,12 +75,14 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     r, tmp_path = first
     v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr
-    # two read-only queries, by argument vector: the pattern reaches systemctl unexpanded
+    # three read-only queries, by argument vector: the pattern reaches systemctl unexpanded,
+    # and the broker host's broker is asked for its agents over its socket
     assert calls(tmp_path) == [
         "systemctl list-unit-files --no-legend --plain --no-pager --type=service,timer "
         "--state=enabled hnx-*",
         "systemctl list-units --no-legend --plain --no-pager --type=service,timer "
         "--state=active hnx-*",
+        "hnx broker agents --socket /run/hnx-broker/broker.sock",
     ]
     out = tmp_path / "census"
     assert json.loads((out / "_hosts.json").read_text()) == ["localhost"]
@@ -71,12 +91,14 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
         "host": "localhost",
         "enabled": ENABLED.splitlines(),
         "active": ACTIVE.splitlines(),
+        "agents": AGENTS.splitlines(),
     }
     inventory, notes = census.gather(out)
     assert inventory == {
         "schema_version": "1.0",
         "units": ["external-collector-pull", "lake-compact", "stray"],
-        "not_gathered": ["rows", "mcp_servers", "agents", "tables"],
+        "agents": ["core-staff-scorecard", "external-collector-analyst"],
+        "not_gathered": ["rows", "mcp_servers", "tables"],
     }
     assert any("template unit" in n for n in notes)
 
@@ -113,6 +135,12 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"inventory_hostname": "../x"},
             {"inventory_hostname": "a/b"},
             {"inventory_hostname": ".hidden"},
+            # the broker's socket is an absolute plain path and hnx a plain command; a broker that
+            # does not answer fails the census
+            {"module_census_broker_socket": "run/broker.sock"},
+            {"module_census_broker_socket": "/run/../etc/broker.sock"},
+            {"module_census_hnx_cli": "hnx; true"},
+            {"module_census_hnx_cli": fake(tmp_path / "hnx-fails", "import sys\nsys.exit(1)\n")},
         ],
     )
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
@@ -120,5 +148,8 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     assert results[2][0] and results[3][0], results
     assert results[4] == (False, ""), results
     assert results[5][0], results
-    for failed, said in results[6:]:
+    for failed, said in results[6:9]:
         assert failed and "the host name a plain name" in said, results
+    for failed, said in results[9:12]:
+        assert failed and "the broker socket empty or an absolute path" in said, results
+    assert results[12][0], results

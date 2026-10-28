@@ -527,6 +527,14 @@ refuses to start there rather than accept an unauthenticated caller.
 - **Only a relay approves or denies**, for the human it names; an agent's peer gets
   `not-an-approval-relay`, a relay asking to act gets `not-a-caller`.
 - **Every audit record carries the peer** as `via: uid:<n>`.
+- **Root is the operator** when the manifest lists uid 0 in no role. It may ask one thing,
+  `agents` (`hnx broker agents --socket PATH`): the agent keys the broker serves, each profile the
+  manifest both maps a transport peer to and grants something, as `<key>`, names only (no uid,
+  grant, action or token). Root on the broker's host can already read the manifest and the state
+  directory, so the answer discloses nothing it could not read; it exists so the deploy's census
+  (role `module_census`, [modules](modules.md)) asks the *running* broker without a secret.
+  Anyone else asking gets `not-the-operator`, and the operator asking anything else is refused.
+  Root listed as a caller (or any other role) is that role, never the operator.
 
 ```sh
 hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-broker/state \

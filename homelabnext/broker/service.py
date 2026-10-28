@@ -1515,6 +1515,19 @@ class BrokerService:
             for r in self._open_rows(lambda rec: rec["request"]["actor"] == caller)
         ]
 
+    def served_agents(self) -> list[str]:
+        """The agent keys this broker serves: each profile (``profile:<key>``) that the manifest
+        both maps a transport peer to (``callers``) and grants something (``grants``), as
+        ``<key>``, sorted.  Names only: no uid, grant, action or token (the operator's
+        ``agents``, for the deploy's census)."""
+        peers = {c.get("profile") for c in self.manifest.get("callers", [])}
+        granted = {g.get("profile") for g in self.manifest.get("grants", [])}
+        return sorted(
+            p.removeprefix("profile:")
+            for p in peers & granted
+            if isinstance(p, str) and p.startswith("profile:")
+        )
+
     def actions_for(self, caller: str) -> list[dict[str, Any]]:
         """What ``caller`` may ask for: every action a grant of its names that :func:`decide`
         would admit (``allow`` or ``needs-approval``), with its tier, kind and parameters.
