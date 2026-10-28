@@ -28,6 +28,11 @@ Extension attribute names are lower-case alphanumeric (CloudEvents rule), so new
 Enrichment (`homelabnext.events.enrich`) sets three declared, optional extensions: `assetid`
 (`svc:`/`guest:`/`host:` id), `assetowner` (team slug) and `assetcriticality`
 (`low`|`medium`|`high`|`critical`).
+These three were added at envelope 1.1 (1.0 declared none of them): the envelope's `$id` moved to 1.1
+and every event type's schema refers to it by that id, so each type took its next minor (a type's
+schema at a lower minor still refers to the envelope it was published against, and its frozen copy
+keeps resolving it). `agent.job.finished`'s `dataschema` stays the 1.0 id: it names the data contract
+as first published, which a 1.0 producer still sends.
 
 Every type here gets a publisher and a consumer contract test automatically
 (`tests/events/test_contracts.py`, parametrized from this directory); `tools/contract_coverage.py`

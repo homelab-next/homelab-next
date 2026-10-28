@@ -23,7 +23,11 @@ For every schema under ``schemas/<dir>/`` (top level only):
    (schemas marked ``"x-defs-only": true`` hold only ``$defs`` and are exempt from 2 and 3);
 4. every example is free of non-documentation IP literals and
    ``viking://`` URIs;
-5. the schema is an *additive* evolution of its frozen baseline
+5. a version names one contract: the schema equals its frozen copy of the *same* version except
+   in documentation (``description``, ``title``, ``$comment``, ``examples``) and a newline guard,
+   so any other change, an additive one included, is the next minor; a non-draft schema has a
+   frozen copy at its own minor (a warning, an error under ``--strict``); and the schema is an
+   *additive* evolution of its frozen baseline
    (``schemas/_frozen/<major>.<minor-at-freeze>/...``) unless the major version
    was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: proposed, no
    loader or pilot yet) has no baseline and may change freely; ``--freeze`` skips it, and
@@ -148,13 +152,25 @@ def stem_of(schema_path: Path) -> str:
 
 
 def build_registry(root: Path) -> Registry:
+    """Every live schema by ``$id``, then every frozen copy whose ``$id`` no live schema carries:
+    a frozen schema refers to the version it was published against (events/alert.created 1.0 to
+    events/envelope 1.0), which is only a baseline once the live one moves on."""
     reg: Registry = Registry()
+    live: set[str] = set()
     for p in schema_files(root):
         doc = json.loads(p.read_text(encoding="utf-8"))
         if "$id" in doc:
+            live.add(doc["$id"])
             reg = reg.with_resource(
                 doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
             )
+    for copies in frozen_index(root).values():
+        for _, _, f in copies:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(doc.get("$id"), str) and doc["$id"] not in live:
+                reg = reg.with_resource(
+                    doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
+                )
     return reg
 
 
@@ -263,6 +279,19 @@ def _newline_guard_only(old: str, new: str) -> bool:
     return old.endswith("$") and (len(body) - len(body.rstrip("\\"))) % 2 == 0
 
 
+def _later_minor_ref(old: Any, new: Any) -> bool:
+    """``new`` refers to a later minor of the schema ``old`` refers to (same name, same major,
+    same fragment).  Each minor is itself additive over the last (:func:`check_schema` holds every
+    schema to that), so whatever validated against the earlier one still does."""
+    if not (isinstance(old, str) and isinstance(new, str)):
+        return False
+    (o, _, of), (n, _, nf) = old.partition("#"), new.partition("#")
+    mo, mn = ID_RE.match(o), ID_RE.match(n)
+    return bool(
+        mo and mn and of == nf and mo[1] == mn[1] and mo[2] == mn[2] and int(mn[3]) > int(mo[3])
+    )
+
+
 def _as_types(t: Any) -> set[str]:
     return set(t) if isinstance(t, list) else {t}
 
@@ -369,7 +398,7 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
                 for i, (a, b) in enumerate(zip(ov, nv, strict=False)):
                     out += is_additive(a, b, f"{p}[{i}]")
         elif key == "$ref":
-            if ov != nv:
+            if ov != nv and not _later_minor_ref(ov, nv):
                 out.append(f"{p}: $ref changed {ov} -> {nv}")
         elif key in {"dependentSchemas", "dependentRequired"}:
             out += _dependent_problems(old, ov, nv, key, p)
@@ -472,6 +501,93 @@ def _dependent_problems(old: dict, ov: Any, nv: Any, key: str, p: str) -> list[s
             out.append(f"{p}.{name}: new constraint on an existing key (tightens)")
     # an entry removed is a constraint removed: that only loosens
     return out
+
+
+#: keywords that are documentation only: rewording them changes no document's validity
+_DOC_KEYS = frozenset({"description", "title", "$comment", "examples"})
+#: keywords whose value maps a name to a subschema (the names are content, never keywords)
+_SCHEMA_MAPS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}
+)
+#: keywords whose value is one subschema, or a list of them
+_SCHEMA_ONE = frozenset(
+    {
+        "items",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+        "additionalProperties",
+        "propertyNames",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+        "contentSchema",
+    }
+)
+_SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+_GUARD = "(?!\\n)"
+
+
+def _unguarded(pattern: Any) -> Any:
+    """``pattern`` without a trailing newline guard that :func:`_newline_guard_only` proves
+    changes no language (anything else is returned as it is)."""
+    if isinstance(pattern, str) and pattern.endswith(_GUARD):
+        base = pattern[: -len(_GUARD)]
+        if _newline_guard_only(base, pattern):
+            return base
+    return pattern
+
+
+def _contract(node: Any) -> Any:
+    """A schema as its validation contract: without documentation keywords (``description``,
+    ``title``, ``$comment``, ``examples``, wherever a keyword can stand, never a property that
+    happens to be called that) and with the newline guard on a pattern taken off.  Values that
+    are data (``enum``, ``const``, ``default``, ``required``) are kept exactly."""
+    if isinstance(node, bool) or not isinstance(node, dict):
+        return node
+    out: dict[str, Any] = {}
+    for k, v in node.items():
+        if k in _DOC_KEYS:
+            continue
+        if k == "pattern":
+            out[k] = _unguarded(v)
+        elif k in _SCHEMA_MAPS and isinstance(v, dict):
+            out[k] = {
+                (_unguarded(n) if k == "patternProperties" else n): _contract(sub)
+                for n, sub in v.items()
+            }
+        elif k in _SCHEMA_ONE:
+            out[k] = [_contract(x) for x in v] if isinstance(v, list) else _contract(v)
+        elif k in _SCHEMA_LISTS and isinstance(v, list):
+            out[k] = [_contract(x) for x in v]
+        else:
+            out[k] = v
+    return out
+
+
+def _differences(a: Any, b: Any, path: str = "$") -> list[str]:
+    if isinstance(a, dict) and isinstance(b, dict):
+        out = [f"{path}.{k}: added" for k in sorted(set(b) - set(a))]
+        out += [f"{path}.{k}: removed" for k in sorted(set(a) - set(b))]
+        for k in sorted(set(a) & set(b)):
+            out += _differences(a[k], b[k], f"{path}.{k}")
+        return out
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        return [
+            d
+            for i, (x, y) in enumerate(zip(a, b, strict=True))
+            for d in _differences(x, y, f"{path}[{i}]")
+        ]
+    return [] if a == b else [f"{path}: changed"]
+
+
+def same_version_problems(frozen: dict, current: dict) -> list[str]:
+    """Where ``current`` differs from the frozen copy of its own version other than in
+    documentation or a newline guard (empty = the same contract).  A schema whose ``$id`` names a
+    frozen version validates exactly what that copy does; any other change, an additive one
+    included, is the next minor with its own frozen copy."""
+    return _differences(_contract(frozen), _contract(current))
 
 
 def parse_id(schema: dict) -> tuple[str, int, int] | None:
@@ -615,6 +731,64 @@ def frozen_lost(root: Path, base: str) -> list[Problem]:
     return probs
 
 
+def frozen_added(root: Path, base: str) -> list[Problem]:
+    """A file new under ``_frozen/`` since ``base`` is what ``--freeze`` writes, or a problem: a
+    ``.json`` schema at ``_frozen/<major>.<minor>/<rel>`` whose ``$id`` carries that version and
+    whose bytes equal the live ``schemas/<rel>``.  Without this, anything added there (any
+    content, any file type) would be a baseline for the additive check and outside every lint
+    that skips the frozen tree."""
+    try:
+        old = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "-z",
+                base,
+                "--",
+                "schemas/_frozen",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except subprocess.CalledProcessError as exc:
+        return [Problem("schemas/_frozen", f"cannot read base {base}: {exc.stderr.strip()}")]
+    before = set(filter(None, old.split("\0")))
+    frozen = root / "schemas" / "_frozen"
+    probs = []
+    for f in sorted(frozen.rglob("*")) if frozen.is_dir() else ():
+        if f.is_dir():
+            continue
+        rel = f.relative_to(root).as_posix()
+        if rel in before:
+            continue
+        parts = f.relative_to(frozen).parts
+        live = root / "schemas" / Path(*parts[1:]) if len(parts) > 1 else None
+        if f.suffix != ".json" or live is None:
+            probs.append(Problem(rel, "only a frozen copy of a live .json schema belongs here"))
+            continue
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError) as exc:
+            probs.append(Problem(rel, f"a new frozen file that does not parse: {exc}"))
+            continue
+        ident = parse_id(doc) if isinstance(doc, dict) else None
+        if ident is None or f"{ident[1]}.{ident[2]}" != parts[0]:
+            probs.append(Problem(rel, f"a new frozen file whose $id is not version {parts[0]}"))
+        elif not live.is_file() or live.read_bytes() != f.read_bytes():
+            probs.append(
+                Problem(
+                    rel,
+                    f"a new frozen file that is not a copy of the live schemas/{Path(*parts[1:]).as_posix()}",
+                )
+            )
+    return probs
+
+
 # ---------------------------------------------------------------- repo check
 @functools.lru_cache(maxsize=1024)
 def _metaschema_error(text: str) -> str | None:
@@ -700,10 +874,34 @@ def check_schema(
             )
     elif pid:
         same_major = [b for b in bl if b[0] == pid[1]]
+        severity = "error" if strict else "warning"
         if not same_major:
+            probs.append(Problem(rel, "no frozen baseline (run --freeze)", severity))
+        elif not any(b[:2] == (pid[1], pid[2]) for b in same_major):
+            # the repository's policy for a missing baseline, whatever the minor: a warning, an
+            # error under --strict (CI).  An older minor's copy does not stand for this one
             probs.append(
-                Problem(rel, "no frozen baseline (run --freeze)", "error" if strict else "warning")
+                Problem(
+                    rel,
+                    f"no frozen baseline at {pid[1]}.{pid[2]} (newest is "
+                    f"{same_major[-1][0]}.{same_major[-1][1]}; run --freeze)",
+                    severity,
+                )
             )
+        for _, bm, bf in same_major:
+            if bm == pid[2]:
+                diffs = same_version_problems(json.loads(bf.read_text(encoding="utf-8")), schema)
+                if diffs:
+                    shown = "; ".join(diffs[:4]) + (
+                        f"; and {len(diffs) - 4} more" if len(diffs) > 4 else ""
+                    )
+                    probs.append(
+                        Problem(
+                            rel,
+                            f"differs from its frozen {pid[1]}.{bm} copy beyond descriptions "
+                            f"(bump the minor and freeze it): {shown}",
+                        )
+                    )
         for _, _, bf in same_major:
             old = json.loads(bf.read_text(encoding="utf-8"))
             for reason in additive_problems(old, schema, pid[0], bf.parent.parent.name):
@@ -728,7 +926,7 @@ def check_repo(
             continue
         probs += check_schema(root, p, registry, strict, index)
     if base:
-        probs += frozen_lost(root, base)
+        probs += frozen_lost(root, base) + frozen_added(root, base)
     return probs
 
 

@@ -131,6 +131,10 @@ ACTIVE_RE = re.compile(
 )
 #: an inventory name (``platform/module_inventory`` ``$defs.name``)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: an MCP server name as a client registers it: what ``platform/mcp_server`` ``instance`` can expand
+#: to (``^[a-z0-9{][a-z0-9_{}-]{0,63}$`` with the placeholders filled), so ``_`` is allowed and the
+#: longest is 64.  ``homelabnext.modules.loader.instance_pattern`` matches these back to a record
+MCP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 #: the client formats the census reads, and the key of the server map each one holds
 MCP_CLIENTS = {
     "claude-code": "mcpServers",
@@ -142,9 +146,10 @@ SOCKET_RE = re.compile(r"(?:tcp|udp)/[1-9][0-9]{0,4}(?:@lo)?")
 MAX_HOSTS = 4096
 MAX_LINES = 4096
 #: the longest MCP server name a census accepts (the role's reader refuses longer ones on the host):
-#: the longest instance name in the tree is 33 characters, and past 48 a name is more likely a
-#: secret pasted where a name belongs than a name, so it is refused and never persisted
-MCP_NAME_MAX = 48
+#: the manifest schema's ``instance`` allows 64 characters, so the loader can produce one that long
+#: and the census must not fail the whole fleet on it; past 64 a name is more likely a secret pasted
+#: where a name belongs than a name, so it is refused (clipped in the message) and never persisted
+MCP_NAME_MAX = 64
 MAX_SOCKETS = 16384
 #: one lake table as the catalog listing reports it, ``<namespace>.<name>`` (the inventory's
 #: ``table:<namespace>.<name>`` without its prefix: ``platform/module_inventory``, at most 129)
@@ -252,7 +257,11 @@ def parse_mcp(configs: Any, host: str) -> tuple[set[str], list[str]]:
         if len(servers) > MAX_LINES or len(set(map(str, servers))) != len(servers):
             raise CensusError(f"{host}: {ld._shown(path)}: the server names are not a set")
         for name in servers:
-            if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not NAME_RE.fullmatch(name):
+            if (
+                not isinstance(name, str)
+                or len(name) > MCP_NAME_MAX
+                or not MCP_NAME_RE.fullmatch(name)
+            ):
                 raise CensusError(
                     f"{host}: {ld._shown(path)}: server {ld._clipped(name)} is not an inventory name"
                 )

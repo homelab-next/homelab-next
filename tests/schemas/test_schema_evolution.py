@@ -100,7 +100,6 @@ def _validation_only(doc):
 # changed after their version was frozen, before this test existed: the next change to one of
 # these bumps its id (and the entry goes); nothing may join the list
 UNBUMPED = {
-    "events/envelope.schema.json": "assetid, assetowner, assetcriticality added at 1.0",
     "status/observation.schema.json": "patterns changed at 1.0",
     "status/agent_activity.schema.json": "changed at 1.0",
     "status/agent_activity_detail.schema.json": "changed at 1.0",
@@ -396,6 +395,50 @@ def test_a_frozen_name_no_live_schema_carries_is_refused(tmp_path):
     assert any("frozen platform/capability is carried by no live schema" in m for m in probs)
 
 
+def test_a_new_frozen_file_must_be_a_copy_of_its_live_schema(tmp_path):
+    """Negative: with --base, what is new under _frozen/ is what --freeze writes (a byte copy of
+    the live schema at its own version), never arbitrary content or another file type, which
+    would be a baseline for the additive check and outside the lints that skip the frozen tree."""
+    import shutil
+    import subprocess
+
+    _copy_schemas(tmp_path)
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", "schemas")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "base")
+    live = tmp_path / "schemas/platform/capability.schema.json"
+    major, minor = sc.parse_id(json.loads(live.read_text()))[1:]
+    frozen = tmp_path / "schemas/_frozen"
+    good = frozen / f"{major}.{minor}" / "platform" / "capability-copy.schema.json"
+    good.parent.mkdir(parents=True, exist_ok=True)
+    # a copy under a name no live schema has is not a copy of its live schema
+    shutil.copy(live, good)
+    other = frozen / f"{major}.{minor}" / "platform" / "notes.md"
+    other.write_text("anything\n")
+    wrong_version = frozen / "9.9" / "platform" / "capability.schema.json"
+    wrong_version.parent.mkdir(parents=True)
+    shutil.copy(live, wrong_version)
+    edited = frozen / f"{major}.{minor}" / "platform" / "guest.schema.json"
+    probs = {p.where: p.message for p in sc.frozen_added(tmp_path, "HEAD")}
+    assert "not a copy of the live" in probs[good.relative_to(tmp_path).as_posix()]
+    assert "only a frozen copy" in probs[other.relative_to(tmp_path).as_posix()]
+    assert "is not version 9.9" in probs[wrong_version.relative_to(tmp_path).as_posix()]
+    assert edited.relative_to(tmp_path).as_posix() not in probs  # at the base: not new
+    # what --freeze writes passes
+    for f in (good, other, wrong_version):
+        f.unlink()
+    exact = frozen / f"{major}.{minor}" / "platform" / "capability.schema.json"
+    if exact.exists():
+        exact.unlink()
+        git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "drop")
+    shutil.copy(live, exact)
+    assert sc.frozen_added(tmp_path, "HEAD") == []
+
+
 def test_frozen_is_append_only_against_the_base(tmp_path):
     """Negative: with --base, deleting capability 1.0's only frozen copy (which lifts the gate for a
     draft) or editing a frozen file is refused; adding one is not."""
@@ -678,3 +721,115 @@ def test_removing_a_dependent_entry_is_additive(key):
     new = {**_CLOSED, key: {"a": entry["a"]}}
     assert sc.is_additive(old, new) == []
     assert sc.is_additive(_CLOSED, {**_CLOSED, "oneOf": [{"required": ["a"]}]}) == []
+
+
+# ----- a version names one contract: same-version content, missing minors, retargeted refs -----
+def _minor_copy(tmp_path, rel="platform/guest.schema.json"):
+    import shutil
+
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas" / rel
+    return p, json.loads(p.read_text())
+
+
+def _problems(tmp_path, rel, strict=True):
+    return sc.check_repo(tmp_path, [rel.split("/")[0]], strict=strict, only=[rel])
+
+
+def test_a_change_under_a_frozen_id_beyond_descriptions_is_refused(tmp_path):
+    """The published 1.x contract changed in place (events/envelope added assetid at 1.0): even an
+    additive edit needs the next minor, because a consumer pinned to the id was promised the
+    frozen document."""
+    p, s = _minor_copy(tmp_path)
+    s["properties"]["a_new_optional_field"] = {"type": "string"}  # additive, yet the same $id
+    p.write_text(json.dumps(s))
+    msgs = [x.message for x in _problems(tmp_path, "platform/guest.schema.json")]
+    assert any("copy beyond descriptions" in m and "a_new_optional_field" in m for m in msgs), msgs
+    # a bump without its baseline is the other half of the same rule
+    _bump(s, "1.99")
+    p.write_text(json.dumps(s))
+    msgs = [x.message for x in _problems(tmp_path, "platform/guest.schema.json")]
+    assert not any("copy beyond descriptions" in m for m in msgs)
+    assert any("no frozen baseline at 1.99" in m for m in msgs), msgs
+
+
+def test_descriptions_and_the_newline_guard_stay_allowed_under_a_frozen_id(tmp_path):
+    p, s = _minor_copy(tmp_path, "platform/mcp_server.schema.json")
+    s["description"] = "reworded"
+    s["title"] = "reworded"
+    s["properties"][next(iter(s["properties"]))]["description"] = "reworded"
+    guarded = 0
+
+    def unguard(node):
+        nonlocal guarded
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k == "pattern" and isinstance(v, str) and v.endswith("$(?!\\n)"):
+                    node[k] = v[: -len("(?!\\n)")]  # a frozen copy before the guard was added
+                    guarded += 1
+                else:
+                    unguard(v)
+        elif isinstance(node, list):
+            for v in node:
+                unguard(v)
+
+    unguard(s)
+    assert guarded
+    p.write_text(json.dumps(s))
+    msgs = [x.message for x in _problems(tmp_path, "platform/guest.schema.json")]
+    assert not any("copy beyond descriptions" in m for m in msgs), msgs
+
+
+def test_a_property_named_description_is_content_not_an_annotation(tmp_path):
+    """Only the keyword is documentation: a field called ``description`` is part of the contract."""
+    p, s = _minor_copy(tmp_path, "platform/capability.schema.json")
+    s["properties"].setdefault("description", {"type": "string"})
+    s["properties"]["description"] = {"type": "integer"}  # stricter, under the same $id
+    p.write_text(json.dumps(s))
+    msgs = [x.message for x in _problems(tmp_path, "platform/capability.schema.json")]
+    assert any("copy beyond descriptions" in m for m in msgs), msgs
+
+
+def test_a_missing_minor_baseline_is_a_warning_and_an_error_when_strict(tmp_path):
+    p, s = _minor_copy(tmp_path, "platform/model_roles.json")
+    major, minor = sc.parse_id(s)[1:]
+    sc.frozen_path(tmp_path, p, major, minor).unlink(missing_ok=True)
+    warn = _problems(tmp_path, "platform/model_roles.json", strict=False)
+    err = _problems(tmp_path, "platform/model_roles.json", strict=True)
+
+    def hit(xs):
+        return [x for x in xs if f"no frozen baseline at {major}.{minor}" in x.message]
+
+    assert [x.severity for x in hit(warn)] == ["warning"]
+    assert [x.severity for x in hit(err)] == ["error"]
+
+
+def test_every_non_draft_schema_has_a_baseline_at_its_own_minor():
+    for p in sc.schema_files(ROOT):
+        s = json.loads(p.read_text())
+        pid = sc.parse_id(s)
+        if pid and not sc.is_draft(s):
+            assert sc.frozen_path(ROOT, p, pid[1], pid[2]).is_file(), p.name
+
+
+def test_a_ref_retargeted_to_a_later_minor_of_the_same_schema_is_additive():
+    old = {"allOf": [{"$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"}]}
+    ref = "https://schemas.example.internal/homelabnext/events/envelope/{}"
+
+    def new(v):
+        return {"allOf": [{"$ref": ref.format(v)}]}
+
+    assert sc.is_additive(old, new("1.1")) == []
+    assert sc.is_additive(old, new("1.0")) == []
+    assert sc.is_additive(old, new("2.0"))  # another major is another contract
+    assert sc.is_additive(new("1.1"), new("1.0"))  # never back
+    other = {"allOf": [{"$ref": ref.format("1.1").replace("envelope", "other")}]}
+    assert sc.is_additive(old, other)
+
+
+def test_the_registry_resolves_a_ref_to_a_frozen_only_version(tmp_path):
+    """A frozen copy that refers to an older minor of another schema still resolves."""
+    reg = sc.build_registry(ROOT)
+    for ver in ("1.0", "1.1"):
+        uri = f"https://schemas.example.internal/homelabnext/events/envelope/{ver}"
+        assert reg.get_or_retrieve(uri).value.contents["$id"] == uri

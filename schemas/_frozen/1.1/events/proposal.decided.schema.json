@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/proposal.decided/1.1",
+  "title": "Event homelabnext.proposal.decided",
+  "description": "The approver decided a proposal. The only event that moves a note out of the inbox lane.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.proposal.decided"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,128}$"
+            },
+            "decision": {
+              "enum": [
+                "approved",
+                "denied"
+              ]
+            },
+            "decided_by": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "decided_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "required": [
+            "proposal_id",
+            "decision",
+            "decided_by",
+            "decided_at"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "decision": {
+                    "const": "denied"
+                  }
+                },
+                "required": [
+                  "decision"
+                ]
+              },
+              "then": {
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

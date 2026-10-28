@@ -116,6 +116,27 @@ GOVERNANCE = (
     "homelabnext/modules/review_tier.py",
     "homelabnext/network/review_tier.py",  # the site's review tier, which the overlay runs
     "homelabnext/gitbase.py",  # the base rule --ci-base takes
+    # the repository code the two tiers and the swap gate import (a change there changes what they
+    # decide; tests/modules/test_review_tier.py derives this from the imports and fails when one
+    # is missing): the loader (parse_yaml, contributed_files, read_tree_file), the base reader and
+    # the gate (swap_evidence), the swap record and the golden pins the gate checks, and what those
+    # read the model store, the role table and the selection rules through
+    "homelabnext/modules/loader.py",
+    "homelabnext/modules/swap_evidence.py",
+    "homelabnext/modules/swap.py",
+    "homelabnext/modules/rules.py",
+    "homelabnext/golden/pins.py",
+    "homelabnext/models/store.py",
+    "homelabnext/registry/models.py",
+    # the commands that run them and set the exit code CI reads, and the readers every parse goes
+    # through (the duplicate-key YAML loader, the scope reader); their wider import tree is not
+    # listed: CI runs the gates with the base commit's code, so a pull request cannot weaken its
+    # own gate, and this list is what a later change needs a human for
+    "homelabnext/cli.py",
+    "homelabnext/modules/cli.py",
+    "homelabnext/network/cli.py",
+    "homelabnext/_yaml.py",
+    "homelabnext/modules/scope.py",
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
 )

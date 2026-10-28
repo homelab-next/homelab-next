@@ -694,68 +694,6 @@
    "trino": 2,
    "wazuh": 1
   },
-  "schemas/_frozen/1.0/events/project.changed.schema.json": {
-   "openproject": 1
-  },
-  "schemas/_frozen/1.0/platform/model_serving.schema.json": {
-   "vllm": 1
-  },
-  "schemas/_frozen/1.0/platform/model_store.schema.json": {
-   "vllm": 2
-  },
-  "schemas/_frozen/1.0/status/agents.schema.json": {
-   "authentik": 2
-  },
-  "schemas/_frozen/1.0/workflows/stackstorm.schema.json": {
-   "stackstorm": 6
-  },
-  "schemas/_frozen/1.1/status/agents.schema.json": {
-   "authentik": 2
-  },
-  "schemas/_frozen/1.1/workflows/stackstorm.schema.json": {
-   "stackstorm": 6
-  },
-  "schemas/_frozen/1.2/status/agents.schema.json": {
-   "authentik": 2
-  },
-  "schemas/_frozen/1.3/status/agents.schema.json": {
-   "authentik": 2
-  },
-  "schemas/_frozen/2.1/platform/service.json": {
-   "prometheus": 1
-  },
-  "schemas/_frozen/2.2/platform/service.json": {
-   "agentmetry": 1,
-   "prometheus": 1
-  },
-  "schemas/_frozen/2.3/platform/service.json": {
-   "agentmetry": 2,
-   "nifi": 1,
-   "prometheus": 2,
-   "stackstorm": 1,
-   "uptime-kuma": 1
-  },
-  "schemas/_frozen/2.4/platform/service.json": {
-   "agentmetry": 2,
-   "nifi": 1,
-   "prometheus": 2,
-   "stackstorm": 1,
-   "uptime-kuma": 1
-  },
-  "schemas/_frozen/2.5/platform/service.json": {
-   "agentmetry": 2,
-   "nifi": 1,
-   "prometheus": 2,
-   "stackstorm": 1,
-   "uptime-kuma": 1
-  },
-  "schemas/_frozen/2.6/platform/service.json": {
-   "agentmetry": 2,
-   "nifi": 1,
-   "prometheus": 2,
-   "stackstorm": 1,
-   "uptime-kuma": 1
-  },
   "schemas/events/examples/project.changed.openproject.json": {
    "openproject": 3
   },

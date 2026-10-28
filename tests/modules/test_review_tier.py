@@ -6,6 +6,7 @@ human-approve change has a valid code owner."""
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import os
@@ -856,3 +857,83 @@ def test_the_cli_output_is_the_one_it_had_before_the_report_moved(repo, capsys):
         ],
         "problems": [],
     }
+
+
+def _repo_imports(rel: str) -> set[str]:
+    """The repository modules (as paths) one source file imports, at any scope, through
+    ``import homelabnext.x`` and ``from homelabnext.x import y`` (``y`` a submodule or a name)."""
+    root = ROOT
+    pkg = Path(rel).with_suffix("").parts[:-1]
+
+    def module_file(dotted: str) -> str | None:
+        p = Path(*dotted.split("."))
+        for cand in (p.with_suffix(".py"), p / "__init__.py"):
+            if (root / cand).is_file():
+                return cand.as_posix()
+        return None
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse((root / rel).read_text())):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = ".".join(pkg[: len(pkg) - (node.level - 1)]) if node.level else ""
+            mod = ".".join(x for x in (base, node.module) if x)
+            names = [mod] + [f"{mod}.{a.name}" for a in node.names]
+        else:
+            continue
+        for dotted in names:
+            if dotted.split(".")[0] == "homelabnext":
+                # a submodule wins over its package (``from homelabnext.modules import loader``)
+                f = module_file(dotted)
+                if f and not (
+                    f.endswith("__init__.py") and any(n.startswith(dotted + ".") for n in names)
+                ):
+                    found.add(f)
+    return found
+
+
+#: the code that decides the tiers and runs the swap gate, and the part of its import chain the
+#: gate evaluates through (the swap record and the golden pins it checks); their own imports are
+#: not followed past that
+DECIDERS = (
+    "homelabnext/modules/review_tier.py",
+    "homelabnext/network/review_tier.py",
+    "homelabnext/modules/swap_evidence.py",
+)
+GATE_CHAIN = ("homelabnext/modules/swap.py", "homelabnext/golden/pins.py")
+
+
+def test_governance_lists_every_module_the_tiers_and_the_gate_import():
+    """A change to code the review tiers or the swap gate import can change what they decide, so
+    it is human-approve: a new import there that GOVERNANCE does not list fails this."""
+    derived: set[str] = set(DECIDERS) | set(GATE_CHAIN)
+    for rel in (*DECIDERS, GATE_CHAIN[0]):
+        derived |= _repo_imports(rel)
+    missing = sorted(derived - set(rt.GOVERNANCE))
+    assert not missing, f"imported by the tiers or the gate, yet not in GOVERNANCE: {missing}"
+    for must in (
+        "homelabnext/modules/cli.py",  # the gate's entry: it picks the base and sets the exit code
+        "homelabnext/network/cli.py",
+        "homelabnext/_yaml.py",  # parse_yaml's duplicate-key loader
+        "homelabnext/modules/loader.py",
+        "homelabnext/modules/swap_evidence.py",
+        "homelabnext/modules/swap.py",
+        "homelabnext/golden/pins.py",
+    ):
+        assert must in rt.GOVERNANCE
+
+
+def test_governance_lists_no_file_that_does_not_exist():
+    root = ROOT
+    gone = [g for g in rt.GOVERNANCE if g not in rt.CODEOWNERS_PATHS and not (root / g).is_file()]
+    assert gone == []
+
+
+@pytest.mark.parametrize("path", ["homelabnext/modules/loader.py", "homelabnext/golden/pins.py"])
+def test_a_change_to_code_the_tiers_import_is_human_approve(repo, capsys, path):
+    f = repo / path
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x = 1\n")
+    _, out = _run(repo, capsys)
+    assert _by_path(out) == {path: rt.HUMAN}

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/status.observed/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/status.observed/1.1",
   "title": "Event homelabnext.status.observed",
   "description": "A status collector observed one item (data is a status observation, schemas/status/observation.schema.json). Collectors and push-event sources publish it onto the bus so the status hub has one place to read everything (ADR-0013). The id derives from source, module, item and observed_at, so a re-sent reading is a duplicate.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {

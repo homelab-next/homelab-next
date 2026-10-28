@@ -111,10 +111,11 @@ def test_an_absent_configuration_still_gathers_the_kind_as_registering_nothing(t
         ([{**cfg("/a", "claude-code", None), "servers": ["a"]}], "is absent yet registers"),
         ([cfg("/a", "claude-code", ["a", "a"])], "the server names are not a set"),
         ([cfg("/a", "claude-code", ["Upper"])], "is not an inventory name"),
-        ([cfg("/a", "claude-code", ["snake_case"])], "is not an inventory name"),
+        ([cfg("/a", "claude-code", ["has space"])], "is not an inventory name"),
+        ([cfg("/a", "claude-code", ["-lead"])], "is not an inventory name"),
         ([cfg("/a", "claude-code", ["x" * 65])], "is not an inventory name"),
         # past census.MCP_NAME_MAX a name is more likely a pasted secret: refused, never persisted
-        ([cfg("/a", "claude-code", ["x" * 49])], "is not an inventory name"),
+        ([cfg("/a", "claude-code", ["x" * (census.MCP_NAME_MAX + 1)])], "is not an inventory name"),
         ([cfg("/a", "claude-code", [5])], "is not an inventory name"),
     ],
 )
@@ -360,3 +361,28 @@ def test_a_long_name_that_is_no_ones_is_shown_clipped(tmp_path):
         "running: mcp_servers short-rogue runs but is no module's or the core's",
     ]
     assert all(token not in line for line in out)
+
+
+def test_the_census_accepts_every_name_an_mcp_instance_can_expand_to(tmp_path):
+    """``platform/mcp_server`` ``instance`` is ``^[a-z0-9{][a-z0-9_{}-]{0,63}$``: an underscore and
+    64 characters are legal, so the loader can produce them and one such name must not fail the
+    whole fleet's census (and the inventory it builds must validate)."""
+    names = ["example-lake_main", "a_b", "9lives", "x" * 64]
+    census_doc = write(tmp_path / "c", {"a": [cfg("/a", "claude-code", names)]})
+    inv, _notes = census.gather(census_doc)
+    assert set(names) <= set(inv["mcp_servers"])
+    schema = json.loads((ROOT / "schemas/platform/module_inventory.schema.json").read_text())
+    import jsonschema
+
+    jsonschema.Draft202012Validator(schema).validate(inv)
+
+
+def test_the_mcp_name_shape_is_the_manifest_instance_pattern():
+    """Every name the manifest's instance pattern admits (placeholders filled) passes the census
+    shape and length, so the two cannot drift apart again."""
+    schema = json.loads((ROOT / "schemas/platform/mcp_server.schema.json").read_text())
+    pat = re.compile(schema["properties"]["instance"]["pattern"].replace("$(?!\\n)", "$"))
+    for name in ["a", "a_b", "9", "a-b_c", "x" * 64]:
+        assert pat.fullmatch(name)
+        assert census.MCP_NAME_RE.fullmatch(name) and len(name) <= census.MCP_NAME_MAX
+    assert census.MCP_NAME_MAX == 64  # {0,63} after the first character

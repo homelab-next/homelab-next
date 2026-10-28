@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.1",
+  "title": "Event homelabnext.agent.job.finished",
+  "description": "The usage record of one agent job (one run in the orchestration controller's queue) that reached a terminal state: completed, failed, cancelled or timed out. Published by the controller (source: the orchestration controller's service id; the status hub's consumer pins it by configuration and refuses any other source) through its durable outbox in the same transaction as the terminal transition, once per run; agent.job.failed is still emitted for failures (finished is the usage record of every outcome). The id derives from the run id, so a re-sent record is a duplicate. data holds names, counts, sizes and times only, NEVER prompt text, task text, tool input or output or model output (the same rule as agent.activity's summary tier): every object is closed (additionalProperties false), so a text field cannot ride along, subject, when sent, is the run id, and the status hub's consumer refuses an envelope attribute the envelope schema does not declare (a CloudEvents extension), so no free text rides on the envelope either. gateway_tag is the tag every model request of the job carries at the LLM gateway, which joins the gateway's per-turn records to the job (docs/orchestration-telemetry.md). Evolve additively.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.agent.job.finished"
+        },
+        "subject": {
+          "$ref": "#/$defs/run_id",
+          "description": "the run id (as data.run_id), never free text"
+        },
+        "dataschema": {
+          "const": "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0",
+          "description": "when sent, the id of this data contract as first published (1.0, kept across minors so a 1.0 producer stays valid), never anything else"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "run_id": {
+              "$ref": "#/$defs/run_id",
+              "description": "the controller's run id"
+            },
+            "profile": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id",
+              "description": "profile: followed by the run's agent key (as agent.job.failed's agent_key)"
+            },
+            "profile_revision": {
+              "type": ["string", "null"],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$(?!\\n)",
+              "description": "the agent profile's revision the run was admitted under; null when the controller does not know it"
+            },
+            "lane": {
+              "enum": ["real", "shadow"],
+              "description": "shadow: a run whose answer is recorded but never delivered (trying a profile or a route before promoting it)"
+            },
+            "outcome": {
+              "enum": ["completed", "failed", "cancelled", "timeout"],
+              "description": "timeout: a failed run whose failure class is timeout, deadline or budget; cancelled: a cancel (failure class cancelled); failed: every other failure (budget_killed, stall, ...)"
+            },
+            "failure_class": {
+              "type": ["string", "null"],
+              "pattern": "^[a-z][a-z0-9-]{0,39}$(?!\\n)",
+              "description": "the controller's typed failure class (capacity, stall, timeout, backend-down, handler-error, deadline, cancelled, turn-cap, budget, unknown, ...) when outcome is not completed; null on a completed run"
+            },
+            "retry_of_run_id": {
+              "anyOf": [{"$ref": "#/$defs/run_id"}, {"type": "null"}],
+              "description": "the run this one retries (a resubmit or an auto-retry); null for an original submit"
+            },
+            "auto_retry_scheduled": {
+              "type": "boolean",
+              "description": "the scheduler auto-retried this run in the same transaction (as agent.job.failed 1.1)"
+            },
+            "local_attempts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000,
+              "description": "attempts made on local backends inside this run"
+            },
+            "cloud_fallback_used": {
+              "type": "boolean"
+            },
+            "backend": {
+              "type": ["string", "null"],
+              "pattern": "^[A-Za-z0-9._-]{1,64}$(?!\\n)",
+              "description": "the logical name of the backend actually used (the controller's local_backend_used, verbatim: it may start with a dot or a digit); never a URL or host:port (no ':' or '/')"
+            },
+            "model": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^(?!.{2,}:/)(?!(?:.*[:/@])?[0-9]{1,3}(?:\\.[0-9]{1,3}){3}(?:[:/]|$))(?!.*:[0-9]{2,5}/)(?!.*@(?:[A-Za-z0-9_-]+\\.)+[A-Za-z]{2,}\\.?(?![A-Za-z0-9.]))(?!\\.\\.)[A-Za-z0-9/.][A-Za-z0-9._:/@-]{0,511}$(?!\\n)",
+              "description": "an opaque model name: the agent runtime's usage file's model, else the passthrough request's model (for a backend served without an alias this can be the model's path); not an alias by contract. The turn record's model rule (conformance/protocols/inference.py MODEL_PATTERN, a test keeps them equal): up to 512 of A-Za-z0-9._:/@-, may start with /, ./ or a drive letter and hold //; a controller whose value fails it sends null, never whitespace, a control character, a URL scheme, an IPv4 address, host:port/ or a mail address"
+            },
+            "queued_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            },
+            "started_at": {
+              "anyOf": [
+                {"$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"},
+                {"type": "null"}
+              ],
+              "description": "null when the run never started (cancelled or timed out in the queue)"
+            },
+            "finished_at": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+            },
+            "queue_wait_s": {
+              "$ref": "#/$defs/seconds",
+              "description": "started_at - queued_at (null when the run never started)"
+            },
+            "wall_s": {
+              "$ref": "#/$defs/seconds",
+              "description": "finished_at - started_at (null when the run never started)"
+            },
+            "input_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "the size of the task input the controller received (task description and request body); the size only, never the text"
+            },
+            "output_bytes": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "description": "the size of the final answer delivered; null when there was none"
+            },
+            "usage": {
+              "anyOf": [{"$ref": "#/$defs/usage"}, {"type": "null"}],
+              "description": "from the run's usage file; null when the run wrote none"
+            },
+            "turn_exit_reason": {
+              "type": ["string", "null"],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$(?!\\n)",
+              "description": "why the agent's last turn ended, from the usage file"
+            },
+            "tools": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "calls"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$(?!\\n)",
+                    "description": "the tool's NAME only, never its input"
+                  },
+                  "calls": {"type": "integer", "minimum": 0}
+                }
+              },
+              "description": "tool names and call counts, only when the controller already has them; omitted otherwise"
+            },
+            "gateway_tag": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:/-]{0,64}[A-Za-z0-9._:-]{1,128}$(?!\\n)",
+              "description": "the request tag the gateway records per call for the job's model requests (how a gateway receives it is its adapter's concern, docs/orchestration-telemetry.md): an optional prefix (at most 64 of A-Z a-z 0-9 . _ : / -, never a comma) followed by the run id"
+            }
+          },
+          "required": [
+            "run_id",
+            "profile",
+            "profile_revision",
+            "lane",
+            "outcome",
+            "failure_class",
+            "retry_of_run_id",
+            "auto_retry_scheduled",
+            "local_attempts",
+            "cloud_fallback_used",
+            "backend",
+            "model",
+            "queued_at",
+            "started_at",
+            "finished_at",
+            "queue_wait_s",
+            "wall_s",
+            "input_bytes",
+            "output_bytes",
+            "usage",
+            "turn_exit_reason",
+            "gateway_tag"
+          ],
+          "if": {
+            "properties": {"outcome": {"const": "completed"}},
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": {"failure_class": {"type": "null"}}
+          }
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ],
+  "$defs": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$(?!\\n)"
+    },
+    "seconds": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "count": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "null = unknown, which is not 0"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "api_calls", "cost_usd"],
+      "properties": {
+        "input_tokens": {"$ref": "#/$defs/count"},
+        "output_tokens": {"$ref": "#/$defs/count"},
+        "reasoning_tokens": {"$ref": "#/$defs/count"},
+        "cache_read_tokens": {"$ref": "#/$defs/count"},
+        "api_calls": {"$ref": "#/$defs/count"},
+        "cost_usd": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "null = unknown, which is not 0"
+        }
+      }
+    }
+  }
+}

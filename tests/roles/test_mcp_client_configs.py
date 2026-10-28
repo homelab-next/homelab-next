@@ -246,9 +246,9 @@ def test_only_the_names_leave_the_host_never_a_secret(mod, tmp_path):
         ("generic", "[]", "is not a generic configuration"),
         ("claude-code", '{"mcpServers": []}', "mcpServers is not a mapping"),
         ("claude-code", '{"mcpServers": {"Upper": {}}}', "a server name is not an inventory name"),
-        ("claude-code", '{"mcpServers": {"snake_case": {}}}', "not an inventory name"),
+        ("claude-code", '{"mcpServers": {"has space": {}}}', "not an inventory name"),
         # past MCP_NAME_MAX a name is more likely a pasted secret: refused here, never returned
-        ("claude-code", '{"mcpServers": {"%s": {}}}' % ("x" * 49), "not an inventory name"),
+        ("claude-code", '{"mcpServers": {"%s": {}}}' % ("x" * 65), "not an inventory name"),
         ("claude-code", "[" * 100000 + "]" * 100000, "does not parse"),
         ("hermes", "mcp_servers: &a {x: 1}\nmore: *a\n", "does not parse"),
         ("hermes", "mcp_servers: {a: 1, a: 2}\n", "does not parse"),
@@ -290,5 +290,16 @@ def test_the_role_module_and_census_name_the_same_clients(mod):
     listed = yaml.safe_load((roles / "vars" / "main.yml").read_text())["module_census_mcp_clients"]
     assert sorted(listed) == sorted(census.MCP_CLIENTS) == sorted(mod.BASENAMES)
     assert mod.SERVERS_KEY == census.MCP_CLIENTS
-    assert mod.NAME_RE.pattern == census.NAME_RE.pattern
+    assert mod.MCP_NAME_RE.pattern == census.MCP_NAME_RE.pattern
     assert mod.MCP_NAME_MAX == census.MCP_NAME_MAX
+
+
+def test_the_role_module_accepts_the_names_the_census_accepts(mod):
+    """The two copies agree on a name, in both directions, not only in their text."""
+    for name in ["example-lake_main", "a_b", "9lives", "x" * census.MCP_NAME_MAX]:
+        doc = json.dumps({"mcpServers": {name: {}}})
+        assert mod.server_names(doc, "claude-code", "/p") == [name]
+    for name in ["Upper", "has space", "-lead", "x" * (census.MCP_NAME_MAX + 1), ""]:
+        doc = json.dumps({"mcpServers": {name: {}}})
+        with pytest.raises(mod.Refused):
+            mod.server_names(doc, "claude-code", "/p")

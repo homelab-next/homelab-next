@@ -1197,3 +1197,47 @@ def test_render_writes_a_fresh_directory_only_for_a_clean_site(capsys, tmp_path)
     refused = tmp_path / "refused"
     code, _ = run(capsys, "--site", str(bad), "--out", str(refused), cmd="render")
     assert code == 1 and not refused.exists()
+
+
+# ----------------------------------------------------------------------------- one table definition
+
+
+def _with_lake_only_table(tmp_path):
+    """The examples with a second table that external-collector declares only as a
+    ``contributes.lake_tables`` record (no ``data`` entry)."""
+    tree, _ = examples(tmp_path)
+    d = tree.dirs["external-collector"]
+    rec = (d / "lake" / "sessions.table.yml").read_text()
+    (d / "lake" / "extra.table.yml").write_text(
+        rec.replace("external_collector.sessions", "external_collector.extra")
+    )
+    tree.mods["external-collector"]["contributes"]["lake_tables"].append(
+        {"file": "lake/extra.table.yml"}
+    )
+    return tree
+
+
+def test_a_table_declared_only_as_a_lake_table_record_is_not_flagged_as_undeclared(tmp_path):
+    tree = _with_lake_only_table(tmp_path)
+    inv = copy.deepcopy(INVENTORY)
+    inv["tables"].append("table:external_collector.extra")
+    report = check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"], inventory=inv)
+    assert [m for m in messages(report) if "tables" in m] == []
+    # and the other direction: declared by the record, not running
+    report = check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"], inventory=INVENTORY)
+    assert [m for m in messages(report) if "tables" in m] == [
+        "running: tables table:external_collector.extra (external-collector) is declared but "
+        "not running"
+    ]
+
+
+def test_the_running_check_and_the_core_collision_check_declare_the_same_tables(tmp_path):
+    tree = _with_lake_only_table(tmp_path)
+    load = ld.module_reader(tree)
+    ins = ld.inputs(tree, load)
+    for n, m in tree.mods.items():
+        declared = ld._declared(tree, ins, {}, {n: m}, load)["tables"]
+        assert set(declared) == ld._module_tables(m, tree.dirs[n], load)
+    assert "table:external_collector.extra" in ld._module_tables(
+        tree.mods["external-collector"], tree.dirs["external-collector"], load
+    )

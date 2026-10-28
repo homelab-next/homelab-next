@@ -652,7 +652,8 @@ def test_the_job_model_pattern_is_the_turn_records_model_rule():
     )
     model = schema["allOf"][1]["properties"]["data"]["properties"]["model"]
     assert model["pattern"] == f"^{MODEL_PATTERN}$(?!\\n)"
-    frozen = EXAMPLES.parents[1] / "_frozen" / "1.0" / "events" / "agent.job.finished.schema.json"
+    version = schema["$id"].rsplit("/", 1)[1]  # the frozen copy of the live schema's own version
+    frozen = EXAMPLES.parents[1] / "_frozen" / version / "events" / "agent.job.finished.schema.json"
     assert json.loads(frozen.read_text(encoding="utf-8")) == schema
 
 

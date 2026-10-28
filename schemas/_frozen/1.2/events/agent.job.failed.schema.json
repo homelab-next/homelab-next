@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/agent.job.failed/1.2",
+  "title": "Event homelabnext.agent.job.failed",
+  "description": "An agent job (one run in the orchestration controller's queue) reached a terminal failure. Published by the controller through the forwarder; StackStorm's job-failed rule (A02, docs/stackstorm.md) reacts by resubmitting through the controller queue, bounded by resubmits. The id derives from the run id, so a re-sent failure is a duplicate. reason is the controller's failure class: capacity, stall, timeout and backend-down are faults of the environment; deadline, cancelled, turn-cap and budget are decisions that must not be retried; handler-error and unknown are the job's own failure.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.agent.job.failed"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            },
+            "agent_key": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+            },
+            "profile": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+            },
+            "state": {
+              "enum": [
+                "failed",
+                "budget_killed"
+              ]
+            },
+            "reason": {
+              "enum": [
+                "capacity",
+                "stall",
+                "timeout",
+                "backend-down",
+                "handler-error",
+                "deadline",
+                "cancelled",
+                "turn-cap",
+                "budget",
+                "unknown"
+              ],
+              "description": "the failure class the controller recorded (the same value as failure_class): stall, backend-down, capacity and timeout are resubmittable, the rest never"
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "attempts made inside this run (the profile's max_attempts chain)"
+            },
+            "resubmits": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "how many whole-job resubmits precede this run in its retry_of_run_id lineage (0 = an original submit)"
+            },
+            "retry_of_run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "idempotency_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "failure_class": {
+              "enum": [
+                "capacity",
+                "stall",
+                "timeout",
+                "backend-down",
+                "handler-error",
+                "deadline",
+                "cancelled",
+                "turn-cap",
+                "budget",
+                "unknown"
+              ],
+              "description": "the controller's failure class; equal to reason (kept for consumers that read the controller's own field name)"
+            },
+            "retried_by_run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "description": "set once the run was retried: by the scheduler itself (auto_retry_scheduled) or by an accepted resubmit; it will not take another"
+            },
+            "auto_retry_scheduled": {
+              "const": true,
+              "description": "present (and true) only when the scheduler auto-retried this run in the same transaction; omitted otherwise"
+            },
+            "profile_revision_drift": {
+              "const": true,
+              "description": "present (and true) only when the agent profile's revision changed while the run was queued or running; omitted otherwise"
+            }
+          },
+          "required": [
+            "run_id",
+            "agent_key",
+            "state",
+            "reason",
+            "resubmits"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

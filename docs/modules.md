@@ -411,12 +411,22 @@ define, a list it cannot key, keys it cannot compare, a path outside a module di
 without a readable slot registry at both ends, every slot change are human-approve. The inputs
 that decide the tier are read **as of the base commit**: the module schema; the slot registry (the
 union of the base's and the head's privileged slots, so neither side can drop one); and
-CODEOWNERS. A change to any of those, to `review_tier.py`, or to what runs it
+CODEOWNERS. A change to any of those, to the two `review_tier.py` files, or to what runs it
 (`homelabnext/gitbase.py`, `tools/schema_check.py`, `.github/workflows/ci.yml`) is itself
-human-approve, and so is a change to what vouches for a model a swap rebinds to (the model store,
-the evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not
-exist until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"),
-and so is a change to the model role table (`examples/model_roles.json`) or to a swap record
+human-approve, and so is a change to the code they import directly from this repository, which
+decides what they decide: `homelabnext/modules/loader.py` (`parse_yaml`, `contributed_files`,
+`read_tree_file`), `swap_evidence.py` (the base reader and the swap gate), `swap.py`, `rules.py`,
+`homelabnext/golden/pins.py`, `homelabnext/models/store.py` and `homelabnext/registry/models.py`;
+to the commands that run them and set the exit code (`homelabnext/cli.py`,
+`homelabnext/modules/cli.py`, `homelabnext/network/cli.py`); and to the readers every parse goes
+through (`homelabnext/_yaml.py`, `homelabnext/modules/scope.py`). `GOVERNANCE` in `review_tier.py`
+lists them all, and a test derives the direct imports of the two tiers, `swap_evidence.py` and
+`swap.py`, so a new import that is not listed fails the suite. Their wider import tree is not
+listed: CI runs the gates with the base commit's code (the `trusted-gates` job), so a pull request
+cannot weaken its own gate. So is a change to what vouches for a model a swap rebinds to (the model store, the
+evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist
+until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"), and so
+is a change to the model role table (`examples/model_roles.json`) or to a swap record
 (`examples/swaps/`): `leaves_lab` and `fallback` are in no pin, yet they decide which modules need
 `grants.cloud_models`. The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
 `hnx site review-tier` ([private-overlay.md](private-overlay.md)).
@@ -1211,12 +1221,12 @@ that is not an inventory name, or a file that does not parse, fails the census, 
 fleet: one host's stray name stops it. `mcp_servers` is gathered when at least one host lists a
 configuration and stays in `not_gathered` otherwise. The names themselves are only checked for
 shape, so a secret pasted where a server name belongs (lower case, digits and hyphens pass) could
-come back like any name. Three bounds limit that. A name over 48 characters is refused on the host
+come back like any name. Three bounds limit that. A name over 64 characters (the longest an `instance` can expand to) is refused on the host
 and again by `gather`, so it is never returned, written to the census answer or persisted in the
 inventory. Every problem and refusal that names a server prints it clipped: the owning module's
 id whole (it says which module the name was bound to) and, when the rest is over 16 characters,
 only the first 8 of it and the name's length. What is persisted is the census answer per host and
-the gathered inventory's `mcp_servers`: names of at most 48 characters, in the name shape, which a
+the gathered inventory's `mcp_servers`: names of at most 64 characters, in the MCP name shape (`[a-z0-9][a-z0-9_-]*`: an underscore is allowed, as in the `instance` pattern), which a
 short pasted secret could still be; both files are the runner's, mode 0600.
 
 The loader matches each registered name back to its catalog record by the record's instance

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/events/case.opened/1.1",
+  "title": "Event homelabnext.case.opened",
+  "description": "An alert (or several) was promoted to a case in the case-management capability.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "homelabnext.case.opened"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "case_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "alert_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "severity": {
+              "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/severity"
+            },
+            "opened_by": {
+              "anyOf": [
+                {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+                },
+                {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/svc_id"
+                }
+              ]
+            }
+          },
+          "required": [
+            "case_id",
+            "alert_ids",
+            "title",
+            "severity",
+            "opened_by"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ]
+    }
+  ]
+}

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/task.queued/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/events/task.queued/1.1",
   "title": "Event homelabnext.task.queued",
   "description": "A unit of agent work entered the queue. idempotency_key makes re-queueing harmless.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
     },
     {
       "properties": {
