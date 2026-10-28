@@ -54,7 +54,17 @@ and the pairs are not compared: the census cannot tell "no notifier records its 
 pair runs".  A record is the owning service's word about its own pairs, believed as a host's
 ``systemctl`` output is.
 
-Kinds the hosts cannot report (service rows that answer, MCP servers, tables) are named in the
+**Listening sockets.**  Each answer also carries ``listening``: the TCP ports the host listens on
+and the UDP ports it has bound, from the kernel's own socket tables (the role's
+``listening_sockets`` module), as ``tcp/<port>`` or ``udp/<port>``.  The inventory's
+``listening`` is each host's list.  Service rows themselves stay in ``not_gathered``: a socket
+names no row.  ``hnx modules check`` judges each selected module's row by whether the host the
+site places it on listens on its port (:func:`~homelabnext.modules.loader.listening_problems`),
+which is derived, from what the host reports and what the row and the placement declare: a row
+whose port is held by another program reads as answering, and a row nobody declared is never
+seen.
+
+Kinds the hosts cannot report (service rows by name, MCP servers, tables) are named in the
 inventory's ``not_gathered``, and the loader notes each as not compared; an inventory that merely
 leaves a kind out is refused by its schema, never read as "nothing runs".
 """
@@ -88,8 +98,11 @@ ACTIVE_RE = re.compile(
 )
 #: an inventory name (``platform/module_inventory`` ``$defs.name``)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: one listening socket as the role's ``listening_sockets`` module reports it
+SOCKET_RE = re.compile(r"(?:tcp|udp)/[1-9][0-9]{0,4}")
 MAX_HOSTS = 4096
 MAX_LINES = 4096
+MAX_SOCKETS = 16384
 
 
 class CensusError(ValueError):
@@ -154,6 +167,21 @@ def parse_agents(lines: Any, host: str) -> set[str]:
     return keys
 
 
+def parse_listening(found: Any, host: str) -> list[str]:
+    """The sockets one host listens on: each ``tcp/<port>`` or ``udp/<port>``, a port 1 to
+    65535, listed once."""
+    if not isinstance(found, list) or not all(isinstance(x, str) for x in found):
+        raise CensusError(f"{host}: the listening sockets are not a list of text")
+    if len(found) > MAX_SOCKETS:
+        raise CensusError(f"{host}: over {MAX_SOCKETS} listening sockets")
+    out: set[str] = set()
+    for i, sock in enumerate(found, 1):
+        if not SOCKET_RE.fullmatch(sock) or int(sock.split("/")[1]) > 65535:
+            raise CensusError(f"{host}: listening socket {i} is not proto/port: {ld._shown(sock)}")
+        out.add(sock)
+    return sorted(out, key=lambda x: (x.split("/")[0], int(x.split("/")[1])))
+
+
 def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     """The inventory the census in ``directory`` describes, and notes on what it does not cover.
 
@@ -187,12 +215,14 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     pairs: set[tuple[str, str, str | None]] = set()
     records = 0
     stale_notes: list[str] = []
-    base = {"host", "enabled", "active", "pairs"}
+    listening: list[dict[str, Any]] = []
+    base = {"host", "enabled", "active", "pairs", "listening"}
     for file, host in sorted(expected.items()):
         doc = _read(root / file)
         if not isinstance(doc, dict) or set(doc) not in (base, base | {"agents"}):
             raise CensusError(
-                f"{file}: not {{host, enabled, active, pairs}} (and agents on a broker host)"
+                f"{file}: not {{host, enabled, active, pairs, listening}} (and agents on a "
+                "broker host)"
             )
         if doc["host"] != host:
             raise CensusError(f"{file}: written for {ld._shown(doc['host'])}")
@@ -200,6 +230,7 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
             names, t = parse_units(doc["active" if active else "enabled"], host, active)
             units |= names
             templates += t
+        listening.append({"host": host, "sockets": parse_listening(doc["listening"], host)})
         found, left = parse_pairs(doc["pairs"], host)
         stale_notes += left
         records += len(found)
@@ -211,6 +242,8 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     notes = [
         f"gathered from {len(hosts)} host(s): {len(units)} fleet unit(s) enabled or active",
         "the census is a union across hosts: a unit is not checked against the host it runs on",
+        "service rows are not gathered by name: each selected module's row is judged by whether "
+        "its placed host listens on its port (derived from the hosts' sockets)",
     ]
     if brokers:
         notes.append(f"asked {brokers} broker(s): {len(agents)} agent(s) served")
@@ -228,6 +261,7 @@ def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:
     if brokers:
         inventory["agents"] = sorted(agents)
     inventory["not_gathered"] = [k for k in ld.INVENTORY_KINDS if k not in gathered]
+    inventory["listening"] = listening
     if records:
         inventory["notify_pairs"] = [
             {"problem": t, "recovery": r, **({"module": m} if m is not None else {})}

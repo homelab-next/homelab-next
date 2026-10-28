@@ -661,6 +661,24 @@
     },
     {
       "exit": {
+        "0": "the socket tables were read (an absent IPv6 table is IPv6 being off, not a failure)",
+        "1": "the IPv4 TCP table cannot be read, or a table is over the size read; the census stops"
+      },
+      "id": "listening-sockets",
+      "inputs": "none (the kernel's /proc/net socket tables)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the sockets as proto/port, sorted and listed once (JSON, as an Ansible module)",
+      "owner": "platform",
+      "path": "ansible/roles/module_census/library/listening_sockets.py",
+      "purpose": "List the TCP ports a host listens on and the UDP ports it has bound, from the kernel's own socket tables, for the census of which service rows answer.",
+      "status": "active",
+      "trigger": [
+        "role:module_census"
+      ]
+    },
+    {
+      "exit": {
         "0": "checked (and alerted, if the set changed)",
         "1": "neither dpkg --verify nor debsums could run; the result is not rewritten",
         "2": "the alert could not be sent; it stays owed to the next run"

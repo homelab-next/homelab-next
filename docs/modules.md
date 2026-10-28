@@ -1156,15 +1156,32 @@ lab whose inventory sets no socket has not shown which agents run, which is neve
 "none"). What the broker answers is believed, like a unit line: an overlay that sets no socket
 leaves `agents` not compared, and the gather says so.
 
+**Service rows, by what listens.** Each host's answer also carries the sockets it listens on: the
+role's `listening_sockets` module reads the kernel's own socket tables (`/proc/net/tcp`, `tcp6`,
+`udp`, `udp6`, never a command's output, each read to a fixed size) and reports each listening TCP
+port and each bound, unconnected UDP port as `tcp/<port>` or `udp/<port>`. `hnx modules gather`
+parses them strictly (proto and a port 1 to 65535, at most 16,384 per host) and writes them to the
+inventory's `listening`, per host. Service rows stay in `not_gathered`: a socket names no row.
+With `listening`, `hnx modules check --running` judges each selected module's row by whether the
+host the site places it on listens on its port (TCP, UDP for a `udp` row, either for `dns`):
+`rows <name> (<module>) is declared on <host> but <census host> listens on no tcp/<port>`. A row's
+site host is the census host of that name, or the one whose first DNS label it is
+(`data` for `data.example.internal`); a row placed on no census host, or on a name two census hosts
+share as a first label, is noted and not judged. This is **derived**, from what the host reports and
+what the row and the placement declare, and it is one way: a port another program holds reads as
+the row answering, a row reached only through NAT into another network namespace with no socket on
+the host reads as not answering, a row nobody declared is never seen, and the core's own rows are
+not judged.
+
 **Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
 can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in
 `not_gathered`, so the loader says it was not compared instead of judging the declarations against
-themselves. Beside the fleet units, only the recovery pairs and the agents have such a source
-(above); for the rest:
+themselves. Beside the fleet units, only the recovery pairs and the agents have such a source,
+and service rows are judged by what listens (above); for the rest:
 
 | Kind | What exists today | What a census of it would need |
 |---|---|---|
-| `rows` (service rows that answer) | the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
+| `rows` by name (service rows that answer) | the listening sockets judge each declared row (above), but name none; the status hub's `status.json` reads only the rows that offer a status source, so a row without one would read as not running | a liveness probe every service row carries (or the hub reporting every row, sourced or not), read on loopback where the hub runs |
 | `mcp_servers` (registered) | `hnx mcp catalog render` writes client files from the catalog; no core role installs them and nothing lists what a client registered | the agent runtime writing, root-owned and read-only, the servers it registered, or a read-only listing the census can query on the agent host |
 | `tables` (exist) | the lake slot's `list_tables`, but only with the catalog's endpoint and credentials, which the deploy runner does not hold and no core role targets | a read-only catalog principal and a census step bound to the lake-catalog instance, or a loopback listing on the catalog's host |
 

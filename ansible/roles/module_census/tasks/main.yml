@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read-only on the hosts: two systemctl queries each (enabled unit files, active units), the
-# notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
+# sockets it listens on (the kernel's socket tables), the notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
 # step by the role's notify_pairs_records module, and on a host that runs the broker
 # (module_census_broker_socket set) one more, the broker's operator answer of the agents it serves
 # (hnx broker agents, as root, which the broker's manifest must list in operators).  The answers
@@ -83,6 +83,14 @@
     max_bytes: "{{ module_census_pairs_max_bytes }}"
   register: module_census_pairs
 
+# The kernel's own socket tables (library/listening_sockets.py): the TCP ports this host listens
+# on and the UDP ports it has bound, never a command's output; hnx modules check judges each
+# selected module's service row by whether its placed host listens on its port.
+- name: List the sockets this host listens on
+  listening_sockets:
+    tables: "{{ module_census_socket_tables }}"
+  register: module_census_listening
+
 # The broker answers a peer its manifest lists in operators (homelabnext.broker.server, manifest
 # 1.8): the agent keys it serves, one per line, and nothing else.  This one task runs as root, the
 # identity the census host's manifest lists; the others stay unprivileged.  A broker that does not
@@ -103,7 +111,7 @@
 
 - name: Write this host's answer on the controller
   ansible.builtin.copy:
-    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {})) | to_json }}\n"
+    content: "{{ ({'host': inventory_hostname, 'enabled': module_census_units.stdout_lines, 'active': module_census_active.stdout_lines, 'pairs': module_census_pairs_found, 'listening': module_census_listening.sockets} | combine({'agents': module_census_agents.stdout_lines} if module_census_broker_socket != '' else {})) | to_json }}\n"
     dest: "{{ module_census_dir }}/{{ inventory_hostname }}.json"
     mode: "0600"
   vars:

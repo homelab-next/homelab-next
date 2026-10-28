@@ -1035,6 +1035,86 @@ def running_pair_problems(
     return out
 
 
+#: the socket a service row answers on, by its protocol (``dns`` on either)
+_ROW_SOCKETS = {"udp": ("udp",), "dns": ("udp", "tcp")}
+
+
+def _placed_rows(
+    ins: Inputs, site: Doc, sel: Mapping[str, Doc]
+) -> list[tuple[str, str, Doc, str | None]]:
+    """``(module, row name, row, site host or None)`` for every service row a selected module
+    declares: a provider's under the instance the site names, on the host its placement gives the
+    row's host role (any of the provider's entries may place it); a feature's or core module's
+    under its own name, on the host its ``placement`` gives."""
+    out = []
+    chosen = [
+        (slot, c) for slot, v in site.get("slots", {}).items() if isinstance(v, list) for c in v
+    ]
+    for n, m in sorted(sel.items()):
+        rows = ins.rows.get(n, {})
+        if not rows:
+            continue
+        if m["kind"] == "provider":
+            mine = [(slot, c) for slot, c in chosen if c["provider"] == n]
+            placed: dict[str, str] = {}
+            for _slot, c in mine:
+                for role, host in c.get("placement", {}).items():
+                    placed.setdefault(role, host)
+            for slot, c in mine:
+                row = rows.get(slot)
+                if isinstance(row, dict):
+                    out.append((n, c["instance"], row, placed.get(row.get("host", ""))))
+        else:
+            sec = "features" if m["kind"] == "feature" else "core"
+            placed = site.get(sec, {}).get(n, {}).get("placement", {})
+            for name, row in sorted(rows.items()):
+                out.append((n, name, row, placed.get(row.get("host", ""))))
+    return out
+
+
+def listening_problems(
+    ins: Inputs, site: Doc, sel: Mapping[str, Doc], listening: list[Doc]
+) -> tuple[list[Problem], list[str]]:
+    """Each selected module's service row against the sockets its placed host listens on (the
+    inventory's ``listening``, gathered from the kernel's socket tables): a row whose host does
+    not listen on its port (TCP; UDP for ``udp``, either for ``dns``) is declared but not
+    answering.  Derived, so it is one way only: a port another program holds reads as the row
+    answering, and a row nobody declared is never seen.  A row's site host is the census host of
+    that name, or the one whose first DNS label it is; a row placed on no census host, or on a
+    name two census hosts share as a first label, is noted and not judged."""
+    by_name = {h["host"]: set(h["sockets"]) for h in listening}
+    by_label: dict[str, list[str]] = {}
+    for h in by_name:
+        by_label.setdefault(h.split(".", 1)[0], []).append(h)
+    problems, unjudged = [], []
+    for n, name, row, host in _placed_rows(ins, site, sel):
+        if host is None:
+            unjudged.append(f"{name} ({n}): no placement for host role {row.get('host')}")
+            continue
+        census = host if host in by_name else None
+        if census is None:
+            match = by_label.get(host, [])
+            if len(match) != 1:
+                why = "no census host" if not match else "two census hosts share that name"
+                unjudged.append(f"{name} ({n}) on {host}: {why}")
+                continue
+            census = match[0]
+        port = row.get("port")
+        wanted = [f"{p}/{port}" for p in _ROW_SOCKETS.get(row.get("protocol", ""), ("tcp",))]
+        if not any(w in by_name[census] for w in wanted):
+            problems.append(
+                Problem(
+                    "running",
+                    f"rows {name} ({n}) is declared on {host} but {census} listens on no "
+                    f"{' or '.join(wanted)}",
+                )
+            )
+    notes = []
+    if unjudged:
+        notes.append("service rows not judged by what listens: " + "; ".join(unjudged))
+    return problems, notes
+
+
 def running_problems(
     tree: Tree,
     ins: Inputs,
@@ -1235,6 +1315,10 @@ def _runtime(
         notes.append(
             "the inventory does not report " + ", ".join(skipped) + ": not compared (not_gathered)"
         )
+    if isinstance(inventory.get("listening"), list):
+        p, n = listening_problems(ins, site, sel, inventory["listening"])
+        problems += p
+        notes += n
     if "notify_pairs" not in inventory:
         notes.append("the inventory names no notify_pairs: the recovery pairs were not compared")
     elif not (core and core.pairs):
