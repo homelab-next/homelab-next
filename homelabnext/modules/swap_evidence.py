@@ -29,6 +29,16 @@ are a local convenience; CI never passes one.
 changed under :data:`SWAPS` must cover it, its legs holding against that evidence.
 
 Whatever cannot be read is :class:`EvidenceError`, never a missing table read as "no change".
+
+The paths above are the repository's (:data:`REPO`).  A private overlay keeps the same files under
+``lab/`` with the same names (:data:`OVERLAY`: ``lab/model_roles.json``,
+``lab/model-serving/model_store.json``, ``lab/model_roles.eval.json``, ``lab/model-evals/`` and
+``lab/swaps/``), and ``hnx modules swap-gate --overlay DIR`` runs :func:`gate` over that layout with
+``DIR`` as the git root.  Nothing else changes: the evidence is the base commit's, the head table
+goes through :func:`read_head`, every unreadable input is :class:`EvidenceError`.  The one
+difference is the golden suites: an overlay carries none, so they are the installed package's
+(:data:`homelabnext.golden.pins.DEFAULT_SUITES`), the same trusted code that does the checking and
+that CI installs from the pinned checkout, never a file of the change.
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ import tempfile
 import weakref
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -52,12 +63,15 @@ from homelabnext.registry.models import RoleTable, RoleTableError
 __all__ = [
     "EVALS",
     "MAX_EVALS",
+    "OVERLAY",
+    "REPO",
     "REPORTS",
     "ROLES",
     "STORE",
     "SUITES",
     "SWAPS",
     "EvidenceError",
+    "Layout",
     "changed_paths",
     "changed_records",
     "from_git",
@@ -81,6 +95,32 @@ MAX_EVALS = 64
 SUITES = ("homelabnext/golden/examples/classifier_smoke.yml",)
 #: where a change keeps the swap record that covers its role-table change (swap-gate)
 SWAPS = "examples/swaps"
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Where the gate's inputs are, relative to the git root.  ``suites=None`` means the installed
+    package's golden suites (an overlay has none of its own); a tuple is read from the base."""
+
+    roles: str
+    store: str
+    reports: tuple[str, ...]
+    evals: str
+    swaps: str
+    suites: tuple[str, ...] | None
+
+
+#: the repository's layout (the module constants above)
+REPO = Layout(ROLES, STORE, REPORTS, EVALS, SWAPS, SUITES)
+#: a private overlay's: the same names under ``lab/``, the suites the installed package's
+OVERLAY = Layout(
+    "lab/model_roles.json",
+    "lab/model-serving/model_store.json",
+    ("lab/model_roles.eval.json",),
+    "lab/model-evals",
+    "lab/swaps",
+    None,
+)
 _RECORD_SUFFIXES = (".json", ".yml", ".yaml")
 _TIMEOUT = 60
 _LS_TREE = re.compile(r"^(\d{6}) (\w+) ([0-9a-f]{40,64}) +(-|\d+)\t(.*)$", re.S)
@@ -200,7 +240,7 @@ def from_git(
     store: str | None = STORE,
     reports: Sequence[str] = REPORTS,
     evals: str | None = EVALS,
-    suites: Sequence[str] = SUITES,
+    suites: Sequence[str] | None = SUITES,
     extra_reports: Sequence[Path] = (),
     require_live: bool = True,
     workdir: Path | None = None,
@@ -235,7 +275,7 @@ def from_git(
             found.append(_json(ld.read_bytes(path, follow=False), str(path)))
         except ld.Unreadable as exc:
             raise EvidenceError(f"{path}: {exc}") from None
-    suite_bytes = [(rel, read_base(root, sha, rel)) for rel in suites]
+    suite_bytes = [(rel, read_base(root, sha, rel)) for rel in suites or ()]
     owned = workdir is None
     out = Path(tempfile.mkdtemp(prefix="hnx-swap-suites-")) if owned else workdir
     suite_paths = []
@@ -245,13 +285,15 @@ def from_git(
         p = d / PurePosixPath(rel).name
         p.write_bytes(data)
         suite_paths.append(p)
+    # suites=None: no base copy, ModelEvidence's own default (the installed golden suites)
+    given = {} if suites is None else {"suites": tuple(suite_paths)}
     ev = ModelEvidence(
         before=before,
         after=after,
         reports=found,
-        suites=tuple(suite_paths),
         store=model_store,
         require_live=require_live,
+        **given,
     )
     if owned:
         weakref.finalize(ev, shutil.rmtree, out, True)
@@ -278,10 +320,11 @@ def changed_paths(root: Path, sha: str | None, spec: list[str]) -> list[str]:
     return sorted(rels)
 
 
-def changed_records(root: Path, base: str) -> list[str]:
-    """The swap records (``*.json``, ``*.yml``, ``*.yaml`` under :data:`SWAPS`) the working tree
-    adds or changes against ``base``, untracked ones included; a removed record covers nothing."""
-    rels = changed_paths(root, resolve_base(root, base), [SWAPS])
+def changed_records(root: Path, base: str, swaps: str = SWAPS) -> list[str]:
+    """The swap records (``*.json``, ``*.yml``, ``*.yaml`` under ``swaps``, :data:`SWAPS` by
+    default) the working tree adds or changes against ``base``, untracked ones included; a removed
+    record covers nothing."""
+    rels = changed_paths(root, resolve_base(root, base), [_rel(swaps)])
     return sorted(r for r in rels if r.endswith(_RECORD_SUFFIXES) and (root / r).exists())
 
 
@@ -337,7 +380,9 @@ def _trust_changes(old: Any, new: Any) -> dict[str, list[str]]:
     return out
 
 
-def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
+def gate(
+    root: Path, base: str, *, roles: str | None = None, layout: Layout = REPO
+) -> tuple[list[str], str]:
     """(the problems, what was decided).  A role table that is the base's passes; a changed one
     needs at least one swap record added or changed under :data:`SWAPS`, and every such record
     must pass the schema and :func:`~homelabnext.modules.swap.model_role_problems` against the
@@ -345,9 +390,11 @@ def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
     (:func:`_trust_changes`: ``leaves_lab``, ``fallback``, ...) is covered only by a record that
     names it in ``model_role_changes`` (every name there must be such a role); a record that
     rebinds, or names, other roles covers nothing for it.  Module, site and migration checks are
-    ``swap-check``'s."""
+    ``swap-check``'s.  ``layout`` says where the inputs are (:data:`REPO`, or :data:`OVERLAY`);
+    ``roles`` overrides its role table."""
     from homelabnext.modules import swap as ms
 
+    roles = roles or layout.roles
     sha = resolve_base(root, base)
     head = read_head(root, roles)
     old = read_base(root, sha, roles, missing_ok=True)
@@ -356,17 +403,26 @@ def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
     if head is not None and old is not None and _json(head, roles) == _json(old, roles):
         return [], f"{roles} is unchanged since {sha[:12]}"
     with tempfile.TemporaryDirectory(prefix="hnx-swap-gate-") as tmp:
-        ev = from_git(root, sha, roles=roles, workdir=Path(tmp))
+        ev = from_git(
+            root,
+            sha,
+            roles=roles,
+            store=layout.store,
+            reports=layout.reports,
+            evals=layout.evals,
+            suites=layout.suites,
+            workdir=Path(tmp),
+        )
         trust = _trust_changes(_json(old, roles), _json(head, roles)) if old and head else {}
         changed = sorted(set(_roles_changed(ev.before, ev.after)) | set(trust))
-        records = changed_records(root, sha)
+        records = changed_records(root, sha, layout.swaps)
         detail = "".join(f"; mdl:{r} changes {', '.join(f)}" for r, f in trust.items())
         if not records:
             return [
                 f"{roles} changes since {sha[:12]} (roles: {', '.join(changed) or 'none rebound'}{detail})"
-                f" and no swap record under {SWAPS}/ in this change covers it: commit the record"
+                f" and no swap record under {layout.swaps}/ in this change covers it: commit the record"
                 " whose model_roles legs rebind them, after the store entry and the live report"
-                f" are on the base ({STORE}, {EVALS}/)"
+                f" are on the base ({layout.store}, {layout.evals}/)"
             ], "uncovered"
         schema = ld._schema("platform", "module_swap.schema.json")
         budget = ld.Budget()

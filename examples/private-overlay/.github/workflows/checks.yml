@@ -170,3 +170,59 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: hnx site review-tier --root . --ci-base
+
+  # The swap gate (docs/modules.md, "Swap record 1.2") over the lab's own model evidence: a change
+  # to lab/model_roles.json needs a swap record added or changed under lab/swaps/ whose legs hold
+  # against lab/model-serving/model_store.json, lab/model_roles.eval.json and lab/model-evals/ as
+  # the pull request's BASE has them, so a change cannot vouch for itself.  A change to what
+  # vouches for a model, or to the records, is human-approve (CODEOWNERS, site-review-tier).  hnx
+  # is the pinned commit and supplies the code and the golden suites only, the base is read
+  # through git, no secret.
+  swap-gate:
+    name: swap gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: refuse an unpinned hnx
+        env:
+          HNX_REF: ${{ vars.HNX_REF }}
+        run: |
+          set -euo pipefail
+          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # the base commit
+          persist-credentials: false
+
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
+      - name: homelab-next at the pinned commit (the gate)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ vars.HNX_REF }}
+          path: hnx
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: hnx, hash-pinned bootstrap
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
+          python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML jsonschema referencing setuptools
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
+
+      - name: a role-table change needs a swap record
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: hnx modules swap-gate --overlay . --ci-base
