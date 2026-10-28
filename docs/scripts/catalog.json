@@ -662,13 +662,13 @@
     {
       "exit": {
         "0": "the socket tables were read (an absent IPv6 table is IPv6 being off, not a failure)",
-        "1": "the IPv4 TCP table cannot be read, or a table is over the size read; the census stops"
+        "1": "the IPv4 TCP table cannot be read, a table is over the size read, or the host holds more sockets than the census takes; the census stops"
       },
       "id": "listening-sockets",
       "inputs": "none (the kernel's /proc/net socket tables)",
       "kind": "tool",
       "language": "python",
-      "outputs": "the sockets as proto/port, sorted and listed once (JSON, as an Ansible module)",
+      "outputs": "the sockets as proto/port, or proto/port@lo for one bound only to loopback, sorted and listed once (JSON, as an Ansible module)",
       "owner": "platform",
       "path": "ansible/roles/module_census/library/listening_sockets.py",
       "purpose": "List the TCP ports a host listens on and the UDP ports it has bound, from the kernel's own socket tables, for the census of which service rows answer.",

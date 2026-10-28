@@ -106,11 +106,11 @@ def test_each_hosts_listening_sockets_are_listed_once_and_in_order(tmp_path):
     d = write_census(
         tmp_path / "c",
         {"a": [], "b": []},
-        listening={"a": ["udp/53", "tcp/9000", "tcp/443", "tcp/443"], "b": []},
+        listening={"a": ["udp/53", "tcp/9000", "tcp/443@lo", "tcp/443", "tcp/443"], "b": []},
     )
     inventory, _ = census.gather(d)
     assert inventory["listening"] == [
-        {"host": "a", "sockets": ["tcp/443", "tcp/9000", "udp/53"]},
+        {"host": "a", "sockets": ["tcp/443", "tcp/443@lo", "tcp/9000", "udp/53"]},
         {"host": "b", "sockets": []},
     ]
     assert "rows" in inventory["not_gathered"]  # a socket names no row
@@ -127,6 +127,9 @@ def test_each_hosts_listening_sockets_are_listed_once_and_in_order(tmp_path):
         ["sctp/80"],
         ["tcp/80 "],
         ["tcp/80\n"],
+        ["tcp/80@local"],
+        ["tcp/80@"],
+        ["tcp/65536@lo"],
         ["tcp/80"] * (census.MAX_SOCKETS + 1),
     ],
 )

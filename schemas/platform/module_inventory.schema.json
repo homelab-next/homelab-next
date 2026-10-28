@@ -258,9 +258,9 @@
             "uniqueItems": true,
             "items": {
               "type": "string",
-              "pattern": "^(?:tcp|udp)/[1-9][0-9]{0,4}$(?!\\n)"
+              "pattern": "^(?:tcp|udp)/[1-9][0-9]{0,4}(?:@lo)?$(?!\\n)"
             },
-            "description": "Each TCP port the host listens on and UDP port it has bound, as proto/port."
+            "description": "Each TCP port the host listens on and UDP port it has bound, as proto/port, with @lo when it is bound only to loopback (which answers no other host)."
           }
         }
       },

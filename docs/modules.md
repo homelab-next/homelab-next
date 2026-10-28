@@ -1159,19 +1159,34 @@ leaves `agents` not compared, and the gather says so.
 **Service rows, by what listens.** Each host's answer also carries the sockets it listens on: the
 role's `listening_sockets` module reads the kernel's own socket tables (`/proc/net/tcp`, `tcp6`,
 `udp`, `udp6`, never a command's output, each read to a fixed size) and reports each listening TCP
-port and each bound, unconnected UDP port as `tcp/<port>` or `udp/<port>`. `hnx modules gather`
-parses them strictly (proto and a port 1 to 65535, at most 16,384 per host) and writes them to the
-inventory's `listening`, per host. Service rows stay in `not_gathered`: a socket names no row.
+port and each bound, unconnected UDP port as `tcp/<port>` or `udp/<port>`, with `@lo` for a socket
+bound only to a loopback address (`tcp/631@lo`). A line whose address or port is not the kernel's
+hex is skipped; a host with more than 16,384 distinct sockets fails the census rather than being
+cut short. `hnx modules gather` parses them strictly (proto, a port 1 to 65535 and the optional
+`@lo`, at most 16,384 per host) and writes them to the inventory's `listening`, per host. Service
+rows stay in `not_gathered`: a socket names no row.
+
 With `listening`, `hnx modules check --running` judges each selected module's row by whether the
-host the site places it on listens on its port (TCP, UDP for a `udp` row, either for `dns`):
-`rows <name> (<module>) is declared on <host> but <census host> listens on no tcp/<port>`. A row's
-site host is the census host of that name, or the one whose first DNS label it is
-(`data` for `data.example.internal`); a row placed on no census host, or on a name two census hosts
-share as a first label, is noted and not judged. This is **derived**, from what the host reports and
-what the row and the placement declare, and it is one way: a port another program holds reads as
-the row answering, a row reached only through NAT into another network namespace with no socket on
-the host reads as not answering, a row nobody declared is never seen, and the core's own rows are
+host the site places it on listens on its port, on an address other hosts can reach (TCP, UDP for
+a `udp` row, either for `dns`; a socket bound only to loopback answers no other host):
+`rows <name> (<module>) is declared on <host> but <census host> listens on no tcp/<port>`, with
+`(only on loopback: tcp/<port>)` when that is all there is. A provider's row is judged under each
+instance the site names, on the host that entry's own placement gives it. A row's site host is the
+census host of that name, or the one whose first DNS label it is (`data` for
+`data.example.internal`), either compared case-insensitively; a row placed on no census host, or
+on a name two census hosts share as a first label, is noted ("no census host has that name") and
 not judged.
+
+This is **derived**, from what the host reports and what the row and the placement declare, and it
+is one way. Its limits:
+
+- a port another program holds reads as the row answering;
+- any bound, unconnected UDP socket counts, a client's on an ephemeral port included, so a row's
+  UDP port can be another program's;
+- a row reached only through NAT into another network namespace, with no socket on the host (a
+  container port published by packet rewriting alone, with no proxy process holding it), reads as
+  not answering;
+- a row nobody declared is never seen, and the core's own rows are not judged.
 
 **Why the other kinds are not gathered.** The census lists only what a host, or a query the runner
 can make without new credentials, reports truthfully and in full; a kind it cannot measure stays in

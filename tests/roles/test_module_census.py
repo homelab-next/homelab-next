@@ -346,3 +346,59 @@ def test_the_socket_reader_takes_listening_tcp_and_bound_udp_only(tmp_path, monk
     monkeypatch.setattr(mod, "MAX_BYTES", 16)
     with pytest.raises(mod.Refused, match="is over 16 bytes"):
         mod.sockets(root)
+
+
+#: IPv4 loopback and a documentation address, built from integers (no address literal)
+_LOOPBACK4, _DOC4 = 0x7F000001, 0xC000020A
+
+
+def _kernel_hex(address) -> str:
+    """An address (text or ``ipaddress`` object) as the kernel writes it in its socket tables:
+    32-bit words in host order."""
+    import ipaddress
+    import sys
+
+    packed = ipaddress.ip_address(address).packed
+    return "".join(
+        int.from_bytes(packed[i : i + 4], "big").to_bytes(4, sys.byteorder).hex().upper()
+        for i in range(0, len(packed), 4)
+    )
+
+
+def test_a_socket_bound_only_to_loopback_is_marked_and_a_bad_line_skipped(tmp_path, monkeypatch):
+    import ipaddress
+
+    mod = _socket_module(monkeypatch)
+    d = tmp_path / "net"
+    d.mkdir()
+    any4, any6 = _kernel_hex("0.0.0.0"), _kernel_hex("::")
+
+    def line(local, port, state="0A", remote=None):
+        return f"   0: {local}:{port:04X} {remote or local}:0000 {state} 0 0 0\n"
+
+    (d / "tcp").write_text(
+        _HEAD
+        + line(_kernel_hex(ipaddress.IPv4Address(_LOOPBACK4)), 631)  # loopback only
+        + line(_kernel_hex(ipaddress.IPv4Address(_DOC4)), 8443)  # one of the host's addresses
+        + line(any4, 22)
+        + "   0: ZZZZZZZZ:0050 00000000:0000 0A 0\n"  # not the kernel's hex: skipped
+        + "   0: 00000000:50 00000000:0000 0A 0\n"  # a short port: skipped
+        + line(any4, 0)  # port 0: no service
+    )
+    (d / "tcp6").write_text(
+        _HEAD
+        + line(_kernel_hex("::1"), 5432)
+        + line(_kernel_hex(ipaddress.IPv6Address((0xFFFF << 32) | _LOOPBACK4)), 6379)  # mapped
+        + line(any6, 22)
+    )
+    assert mod.sockets(str(d)) == [
+        "tcp/22",
+        "tcp/631@lo",
+        "tcp/5432@lo",
+        "tcp/6379@lo",
+        "tcp/8443",
+    ]
+    # more sockets than the census takes fails, never cut short
+    monkeypatch.setattr(mod, "MAX_SOCKETS", 4)
+    with pytest.raises(mod.Refused, match="holds 5 sockets, over the 4 the census takes"):
+        mod.sockets(str(d))

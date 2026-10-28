@@ -56,7 +56,8 @@ pair runs".  A record is the owning service's word about its own pairs, believed
 
 **Listening sockets.**  Each answer also carries ``listening``: the TCP ports the host listens on
 and the UDP ports it has bound, from the kernel's own socket tables (the role's
-``listening_sockets`` module), as ``tcp/<port>`` or ``udp/<port>``.  The inventory's
+``listening_sockets`` module), as ``tcp/<port>`` or ``udp/<port>``, with ``@lo`` for a socket
+bound only to loopback.  The inventory's
 ``listening`` is each host's list.  Service rows themselves stay in ``not_gathered``: a socket
 names no row.  ``hnx modules check`` judges each selected module's row by whether the host the
 site places it on listens on its port (:func:`~homelabnext.modules.loader.listening_problems`),
@@ -99,7 +100,7 @@ ACTIVE_RE = re.compile(
 #: an inventory name (``platform/module_inventory`` ``$defs.name``)
 NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: one listening socket as the role's ``listening_sockets`` module reports it
-SOCKET_RE = re.compile(r"(?:tcp|udp)/[1-9][0-9]{0,4}")
+SOCKET_RE = re.compile(r"(?:tcp|udp)/[1-9][0-9]{0,4}(?:@lo)?")
 MAX_HOSTS = 4096
 MAX_LINES = 4096
 MAX_SOCKETS = 16384
@@ -169,17 +170,23 @@ def parse_agents(lines: Any, host: str) -> set[str]:
 
 def parse_listening(found: Any, host: str) -> list[str]:
     """The sockets one host listens on: each ``tcp/<port>`` or ``udp/<port>``, a port 1 to
-    65535, listed once."""
+    65535, with ``@lo`` when bound only to loopback, listed once."""
     if not isinstance(found, list) or not all(isinstance(x, str) for x in found):
         raise CensusError(f"{host}: the listening sockets are not a list of text")
     if len(found) > MAX_SOCKETS:
         raise CensusError(f"{host}: over {MAX_SOCKETS} listening sockets")
     out: set[str] = set()
     for i, sock in enumerate(found, 1):
-        if not SOCKET_RE.fullmatch(sock) or int(sock.split("/")[1]) > 65535:
+        if not SOCKET_RE.fullmatch(sock) or int(sock.split("/")[1].split("@")[0]) > 65535:
             raise CensusError(f"{host}: listening socket {i} is not proto/port: {ld._shown(sock)}")
         out.add(sock)
-    return sorted(out, key=lambda x: (x.split("/")[0], int(x.split("/")[1])))
+    return sorted(out, key=_socket_order)
+
+
+def _socket_order(sock: str) -> tuple[str, int, str]:
+    proto, _, rest = sock.partition("/")
+    port, _, scope = rest.partition("@")
+    return proto, int(port), scope
 
 
 def gather(directory: str | Path) -> tuple[dict[str, Any], list[str]]:

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read-only on the hosts: two systemctl queries each (enabled unit files, active units), the
-# sockets it listens on (the kernel's socket tables), the notify pairs records at one fixed directory (<dir>/<owner>/pairs.json, never a glob), read in one
-# step by the role's notify_pairs_records module, and on a host that runs the broker
+# sockets it listens on (the kernel's socket tables), the notify pairs records at one fixed
+# directory (<dir>/<owner>/pairs.json, never a glob), read in one step by the role's
+# notify_pairs_records module, and on a host that runs the broker
 # (module_census_broker_socket set) one more, the broker's operator answer of the agents it serves
 # (hnx broker agents, as root, which the broker's manifest must list in operators).  The answers
 # are written on the controller
