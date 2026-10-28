@@ -173,7 +173,11 @@ def _extra6(ip: ipaddress.IPv6Address, net6: ipaddress.IPv6Network | None) -> st
     if iid >= ANYCAST_EUI64 and (iid <= ANYCAST_EUI64 | 0x7F or iid >= ANYCAST_TOP):
         return "is an anycast address RFC 2526 reserves at the top of its /64"
     if net6 is not None:
-        return None if ip in net6 else f"is outside the zone's IPv6 prefix {net6}"
+        if ip not in net6:
+            return f"is outside the zone's IPv6 prefix {net6}"
+        if ip == net6[1]:  # the router's address there (homelabnext.network.ir.router_address6)
+            return f"is the router's address in the zone's IPv6 prefix {net6} (its ::1)"
+        return None
     if any(ip in n for n in OWNABLE_V6):
         return None
     return (
