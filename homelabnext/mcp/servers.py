@@ -863,7 +863,7 @@ def broker_tools() -> frozenset[str]:
 def broker_front_problems(rec: Mapping[str, Any]) -> list[str]:
     """Why ``rec`` may not say ``acts_via: broker`` (empty: it is the broker's own front). It must
     be the record :data:`BROKER_FRONT_ID`, first-party from :data:`BROKER_FRONT_PATH`, launched as
-    ``hnx broker-mcp``, and list exactly the tools the broker's front registers: an extra tool
+    ``hnx broker mcp``, and list exactly the tools the broker's front registers: an extra tool
     (a ``raw_shell`` added to the record) is not a broker call, whatever the record says."""
     origin = rec.get("origin") if isinstance(rec.get("origin"), Mapping) else {}
     t = rec.get("transport") if isinstance(rec.get("transport"), Mapping) else {}

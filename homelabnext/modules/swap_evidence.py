@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import tempfile
 import weakref
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -289,11 +290,62 @@ def _roles_changed(before: RoleTable, after: RoleTable) -> list[str]:
     return sorted(r for r in set(b) | set(a) if b.get(r) != a.get(r))
 
 
+#: a binding's keys that are its pin (``RoleTable.pins``): a rebind changes these, and a leg covers it
+_PIN_KEYS = ("backend", "model_id", "version", "digest")
+
+
+def _trust_view(role: Any) -> dict[str, Any]:
+    """What of a role is not a pin: its own keys but ``bindings``, and the keys each binding
+    carries beside the pin (``leaves_lab``, ``priority``, ...) as a sorted multiset, so rebinding
+    leaves it unchanged and flagging a binding ``leaves_lab`` does not."""
+    if not isinstance(role, dict):
+        return {"": role}
+    view = {k: v for k, v in role.items() if k != "bindings"}
+    extras = [
+        {k: v for k, v in b.items() if k not in _PIN_KEYS}
+        for b in role.get("bindings", [])
+        if isinstance(b, dict)
+    ]
+    view["bindings[]"] = sorted(json.dumps(e, sort_keys=True) for e in extras if e)
+    return view
+
+
+def _trust_changes(old: Any, new: Any) -> dict[str, list[str]]:
+    """Role -> the non-pin fields that differ between the two tables' raw documents, for each role
+    both have.  ``RoleTable.pins`` holds backend, model id, version and digest only, so a change
+    to ``leaves_lab`` (which ``rules.cloud_roles`` reads to require ``grants.cloud_models``),
+    ``fallback`` (which it follows) or any other field is invisible to it."""
+    before = old.get("roles") if isinstance(old, dict) else None
+    after = new.get("roles") if isinstance(new, dict) else None
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for name in sorted(set(before) & set(after)):
+        b, a = _trust_view(before[name]), _trust_view(after[name])
+        fields = [k for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+        if "bindings[]" in fields:
+            pairs = [
+                Counter(
+                    (k, json.dumps(v)) for x in view["bindings[]"] for k, v in json.loads(x).items()
+                )
+                for view in (b, a)
+            ]
+            keys = sorted({k for k, _ in (pairs[0] - pairs[1]) + (pairs[1] - pairs[0])})
+            fields = [f for f in fields if f != "bindings[]"] + [f"bindings[].{k}" for k in keys]
+        if fields:
+            out[name] = fields
+    return out
+
+
 def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
     """(the problems, what was decided).  A role table that is the base's passes; a changed one
     needs at least one swap record added or changed under :data:`SWAPS`, and every such record
     must pass the schema and :func:`~homelabnext.modules.swap.model_role_problems` against the
-    base's evidence (live required).  Module, site and migration checks are ``swap-check``'s."""
+    base's evidence (live required).  A role whose fields other than its pin differ
+    (:func:`_trust_changes`: ``leaves_lab``, ``fallback``, ...) is covered only by a record that
+    names it in ``model_role_changes`` (every name there must be such a role); a record that
+    rebinds, or names, other roles covers nothing for it.  Module, site and migration checks are
+    ``swap-check``'s."""
     from homelabnext.modules import swap as ms
 
     sha = resolve_base(root, base)
@@ -305,11 +357,13 @@ def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
         return [], f"{roles} is unchanged since {sha[:12]}"
     with tempfile.TemporaryDirectory(prefix="hnx-swap-gate-") as tmp:
         ev = from_git(root, sha, roles=roles, workdir=Path(tmp))
-        changed = _roles_changed(ev.before, ev.after)
+        trust = _trust_changes(_json(old, roles), _json(head, roles)) if old and head else {}
+        changed = sorted(set(_roles_changed(ev.before, ev.after)) | set(trust))
         records = changed_records(root, sha)
+        detail = "".join(f"; mdl:{r} changes {', '.join(f)}" for r, f in trust.items())
         if not records:
             return [
-                f"{roles} changes since {sha[:12]} (roles: {', '.join(changed) or 'none rebound'})"
+                f"{roles} changes since {sha[:12]} (roles: {', '.join(changed) or 'none rebound'}{detail})"
                 f" and no swap record under {SWAPS}/ in this change covers it: commit the record"
                 " whose model_roles legs rebind them, after the store entry and the live report"
                 f" are on the base ({STORE}, {EVALS}/)"
@@ -317,6 +371,7 @@ def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
         schema = ld._schema("platform", "module_swap.schema.json")
         budget = ld.Budget()
         problems: list[str] = []
+        named: set[str] = set()
         for rel in records:
             if ld.path_has_symlink(root, rel):
                 problems.append(f"{rel}: a symbolic link on its path")
@@ -330,4 +385,19 @@ def gate(root: Path, base: str, *, roles: str = ROLES) -> tuple[list[str], str]:
                 problems += [f"{rel}: record: {e}" for e in errs]
                 continue
             problems += [f"{rel}: {p}" for p in ms.model_role_problems(record, ev)]
+            for alias in record.get("model_role_changes", []):
+                role = alias.removeprefix("mdl:")
+                if role in trust:
+                    named.add(role)
+                else:
+                    problems.append(
+                        f"{rel}: model_role_changes names {alias}, whose fields other than its pin"
+                        f" did not change since {sha[:12]}"
+                    )
+        problems += [
+            f"mdl:{r} changes {', '.join(f)} since {sha[:12]} and no record in this change names"
+            f" it in model_role_changes (a pin-only record covers nothing for it)"
+            for r, f in trust.items()
+            if r not in named
+        ]
         return problems, f"{len(records)} record(s) for roles {', '.join(changed) or 'none'}"

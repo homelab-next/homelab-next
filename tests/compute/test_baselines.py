@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -325,11 +327,12 @@ def test_playbook_binds_roles_and_never_drops_an_unbound_control(fleet):
     assert "# control siem-agent (detection): NOT BOUND to a product yet" in text
 
 
-def test_playbook_without_a_set_or_bound_role_is_an_empty_list(tmp_path):
+def _no_baseline_playbooks(tmp_path):
+    """The playbooks of a fleet with no baseline set, and of one whose controls are all unbound."""
     d = copy_fleet(
         tmp_path, baselines=lambda x: [c.update(role=None) for c in x["controls"].values()]
     )
-    assert yaml.safe_load(render(load_fleet(d, STUB), "baseline-playbook")["baseline.yml"]) == []
+    unbound = render(load_fleet(d, STUB), "baseline-playbook")["baseline.yml"]
     plain = tmp_path / "plain"
     shutil.copytree(EXAMPLE, plain)
     (plain / "_baselines.yml").unlink()
@@ -340,7 +343,31 @@ def test_playbook_without_a_set_or_bound_role_is_an_empty_list(tmp_path):
     from homelabnext.compute import open_site
 
     f = load_fleet(plain, open_site(EXAMPLE_SITE)[0])
-    assert yaml.safe_load(render(f, "baseline-playbook")["baseline.yml"]) == []
+    return {"unbound": unbound, "no set": render(f, "baseline-playbook")["baseline.yml"]}
+
+
+def test_playbook_without_a_set_or_bound_role_is_a_no_op_play(tmp_path):
+    """``[]`` is not a playbook: ansible-playbook refuses it ("must contain at least one play")."""
+    for why, text in _no_baseline_playbooks(tmp_path).items():
+        assert yaml.safe_load(text) == [
+            {"name": "no baseline control to apply", "hosts": "localhost", "gather_facts": False}
+        ], why
+        assert "# no baseline set" in text or "# no control is bound" in text, why
+
+
+@pytest.mark.skipif(
+    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
+)
+def test_playbook_without_a_set_or_bound_role_passes_ansible_syntax_check(tmp_path):
+    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1")
+    for why, text in _no_baseline_playbooks(tmp_path).items():
+        pb = tmp_path / f"{why.replace(' ', '_')}.yml"
+        pb.write_text(text)
+        r = subprocess.run(
+            ["ansible-playbook", "--syntax-check", "-i", "localhost,", str(pb)],
+            capture_output=True, text=True, env=env, cwd=tmp_path,
+        )  # fmt: skip
+        assert r.returncode == 0, why + r.stdout + r.stderr
 
 
 # ---------------------------------------------------------------- CLI

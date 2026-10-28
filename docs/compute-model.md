@@ -538,7 +538,7 @@ What it does not do:
   holds only when the report passes this check, live by the checker's default policy, and the new
   binding is on the instance the leg moves. `hnx modules swap-check` reads that evidence from the
   repository, and everything that vouches for the new model from the base commit: the role table
-  before, the store, these reports (`examples/model-evals/` holds the live report of a proposed
+  before, the store, these reports (`examples/model-evals/`, a path `swap_evidence.EVALS` names and the first vetting change creates, will hold the live report of a proposed
   table) and the golden suites; only the table after is the working tree's. So vetting a model
   (its store entry and its live report, human-approve) is one change and the rebind a later one.
   `hnx modules swap-gate` makes CI refuse a role-table change that no swap record in the change
@@ -606,7 +606,9 @@ target puts each guest in `baseline_<name>` (every baseline it resolves to) and 
 `baseline-playbook` target writes one play per control whose `role` is set, against its
 `control_<id>` group and tagged `control_<id>` and `layer_<layer>`; a control with `role: null`
 is a commented "NOT BOUND to a product yet" block naming the guests that wait for it, and a
-control no guest needs is listed as such. Choosing a SIEM agent is then a one-line change to the
+control no guest needs is listed as such. With no baseline set, or no control bound to a role,
+the file is one play on `localhost` (no facts, no tasks) under the reason as a comment, since
+`ansible-playbook` refuses a file with no play. Choosing a SIEM agent is then a one-line change to the
 set, and every guest that needs `siem-agent` gets it.
 
 **Settings (baseline set 1.2).** A baseline lists a control as its id or as `{id, with}`; `with`

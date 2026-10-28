@@ -452,3 +452,73 @@ def test_a_linked_record_fails_the_gate(repo, report, capsys, tmp_path):
     (repo / se.SWAPS / "x.json").symlink_to(_write(tmp_path, "x.json", _swap(report)))
     rc, out = _gate(repo, capsys)
     assert rc == 1 and any("a symbolic link on its path" in p for p in out["problems"])
+
+
+# ------------------------------------------------- S4: the gate ties a record to what changed
+
+
+def _trust_repo(repo: Path, *, flag_on: str) -> Path:
+    """The base marks ``flag_on``'s first binding ``leaves_lab``; the working tree is the
+    shipped table (rebinding nothing)."""
+    base = json.loads(ROLES.read_text(encoding="utf-8"))
+    base["roles"][flag_on]["bindings"][0]["leaves_lab"] = True
+    _write(repo, se.ROLES, base)
+    _commit(repo)
+    _write(repo, se.ROLES, json.loads(ROLES.read_text(encoding="utf-8")))
+    return repo
+
+
+def test_a_dropped_leaves_lab_is_a_role_change(repo, capsys):
+    """S4: ``leaves_lab`` is in no pin, so the gate saw no changed role."""
+    _trust_repo(repo, flag_on="main-reasoner")
+    rc, out = _gate(repo, capsys)
+    assert rc == 1
+    assert any("mdl:main-reasoner" in p and "leaves_lab" in p for p in out["problems"]), out
+
+
+def test_an_unrelated_record_does_not_cover_a_trust_change(repo, report, capsys):
+    """S4: a record that rebinds another role (or none) covered any change to the table."""
+    _trust_repo(repo, flag_on="main-reasoner")
+    swap = _swap(report)
+    del swap["model_roles"]
+    _write(repo, f"{se.SWAPS}/unrelated.json", swap)
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and any("mdl:main-reasoner" in p for p in out["problems"]), out
+
+
+def test_a_record_naming_the_role_covers_a_trust_change(repo, report, capsys):
+    _trust_repo(repo, flag_on="main-reasoner")
+    swap = _swap(report)
+    del swap["model_roles"]
+    swap["model_role_changes"] = ["mdl:main-reasoner"]
+    _write(repo, f"{se.SWAPS}/trust.json", swap)
+    rc, out = _gate(repo, capsys)
+    assert (rc, out["problems"]) == (0, []), out
+
+
+def test_a_record_naming_a_role_that_did_not_change_is_refused(repo, report, capsys):
+    _trust_repo(repo, flag_on="main-reasoner")
+    swap = _swap(report)
+    del swap["model_roles"]
+    swap["model_role_changes"] = ["mdl:main-reasoner", "mdl:fast-classifier"]
+    _write(repo, f"{se.SWAPS}/trust.json", swap)
+    rc, out = _gate(repo, capsys)
+    assert rc == 1 and any(
+        "mdl:fast-classifier" in p and "did not change" in p for p in out["problems"]
+    ), out
+
+
+def test_a_rebind_record_does_not_cover_another_roles_trust_change(repo, report, capsys):
+    """The rebind of fast-classifier is covered by its leg; a leaves_lab dropped on
+    main-reasoner in the same change is not."""
+    base = json.loads(ROLES.read_text(encoding="utf-8"))
+    base["roles"]["main-reasoner"]["bindings"][0]["leaves_lab"] = True
+    _write(repo, se.ROLES, base)
+    _write(repo, CANDIDATE, report)
+    _commit(repo)
+    _write(repo, se.ROLES, _rebound_doc())  # fast-classifier rebound, main-reasoner flag dropped
+    _write(repo, f"{se.SWAPS}/fast-classifier.json", _swap(report))
+    rc, out = _gate(repo, capsys)
+    assert rc == 1
+    assert any("mdl:main-reasoner" in p for p in out["problems"]), out
+    assert not any("mdl:fast-classifier" in p for p in out["problems"]), out

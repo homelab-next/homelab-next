@@ -258,6 +258,17 @@
       },
       "description": "the outgoing provider's issued credentials, revoked; gates decommission-check"
     },
+    "model_role_changes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 68,
+        "pattern": "^mdl:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+      },
+      "description": "model roles whose role-table fields other than the pin (a binding's leaves_lab, the role's fallback, limits, ...) change in the change this record covers; hnx modules swap-gate requires every such role to be named by a record in the change, and refuses a name whose fields did not change. A pin change is a model_roles leg, not this"
+    },
     "model_roles": {
       "type": "array",
       "minItems": 1,
