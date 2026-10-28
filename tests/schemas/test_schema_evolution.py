@@ -10,6 +10,7 @@ import schema_check as sc
 
 ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
+KNOWN = sc.known_ids(ROOT)
 OWNED = ["ids", "events", "records", "registers", "platform"]
 SCHEMAS = [
     p
@@ -50,7 +51,7 @@ def test_current_schema_is_additive_over_frozen_v1_0(path):
         assert sc.frozen_path(ROOT, path, m, 0).is_file(), f"missing baseline {m}.0 of {path}"
     old = json.loads(sc.frozen_path(ROOT, path, major, 0).read_text())
     new = json.loads(path.read_text())
-    assert sc.additive_problems(old, new, sc.parse_id(new)[0], f"{major}.0") == []
+    assert sc.additive_problems(old, new, sc.parse_id(new)[0], f"{major}.0", KNOWN) == []
 
 
 # examples of a feature added after the 1.0 freeze (1.0 rightly refuses them)
@@ -812,19 +813,74 @@ def test_every_non_draft_schema_has_a_baseline_at_its_own_minor():
             assert sc.frozen_path(ROOT, p, pid[1], pid[2]).is_file(), p.name
 
 
+_ENV_REF = "https://schemas.example.internal/homelabnext/events/envelope/{}"
+_ENV_KNOWN = frozenset(_ENV_REF.format(v) for v in ("1.0", "1.1"))
+
+
+def _env_bump(wrap, ver="1.1"):
+    """``wrap(ref)`` with the reference at 1.0 (old) and at ``ver`` (new)."""
+    return wrap({"$ref": _ENV_REF.format("1.0")}), wrap({"$ref": _ENV_REF.format(ver)})
+
+
 def test_a_ref_retargeted_to_a_later_minor_of_the_same_schema_is_additive():
-    old = {"allOf": [{"$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.0"}]}
-    ref = "https://schemas.example.internal/homelabnext/events/envelope/{}"
+    def wrap(r):
+        return {"allOf": [r]}
 
-    def new(v):
-        return {"allOf": [{"$ref": ref.format(v)}]}
+    old, new11 = _env_bump(wrap)
+    assert sc.is_additive(old, new11, known=_ENV_KNOWN) == []
+    assert sc.is_additive(old, wrap({"$ref": _ENV_REF.format("1.0")}), known=_ENV_KNOWN) == []
+    assert sc.is_additive(
+        old, wrap({"$ref": _ENV_REF.format("2.0")}), known=_ENV_KNOWN
+    )  # another major
+    assert sc.is_additive(new11, old, known=_ENV_KNOWN)  # never back
+    other = {"allOf": [{"$ref": _ENV_REF.format("1.1").replace("envelope", "other")}]}
+    assert sc.is_additive(old, other, known=_ENV_KNOWN)
 
-    assert sc.is_additive(old, new("1.1")) == []
-    assert sc.is_additive(old, new("1.0")) == []
-    assert sc.is_additive(old, new("2.0"))  # another major is another contract
-    assert sc.is_additive(new("1.1"), new("1.0"))  # never back
-    other = {"allOf": [{"$ref": ref.format("1.1").replace("envelope", "other")}]}
-    assert sc.is_additive(old, other)
+
+def test_a_later_minor_ref_must_name_a_live_or_frozen_schema():
+    old, ghost = _env_bump(lambda r: {"allOf": [r]}, "1.9")
+    assert sc.is_additive(old, ghost, known=_ENV_KNOWN)  # 1.9 exists nowhere
+    assert sc.is_additive(old, ghost)  # nothing known: nothing resolves
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda r: {"not": r},
+        lambda r: {"if": r, "then": {"required": ["a"]}},
+        lambda r: {"oneOf": [r, {"required": ["a"]}]},
+        lambda r: {"contains": r, "maxContains": 2},
+        lambda r: {"properties": {"x": {"not": r}}},  # nested: still negative
+        lambda r: {"not": {"allOf": [r]}},
+    ],
+    ids=["not", "if", "oneOf", "contains+maxContains", "under-properties", "under-not-allOf"],
+)
+def test_a_later_minor_ref_is_not_additive_where_widening_is_not_monotone(wrap):
+    """A wider schema under ``not`` rejects more, as under ``if`` (a different branch applies),
+    ``oneOf`` (two branches may now match) and ``contains`` capped by ``maxContains``."""
+    old, new = _env_bump(wrap)
+    assert sc.is_additive(old, new, known=_ENV_KNOWN)
+    assert (
+        sc.is_additive(old, wrap({"$ref": _ENV_REF.format("1.0")}), known=_ENV_KNOWN) == []
+    )  # unchanged
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda r: {"allOf": [r]},
+        lambda r: {"anyOf": [r, {"required": ["a"]}]},
+        lambda r: {"properties": {"x": r}},
+        lambda r: {"items": r},
+        lambda r: {"contains": r},
+        lambda r: {"propertyNames": r},
+        lambda r: {"if": {"required": ["a"]}, "then": r, "else": r},
+    ],
+    ids=["allOf", "anyOf", "properties", "items", "contains", "propertyNames", "then-else"],
+)
+def test_a_later_minor_ref_stays_additive_where_widening_is_monotone(wrap):
+    old, new = _env_bump(wrap)
+    assert sc.is_additive(old, new, known=_ENV_KNOWN) == []
 
 
 def test_the_registry_resolves_a_ref_to_a_frozen_only_version(tmp_path):

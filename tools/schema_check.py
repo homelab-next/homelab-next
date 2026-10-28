@@ -54,6 +54,8 @@ Usage: ``python tools/schema_check.py [--root DIR] [--freeze] [--strict] [--base
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
 import copy
 import functools
 import json
@@ -174,6 +176,17 @@ def build_registry(root: Path) -> Registry:
     return reg
 
 
+def known_ids(root: Path) -> frozenset[str]:
+    """Every ``$id`` a ``$ref`` can resolve to: each live schema's and each frozen copy's."""
+    ids: set[str] = set()
+    paths = list(schema_files(root)) + [f for c in frozen_index(root).values() for _, _, f in c]
+    for p in paths:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(doc, dict) and isinstance(doc.get("$id"), str):
+            ids.add(doc["$id"])
+    return frozenset(ids)
+
+
 def validator_for(schema: dict, registry: Registry) -> Draft202012Validator:
     return Draft202012Validator(schema, registry=registry)
 
@@ -258,11 +271,14 @@ PROVEN_BY_HAND = {
 }
 
 
-def additive_problems(old: dict, new: dict, name: str, frozen: str) -> list[str]:
+def additive_problems(
+    old: dict, new: dict, name: str, frozen: str, known: Iterable[str] | None = None
+) -> list[str]:
     """:func:`is_additive` less the evolutions :data:`PROVEN_BY_HAND` for ``name`` against its
-    frozen version ``frozen``."""
+    frozen version ``frozen``; ``known`` is every ``$id`` a ``$ref`` may resolve to
+    (:func:`known_ids`)."""
     proven = PROVEN_BY_HAND.get((name, frozen), {})
-    return [r for r in is_additive(old, new) if r.split(":", 1)[0] not in proven]
+    return [r for r in is_additive(old, new, known=known or ()) if r.split(":", 1)[0] not in proven]
 
 
 def _newline_guard_only(old: str, new: str) -> bool:
@@ -279,16 +295,78 @@ def _newline_guard_only(old: str, new: str) -> bool:
     return old.endswith("$") and (len(body) - len(body.rstrip("\\"))) % 2 == 0
 
 
+#: the ``$id`` of every schema a ``$ref`` may resolve to (live, or frozen): a later-minor ``$ref``
+#: bump is additive only when its target is one of them.  Set per call by :func:`is_additive`
+#: (``known=``) and :func:`additive_problems`; empty by default, so nothing resolves unless said.
+_KNOWN_IDS: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "known_ids", default=frozenset()
+)
+#: the keyword that made the schema being compared a position where a wider subschema does not
+#: only widen this one (``None`` = every position above is monotone)
+_NON_MONOTONE: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "non_monotone", default=None
+)
+
+#: keywords whose subschema, once WIDENED, can make the schema holding it accept LESS, so that a
+#: wider ``$ref`` target there is not "additive".  Everything below one of these is non-monotone
+#: too (the walk is sticky: a nested position never restores monotonicity).
+#:
+#: * ``not``: accepts exactly what the subschema rejects, so a wider subschema narrows it.
+#: * ``if``: the condition picks ``then`` or ``else``; a wider condition moves documents from
+#:   ``else`` to ``then`` (``then`` may refuse what ``else`` allowed).
+#: * ``oneOf``: exactly one branch may match; a wider branch can make a second one match.
+#:
+#: ``contains`` is non-monotone only beside ``maxContains`` (a wider ``contains`` matches more
+#: items, which can exceed the cap): see :func:`_non_monotone_keyword`.  Monotone, so allowed:
+#: ``allOf``, ``anyOf``, ``then``, ``else``, ``properties``, ``patternProperties``,
+#: ``additionalProperties``, ``items``, ``prefixItems``, ``propertyNames`` (a wider names schema
+#: admits more names, never fewer), ``dependentSchemas``, ``unevaluated*`` and bare ``contains`` or
+#: ``minContains`` (more matches only helps).  Not tracked: a ``$defs`` entry is judged where it
+#: is defined, not where a local ``$ref`` uses it (a def referenced from under ``not`` is not
+#: caught); no repository schema nests a cross-schema ``$ref`` that way.
+NON_MONOTONE_KEYWORDS = frozenset({"not", "if", "oneOf"})
+
+
+def _non_monotone_keyword(key: str, old: dict, new: dict) -> str | None:
+    """``key`` when widening the subschema under ``key`` of ``old``/``new`` can narrow the whole."""
+    if key in NON_MONOTONE_KEYWORDS:
+        return key
+    if key == "contains" and ("maxContains" in old or "maxContains" in new):
+        return "contains beside maxContains"
+    return None
+
+
+@contextlib.contextmanager
+def _within(keyword: str | None):
+    """Compare the subschemas below ``keyword`` (``None``: a monotone keyword, nothing changes)."""
+    if keyword is None or _NON_MONOTONE.get() is not None:
+        yield
+        return
+    token = _NON_MONOTONE.set(keyword)
+    try:
+        yield
+    finally:
+        _NON_MONOTONE.reset(token)
+
+
 def _later_minor_ref(old: Any, new: Any) -> bool:
     """``new`` refers to a later minor of the schema ``old`` refers to (same name, same major,
-    same fragment).  Each minor is itself additive over the last (:func:`check_schema` holds every
-    schema to that), so whatever validated against the earlier one still does."""
-    if not (isinstance(old, str) and isinstance(new, str)):
+    same fragment), that minor exists (:data:`_KNOWN_IDS`), and the reference sits where widening
+    only widens (:data:`NON_MONOTONE_KEYWORDS`).  Each minor is itself additive over the last
+    (:func:`check_schema` holds every schema to that), so whatever validated against the earlier
+    one still does, except where a wider target makes the referencing schema accept less."""
+    if not (isinstance(old, str) and isinstance(new, str)) or _NON_MONOTONE.get() is not None:
         return False
     (o, _, of), (n, _, nf) = old.partition("#"), new.partition("#")
     mo, mn = ID_RE.match(o), ID_RE.match(n)
     return bool(
-        mo and mn and of == nf and mo[1] == mn[1] and mo[2] == mn[2] and int(mn[3]) > int(mo[3])
+        mo
+        and mn
+        and of == nf
+        and mo[1] == mn[1]
+        and mo[2] == mn[2]
+        and int(mn[3]) > int(mo[3])
+        and n in _KNOWN_IDS.get()
     )
 
 
@@ -308,13 +386,23 @@ def _widened_to_any_of(old: Any, new: Any) -> bool:
     return any(is_additive(old, branch) == [] for branch in new["anyOf"])
 
 
-def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
+def is_additive(
+    old: Any, new: Any, path: str = "$", *, known: Iterable[str] | None = None
+) -> list[str]:
     """Return reasons ``new`` is NOT an additive evolution of ``old`` (empty = compatible).
 
     Additive means every document valid under ``old`` stays valid under ``new``
     (checked structurally and conservatively): properties/enum members/types may
-    be added; nothing may be removed, required, or tightened.
+    be added; nothing may be removed, required, or tightened.  ``known`` is the set of ``$id``
+    values a later-minor ``$ref`` may resolve to (:data:`_KNOWN_IDS`); a call without it keeps the
+    enclosing call's.
     """
+    if known is not None:
+        token = _KNOWN_IDS.set(frozenset(known))
+        try:
+            return is_additive(old, new, path)
+        finally:
+            _KNOWN_IDS.reset(token)
     if isinstance(old, bool) or isinstance(new, bool):
         return [] if (new is True or old == new) else [f"{path}: schema became {new}"]
     if _widened_to_any_of(old, new):
@@ -390,13 +478,15 @@ def is_additive(old: Any, new: Any, path: str = "$") -> list[str]:
                     out += is_additive(osub, nv[name], f"{p}.{name}")
         elif key in {"items", "contains", "not", "if", "then", "else", "propertyNames"}:
             if isinstance(ov, (dict, bool)):
-                out += is_additive(ov, nv, p)
+                with _within(_non_monotone_keyword(key, old, new)):
+                    out += is_additive(ov, nv, p)
         elif key in {"allOf", "anyOf", "oneOf"}:
             if len(ov) != len(nv):
                 out.append(f"{p}: {key} length changed {len(ov)} -> {len(nv)}")
             else:
-                for i, (a, b) in enumerate(zip(ov, nv, strict=False)):
-                    out += is_additive(a, b, f"{p}[{i}]")
+                with _within(_non_monotone_keyword(key, old, new)):
+                    for i, (a, b) in enumerate(zip(ov, nv, strict=False)):
+                        out += is_additive(a, b, f"{p}[{i}]")
         elif key == "$ref":
             if ov != nv and not _later_minor_ref(ov, nv):
                 out.append(f"{p}: $ref changed {ov} -> {nv}")
@@ -808,6 +898,7 @@ def check_schema(
     registry: Registry,
     strict: bool = False,
     index: dict[str, list[tuple[int, int, Path]]] | None = None,
+    known: frozenset[str] | None = None,
 ) -> list[Problem]:
     rel = schema_path.relative_to(root).as_posix()
     probs: list[Problem] = []
@@ -904,7 +995,9 @@ def check_schema(
                     )
         for _, _, bf in same_major:
             old = json.loads(bf.read_text(encoding="utf-8"))
-            for reason in additive_problems(old, schema, pid[0], bf.parent.parent.name):
+            if known is None:
+                known = known_ids(root)
+            for reason in additive_problems(old, schema, pid[0], bf.parent.parent.name, known):
                 probs.append(Problem(rel, f"not additive vs {bf.parent.parent.name}: {reason}"))
     return probs
 
@@ -921,10 +1014,11 @@ def check_repo(
     registry = build_registry(root)
     probs: list[Problem] = repo_problems(root) + frozen_symlinks(root)
     index = frozen_index(root)
+    known = known_ids(root)
     for p in schema_files(root, dirs):
         if only is not None and p.relative_to(root / "schemas").as_posix() not in set(only):
             continue
-        probs += check_schema(root, p, registry, strict, index)
+        probs += check_schema(root, p, registry, strict, index, known)
     if base:
         probs += frozen_lost(root, base) + frozen_added(root, base)
     return probs

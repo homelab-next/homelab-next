@@ -613,7 +613,11 @@ def test_retention_inside_the_range_is_accepted(tmp_path, days):
     )
 
 
-SCHEMA_ID = "https://schemas.example.internal/homelabnext/events/agent.job.finished/1.0"
+#: the ``dataschema`` the live schema requires: it pins the contract's first-published id (1.0)
+#: across minors, so a 1.0 producer stays valid; read from the schema, never retyped here
+SCHEMA_ID = json.loads(
+    (EXAMPLES.parent / "agent.job.finished.schema.json").read_text(encoding="utf-8")
+)["allOf"][1]["properties"]["dataschema"]["const"]
 
 
 @pytest.mark.parametrize(
