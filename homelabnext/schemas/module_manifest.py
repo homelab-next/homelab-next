@@ -1492,6 +1492,19 @@ def module_selection_schema() -> dict[str, Any]:
         desc="Authority a module cannot give itself. A misspelt grant kind is refused, never read as no grant.",
     )
     scope = scope_schema()
+    lab_namespaces = arr(
+        obj(
+            {
+                "namespace": pat("[a-z][a-z0-9_]*", None, 64),
+                "why": text(200, "What the lab keeps there (an archive, a scratch space)."),
+            },
+            ["namespace", "why"],
+        ),
+        "The lake namespaces that are the lab's own, outside every module and the core. With the "
+        "list, a gathered table in a namespace no module id binds, not the core's and not listed "
+        "is a problem; without it such a table is not judged. A namespace that is a module id's "
+        "(the id with - read as _), the core's, or listed twice is refused (loader).",
+    )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
@@ -1525,6 +1538,7 @@ def module_selection_schema() -> dict[str, Any]:
             },
             "grants": grants,
             "scope": scope,
+            "lab_table_namespaces": lab_namespaces,
         },
         "$defs": {"scope_entry": scope_entry_schema(), "scope_source": scope_source_schema()},
     }

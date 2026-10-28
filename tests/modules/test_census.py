@@ -846,6 +846,8 @@ def test_gathered_tables_are_judged_and_the_cores_namespace_holds_only_its_own(t
         "running: tables table:ocsf.planted is in the core's namespace but is no core table",
     ]
     assert not any("tables" in n and "not compared" in n for n in notes)
+    # an empty selection declares no lab namespaces: lab_own.x is not judged, and the check says so
+    assert any(n.startswith("the lab's own table namespaces are not declared") for n in notes)
     # without the core's tables nothing in its namespace is judged, and the check says so
     problems, notes = running(None)
     assert problems == [

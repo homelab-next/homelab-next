@@ -577,6 +577,16 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["grants"].__setitem__("upstreams", {"publishing": ["cap:secrets"]}),
         "grants.upstreams names only broker, idp or remote-admin (secrets is never an upstream).",
     ),
+    "lab-namespace-without-why": (
+        "full",
+        lambda d: d["lab_table_namespaces"][0].pop("why"),
+        "A lab table namespace says why it is the lab's.",
+    ),
+    "lab-namespace-not-a-name": (
+        "full",
+        lambda d: d["lab_table_namespaces"][0].__setitem__("namespace", "Archive.old"),
+        "A lab table namespace is one catalog name of the inventory's shape.",
+    ),
     "cloud-model-not-a-role": (
         "full",
         lambda d: d["grants"].__setitem__("cloud_models", {"publishing": ["main-reasoner"]}),
