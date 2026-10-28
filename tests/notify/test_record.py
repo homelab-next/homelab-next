@@ -170,19 +170,33 @@ def test_a_record_names_a_known_owner_and_a_plain_directory(tmp_path):
         PairsRecord(d, "status")
 
 
-def test_a_directory_others_may_write_is_refused(tmp_path):
+def test_a_directory_others_may_write_is_refused(tmp_path, monkeypatch):
+    # the rule itself is test_the_mode_rule_refuses_group_or_other_write_and_other_owners (no
+    # real directory is made writable by others): here, that each directory is held to it, at
+    # start and again at a later write
     d = _pairs_dir(tmp_path)
-    os.chmod(d, 0o770)  # its group may write
-    with pytest.raises(ValueError, match="writable by no one else"):
-        PairsRecord(d, "broker")
-    os.chmod(d, 0o700)
     (d / "broker").mkdir()
-    os.chmod(d / "broker", 0o770)
-    with pytest.raises(ValueError, match="writable by no one else"):
-        PairsRecord(d, "broker")
     os.chmod(d / "broker", 0o700)
+    held = []
+
+    def judged(mode, uid, euid, *, refuse):
+        held.append(mode)
+        return refuse(len(held))
+
+    monkeypatch.setattr(
+        nr, "_mode_problem", lambda m, u, e: judged(m, u, e, refuse=lambda n: n == 1)
+    )
+    with pytest.raises(ValueError, match="writable by no one else"):
+        PairsRecord(d, "broker")  # the pairs directory itself
+    held.clear()
+    monkeypatch.setattr(
+        nr, "_mode_problem", lambda m, u, e: judged(m, u, e, refuse=lambda n: n == 2)
+    )
+    with pytest.raises(ValueError, match="writable by no one else"):
+        PairsRecord(d, "broker")  # the owner's directory
+    monkeypatch.setattr(nr, "_mode_problem", lambda m, u, e: False)
     rec = PairsRecord(d, "broker")
-    os.chmod(d / "broker", 0o770)  # loosened after start: the next write refuses
+    monkeypatch.setattr(nr, "_mode_problem", lambda m, u, e: True)  # loosened after start
     with pytest.raises(ValueError, match="writable by no one else"):
         rec.write({})
 

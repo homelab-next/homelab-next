@@ -181,11 +181,11 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
 
     # a record is read only as a small regular file, never through a link, in a directory no
     # one else may write; a FIFO never blocks the read
-    def plain(name, owner, mode=0o700):
+    def plain(name, owner):  # its owner's only
         d = tmp_path / name
         (d / owner).mkdir(parents=True)
         for x in (d, d / owner):
-            os.chmod(x, mode)
+            os.chmod(x, 0o700)
         return d
 
     linked = plain("linked-pairs", "broker")
@@ -194,7 +194,6 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     (big / "status" / "pairs.json").write_text(" " * (256 * 1024 + 1))
     fifo = plain("fifo-pairs", "status")
     os.mkfifo(fifo / "status" / "pairs.json")
-    loose = plain("loose-pairs", "broker", 0o770)
     via = tmp_path / "via"
     via.symlink_to(tmp_path / "pairs")
     results = run_cases(
@@ -207,7 +206,6 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_pairs_dir": str(linked)},
             {"module_census_pairs_dir": str(big)},
             {"module_census_pairs_dir": str(fifo)},
-            {"module_census_pairs_dir": str(loose)},
             {"module_census_pairs_dir": str(via)},
             {"module_census_dir": "relative/census"},
             {"module_census_dir": str(tmp_path / "absent")},
@@ -234,9 +232,8 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     assert results[0][0] and "the notify pairs directory an absolute" in results[0][1]
     for failed, said in results[1:4]:
         assert failed and "is not a regular file of at most 262144 bytes" in said, results
-    assert results[4][0] and "is writable by its group or others" in results[4][1], results
-    assert results[5][0] and "reached without a link" in results[5][1], results
-    results = results[6:]
+    assert results[4][0] and "reached without a link" in results[4][1], results
+    results = results[5:]
     assert results[0][0] and "module_census: the census directory is an absolute" in results[0][1]
     assert results[1][0] and "is not a directory on the controller" in results[1][1]
     assert results[2][0] and results[3][0], results
@@ -247,3 +244,32 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
     for failed, said in results[9:15]:
         assert failed and "the broker socket empty or a path under /run/" in said, results
     assert results[15][0], results
+
+
+def test_the_record_reader_refuses_a_directory_its_group_or_others_may_write(monkeypatch):
+    # the reader's own mode rule, on reported modes: no real directory is made writable by
+    # others (the playbook cases above cover links, size and the FIFO)
+    import importlib.util
+    import types
+
+    pytest.importorskip("ansible")
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "ansible",
+        "roles",
+        "module_census",
+        "library",
+        "notify_pairs_records.py",
+    )
+    spec = importlib.util.spec_from_file_location("notify_pairs_records", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for mode, refused in ((0o40700, False), (0o40755, False), (0o40775, True), (0o40757, True)):
+        monkeypatch.setattr(mod.os, "fstat", lambda fd, m=mode: types.SimpleNamespace(st_mode=m))
+        if refused:
+            with pytest.raises(mod.Refused, match="is writable by its group or others"):
+                mod.guarded(3, "/x")
+        else:
+            mod.guarded(3, "/x")
