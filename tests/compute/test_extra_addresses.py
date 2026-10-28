@@ -116,6 +116,8 @@ def test_every_address_of_a_guest_is_in_the_table_with_its_value(tmp_path):
         (_v6(0xFD00 << 112 | 0x8C), "is outside zone compute's IPv6 prefix"),  # unique-local
         ("2001:db8:0:83::1", "is outside zone compute's IPv6 prefix"),
         ("2001:db8:0:82::", "subnet-router anycast address of its /64"),
+        # the network adapters give the router the prefix's ::1 (homelabnext.network.ir)
+        ("2001:db8:0:82::1", "is the router's address in zone compute's IPv6 prefix"),
         # RFC 2526: the top 128 interface identifiers of a /64, EUI-64 form and not
         ("2001:db8:0:82:fdff:ffff:ffff:ff80", "anycast address RFC 2526 reserves"),
         ("2001:db8:0:82:fdff:ffff:ffff:ffff", "anycast address RFC 2526 reserves"),

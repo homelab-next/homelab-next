@@ -229,8 +229,14 @@ def test_an_extra_inside_the_prefix_must_still_be_written_canonically(extra):
 
 def test_the_last_identifier_below_each_anycast_block_is_an_address():
     base = 0x2600 << 112
-    for iid in (0xFDFF_FFFF_FFFF_FF7F, 0xFFFF_FFFF_FFFF_FF7F, 1):
+    for iid in (0xFDFF_FFFF_FFFF_FF7F, 0xFFFF_FFFF_FFFF_FF7F, 2):
         assert problems([{**ZONED6, "extra_addresses": [a(base | iid, v6=True)]}]) == []
+
+
+def test_the_routers_address_in_the_prefix_is_not_an_extra_address():
+    # the network adapters give the router the prefix's ::1 (homelabnext.network.ir)
+    (msg,) = problems([{**ZONED6, "extra_addresses": [a(0x2600 << 112 | 1, v6=True)]}])
+    assert "the router's address" in msg, msg
 
 
 @pytest.mark.parametrize(
