@@ -91,11 +91,11 @@ BASENAMES = {
 }
 #: where each client lists its servers
 SERVERS_KEY = {"claude-code": "mcpServers", "generic": "mcpServers", "hermes": "mcp_servers"}
-#: an inventory name (homelabnext.modules.census.NAME_RE)
-NAME_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+#: an MCP server name as a client registers it (homelabnext.modules.census.MCP_NAME_RE)
+MCP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 #: the longest MCP server name (homelabnext.modules.census.MCP_NAME_MAX): a longer one is refused
 #: here, never returned, since past this length a name is more likely a pasted secret than a name
-MCP_NAME_MAX = 48
+MCP_NAME_MAX = 64
 #: the most server names one file may register
 MAX_SERVERS = 1024
 
@@ -243,7 +243,7 @@ def server_names(text: str, client: str, path: str) -> list[str]:
     if len(servers) > MAX_SERVERS:
         raise Refused(f"{path} registers more than {MAX_SERVERS} servers")
     for name in servers:
-        if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not NAME_RE.fullmatch(name):
+        if not isinstance(name, str) or len(name) > MCP_NAME_MAX or not MCP_NAME_RE.fullmatch(name):
             raise Refused(f"{path}: a server name is not an inventory name")
     return sorted(servers)
 

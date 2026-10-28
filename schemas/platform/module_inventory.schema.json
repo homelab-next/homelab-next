@@ -168,7 +168,7 @@
       "maxItems": 4096,
       "uniqueItems": true,
       "items": {
-        "$ref": "#/$defs/name"
+        "$ref": "#/$defs/mcp_name"
       },
       "description": "MCP server names the installed clients register: a catalog record's id, or one of its instance names (instance:, which the loader matches back to the record)."
     },
@@ -272,6 +272,12 @@
       "type": "string",
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+    },
+    "mcp_name": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9_-]*$(?!\\n)",
+      "description": "An MCP server name as a client registers it: what a catalog record's instance template (platform/mcp_server) expands to, so an underscore is allowed and the longest is 64."
     },
     "title": {
       "type": "string",
