@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:a8e41c11dee24067
+summary_of: outline:sha256:102954101a771a44
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -661,6 +661,21 @@ override the claim; only inert media types are accepted (`text/markdown`, `appli
 `image/png`) and the gate renders HTML itself. A module that requires a **model role whose prompts
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
 `grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
+
+### TLP labels (ADR-0033)
+
+Data is labelled with TLP 2.0 ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)):
+`clear` < `green` < `amber` < `amber+strict` < `red`, and a reader with ceiling X receives labels at
+or below X. `homelabnext.tlp` is the one implementation every component uses. `read()` is for a
+label on data (a record, a sidecar, a stored row) and never raises: anything but an accepted
+spelling, including a missing label, is `red`. `parse()` is for a declaration (a source's label, a
+reader's ceiling) and raises on anything else, so an authored mistake is refused rather than
+silently read as `red`. `strictest()` is the label of derived data (`red` when an input is
+unreadable or there are none), and `allows(ceiling, label)` takes only a parsed ceiling. Accepted
+spellings: the five labels, optionally `tlp:`-prefixed, in any ASCII case, surrounding whitespace
+ignored; `white` is `clear`. The publishing sidecar's enum is held equal to `tlp.LABELS`.
+Source declarations, storage, reader ceilings and model-role ceilings follow in the order the ADR
+sets.
 
 ## Placement and isolation
 
