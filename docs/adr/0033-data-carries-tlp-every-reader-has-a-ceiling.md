@@ -114,8 +114,8 @@ The standard for this already exists and the lab's threat-intel sources already 
    declared *release transform*: a named, reviewed piece of code or configuration that records
    its input label, its output label and the fields it keeps. It is an allow-list: a field it
    does not list is dropped. Its output is labelled by that declaration and still passes the
-   egress content checks (decision 13); creating or changing one is human-approve. A one-off downgrade of a single
-   item is a recorded human decision of the same kind.
+   egress content checks (decision 13); creating or changing one is human-approve. A one-off
+   downgrade of a single item is a recorded human decision of the same kind.
 8. **Viewer grants.** Anonymous and internet-facing access is granted `clear`; the private tier
    behind the trusted front door (the operator) is granted `red`. `amber` (a named partner
    organisation and its clients) and `amber+strict` (the lab's own organisation, with no onward
@@ -133,14 +133,14 @@ The standard for this already exists and the lab's threat-intel sources already 
     addition to, and does not replace, `grants.cloud_models`.
 11. **Model requests carry their context label.** The caller labels each model request with the
     strictest label of everything it assembled (retrieved rows, broker results, MCP tool output,
-    memory). Broker action results and MCP tool outputs carry the label of what they return; an
-    MCP server record declares it. Because the caller asserts that label, the gateway takes the
-    higher of the request's label and the sending profile's TLP ceiling as the request's label
-    for a role that leaves the lab, so a profile that may hold `amber` cannot send to a cloud
-    role whatever its request claims. It refuses a request above the role's ceiling, and a
-    request with no label (read as `red`), and records the refusal. The content checks of
-    decision 13 apply to gateway requests as to any egress. A profile reaching a cloud model other than through the gateway is a defect the
-    actors-act-via-broker check reports, not an exemption.
+    memory). Broker action results and MCP tool outputs carry the label of what they return; an MCP
+    server record declares it. Because the caller asserts that label, the gateway takes the higher
+    of the request's label and the sending profile's TLP ceiling as the request's label for a role
+    that leaves the lab, so a profile that may hold `amber` cannot send to a cloud role whatever
+    its request claims. It refuses a request above the role's ceiling, and a request with no label
+    (read as `red`), and records the refusal. The content checks of decision 13 apply to gateway
+    requests as to any egress. A profile reaching a cloud model other than through the gateway is a
+    defect the actors-act-via-broker check reports, not an exemption.
 12. **`data_tier` is derived, not a second axis.** For an agent profile, the ceiling policy
     attests a TLP ceiling (`tlp_ceiling`, distinct from the compiled profile's existing ceiling)
     where it attests `data_tier` today: `local-only` is a ceiling above the cloud-role ceiling,
@@ -152,12 +152,12 @@ The standard for this already exists and the lab's threat-intel sources already 
 13. **Egress points are enumerated, and each verifies.** One list in docs/modules.md names every
     point where data leaves its store: the publishing gate, the public exports, the bus,
     notification channels, webhooks, backups and off-site copies, model gateway requests, and
-    memory and embedding stores, generated pages committed to a repository (ADR-0018), records
-    and ticket systems (ADR-0010, ADR-0020), and logs and error text that reach a notification.
-    Each one applies the reader filter and the gate's content checks (TLP markers and deny-listed
-    names; a marker stricter than the label wins). An egress is a capability a module can
-    require; a module requiring an egress capability that is not on the list is refused by the
-    same grant rule that guards publishing (`grants.publish`). The publishing gate also refuses an item whose
+    memory and embedding stores, generated pages committed to a repository (ADR-0018), records and
+    ticket systems (ADR-0010, ADR-0020), and logs and error text that reach a notification. Each
+    one applies the reader filter and the gate's content checks (TLP markers and deny-listed names;
+    a marker stricter than the label wins). An egress is a capability a module can require; a
+    module requiring an egress capability that is not on the list is refused by the same grant rule
+    that guards publishing (`grants.publish`). The publishing gate also refuses an item whose
     sidecar claim is looser than its recorded label (decision 4). Stored detail tiers and caches
     (the activity detail tier holds prompts and tool output) take the strictest label of their
     content, `red` when unknown.
@@ -183,6 +183,8 @@ The standard for this already exists and the lab's threat-intel sources already 
   pipeline.
 - Cloud models see only `clear` by default, and never `amber` or above. Work that needs labelled
   context runs on a local role.
+- A release transform is trusted: its review is the control, and the egress content checks are a
+  second line, not a proof.
 - The label describes sharing terms, not sensitivity in general. Data that is sensitive for other
   reasons (personal data, legal holds) still needs its own handling; this ADR does not cover it.
 - **Verification.** Each rule gets a negative fixture or a criterion:
