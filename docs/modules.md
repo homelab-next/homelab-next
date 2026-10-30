@@ -672,8 +672,9 @@ spelling, including a missing label, is `red`. `parse()` is for a declaration (a
 reader's ceiling) and raises on anything else, so an authored mistake is refused rather than
 silently read as `red`. `strictest()` is the label of derived data (`red` when an input is
 unreadable or there are none), and `allows(ceiling, label)` takes only a parsed ceiling. Accepted
-spellings: the five labels, optionally `tlp:`-prefixed, in any ASCII case, surrounding whitespace
-ignored; `white` is `clear`. The publishing sidecar's enum is held equal to `tlp.LABELS`.
+spellings: the five labels, optionally `tlp:`-prefixed, in any ASCII case, with surrounding spaces,
+tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with another `Label`, and a
+`str` subclass is read through `str`'s own methods. The publishing sidecar's enum is held equal to `tlp.LABELS`.
 Source declarations, storage, reader ceilings and model-role ceilings follow in the order the ADR
 sets.
 

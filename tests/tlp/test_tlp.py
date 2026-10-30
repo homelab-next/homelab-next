@@ -33,6 +33,8 @@ def test_five_labels_in_restriction_order():
         ("\ttlp:Clear\n", Label.CLEAR),
         ("white", Label.CLEAR),
         ("TLP:WHITE", Label.CLEAR),
+        ("tlp:white", Label.CLEAR),
+        (" \r\nred\t", Label.RED),
         (Label.AMBER, Label.AMBER),
     ],
 )
@@ -53,6 +55,15 @@ def test_accepted_spellings(spelling, label):
         "tlp: red",  # a space after the prefix is not an accepted spelling
         "tlp:",
         "tlp:tlp:red",
+        "tlp:tlp:clear",  # the prefix is taken once
+        "\x0bclear",  # only spaces, tabs, CR and LF are stripped
+        "\x1cclear",
+        "\x0cgreen\x0c",
+        "\u00a0clear",  # no-break space
+        "clear\u3000",
+        "tlp:clear\x00",
+        b"clear",
+        bytearray(b"clear"),
         "black",
         "secret",
         "public",
@@ -90,6 +101,13 @@ def test_strictest_takes_the_most_restrictive_input():
     # no inputs: unlabelled, so red
     assert tlp.strictest([]) is Label.RED
     assert tlp.strictest(iter(())) is Label.RED
+    # a single string is one input, not its characters; a non-iterable is unreadable
+    assert tlp.strictest("clear") is Label.CLEAR
+    assert tlp.strictest("amber+strict") is Label.AMBER_STRICT
+    assert tlp.strictest(Label.GREEN) is Label.GREEN
+    assert tlp.strictest(b"clear") is Label.RED
+    assert tlp.strictest(None) is Label.RED
+    assert tlp.strictest(3) is Label.RED
 
 
 def test_allows_is_at_or_below_the_ceiling():
@@ -111,11 +129,75 @@ def test_allows_refuses_a_ceiling_that_was_not_parsed(ceiling):
         tlp.allows(ceiling, "clear")
 
 
-def test_bool_is_not_a_label():
-    # True == 1 == Label.GREEN numerically; it must still not be accepted as a label
+def test_numbers_are_not_labels():
     assert tlp.read(True) is Label.RED
+    assert tlp.read(0) is Label.RED
     with pytest.raises(TypeError):
         tlp.allows(True, "clear")
+    with pytest.raises(TypeError):
+        tlp.allows(0, "clear")
+
+
+def test_a_label_compares_only_with_a_label_and_is_always_truthy():
+    assert all(bool(label) for label in Label)
+    assert Label.CLEAR != 0
+    assert Label.GREEN != 1
+    with pytest.raises(TypeError):
+        _ = Label.RED >= 4
+    with pytest.raises(TypeError):
+        _ = Label.CLEAR < 1
+    assert [label.rank for label in Label] == [0, 1, 2, 3, 4]
+    assert max(Label) is Label.RED and min(Label) is Label.CLEAR
+
+
+def test_parse_and_allows_take_a_label_as_is():
+    for label in Label:
+        assert tlp.parse(label) is label
+        assert tlp.read(label) is label
+        assert tlp.allows(Label.RED, label)
+    assert tlp.allows(Label.AMBER, Label.AMBER)
+    assert not tlp.allows(Label.AMBER, Label.AMBER_STRICT)
+
+
+class _Lying(str):
+    def strip(self, *args):
+        return "clear"
+
+    def lower(self):
+        return "clear"
+
+    def startswith(self, *args):
+        return False
+
+
+class _Equal(str):
+    def __eq__(self, other):
+        return True
+
+    def __hash__(self):
+        return hash("clear")
+
+
+class _Raising(str):
+    def isascii(self):
+        raise RuntimeError("boom")
+
+    def __str__(self):
+        raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("cls", [_Lying, _Equal, _Raising])
+def test_a_str_subclass_is_read_as_the_str_it_holds(cls):
+    assert tlp.read(cls("red")) is Label.RED
+    assert tlp.read(cls("typo")) is Label.RED
+    assert tlp.read(cls("green")) is Label.GREEN
+    assert tlp.strictest(["clear", cls("red")]) is Label.RED
+    assert not tlp.allows(Label.AMBER, cls("red"))
+
+
+def test_the_spelling_tables_are_read_only():
+    with pytest.raises(TypeError):
+        tlp._SPELLINGS["red"] = Label.CLEAR  # type: ignore[index]
 
 
 def test_publishing_sidecar_uses_the_canonical_enum():
