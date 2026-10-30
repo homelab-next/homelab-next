@@ -82,8 +82,11 @@ The standard for this already exists and the lab's threat-intel sources already 
 
    Cost and processing stage are not the test: a free source whose terms restrict sharing is
    labelled by those terms, and enriching an open item only from free, open lookups leaves it
-   `clear`, so a public threat-intel rollup built from such sources publishes at a `clear` or
-   `green` ceiling. `amber+strict` is held for a licensed source, should the lab add one.
+   `clear`. A public threat-intel rollup whose inputs are all `clear` is `clear`, and one that
+   includes `green` inputs is `green`; it needs no release transform to carry that label, but it
+   must carry no lab-derived field. `amber+strict` is held for a licensed source, should the lab
+   add one. This labels what a lookup returns; what may be sent to a lookup is decision 13. A
+   `clear` result attached to a lab sighting is part of a `red` record (decision 4).
 
    An item that carries its own label from the source (a tag, a sidecar field, a STIX marking)
    keeps it when it is **stricter** than the declaration. It may be **looser** only when the
@@ -157,25 +160,35 @@ The standard for this already exists and the lab's threat-intel sources already 
     an entry whose `data_tier` and TLP label or ceiling disagree.
 13. **Egress points are enumerated, and each verifies.** One list in docs/modules.md names every
     point where data leaves its store: the publishing gate, the public exports, the bus,
-    notification channels, webhooks, backups and off-site copies, model gateway requests, and
-    memory and embedding stores, generated pages committed to a repository (ADR-0018), records and
-    ticket systems (ADR-0010, ADR-0020), and logs and error text that reach a notification. Each
-    one applies the reader filter and the gate's content checks (TLP markers and deny-listed names;
-    a marker stricter than the label wins). An egress is a capability a module can require; a
-    module requiring an egress capability that is not on the list is refused by the same grant rule
-    that guards publishing (`grants.publish`). The publishing gate also refuses an item whose
-    sidecar claim is looser than its recorded label (decision 4). Stored detail tiers and caches
-    (the activity detail tier holds prompts and tool output) take the strictest label of their
-    content, `red` when unknown.
+    notification channels, webhooks, backups and off-site copies, model gateway requests, external
+    enrichment lookups, memory and embedding stores, generated pages committed to a repository
+    (ADR-0018), records and ticket systems (ADR-0010, ADR-0020), and logs and error text that reach
+    a notification. Each one applies the reader filter and the gate's content checks (TLP markers
+    and deny-listed names; a marker stricter than the label wins). An egress is a capability a
+    module can require; a module requiring an egress capability that is not on the list is refused
+    by the same grant rule that guards publishing (`grants.publish`). The publishing gate also
+    refuses an item whose sidecar claim is looser than its recorded label (decision 4). Stored
+    detail tiers and caches (the activity detail tier holds prompts and tool output) take the
+    strictest label of their content, `red` when unknown.
 
     **Lookups to external enrichment services are egress too.** Sending an observable out for
-    enrichment discloses the observable, and that the lab saw it, so a sighting from the lab's own
-    data is `red` and must not reach a third-party analyzer. Each external analyzer or connector
-    declares the highest label it may receive (where the enrichment platform supports it, its
-    per-analyzer maximum TLP), and each enrichment job is submitted with the label of the
-    observable; the platform runs only the analyzers whose maximum is at or above it. A job
-    submitted with no label is submitted as `red`. Analyzers that stay inside the lab keep a `red`
-    maximum.
+    enrichment discloses the observable, and that the lab saw it. An observable (an indicator
+    value) has no label of its own: a job takes the strictest label among the records that cause
+    the lookup (the sighting, alert, case or feed record being enriched). A job raised from a lab
+    sighting is `red` even when the same value is also in an open feed at `clear`; only a lookup
+    raised from an external feed's own record, with no lab data among its inputs, may be `clear` or
+    `green`. Where one lookup serves several records, it takes the strictest. As in decision 11,
+    the job is labelled the higher of the caller's assertion and the submitting component's own TLP
+    ceiling, and a job with no label is `red`.
+
+    Each external analyzer or connector declares the highest label it may receive, and runs only
+    for a job whose label is at or below that maximum; an analyzer with no declared maximum reads
+    as `red` (decision 1) and is not sent anything. Where the enrichment platform has a
+    per-analyzer maximum TLP, that setting carries the declaration; where it has none, the lab
+    enforces the rule in the submission path before the job leaves. The content checks above apply
+    to the observable and to any context sent with the job. Analyzers that stay inside the lab keep
+    a `red` maximum; an analyzer that calls a model is also a model request (decisions 10 and 11).
+
 14. **Secrets are not labelled data.** Keys, passwords and tokens are never stored in the lake,
     the SIEM or any labelled store and are never shown at any ceiling; they live only in the
     secrets slot. The existing screeners (`homelabnext.agent.screen`) and leak scans
@@ -213,7 +226,11 @@ The standard for this already exists and the lab's threat-intel sources already 
   - a role with a local primary and a `leaves_lab` fallback has the cloud ceiling;
   - a release transform that passes an unlisted field fails;
   - a profile is refused a server whose label is above its ceiling;
-  - an enrichment job labelled `red` runs no external analyzer;
+  - an enrichment job labelled `red` runs no external analyzer, and an unlabelled job reads `red`;
+  - an indicator present in a `clear` feed and in a lab log, looked up for the lab sighting, runs
+    no external analyzer;
+  - a `green` job runs only analyzers whose maximum is `green` or higher, and an analyzer with no
+    declared maximum is sent nothing;
   - a public field without a release transform fails the public-view test;
   - `green` publishing without an audience is refused;
   - `data_tier` disagreeing with the ceiling is refused;
