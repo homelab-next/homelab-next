@@ -74,10 +74,16 @@ The standard for this already exists and the lab's threat-intel sources already 
    | Source | Label |
    |---|---|
    | open feeds with no sharing restriction | `clear` |
+   | free, open enrichment lookups with no sharing restriction | `clear` |
    | community or consented feeds | `green` |
    | third-party enrichment whose terms allow organisation-and-clients sharing | `amber` |
    | licensed or non-redistributable results (paid APIs) | `amber+strict` |
    | the lab's own data | `red` |
+
+   Cost and processing stage are not the test: a free source whose terms restrict sharing is
+   labelled by those terms, and enriching an open item only from free, open lookups leaves it
+   `clear`, so a public threat-intel rollup built from such sources publishes at a `clear` or
+   `green` ceiling. `amber+strict` is held for a licensed source, should the lab add one.
 
    An item that carries its own label from the source (a tag, a sidecar field, a STIX marking)
    keeps it when it is **stricter** than the declaration. It may be **looser** only when the
@@ -161,6 +167,15 @@ The standard for this already exists and the lab's threat-intel sources already 
     sidecar claim is looser than its recorded label (decision 4). Stored detail tiers and caches
     (the activity detail tier holds prompts and tool output) take the strictest label of their
     content, `red` when unknown.
+
+    **Lookups to external enrichment services are egress too.** Sending an observable out for
+    enrichment discloses the observable, and that the lab saw it, so a sighting from the lab's own
+    data is `red` and must not reach a third-party analyzer. Each external analyzer or connector
+    declares the highest label it may receive (where the enrichment platform supports it, its
+    per-analyzer maximum TLP), and each enrichment job is submitted with the label of the
+    observable; the platform runs only the analyzers whose maximum is at or above it. A job
+    submitted with no label is submitted as `red`. Analyzers that stay inside the lab keep a `red`
+    maximum.
 14. **Secrets are not labelled data.** Keys, passwords and tokens are never stored in the lake,
     the SIEM or any labelled store and are never shown at any ceiling; they live only in the
     secrets slot. The existing screeners (`homelabnext.agent.screen`) and leak scans
@@ -198,6 +213,7 @@ The standard for this already exists and the lab's threat-intel sources already 
   - a role with a local primary and a `leaves_lab` fallback has the cloud ceiling;
   - a release transform that passes an unlisted field fails;
   - a profile is refused a server whose label is above its ceiling;
+  - an enrichment job labelled `red` runs no external analyzer;
   - a public field without a release transform fails the public-view test;
   - `green` publishing without an audience is refused;
   - `data_tier` disagreeing with the ceiling is refused;
