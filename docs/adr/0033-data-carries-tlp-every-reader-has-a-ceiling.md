@@ -82,10 +82,11 @@ The standard for this already exists and the lab's threat-intel sources already 
 
    Cost and processing stage are not the test: a free source whose terms restrict sharing is
    labelled by those terms, and enriching an open item only from free, open lookups leaves it
-   `clear`. A public threat-intel rollup whose inputs are all `clear` is `clear`, and one that
-   includes `green` inputs is `green`; it needs no release transform to carry that label, but it
-   must carry no lab-derived field. `amber+strict` is held for a licensed source, should the lab
-   add one. This labels what a lookup returns; what may be sent to a lookup is decision 13. A
+   `clear`. A public threat-intel rollup whose inputs are all `clear` is `clear` by decision 4,
+   without declassification, and one that includes `green` inputs is `green`; publishing it to a
+   wider-audience reader still goes through the reader filter, and any lab-derived field is dropped
+   by a release transform (decision 7). `amber+strict` is held for a licensed source, should the
+   lab add one. This labels what a lookup returns; what may be sent to a lookup is decision 13. A
    `clear` result attached to a lab sighting is part of a `red` record (decision 4).
 
    An item that carries its own label from the source (a tag, a sidecar field, a STIX marking)
@@ -188,7 +189,6 @@ The standard for this already exists and the lab's threat-intel sources already 
     enforces the rule in the submission path before the job leaves. The content checks above apply
     to the observable and to any context sent with the job. Analyzers that stay inside the lab keep
     a `red` maximum; an analyzer that calls a model is also a model request (decisions 10 and 11).
-
 14. **Secrets are not labelled data.** Keys, passwords and tokens are never stored in the lake,
     the SIEM or any labelled store and are never shown at any ceiling; they live only in the
     secrets slot. The existing screeners (`homelabnext.agent.screen`) and leak scans
@@ -231,6 +231,8 @@ The standard for this already exists and the lab's threat-intel sources already 
     no external analyzer;
   - a `green` job runs only analyzers whose maximum is `green` or higher, and an analyzer with no
     declared maximum is sent nothing;
+  - a job asserted `clear` by a component whose ceiling is `amber` runs only analyzers whose
+    maximum is `amber` or higher;
   - a public field without a release transform fails the public-view test;
   - `green` publishing without an audience is refused;
   - `data_tier` disagreeing with the ceiling is refused;
