@@ -55,9 +55,12 @@ The standard for this already exists and the lab's threat-intel sources already 
    | `red` | the named recipients only |
 
    `clear` < `green` < `amber` < `amber+strict` < `red`. A reader with TLP ceiling X receives
-   labels at or below X. No other label is defined. Values are read case- and
-   whitespace-insensitively with an optional `tlp:` prefix; TLP 1.0 `white` is read as `clear`.
-   Any other value, and a missing one, reads as `red` wherever it is read.
+   labels at or below X; a `red` ceiling means every label is visible to that reader, not that
+   the reader may share it on, which `red` forbids. No other label is defined. Accepted
+   spellings: `clear`, `green`, `amber`, `amber+strict`, `red`, each with an optional `tlp:`
+   prefix, in any case, surrounding whitespace ignored; TLP 1.0 `white` is `clear`. Anything else
+   (including `amber-strict`, `amber strict` and an empty string), and a missing value, reads as
+   `red` wherever it is read.
 2. **The default is red.** Any source or record without a label is `red`. Data the lab generates
    about itself (logs, alerts, telemetry, inventory, configuration, findings, agent activity) is
    `red` unless a source declaration says otherwise. Lowering this default is a declaration a
@@ -91,10 +94,12 @@ The standard for this already exists and the lab's threat-intel sources already 
 5. **Storage carries the label.** Every lake table and the SIEM's event schema have a `tlp`
    field, set per row by the writer: the log pipeline sets it on each event from the source's
    declaration before the event reaches the SIEM or the lake. A writer that supplies no label is
-   refused. Rows that predate the field are backfilled once, by a recorded migration, per table
-   and source, and never looser than the strictest source feeding that table; there is no
-   standing table default that can loosen a row. A stored value that is missing or not one of the
-   five labels reads as `red` (decision 1).
+   refused, and there is no standing table default that can loosen a row. Rows that predate the
+   field are backfilled once by a recorded migration: a row whose source is recorded takes that
+   source's declared label; a row whose source is not recorded takes the strictest label of any
+   source feeding the table; a source whose items carried their own labels that were not stored
+   is backfilled `red` unless a human records otherwise. Rows not yet backfilled, and a stored
+   value that is not one of the five labels, read as `red` (decision 1).
 6. **Every reader declares a TLP ceiling, and receives only data at or below it.** A reader is
    anything that shows or sends data on: a status or generated page, a public export, a
    dashboard, the publishing gate, the bus, a notification channel, an agent profile, a model
@@ -107,8 +112,9 @@ The standard for this already exists and the lab's threat-intel sources already 
 7. **Release transforms are the only declassification.** A wider-audience product derived from
    labelled data (a health badge, a count, a redacted summary, a public rollup) is produced by a
    declared *release transform*: a named, reviewed piece of code or configuration that records
-   its input label, its output label and the fields it keeps. Its output is labelled by that
-   declaration, and creating or changing one is human-approve. A one-off downgrade of a single
+   its input label, its output label and the fields it keeps. It is an allow-list: a field it
+   does not list is dropped. Its output is labelled by that declaration and still passes the
+   egress content checks (decision 13); creating or changing one is human-approve. A one-off downgrade of a single
    item is a recorded human decision of the same kind.
 8. **Viewer grants.** Anonymous and internet-facing access is granted `clear`; the private tier
    behind the trusted front door (the operator) is granted `red`. `amber` (a named partner
@@ -123,25 +129,35 @@ The standard for this already exists and the lab's threat-intel sources already 
     can leave the lab (`leaves_lab` on any binding of the role or down its fallback chain, as
     `cloud_roles` reads it) has a ceiling of `clear`. The overlay may raise it to `green` only by
     recording the provider's terms (no retention, no training); `amber` and above are never
-    granted to a role that leaves the lab. Raising it is human-approve.
+    granted to a role that leaves the lab. Raising it is human-approve. The ceiling is in
+    addition to, and does not replace, `grants.cloud_models`.
 11. **Model requests carry their context label.** The caller labels each model request with the
     strictest label of everything it assembled (retrieved rows, broker results, MCP tool output,
     memory). Broker action results and MCP tool outputs carry the label of what they return; an
-    MCP server record declares it. The gateway refuses a request above the role's ceiling and a
-    request with no label (read as `red`) for a role that leaves the lab, and records the
-    refusal. A profile reaching a cloud model other than through the gateway is a defect the
+    MCP server record declares it. Because the caller asserts that label, the gateway takes the
+    higher of the request's label and the sending profile's TLP ceiling as the request's label
+    for a role that leaves the lab, so a profile that may hold `amber` cannot send to a cloud
+    role whatever its request claims. It refuses a request above the role's ceiling, and a
+    request with no label (read as `red`), and records the refusal. The content checks of
+    decision 13 apply to gateway requests as to any egress. A profile reaching a cloud model other than through the gateway is a defect the
     actors-act-via-broker check reports, not an exemption.
-12. **`data_tier` is derived, not a second axis.** The ceiling policy attests each agent
-    profile's and MCP server's TLP ceiling where it attests `data_tier` today. `local-only`
-    corresponds to a ceiling above the cloud-role ceiling (the data may not reach a cloud role);
-    `cloud-allowed` to a ceiling at or below it. Until `data_tier` is derived, validation refuses
-    an entry whose `data_tier` and TLP ceiling disagree.
+12. **`data_tier` is derived, not a second axis.** For an agent profile, the ceiling policy
+    attests a TLP ceiling (`tlp_ceiling`, distinct from the compiled profile's existing ceiling)
+    where it attests `data_tier` today: `local-only` is a ceiling above the cloud-role ceiling,
+    `cloud-allowed` one at or below it. For an MCP server, the record declares the label of what
+    it returns (`tlp`, decision 11): `local-only` is a label above the cloud-role ceiling,
+    `cloud-allowed` one at or below it. A profile may be granted a server only when the server's
+    label is at or below the profile's ceiling. Until `data_tier` is derived, validation refuses
+    an entry whose `data_tier` and TLP label or ceiling disagree.
 13. **Egress points are enumerated, and each verifies.** One list in docs/modules.md names every
     point where data leaves its store: the publishing gate, the public exports, the bus,
     notification channels, webhooks, backups and off-site copies, model gateway requests, and
-    memory and embedding stores. Each one applies the reader filter and the gate's content checks
-    (TLP markers and deny-listed names; a marker stricter than the label wins). A module rule
-    refuses an egress that is not on the list. The publishing gate also refuses an item whose
+    memory and embedding stores, generated pages committed to a repository (ADR-0018), records
+    and ticket systems (ADR-0010, ADR-0020), and logs and error text that reach a notification.
+    Each one applies the reader filter and the gate's content checks (TLP markers and deny-listed
+    names; a marker stricter than the label wins). An egress is a capability a module can
+    require; a module requiring an egress capability that is not on the list is refused by the
+    same grant rule that guards publishing (`grants.publish`). The publishing gate also refuses an item whose
     sidecar claim is looser than its recorded label (decision 4). Stored detail tiers and caches
     (the activity detail tier holds prompts and tool output) take the strictest label of their
     content, `red` when unknown.
@@ -170,17 +186,21 @@ The standard for this already exists and the lab's threat-intel sources already 
 - The label describes sharing terms, not sensitivity in general. Data that is sensitive for other
   reasons (personal data, legal holds) still needs its own handling; this ADR does not cover it.
 - **Verification.** Each rule gets a negative fixture or a criterion:
-  - an unknown label reads `red`;
+  - an unknown label reads `red`, `white` reads `clear`, `amber-strict` reads `red`;
   - a reader with no ceiling is refused;
   - a looser item label without `honour_item_labels` is clamped to the declaration;
   - a derived record takes its strictest input;
   - a writer with no label is refused, and a NULL row reads `red`;
-  - a cloud role is refused an `amber` context and an unlabelled one;
+  - a cloud role is refused an `amber` context, an unlabelled one, and a `clear`-labelled one
+    from a profile whose ceiling is `amber`;
+  - a role with a local primary and a `leaves_lab` fallback has the cloud ceiling;
+  - a release transform that passes an unlisted field fails;
+  - a profile is refused a server whose label is above its ceiling;
   - a public field without a release transform fails the public-view test;
   - `green` publishing without an audience is refused;
   - `data_tier` disagreeing with the ceiling is refused;
   - every listed egress point applies the filter;
-  - no table holds a row looser than its strictest source.
+  - no row is looser than its own source's declaration.
 - **Delivery**, in this order:
   1. the label type and its validation;
   2. source declarations in module manifests and the review tier;
