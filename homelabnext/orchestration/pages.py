@@ -139,7 +139,9 @@ class OrchestrationSite:
 
     @staticmethod
     def _shell(doc: Mapping[str, Any], title: str, main: str) -> bytes:
-        return shell_html(doc, title, main, nav=nav_html(doc, live=True)).encode("utf-8")
+        return shell_html(doc, title, main, nav=nav_html(doc, live=True, private=True)).encode(
+            "utf-8"
+        )
 
     # ---------------------------------------------------------------- overview
     def _overview(self, q: Mapping[str, str]) -> str:

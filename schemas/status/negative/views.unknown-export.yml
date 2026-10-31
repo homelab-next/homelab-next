@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# exports names only the exports the hub serves
+views_version: 1
+shell: {title: Status, main: overview}
+exports:
+  dump.json: {tlp: clear}
+menu:
+  - {id: overview, title: Overview, panel: exceptions, tlp: clear}

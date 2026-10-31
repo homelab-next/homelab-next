@@ -32,6 +32,7 @@ from homelabnext.registry.model import load
 from homelabnext.status.model import iso
 from homelabnext.status.serve import make_server
 from homelabnext.status.views import build_status
+from tests.front_door_pass import FrontDoorPass
 
 VIEWS = {
     "views_version": 1,
@@ -161,7 +162,7 @@ def test_the_job_page_sums_each_turn_value_over_the_turns_that_report_it(filled)
 
 
 def test_the_hub_serves_the_page_read_only(site):
-    srv = make_server(_doc, orchestration=site)
+    srv = make_server(_doc, orchestration=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     host, port = srv.server_address[:2]
     try:
@@ -196,7 +197,7 @@ def test_a_page_the_store_cannot_answer_is_a_500_not_a_dropped_connection(filled
         db.execute("UPDATE jobs SET doc = ? WHERE run_id = ?", (json.dumps(doc), run))
     db.close()
     site = OrchestrationSite(filled, clock=lambda: T0)
-    srv = make_server(_doc, orchestration=site)
+    srv = make_server(_doc, orchestration=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         assert _get(srv, f"/orchestration/job?run={run}") == 500

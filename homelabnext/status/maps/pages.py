@@ -5,8 +5,10 @@
 ``hnx status serve`` routes them (``--guests DIR --guests-site SITE`` for the topology, ``--maps
 ROOT`` for the rest, ``--invariants-results FILE`` for the roadmap's live state, ``--roster FILE``
 for the roster, default ``ROOT/examples/status/roster.yml``, ``--mcp-catalog DIR`` for the MCP
-servers, default ``ROOT/examples/mcp``) and
-``hnx status render`` writes them beside ``index.html`` as ``<panel>.html``.  Each page is built
+servers, default ``ROOT/examples/mcp``), only through the trusted front door (they are withheld
+from the public view: ADR-0033, ``homelabnext.status.views.WITHHELD_PANELS``), and
+``hnx status render --private-out DIR`` writes them into ``DIR`` as ``<panel>.html``, never
+beside the public ``index.html``.  Each page is built
 from the repository's own models on request (the dataflow and architecture, which only change
 with the code, once per process); a source that cannot be read gives the page an error line,
 escaped, instead of a half-drawn map.  Nothing here changes anything.
@@ -239,7 +241,8 @@ class MapSite:
         return self._static[panel]
 
     def page(self, panel: str, doc: Mapping[str, Any], *, live: bool) -> str:
-        nav = nav_html(doc, live=live, home=None if live else "index.html")
+        # a withheld page (ADR-0033): it is only ever shown through the front door
+        nav = nav_html(doc, live=live, private=True, home=None if live else "index.html")
         if panel not in assets.INTERACTIVE:
             return shell_html(doc, TITLES[panel], self.body(panel, doc), nav=nav)
         return shell_html(

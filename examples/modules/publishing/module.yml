@@ -77,9 +77,19 @@ data:
 config:
   tlp_allowed:
     type: enum
-    description: the most permissive TLP the gate lets out (red and amber never pass)
+    description: the most permissive TLP the gate lets out (red and amber never pass); green needs audience and access_control
     values: [clear, green]
     default: clear
+    overlay: optional
+  audience:
+    type: enum
+    description: who the publication is for; green is not public, so tlp_allowed green needs community (ADR-0033)
+    values: [public, community]
+    default: public
+    overlay: optional
+  access_control:
+    type: string
+    description: the access control that restricts a community publication to its community (needed with green)
     overlay: optional
   deny_list:
     type: secret

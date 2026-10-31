@@ -35,8 +35,9 @@ from typing import Any
 
 from homelabnext._http import is_loopback
 
+from .release import ReleaseError
 from .render import render_html, style_hash
-from .views import dumps
+from .views import dumps, public_status, withheld_route
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
 LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
@@ -214,6 +215,7 @@ def make_server(
     approvals: Any = None,
     orchestration: Any = None,
     maps: Any = None,
+    releases: Any = None,
     max_connections: int = DEFAULT_MAX_CONNECTIONS,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port;
@@ -229,7 +231,14 @@ def make_server(
     ``POST`` route; ``maps``: a :class:`homelabnext.status.maps.MapSite` adds the generated maps
     (topology, dataflow, architecture, roadmap: ADR-0018); ``projects``: a
     :class:`homelabnext.projects.pages.ProjectsSite` adds the Projects page; ``orchestration``: an
-    :class:`homelabnext.orchestration.pages.OrchestrationSite` adds the Orchestration page."""
+    :class:`homelabnext.orchestration.pages.OrchestrationSite` adds the Orchestration page.
+
+    ``/`` and ``/status.json`` are the public view: the document through its release transform
+    (``releases``, default the hub's registry: ADR-0033 decision 7), for every request.  Their
+    ceiling is ``clear``, so a request through the trusted front door gets the same fields (the
+    private tier's grant shows only in the private menu group), and neither the bind address nor
+    ``allowed_hosts`` changes what they hold.  A release that fails is a ``500`` with no body
+    from the document."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -267,14 +276,18 @@ def make_server(
                 return
             route, _, query = self.path.partition("?")
             client = self.client_address[0] if self.client_address else None
-            if route in ("/", "/index.html"):
+            if route in ("/", "/index.html", "/status.json"):
+                try:  # the public view: only what its release transform keeps (fail closed)
+                    doc = public_status(document(), releases, contract=route == "/status.json")
+                except ReleaseError:
+                    self._reply(500, "text/plain; charset=utf-8", b"withdrawn: release failed\n")
+                    return
+                if route == "/status.json":  # the public contract: no private group either
+                    self._reply(200, "application/json", dumps(doc).encode("utf-8"))
+                    return
                 private = bool(agents) and agents.authorize(client, self.headers).allowed
-                html = render_html(document(), docs_base=docs_base, live=True, private=private)
+                html = render_html(doc, docs_base=docs_base, live=True, private=private)
                 self._reply(200, "text/html; charset=utf-8", html.encode("utf-8"))
-            elif route == "/status.json":
-                doc = dict(document())  # the public contract: the private group is not listed
-                doc["menu"] = [m for m in doc["menu"] if m.get("group") != "private"]
-                self._reply(200, "application/json", dumps(doc).encode("utf-8"))
             elif hit := self._page(route, query, client):
                 self._reply(*hit)
             elif route.startswith("/private"):  # no activity store: still never served
@@ -284,24 +297,42 @@ def make_server(
 
         def _page(self, route: str, query: str, client: str | None) -> Any:
             """The first page site's response for ``route``, or None; the document is built
-            once, and only when some site is configured."""
-            # (site, whether its handler also judges the caller), in the order routes resolve
-            sites = [
-                (approvals, True),
-                (strategy, False),
-                (projects, False),
-                (orchestration, False),
-                (baselines, False),
-                (maps, False),
-                (agents, True),
-            ]
-            sites = [(s, auth) for s, auth in sites if s is not None]
+            once, and only when some site is configured.
+
+            A withheld route (:func:`homelabnext.status.views.withheld_route`: strategy,
+            projects, orchestration, baselines, the maps and the directory pages, which have no
+            release transform, ADR-0033 decision 8) is judged **first**: a request that does not
+            pass the trusted front door gets ``403`` before any site does any work, and the same
+            ``403`` whether or not that site is configured (always, without an activity store's
+            front door).  One that passes reaches only the withheld sites and is access-logged
+            like every private view.  The agent pages, which are public, get the released
+            document only; the Approvals page, private, judges the caller itself."""
+            if withheld_route(route):
+                decision = agents.authorize(client, self.headers) if agents else None
+                if decision is None or not decision.allowed:
+                    return 403, "text/plain; charset=utf-8", b"forbidden: private view\n"
+                withheld = [s for s in (strategy, projects, orchestration, baselines, maps) if s]
+                if not withheld:
+                    return None
+                doc = document()
+                for site in withheld:
+                    if hit := site.handle(route, query, doc):
+                        if agents.access_log is not None:
+                            agents.access_log.append(decision.user or "", route.lstrip("/"))
+                        return hit
+                return None
+            sites = [s for s in (approvals, agents) if s is not None]
             if not sites:
                 return None
             doc = document()
-            for site, auth in sites:
-                args = (client, self.headers) if auth else ()
-                if hit := site.handle(route, query, doc, *args):
+            for site in sites:
+                view = doc
+                if site is agents:
+                    try:  # the agent pages' shell: the released document, never the full one
+                        view = public_status(doc, releases)
+                    except ReleaseError:
+                        return 500, "text/plain; charset=utf-8", b"withdrawn: release failed\n"
+                if hit := site.handle(route, query, view, client, self.headers):
                     return hit
             return None
 

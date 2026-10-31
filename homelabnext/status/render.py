@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .views import GENERATED_PANELS, dumps
+from .views import GENERATED_PANELS, PAGE_PANELS, dumps, public_status
 
 _CSS = """
 :root{--bg:#f6f7f9;--panel:#fff;--ink:#1d2330;--mute:#5b6475;--line:#d9dde4;
@@ -141,12 +141,12 @@ def _exceptions(p: Mapping[str, Any], docs_base: str) -> str:
     parts = [f'<p class="green">{p["ok"]} ok</p>']
     if p["total"] != p["ok"]:
         parts.append(f'<p class="muted">of {p["total"]} items</p>')
-    if p["live"]:
+    if p.get("live"):
         live = "".join(
             f"<li>{_e(r['module'])} / {_e(r['item'])}: {_e(r['summary'])}</li>" for r in p["live"]
         )
         parts.append(f'<h3>Live work</h3><ul class="live">{live}</ul>')
-    if p["attention"]:
+    if p.get("attention"):
         parts.append('<h3>Needs attention</h3><div class="attention">')
         parts.append(_rows(p["attention"], docs_base) + "</div>")
     return "".join(parts)
@@ -157,14 +157,16 @@ def _grid(p: Mapping[str, Any], docs_base: str) -> str:
     for m in p["modules"]:
         c = m["counts"]
         count = ", ".join(f"{c[s]} {s}" for s in ("fail", "stale", "unknown", "warn", "ok") if c[s])
-        bad = [i for i in m["items"] if i["state"] != "ok"]
+        bad = [i for i in m.get("items", ()) if i["state"] != "ok"]
         items = "".join(
             f"<li>{_state(i['state'])} {_e(i['item'])}: {_e(i['summary'])}</li>" for i in bad
         )
-        links = " ".join(_link(m["links"][k], docs_base) for k in _TILE_LINKS if k in m["links"])
+        ml = m.get("links", {})
+        links = " ".join(_link(ml[k], docs_base) for k in _TILE_LINKS if k in ml)
         tiles.append(
-            f'<div class="tile {_e(m["state"])}"><h3>{_e(m["module"])}</h3>'
-            f'{_state(m["state"])} <span class="muted">{_e(count or "no items")}</span>'
+            f'<div class="tile {_e(m["state"])}">'
+            + (f"<h3>{_e(m['module'])}</h3>" if "module" in m else "")  # withdrawn when public
+            + f'{_state(m["state"])} <span class="muted">{_e(count or "no items")}</span>'
             f"{'<ul>' + items + '</ul>' if items else ''}"
             f'<div class="muted">{links}</div></div>'
         )
@@ -175,19 +177,32 @@ def _grid(p: Mapping[str, Any], docs_base: str) -> str:
     )
 
 
+#: the source table's columns: (heading, the field that decides whether the column is shown,
+#: the cell); a column whose field no row carries (the public view withdraws them) is left out
+_SOURCE_COLUMNS = (
+    ("State", "state", lambda s, d: _state(s["state"])),
+    ("Source", "id", lambda s, d: _link("status:" + s["id"], d)),
+    ("Kind", "kind", lambda s, d: _e(s.get("kind"))),
+    ("Module", "module", lambda s, d: _e(s.get("module"))),
+    ("Interval / stale after", "interval_s",
+     lambda s, d: f"{_e(s.get('interval_s'))}s / {_e(s.get('stale_after_s'))}s"),
+    ("Last read", "last_ok", lambda s, d: _e(s.get("last_ok") or "never")),
+    ("Error", "error", lambda s, d: _e(s.get("error") or "")),
+    ("What", "what", lambda s, d: _e(s.get("what"))),
+)  # fmt: skip
+
+
 def _sources(p: Mapping[str, Any], docs_base: str) -> str:
+    if "sources" not in p:  # the public view withdraws the source table (ADR-0033)
+        return '<p class="muted">withheld from the public view: the counts say how many</p>'
+    rows = p["sources"]
+    cols = [c for c in _SOURCE_COLUMNS if c[1] in ("state", "id") or any(c[1] in s for s in rows)]
+    head = "".join(f"<th>{_e(h)}</th>" for h, _, _ in cols)
     body = "".join(
-        f"<tr><td>{_state(s['state'])}</td><td>{_link('status:' + s['id'], docs_base)}</td>"
-        f"<td>{_e(s['kind'])}</td><td>{_e(s['module'])}</td><td>{_e(s['interval_s'])}s / "
-        f"{_e(s['stale_after_s'])}s</td><td>{_e(s.get('last_ok') or 'never')}</td>"
-        f"<td>{_e(s.get('error') or '')}</td><td>{_e(s['what'])}</td></tr>"
-        for s in p["sources"]
+        "<tr>" + "".join(f"<td>{cell(s, docs_base)}</td>" for _, _, cell in cols) + "</tr>"
+        for s in rows
     )
-    return (
-        "<table><thead><tr><th>State</th><th>Source</th><th>Kind</th><th>Module</th>"
-        "<th>Interval / stale after</th><th>Last read</th><th>Error</th><th>What</th></tr>"
-        f"</thead><tbody>{body}</tbody></table>"
-    )
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
 _PANELS = {"exceptions": _exceptions, "grid": _grid, "sources": _sources}
@@ -197,8 +212,8 @@ def nav_html(
     doc: Mapping[str, Any], *, live: bool = False, private: bool = False, home: str | None = None
 ) -> str:
     """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
-    pages; in the static file they are marked live-only, except the maps ``hnx status render``
-    writes beside it as ``<panel>.html``).  ``private``: the request passed the trusted front
+    pages; in the static file they are marked live-only, except the maps ``hnx status render
+    --private-out`` writes as ``<panel>.html``, linked from the private pages beside them).  ``private``: the request passed the trusted front
     door -- only then is the private group rendered at all, and then only its pages that are
     served (the Approvals entry appears only when approvals are configured).  ``home``: the page
     the panel anchors live on, for a static page other than ``index.html``."""
@@ -214,17 +229,20 @@ def nav_html(
         if m["kind"] == "panel":
             nav.append(f'<a href="{prefix}#view-{_e(m["id"])}">{_e(m["title"])}</a>')
         elif m["kind"] == "page":
-            if live and m["available"]:
-                nav.append(f'<a href="{_e(m["href"])}">{_e(m["title"])}</a>')
+            if live and m["available"]:  # the public view withdraws href: the path is the code's
+                href = m.get("href") or PAGE_PANELS[m["panel"]]
+                nav.append(f'<a href="{_e(href)}">{_e(m["title"])}</a>')
             elif m["available"] and m.get("panel") in GENERATED_PANELS:  # written beside index.html
                 nav.append(f'<a href="{_e(m["panel"])}.html">{_e(m["title"])}</a>')
             else:
                 why = "served live by hnx status serve" if not live else "no activity store"
                 nav.append(f'<span class="off" title="{why}">{_e(m["title"])}</span>')
-        elif m["available"]:
+        elif m["available"] and m.get("href"):
             nav.append(
                 f'<a class="ext" href="{_e(m["href"])}" rel="noopener noreferrer">{_e(m["title"])}</a>'
             )
+        elif m["available"]:  # the public view withdraws a lab service's address
+            nav.append(f'<span class="off" title="lab only">{_e(m["title"])}</span>')
         else:
             nav.append(f'<span class="off" title="not registered">{_e(m["title"])}</span>')
     if doc.get("act_via"):
@@ -281,11 +299,18 @@ def render_html(
     return shell_html(doc, doc["title"], "".join(sections), nav=nav)
 
 
-def write(out: str | Path, doc: Mapping[str, Any], *, docs_base: str = "docs") -> list[Path]:
-    """Write ``index.html`` and ``status.json`` into ``out``; returns the paths."""
+def write(
+    out: str | Path, doc: Mapping[str, Any], *, docs_base: str = "docs", releases: Any = None
+) -> list[Path]:
+    """Write ``index.html`` and ``status.json`` into ``out``; returns the paths.  Both are the
+    public view, so both are the document through its release transform
+    (:func:`homelabnext.status.views.public_status`); ``releases``: the registry (default the
+    hub's)."""
+    page_doc = public_status(doc, releases)
+    data_doc = public_status(doc, releases, contract=True)
     d = Path(out)
     d.mkdir(parents=True, exist_ok=True)
     page, data = d / "index.html", d / "status.json"
-    page.write_text(render_html(doc, docs_base=docs_base), encoding="utf-8")
-    data.write_text(dumps(doc), encoding="utf-8")
+    page.write_text(render_html(page_doc, docs_base=docs_base), encoding="utf-8")
+    data.write_text(dumps(data_doc), encoding="utf-8")
     return [page, data]
