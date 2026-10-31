@@ -144,7 +144,18 @@ class RuntimeTable:
 
 def _is(key: Any, name: str) -> bool:
     """``key`` spells ``name`` up to case and surrounding white space."""
-    return isinstance(key, str) and key.strip().casefold() == name
+    return isinstance(key, str) and str.casefold(str.strip(key)) == name
+
+
+def drop_label(out: dict[str, Any], flat_key: str, label: str) -> None:
+    """Remove, in place, every spelling of a pipeline-owned label from ``out``: the flat dotted
+    ``flat_key`` and ``label`` under any ``labels`` object, up to case and surrounding white space
+    (a back end that folds field names would read them as the label)."""
+    for key in [k for k in out if _is(k, flat_key)]:
+        del out[key]
+    for holder in [v for k, v in out.items() if _is(k, "labels") and isinstance(v, dict)]:
+        for key in [k for k in holder if _is(k, label)]:
+            del holder[key]
 
 
 def enrich(event: Any, observed: Any, table: RuntimeTable) -> Any:
@@ -164,11 +175,7 @@ def enrich(event: Any, observed: Any, table: RuntimeTable) -> Any:
     if not isinstance(event, Mapping):
         return copy.deepcopy(event)
     out = copy.deepcopy(dict(event))
-    for key in [k for k in out if _is(k, FLAT_KEY)]:
-        del out[key]
-    for holder in [v for k, v in out.items() if _is(k, "labels") and isinstance(v, dict)]:
-        for key in [k for k in holder if _is(k, LABEL)]:
-            del holder[key]
+    drop_label(out, FLAT_KEY, LABEL)
     value = table.lookup(observed)
     if value is not None:
         if not isinstance(out.get("labels"), dict):

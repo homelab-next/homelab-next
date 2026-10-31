@@ -12,6 +12,11 @@ from .runtime_labels import (
     enrich,
     table_doc,
 )
+from .tlp_labels import (
+    SourceTable,
+    SourceTableError,
+    enrich_tlp,
+)
 
 __all__ = [
     "FLAT_KEY",
@@ -19,8 +24,11 @@ __all__ = [
     "SCHEMA",
     "VALUES",
     "RuntimeTable",
+    "SourceTable",
+    "SourceTableError",
     "TableError",
     "canonical_address",
     "enrich",
+    "enrich_tlp",
     "table_doc",
 ]

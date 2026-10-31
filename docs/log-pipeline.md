@@ -1,13 +1,14 @@
 ---
-summary: 'The log-pipeline slot contract: the hnx_runtime label set from a table generated from the guest model, joined on the address the collector saw, never the event.'
-summary_of: outline:sha256:da0b27b9ecb06f1a
+summary: 'The log-pipeline contract: hnx_runtime from the guest model by the address the collector saw, hnx_tlp from the route''s declaration; never the event.'
+summary_of: outline:sha256:a49158449fd20cc4
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# The log pipeline and the runtime label
+# The log pipeline and its labels
 
 The `log-pipeline` slot (stage 2 of the SOC bundle, [modules](modules.md#the-soc-bundle-by-pipeline-stage))
-moves events from the collectors to the index and the lake. It has one contractual duty: to label
-the events of a **model runtime**, a guest that serves models or runs model-written code
+moves events from the collectors to the index and the lake. It has two contractual duties, each a
+label it sets and never takes from the event: the TLP label of every event
+([below](#the-tlp-label)), and the label of the events of a **model runtime**, a guest that serves models or runs model-written code
 (`cap:inference`, `cap:codemode-executor`; [compute model](compute-model.md#model-runtimes)), so
 that the detections written for them can tell those events from everyone else's.
 
@@ -66,8 +67,8 @@ The example lab's table, rendered from `examples/minimal/guests`, is committed a
 The contract is `conformance/protocols/log_pipeline.py` (`LogPipeline`: `load_runtimes(table)`
 and `process(records)`, each record an `Observed(event, observed)`). It is an extended suite,
 `hnx conform run log-pipeline`, against a target that names the provider's adapter (the example
-provider's is `examples/modules/example-log-pipeline/conformance/target.yml`). Its seventeen MUST
-checks cover:
+provider's is `examples/modules/example-log-pipeline/conformance/target.yml`). Its twenty-four MUST
+checks cover, for the runtime label:
 
 - a model runtime's event is `model`, a known other guest's is `none`, whatever either said;
 - an unknown address, no address, and something that is not an address give no label;
@@ -76,9 +77,21 @@ checks cover:
 - an IPv4-mapped IPv6 peer is its IPv4 address, and IPv6 spellings fold to the table's key;
 - every other field leaves unchanged, the caller's records are not modified, a batch keeps its
   order and count, a record that is not an object comes back unchanged, and a reloaded table
-  replaces the earlier one.
+  replaces the earlier one;
 
-Each of its thirteen mutants is caught by its named check alone.
+and for the TLP label ([below](#the-tlp-label)):
+
+- an event on a declared route with no label of its own takes the declaration, keeping its
+  runtime label and its own `tlp` field;
+- an unknown route, no route, or a route the event names itself is `red`, and a route in another
+  case, padded or not a string is no table key;
+- a TLP label the event arrived with, nested, flat or in another case, is replaced;
+- a stricter item label, in any of its places and the strictest of several, is kept and one that
+  is not a label is `red`; a looser one is raised to the declaration unless the dataset honours
+  item labels;
+- a reloaded source table replaces the earlier one.
+
+Each of its twenty-one mutants is caught by its named check alone.
 
 The end-to-end evasion fixtures in `tests/logpipeline/evasion/` run the enrichment over the
 example table and then the rule. They show that a self-set label changes nothing:
@@ -91,7 +104,51 @@ example table and then the rule. They show that a self-set label changes nothing
   that runs no model sending a PUT to a cloud bucket;
 - an event with no observed address stays silent whatever its host fields say.
 
+## The TLP label
+
+The pipeline also gives every object event its TLP label, `labels.hnx_tlp` (ADR-0033 decisions 3
+and 5), which the lake stores as the row's `tlp` column and every reader is filtered by. Like the
+runtime label it is never the event's word: the rule is
+`homelabnext.logpipeline.enrich_tlp(event, route, table)`.
+
+- **The route** names the dataset the collector input feeds, `<module>/<dataset>`, and is
+  supplied by the collector beside the event (`Observed.route`), never read out of it. A route the
+  table does not hold, no route, or one that is not exactly a table key is `red`: unlike the
+  runtime label, an unknown source cannot stay unlabelled, because a missing label must never
+  read as a looser one.
+- **The declaration** is the dataset's `tlp` (absent is `red`) and `honour_item_labels`
+  ([modules](modules.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
+  An item label the event carries in its `tlp` field, the flat `"labels.tlp"` key or
+  `labels.tlp` (any spelling of each up to case and surrounding white space; several give the
+  strictest) is kept when stricter, and when looser only where the dataset honours item labels;
+  one that is not a label, `null` included, is `red`. The label is decided by the event as it
+  arrived: an item label another stage drops still counts.
+- **Self-set labels** in `labels.hnx_tlp`, the flat `"labels.hnx_tlp"` key or any spelling of
+  either are replaced. The event's own `tlp` field is left as it came: it is an input, and the
+  lake writer stores `labels.hnx_tlp`, never it.
+
+The table is `tlp-sources.json` (`homelabnext.logpipeline.tlp_sources/v1`), written by
+`hnx modules render` from the site's selection: one source per dataset of every module the site
+runs, with its declaration. `SourceTable.load` refuses any other shape, a label that is not
+canonical, a non-boolean honour flag or a route its entry does not spell. An empty table labels
+every event `red`. As with the runtime table, deploying it to the provider and reloading it when
+the selection changes is the provider's job.
+
 ## Limits
+
+The TLP label:
+
+- **The route is the collector's word.** A collector input wired to the wrong dataset labels its
+  events by that dataset's declaration. Give each input exactly one route, and review a change of
+  route as a change of declaration.
+- **`honour_item_labels` trusts the source.** A dataset that honours item labels takes a looser
+  label from the provider's own marking; that is why the field is human-approve.
+- **Pass-through.** A site with no `log-pipeline` stage sets no `hnx_tlp`, so its writer has no
+  label to store: the lake refuses an unlabelled row, and the writer must not invent one.
+- **Non-objects.** A record that is not an object carries no label; it is not a row the lake
+  would store.
+
+The runtime label:
 
 - **Pass-through.** A site whose `log-pipeline` is `pass-through` (single-box and small-lab in
   the examples) has no stage to apply the label, so no event carries it and the three rules never

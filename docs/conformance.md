@@ -176,7 +176,8 @@ verified restores, retention), `dns` (zone semantics the registry's aliases rely
 `migration` (a stateful slot's export and its validated `import_`: the import MUST of ADR-0027
 follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)), `log-pipeline` (the runtime
 label the model-runtime detections match, from the guest model's table and the observed address,
-never the event's own; see [log pipeline](log-pipeline.md)) and
+and the TLP label the lake stores, from the route's declaration, never the event's own; see
+[log pipeline](log-pipeline.md)) and
 `orchestration-features`. The last one holds the optional features of the `orchestration`
 contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
 shadow lane only with one unfinished per job, placement constraints (tags, minimum context,

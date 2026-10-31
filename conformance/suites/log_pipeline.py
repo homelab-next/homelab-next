@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``log-pipeline`` (extended): the runtime label comes from the guest model, never the event."""
+"""``log-pipeline`` (extended): the runtime label comes from the guest model and the TLP label from
+the source's declaration, never the event."""
 
 from __future__ import annotations
 
@@ -20,17 +21,28 @@ from conformance.fakes.log_pipeline import (
     ReplacesLabelsPipeline,
     ReversesBatchPipeline,
     StripsPortPipeline,
+    TlpDropsStricterClaimPipeline,
+    TlpHonoursEverySourcePipeline,
+    TlpIgnoresDeclarationPipeline,
+    TlpKeepsSelfSetPipeline,
+    TlpMergesSourcesPipeline,
+    TlpNeverHonoursPipeline,
+    TlpNormalisesRoutePipeline,
+    TlpNoRouteUnlabelledPipeline,
     TrustsSelfNonePipeline,
 )
 from conformance.protocols.log_pipeline import Observed
+from homelabnext import tlp
 from homelabnext.conform.core import Mutant, Suite
-from homelabnext.logpipeline import FLAT_KEY, LABEL, RuntimeTable, table_doc
+from homelabnext.logpipeline import FLAT_KEY, LABEL, RuntimeTable, SourceTable, table_doc
+from homelabnext.logpipeline import tlp_labels as tl
 
 from ._util import ip
 
 SUITE = Suite(
     "log-pipeline",
-    "labels.hnx_runtime from the guest model's table, joined on the observed address only",
+    "labels.hnx_runtime from the guest model, joined on the observed address only, and"
+    " labels.hnx_tlp from the route's declaration",
     "conformance.protocols.log_pipeline:LogPipeline",
     tier="extended",
 )
@@ -219,6 +231,8 @@ def _(t):
         tags=["a", "b"],
     )
     got = _one(t, event, RUNTIME)
+    if isinstance(got.get("labels"), dict):
+        got["labels"].pop(tl.LABEL, None)  # the TLP label's own checks are below
     want = copy.deepcopy(event)
     want["labels"][LABEL] = "model"
     assert got == want, f"event changed beyond the label: {got!r}"
@@ -251,6 +265,132 @@ def _(t):
     t.load_runtimes(_table(without=RUNTIME))
     (got,) = t.process([Observed(_dns(), RUNTIME)])
     _labelled(got, None)
+
+
+# ---------------------------------------------------------------- the TLP label (ADR-0033)
+FEED = "example-feeds/open"  # an open feed, declared clear
+INTEL = "example-feeds/partner"  # third-party enrichment, declared amber
+HONOURED = "example-feeds/community"  # a community feed, declared green, item labels honoured
+SIGHTINGS = "example-sensor/sightings"  # the lab's own data, declared red
+UNKNOWN_ROUTE = "example-feeds/unlisted"
+
+
+def _sources(*, without: str | None = None) -> SourceTable:
+    rows = [
+        (FEED, tlp.Label.CLEAR, False),
+        (INTEL, tlp.Label.AMBER, False),
+        (HONOURED, tlp.Label.GREEN, True),
+        (SIGHTINGS, tlp.Label.RED, False),
+    ]
+    return SourceTable.from_doc(tl.table_doc(r for r in rows if r[0] != without))
+
+
+def _routed(t, event, route):
+    t.load_runtimes(_table())
+    t.load_sources(_sources())
+    out = t.process([Observed(event, OTHER, route)])
+    assert isinstance(out, list) and len(out) == 1, f"one record in, {out!r} out"
+    return out[0]
+
+
+def _tlp_is(event, want):
+    labels = event.get("labels")
+    got = labels.get(tl.LABEL) if isinstance(labels, dict) else None
+    assert event.get(tl.FLAT_KEY) is None, f"the flat {tl.FLAT_KEY!r} key survived: {event!r}"
+    assert got == want, f"{tl.LABEL} is {got!r}, expected {want!r}"
+
+
+@SUITE.check(
+    "tlp-declared-source",
+    "an event on a declared route that carries no label of its own takes the declaration",
+)
+def _(t):
+    _tlp_is(_routed(t, _dns(), FEED), "clear")
+    _tlp_is(_routed(t, _dns(), INTEL), "amber")
+    _tlp_is(_routed(t, _dns(), HONOURED), "green")
+    got = _routed(t, _dns(message="m"), FEED)
+    assert got.get("message") == "m" and got.get("dns") == _dns()["dns"], f"changed: {got!r}"
+    assert got["labels"].get(LABEL) == "none", f"the runtime label was lost: {got!r}"
+    # the event's own tlp field is an input, left as it came
+    assert _routed(t, _dns(tlp="amber"), FEED).get("tlp") == "amber"
+
+
+@SUITE.check(
+    "tlp-unknown-route-red",
+    "a route the table does not hold, none, or one the event names itself, gives red",
+)
+def _(t):
+    _tlp_is(_routed(t, _dns(), UNKNOWN_ROUTE), "red")
+    _tlp_is(_routed(t, _dns(), None), "red")
+    _tlp_is(_routed(t, _dns(event={"dataset": FEED}, route=FEED), None), "red")
+
+
+class _Route(str):
+    pass
+
+
+@SUITE.check(
+    "tlp-route-exact",
+    "a route is a table key exactly: another case, padding or a non-string is red",
+)
+def _(t):
+    for route in (FEED.upper(), f" {FEED}", f"{FEED}\n", _Route(FEED.upper()), [FEED]):
+        _tlp_is(_routed(t, _dns(), route), "red")
+
+
+@SUITE.check(
+    "tlp-self-set-replaced",
+    "a TLP label the event arrived with, nested, flat or in another case, is replaced",
+)
+def _(t):
+    event = {
+        **_dns(labels={tl.LABEL: "clear", "HNX_TLP": "clear"}),
+        tl.FLAT_KEY: "clear",
+        "Labels.Hnx_Tlp ": "clear",
+    }
+    got = _routed(t, event, SIGHTINGS)
+    _tlp_is(got, "red")
+    survivors = [k for k in got if _folds_to(k, tl.FLAT_KEY)]
+    for key, labels in got.items():
+        if _folds_to(key, "labels") and isinstance(labels, dict):
+            survivors += [f"{key}.{k}" for k in labels if _folds_to(k, tl.LABEL)]
+    assert survivors == [f"labels.{tl.LABEL}"], f"a self-set TLP label survived: {got!r}"
+
+
+@SUITE.check(
+    "tlp-stricter-claim-kept",
+    "an item label stricter than the declaration is kept; one that is not a label is red",
+)
+def _(t):
+    _tlp_is(_routed(t, _dns(tlp="amber"), FEED), "amber")
+    _tlp_is(_routed(t, _dns(TLP="TLP:RED"), FEED), "red")
+    _tlp_is(_routed(t, {**_dns(tlp="clear"), "Tlp ": "amber"}, FEED), "amber")  # the strictest
+    _tlp_is(_routed(t, _dns(labels={"tlp": "red"}), FEED), "red")
+    _tlp_is(_routed(t, {**_dns(), "labels.tlp": "amber"}, FEED), "amber")
+    _tlp_is(_routed(t, _dns(tlp=None), FEED), "red")
+    _tlp_is(_routed(t, _dns(tlp="amber-strict"), FEED), "red")
+
+
+@SUITE.check(
+    "tlp-looser-claim-needs-honour",
+    "a looser item label is raised to the declaration, unless the dataset honours item labels",
+)
+def _(t):
+    _tlp_is(_routed(t, _dns(tlp="clear"), INTEL), "amber")
+    _tlp_is(_routed(t, _dns(tlp="clear"), SIGHTINGS), "red")
+    _tlp_is(_routed(t, _dns(tlp="clear"), HONOURED), "clear")
+    _tlp_is(_routed(t, _dns(tlp="tlp:clear"), HONOURED), "clear")
+
+
+@SUITE.check(
+    "tlp-reload-replaces-sources",
+    "a later source table replaces the earlier: a route it drops is red",
+)
+def _(t):
+    t.load_sources(_sources())
+    t.load_sources(_sources(without=FEED))
+    (got,) = t.process([Observed(_dns(), OTHER, FEED)])
+    _tlp_is(got, "red")
 
 
 def make_fake():
@@ -308,5 +448,43 @@ MUTANTS = {
         MergesTablesPipeline,
         "reload-replaces-table",
         "a new table is merged over the old one",
+    ),
+    "tlp-ignores-declaration": Mutant(
+        TlpIgnoresDeclarationPipeline,
+        "tlp-declared-source",
+        "an event with no label of its own is red whatever its source declares",
+    ),
+    "tlp-no-route-unlabelled": Mutant(
+        TlpNoRouteUnlabelledPipeline,
+        "tlp-unknown-route-red",
+        "an event with no route leaves without a TLP label",
+    ),
+    "tlp-keeps-self-set": Mutant(
+        TlpKeepsSelfSetPipeline, "tlp-self-set-replaced", "an event's own labels.hnx_tlp survives"
+    ),
+    "tlp-drops-stricter-claim": Mutant(
+        TlpDropsStricterClaimPipeline,
+        "tlp-stricter-claim-kept",
+        "an item label stricter than the declaration is dropped",
+    ),
+    "tlp-honours-every-source": Mutant(
+        TlpHonoursEverySourcePipeline,
+        "tlp-looser-claim-needs-honour",
+        "every source's looser item labels win",
+    ),
+    "tlp-never-honours": Mutant(
+        TlpNeverHonoursPipeline,
+        "tlp-looser-claim-needs-honour",
+        "honour_item_labels is ignored",
+    ),
+    "tlp-normalises-route": Mutant(
+        TlpNormalisesRoutePipeline,
+        "tlp-route-exact",
+        "the route is trimmed and lower-cased before the lookup",
+    ),
+    "tlp-merges-sources": Mutant(
+        TlpMergesSourcesPipeline,
+        "tlp-reload-replaces-sources",
+        "a new source table is merged over the old one",
     ),
 }

@@ -678,9 +678,12 @@ def _run(args: argparse.Namespace) -> int:
         for n in notes:
             print(f"note: {n}")
         if written:
+            from homelabnext.modules.tlp_sources import FILE as tlp_sources_file
+
             print(
                 f"hnx modules render: wrote {written['limits']} limits and {written['egress']} "
-                f"egress file(s) under {args.out}"
+                f"egress file(s), and {written['tlp_sources']} TLP source(s) in "
+                f"{tlp_sources_file}, under {args.out}"
             )
         print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
     if error:
@@ -692,17 +695,20 @@ def _render(
     args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
-    from homelabnext.modules import egress, limits
+    from homelabnext.logpipeline.tlp_labels import SourceTableError
+    from homelabnext.modules import egress, limits, tlp_sources
 
     ins = ld.inputs(tree)
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
-    except (limits.LimitsError, egress.EgressError) as exc:
+        src = tlp_sources.render(site, tree.mods)
+    except (limits.LimitsError, egress.EgressError, SourceTableError) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
-    return {"limits": len(lim), "egress": len(egr)}, None
+    tlp_sources.write(src, args.out)
+    return {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}, None
 
 
 def main(argv: list[str] | None = None) -> int:

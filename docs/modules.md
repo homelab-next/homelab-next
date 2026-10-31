@@ -986,7 +986,9 @@ carry a terminal escape, a line break or a CI workflow command. Whatever the loa
 repository's examples instead of the overlay (the role table, the core registry, an empty
 public `modules/`) it prints as a note, never as a pass. `hnx modules render --site FILE [--network
 FILE] --out DIR` (with `--overlay DIR`, the site and the network model default to the overlay's
-`lab/modules.yml` and `lab/site.yml`) writes the footprint limits and the egress policy, only for a site that checks clean and
+`lab/modules.yml` and `lab/site.yml`) writes the footprint limits, the egress policy and the log
+pipeline's TLP source table (`tlp-sources.json`: every selected module's datasets with their
+declarations, [log pipeline](log-pipeline.md#the-tlp-label)), only for a site that checks clean and
 only into a new or empty directory (stale files from an earlier render never mix in; a file
 there is a usage error); with `--json`, a generator's refusal is the output's `error`. The rules
 (`homelabnext/modules/rules.py`):
