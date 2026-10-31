@@ -145,3 +145,19 @@ def test_raising_a_ceiling_is_a_trust_change_the_swap_gate_needs_a_record_for(mu
     head = copy.deepcopy(base)
     mutate(head["roles"])
     assert se._trust_changes(base, head) == {"main-reasoner": [field]}
+
+
+@pytest.mark.parametrize("value", [" TLP:GREEN ", "tlp:green", "GREEN", "green\n", "Green"])
+def test_only_the_canonical_spelling_raises_a_role(value):
+    """Validation refuses a non-canonical ceiling, so it must raise nothing either: the role
+    stays clear in role_ceiling and in admit."""
+    from homelabnext.registry import model_tlp as mt
+
+    roles = _roles("cloud-terms")
+    for r in roles.values():
+        r["tlp_ceiling"] = value
+    assert rules.role_ceiling(roles, "remote-summariser") is Label.CLEAR
+    assert rules.role_ceiling(roles, "local-summariser") is Label.CLEAR
+    a = mt.admit(roles, "remote-summariser", "green", sender=Label.CLEAR)
+    assert not a and a.ceiling is Label.CLEAR
+    assert rules.role_ceiling_problems(roles)

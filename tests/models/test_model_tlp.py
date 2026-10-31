@@ -83,7 +83,7 @@ def test_a_local_role_takes_anything_and_the_sender_does_not_raise_it(claim):
     assert "stays in the lab" in a.message
 
 
-@pytest.mark.parametrize("claim", [None, "", "amber-strict", "black", 0, ["clear"]])
+@pytest.mark.parametrize("claim", ["", "amber-strict", "black", 0, ["clear"]])
 def test_a_label_that_is_not_one_is_red(claim):
     a = mt.admit(CLOUD, "mdl:remote-reasoner", claim, sender=CLOUD_SENDER)
     assert not a and a.label is Label.RED and a.reason == mt.ABOVE_CEILING
@@ -154,3 +154,33 @@ def test_data_tier_of_needs_a_label():
     with pytest.raises(TypeError):
         mt.data_tier_of("clear")
     assert mt.tier_disagreement(None, Label.RED, "x")  # a missing tier never agrees
+
+
+def test_a_none_claim_is_an_unlabelled_request():
+    """``claimed=None`` (a JSON null label) is the same as no claim: unlabelled, red."""
+    a = mt.admit(CLOUD, "mdl:remote-reasoner", None, sender=CLOUD_SENDER)
+    assert not a and a.reason == mt.UNLABELLED and a.label is Label.RED
+    assert mt.admit(CLOUD, "mdl:remote-reasoner", sender=CLOUD_SENDER) == a
+
+
+def test_an_unlabelled_request_to_a_local_role_is_within_its_ceiling():
+    a = mt.admit(LOCAL, "mdl:main-reasoner", sender=Label.RED)
+    assert a and a.reason == mt.WITHIN_CEILING and a.label is Label.RED is a.ceiling
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"remote-reasoner": "not a role"},
+        {"remote-reasoner": None},
+        {"remote-reasoner": {"tier": "large", "bindings": ["svc:x"]}},
+        {"remote-reasoner": {"tier": "large", "bindings": "svc:x"}},
+        {"other": ["x"]},  # another entry: it could sit on the chain
+        {"local-reasoner": {"tier": "standard", "bindings": [], "fallback": 3}},
+    ],
+)
+def test_a_malformed_role_table_is_a_refusal_not_a_crash(bad):
+    roles = {**CLOUD, **bad}
+    a = mt.admit(roles, "mdl:remote-reasoner", "clear", sender=CLOUD_SENDER)
+    assert not a and a.reason == mt.INVALID_TABLE and a.label is Label.RED
+    assert "malformed" in a.message and a.record()["reason"] == "invalid-role-table"

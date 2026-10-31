@@ -145,7 +145,9 @@ provider's terms in the role table, never `amber` or above. A request carries th
 everything its caller assembled, and for a role that leaves the lab it is judged at the higher of
 that label and the sending profile's own TLP ceiling, so a profile that may hold `amber` cannot send
 to a cloud role whatever its request claims. A request above the role's ceiling is refused, and a
-request with no label is `red`.
+request with no label (or a `null` one) is `red`. So an unlabelled request to a role that stays in
+the lab is allowed, with reason `within-ceiling` (`red` is at or below that role's `red` ceiling),
+and the same request to a role that leaves the lab is refused as `unlabelled`.
 
 The gateway is LiteLLM run the supported way, with **no admission code** (ADR-0022): it cannot read
 a request's label. So the rule is split where it can be enforced:
@@ -158,17 +160,24 @@ a request's label. So the rule is split where it can be enforced:
   never rises above `clear`, since only a `leaves_lab` binding records the terms that raise it.
   The generator refuses a key scoped (directly or down a fallback chain) to a role whose ceiling
   is below the key's: every request from it would be refused. It also runs the role table's
-  ceiling rules. Today this mostly coincides with the locality rule (a key above `clear` is
-  `local-only`), and adds that a table's `leaves_lab` is honoured even where the spec calls the
-  backend local.
+  ceiling rules. Today this mostly coincides with the locality rule. A key whose ceiling is above
+  `clear` must be `data_tier: local-only` (decision 12), and the locality rule keeps every
+  local-only key off cloud roles, so key scope only ever lets a `clear`-ceiling key reach a role
+  that leaves the lab. A role raised to `green` is therefore reachable at `green` only through
+  per-request `admit` (a `cloud-allowed` sender whose request claims `green`), not by giving a
+  `green`-ceiling key that role. What the TLP rule adds to key scope is that a table's
+  `leaves_lab` is honoured even where the spec calls the backend local.
 - **In `--check`, by audit.** `litellm/keys.json` gives each key's `metadata.tlp_ceiling`. The
-  audit reads it as data (missing or edited: `red`) and refuses a key that lists a model the
-  rendered config deploys to the cloud whose ceiling is below it. A role the spec reads as local
+  audit reads it as data (missing or edited: `red`) and refuses a key that reaches a model the
+  rendered config deploys to the cloud whose ceiling is below it: a model it lists, an `aliases`
+  target, or a fallback of either (`fallbacks`, `context_window_fallbacks`,
+  `content_policy_fallbacks`, `default_fallbacks`), followed transitively. A role the spec reads as local
   but the file deploys out is held at `clear`. Bifrost's virtual keys carry no metadata: its audit
   holds every `local-only` key (the only kind above `clear`) to local providers, as before.
 - **Per request, by the caller.** `homelabnext.registry.model_tlp.admit(roles, role, claimed,
   sender=send_ceiling(...))` is the rule as a library function. It returns an `Admission` whose
-  `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`) and `record()` the
+  `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`, `invalid-role-table`
+  for a table with an entry that is not the schema's shape) and `record()` the
   caller logs, allowed or refused. A client in front of the gateway applies it to each request; the
   gateway's key scope is the backstop that holds even when a caller does not.
 

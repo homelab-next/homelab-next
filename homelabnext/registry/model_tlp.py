@@ -32,6 +32,7 @@ from homelabnext.modules.rules import CLOUD_CEILING, cloud_roles, role_ceiling
 
 __all__ = [
     "ABOVE_CEILING",
+    "INVALID_TABLE",
     "UNKNOWN_ROLE",
     "UNLABELLED",
     "WITHIN_CEILING",
@@ -48,6 +49,7 @@ WITHIN_CEILING = "within-ceiling"
 ABOVE_CEILING = "above-ceiling"
 UNLABELLED = "unlabelled"
 UNKNOWN_ROLE = "unknown-role"
+INVALID_TABLE = "invalid-role-table"
 
 #: the default of a request's label: the request carried none at all
 _ABSENT: object = object()
@@ -107,7 +109,7 @@ class Admission:
     label: tlp.Label  # the label the request was judged at
     ceiling: tlp.Label  # the role's ceiling (red for a role the table does not hold)
     leaves_lab: bool
-    reason: str  # one of WITHIN_CEILING, ABOVE_CEILING, UNLABELLED, UNKNOWN_ROLE
+    reason: str  # WITHIN_CEILING, ABOVE_CEILING, UNLABELLED, UNKNOWN_ROLE or INVALID_TABLE
 
     def __bool__(self) -> bool:
         return self.allowed
@@ -117,6 +119,11 @@ class Admission:
         """One line for a log or an error reply: names and labels only, never request content."""
         if self.reason == UNKNOWN_ROLE:
             return f"{self.role} is not in the role table: the request is refused"
+        if self.reason == INVALID_TABLE:
+            return (
+                f"the role table is malformed (a role, a binding or a fallback that is not the "
+                f"shape the schema gives it), so no ceiling of {self.role} can be read: refused"
+            )
         where = "can leave the lab" if self.leaves_lab else "stays in the lab"
         verdict = "allowed" if self.allowed else "refused"
         why = {
@@ -141,6 +148,20 @@ class Admission:
         }
 
 
+def _sound(roles: Mapping[str, Any]) -> bool:
+    """Every role is a mapping whose bindings are mappings and whose fallback is text, so the
+    ceiling rules can read the whole table (a malformed entry anywhere could sit on a chain)."""
+    for r in roles.values():
+        if not isinstance(r, Mapping):
+            return False
+        bindings = r.get("bindings", [])
+        if not isinstance(bindings, list) or not all(isinstance(b, Mapping) for b in bindings):
+            return False
+        if r.get("fallback") is not None and not isinstance(r.get("fallback"), str):
+            return False
+    return True
+
+
 def admit(
     roles: Mapping[str, Any],
     role: str,
@@ -151,15 +172,21 @@ def admit(
     """Whether a request labelled ``claimed`` from a profile whose sending ceiling is ``sender``
     (:func:`send_ceiling`) may go to model role ``role`` of the role table's ``roles``.
 
-    Leave ``claimed`` out when the request carried no label: it is ``red``.  A role the table does
-    not hold is refused (``unknown-role``).  For a role that leaves the lab the label is the higher
+    Leave ``claimed`` out (or pass ``None``) when the request carried no label: it is ``red``,
+    reason ``unlabelled`` when refused.  A role the table does not hold is refused
+    (``unknown-role``), and so is any request while the table has a malformed entry
+    (``invalid-role-table``): a ceiling read past one could be wrong.  For a role that leaves the lab the label is the higher
     of the claim and ``sender``; it is refused when above the role's ceiling (``above-ceiling``, or
     ``unlabelled`` when there was no claim at all)."""
     name = role.removeprefix("mdl:")
     rid = "mdl:" + name
     roles = dict(roles)
+    if not _sound(roles):
+        return Admission(False, rid, tlp.Label.RED, tlp.Label.RED, True, INVALID_TABLE)
     if name not in roles:
         return Admission(False, rid, tlp.Label.RED, tlp.Label.RED, True, UNKNOWN_ROLE)
+    if claimed is None:
+        claimed = _ABSENT
     leaves = rid in cloud_roles(roles)
     ceiling = role_ceiling(roles, name)
     label = request_label(claimed, leaves_lab=leaves, sender=sender)

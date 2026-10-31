@@ -1242,9 +1242,10 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
 
 
 def _audit_key_ceilings(keys_text: str, config_text: str, hosts: set[str], spec: Spec) -> list[str]:
-    """No key lists a model with a cloud deployment (read from the rendered config, as the
+    """No key reaches a model with a cloud deployment (read from the rendered config, as the
     locality audit reads it) whose TLP ceiling is below the key's ``metadata.tlp_ceiling``
-    (ADR-0033 decision 11).  A key's ceiling is read as data, so a missing or edited one is red;
+    (ADR-0033 decision 11): a model it lists, an alias target, or a fallback of either
+    (:func:`_reachable`).  A key's ceiling is read as data, so a missing or edited one is red;
     a model's is the spec's, never above clear when the file deploys it to the cloud while the
     spec reads it as local."""
     try:
@@ -1257,23 +1258,39 @@ def _audit_key_ceilings(keys_text: str, config_text: str, hosts: set[str], spec:
         for d in doc.get("model_list") or []
         if not _local_deployment(d, hosts)
     }
+    falls = _fallbacks(doc)
     problems: list[str] = []
     for k in keys if isinstance(keys, list) else []:
         if not isinstance(k, Mapping) or k.get("key_alias") == READER_ALIAS:
             continue
         sender = tlp.read((k.get("metadata") or {}).get("tlp_ceiling"))
-        for m in k.get("models") or []:
-            if str(m) not in cloud:
+        for m in _reachable(k, falls):
+            if m not in cloud:
                 continue
             ceiling = spec.ceilings.get(str(m), module_rules.CLOUD_CEILING)
             if ceiling is tlp.Label.RED:  # the spec reads it as local; the file deploys it out
                 ceiling = module_rules.CLOUD_CEILING
             if sender > ceiling:
                 problems.append(
-                    f"key {k.get('key_alias')} (metadata.tlp_ceiling read as {sender}) lists "
+                    f"key {k.get('key_alias')} (metadata.tlp_ceiling read as {sender}) reaches "
                     f"{m}, which has a cloud deployment at TLP ceiling {ceiling}"
                 )
     return problems
+
+
+def _reachable(key: Mapping[str, Any], falls: list[tuple[str, str | None, str]]) -> list[str]:
+    """The models a key's request can be served by: the ones it lists, the targets of its
+    ``aliases``, and every fallback (and default fallback) from any of them, transitively."""
+    aliases = key.get("aliases") if isinstance(key.get("aliases"), Mapping) else {}
+    todo = [str(m) for m in [*(key.get("models") or []), *aliases.values()]]
+    seen: list[str] = []
+    while todo:
+        m = todo.pop(0)
+        if m in seen:
+            continue
+        seen.append(m)
+        todo += [t for _, src, t in falls if src is None or src == m]
+    return seen
 
 
 def _audit_keys(text: str, name: str = "") -> list[str]:
@@ -1392,24 +1409,38 @@ def _audit_litellm(text: str, hosts: set[str], strict: Mapping[str, str]) -> lis
         for r, why in sorted(strict.items())
         if r in local and not local[r]
     ]
-    sections = [doc.get("router_settings") or {}, doc.get("litellm_settings") or {}]
-    for sec in sections:
-        for key in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks"):
-            for entry in sec.get(key) or []:
-                for src, targets in (entry or {}).items():
-                    if src not in strict:
-                        continue
-                    for t in targets or []:
-                        if not local.get(str(t), False):
-                            problems.append(
-                                f"{key}: {src} ({strict[src]}) falls back to non-local {t}"
-                            )
-        for t in sec.get("default_fallbacks") or []:
-            if strict and not local.get(str(t), False):
+    for key, src, t in _fallbacks(doc):
+        if local.get(t, False):
+            continue
+        if src is None:
+            if strict:
                 problems.append(
                     f"default_fallbacks names non-local {t}, which applies to every role"
                 )
+        elif src in strict:
+            problems.append(f"{key}: {src} ({strict[src]}) falls back to non-local {t}")
     return problems
+
+
+#: the proxy config's per-role fallback lists (``{role: [targets]}`` entries)
+_FALLBACK_KEYS = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+
+
+def _fallbacks(doc: Any) -> list[tuple[str, str | None, str]]:
+    """``(key, source role, target)`` for every fallback the rendered proxy config declares, in
+    its router and proxy settings; a ``default_fallbacks`` target has no source (``None``: it
+    applies to every role)."""
+    out: list[tuple[str, str | None, str]] = []
+    if not isinstance(doc, Mapping):
+        return out
+    for name in ("router_settings", "litellm_settings"):
+        sec = doc.get(name) if isinstance(doc.get(name), Mapping) else {}
+        for key in _FALLBACK_KEYS:
+            for entry in sec.get(key) or []:
+                for src, targets in (entry if isinstance(entry, Mapping) else {}).items():
+                    out += [(key, str(src), str(t)) for t in targets or []]
+        out += [("default_fallbacks", None, str(t)) for t in sec.get("default_fallbacks") or []]
+    return out
 
 
 def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: Spec) -> list[str]:

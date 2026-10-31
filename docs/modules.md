@@ -730,12 +730,15 @@ that does not leave the lab (its ceiling is `red`); `green` without the terms on
 
 `homelabnext.registry.model_tlp.admit(roles, role, claimed, sender=...)` is the rule a request
 meets: `claimed` is the caller's label of everything it assembled (left out when the request
-carries none, which is `red`; a value that is not a label is `red` too), and `sender` the sending
+carries none or `null`, which is `red`; a value that is not a label is `red` too), and `sender` the sending
 profile's ceiling (`send_ceiling(tlp_ceiling, data_tier)`: its declared ceiling, else `clear` for
 `cloud-allowed` and `red` for anything else). For a role that leaves the lab the request is judged
 at the higher of the two; it is refused when above the role's ceiling, and a role the table does not
-hold is refused. The `Admission` it returns carries `reason` (`within-ceiling`, `above-ceiling`,
-`unlabelled`, `unknown-role`), a `message` and a `record()` the caller logs. Where it runs, and what
+hold, or any role while the table has a malformed entry, is refused. The `Admission` it returns
+carries `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`,
+`invalid-role-table`), a `message` and a `record()` the caller logs. Only the canonical
+`tlp_ceiling: green` raises a role: another spelling (`TLP:GREEN`) is refused by validation and
+raises nothing. Where it runs, and what
 the gateway itself enforces, is in [the LLM gateway](llm-gateway.md#tlp-labels-on-model-requests).
 
 #### Agent profiles and MCP servers (ADR-0033 decision 12)

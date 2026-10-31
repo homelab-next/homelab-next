@@ -473,10 +473,15 @@ def test_audit_catches_a_hand_added_cloud_fallback_in_litellm():
     doc["router_settings"]["fallbacks"] = [{"fast-classifier": ["cloud-x"]}]
     files["litellm/config.yaml"] = yaml.safe_dump(doc)
     problems = gw.audit(files, spec)
-    assert problems == [
+    assert problems[0] == (
         "litellm/config.yaml: fallbacks: fast-classifier "
         "(profile:reader is data_tier local-only) falls back to non-local cloud-x"
-    ]
+    )
+    # the keys that call fast-classifier now reach cloud-x through the fallback (ADR-0033)
+    assert problems[1:] and all(
+        "reaches cloud-x, which has a cloud deployment at TLP ceiling clear" in p
+        for p in problems[1:]
+    ), problems
 
 
 def test_audit_catches_a_cloud_deployment_and_a_default_fallback_in_litellm():
@@ -1070,7 +1075,7 @@ def test_audit_reads_a_missing_or_edited_key_ceiling_as_red(tmp_path, edit):
     edit(cloud["metadata"])
     files[KEYS] = json.dumps(doc)
     assert gw.audit(files, spec) == [
-        f"{KEYS}: key cloud-tool (metadata.tlp_ceiling read as red) lists "
+        f"{KEYS}: key cloud-tool (metadata.tlp_ceiling read as red) reaches "
         "cloud-reasoner, which has a cloud deployment at TLP ceiling clear"
     ]
 
@@ -1091,8 +1096,33 @@ def test_audit_holds_a_hand_scoped_key_to_the_cloud_ceiling(tmp_path):
     files[CONFIG] = yaml.safe_dump(cfg)
     problems = [p for p in gw.audit(files, spec) if "TLP ceiling" in p]
     assert problems == [
-        f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) lists "
+        f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) reaches "
         "small-local, which has a cloud deployment at TLP ceiling clear",
-        f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) lists "
+        f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) reaches "
         "cloud-reasoner, which has a cloud deployment at TLP ceiling clear",
+    ]
+
+
+@pytest.mark.parametrize("route", ["fallback", "default", "alias"])
+def test_audit_follows_fallbacks_and_aliases_to_a_cloud_model(tmp_path, route):
+    """A red key that reaches a cloud model only through a fallback, a default fallback or an
+    alias is refused like one that lists it."""
+    spec = gw.load_spec(make_spec(tmp_path))
+    files = dict(gw.render(spec))
+    if route == "alias":
+        doc = json.loads(files[KEYS])
+        (local,) = [k for k in doc["keys"] if k["key_alias"] == "local-agent"]
+        local["aliases"] = {"x": "cloud-reasoner"}
+        files[KEYS] = json.dumps(doc)
+    else:
+        cfg = yaml.safe_load(files[CONFIG])
+        if route == "fallback":
+            cfg["router_settings"]["fallbacks"].append({"small-local": ["cloud-reasoner"]})
+        else:
+            cfg["router_settings"]["default_fallbacks"] = ["cloud-reasoner"]
+        files[CONFIG] = yaml.safe_dump(cfg)
+    problems = [p for p in gw.audit(files, spec) if "TLP ceiling" in p]
+    assert problems == [
+        f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) reaches "
+        "cloud-reasoner, which has a cloud deployment at TLP ceiling clear"
     ]

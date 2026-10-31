@@ -191,10 +191,11 @@ def _terms_recorded(binding: Doc) -> bool:
 
 
 def _declared_raise(role: Doc) -> bool:
-    """The role declares the raised ceiling, in an accepted spelling (validation holds it to the
-    canonical one; anything else raises nothing)."""
+    """The role declares the raised ceiling in its canonical spelling, exactly (``green``): any
+    other value, an accepted spelling such as ``TLP:GREEN`` included, raises nothing, as
+    validation refuses it (:func:`role_ceiling_problems`)."""
     value = role.get("tlp_ceiling")
-    return value is not None and tlp.read(value) is RAISED_CEILING
+    return type(value) is str and value == RAISED_CEILING.value
 
 
 def role_ceiling(roles: dict[str, Doc], role: str) -> tlp.Label:
