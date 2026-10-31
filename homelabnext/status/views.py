@@ -123,6 +123,16 @@ WITHHELD_PANELS = (
     )
     | GENERATED_PANELS
 )
+#: the routes of the withheld pages, and the maps' shared script: a route that is one of them
+#: or below one (``/orchestration/job``) is served only through the trusted front door
+WITHHELD_ROUTES = (*sorted(PAGE_PANELS[p] for p in WITHHELD_PANELS), "/static/maps.js")
+
+
+def withheld_route(route: str) -> bool:
+    """Whether ``route`` belongs to a withheld page (:data:`WITHHELD_ROUTES`)."""
+    return any(route == r or route.startswith(r + "/") for r in WITHHELD_ROUTES)
+
+
 #: at most this many sessions go into status.json (worst state first)
 MAX_SESSIONS = 200
 _ATTENTION_ORDER = {s: -SEVERITY[s] for s in STATES}

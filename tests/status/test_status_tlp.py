@@ -39,8 +39,12 @@ FULL_VIEWS = {
         {"id": "detail", "title": "Detail", "panel": "agent-detail", "group": "private", "tlp": "red"},
     ],
 }  # fmt: skip
+#: values planted in kept fields: a hostname-like source id, agent and tool, an IP as a
+#: session id, a path and a TLP marker; the value checks must replace every one of them
+PLANTED = ("db1.lab.example", "agent.lab.example", "usr/bin/curl", "203.0.113.9", "TLP:RED")
 #: what the public view must never carry, whatever the source held
-SECRETISH = ("lab-host-7", "private-project", "example-model-large", "/var/lib/probe.json")
+SECRETISH = ("lab-host-7", "private-project", "example-model-large", "/var/lib/probe.json",
+             *PLANTED)  # fmt: skip
 
 
 @pytest.fixture
@@ -50,17 +54,22 @@ def store(tmp_path, clock):
             "surface": "local", "agent": "triage-agent", "parent_session_id": "s-0",
             "tokens_in": 10, "tokens_out": 20, "cost_usd": 0.5, "has_detail": False}  # fmt: skip
     s.add([summary(1, **full), summary(2, kind="prompt", outcome="info", **full)], [], via="test")
+    planted = [  # kept fields holding what no kept field may release
+        summary(3, session="203.0.113.9", agent="agent.lab.example", tool="usr/bin/curl"),
+        summary(4, session="s-2", agent="TLP:RED", tool="TLP:RED", runtime="codex"),
+    ]
+    s.add(planted, [], via="test")
     return s
 
 
 def _full_doc(registry, site):
     """A status document with every field the hub writes today, each one populated."""
     src = spec(
-        "a", kind="poll-file", file="/var/lib/probe.json", path=None, service="dashboards",
+        "db1.lab.example", kind="poll-file", file="/var/lib/probe.json", path=None, service="dashboards",
         power={"ups": "ups-1", "model": "x", "feeds": [], "guests": []},
     )  # fmt: skip
     t = iso(T0)
-    obs = {"source": "a", "module": src.module, "item": "lab-host-7 disk", "state": "fail",
+    obs = {"source": src.id, "module": src.module, "item": "lab-host-7 disk", "state": "fail",
            "summary": "lab-host-7 /var/lib full", "link": "status:a", "observed_at": t,
            "expires_at": t, "value": 3, "work": True, "reported_state": "fail",
            "history": [[t, "fail"]], "flags": ["late"]}  # fmt: skip
@@ -177,14 +186,19 @@ def test_a_transform_above_the_ceiling_fails(registry, specs):
     [
         (lambda t: t.update(input="white-ish"), "input: not a TLP label"),
         (lambda t: t.update(output="red", input="clear"), "stricter than its input"),
-        (lambda t: t["keep"].append("summary"), "overlaps another listed path"),
-        (lambda t: t["keep"].append("schema"), "overlaps another listed path"),
-        (lambda t: t["keep"].append("observations"), "keep and withdraw overlap"),
-        (lambda t: t["keep"].append("menu[].x-y"), "not a field path"),
+        (lambda t: t["keep"].update(summary="count"), "overlaps another listed path"),
+        (lambda t: t["keep"].update({"menu[]": "slug"}), "overlaps another listed path"),
+        (lambda t: t["keep"].update(observations="count"), "keep and withdraw overlap"),
+        (lambda t: t["keep"].update({"menu[].x-y": "slug"}), "not a field path"),
+        (lambda t: t["keep"].update(title="text"), "unknown value kind 'text'"),
+        (lambda t: t["keep"].update(title="enum:colours"), "unknown set 'colours'"),
+        (lambda t: t["keep"].update(title="const:"), "const needs its value"),
+        (lambda t: t["keep"].update(title="slug:x"), "slug takes no argument"),
         (lambda t: t["withdraw"].append({"field": "extra"}), "with a reason"),
         (lambda t: t["withdraw"].append({"field": "extra", "why": " "}), "with a reason"),
         (lambda t: t["serves"].append("topology"), "serves 'topology'"),
-        (lambda t: t.update(keep=[]), "keep is a non-empty list"),
+        (lambda t: t.update(keep={}), "keep is a non-empty mapping"),
+        (lambda t: t.update(keep=["schema"]), "keep is a non-empty mapping"),
         (lambda t: t.pop("withdraw"), "missing 'withdraw'"),
         (lambda t: t.update(note="x"), "unknown key 'note'"),
     ],
@@ -228,11 +242,74 @@ def test_a_transform_passing_an_unlisted_field_fails():
         rel.Releases([leaky]).release(rel.EVENTS_PUBLIC, "activity.csv", {"host": "lab-host-7"})
 
 
-def test_a_kept_path_never_keeps_a_mapping_whole():
-    t = rel.Transform("x", "x", ("status.json",), tlp.Label.RED, tlp.Label.CLEAR, ("a",), {})
+def _transform(keep):
+    return rel.Transform("x", "x", ("status.json",), tlp.Label.RED, tlp.Label.CLEAR, keep, {})
+
+
+def test_a_kept_leaf_is_a_scalar_only():
+    """A kept path keeps a scalar; a list of scalars only through an explicit ``x[]`` path."""
+    t = _transform({"a": "slug"})
     assert t.apply({"a": {"secret": 1}}) == {}
     assert t.apply({"a": [{"secret": 1}]}) == {}
-    assert t.apply({"a": [1, "b"]}) == {"a": [1, "b"]}
+    assert t.apply({"a": [1, "b"]}) == {}
+    assert t.unlisted({"a": ["b"]}) == ["a[]"]
+    items = _transform({"a[]": "slug"})
+    assert (
+        items.apply({"a": ["b", {"c": 1}]}) == {"a": ["b"]} and items.unlisted({"a": ["b"]}) == []
+    )
+
+
+def test_the_output_recheck_does_not_trust_apply():
+    """``unlisted`` flattens the output by its own walk: it catches what a wrong apply passes."""
+    t = _transform({"views.*.ok": "count", "menu[].id": "slug"})
+    assert t.unlisted({"views": {"o": {"ok": 1}}, "menu": [{"id": "a"}]}) == []
+    assert t.unlisted({"views": {"o": {"ok": 1, "x": 2}}}) == ["views.o.x"]
+    assert t.unlisted({"menu": [{"id": {"deep": 1}}]}) == ["menu[].id.deep"]
+    assert t.unlisted({"menu": [], "views": {}}) == []  # empty, on the way to a kept leaf
+    assert t.unlisted({"other": []}) == ["other"]
+
+
+@pytest.mark.parametrize(
+    "kind, good, bad",
+    [
+        ("slug", ["s-1", "triage-agent", "profile:triage", "Bash", "mcp__x__y"],
+         ["db1.lab.example", "a/b", "192.0.2.7", "tlp-red", "", "x" * 81, "a b"]),
+        ("title", ["Overview", "Proposals and approvals", "Agent analytics (beta)"],
+         ["svc.lab.example", "TLP:AMBER notes", "/etc/hosts", "<b>", "2001:db8::5 view"]),
+        ("time", ["2026-09-21T13:33:20Z", "2026-09-21T13:33:20.5Z"],
+         ["2026-09-21 13:33:20", "yesterday", "2026-09-21T13:33:20+02:00"]),
+        ("enum:state", ["ok", "fail"], ["broken", "OK"]),
+        ("enum:outcome", ["success", "denied"], ["maybe"]),
+        ("const:homelabnext.status/1", ["homelabnext.status/1"], ["homelabnext.status/2"]),
+        ("count", [0, 3, 0.5, None], ["3", True]),
+        ("bool", [True, False, None], [1, "true"]),
+    ],
+)  # fmt: skip
+def test_each_value_kind_is_closed(kind, good, bad):
+    assert all(rel.check_value(kind, v) for v in good), kind
+    assert not any(rel.check_value(kind, v) for v in bad), kind
+
+
+def test_the_closed_sets_match_the_activity_schema():
+    schema = json.loads((ROOT / "schemas/status/agent_activity.schema.json").read_text("utf-8"))
+    props = schema["properties"]
+    assert rel.SETS["activity-kind"] == tuple(props["kind"]["enum"])
+    assert rel.SETS["outcome"] == tuple(props["outcome"]["enum"])
+    assert rel.SETS["surface"] == tuple(props["surface"]["enum"])
+
+
+def test_a_value_that_fails_is_replaced_never_passed():
+    t = rel.registry().by_id[rel.EVENTS_PUBLIC]
+    out = rel.registry().release(
+        rel.EVENTS_PUBLIC, "activity.jsonl",
+        {"event_id": "ev-1", "agent": "db1.lab.example", "tool": "/usr/bin/x", "kind": "boom",
+         "session_id": "198.51.100.4", "tokens_in": "12", "has_detail": "yes",
+         "runtime": "TLP:RED"},
+    )  # fmt: skip
+    assert out == {"event_id": "ev-1", "agent": rel.PLACEHOLDER, "tool": rel.PLACEHOLDER,
+                   "kind": rel.PLACEHOLDER, "session_id": rel.PLACEHOLDER, "tokens_in": None,
+                   "has_detail": None, "runtime": rel.PLACEHOLDER}  # fmt: skip
+    assert t.unlisted(out) == []
 
 
 def test_every_public_field_is_kept_or_withdrawn(registry, store, clock):
@@ -262,9 +339,14 @@ def test_the_public_status_carries_only_kept_fields(registry, store, clock):
     for s in SECRETISH:
         assert s not in text, s
     assert "observations" not in out and "act_via" not in out
-    assert out["summary"]["fail"] == 1 and out["modules"][0]["state"] == "fail"
-    assert out["views"]["overview"]["attention"][0] == {"module": out["modules"][0]["module"],
-                                                        "state": "fail"}  # fmt: skip
+    assert out["summary"]["fail"] == 1 and out["modules"] == [
+        {"state": "fail", "counts": {"total": 1, "ok": 0, "warn": 0, "fail": 1, "unknown": 0,
+                                     "stale": 0}}
+    ]  # fmt: skip
+    # nothing that names which system is failing: no source, module or attention item
+    assert "sources" not in out and "attention" not in out["views"]["overview"]
+    assert "sources" not in out["views"]["sources"]
+    assert all("module" not in m for v in out["views"].values() for m in v.get("modules", []))
     assert all("href" not in m and "service" not in m for m in out["menu"])
     assert [m["id"] for m in out["menu"] if m.get("group") == "private"] == []
     assert out["agents"]["counts"]["working"] + out["agents"]["counts"]["waiting"] >= 0
@@ -312,8 +394,10 @@ def served(tmp_path, clock, store, registry):
         srv.server_close()
 
 
-PUBLIC = ["/", "/status.json", "/agents", "/agents/session?id=s-1", "/activity",
-          "/activity?event=ev-s-1-1", "/agent-analytics", "/activity.csv", "/activity.jsonl"]  # fmt: skip
+PUBLIC = ["/", "/status.json", "/agents", "/agents/session?id=s-1", "/agents/session?id=s-2",
+          "/activity", "/activity?event=ev-s-1-1", "/activity?event=ev-s-2-4",
+          "/agent-analytics", "/activity.csv", "/activity.jsonl",
+          "/activity.jsonl?session=s-2"]  # fmt: skip
 
 
 @pytest.mark.parametrize("path", PUBLIC)
@@ -323,6 +407,15 @@ def test_no_public_route_carries_a_withdrawn_field(served, path):
         code, _, body = request(base, path, headers=headers)
         assert code == 200, (path, headers)
         assert not any(s.encode() in body for s in SECRETISH), (path, headers)
+
+
+def test_a_planted_value_reaches_no_public_route_even_by_its_own_id(served):
+    """Asked for by the planted session id itself, the page answers without echoing it."""
+    base = served()
+    for path in ("/agents/session?id=203.0.113.9", "/activity?session=203.0.113.9"):
+        code, _, body = request(base, path)
+        assert code == 200 and b"usr/bin/curl" not in body and b"agent.lab.example" not in body
+        assert b"203.0.113.9" not in body.replace(b"session=203.0.113.9", b""), path
 
 
 def test_the_front_door_grant_does_not_raise_a_public_ceiling(served):
@@ -338,7 +431,7 @@ def test_the_front_door_grant_does_not_raise_a_public_ceiling(served):
 
 def test_the_exports_carry_only_their_transform(served):
     base = served()
-    keep = set(rel.registry().by_id[rel.EVENTS_PUBLIC].keep)
+    keep = set(rel.registry().by_id[rel.EVENTS_PUBLIC].keep)  # the paths
     rows = [json.loads(line) for line in request(base, "/activity.jsonl")[2].decode().splitlines()]
     assert rows and all(set(r) <= keep for r in rows)
     header = next(csv.reader(io.StringIO(request(base, "/activity.csv")[2].decode())))
@@ -408,6 +501,66 @@ def test_a_withheld_page_is_served_only_through_the_front_door(served, tmp_path)
     assert {"user": "operator", "view": "strategy"}.items() <= log[-1].items()
     no_door = served(strategy=_Withheld(), door=False)
     assert request(no_door, "/strategy", headers=AUTHORIZED)[0] == 403
+
+
+class _Counting(_Withheld):
+    def __init__(self):
+        self.calls = 0
+
+    def handle(self, route, query, doc):
+        self.calls += 1
+        return super().handle(route, query, doc)
+
+
+def test_a_withheld_route_is_refused_before_any_site_work(served):
+    site = _Counting()
+    base = served(strategy=site)
+    assert request(base, "/strategy")[0] == 403 and site.calls == 0
+    assert request(base, "/orchestration/job?run=x")[0] == 403 and site.calls == 0
+    bare = served()  # no withheld site configured at all: the same 403, never a 404
+    for path in ("/strategy", "/topology", "/orchestration/job", "/static/maps.js"):
+        code, _, body = request(bare, path)
+        assert (code, body) == (403, b"forbidden: private view\n"), path
+    assert request(bare, "/strategy", headers=AUTHORIZED)[0] == 404  # allowed, nothing there
+
+
+def test_the_real_withheld_sites_refuse_an_anonymous_request(served, tmp_path):
+    from homelabnext.compute.pages import BaselineSite
+    from homelabnext.orchestration.pages import OrchestrationSite
+    from homelabnext.orchestration.store import TelemetryStore
+    from homelabnext.projects.pages import ProjectsSite
+    from homelabnext.status.maps import MapSite
+    from homelabnext.strategy.pages import StrategySite
+
+    sites = {
+        "strategy": StrategySite(ROOT / "examples" / "strategy", clock=lambda: T0),
+        "projects": ProjectsSite(ROOT / "examples" / "projects", clock=lambda: T0),
+        "orchestration": OrchestrationSite(
+            TelemetryStore(tmp_path / "t.db", clock=lambda: T0), clock=lambda: T0
+        ),
+        "baselines": BaselineSite(
+            ROOT / "examples" / "minimal" / "guests", ROOT / "examples" / "minimal" / "site.yml"
+        ),
+        "maps": MapSite(root=ROOT),
+    }
+    base = served(**sites)
+    routes = ["/strategy", "/requirements", "/objectives", "/rfis", "/projects",
+              "/orchestration", "/orchestration/job?run=x", "/baselines", "/architecture",
+              "/roadmap", "/links", "/schedule", "/roster", "/mcp-servers"]  # fmt: skip
+    for path in routes:
+        for headers in ({}, {"Host": "status.lab.example"}):
+            code, _, body = request(base, path, headers=headers)
+            assert (code, body) == (403, b"forbidden: private view\n"), (path, headers)
+    assert request(base, "/strategy", headers=AUTHORIZED)[0] == 200
+
+
+def test_the_withheld_routes_cover_every_withheld_page():
+    from homelabnext.status.maps import assets
+    from homelabnext.status.views import PAGE_PANELS, WITHHELD_ROUTES, withheld_route
+
+    assert {PAGE_PANELS[p] for p in WITHHELD_PANELS} | {assets.SCRIPT_ROUTE} == set(WITHHELD_ROUTES)
+    assert withheld_route("/orchestration/job") and not withheld_route("/rosterx")
+    assert not any(withheld_route(r) for r in ("/", "/agents", "/activity", "/activity.csv"))
 
 
 def test_the_public_agent_pages_render_from_the_released_document(served):

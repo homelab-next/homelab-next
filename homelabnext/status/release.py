@@ -6,20 +6,30 @@ The registry is :data:`REGISTRY` (``release_transforms.yml`` beside this module,
 change to it needs a human approve through CODEOWNERS).  Each :class:`Transform` names what it
 serves (:data:`EXPORTS` and :data:`VIEWS`), its input and output label, the fields it keeps and
 the fields it withdraws with the reason.  :meth:`Transform.apply` is an allow-list: a field it
-does not keep is dropped, a kept path keeps only a scalar or a list of scalars, so a mapping is
-kept only through the fields listed under it.  :meth:`Releases.release` applies the transform
-and then checks its output against the same list (:meth:`Transform.unlisted`): a transform that
-passes an unlisted field raises :class:`ReleaseError`, and a name no transform serves raises too
-(fail closed: an unserved public field is withdrawn, never passed).
+does not keep is dropped, and a kept path keeps only a scalar (a list of scalars only through an
+explicit ``x[]`` path), so a mapping is kept only through the fields listed under it.
 
-Paths: ``a.b`` is field ``b`` of mapping ``a``, ``a[]`` each item of list ``a``, ``*`` every key
-of a mapping whose keys are data (the view ids under ``views``).
+:meth:`Releases.release` then does two things the allow-list alone cannot (decision 7: released
+output still passes the egress content checks):
+
+* **every kept value is checked** against its declared kind (:data:`KINDS`): a closed pattern or
+  a closed set, and for every string no hostname-like dotted name, no IP address, no path and no
+  TLP marker (:func:`content_problem`).  A value that fails is replaced by :data:`PLACEHOLDER`
+  (a string kind) or ``None`` (a number or a flag), never passed and never fatal;
+* **the output is re-checked** by separate code (:func:`leaf_paths` flattens the output's key
+  paths and compares them with the keep list, :meth:`Transform.unlisted`): a transform that
+  passes an unlisted field raises :class:`ReleaseError`.
+
+A name no transform serves raises too (fail closed: an unserved public field is withdrawn, never
+passed).  Paths: ``a.b`` is field ``b`` of mapping ``a``, ``a[]`` each item of list ``a``, ``*``
+every key of a mapping whose keys are data (the view ids under ``views``).
 """
 
 from __future__ import annotations
 
+import ipaddress
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache, cached_property
 from pathlib import Path
@@ -29,10 +39,14 @@ import yaml
 
 from homelabnext import tlp
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.status.agents.model import SESSION_STATES
+from homelabnext.status.model import STATES
 
 __all__ = [
     "EVENTS_PUBLIC",
     "EXPORTS",
+    "KINDS",
+    "PLACEHOLDER",
     "REGISTRY",
     "REQUIRED",
     "SESSIONS_PUBLIC",
@@ -41,6 +55,9 @@ __all__ = [
     "ReleaseError",
     "Releases",
     "Transform",
+    "check_value",
+    "content_problem",
+    "leaf_paths",
     "load",
     "registry",
     "registry_problems",
@@ -67,6 +84,114 @@ REQUIRED = {
 _KEYS = frozenset({"id", "what", "serves", "input", "output", "keep", "withdraw"})
 _WILD, _ITEMS, _LEAF = "*", "[]", True
 _SCALARS = (str, int, float, bool, type(None))
+
+#: what a kept value that fails its check is replaced by (a string kind; a number or flag: None)
+PLACEHOLDER = "withheld"
+#: the closed sets a kept string may come from (agent activity: its schema's enums, held equal by
+#: tests/status/test_status_tlp.py)
+SETS = {
+    "state": STATES,
+    "session-state": SESSION_STATES,
+    "menu-kind": ("panel", "page", "external"),
+    "activity-kind": (
+        "session_start", "session_end", "prompt", "tool_start", "tool_end", "approval_request",
+        "approval_response", "notification", "stop", "subagent_stop", "error", "heartbeat",
+        "usage",
+    ),
+    "outcome": ("success", "error", "denied", "pending", "approved", "info"),
+    "surface": ("local", "cloud"),
+}  # fmt: skip
+_SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:-]{0,79}$(?!\n)")
+_TITLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,'()+-]{0,79}$(?!\n)")
+_TIME = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$(?!\n)")
+#: the value kinds a kept path declares (``const:<value>`` and ``enum:<set>`` take an argument)
+KINDS = {
+    "slug": "an id or a name: a letter or digit, then letters, digits, _ : -; at most 80, no dot",
+    "title": "a menu or page title: letters, digits, spaces and , ' ( ) + -; at most 80",
+    "time": "an RFC 3339 UTC timestamp (Z)",
+    "count": "a number (or null)",
+    "bool": "true or false (or null)",
+    "const": "exactly the value after the colon",
+    "enum": "one of the closed set named after the colon (" + ", ".join(SETS) + ")",
+}
+# a dotted name with a letter in its first two labels (db1.lab.example, svc.local), an IP
+# address, a path, and a TLP marker.  TODO(ADR-0033): use homelabnext.tlp_egress.markers once
+# PR #169 lands, so the hub and the publishing gate read markers one way
+_DOTTED = re.compile(r"[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*")
+_IP_TOKEN = re.compile(r"[0-9A-Fa-f:.%]{3,}")
+_PATHISH = re.compile(r"[/\\]|^~")
+_MARKER = re.compile(r"(?i)tlp\s*[:_ -]?\s*(?:clear|white|green|amber(?:\s*\+\s*strict)?|red)\b")
+
+
+def content_problem(text: str) -> str | None:
+    """Why ``text`` may not leave in a released field, or None: a hostname-like dotted name, an
+    IP address, a path or a TLP marker (the egress content checks, decision 13)."""
+    if _MARKER.search(text):
+        return "a TLP marker"
+    if _DOTTED.search(text):
+        return "a dotted name"
+    for token in _IP_TOKEN.findall(text):
+        try:
+            ipaddress.ip_address(token.split("%", 1)[0].strip(".:"))
+        except ValueError:
+            continue
+        return "an IP address"
+    if _PATHISH.search(text):
+        return "a path"
+    return None
+
+
+def _kind_problem(kind: str) -> str | None:
+    name, _, arg = kind.partition(":")
+    if name not in KINDS:
+        return f"unknown value kind {kind!r} (one of {', '.join(KINDS)})"
+    if name == "enum" and arg not in SETS:
+        return f"unknown set {arg!r} (one of {', '.join(SETS)})"
+    if name == "const" and not arg:
+        return "const needs its value"
+    if name not in ("enum", "const") and arg:
+        return f"{name} takes no argument"
+    return None
+
+
+def check_value(kind: str, value: Any) -> bool:
+    """Whether a kept ``value`` passes its declared ``kind`` and, for a string, the content
+    checks (``const`` is the registry's own literal and is compared exactly)."""
+    name, _, arg = kind.partition(":")
+    if name == "count":
+        return value is None or (isinstance(value, int | float) and not isinstance(value, bool))
+    if name == "bool":
+        return value is None or isinstance(value, bool)
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    if name == "const":
+        return value == arg
+    if name == "enum":
+        return value in SETS[arg]
+    pattern = {"slug": _SLUG, "title": _TITLE, "time": _TIME}[name]
+    return bool(pattern.match(value)) and content_problem(value) is None
+
+
+def leaf_paths(value: Any, at: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:
+    """Every leaf of ``value`` as ``(path, value)``, a list item's step ``[]``; an empty mapping or
+    list is a leaf of its own.  Written apart from :func:`_apply`, so the output re-check does
+    not trust the code it checks."""
+    if isinstance(value, Mapping) and value:
+        for k, v in value.items():
+            yield from leaf_paths(v, (*at, str(k)))
+    elif isinstance(value, list) and value:
+        for v in value:
+            yield from leaf_paths(v, (*at, _ITEMS))
+    else:
+        yield at, value
+
+
+def _matches(path: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    return len(path) == len(pattern) and all(
+        p == q or (q == _WILD and p != _ITEMS) for p, q in zip(path, pattern, strict=True)
+    )
 
 
 class ReleaseError(ValueError):
@@ -106,8 +231,7 @@ def _tree(paths: Iterable[str]) -> dict[str, Any]:
 
 
 def _scalar(value: Any) -> bool:
-    if isinstance(value, list):
-        return all(isinstance(v, _SCALARS) for v in value)
+    """A kept leaf holds a scalar only; a list of scalars is kept through an ``x[]`` path."""
     return isinstance(value, _SCALARS)
 
 
@@ -133,21 +257,6 @@ def _apply(node: Any, value: Any) -> Any:
     if isinstance(value, list) and _ITEMS in node:
         return [r for v in value if (r := _apply(node[_ITEMS], v)) is not _DROP]
     return _DROP
-
-
-def _unlisted(node: Any, value: Any, at: str) -> list[str]:
-    if node is _LEAF:
-        return [] if _scalar(value) else [at or "$"]
-    if isinstance(value, Mapping):
-        out = []
-        for k, v in value.items():
-            child = _child(node, k)
-            where = f"{at}.{k}" if at else str(k)
-            out += [where] if child is None else _unlisted(child, v, where)
-        return out
-    if isinstance(value, list) and _ITEMS in node:
-        return [p for i, v in enumerate(value) for p in _unlisted(node[_ITEMS], v, f"{at}[{i}]")]
-    return [at or "$"]
 
 
 def _covered(node: Any, value: Any, at: str, withdrawn: Any) -> list[str]:
@@ -179,7 +288,8 @@ class Transform:
     serves: tuple[str, ...]
     input: tlp.Label
     output: tlp.Label
-    keep: tuple[str, ...]
+    #: path -> value kind (:data:`KINDS`)
+    keep: Mapping[str, str]
     withdraw: Mapping[str, str]
 
     @cached_property
@@ -189,6 +299,15 @@ class Transform:
     @cached_property
     def _withdrawn(self) -> dict[str, Any]:
         return _tree(self.withdraw)
+
+    @cached_property
+    def _patterns(self) -> tuple[tuple[tuple[str, ...], str], ...]:
+        return tuple((tuple(_steps(p)), kind) for p, kind in self.keep.items())
+
+    def kind_of(self, path: tuple[str, ...]) -> str | None:
+        """The declared kind of the leaf at ``path`` (an explicit key beats ``*``), or None."""
+        hits = [(pat.count(_WILD), kind) for pat, kind in self._patterns if _matches(path, pat)]
+        return min(hits)[1] if hits else None
 
     def keeps(self, field: str) -> bool:
         """Whether the top-level ``field`` is kept (a column of an export, a fact on a page)."""
@@ -200,8 +319,31 @@ class Transform:
         return {} if out is _DROP else out
 
     def unlisted(self, data: Any) -> list[str]:
-        """The fields of ``data`` this transform does not keep (output must have none)."""
-        return _unlisted(self._keep, data, "")
+        """The leaves of ``data`` this transform does not keep, by separate code
+        (:func:`leaf_paths`): a leaf whose path no kept path matches, or a kept path holding
+        anything but a scalar.  An empty mapping or list passes only on the way to a kept path."""
+        out = []
+        for path, value in leaf_paths(data):
+            if isinstance(value, Mapping | list):  # empty: a step towards a kept leaf, or not
+                ok = any(_matches(path, pat[: len(path)]) for pat, _ in self._patterns
+                         if len(pat) > len(path))  # fmt: skip
+            else:
+                ok = self.kind_of(path) is not None and isinstance(value, _SCALARS)
+            if not ok:
+                out.append(".".join(path).replace(".[]", "[]") or "$")
+        return out
+
+    def checked(self, data: Any, at: tuple[str, ...] = ()) -> Any:
+        """``data`` (an applied output) with every leaf that fails its kind replaced:
+        :data:`PLACEHOLDER` for a string kind, ``None`` for a number or a flag."""
+        if isinstance(data, Mapping):
+            return {k: self.checked(v, (*at, str(k))) for k, v in data.items()}
+        if isinstance(data, list):
+            return [self.checked(v, (*at, _ITEMS)) for v in data]
+        kind = self.kind_of(at)
+        if kind is None or check_value(kind, data):
+            return data  # an unkept leaf is the re-check's to refuse
+        return None if kind.partition(":")[0] in ("count", "bool") else PLACEHOLDER
 
     def unclassified(self, data: Any) -> list[str]:
         """The fields of ``data`` neither kept nor withdrawn: a field added to the source after
@@ -247,9 +389,13 @@ def _transform(i: int, raw: Any, problems: list[str]) -> Transform | None:
     if len(labels) == 2 and labels["output"] > labels["input"]:
         problems.append(f"{where}: output {labels['output']} is stricter than its input")
     keep = raw["keep"]
-    if not (isinstance(keep, list) and keep):
-        problems.append(f"{where}: keep is a non-empty list of field paths")
-        keep = []
+    if not (isinstance(keep, Mapping) and keep):
+        problems.append(f"{where}: keep is a non-empty mapping of field path to value kind")
+        keep = {}
+    for path, kind in keep.items():
+        why = _kind_problem(kind) if isinstance(kind, str) else "a value kind is a string"
+        if why:
+            problems.append(f"{where}: keep {path!r}: {why}")
     withdraw: dict[str, str] = {}
     entries = raw["withdraw"] if isinstance(raw["withdraw"], list) else None
     if entries is None:
@@ -276,7 +422,7 @@ def _transform(i: int, raw: Any, problems: list[str]) -> Transform | None:
             trees = False
     if trees:
         try:
-            _tree([*keep, *withdraw])
+            _tree([*map(str, keep), *withdraw])
         except ValueError as exc:
             problems.append(f"{where}: keep and withdraw overlap: {exc}")
     if len(problems) > start:
@@ -287,7 +433,7 @@ def _transform(i: int, raw: Any, problems: list[str]) -> Transform | None:
         serves=tuple(serves),
         input=labels["input"],
         output=labels["output"],
-        keep=tuple(keep),
+        keep=dict(keep),
         withdraw=withdraw,
     )
 
@@ -311,10 +457,12 @@ class Releases:
         return t
 
     def release(self, tid: str, serves: str, data: Any) -> Any:
-        """``data`` through transform ``tid`` for ``serves``, its output checked against the
-        transform's own list (fail closed: an unlisted field in the output raises)."""
+        """``data`` through transform ``tid`` for ``serves``: applied, every kept value checked
+        against its kind and the content checks (a failing one replaced, never passed), then the
+        output re-checked against the transform's own list by separate code (fail closed: an
+        unlisted field raises)."""
         t = self.transform(tid, serves)
-        out = t.apply(data)
+        out = t.checked(t.apply(data))
         leaked = t.unlisted(out)
         if leaked:
             raise ReleaseError(

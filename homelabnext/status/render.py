@@ -164,8 +164,9 @@ def _grid(p: Mapping[str, Any], docs_base: str) -> str:
         ml = m.get("links", {})
         links = " ".join(_link(ml[k], docs_base) for k in _TILE_LINKS if k in ml)
         tiles.append(
-            f'<div class="tile {_e(m["state"])}"><h3>{_e(m["module"])}</h3>'
-            f'{_state(m["state"])} <span class="muted">{_e(count or "no items")}</span>'
+            f'<div class="tile {_e(m["state"])}">'
+            + (f"<h3>{_e(m['module'])}</h3>" if "module" in m else "")  # withdrawn when public
+            + f'{_state(m["state"])} <span class="muted">{_e(count or "no items")}</span>'
             f"{'<ul>' + items + '</ul>' if items else ''}"
             f'<div class="muted">{links}</div></div>'
         )
@@ -192,6 +193,8 @@ _SOURCE_COLUMNS = (
 
 
 def _sources(p: Mapping[str, Any], docs_base: str) -> str:
+    if "sources" not in p:  # the public view withdraws the source table (ADR-0033)
+        return '<p class="muted">withheld from the public view: the counts say how many</p>'
     rows = p["sources"]
     cols = [c for c in _SOURCE_COLUMNS if c[1] in ("state", "id") or any(c[1] in s for s in rows)]
     head = "".join(f"<th>{_e(h)}</th>" for h, _, _ in cols)

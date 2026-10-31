@@ -58,11 +58,9 @@ def test_collect_then_render_is_deterministic(tmp_path, capsys):
         assert (tmp_path / "a" / name).read_bytes() == (tmp_path / "b" / name).read_bytes()
     doc = json.loads((tmp_path / "a" / "status.json").read_text())
     assert doc["generated_at"] == "2026-10-20T09:00:00Z"
-    # the public view (ADR-0033): source states and counts, never the readings themselves
-    assert "observations" not in doc and doc["summary"]["total"] > 0
-    states = {s["id"]: s["state"] for s in doc["sources"]}
-    assert {"proposals", "approvals", "invariants"} <= set(states)
-    assert all(set(s) == {"id", "module", "state"} for s in doc["sources"])
+    # the public view (ADR-0033): counts, never which source or module, never the readings
+    assert "observations" not in doc and "sources" not in doc and doc["summary"]["total"] > 0
+    assert doc["modules"] and all(set(m) == {"state", "counts"} for m in doc["modules"])
 
 
 def test_render_refuses_invalid_views(tmp_path, capsys):

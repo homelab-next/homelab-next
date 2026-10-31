@@ -374,10 +374,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
                 file=sys.stderr,
             )
             return 2
-        if args.private_out and Path(args.private_out).resolve().is_relative_to(
-            Path(args.out).resolve()
-        ):
-            print("hnx status render: --private-out must be outside --out", file=sys.stderr)
+        public = Path(args.out).resolve()
+        private = Path(args.private_out).resolve() if args.private_out else None
+        if private and (private.is_relative_to(public) or public.is_relative_to(private)):
+            print(
+                "hnx status render: --private-out and --out must each be outside the other",
+                file=sys.stderr,
+            )
             return 2
         paths = write(args.out, doc, docs_base=args.docs_base)
         if maps is not None:

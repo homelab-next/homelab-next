@@ -1536,6 +1536,30 @@ SITE_DEFECTS.update(
             ),
             "it needs access_control naming what restricts it to that community",
         ),
+        "amber publishing, even for a named community": (
+            "full",
+            lambda s, m: (
+                m["publishing"]["config"]["tlp_allowed"]["values"].append("amber"),
+                s["features"]["publishing"]
+                .setdefault("config", {})
+                .update(
+                    tlp_allowed="amber",
+                    audience="community",
+                    access_control="the partner community's sign-in",
+                ),
+            ),
+            "features.publishing.config.tlp_allowed: amber is never published (ADR-0033 "
+            "decision 9): the most a publication may carry is green",
+        ),
+        "green publishing with a placeholder access control": (
+            "full",
+            lambda s, m: (
+                s["features"]["publishing"]
+                .setdefault("config", {})
+                .update(tlp_allowed="green", audience="community", access_control="N/A")
+            ),
+            "it needs access_control naming what restricts it to that community",
+        ),
         "a manifest whose default publishes green without either": (
             "full",
             lambda s, m: m["publishing"]["config"]["tlp_allowed"].__setitem__("default", "green"),

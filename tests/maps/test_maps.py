@@ -685,6 +685,10 @@ def test_render_writes_the_maps_to_the_private_out_only(tmp_path, capsys):
             "--invariants-results", str(results)]  # fmt: skip
     assert main(args) == 2 and "--private-out" in capsys.readouterr().err
     assert main([*args, "--private-out", str(out / "maps")]) == 2  # inside the public out
+    assert main([*args, "--private-out", str(out)]) == 2  # the public out itself
+    nested = [*args[:2], str(private / "public"), *args[3:], "--private-out", str(private)]
+    assert main(nested) == 2  # the public out inside the private one
+    assert "outside" in capsys.readouterr().err and not private.exists()
     assert main([*args, "--private-out", str(private)]) == 0
     assert sorted(p.name for p in out.iterdir()) == ["index.html", "status.json"]
     names = sorted(p.name for p in private.iterdir())

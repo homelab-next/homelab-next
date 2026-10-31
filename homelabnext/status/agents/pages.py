@@ -254,17 +254,17 @@ class AgentSite:
                 _n(e["time"]), _n(e["kind"]), _n(e.get("tool")), _n(e.get("outcome")),
                 _e(f"{e.get('tokens_in', '')}/{e.get('tokens_out', '')}")
                 if e.get("tokens_in") or e.get("tokens_out") else "",
-                f'<a href="{_e(_href("/activity", session=sid, event=e["event_id"]))}">'
+                f'<a href="{_e(_href("/activity", session=s["session_id"], event=e["event_id"]))}">'
                 f"<code>{_e(e['event_id'])}</code></a>",
             )
             for e in events
         ]  # fmt: skip
         main = (
-            f"<h2>Session <code>{_e(sid)}</code> {_badge(s['state'])}</h2>"
+            f"<h2>Session <code>{_e(s['session_id'])}</code> {_badge(s['state'])}</h2>"
             f'<div class="pane"><dl>{facts}</dl></div>{link}<h3>Timeline</h3>'
             + _table(("Time", "Kind", "Tool", "Outcome", "Tokens", "Event"), rows)
         )
-        return self._page(doc, f"Session {sid}", main, decision)
+        return self._page(doc, f"Session {s['session_id']}", main, decision)
 
     def _selection(self, q: Mapping[str, str], limit: int) -> list[dict[str, Any]]:
         return self.store.events(
@@ -282,8 +282,9 @@ class AgentSite:
             _chips("/activity", q, key, sorted({e[key] for e in recent if e.get(key)}))
             for key in ("runtime", "outcome", "kind")
         )
-        if q.get("session"):
-            chips += _chips("/activity", q, "session", [q["session"]])
+        if q.get("session"):  # shown only as a released session id would be (the value checks)
+            shown = q["session"] if release.check_value("slug", q["session"]) else None
+            chips += _chips("/activity", q, "session", [shown or release.PLACEHOLDER])
         filters = {k: q.get(k) for k in ("runtime", "outcome", "kind", "session")}
         exports = (
             f'<p class="muted">export: <a href="{_e(_href("/activity.csv", **filters))}">CSV</a> '
