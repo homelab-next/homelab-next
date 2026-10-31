@@ -156,9 +156,9 @@ def item_label(
     ``item`` is the label the item carried from the source; leave it out when the item carried
     none (its label field is missing), and only then does the item take the declaration. Anything
     passed is read as data, so ``None`` (a JSON ``null`` in a label field), an empty string or a
-    misspelling is ``red``. It is kept when it is stricter than the declaration; it is kept when looser only if
-    the source declares ``honour_item_labels`` (a human-approve field), and is otherwise raised to
-    the declaration.
+    misspelling is ``red``. A carried label is kept when it is stricter than the declaration, and
+    when looser only if the source declares ``honour_item_labels`` (a human-approve field); it is
+    otherwise raised to the declaration.
     """
     if type(declared) is not Label:
         raise TypeError(f"declared must be a Label, not {type(declared).__name__}")
