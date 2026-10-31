@@ -62,7 +62,7 @@ class BaselineSite:
         if route != ROUTE:
             return None
         title, main = "Baselines", self._main()
-        html = shell_html(doc, title, main, nav=nav_html(doc, live=True))
+        html = shell_html(doc, title, main, nav=nav_html(doc, live=True, private=True))
         return 200, HTML, html.encode("utf-8")
 
     def _main(self) -> str:

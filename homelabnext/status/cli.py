@@ -8,8 +8,8 @@
                        [--notify-topic T [--notify-pairs-dir DIR]] [--secrets-dir DIR]
                        [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
-                      [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
-                      [--invariants-results FILE] [--roster FILE] [--mcp-catalog DIR]
+                      [--private-out DIR [--guests DIR --guests-site SITE [--guests-registry FILE]]
+                      [--maps ROOT] [--invariants-results FILE] [--roster FILE] [--mcp-catalog DIR]]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
                      [--strategy DIR] [--projects DIR] [--orchestration DB]
@@ -231,6 +231,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p.add_argument("--out", required=True)
     p.add_argument("--now", help="RFC 3339 time to render at (default: now)")
     p.add_argument("--docs-base", default="docs")
+    p.add_argument(
+        "--private-out",
+        metavar="DIR",
+        help="where to write the generated maps and directory pages: they are withheld from the "
+        "public view (no release transform, ADR-0033), so they never go into --out; serve DIR "
+        "only behind the trusted front door",
+    )
     map_opts(p)
     agents_opt(p)
     p = sub.add_parser("serve", help="serve the page and status.json live (GET only)")
@@ -360,9 +367,24 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             fixed = parse_iso(args.now)
             at = lambda: fixed  # noqa: E731
         doc = _document(args, reg, specs, views, at, site, maps=maps)
+        if maps is not None and not args.private_out:
+            print(
+                "hnx status render: the maps and directory pages are withheld from the public "
+                "view (ADR-0033): write them with --private-out DIR, never beside --out",
+                file=sys.stderr,
+            )
+            return 2
+        public = Path(args.out).resolve()
+        private = Path(args.private_out).resolve() if args.private_out else None
+        if private and (private.is_relative_to(public) or public.is_relative_to(private)):
+            print(
+                "hnx status render: --private-out and --out must each be outside the other",
+                file=sys.stderr,
+            )
+            return 2
         paths = write(args.out, doc, docs_base=args.docs_base)
         if maps is not None:
-            paths += maps.write(args.out, doc)
+            paths += maps.write(args.private_out, doc)
         print("wrote " + ", ".join(str(p) for p in paths))
         return 0
     from .serve import LOOPBACK, make_server

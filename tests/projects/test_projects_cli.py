@@ -14,6 +14,7 @@ from homelabnext.projects import strategy_records
 from homelabnext.projects.cli import main as cli
 from homelabnext.projects.markdown import parse_item, render_item
 from homelabnext.projects.pages import ROUTES, ProjectsSite
+from tests.front_door_pass import FrontDoorPass
 
 REPO = Path(__file__).resolve().parents[2]
 STRATEGY = str(REPO / "examples/strategy")
@@ -154,7 +155,7 @@ def test_serve_routes_the_page():
     from homelabnext.status.serve import make_server
 
     site = ProjectsSite(REPO / "examples/projects", strategy=STRATEGY, clock=lambda: NOW)
-    srv = make_server(_doc, projects=site)
+    srv = make_server(_doc, projects=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:

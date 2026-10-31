@@ -105,7 +105,7 @@ class StrategySite:
         tree = load_tree(self.root)
         now = dt.datetime.fromtimestamp(self.clock(), dt.UTC)
         title, main = pages[route](tree, now)
-        html = shell_html(doc, title, main, nav=nav_html(doc, live=True))
+        html = shell_html(doc, title, main, nav=nav_html(doc, live=True, private=True))
         return 200, HTML, html.encode("utf-8")
 
     # ---------------------------------------------------------------- pages

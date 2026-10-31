@@ -28,3 +28,7 @@
 # manifest has an owner here)
 /modules/                            @PeteSampras
 /examples/modules/                   @PeteSampras
+# ADR-0033 decision 7: the hub's release transforms are the only declassification of its data; a
+# change to the registry, or to the code that applies it, is human-approve
+/homelabnext/status/release_transforms.yml @PeteSampras
+/homelabnext/status/release.py           @PeteSampras

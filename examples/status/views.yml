@@ -4,116 +4,164 @@
 # built-in panel over a selection of the registered status sources (`hnx status sources` is the
 # menu of what exists) or an external link to a registry service. Schema:
 # schemas/status/views.schema.json. Fictional, like every example.
+#
+# Every entry and every export declares its TLP ceiling (ADR-0033; docs/status.md, "TLP
+# ceilings and release transforms"): clear for the public view, red for the private group. A
+# page that no release transform shapes yet (strategy, projects, orchestration, baselines, the
+# maps and the directory pages) is withheld: it sits in the private group and is served only
+# through the trusted front door.
 views_version: 1
 
 shell:
   title: Northwind status
   main: overview
 
+# the public exports: what leaves is what each one's release transform keeps
+exports:
+  status.json: {tlp: clear}
+  activity.csv: {tlp: clear}
+  activity.jsonl: {tlp: clear}
+
 menu:
   - id: overview
     title: Overview
     panel: exceptions
+    tlp: clear
   - id: modules
     title: All modules
     panel: grid
+    tlp: clear
   - id: governance
     title: Proposals and approvals
     panel: grid
     select: {sources: [proposals, approvals]}
+    tlp: clear
   - id: fleet
     title: Invariants and alerts
     panel: grid
     select: {sources: [invariants, metrics-alerts]}
+    tlp: clear
   - id: sources
     title: Sources
     panel: sources
+    tlp: clear
   # agent activity (stage 1b, optional: listed as unavailable without --agents)
   - id: agents
     title: Agents
     panel: agents
+    tlp: clear
   - id: activity
     title: Activity
     panel: activity
+    tlp: clear
   - id: agent-analytics
     title: Agent analytics
     panel: agent-analytics
+    tlp: clear
+  - id: grafana
+    title: Grafana
+    external: {service: dashboards}
+    tlp: clear
+  - id: agentmetry
+    title: Agentmetry
+    external: {service: agentmetry, optional: true}
+    tlp: clear
+  # the withheld pages: private until a release transform shapes them (ADR-0033)
   # strategy to task (docs/strategy.md; listed as unavailable without --strategy)
   - id: strategy
     title: Strategy
     panel: strategy
+    group: private
+    tlp: red
   - id: requirements
     title: Requirements
     panel: requirements
+    group: private
+    tlp: red
   - id: objectives
     title: Objectives
     panel: objectives
+    group: private
+    tlp: red
   - id: rfis
     title: RFIs
     panel: rfis
+    group: private
+    tlp: red
   # project management (docs/projects.md; listed as unavailable without --projects)
   - id: projects
     title: Projects
     panel: projects
+    group: private
+    tlp: red
   # orchestration telemetry (docs/orchestration-telemetry.md; unavailable without --orchestration)
   - id: orchestration
     title: Orchestration
     panel: orchestration
+    group: private
+    tlp: red
   # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
   - id: baselines
     title: Baselines
     panel: baselines
-  - id: grafana
-    title: Grafana
-    external: {service: dashboards}
-  - id: agentmetry
-    title: Agentmetry
-    external: {service: agentmetry, optional: true}
+    group: private
+    tlp: red
   # generated maps (ADR-0018; topology with --guests, the rest with --maps; unavailable without)
   - id: topology
     title: Topology
     panel: topology
-    group: maps
+    group: private
+    tlp: red
   - id: dataflow
     title: Dataflow
     panel: dataflow
-    group: maps
+    group: private
+    tlp: red
   - id: architecture
     title: Architecture
     panel: architecture
-    group: maps
+    group: private
+    tlp: red
   - id: roadmap
     title: Roadmap
     panel: roadmap
-    group: maps
+    group: private
+    tlp: red
   # directory pages generated from the repository (--maps; unavailable without)
   - id: links
     title: Links
     panel: links
-    group: directory
+    group: private
+    tlp: red
   - id: schedule
     title: Schedule
     panel: schedule
-    group: directory
+    group: private
+    tlp: red
   - id: roster
     title: Agent roster
     panel: roster
-    group: directory
+    group: private
+    tlp: red
   - id: mcp-servers
     title: MCP servers
     panel: mcp-servers
-    group: directory
+    group: private
+    tlp: red
   # rendered only for a request through the trusted front door (docs/status.md)
   - id: agent-detail
     title: Session detail
     panel: agent-detail
     group: private
+    tlp: red
   - id: access-log
     title: Access log
     panel: agent-access-log
     group: private
+    tlp: red
   # the broker Approvals page (ADR-0017 stage 2b; listed only when agents.yml has approvals:)
   - id: approvals
     title: Approvals
     panel: approvals
     group: private
+    tlp: red

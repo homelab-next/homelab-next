@@ -91,6 +91,7 @@ homelabnext = [
   "agent/terms.md",
   "agent/prompts/templates/*.yml",
   "agent/prompts/injection/*.yml",
+  "status/*.yml",
   "status/maps/static/*.js",
   "status/maps/static/*.css",
 ]
