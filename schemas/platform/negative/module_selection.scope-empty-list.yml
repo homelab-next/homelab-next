@@ -210,3 +210,21 @@ lab_table_namespaces:
   why: the lab's own long-term copies of retired tables
 - namespace: scratch
   why: ad hoc analysis tables, dropped by hand
+lake_catalog: lake
+tlp_readers:
+- reader: module:external-collector
+  ceiling: red
+  why: its probe reads the sessions it collected, the lab's own data
+- reader: profile:external-collector-analyst
+  ceiling: red
+  why: reports on the lab's own sessions with a local model role
+- reader: module:example-log-pipeline
+  ceiling: red
+  write: true
+  why: the pipeline writes every labelled event into the lake
+- reader: group:soc-operators
+  ceiling: red
+  why: the lab's operators, signed in through the front door
+- reader: group:community
+  ceiling: green
+  why: a community partner, shown open and community-shareable rows only

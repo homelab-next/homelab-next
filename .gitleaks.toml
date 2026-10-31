@@ -26,3 +26,8 @@ regexes = ['''^9f8e7d6c5b4a3928$''']
 description = "Go test policy tests: an import path that only ends like a quarantined package, to prove a skips.yml entry does not cover it"
 regexTarget = "secret"
 regexes = ['''^cmd/x/internal/api$''']
+
+[[allowlists]]
+description = "lake ceiling tests: `limit=MAX_LIMIT` (a keyword argument naming a constant), which the generic key rule reads as a value after the auth in authentication"
+regexTarget = "secret"
+regexes = ['''^limit=MAX_LIMIT$''']

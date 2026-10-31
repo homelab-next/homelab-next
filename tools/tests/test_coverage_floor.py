@@ -35,6 +35,7 @@ def _report(**overrides):
         "homelabnext/status/serve.py": _file(10, 9),
         "homelabnext/generators/safe.py": _file(10, 9),
         "homelabnext/tlp.py": _file(10, 9),
+        "homelabnext/lake/ceiling.py": _file(10, 9),
         "tools/leak_scan.py": _file(10, 9),
         "homelabnext/agent/pack.py": _file(10, 0),  # not a unit: never counted
     }

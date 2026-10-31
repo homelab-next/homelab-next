@@ -31,7 +31,17 @@ from collections.abc import Iterable
 from enum import Enum
 from types import MappingProxyType
 
-__all__ = ["LABELS", "Label", "allows", "item_label", "parse", "read", "strictest"]
+__all__ = [
+    "LABELS",
+    "Label",
+    "allows",
+    "at_or_below",
+    "item_label",
+    "parse",
+    "read",
+    "row_filter_sql",
+    "strictest",
+]
 
 
 class Label(Enum):
@@ -168,3 +178,24 @@ def item_label(
     if carried >= declared or honour_item_labels is True:
         return carried
     return declared
+
+
+def at_or_below(ceiling: Label) -> tuple[str, ...]:
+    """The canonical labels a reader with ``ceiling`` receives, least restrictive first."""
+    if type(ceiling) is not Label:
+        raise TypeError(f"ceiling must be a Label, not {type(ceiling).__name__}")
+    return tuple(label.value for label in Label if label <= ceiling)
+
+
+def row_filter_sql(ceiling: Label, column: str = "tlp") -> str | None:
+    """The SQL predicate a query engine applies for a reader with ``ceiling`` (ADR-0033 decision
+    6), or None for ``red``, which receives every row.  A row whose label is missing reads as
+    ``red``; one that is not a canonical label matches no listed value, so it is shown only at
+    ``red`` too.  ``column`` must be a plain identifier."""
+    if not column.isidentifier() or not column.isascii():
+        raise ValueError(f"not a plain column name: {column!r}")
+    labels = at_or_below(ceiling)
+    if ceiling is Label.RED:
+        return None
+    listed = ", ".join(f"'{v}'" for v in labels)
+    return f"coalesce({column}, 'red') IN ({listed})"
