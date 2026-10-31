@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext.modules.scope import (
     ScopeMissing,
     address_literals,
@@ -1380,3 +1380,12 @@ def dependants(slot: str, mods: dict[str, Doc], site: Doc | None = None) -> dict
         elif any(p["cap"] == slot for p in m.get("prefers", {}).get("capabilities", [])):
             out[m["id"]] = "prefers"
     return out
+
+
+def dataset_label(ds: dict[str, Any]) -> tuple[tlp.Label, bool]:
+    """A dataset's declared TLP label and whether its items' own labels are honoured when looser
+    (ADR-0033 decision 3): ``red`` when it declares none (decision 2). The schema has already
+    held ``tlp`` to a canonical label; :func:`homelabnext.tlp.parse` still refuses anything else.
+    """
+    declared = tlp.parse(ds["tlp"]) if "tlp" in ds else tlp.Label.RED
+    return declared, ds.get("honour_item_labels") is True

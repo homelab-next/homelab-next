@@ -204,3 +204,34 @@ def test_publishing_sidecar_uses_the_canonical_enum():
     path = ROOT / "examples/modules/publishing/interfaces/publishable-item.schema.json"
     schema = json.loads(path.read_text(encoding="utf-8"))
     assert tuple(schema["properties"]["tlp"]["enum"]) == tlp.LABELS
+
+
+@pytest.mark.parametrize(
+    "declared, item, honour, want",
+    [
+        # no label carried: the declaration
+        (Label.AMBER, None, False, Label.AMBER),
+        (Label.CLEAR, None, True, Label.CLEAR),
+        # stricter carried labels are always kept
+        (Label.GREEN, "amber", False, Label.AMBER),
+        (Label.CLEAR, "tlp:red", False, Label.RED),
+        # looser carried labels are raised to the declaration unless the source is honoured
+        (Label.AMBER, "clear", False, Label.AMBER),
+        (Label.AMBER, "clear", True, Label.CLEAR),
+        (Label.RED, "green", True, Label.GREEN),
+        # an unreadable carried label is red, whatever the declaration and the trust
+        (Label.CLEAR, "amber-strict", True, Label.RED),
+        (Label.GREEN, "", False, Label.RED),
+        # only True honours: a string that looks true does not
+        (Label.AMBER, "clear", "yes", Label.AMBER),
+        (Label.AMBER, "clear", 1, Label.AMBER),
+    ],
+)
+def test_item_label(declared, item, honour, want):
+    assert tlp.item_label(declared, item, honour_item_labels=honour) is want
+
+
+@pytest.mark.parametrize("declared", ["amber", None, 2])
+def test_item_label_needs_a_parsed_declaration(declared):
+    with pytest.raises(TypeError, match="declared must be a Label"):
+        tlp.item_label(declared, "clear")
