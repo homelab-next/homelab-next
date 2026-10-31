@@ -320,6 +320,21 @@ def _parser() -> argparse.ArgumentParser:
         "--ci-base", action="store_true", help="pick the base like tools/schema_check.py --ci-base"
     )
     w.add_argument("--json", action="store_true")
+    b = sub.add_parser(
+        "tlp-backfill",
+        help="the statements that label a lake table's rows stored before its tlp column",
+    )
+    b.add_argument("--sources", type=Path, required=True, help="tlp-sources.json (render's)")
+    b.add_argument("--table", required=True, help="the table's schema name (authentication, ...)")
+    b.add_argument("--qualified", required=True, help="its name on the engine (lake.ocsf.x)")
+    b.add_argument(
+        "--route",
+        action="append",
+        required=True,
+        help="a <module>/<dataset> route that feeds the table (repeat for each)",
+    )
+    b.add_argument("--map", type=Path, help="JSON object: a recorded source value -> its route")
+    b.add_argument("--source-column", help="the column the source is recorded in (a.b for a field)")
     g = sub.add_parser(
         "swap-gate", help="a role-table change must be covered by a swap record in the change"
     )
@@ -521,6 +536,8 @@ def _run(args: argparse.Namespace) -> int:
         return _swap_check(args)
     if args.cmd == "swap-gate":
         return _swap_gate(args)
+    if args.cmd == "tlp-backfill":
+        return _tlp_backfill(args)
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
@@ -689,6 +706,41 @@ def _run(args: argparse.Namespace) -> int:
     if error:
         print(f"hnx modules render: {error}", file=sys.stderr)
     return 1 if found or error else 0
+
+
+def _tlp_backfill(args: argparse.Namespace) -> int:
+    """Print the backfill plan (ADR-0033 decision 5); exit 2 when it cannot be made."""
+    from homelabnext.lake import load_schemas
+    from homelabnext.lake.backfill import BackfillError, Source, plan
+    from homelabnext.logpipeline.tlp_labels import SourceTable, SourceTableError
+
+    try:
+        table = SourceTable.load(args.sources)
+        missing = [r for r in args.route if table.lookup(r) is None]
+        if missing:
+            raise BackfillError(f"routes the source table does not hold: {missing}")
+        sources = {r: Source(*table.lookup(r)) for r in args.route}
+        mapping = json.loads(args.map.read_text(encoding="utf-8")) if args.map else {}
+        if not isinstance(mapping, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()
+        ):
+            raise BackfillError("--map is a JSON object of source value -> route")
+        schema = load_schemas().get(args.table)
+        if schema is None:
+            raise BackfillError(f"unknown table {args.table!r}")
+        steps = plan(
+            schema,
+            table=args.qualified,
+            sources=sources,
+            source_map=mapping,
+            source_column=args.source_column,
+        )
+    except (BackfillError, SourceTableError, OSError, ValueError) as exc:
+        print(f"hnx modules tlp-backfill: {exc}", file=sys.stderr)
+        return 2
+    for step in steps:
+        print(step + ";")
+    return 0
 
 
 def _render(

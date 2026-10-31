@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:102954101a771a44
+summary_of: outline:sha256:27050e1c0b4b6ecd
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -673,6 +673,33 @@ override the claim; only inert media types are accepted (`text/markdown`, `appli
 `image/png`) and the gate renders HTML itself. A module that requires a **model role whose prompts
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
 `grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
+
+### Egress points (ADR-0033 decision 13)
+
+Data leaves its store at these points, and each applies the same check before anything leaves
+(`homelabnext.tlp_egress`): the item's label is the strictest of the label it claims, the label
+recorded for it (the lake row's, the derived record's) and every TLP marker in its body
+(`TLP:<word>` in any ASCII case; an unknown word is `red`), and it leaves only at or below the
+destination's ceiling (`egress_check`).
+
+| Egress point | Its ceiling comes from | What lets a module use it |
+|---|---|---|
+| the publishing gate (the static host) | `tlp_allowed` (`clear`, `green` for a community audience) | `grants.publish` |
+| the status hub's public view and exports | `clear` | the hub's release transforms |
+| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` |
+| enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (internet) |
+| notification channels, webhooks | the channel's reader ceiling | `cap:notify`; `grants.egress` for a webhook |
+| backups and off-site copies | the backup target's reader ceiling | `cap:backup`; `grants.egress` off site |
+| the bus, records and tickets, memory and embedding stores | their readers' ceilings | the slot itself |
+| generated pages committed to a repository | `clear` for the public repository (ADR-0011) | the leak scans |
+| logs and error text that reach a notification | the channel's ceiling | the screeners |
+
+A module reaches beyond the lab only through a grant the overlay gives: `grants.egress` for any host
+role's network egress, `grants.publish` for the static host, `grants.cloud_models` for a model role
+that leaves the lab. A module requiring an egress the overlay has not granted is refused by those
+rules; there is no other way out. An enrichment lookup is labelled by the records that cause it
+(`job_label`: their strictest label, `red` with none, raised to the submitter's ceiling) and is sent
+only to analyzers whose declared maximum admits it; an analyzer with no maximum is sent nothing.
 
 ### TLP labels (ADR-0033)
 
