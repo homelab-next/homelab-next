@@ -320,6 +320,21 @@ def _parser() -> argparse.ArgumentParser:
         "--ci-base", action="store_true", help="pick the base like tools/schema_check.py --ci-base"
     )
     w.add_argument("--json", action="store_true")
+    b = sub.add_parser(
+        "tlp-backfill",
+        help="the statements that label a lake table's rows stored before its tlp column",
+    )
+    b.add_argument("--sources", type=Path, required=True, help="tlp-sources.json (render's)")
+    b.add_argument("--table", required=True, help="the table's schema name (authentication, ...)")
+    b.add_argument("--qualified", required=True, help="its name on the engine (lake.ocsf.x)")
+    b.add_argument(
+        "--route",
+        action="append",
+        required=True,
+        help="a <module>/<dataset> route that feeds the table (repeat for each)",
+    )
+    b.add_argument("--map", type=Path, help="JSON object: a recorded source value -> its route")
+    b.add_argument("--source-column", help="the column the source is recorded in (a.b for a field)")
     g = sub.add_parser(
         "swap-gate", help="a role-table change must be covered by a swap record in the change"
     )
@@ -521,6 +536,8 @@ def _run(args: argparse.Namespace) -> int:
         return _swap_check(args)
     if args.cmd == "swap-gate":
         return _swap_gate(args)
+    if args.cmd == "tlp-backfill":
+        return _tlp_backfill(args)
     root = _root(args.root)
     if args.overlay is not None and not args.overlay.is_dir():
         raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
@@ -682,8 +699,14 @@ def _run(args: argparse.Namespace) -> int:
 
             print(
                 f"hnx modules render: wrote {written['limits']} limits and {written['egress']} "
-                f"egress file(s), and {written['tlp_sources']} TLP source(s) in "
-                f"{tlp_sources_file}, under {args.out}"
+                f"egress file(s), {written['tlp_sources']} TLP source(s) in "
+                f"{tlp_sources_file}"
+                + (
+                    f", {written['lake_readers']} lake reader rule(s) in lake-access.json"
+                    if "lake_readers" in written
+                    else ""
+                )
+                + f", under {args.out}"
             )
         print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
     if error:
@@ -691,24 +714,77 @@ def _run(args: argparse.Namespace) -> int:
     return 1 if found or error else 0
 
 
+def _tlp_backfill(args: argparse.Namespace) -> int:
+    """Print the backfill plan (ADR-0033 decision 5); exit 2 when it cannot be made."""
+    from homelabnext.lake import load_schemas
+    from homelabnext.lake.backfill import BackfillError, Source, plan
+    from homelabnext.logpipeline.tlp_labels import SourceTable, SourceTableError
+
+    try:
+        table = SourceTable.load(args.sources)
+        found = {r: table.lookup(r) for r in args.route}
+        missing = [r for r, entry in found.items() if entry is None]
+        if missing:
+            raise BackfillError(f"--route: routes the source table does not hold: {missing}")
+        sources = {r: Source(*entry) for r, entry in found.items()}
+        if (args.map is None) != (args.source_column is None):
+            raise BackfillError("--map and --source-column go together")
+        mapping = json.loads(args.map.read_text(encoding="utf-8")) if args.map else {}
+        if not isinstance(mapping, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()
+        ):
+            raise BackfillError("--map is a JSON object of source value -> route")
+        schema = load_schemas().get(args.table)
+        if schema is None:
+            raise BackfillError(f"unknown table {args.table!r}")
+        steps = plan(
+            schema,
+            table=args.qualified,
+            sources=sources,
+            source_map=mapping,
+            source_column=args.source_column,
+        )
+    except (BackfillError, SourceTableError, OSError, ValueError) as exc:
+        print(f"hnx modules tlp-backfill: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"-- the TLP backfill of {args.qualified}: run it only if these are every route that "
+        f"feeds the table ({', '.join(sorted(sources))}); a missing one could leave unrecorded "
+        "rows a looser label"
+    )
+    for step in steps:
+        print(step + ";")
+    return 0
+
+
 def _render(
     args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
     from homelabnext.logpipeline.tlp_labels import SourceTableError
-    from homelabnext.modules import egress, limits, tlp_sources
+    from homelabnext.modules import egress, lake_access, limits, tlp_sources
 
     ins = ld.inputs(tree)
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
         src = tlp_sources.render(site, tree.mods)
-    except (limits.LimitsError, egress.EgressError, SourceTableError) as exc:
+        access = lake_access.render(site)
+    except (
+        limits.LimitsError,
+        egress.EgressError,
+        SourceTableError,
+        lake_access.LakeAccessError,
+    ) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
     tlp_sources.write(src, args.out)
-    return {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}, None
+    written = {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}
+    if access is not None:
+        lake_access.write(access, args.out)
+        written["lake_readers"] = len(access["tables"])
+    return written, None
 
 
 def main(argv: list[str] | None = None) -> int:
