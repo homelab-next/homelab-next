@@ -1858,6 +1858,27 @@ def test_a_role_whose_prompts_can_leave_the_lab_needs_grants_cloud_models():
     ) in probs, probs
 
 
+def test_a_role_table_ceiling_the_rules_refuse_fails_the_site():
+    """ADR-0033 decision 10: amber and above are never a cloud role's ceiling, and green needs the
+    provider's terms on every binding that leaves the lab; a raised role still needs the grant."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    roles = copy.deepcopy(MODEL_ROLES)
+    remote = {"backend": "svc:cloud-inference", "model_id": "example-remote-1", "leaves_lab": True}
+    roles["fast-classifier"]["bindings"].append(remote)
+    roles["fast-classifier"]["tlp_ceiling"] = "amber"
+    probs, _ = _granted(site, mods, roles=roles)
+    assert any(p.startswith("mdl:fast-classifier: tlp_ceiling amber") for p in probs), probs
+    roles["fast-classifier"]["tlp_ceiling"] = "green"
+    probs, _ = _granted(site, mods, roles=roles)
+    assert any("records no provider_terms" in p for p in probs), probs
+    remote["provider_terms"] = {"retention": "none", "training": "none", "ref": "terms, 2026-09"}
+    roles["main-reasoner"]["tlp_ceiling"] = "green"  # it falls back to fast-classifier
+    probs, _ = _granted(site, mods, roles=roles)
+    assert not any("tlp_ceiling" in p for p in probs), probs
+    assert any("without grants.cloud_models" in p for p in probs), probs
+    assert mr.role_ceiling(roles, "mdl:main-reasoner") is mr.RAISED_CEILING
+
+
 def test_an_egress_service_target_names_a_real_service():
     """svc:secret (a typo of svc:secrets) is refused; a selected feature's own row is a service."""
     site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)

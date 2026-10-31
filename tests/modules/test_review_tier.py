@@ -697,6 +697,31 @@ def test_the_role_table_and_the_swap_records_are_human_approve(repo, capsys, pat
     assert "role table" in out["manifests"][0]["changes"][0]["why"]
 
 
+def test_raising_a_model_roles_tlp_ceiling_is_human_approve(repo, capsys):
+    """ADR-0033 decision 10: raising a role that leaves the lab from clear to green (its
+    ``tlp_ceiling`` and the binding's ``provider_terms``) is a change to the role table, a human's
+    to approve, and the reason names the field."""
+    table = json.loads(
+        (ROOT / "schemas/platform/examples/model_roles.cloud-bound.json").read_text()
+    )
+    f = repo / rt.MODEL_TRUST[0]
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(table))
+    _commit(repo)
+    role = table["roles"]["remote-reasoner"]
+    role["tlp_ceiling"] = "green"
+    role["bindings"][0]["provider_terms"] = {
+        "retention": "none",
+        "training": "none",
+        "ref": "the provider's terms, 2026-09",
+    }
+    f.write_text(json.dumps(table))
+    _, out = _run(repo, capsys)
+    assert _by_path(out) == {rt.MODEL_TRUST[0]: rt.HUMAN}
+    why = out["manifests"][0]["changes"][0]["why"]
+    assert "tlp_ceiling" in why and "provider_terms" in why, why
+
+
 def test_the_schema_is_read_as_of_the_base(repo, capsys):
     """S2: a pull request that adds a key to the schema still has its use judged undefined."""
     schema = json.loads((repo / rt.SCHEMA).read_text())

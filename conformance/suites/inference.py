@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import re
 
-from conformance.fakes.inference_target import FakeInferenceClient, WrongModelClient
+from conformance.fakes.inference_target import (
+    CeilingIgnoredClient,
+    FakeInferenceClient,
+    WrongModelClient,
+)
 from conformance.protocols.inference import TURN_FIELDS, InferenceError, turn_problems
 from homelabnext.conform.core import Mutant, Suite
 from homelabnext.status.model import parse_iso
@@ -168,6 +172,24 @@ def _(c):
     assert served == declared, f"/v1/models {served} != declared {declared}"
 
 
+@SUITE.check(
+    "gateway-refuses-role-above-key-ceiling",
+    "a key whose sending TLP ceiling is above a cloud role's ceiling is refused that role with a 401 "
+    "or 403 on the chat, and is still served on a role it may call",
+    requires=["gateway", "tlp-ceiling"],
+)
+def _(c):
+    client, refused, served = c.over_ceiling()
+    r = client.chat(served, PROMPT)
+    assert r.content.strip(), f"the key was not served on {served!r}, a role it may call"
+    exc = raises(lambda: client.chat(refused, PROMPT), f"a call to {refused!r}", InferenceError)
+    assert exc.status in (401, 403), (
+        f"{refused!r}: HTTP {exc.status} ({exc.detail[:120]!r}), expected a 401 or 403 refusal"
+    )
+    assert exc.path == CHAT, f"the refusal came from {exc.path or '?'}, not {CHAT}"
+    assert not NOT_AUTH.search(exc.detail), f"refused, but the reason is {exc.detail[:120]!r}"
+
+
 # --- feature ``turn-records``: the gateway's per-call log as neutral turn records --------------
 #: a tag no request carries
 NO_SUCH_TAG = "conformance-no-such-tag-zz"
@@ -245,5 +267,11 @@ def make_fake():
 MUTANTS = {
     "alias-swap": Mutant(
         WrongModelClient, "chat-echoes-requested-model", "replies come from a different model"
+    ),
+    "ceiling-ignored": Mutant(
+        CeilingIgnoredClient,
+        "gateway-refuses-role-above-key-ceiling",
+        "a key above a cloud role's TLP ceiling is scoped to it",
+        features=frozenset({"gateway", "tlp-ceiling"}),
     ),
 }

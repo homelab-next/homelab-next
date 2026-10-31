@@ -106,11 +106,14 @@ def test_the_lab_targets_pass_every_check_against_a_conforming_gateway(monkeypat
         assert run.error is None, run.error
         assert sorted(r.check for r in run.results if not r.ok) == []
         assert {r.check for r in run.results} >= set(GATEWAY_CHECKS)
-        # nothing skipped but the turn-records checks: the lab targets name no window known to
-        # hold turns yet (follow-up: a recorded call per lab run, docs/orchestration-telemetry.md)
+        # nothing skipped but the turn-records checks (the lab targets name no window known to
+        # hold turns yet; follow-up: a recorded call per lab run, docs/orchestration-telemetry.md)
+        # and the tlp-ceiling check (the lab's gateway has no role that leaves the lab)
         skipped = {r.check for r in run.results if r.status != "pass"}
         assert {r.status for r in run.results if r.check in skipped} <= {"skip"}
-        assert skipped == {s.id for s in SUITE.specs if "turn-records" in s.requires}
+        assert skipped == {
+            s.id for s in SUITE.specs if {"turn-records", "tlp-ceiling"} & set(s.requires)
+        }
     finally:
         srv.stop()
 
@@ -231,6 +234,8 @@ def test_adapter_configuration_errors(monkeypatch, tmp_path):
         llm_gateway.make(roles=roles)
     with pytest.raises(AdapterConfigError, match="go together"):
         llm_gateway.make(roles=roles, throttle_key="secret:llm-gateway/key-x")
+    with pytest.raises(AdapterConfigError, match="go together"):
+        llm_gateway.make(roles=roles, over_ceiling_key="secret:llm-gateway/key-x")
     with pytest.raises(AdapterConfigError, match="cannot read the role table"):
         llm_gateway.make(roles=str(tmp_path / "missing.json"))
 
@@ -242,3 +247,64 @@ def test_target_files_name_no_url_and_no_literal_secret():
         assert all(not str(v).startswith(("http://", "https://")) for v in cfg.values()), path
         assert str(cfg["throttle_key"]).startswith("secret:"), path
         assert "sk-" not in text, path
+
+
+OVER = "sk-bf-fake-over-ceiling-0000"
+CEILING_CHECK = "gateway-refuses-role-above-key-ceiling"
+
+
+def _ceiling_target(monkeypatch, key_models):
+    """A gateway target with feature tlp-ceiling: OVER is an amber-ceiling key the gateway should
+    scope to fast-classifier (a local role) and away from main-reasoner (here, the cloud role)."""
+    srv = FakeOpenAIServer(
+        models=ROLES, api_keys=[ADMIN, THROTTLE, OVER], key_limits={THROTTLE: 3},
+        key_models=key_models,
+    ).start()  # fmt: skip
+    monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", srv.url)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_MASTER_KEY", ADMIN)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_OVER", OVER)
+    t = llm_gateway.make(
+        roles="schemas/platform/examples/model_roles.valid.json",
+        over_ceiling_key="secret:llm-gateway/key-over",
+        over_ceiling_model="main-reasoner",
+        over_ceiling_served="fast-classifier",
+        allow_plaintext=True,
+    )
+    return srv, t
+
+
+def test_a_key_scoped_away_from_a_role_above_its_ceiling_passes(monkeypatch):
+    srv, t = _ceiling_target(monkeypatch, {OVER: ["fast-classifier"]})
+    try:
+        _, refused, served = t.over_ceiling()
+        assert (refused, served) == ("main-reasoner", "fast-classifier")
+        result = SUITE.bind(CEILING_CHECK, features=["tlp-ceiling"])(t)
+        assert result.status == "pass", result
+    finally:
+        srv.stop()
+
+
+@pytest.mark.parametrize(
+    "key_models",
+    [
+        {},  # the key reaches every role: the ceiling is not applied
+        {OVER: ["main-reasoner"]},  # scoped backwards: refused where it may call
+    ],
+)
+def test_a_gateway_that_ignores_the_ceiling_fails_the_ceiling_check(monkeypatch, key_models):
+    srv, t = _ceiling_target(monkeypatch, key_models)
+    try:
+        result = SUITE.bind(CEILING_CHECK, features=["tlp-ceiling"])(t)
+        assert not result.ok and result.status != "skip", result
+    finally:
+        srv.stop()
+
+
+def test_the_ceiling_check_needs_its_configuration(monkeypatch):
+    srv = gateway(monkeypatch)
+    try:
+        t = llm_gateway.make(roles="schemas/platform/examples/model_roles.valid.json")
+        with pytest.raises(AdapterConfigError, match="tlp-ceiling needs"):
+            t.over_ceiling()
+    finally:
+        srv.stop()

@@ -515,6 +515,29 @@ def test_the_overlays_role_table_and_swap_records_are_human(lab, path):
     assert "role table" in r.changes[0].why and len(problems) == 1  # no owner in this fixture
 
 
+def test_raising_the_overlays_model_role_ceiling_is_human(lab):
+    """ADR-0033 decision 10: a role's tlp_ceiling raised to green, with the provider's terms on
+    its binding, is a change to the overlay's role table: human-approve, and the reason says so."""
+    root, _ = lab
+    roles = {"version": 1, "roles": {"remote": {"tier": "large", "bindings": [
+        {"backend": "svc:cloud-inference", "model_id": "example-remote-1", "leaves_lab": True}
+    ]}}}  # fmt: skip
+    _write(root, "lab/model_roles.json", json.dumps(roles))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "roles")
+    base = _git(root, "rev-parse", "HEAD")
+    roles["roles"]["remote"]["tlp_ceiling"] = "green"
+    roles["roles"]["remote"]["bindings"][0]["provider_terms"] = {
+        "retention": "none",
+        "training": "none",
+        "ref": "the provider's terms, 2026-09",
+    }
+    _write(root, "lab/model_roles.json", json.dumps(roles))
+    (r,), _ = rt.review(root, base)
+    assert (r.path, r.tier) == ("lab/model_roles.json", rt.HUMAN)
+    assert "tlp_ceiling" in r.changes[0].why and "provider_terms" in r.changes[0].why
+
+
 @pytest.mark.parametrize(
     "path",
     ["lab/model-serving/model_store.json", "lab/model_roles.eval.json", "lab/model-evals/x.json"],

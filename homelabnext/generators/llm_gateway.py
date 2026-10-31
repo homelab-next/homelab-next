@@ -69,9 +69,12 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from homelabnext import tlp
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.models.store import ProblemsError
+from homelabnext.modules import rules as module_rules
 from homelabnext.registry.model import secret_env_name
+from homelabnext.registry.model_tlp import send_ceiling, tier_disagreement
 from homelabnext.registry.models import RoleTable, RoleTableError
 
 from . import agent_homes
@@ -164,6 +167,9 @@ class Key:
     window_s: int | None = None
     max_requests: int | None = None
     max_tokens: int | None = None
+    #: the key's sending TLP ceiling (ADR-0033 decision 11): its profile's ``tlp_ceiling``, a
+    #: spec key's own, or what its ``data_tier`` allows (``cloud-allowed``: clear, else red)
+    tlp_ceiling: tlp.Label = tlp.Label.RED
 
 
 @dataclass
@@ -192,6 +198,9 @@ class Spec:
     controller: ControllerRef | None = None
     #: the telemetry reader's key (``telemetry_reader.key``, a secret reference), or None
     telemetry_reader: str | None = None
+    #: role -> its TLP ceiling as the gateway holds it (:func:`role_ceilings`); a role absent here
+    #: is read as clear (:func:`ceiling_of`)
+    ceilings: dict[str, tlp.Label] = field(default_factory=dict)
 
     @property
     def reader_user(self) -> str:
@@ -355,10 +364,12 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         raise GatewaySpecError(f"{source}: 'roles' (the role table path) is required")
     try:
         table = RoleTable.load(base / roles_path)
+        raw_roles = json.loads((base / roles_path).read_text(encoding="utf-8"))["roles"]
     except RoleTableError as exc:
         raise GatewaySpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:
         raise GatewaySpecError(f"{source}: cannot read role table {roles_path}: {exc}") from None
+    problems += [f"{roles_path}: {p}" for p in module_rules.role_ceiling_problems(raw_roles)]
 
     registry = None
     if doc.get("registry"):
@@ -486,6 +497,9 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
             if not pid.startswith("profile:") or tier not in DATA_TIERS or rn is None:
                 problems.append(f"{p}: a profile needs id, model_role and data_tier")
                 continue
+            ceiling = _key_ceiling(p, prof, tier, problems)
+            if ceiling is None:
+                continue
             agent_roles.setdefault(rn, pid)
             if tier == "local-only":
                 local_only.setdefault(rn, f"{pid} is data_tier local-only")
@@ -497,6 +511,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                     roles=(rn,),
                     data_tier=str(tier),
                     owner=pid,
+                    tlp_ceiling=ceiling,
                 )
             )
 
@@ -508,6 +523,9 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         tier = k.get("data_tier", "local-only")
         if tier not in DATA_TIERS:
             problems.append(f"{where}: data_tier must be one of {DATA_TIERS}")
+            continue
+        ceiling = _key_ceiling(where, k, tier, problems)
+        if ceiling is None:
             continue
         rs = tuple(
             r
@@ -529,6 +547,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                 window_s=lim.get("window_s"),
                 max_requests=lim.get("max_requests"),
                 max_tokens=lim.get("max_tokens"),
+                tlp_ceiling=ceiling,
             )
         )
     names = [k.name for k in keys]
@@ -598,7 +617,9 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         telemetry_reader=reader,
     )
     if not problems:
+        spec.ceilings = role_ceilings(spec, raw_roles)
         problems += locality_problems(spec)
+        problems += tlp_problems(spec)
     if problems:
         raise GatewaySpecError(f"{source}: invalid gateway spec", problems)
     return spec
@@ -765,6 +786,62 @@ def locality_problems(spec: Spec) -> list[str]:
     return problems
 
 
+def _key_ceiling(where: str, doc: Mapping[str, Any], tier: Any, problems: list[str]):
+    """A key's sending TLP ceiling (ADR-0033 decisions 11 and 12): a declared ``tlp_ceiling`` (a
+    canonical label that agrees with the key's ``data_tier``), else the one its ``data_tier``
+    allows (:func:`~homelabnext.registry.model_tlp.send_ceiling`: ``cloud-allowed`` is clear,
+    anything else red).  ``None`` (with a problem) when the declaration is refused."""
+    if "tlp_ceiling" not in doc:
+        return send_ceiling(data_tier=tier)
+    raw = doc["tlp_ceiling"]
+    try:
+        label = tlp.parse(raw)
+    except ValueError as exc:
+        problems.append(f"{where}: tlp_ceiling: {exc}")
+        return None
+    if raw != str(label):
+        problems.append(f"{where}: tlp_ceiling {raw!r} is not written as {str(label)!r}")
+        return None
+    bad = tier_disagreement(tier, label, f"tlp_ceiling {label}")
+    if bad:
+        problems.append(f"{where}: {bad}")
+        return None
+    return label
+
+
+def role_ceilings(spec: Spec, raw_roles: Mapping[str, Any]) -> dict[str, tlp.Label]:
+    """Role -> its TLP ceiling at this gateway (ADR-0033 decision 10): the role table's
+    (:func:`homelabnext.modules.rules.role_ceiling`), but never above clear for a role whose chain
+    the spec puts on a cloud backend while the table marks no ``leaves_lab`` (the raise needs the
+    provider's terms, which only a ``leaves_lab`` binding records)."""
+    out: dict[str, tlp.Label] = {}
+    for role in spec.table.roles:
+        ceiling = module_rules.role_ceiling(dict(raw_roles), role)
+        cloud = any("cloud" in localities(spec, step) for step in chain(spec.table, role))
+        out[role] = module_rules.CLOUD_CEILING if cloud and ceiling is tlp.Label.RED else ceiling
+    return out
+
+
+def tlp_problems(spec: Spec) -> list[str]:
+    """No key is scoped to a role whose TLP ceiling is below the key's sending ceiling (ADR-0033
+    decision 11).  For a role that leaves the lab a request is judged at the higher of its claimed
+    label and the sender's ceiling, so every request from such a key would be above the role's
+    ceiling; the gateway itself cannot read a request's label (no admission code, ADR-0022), so
+    the one part of the rule that needs no request is applied here, as key scope."""
+    problems: list[str] = []
+    for k in sorted(spec.keys, key=lambda k: k.name):
+        for role in sorted(_allowed(spec, k)):
+            ceiling = spec.ceilings.get(role, module_rules.CLOUD_CEILING)
+            if k.tlp_ceiling > ceiling:
+                via = "" if role in k.roles else " (down a fallback chain)"
+                problems.append(
+                    f"key {k.name} sends at TLP ceiling {k.tlp_ceiling} but may call "
+                    f"mdl:{role}{via}, whose prompts can leave the lab at ceiling {ceiling}: every "
+                    "request from it would be above the role's ceiling (ADR-0033 decision 11)"
+                )
+    return problems
+
+
 # ---------------------------------------------------------------------------- rendering
 def _env_ref_litellm(secret: str) -> str:
     return f"os.environ/{secret_env_name(secret)}"
@@ -871,6 +948,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             "metadata": {
                 "owner": k.owner or k.name,
                 "data_tier": k.data_tier,
+                "tlp_ceiling": str(k.tlp_ceiling),
                 MANAGED: spec.name or True,
             },
             **(
@@ -1156,8 +1234,63 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
         problems += [f"bifrost/config.json: {p}" for p in _audit_bifrost(bf, hosts, strict, spec)]
     kj = files.get("litellm/keys.json")
     if kj is not None:
-        problems += [f"litellm/keys.json: {p}" for p in _audit_keys(kj, spec.name)]
+        found = _audit_keys(kj, spec.name)
+        if lt is not None:
+            found += _audit_key_ceilings(kj, lt, hosts, spec)
+        problems += [f"litellm/keys.json: {p}" for p in found]
     return problems
+
+
+def _audit_key_ceilings(keys_text: str, config_text: str, hosts: set[str], spec: Spec) -> list[str]:
+    """No key reaches a model with a cloud deployment (read from the rendered config, as the
+    locality audit reads it) whose TLP ceiling is below the key's ``metadata.tlp_ceiling``
+    (ADR-0033 decision 11): a model it lists, an alias target, or a fallback of either
+    (:func:`_reachable`).  A key's ceiling is read as data, so a missing or edited one is red;
+    a model's is the spec's, never above clear when the file deploys it to the cloud while the
+    spec reads it as local."""
+    try:
+        keys = (json.loads(keys_text) or {}).get("keys")
+        doc = yaml.safe_load(config_text) or {}
+    except (ValueError, yaml.YAMLError, AttributeError):
+        return []  # the key and locality audits already report an unreadable file
+    cloud = {
+        str(d.get("model_name"))
+        for d in doc.get("model_list") or []
+        if not _local_deployment(d, hosts)
+    }
+    falls = _fallbacks(doc)
+    problems: list[str] = []
+    for k in keys if isinstance(keys, list) else []:
+        if not isinstance(k, Mapping) or k.get("key_alias") == READER_ALIAS:
+            continue
+        sender = tlp.read((k.get("metadata") or {}).get("tlp_ceiling"))
+        for m in _reachable(k, falls):
+            if m not in cloud:
+                continue
+            ceiling = spec.ceilings.get(str(m), module_rules.CLOUD_CEILING)
+            if ceiling is tlp.Label.RED:  # the spec reads it as local; the file deploys it out
+                ceiling = module_rules.CLOUD_CEILING
+            if sender > ceiling:
+                problems.append(
+                    f"key {k.get('key_alias')} (metadata.tlp_ceiling read as {sender}) reaches "
+                    f"{m}, which has a cloud deployment at TLP ceiling {ceiling}"
+                )
+    return problems
+
+
+def _reachable(key: Mapping[str, Any], falls: list[tuple[str, str | None, str]]) -> list[str]:
+    """The models a key's request can be served by: the ones it lists, the targets of its
+    ``aliases``, and every fallback (and default fallback) from any of them, transitively."""
+    aliases = key.get("aliases") if isinstance(key.get("aliases"), Mapping) else {}
+    todo = [str(m) for m in [*(key.get("models") or []), *aliases.values()]]
+    seen: list[str] = []
+    while todo:
+        m = todo.pop(0)
+        if m in seen:
+            continue
+        seen.append(m)
+        todo += [t for _, src, t in falls if src is None or src == m]
+    return seen
 
 
 def _audit_keys(text: str, name: str = "") -> list[str]:
@@ -1256,6 +1389,12 @@ def _host(url: Any) -> str:
         return ""
 
 
+def _local_deployment(entry: Any, hosts: set[str]) -> bool:
+    """A ``model_list`` entry is local only when it is ``openai/`` on a declared local host."""
+    p = (entry.get("litellm_params") if isinstance(entry, Mapping) else None) or {}
+    return str(p.get("model", "")).startswith("openai/") and _host(p.get("api_base")) in hosts
+
+
 def _audit_litellm(text: str, hosts: set[str], strict: Mapping[str, str]) -> list[str]:
     try:
         doc = yaml.safe_load(text) or {}
@@ -1263,35 +1402,45 @@ def _audit_litellm(text: str, hosts: set[str], strict: Mapping[str, str]) -> lis
         return [f"not YAML ({exc})"]
     local: dict[str, bool] = {}
     for d in doc.get("model_list") or []:
-        p = d.get("litellm_params") or {}
-        is_local = (
-            str(p.get("model", "")).startswith("openai/") and _host(p.get("api_base")) in hosts
-        )
         name = str(d.get("model_name"))
-        local[name] = local.get(name, True) and is_local
+        local[name] = local.get(name, True) and _local_deployment(d, hosts)
     problems = [
         f"local-only/agent role {r} ({why}) has a cloud deployment"
         for r, why in sorted(strict.items())
         if r in local and not local[r]
     ]
-    sections = [doc.get("router_settings") or {}, doc.get("litellm_settings") or {}]
-    for sec in sections:
-        for key in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks"):
-            for entry in sec.get(key) or []:
-                for src, targets in (entry or {}).items():
-                    if src not in strict:
-                        continue
-                    for t in targets or []:
-                        if not local.get(str(t), False):
-                            problems.append(
-                                f"{key}: {src} ({strict[src]}) falls back to non-local {t}"
-                            )
-        for t in sec.get("default_fallbacks") or []:
-            if strict and not local.get(str(t), False):
+    for key, src, t in _fallbacks(doc):
+        if local.get(t, False):
+            continue
+        if src is None:
+            if strict:
                 problems.append(
                     f"default_fallbacks names non-local {t}, which applies to every role"
                 )
+        elif src in strict:
+            problems.append(f"{key}: {src} ({strict[src]}) falls back to non-local {t}")
     return problems
+
+
+#: the proxy config's per-role fallback lists (``{role: [targets]}`` entries)
+_FALLBACK_KEYS = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+
+
+def _fallbacks(doc: Any) -> list[tuple[str, str | None, str]]:
+    """``(key, source role, target)`` for every fallback the rendered proxy config declares, in
+    its router and proxy settings; a ``default_fallbacks`` target has no source (``None``: it
+    applies to every role)."""
+    out: list[tuple[str, str | None, str]] = []
+    if not isinstance(doc, Mapping):
+        return out
+    for name in ("router_settings", "litellm_settings"):
+        sec = doc.get(name) if isinstance(doc.get(name), Mapping) else {}
+        for key in _FALLBACK_KEYS:
+            for entry in sec.get(key) or []:
+                for src, targets in (entry if isinstance(entry, Mapping) else {}).items():
+                    out += [(key, str(src), str(t)) for t in targets or []]
+        out += [("default_fallbacks", None, str(t)) for t in sec.get("default_fallbacks") or []]
+    return out
 
 
 def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: Spec) -> list[str]:

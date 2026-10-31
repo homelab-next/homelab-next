@@ -47,7 +47,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from homelabnext import tlp
 from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
+from homelabnext.registry.model_tlp import data_tier_of, tier_disagreement
 
 from .digest import digest_of, sha256_text
 from .errors import (
@@ -69,6 +71,8 @@ from .readers import (
     grant_problems,
     profile_problems,
     reader_problems,
+    server_label,
+    tlp_ceiling_problems,
 )
 from .schemas import schema_errors
 
@@ -155,6 +159,12 @@ class CeilingPolicy:
     ``egress: internet``: its context would leave the lab) unless its entry names that server in
     ``internet_mcp``, an exception per profile and server that the policy owner makes.
 
+    ``tlp_ceiling`` on an entry is the profile's TLP ceiling, attested like ``data_tier`` (ADR-0033
+    decision 12): a canonical label that agrees with the entry's ``data_tier`` (``local-only`` is
+    above ``clear``, ``cloud-allowed`` is ``clear``) and, without one, attests the tier it derives.
+    A profile that states a ``tlp_ceiling`` must state this one, and is granted no MCP server whose
+    ``tlp`` is above it.  An entry without one is read as before (:meth:`tlp_notes` says so).
+
     ``direct_mcp`` on an entry names the ``acts_via: direct`` MCP servers (an acting server that
     does not go through the broker, ADR-0030) the profile may hold: an exception per profile and
     server that the policy owner makes, on top of the record's ``direct_reason`` and human
@@ -168,6 +178,7 @@ class CeilingPolicy:
         self.source = source
         self._readers = set()
         self._attested: dict[str, dict[str, str]] = {}
+        self._tlp: dict[str, tlp.Label] = {}
         self._internet: dict[str, frozenset[str]] = {}
         self._direct: dict[str, frozenset[str]] = {}
         for pid, c in ceilings.items():
@@ -183,6 +194,10 @@ class CeilingPolicy:
                 if c["data_tier"] not in DATA_TIERS:
                     raise SpecError(f"{source}: {pid}: data_tier must be one of {list(DATA_TIERS)}")
                 att["data_tier"] = c["data_tier"]
+            if c.get("tlp_ceiling") is not None:
+                label = _policy_ceiling(c, f"{source}: {pid}")
+                self._tlp[_ids({"id": [pid]}, "id", "profile")[0]] = label
+                att.setdefault("data_tier", data_tier_of(label))
             if c.get("model_role") is not None:
                 att["model_role"] = _ids({"model_role": [c["model_role"]]}, "model_role", "mdl")[0]
             if att:
@@ -234,6 +249,24 @@ class CeilingPolicy:
             if (meta.get(name) or {}).get("acts_via") != "direct"
         ]
 
+    def tlp_ceiling(self, profile_id: str) -> tlp.Label | None:
+        """The TLP ceiling this policy attests for ``profile_id`` (ADR-0033 decision 12), or
+        ``None`` when its entry states none."""
+        return self._tlp.get(profile_id)
+
+    def tlp_notes(self) -> list[str]:
+        """One note naming the entries that attest no ``tlp_ceiling`` (each is read from its
+        ``data_tier``, as before decision 12)."""
+        missing = sorted(set(self._ceilings) - set(self._tlp))
+        if not missing:
+            return []
+        return [
+            f"{len(missing)} entr{'y' if len(missing) == 1 else 'ies'} attest no "
+            "tlp_ceiling, so each profile's TLP ceiling is read from its data_tier (receiving: "
+            "red for local-only, clear otherwise; sending to a model: clear for cloud-allowed, "
+            "red otherwise; ADR-0033 decision 12): " + ", ".join(missing)
+        ]
+
     def requires_reader(self, profile_id: str) -> bool:
         """True when the policy marks ``profile_id`` as reading untrusted content."""
         return profile_id in self._readers
@@ -245,12 +278,15 @@ class CeilingPolicy:
         model_role: Any,
         mcp: Iterable[str] = (),
         classes: ToolClasses | None = None,
+        tlp_ceiling: Any = None,
     ) -> list[str]:
-        """Where a profile's ``data_tier``/``model_role`` disagree with what this policy attests
-        for it, a ``local-only`` MCP server granted without the policy attesting
-        ``data_tier: local-only`` (a profile cannot vouch for itself), and a local-only profile
-        (attested, or declared when the policy attests no tier) granted a server that reaches
-        the internet which its entry's ``internet_mcp`` does not name."""
+        """Where a profile's ``data_tier``/``model_role``/``tlp_ceiling`` disagree with what this
+        policy attests for it (a ``tlp_ceiling`` the profile does not state is the attested one),
+        a ``local-only`` MCP server granted without the policy attesting ``data_tier: local-only``
+        (a profile cannot vouch for itself), a server whose ``tlp`` is above the attested TLP
+        ceiling, and a local-only profile (attested, or declared when the policy attests no tier)
+        granted a server that reaches the internet which its entry's ``internet_mcp`` does not
+        name."""
         att = self._attested.get(profile_id, {})
         out = []
         for key, value in (("data_tier", data_tier), ("model_role", model_role)):
@@ -260,6 +296,20 @@ class CeilingPolicy:
                     f"{value}"
                 )
         meta = (classes if classes is not None else default_classes()).catalog or {}
+        ceiling = self._tlp.get(profile_id)
+        if ceiling is not None:
+            if tlp_ceiling is not None and tlp_ceiling != str(ceiling):
+                out.append(
+                    f"{self.source} attests tlp_ceiling {ceiling} for {profile_id}; the profile "
+                    f"says {tlp_ceiling}"
+                )
+            above = sorted(n for n in mcp if n in meta and server_label(meta[n]) > ceiling)
+            if above:
+                out.append(
+                    f"{profile_id} is granted MCP server(s) {above}, whose data is labelled "
+                    f"above the TLP ceiling {ceiling} that {self.source} attests for it "
+                    "(ADR-0033 decision 12)"
+                )
         if att.get("data_tier") != "local-only":
             local = sorted(n for n in mcp if (meta.get(n) or {}).get("data_tier") == "local-only")
             if local:
@@ -281,6 +331,22 @@ class CeilingPolicy:
                     "internet_mcp for this profile (a named exception the policy owner makes)"
                 )
         return out
+
+
+def _policy_ceiling(c: Mapping[str, Any], where: str) -> tlp.Label:
+    """An entry's ``tlp_ceiling``: a canonical label agreeing with its ``data_tier``."""
+    raw = c["tlp_ceiling"]
+    try:
+        label = tlp.parse(raw)
+    except ValueError as exc:
+        raise SpecError(f"{where}: tlp_ceiling: {exc}") from None
+    if raw != str(label):
+        raise SpecError(f"{where}: tlp_ceiling {raw!r} is not written as {str(label)!r}")
+    if c.get("data_tier") is not None:
+        bad = tier_disagreement(c["data_tier"], label, f"tlp_ceiling {label}")
+        if bad:
+            raise SpecError(f"{where}: {bad}")
+    return label
 
 
 def _normal_ceiling(c: Any, where: str) -> dict[str, Any]:
@@ -365,6 +431,11 @@ def compile_profile(
     reads = spec.get("reads_untrusted", True)  # fail closed: an actor must say false
     if not isinstance(reads, bool):
         raise SpecError("reads_untrusted must be true or false")
+    bad = tlp_ceiling_problems(spec, pid)
+    if bad:
+        raise SpecError("; ".join(bad))
+    attested = policy.tlp_ceiling(pid) if policy is not None else None
+    tlp_ceiling = spec.get("tlp_ceiling", None if attested is None else str(attested))
 
     # 1. harvest: every logical id must be in the library, reported together
     wanted = [persona, *skills, *caps]
@@ -387,7 +458,9 @@ def compile_profile(
         ceiling = own  # type: ignore[assignment]
     violations += check_ceiling(grants, ceiling)
     if policy is not None:
-        violations += policy.attestation_problems(pid, spec["data_tier"], model_role, mcp, classes)
+        violations += policy.attestation_problems(
+            pid, spec["data_tier"], model_role, mcp, classes, tlp_ceiling
+        )
     if violations:
         raise CeilingViolation(violations)
 
@@ -406,7 +479,7 @@ def compile_profile(
 
     # the MCP catalog: every server granted, reader or actor, is a reviewed, current catalog
     # server whose data may go where this profile's may (ADR-0024)
-    gproblems = grant_problems(grants, classes, pid, spec["data_tier"])
+    gproblems = grant_problems(grants, classes, pid, spec["data_tier"], tlp_ceiling)
     if gproblems:
         raise CatalogViolation(gproblems)
 
@@ -434,6 +507,7 @@ def compile_profile(
         "ceiling": ceiling,
         "memory_scopes": sorted(set(spec.get("memory_scopes", []))),
         "data_tier": spec["data_tier"],
+        **({"tlp_ceiling": tlp_ceiling} if tlp_ceiling is not None else {}),
         "budgets": {k: spec["budgets"][k] for k in BUDGET_KEYS},
         "budget_mode": spec.get("budget_mode", "warn"),
         "reads_untrusted": reads,
@@ -505,6 +579,7 @@ def verify_profile(
             profile.get("model_role"),
             profile["grants"].get("mcp") or (),
             classes,
+            profile.get("tlp_ceiling"),
         )
     problems += check_ceiling(profile["grants"], ceiling)
     problems += check_budgets(profile["budgets"], ceiling.get("budgets"))

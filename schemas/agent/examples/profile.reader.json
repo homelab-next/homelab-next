@@ -24,7 +24,8 @@
     "tier": "write"
   },
   "data_tier": "local-only",
-  "digest": "sha256:c2a60bc0b12f1c5f9a10218cc6008dca2c4ce03d7d2fc8c12d9d2ac80f2e448c",
+  "tlp_ceiling": "red",
+  "digest": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
   "grants": {
     "capabilities": [
       "cap:lake-query"

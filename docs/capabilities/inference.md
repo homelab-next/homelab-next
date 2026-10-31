@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias.**
 
 - Contract: [`conformance.protocols.inference`](../../conformance/protocols/inference.py) (`conformance.protocols.inference:InferenceClient`)
-- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (16 checks: 14 MUST, 2 SHOULD)
+- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (17 checks: 15 MUST, 2 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -33,6 +33,13 @@ A model *gateway* in front of the backends (LiteLLM, Bifrost; docs/llm-gateway.m
 feature `gateway` and adds `GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and `/v1/models` is
 exactly the declared role aliases.
+
+A gateway whose keys are scoped by TLP ceiling (ADR-0033 decisions 10 and 11) declares the feature
+`tlp-ceiling` and adds `TlpCeilingGateway.over_ceiling`: a key whose sending profile's TLP
+ceiling is above the ceiling of a role whose prompts leave the lab is refused that role (a 401 or
+403 on the chat, never a reply) while it is still served on a role it may call.  The per-request
+half of the rule (a request's own label) is the caller's (`homelabnext.registry.model_tlp.admit`):
+a gateway with no admission code of its own cannot read it.
 
 A gateway that keeps a per-call log declares the feature `turn-records` as well: it offers a
 `TurnSource`, `turns(start, end, tags)`, that yields the calls (*turns*) started in a
@@ -225,6 +232,134 @@ Inherited from `InferenceClient`.
 
 **Returns:** `list[list[float]]`
 
+### `TlpCeilingGateway` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+Feature `tlp-ceiling`: the gateway scopes no key to a role whose TLP ceiling is below
+the key's sending ceiling (ADR-0033 decision 11).
+
+#### `TlpCeilingGateway.over_ceiling`
+
+```python
+def over_ceiling() -> tuple[InferenceClient, str, str]
+```
+
+**Returns:** `tuple[InferenceClient, str, str]`
+
+`(client, refused, served)`: `client` is a key whose sending TLP ceiling is above
+the ceiling of role `refused` (one whose prompts leave the lab), and that may call role
+`served`.
+
+#### `TlpCeilingGateway.declared_models`
+
+```python
+def declared_models() -> list[str]
+```
+
+Inherited from `GatewayClient`.
+
+**Returns:** `list[str]`
+
+The model names the gateway is configured to serve (the role aliases).
+
+#### `TlpCeilingGateway.with_key`
+
+```python
+def with_key(token: str | None) -> InferenceClient
+```
+
+Inherited from `GatewayClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str \| None` | required | positional or keyword |
+
+**Returns:** `InferenceClient`
+
+The same endpoint called with `token` as the bearer key (`None`: no key at all).
+
+#### `TlpCeilingGateway.throttled`
+
+```python
+def throttled() -> tuple[InferenceClient, str, int]
+```
+
+Inherited from `GatewayClient`.
+
+**Returns:** `tuple[InferenceClient, str, int]`
+
+`(client, model, n)`: calls by `client` to `model` are limited to `n` per window.
+
+#### `TlpCeilingGateway.models`
+
+```python
+def models() -> list[str]
+```
+
+Inherited from `InferenceClient`.
+
+**Returns:** `list[str]`
+
+#### `TlpCeilingGateway.chat`
+
+```python
+def chat(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+    temperature: float = 0.0,
+) -> ChatResult
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+| `temperature` | `float` | `0.0` | keyword-only |
+
+**Returns:** `ChatResult`
+
+#### `TlpCeilingGateway.chat_stream`
+
+```python
+def chat_stream(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+) -> Iterator[str]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+
+**Returns:** `Iterator[str]`
+
+#### `TlpCeilingGateway.embed`
+
+```python
+def embed(model: str, texts: Sequence[str]) -> list[list[float]]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `texts` | `Sequence[str]` | required | positional or keyword |
+
+**Returns:** `list[list[float]]`
+
 ### `TurnRecordsGateway` (Protocol)
 
 Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
@@ -322,6 +457,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `gateway-rejects-bad-key` | MUST | a chat call with a wrong key and with no key is each a 401 that says so, never a 5xx or a store error | `gateway` |
 | `gateway-limit-throttles` | MUST | on a key limited to n requests, the first n chat calls are served and call n+1 is a 429 | `gateway` |
 | `gateway-models-match-roles` | MUST | /v1/models lists exactly the declared role aliases (no backend ids, no extras) | `gateway` |
+| `gateway-refuses-role-above-key-ceiling` | MUST | a key whose sending TLP ceiling is above a cloud role's ceiling is refused that role with a 401 or 403 on the chat, and is still served on a role it may call | `gateway`, `tlp-ceiling` |
 | `turn-records-are-neutral` | MUST | every turn of a window known to hold some is exactly the neutral turn record (15 fields, each of its kind): nothing else of the gateway's log | `turn-records` |
 | `turn-records-only-the-asked-tags` | MUST | every turn carries one of the tags asked for; a tag no request used gives no turns, and each tag alone gives exactly that tag's turns | `turn-records` |
 | `turn-records-in-the-window` | MUST | every turn started inside the window asked for (whole seconds), and a window before any gives none | `turn-records` |
@@ -332,8 +468,9 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | Feature | Kind | Checks that need it |
 |---|---|---|
 | `embeddings` | product feature (checks skip without it) | `embeddings-fixed-dimension`, `embeddings-deterministic-and-distinct` |
-| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles` |
+| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles`, `gateway-refuses-role-above-key-ceiling` |
 | `streaming` | product feature (checks skip without it) | `stream-matches-completion` |
+| `tlp-ceiling` | product feature (checks skip without it) | `gateway-refuses-role-above-key-ceiling` |
 | `turn-records` | product feature (checks skip without it) | `turn-records-are-neutral`, `turn-records-only-the-asked-tags`, `turn-records-in-the-window`, `turn-records-stable-ids` |
 
 ### Defects the suite is proven to catch
@@ -343,6 +480,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 | Mutant | Must fail | Defect |
 |---|---|---|
 | `alias-swap` | `chat-echoes-requested-model` | replies come from a different model |
+| `ceiling-ignored` | `gateway-refuses-role-above-key-ceiling` | a key above a cloud role's TLP ceiling is scoped to it |
 
 ## Implementations
 
@@ -350,7 +488,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 
 `FakeInferenceClient` in [`conformance.fakes.inference_target`](../../conformance/fakes/inference_target.py): `hnx conform run inference` (the default target `fake`) runs the suite against it.
 
-> An `OpenAICompat` wired to a private fake server in gateway mode (keys and a throttled key), so the `gateway` checks run against it too; stopped by `close`.
+> An `OpenAICompat` wired to a private fake server in gateway mode (keys, a throttled key and a key scoped away from a role above its TLP ceiling), so the `gateway` and `tlp-ceiling` checks run against it too; stopped by `close`.
 
 ### Real-product adapters
 
@@ -359,7 +497,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-gateway-bifrost.yml`](../../compose/lab-in-a-box/targets/inference-gateway-bifrost.yml) (target `lab-inference-gateway-bifrost`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
 - Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway-bifrost, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
 - Features declared: `streaming`, `embeddings`, `gateway`
 
@@ -378,7 +516,10 @@ admin key, plus the three methods of feature `gateway`
   truth rather than with itself;
 * `with_key(token)` - the same endpoint with another bearer key, or none;
 * `throttled()` - a client on the key that the generated config limits (`throttle_key`,
-  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key).
+  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key);
+* `over_ceiling()` (feature `tlp-ceiling`) - a client on a key whose sending TLP ceiling is
+  above a cloud role's (`over_ceiling_key`), the role it must be refused
+  (`over_ceiling_model`) and one it may call (`over_ceiling_served`).
 
 Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
 Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
@@ -391,7 +532,7 @@ gateway swap is a target file plus this suite (docs/llm-gateway.md).
 The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-gateway.yml`](../../compose/lab-in-a-box/targets/inference-gateway.yml) (target `lab-inference-gateway`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
 - Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
 - Features declared: `streaming`, `embeddings`, `gateway`
 
@@ -410,7 +551,10 @@ admin key, plus the three methods of feature `gateway`
   truth rather than with itself;
 * `with_key(token)` - the same endpoint with another bearer key, or none;
 * `throttled()` - a client on the key that the generated config limits (`throttle_key`,
-  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key).
+  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key);
+* `over_ceiling()` (feature `tlp-ceiling`) - a client on a key whose sending TLP ceiling is
+  above a cloud role's (`over_ceiling_key`), the role it must be refused
+  (`over_ceiling_model`) and one it may call (`over_ceiling_served`).
 
 Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
 Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
@@ -466,7 +610,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> InferenceClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`.
+   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
@@ -480,6 +624,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
        - embeddings
        - gateway
        - streaming
+       - tlp-ceiling
        - turn-records
    ```
 
@@ -490,4 +635,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run inference --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (14) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

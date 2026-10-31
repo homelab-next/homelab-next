@@ -13,6 +13,13 @@ feature ``gateway`` and adds :class:`GatewayClient`'s three methods, so the suit
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and ``/v1/models`` is
 exactly the declared role aliases.
 
+A gateway whose keys are scoped by TLP ceiling (ADR-0033 decisions 10 and 11) declares the feature
+``tlp-ceiling`` and adds :meth:`TlpCeilingGateway.over_ceiling`: a key whose sending profile's TLP
+ceiling is above the ceiling of a role whose prompts leave the lab is refused that role (a 401 or
+403 on the chat, never a reply) while it is still served on a role it may call.  The per-request
+half of the rule (a request's own label) is the caller's (:func:`homelabnext.registry.model_tlp.admit`):
+a gateway with no admission code of its own cannot read it.
+
 A gateway that keeps a per-call log declares the feature ``turn-records`` as well: it offers a
 :class:`TurnSource`, ``turns(start, end, tags)``, that yields the calls (*turns*) started in a
 window and tagged with one of ``tags``, each reduced to the neutral turn record
@@ -43,6 +50,7 @@ __all__ = [
     "GatewayClient",
     "InferenceClient",
     "InferenceError",
+    "TlpCeilingGateway",
     "TurnRecordsGateway",
     "TurnSource",
     "TurnSourceError",
@@ -85,6 +93,18 @@ class GatewayClient(InferenceClient, Protocol):
 
     def throttled(self) -> tuple[InferenceClient, str, int]:
         """``(client, model, n)``: calls by ``client`` to ``model`` are limited to ``n`` per window."""
+        ...
+
+
+@runtime_checkable
+class TlpCeilingGateway(GatewayClient, Protocol):
+    """Feature ``tlp-ceiling``: the gateway scopes no key to a role whose TLP ceiling is below
+    the key's sending ceiling (ADR-0033 decision 11)."""
+
+    def over_ceiling(self) -> tuple[InferenceClient, str, str]:
+        """``(client, refused, served)``: ``client`` is a key whose sending TLP ceiling is above
+        the ceiling of role ``refused`` (one whose prompts leave the lab), and that may call role
+        ``served``."""
         ...
 
 

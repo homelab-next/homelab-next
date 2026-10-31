@@ -11,6 +11,7 @@
       "metadata": {
         "owner": "chat-ui",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "model-serving-example"
       }
     }

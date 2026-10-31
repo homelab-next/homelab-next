@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:27050e1c0b4b6ecd
+summary_of: outline:sha256:add66f9275cddb72
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -428,7 +428,9 @@ evaluation reports, `examples/model-evals/` (the path the code reads; the direct
 until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"), and so
 is a change to the model role table (`examples/model_roles.json`) or to a swap record
 (`examples/swaps/`): `leaves_lab` and `fallback` are in no pin, yet they decide which modules need
-`grants.cloud_models`. The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
+`grants.cloud_models`, and a role's `tlp_ceiling` and a binding's `provider_terms` decide the role's
+TLP ceiling (raising one is human-approve; see [Model-role ceilings](#model-role-ceilings-adr-0033-decision-10)).
+The overlay's equivalents (`lab/model_roles.json`, `lab/swaps/`) are rated by
 `hnx site review-tier` ([private-overlay.md](private-overlay.md)).
 
 `hnx modules review-tier --base REV | --ci-base` prints each changed path's tier and fields (and
@@ -672,7 +674,8 @@ amber and unknown are excluded; the body is scanned for TLP markers and deny-lis
 override the claim; only inert media types are accepted (`text/markdown`, `application/json`,
 `image/png`) and the gate renders HTML itself. A module that requires a **model role whose prompts
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
-`grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
+`grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)), and the
+role has a TLP ceiling besides ([Model-role ceilings](#model-role-ceilings-adr-0033-decision-10)).
 
 ### Egress points (ADR-0033 decision 13)
 
@@ -728,12 +731,68 @@ tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with anothe
 source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The lake stores the
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
-is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column, reader ceilings and
-model-role ceilings follow in the order the ADR sets. Readers read at their ceiling: the query
+is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column and
+reader ceilings follow in the order the ADR sets. Readers read at their ceiling: the query
 engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
 and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
 filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
-refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`).
+refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`). Model roles, model
+requests, agent profiles and MCP servers carry their ceilings and labels (below).
+
+#### Model-role ceilings (ADR-0033 decision 10)
+
+Every model role has a TLP ceiling, `homelabnext.modules.rules.role_ceiling(roles, role)` (and
+`role_ceilings(roles)` for the table). A role no prompt can leave the lab through is `red`. A role
+whose prompts can leave it, as `cloud_roles` reads it (a binding marked `leaves_lab` on the role
+or anywhere down its fallback chain, so a local primary with a cloud fallback counts), is `clear`.
+The overlay raises it to `green` only by recording the provider's terms in the role table
+(`platform/model_roles` 1.4): `provider_terms: {retention: none, training: none, ref: ...}` on
+each `leaves_lab` binding, and `tlp_ceiling: green` on the role. Every role on the chain that
+leaves the lab must be raised, and every `leaves_lab` binding on it must record the terms, since a
+request may be served by any of them. `amber` and above are never a ceiling of a role that leaves
+the lab.
+
+The terms sit in the role table because they describe the provider behind one binding, which the
+table already names (with `leaves_lab` beside it): a swap that rebinds a role to another provider
+changes the binding the terms are on, and the swap gate reads both as a trust change of the role
+(`bindings[].provider_terms`, `tlp_ceiling`), which needs a record naming it. The selection's
+grants are per module, not per role or provider, so a ceiling there could differ by module for the
+same prompt path. The whole role table is already human-approve in both review tiers
+(`hnx modules review-tier`, `hnx site review-tier`), so raising a ceiling is too.
+
+`rules.role_ceiling_problems(roles)` refuses, in the site rules and when the gateway config is
+generated: a `tlp_ceiling` that is not `clear` or `green` in its canonical spelling; one on a role
+that does not leave the lab (its ceiling is `red`); `green` without the terms on every
+`leaves_lab` binding of the chain, or with a role down the chain that is not raised; and
+`provider_terms` on a binding that does not leave the lab. The ceiling is in addition to
+`grants.cloud_models`: a raised role still needs the grant.
+
+#### Model requests (ADR-0033 decision 11)
+
+`homelabnext.registry.model_tlp.admit(roles, role, claimed, sender=...)` is the rule a request
+meets: `claimed` is the caller's label of everything it assembled (left out when the request
+carries none or `null`, which is `red`; a value that is not a label is `red` too), and `sender` the sending
+profile's ceiling (`send_ceiling(tlp_ceiling, data_tier)`: its declared ceiling, else `clear` for
+`cloud-allowed` and `red` for anything else). For a role that leaves the lab the request is judged
+at the higher of the two; it is refused when above the role's ceiling, and a role the table does not
+hold, or any role while the table has a malformed entry, is refused. The `Admission` it returns
+carries `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`,
+`invalid-role-table`), a `message` and a `record()` the caller logs. Only the canonical
+`tlp_ceiling: green` raises a role: another spelling (`TLP:GREEN`) is refused by validation and
+raises nothing. Where it runs, and what
+the gateway itself enforces, is in [the LLM gateway](llm-gateway.md#tlp-labels-on-model-requests).
+
+#### Agent profiles and MCP servers (ADR-0033 decision 12)
+
+`data_tier` is derived from a TLP value, not a second axis: `local-only` is above the cloud-role
+ceiling (`clear`), `cloud-allowed` is at or below it. The ceiling policy attests a profile's
+`tlp_ceiling` where it attests `data_tier` ([agent profiles](agent.md#profile-compiler)), and an MCP
+server record declares `tlp`, the label of what it returns ([MCP catalog](mcp-catalog.md#a-record)).
+Validation refuses an entry whose `data_tier` and TLP value disagree, and a profile is granted a
+server only when the server's `tlp` is at or below the profile's ceiling. A record or entry that
+states no TLP value is read from its `data_tier` (a server: `clear` for `cloud-allowed`, `red` for
+`local-only`; a profile: it receives what its tier already let it receive and sends to a model at
+`clear` only when `cloud-allowed`), and the catalog check and the policy say so in a note.
 
 ## Placement and isolation
 

@@ -86,6 +86,20 @@ profile may be granted a `local-only` MCP server only when its entry says `data_
 local-only`, so a spec cannot declare itself local-only to receive local-only data. Both are
 optional; without `data_tier` the profile receives no local-only server.
 
+`tlp_ceiling` on an entry is the profile's TLP ceiling ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)
+decision 12), attested the same way (`agent/profile` 1.5, `platform/agent_profile` 1.2): a
+canonical label that agrees with the entry's `data_tier` (`local-only` is above `clear`,
+`cloud-allowed` is `clear`; a disagreement is a `SpecError` when the policy loads), and without a
+`data_tier` beside it, it attests the tier it derives. The compiler writes it into the profile (a
+spec may state it only as the same label), the profile is granted no MCP server whose `tlp` is
+above it, and a model request the profile sends to a role that leaves the lab is judged at least at
+it ([LLM gateway](llm-gateway.md#tlp-labels-on-model-requests)). An entry without one keeps its old
+reading, which `CeilingPolicy.tlp_notes()` names: the profile receives what its `data_tier` already
+let it receive (`red` for `local-only`, `clear` otherwise) and sends to a model at `clear` only when
+`cloud-allowed` (`red` otherwise, which no cloud role takes). A profile or spec that states a
+`tlp_ceiling` of its own, with or without a policy, must agree with its own `data_tier`, and is
+granted no server above it.
+
 A local-only profile (attested, or declared when the entry attests no tier) is granted no MCP
 server that reaches the internet, a vendor's hosted server or one whose `egress` names
 `internet`, since its local-only context would leave the lab through that server's tools. The

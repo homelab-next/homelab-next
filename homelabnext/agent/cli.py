@@ -231,6 +231,7 @@ def main(argv: list[str]) -> int:
             policy = _policy(args.policy) if args.policy else None
             if policy is not None:
                 notes += [(str(args.policy), n) for n in policy.direct_notes(classes)]
+                notes += [(str(args.policy), n) for n in policy.tlp_notes()]
             by_rule: dict[str, list[tuple[str, str]]] = {}
             problems, counts = lint_paths(
                 args.paths, classes, notes, policy=policy, rules=rules, by_rule=by_rule
@@ -270,6 +271,8 @@ def main(argv: list[str]) -> int:
                     "hnx agent compile: no --policy; the ceiling comes from the spec itself",
                     file=sys.stderr,
                 )
+            for note in policy.tlp_notes() if policy is not None else ():
+                print(f"hnx agent compile: note: {args.policy}: {note}", file=sys.stderr)
             profile = compile_profile(
                 _load(args.spec), _library(args.library), policy=policy, classes=classes
             )

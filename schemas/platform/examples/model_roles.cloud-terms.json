@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "roles": {
+    "remote-summariser": {
+      "description": "A role bound to a backend outside the lab whose provider's terms are on record (no retention, no training): its TLP ceiling is raised from clear to green. A module requiring it still needs grants.cloud_models.",
+      "tier": "large",
+      "tlp_ceiling": "green",
+      "bindings": [
+        {
+          "backend": "svc:cloud-inference",
+          "model_id": "example-remote-1",
+          "leaves_lab": true,
+          "provider_terms": {
+            "retention": "none",
+            "training": "none",
+            "ref": "the provider's data-processing terms, version 2026-09, read by the lab operator"
+          }
+        }
+      ]
+    },
+    "local-summariser": {
+      "description": "A local primary that falls back to the raised role: its prompts can leave the lab, so it declares the raised ceiling too.",
+      "tier": "standard",
+      "tlp_ceiling": "green",
+      "bindings": [
+        {
+          "backend": "svc:inference",
+          "model_id": "example-9b"
+        }
+      ],
+      "fallback": "mdl:remote-summariser"
+    }
+  }
+}
