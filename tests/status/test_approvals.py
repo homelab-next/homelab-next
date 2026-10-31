@@ -25,7 +25,7 @@ from status_helpers import ROOT, T0, VIEWS
 from homelabnext.status import build_status, load_views
 from homelabnext.status.agents import AgentsConfigError, load_config
 from homelabnext.status.agents.config import ApprovalsSettings
-from homelabnext.status.approvals import TOKEN_TTL_S, ApprovalsSite, same_origin
+from homelabnext.status.approvals import MAX_NOTE, TOKEN_TTL_S, ApprovalsSite, same_origin
 from homelabnext.status.model import iso
 from homelabnext.status.serve import LOOPBACK, make_server
 
@@ -335,7 +335,7 @@ def test_an_expired_token_is_refused(served, broker, clock):
         ("issuer=other", None, 400),
         ("decision=maybe", None, 400),
         ("request_id=..%2Fx", None, 400),
-        ("note=" + "x" * 2001, None, 400),
+        ("note=" + "x" * (MAX_NOTE + 1), None, 400),
     ],
 )
 def test_malformed_forms_are_refused(served, broker, body, ctype, code):
@@ -382,6 +382,29 @@ def test_the_digest_shown_must_be_the_brokers_current_one(served, broker, tmp_pa
     status, _, body = _post(base, _form(site, digest=OTHER_DIGEST))
     assert status == 409 and "digest mismatch" in body.decode() and broker.calls == []
     assert _log(tmp_path)[-1]["reason"].startswith("digest mismatch")
+
+
+def test_the_note_limit_is_the_one_the_broker_stores(served, broker):
+    """Regression: the hub and the transport took notes of up to 2000 characters while the
+    broker's approval schema stores at most 500, so a 501-2000 character note passed both and
+    made a valid approve or deny fail at the store (``approval-invalid``)."""
+    import json as jsonlib
+
+    from homelabnext import paths
+    from homelabnext.agent.schemas import schema_errors
+    from homelabnext.broker import server
+
+    schema = jsonlib.loads(paths.schema_file("broker", "approval.schema.json").read_text())
+    assert MAX_NOTE == schema["properties"]["note"]["maxLength"] == server._MAX_NOTE
+    doc = {"note": "x" * MAX_NOTE}  # the note alone: other fields' errors are not this test's
+    assert not [e for e in schema_errors("broker", "approval", doc) if e.startswith("note")]
+    assert [e for e in schema_errors("broker", "approval", {"note": "x" * (MAX_NOTE + 1)})
+            if e.startswith("note")]  # fmt: skip
+    base, site = served()
+    status, _, _ = _post(base, _form(site, note="x" * MAX_NOTE), APPROVER)
+    assert status == 200 and broker.calls[-1][-1] == "x" * MAX_NOTE
+    status, _, _ = _post(base, _form(site, note="x" * (MAX_NOTE + 1)), APPROVER)
+    assert status == 400 and len(broker.calls) == 1
 
 
 def test_approve_files_the_front_door_identity_and_re_submits_are_idempotent(

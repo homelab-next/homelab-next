@@ -46,7 +46,9 @@ class HttpClient(Protocol):
 
 
 class PendingApprovals(Protocol):
-    """What the ``broker-pending`` mapper reads in process: requests waiting for approval."""
+    """What the ``broker-pending`` mapper reads in process: requests waiting for approval.  Only
+    a library caller that sets ``CollectContext.broker`` uses it; ``hnx status collect`` never
+    does, and reads the source's file."""
 
     def pending(self) -> Iterable[Mapping[str, Any]]: ...
 

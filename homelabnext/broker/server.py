@@ -126,6 +126,7 @@ from typing import Any
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
 from .service import TRANSPORT_PEER, BrokerService, ManifestError
+from .state import APPROVAL_NOTE_MAX
 from .tokens import BEARER_PREFIX as _TOKEN_PREFIX
 from .tokens import MAX_BEARER_BYTES
 
@@ -240,7 +241,7 @@ _AUDIT_OPS = frozenset(
 )
 #: a transport refusal of a token op is audited as the operation it carries
 _AUDITED_AS = {"token-call": "call", "token-submit": "submit", "token-run": "run"}
-_MAX_NOTE = 2000
+_MAX_NOTE = APPROVAL_NOTE_MAX  # the approval schema's note.maxLength: one limit
 _MAX_NAME = 64
 
 log = logging.getLogger("homelabnext.broker.server")

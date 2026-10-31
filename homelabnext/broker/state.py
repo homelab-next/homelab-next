@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "APPROVAL_NOTE_MAX",
     "FileApprovalStore",
     "StateDir",
     "StateError",
@@ -118,6 +119,18 @@ RELAY_DIR = "relay"
 RELAY_DONE = ("delivered", "undeliverable", "quarantine")
 #: how often (at most) the broker removes outbox files the relay is done with
 PRUNE_INTERVAL_S = 60.0
+
+
+def _approval_note_max() -> int:
+    from homelabnext import paths
+
+    doc = json.loads(paths.schema_file("broker", "approval.schema.json").read_text("utf-8"))
+    return int(doc["properties"]["note"]["maxLength"])
+
+
+#: the longest approval or denial note (``schemas/broker/approval``'s ``note.maxLength``), read
+#: from the schema so the hub's form, the transport and the store hold one limit
+APPROVAL_NOTE_MAX = _approval_note_max()
 
 
 class StateError(RuntimeError):

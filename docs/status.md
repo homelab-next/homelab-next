@@ -85,7 +85,7 @@ Built-in mappers for sources this repository has:
 |---|---|---|
 | `invariants-results` | the invariants runner's results document | one per criterion: pass ok, fail fail, error and skip unknown; link `inv:<id>` |
 | `records-lanes` | a records root (`homelabnext.records`) | `inbox`, `approved-not-completed`: live-work counts with the oldest age, warn past `warn_after_s` |
-| `broker-pending` | broker requests awaiting approval (a list or `{"requests": [...]}`), or a `PendingApprovals` store in process | `pending-approvals`: a live-work count with the oldest age |
+| `broker-pending` | broker requests awaiting approval (a list or `{"requests": [...]}`) read from the file; a library caller may instead pass a `PendingApprovals` store in process (`CollectContext(broker=...)`), which `hnx status collect` never does | `pending-approvals`: a live-work count with the oldest age |
 | `orchestrator-queue` | the LLM orchestrator's `GET /admin/queue-summary` (`poll-http-json`, section 7) | `queued`, `running` (live work), `history` |
 | `agentmetry-audit` | Agentmetry's `GET /api/v1/audit/status` (`poll-http-json`, section 7) | `audit-trail`: warn when off, empty, or silent past `warn_after_s` |
 | `prometheus-alerts` | Prometheus `GET /api/v1/alerts` (`poll-prometheus` only, section 7) | one per firing alert, by severity |
@@ -270,6 +270,8 @@ schema refuses `TLP:CLEAR`, `white`, `amber-strict` and anything else). `hnx sta
 and `render` and `serve` when they load the views, refuse:
 
 - an entry or export with no ceiling;
+- a shell or menu entry title that the release's `title` value check (below) would publish as
+  `withheld`, such as `Agents: activity` or `Ops/SOC`;
 - a public entry (every entry outside the `private` group, an external link included) or a
   public export whose ceiling is not `clear`: anonymous readers are granted `clear` (decision 8);
 - a private entry whose ceiling is not `red`: the private tier, behind the trusted front door,
@@ -280,6 +282,14 @@ and `render` and `serve` when they load the views, refuse:
 - a public entry for any other panel: a page no release transform shapes is **withheld** and may
   sit only in the `private` group, at `red` (below); and a `private` group entry that is neither a
   private page nor a withheld one.
+
+The routes themselves carry the ceilings, fixed per tier in code
+(`homelabnext.status.views.route_ceiling`): `/`, `/index.html`, `/status.json` and the agent
+summary pages and exports are released routes (`clear`); `/private/*`, `/approvals` and the
+withheld pages are `red`. `hnx status serve` answers `404` for any route with no declared
+ceiling, whatever site would offer it, so a page added to a site without a tier is never served;
+a menu entry's `tlp` is a declaration checked against its tier. The summary pages read the
+activity store only through one released reader (`PublicActivity`), never row by row.
 
 Where the hub can be reached from never enters into it: binding another address,
 `--allowed-host`, a public hostname or a front door raises no ceiling. A request through the
@@ -381,7 +391,7 @@ decision: ADR-0013 "Stage 1b".
 
 | Tier | Schema | Holds | Where it goes |
 |---|---|---|---|
-| summary | `schemas/status/agent_activity.schema.json` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface` (local, cloud), `host`, `project`, `model`, `agent`, `time`, `kind`, `tool` (name only), `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | the hub pages, `status.json` (`agents`), the bus (`homelabnext.agent.activity`), CSV/JSONL export |
+| summary | `schemas/status/agent_activity.schema.json` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface` (local, cloud), `host`, `project`, `model`, `agent`, `time`, `kind`, `tool` (name only), `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | stored at `red`; the hub pages, `status.json` (`agents`) and CSV/JSONL export show only what their release transforms keep (`host`, `project` and `model` are withdrawn: [the public view](#the-public-view-adr-0033)); the bus (`homelabnext.agent.activity`) carries all of it, unreleased, so the bus is a `red` reader until its egress check exists ([modules](modules.md#egress-points-adr-0033-decision-13)) |
 | detail | `schemas/status/agent_activity_detail.schema.json` | `prompt`, `command`, `tool_input`, `tool_output`, `error`, `approval` (`decision`, `payload`), plus `truncated` and `redactions` set by the hub | the activity store and the private pages; never the bus, never `status.json` |
 
 Both schemas are closed: a summary event that carries a detail field is refused everywhere
@@ -601,7 +611,8 @@ hnx status render --out build/hub --guests examples/lab-topology/guests \
 live, through the trusted front door only (the maps are withheld from the public view,
 [above](#tlp-ceilings-and-release-transforms)); `hnx status render --out DIR --private-out PRIV`
 with the same options writes each available map as `<panel>.html` into `PRIV`, never beside the
-public `index.html`. The architecture and the
+public `index.html`, together with a private `index.html` (the full document, as the front door's
+tier sees it) that their menu links back to. The architecture and the
 dataflow model are built once per process (they change only with the code); the topology, the
 dataflow's placement on guests and the roadmap are read on each request. A test keeps
 `docs/build-order.md` naming every checklist row and only real ones.
@@ -680,11 +691,11 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 
 | Path | Shows |
 |---|---|
-| `/agents` | sessions with state badges and counts; filters `?runtime=`, `?state=`, `?project=` |
+| `/agents` | sessions with state badges and counts; filters `?runtime=`, `?state=` (`?project=` matches nothing: the release withdraws `project`) |
 | `/agents/session?id=` | one session's facts and timeline (a link to its private detail when authorized) |
 | `/activity` | the event stream, newest 200; filters `runtime`, `outcome`, `kind`, `session`; `?event=` opens the inspector |
 | `/activity.csv`, `/activity.jsonl` | the same selection exported, summary tier only, through the `agent-events-public` release transform (CSV cells that would run as a spreadsheet formula are quoted) |
-| `/agent-analytics` | counts by outcome, runtime, model, tool and day |
+| `/agent-analytics` | counts by outcome, runtime, tool and day (no By model table: the release withdraws `model`) |
 | `/private/sessions`, `/private/session?id=`, `/private/event?id=`, `/private/access-log` | the detail tier and the access log: **private** |
 | `/approvals`, `POST /approvals/decide` | broker requests awaiting an approver, recent decisions, approve and deny: **private**, with an approver group (below) |
 
@@ -788,7 +799,7 @@ console's DNS-rebinding guard), an `Origin` (else `Referer`) that is not `public
 host and port; without it, not the `Host`'s host and port), or a `Sec-Fetch-Site` other than
 `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
 8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
-`note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
+`note` (at most 500 characters: the approval schema's `note.maxLength`), a repeated or malformed one; `403` a CSRF token that is not the
 HMAC (under the `csrf_key` above, else a key drawn when the hub starts) of its issue time, the
 request id, the digest shown and this approver, or older than 30 minutes; `409` the broker's current digest for the request is
 not the one in the form (**the person approves exactly what they saw**) or the request no longer
