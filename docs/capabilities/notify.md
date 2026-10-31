@@ -89,6 +89,7 @@ Defined in [`homelabnext.notify.core`](../../homelabnext/notify/core.py).
 | `topic` | `str \| None` | `None` | None -> the sender's default topic |
 | `email` | `str \| None` | `None` | optional extra email target |
 | `click` | `str \| None` | `None` | optional http(s) link the notification opens (ntfy `Click`) |
+| `tlp` | `str \| None` | `None` | the label it claims (ADR-0033); none reads as red at a channel gate |
 
 ### Errors
 

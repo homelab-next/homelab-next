@@ -11,6 +11,8 @@
 #   required_in_core a site must select a provider (never none or pass-through)
 #   privileged       a trust root: never provisional, always a conformance run and human review
 #   pass_through     the stage may be skipped when its neighbours' formats meet
+#   egress           data leaves its store through it: it is on the egress list in docs/modules.md
+#                    and applies the TLP check there (ADR-0033 decision 13)
 slots:
   siem-source:         {stage: 1, contract: null, stateful: false, formats: {in: [], out: [ocsf]}}
   log-pipeline:        {stage: 2, contract: log_pipeline.py, stateful: false, formats: {in: [ocsf], out: [ocsf]}, pass_through: true}
@@ -19,18 +21,18 @@ slots:
   lake-query:          {stage: 3, contract: lake.py, stateful: false, formats: {in: [sql], out: [sql]}}
   hot-index:           {stage: 3, contract: null, stateful: true, export_formats: [jsonl], formats: {in: [ocsf], out: [ocsf]}}
   detections:          {stage: 4, contract: detections.py, stateful: true, export_formats: [sigma], formats: {in: [sigma, ocsf], out: [ocsf]}}
-  cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}}
+  cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}, egress: true}
   exposure-management: {stage: 8, contract: null, stateful: false, formats: {in: [], out: [sarif, ocsf]}}
-  static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}}
+  static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}, egress: true}
   secrets:             {stage: null, contract: secrets.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true}
   idp:                 {stage: null, contract: idp.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true}
   edge:                {stage: null, contract: edge.py, stateful: false, required_in_core: true, privileged: true}
   dns:                 {stage: null, contract: dns.py, stateful: true, export_formats: [zone-file], required_in_core: true}
-  backup:              {stage: null, contract: backup.py, stateful: true, export_formats: [object-tree], required_in_core: true}
-  notify:              {stage: null, contract: notify.py, stateful: false, required_in_core: true}
-  events:              {stage: 6, contract: events.py, stateful: true, export_formats: [jsonl], required_in_core: true, formats: {in: [cloudevents], out: [cloudevents]}}
+  backup:              {stage: null, contract: backup.py, stateful: true, export_formats: [object-tree], required_in_core: true, egress: true}
+  notify:              {stage: null, contract: notify.py, stateful: false, required_in_core: true, egress: true}
+  events:              {stage: 6, contract: events.py, stateful: true, export_formats: [jsonl], required_in_core: true, formats: {in: [cloudevents], out: [cloudevents]}, egress: true}
   broker:              {stage: 6, contract: broker.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true}
   orchestration:       {stage: 6, contract: orchestration.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true}
-  records:             {stage: 9, contract: records.py, stateful: true, export_formats: [markdown-tree], required_in_core: true, privileged: true}
+  records:             {stage: 9, contract: records.py, stateful: true, export_formats: [markdown-tree], required_in_core: true, privileged: true, egress: true}
   agent-runtime:       {stage: null, contract: null, stateful: false, required_in_core: true}
   inference:           {stage: null, contract: inference.py, stateful: false, required_in_core: true}

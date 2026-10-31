@@ -5,7 +5,8 @@
     hnx status catalog generate|check [--registry FILE] [--out FILE]   docs/status/sources.md
     hnx status views check [VIEWS] [--registry FILE]        views.yml against schema + registry
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
-                       [--notify-topic T [--notify-pairs-dir DIR]] [--secrets-dir DIR]
+                       [--notify-topic T [--notify-pairs-dir DIR] [--notify-ceiling LABEL]]
+                       [--secrets-dir DIR]
                        [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
                       [--guests DIR --guests-site SITE [--guests-registry FILE]] [--maps ROOT]
@@ -66,6 +67,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from homelabnext.notify.ceiling import ceiling_arg
 from homelabnext.registry.model import RegistryError, load
 
 from . import catalog
@@ -218,6 +220,15 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--source", action="append", help="only this source (repeatable; implies due or not)"
     )
     p.add_argument("--notify-topic", help="page transitions through the registry's notify service")
+    p.add_argument(
+        "--notify-ceiling",
+        default="red",
+        type=ceiling_arg,
+        metavar="LABEL",
+        help="the channel's TLP ceiling (ADR-0033): a message labelled above it (one claiming "
+        "no label is red) is replaced by a content-free withheld notice; default red, a channel "
+        "only the operators read",
+    )
     p.add_argument(
         "--notify-pairs-dir",
         default=os.environ.get("HNX_NOTIFY_PAIRS_DIR"),
@@ -616,10 +627,14 @@ def _collect(args, reg, specs, clock: Callable[[], float], store=None) -> int:
             f"{r.source:<22} {'ok' if r.ok else 'error'}  {len(r.drafts)} item(s)  {r.error or ''}"
         )
     if args.notify_topic:
-        from homelabnext.notify import Notifier, NtfySender
+        from homelabnext.notify import CeilingSender, Notifier, NtfySender
+        from homelabnext.notify.ceiling import ceiling_from_flag
         from homelabnext.registry.resolver import Resolver
 
-        sender = NtfySender(default_topic=args.notify_topic, resolver=Resolver(reg))
+        sender = CeilingSender(
+            NtfySender(default_topic=args.notify_topic, resolver=Resolver(reg)),
+            ceiling_from_flag(getattr(args, "notify_ceiling", None)),
+        )
         from homelabnext.notify.record import record_in
 
         record = record_in(args.notify_pairs_dir, "status")

@@ -14,8 +14,9 @@ that reach a notification) applies the same rule before anything leaves:
 :func:`egress_label` and :func:`egress_check` are that rule.  Enrichment lookups are egress too:
 :func:`job_label` labels a lookup by the records that cause it, raised to the submitter's ceiling,
 and :func:`analyzers_for` names the analyzers whose declared maximum admits it (a maximum must
-be a canonical label; an analyzer named by anything but a string is skipped).  Nothing calls this
-module yet: wiring each egress point to it is the step after this one.
+be a canonical label; an analyzer named by anything but a string is skipped).  The notification
+channels call it (:class:`homelabnext.notify.CeilingSender`); docs/modules.md, "Egress points",
+says which other points do and which do not yet.
 
 Standard library only.
 """

@@ -29,6 +29,10 @@
     },
     "pass_through": {
       "$ref": "#/$defs/flag"
+    },
+    "egress": {
+      "$ref": "#/$defs/flag",
+      "description": "data leaves its store through this slot: it must be on the egress list (docs/modules.md, 'Egress points') and apply the TLP check there (ADR-0033 decision 13); a module reaching an egress slot not on the list is refused"
     }
   },
   "required": [

@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import Any
 
 from conformance.protocols.broker import BrokerError
+from homelabnext.notify.ceiling import ceiling_arg
 
 from .service import BrokerService, ManifestError, _reasoned, load_manifest, validate_manifest
 
@@ -136,6 +137,15 @@ def _parser() -> argparse.ArgumentParser:
         "endpoint is the notify capability (--registry, else HNX_ENDPOINT_NOTIFY)",
     )
     srv.add_argument("--notify-topic-file", help="read the ntfy topic from this file's first line")
+    srv.add_argument(
+        "--notify-ceiling",
+        default="red",
+        type=ceiling_arg,
+        metavar="LABEL",
+        help="the channel's TLP ceiling (ADR-0033): a message labelled above it (one claiming "
+        "no label is red) is replaced by a content-free withheld notice; default red, a channel "
+        "only the operators read",
+    )
     srv.add_argument(
         "--notify-token",
         default=os.environ.get("HNX_BROKER_NOTIFY_TOKEN"),
@@ -331,7 +341,8 @@ def notifier_from_args(args) -> Any:
     if not topic:
         return None
     from homelabnext._http import check_plaintext
-    from homelabnext.notify import Notifier, NtfySender, RateLimit
+    from homelabnext.notify import CeilingSender, Notifier, NtfySender, RateLimit
+    from homelabnext.notify.ceiling import ceiling_from_flag
     from homelabnext.registry.model import secret_env_name
     from homelabnext.state import StateStore
 
@@ -354,6 +365,7 @@ def notifier_from_args(args) -> Any:
         from homelabnext.registry.resolver import Resolver
 
         resolver = Resolver(load(args.registry))
+    ceiling = ceiling_from_flag(getattr(args, "notify_ceiling", None))
     sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
         raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")
@@ -369,7 +381,9 @@ def notifier_from_args(args) -> Any:
         window_s=3600.0,
         max_sends_all_scopes=NOTIFY_ALL_AGENTS_PER_HOUR,
     )
-    return Notifier(sender, store, rate_limit=limit, record=pairs_record(args, "broker"))
+    return Notifier(
+        CeilingSender(sender, ceiling), store, rate_limit=limit, record=pairs_record(args, "broker")
+    )
 
 
 def pairs_record(args, owner: str) -> Any:

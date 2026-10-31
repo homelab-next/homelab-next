@@ -680,8 +680,7 @@ role has a TLP ceiling besides ([Model-role ceilings](#model-role-ceilings-adr-0
 ### Egress points (ADR-0033 decision 13)
 
 Data leaves its store at the points below. `homelabnext.tlp_egress` is the shared check each of
-them is to apply before anything leaves; **no egress point calls it yet**, and wiring them is the
-next step. The check: the item's label is the strictest of the label it claims, the label recorded
+them is to apply before anything leaves; the last column says where it is applied today. The check: the item's label is the strictest of the label it claims, the label recorded
 for it (`recorded` is a required argument, `NO_RECORD` for an item with none, so a caller cannot
 loosen an item by forgetting its record) and every TLP marker in its body; it leaves only at or
 below the destination's ceiling (`egress_check`). A body is read after folding look-alike and
@@ -690,25 +689,30 @@ leaf by leaf with its keys, and a body that cannot be scanned is `red`. A marker
 word in any ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label
 word; any other spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 
-| Egress point | Its ceiling comes from | What lets a module use it today |
-|---|---|---|
-| the publishing gate (the static host) | `tlp_allowed` (`clear`, `green` for a community audience) | `grants.publish` |
-| the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown |
-| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` |
-| enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) |
-| notification channels | the channel's reader ceiling | `cap:notify` (a send class) |
-| webhooks | the receiver's ceiling | `grants.egress` |
-| backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) |
-| the bus | its subscribers' ceilings | `cap:events` |
-| records and tickets (ADR-0010, ADR-0020) | their readers' ceilings | `cap:records`, `cap:cases` |
-| memory and embedding stores | their readers' ceilings | the agent's memory grants |
-| generated pages committed to a repository | `clear` for the public repository (ADR-0011) | not a module grant: the leak scans |
-| logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners |
+| Egress point | Its ceiling comes from | What lets a module use it today | Checked today |
+|---|---|---|---|
+| the publishing gate (the static host) | `tlp_allowed` (`clear`, `green` for a community audience) | `grants.publish` | `tlp_allowed` checked at load (never above `green`); the per-item check is the gate module's |
+| the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown | the hub's view ceilings and release transforms |
+| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling |
+| enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) | none in this repository yet (`job_label`, `analyzers_for` are for the client) |
+| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's and the status hub's pages (`--notify-ceiling`) |
+| webhooks | the receiver's ceiling | `grants.egress` | not yet |
+| backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) | not yet |
+| the bus | its subscribers' ceilings | `cap:events` | not yet |
+| records and tickets (ADR-0010, ADR-0020) | their readers' ceilings | `cap:records`, `cap:cases` | not yet |
+| memory and embedding stores | their readers' ceilings | the agent's memory grants | not yet |
+| generated pages committed to a repository | `clear` for the public repository (ADR-0011) | not a module grant: the leak scans | the leak scans (no TLP check) |
+| logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners | `notify.CeilingSender` scans the title, body, tags and link |
 
-What is enforced today is the reach, not the content: a module reaches beyond the lab only through
-a grant the overlay gives (`grants.egress` for any host role's network egress, `grants.publish` for
-the static host, `grants.cloud_models` for a model role that leaves the lab). The ADR's rule that
-an egress capability not on this list is refused like `grants.publish` is not implemented yet. An
+Where the last column says "not yet", what is enforced is the reach, not the content: a module
+reaches beyond the lab only through a grant the overlay gives (`grants.egress` for any host role's
+network egress, `grants.publish` for the static host, `grants.cloud_models` for a model role that
+leaves the lab). A slot through which data leaves its store is flagged `egress` in the slot
+registry; the slots this list names are `static-hosting`, `notify`, `events`, `backup`, `records`
+and `cases` (`rules.EGRESS_SLOTS`, and a test holds the example registry to exactly these). A
+module that requires, prefers, falls back to or provides an egress slot not on the list is
+refused, so a new way out is not used before it is added here. Flagging a slot is a change to the
+slot registry, which is human-approve (the review tier). An
 enrichment lookup is labelled by the records that cause it (`job_label`: their strictest label,
 `red` with none, raised to the submitter's ceiling) and is to be sent only to analyzers whose
 declared maximum admits it; an analyzer with no maximum, or one that is not a canonical label, is

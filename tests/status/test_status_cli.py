@@ -100,3 +100,14 @@ def test_collect_records_the_notify_pairs_it_holds_for_the_census(tmp_path, caps
     held = parse_record((pairs / "status" / "pairs.json").read_text(), "status").pairs
     assert {"problem": STATUS_ITEM[0], "recovery": STATUS_ITEM[1]} in held
     assert not (pairs / "broker").exists()
+
+
+def test_collect_refuses_a_misspelt_notify_ceiling_before_collecting(tmp_path, capsys):
+    """Negative: --notify-ceiling is a declaration, so a misspelling is a usage error (never red),
+    refused before any source is collected."""
+    state = tmp_path / "state.json"
+    collect = ["collect", "--registry", str(REGISTRY), "--root", str(ROOT), "--state", str(state),
+               "--notify-topic", "status", "--notify-ceiling", "gren", *FILE_SOURCES]  # fmt: skip
+    assert main(collect) == 2
+    assert "--notify-ceiling" in capsys.readouterr().err
+    assert not state.exists()

@@ -1963,3 +1963,54 @@ def pytest_generate_tests(metafunc):
     table = DEFECT_TABLES.get(metafunc.function.__name__)
     if table is not None:
         metafunc.parametrize("case", sorted(table()))
+
+
+# ------------------------------------------------------- egress slots are on the list (ADR-0033)
+def test_the_registry_flags_exactly_the_listed_egress_slots():
+    """The example registry flags as egress exactly the slots the egress list names, and each of
+    them appears in docs/modules.md's "Egress points" table."""
+    flagged = {s for s, d in SLOTS.items() if d.get("egress")}
+    assert flagged == mr.EGRESS_SLOTS
+    docs = (ROOT / "docs" / "modules.md").read_text()
+    table = docs.split("### Egress points", 1)[1].split("\n### ", 1)[0]
+    for slot in mr.EGRESS_SLOTS:
+        assert f"cap:{slot}" in table or slot == "static-hosting", slot
+
+
+def _with_unlisted_egress() -> dict:
+    slots = copy.deepcopy(SLOTS)
+    slots["outbound-hook"] = {"stage": None, "contract": "notify.py", "stateful": False}
+    slots["outbound-hook"]["egress"] = True
+    return slots
+
+
+@pytest.mark.parametrize("how", ["requirement", "preference fallback", "provider"])
+def test_a_module_reaching_an_unlisted_egress_slot_is_refused(how):
+    """Negative: a slot flagged egress that is not on the egress list is refused wherever a module
+    reaches it (a requirement, a preference's fallback target) or provides it."""
+    slots = _with_unlisted_egress()
+    if how == "provider":
+        name = "example-siem-suite"
+        doc = copy.deepcopy(MODULES[name])
+        doc["provides"]["slots"]["outbound-hook"] = copy.deepcopy(
+            doc["provides"]["slots"]["notify"]
+        )
+    else:
+        name = "external-collector"
+        doc = copy.deepcopy(MODULES[name])
+        if how == "requirement":
+            doc["requires"]["capabilities"][1]["cap"] = "cap:outbound-hook"
+        else:
+            doc.setdefault("prefers", {}).setdefault("capabilities", []).append(
+                {
+                    "cap": "cap:notify",
+                    "version": "1.0",
+                    "purpose": "x",
+                    "fallback": {"to": "cap:outbound-hook"},
+                }
+            )
+    probs = mr.module_problems(doc, MODULES_DIR / name, slots, load, ROOTS)
+    assert any(
+        p.startswith("cap:outbound-hook: an egress slot not on the egress list") for p in probs
+    )
+    assert mr.module_problems(MODULES[name], MODULES_DIR / name, slots, load, ROOTS) == []
