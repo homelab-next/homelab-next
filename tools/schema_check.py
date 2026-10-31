@@ -41,7 +41,10 @@ For every schema under ``schemas/<dir>/`` (top level only):
    else ``HEAD^``.  Without a base a deleted baseline is not detected, and a symlink under
    ``_frozen/`` is always refused.
 6. no two schema files carry one ``$id``, and every frozen ``$id`` name is still carried by a
-   live schema (an orphaned baseline is a schema that was renamed or removed).
+   live schema (an orphaned baseline is a schema that was renamed or removed);
+7. every file under ``examples/`` or ``negative/`` belongs to exactly one schema of its
+   directory: the longest sibling stem its name starts with (a label may hold dots), so none is
+   silently left unvalidated (:func:`instance_owner`, :func:`orphan_instances`).
 
 Instances may be ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
 
@@ -199,15 +202,61 @@ def errors_for(schema: dict, instance: Any, registry: Registry) -> list[str]:
     ]
 
 
+def instance_owner(name: str, stems: Iterable[str]) -> str | None:
+    """The schema stem an instance file ``<stem>.<label>.<ext>`` belongs to: the longest of
+    ``stems`` that ``name`` starts with, followed by a dot and a non-empty label (a label may
+    hold dots: ``customization.full.maintained.json`` is ``customization``'s).  ``None`` when no
+    schema owns it (:func:`orphan_instances`)."""
+    best = None
+    for stem in stems:
+        prefix = stem + "."
+        if name.startswith(prefix) and "." in name[len(prefix) :]:
+            label = name[len(prefix) :].rsplit(".", 1)[0]
+            if label and (best is None or len(stem) > len(best)):
+                best = stem
+    return best
+
+
+def _sibling_stems(schema_dir: Path) -> list[str]:
+    return [stem_of(p) for p in sorted(schema_dir.glob("*.json"))]
+
+
 def instances_for(schema_path: Path, kind: str) -> list[Path]:
-    """Files ``<kind>/<stem>.<label>.<ext>`` belonging to exactly this schema."""
+    """Files ``<kind>/<stem>.<label>.<ext>`` belonging to exactly this schema (the longest
+    sibling stem a file name starts with owns it: :func:`instance_owner`)."""
     d = schema_path.parent / kind
     stem = stem_of(schema_path)
     if not d.is_dir():
         return []
+    stems = _sibling_stems(schema_path.parent)
     return sorted(
-        f for f in d.iterdir() if f.suffix in INSTANCE_EXTS and f.stem.rsplit(".", 1)[0] == stem
+        f
+        for f in d.iterdir()
+        if f.suffix in INSTANCE_EXTS and instance_owner(f.name, stems) == stem
     )
+
+
+def orphan_instances(root: Path) -> list[Problem]:
+    """Every file under a schema directory's ``examples/`` or ``negative/`` belongs to exactly
+    one schema there: a file none owns is never validated, so the proof it was meant to be is
+    silently gone."""
+    probs: list[Problem] = []
+    base = root / "schemas"
+    for d in sorted(p for p in base.iterdir() if p.is_dir() and p.name not in SKIP_DIRS):
+        stems = _sibling_stems(d)
+        for kind in ("examples", "negative"):
+            for f in sorted((d / kind).glob("*")) if (d / kind).is_dir() else ():
+                if f.is_file() and (
+                    f.suffix not in INSTANCE_EXTS or not instance_owner(f.name, stems)
+                ):
+                    probs.append(
+                        Problem(
+                            f.relative_to(root).as_posix(),
+                            f"a file under {kind}/ that no schema in {d.name}/ owns (name it "
+                            f"<stem>.<label>.<ext>, ext one of {sorted(INSTANCE_EXTS)})",
+                        )
+                    )
+    return probs
 
 
 # ---------------------------------------------------------------- additive evolution
@@ -1263,7 +1312,7 @@ def check_repo(
     """Every schema's checks, plus the cross-file ones (one file per ``$id``, no orphaned frozen
     name) and, with ``base``, append-only ``_frozen/`` against that commit."""
     registry = build_registry(root)
-    probs: list[Problem] = repo_problems(root) + frozen_symlinks(root)
+    probs: list[Problem] = repo_problems(root) + frozen_symlinks(root) + orphan_instances(root)
     index = frozen_index(root)
     known = known_ids(root)
     for p in schema_files(root, dirs):
