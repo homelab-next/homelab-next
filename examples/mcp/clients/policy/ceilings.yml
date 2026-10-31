@@ -3,7 +3,9 @@
 # shape `hnx agent verify --policy` reads). Owned and reviewed apart from the profiles: a compiled
 # profile's stored ceiling and digest are whatever last edited the file, so render refuses one
 # without a policy. data_tier and model_role are what the policy owner attests: a profile must say the
-# same, and only an attested local-only profile receives a local-only server. Fictional, like every
+# same, and only an attested local-only profile receives a local-only server. tlp_ceiling is the
+# profile's TLP ceiling, attested the same way (ADR-0033 decision 12): it agrees with data_tier
+# (local-only is above clear) and bounds the tlp of the servers granted. Fictional, like every
 # example.
 ceilings:
   profile:broker-agent:
@@ -11,6 +13,7 @@ ceilings:
     capabilities: [cap:broker, cap:records-propose]
     tier: execute
     data_tier: local-only
+    tlp_ceiling: red
     model_role: mdl:main-reasoner
     budgets: {max_input_tokens: 16000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 20}
   profile:collector:
@@ -18,5 +21,6 @@ ceilings:
     capabilities: [cap:records-propose]
     tier: write
     data_tier: local-only
+    tlp_ceiling: red
     model_role: mdl:fast-classifier
     budgets: {max_input_tokens: 32000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 20}

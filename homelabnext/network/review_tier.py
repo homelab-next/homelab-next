@@ -38,7 +38,8 @@ human-approve as a whole (:data:`TRUST_PATHS`): the registry (``lab/services.yml
 ``svc:`` allow renders to), the guests (``lab/guests/``: a guest's zone, addresses and
 ``outbound_allow``), and the overlay's own modules and lock (``lab/modules/``,
 ``lab/modules.lock``), the model role table (``lab/model_roles.json``: ``leaves_lab`` and
-``fallback`` decide who needs ``grants.cloud_models``) and its swap records (``lab/swaps/``), which
+``fallback`` decide who needs ``grants.cloud_models``, ``tlp_ceiling`` and ``provider_terms`` a
+role's TLP ceiling) and its swap records (``lab/swaps/``), which
 ``hnx modules review-tier`` does not read for the overlay (its roots are the
 repository's ``modules/`` and ``examples/modules/``).
 
@@ -135,7 +136,8 @@ TRUST_PATHS = {
     "review-tier does not read",
     "lab/modules.lock": "what each fetched module is pinned to",
     "lab/model_roles.json": "the model role table: a binding's leaves_lab and a role's fallback "
-    "decide which modules need grants.cloud_models, and no pin shows them",
+    "decide which modules need grants.cloud_models, a role's tlp_ceiling and a binding's "
+    "provider_terms its TLP ceiling, and no pin shows them",
     "lab/swaps/": "the swap records that cover a change to the model role table",
     "lab/model-serving/model_store.json": "the model store: what a swap's rebind vouches for",
     "lab/model_roles.eval.json": "the evaluation report a rebind's live canary must pass",

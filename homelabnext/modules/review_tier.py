@@ -18,7 +18,9 @@ is a change to what vouches for a model a swap rebinds to (:data:`EVIDENCE`, :da
 the model store, the evaluation reports and the golden suites, which the swap check reads from the
 base, so vetting a model is its own reviewed change), and so is a change to the model role table
 or to a swap record (:data:`MODEL_TRUST`, :data:`MODEL_TRUST_DIRS`): ``leaves_lab`` and ``fallback``
-are in no pin, yet they decide which modules need ``grants.cloud_models``.
+are in no pin, yet they decide which modules need ``grants.cloud_models``, and a role's
+``tlp_ceiling`` and a binding's ``provider_terms`` decide its TLP ceiling (ADR-0033 decision 10:
+raising one is a human's to approve).
 
 The approval itself is the pull request's code-owner review: :func:`review` reads CODEOWNERS **as
 of the base commit** (the rules GitHub applies to the pull request) and reports a problem for every
@@ -148,8 +150,10 @@ EVIDENCE = (_se.STORE, *_se.REPORTS, *_se.SUITES)
 #: directories whose every file vouches the same way: the live reports of proposed tables
 EVIDENCE_DIRS = (_se.EVALS,)
 #: the model role table and the swap records: a binding's ``leaves_lab`` and a role's ``fallback``
-#: decide which modules need ``grants.cloud_models`` (``rules.cloud_roles``), and neither is in a
-#: pin, so only a human reviewing the table (and the record that covers it) catches a change
+#: decide which modules need ``grants.cloud_models`` (``rules.cloud_roles``), a role's
+#: ``tlp_ceiling`` and a binding's ``provider_terms`` its TLP ceiling (``rules.role_ceiling``), and
+#: none is in a pin, so only a human reviewing the table (and the record that covers it) catches a
+#: change
 MODEL_TRUST = (_se.ROLES,)
 MODEL_TRUST_DIRS = (_se.SWAPS,)
 #: git's empty tree, the base of a root commit
@@ -694,7 +698,8 @@ def review(root: Path, base: str) -> tuple[list[Result], list[str]]:
         if rel in MODEL_TRUST or any(rel.startswith(d + "/") for d in MODEL_TRUST_DIRS):
             why = (
                 "the model role table or a swap record: leaves_lab and fallback decide "
-                "grants.cloud_models and no pin shows them"
+                "grants.cloud_models, tlp_ceiling and provider_terms a role's TLP ceiling, and "
+                "no pin shows them"
             )
             results[rel] = Result(rel, [Change(rel, HUMAN, why)])
             continue

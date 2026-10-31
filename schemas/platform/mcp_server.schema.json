@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.3",
   "title": "MCP catalog record",
-  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`).",
+  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`). 1.3 adds, additively, tlp (ADR-0033 decisions 11 and 12): the TLP label of what the server returns, which agrees with data_tier (local-only is above clear, cloud-allowed is clear); a profile is granted the server only when tlp is at or below its tlp_ceiling. Absent, it is read from data_tier: clear for cloud-allowed, red for local-only.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -193,6 +193,16 @@
         "cloud-allowed"
       ],
       "description": "The data the server may return: local-only data may only reach a profile whose data_tier is local-only."
+    },
+    "tlp": {
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The TLP label of what the server returns (ADR-0033 decision 11), from the terms of the data behind it: what its tool output carries into a model request. Agrees with data_tier: local-only is a label above clear, cloud-allowed is clear. Absent, it reads clear for cloud-allowed and red for local-only."
     },
     "capabilities": {
       "type": "array",

@@ -179,3 +179,27 @@ def test_compile_with_policy_and_verify(work, capsys):
     assert cli.main([*base, "--out", str(out)]) == 0  # self-declared ceiling, with a warning
     assert "ceiling comes from the spec itself" in capsys.readouterr().err
     assert cli.main([*verify, "--lock", str(work / "profiles.lock")]) == 1
+
+
+def test_compile_notes_a_policy_entry_without_a_tlp_ceiling(work, capsys):
+    """ADR-0033 decision 12: an entry that attests no tlp_ceiling is read from its data_tier, and
+    the compile says so; one that attests it compiles it into the profile, with no note."""
+    s = {k: v for k, v in spec().items() if k != "ceiling"}
+    (work / "spec.yml").write_text(yaml.safe_dump(s))
+    entry = {**spec()["ceiling"], "data_tier": "local-only"}
+    argv = [
+        "agent",
+        "compile",
+        str(work / "spec.yml"),
+        "--library",
+        str(work / "lib" / "library.yml"),
+    ]
+    argv += ["--policy", str(work / "policy.yml"), "--out", str(work / "p.json")]
+    (work / "policy.yml").write_text(yaml.safe_dump({"ceilings": {"profile:reader": entry}}))
+    assert cli.main(argv) == 0
+    assert "attest no tlp_ceiling" in capsys.readouterr().err
+    entry["tlp_ceiling"] = "red"
+    (work / "policy.yml").write_text(yaml.safe_dump({"ceilings": {"profile:reader": entry}}))
+    assert cli.main(argv) == 0
+    assert "tlp_ceiling" not in capsys.readouterr().err
+    assert json.loads((work / "p.json").read_text())["tlp_ceiling"] == "red"

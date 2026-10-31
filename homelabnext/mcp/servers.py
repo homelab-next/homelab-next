@@ -47,7 +47,9 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from homelabnext import tlp
 from homelabnext.registry.model import secret_env_name
+from homelabnext.registry.model_tlp import tier_disagreement
 
 from . import credentials
 
@@ -760,6 +762,45 @@ def numeric_host(host: str) -> bool:
     )
 
 
+def record_label(rec: Mapping[str, Any]) -> tlp.Label:
+    """The TLP label of what a catalog server returns (ADR-0033 decisions 11 and 12): its ``tlp``,
+    read as data (a value that is not a label is ``red``).  A record that declares none reads from
+    its ``data_tier`` the only label that tier allows at the cloud end, ``clear`` for
+    ``cloud-allowed``; ``local-only`` (or anything else) is ``red``, the most restrictive reading
+    and the default of unlabelled data (decision 2)."""
+    if rec.get("tlp") is not None:
+        return tlp.read(rec["tlp"])
+    return tlp.Label.CLEAR if rec.get("data_tier") == "cloud-allowed" else tlp.Label.RED
+
+
+def tlp_problems(rec: Mapping[str, Any], where: str) -> list[str]:
+    """A declared ``tlp`` is a canonical label that agrees with ``data_tier`` (decision 12:
+    ``local-only`` is above ``clear``, ``cloud-allowed`` is ``clear``)."""
+    if "tlp" not in rec:
+        return []
+    try:
+        label = tlp.parse(rec["tlp"])
+    except ValueError as exc:
+        return [f"{where}: tlp: {exc}"]
+    if rec["tlp"] != str(label):
+        return [f"{where}: tlp {rec['tlp']!r} is not written as {str(label)!r}"]
+    bad = tier_disagreement(rec.get("data_tier"), label, f"tlp {label}")
+    return [f"{where}: {bad}"] if bad else []
+
+
+def tlp_notes(cat: Catalog) -> list[str]:
+    """A note naming the records that declare no ``tlp`` (each is read from its ``data_tier``,
+    :func:`record_label`): one line for the catalog, not one per record."""
+    unlabelled = [f"{sid} ({record_label(rec)})" for sid, rec in cat if "tlp" not in rec]
+    if not unlabelled:
+        return []
+    return [
+        f"{len(unlabelled)} record(s) declare no tlp, so what each returns is read from its "
+        "data_tier (cloud-allowed: clear; local-only: red, ADR-0033 decisions 2 and 12); declare "
+        "the label of the data behind it: " + ", ".join(unlabelled)
+    ]
+
+
 def remote_problems(rec: Mapping[str, Any], where: str, registry: Any = None) -> list[str]:
     """A third party's hosted server (``transport.type: remote``): a ``hosted`` origin and
     runtime, egress to the internet, ``data_tier: cloud-allowed``, and an https URL whose host is a public DNS name (not an
@@ -1454,6 +1495,7 @@ def check(
         out += acts_via_problems(rec, where, broker_only)
         out += floor_problems(rec, where, broker_only)
         out += _egress_problems(rec, where)
+        out += tlp_problems(rec, where)
         out += remote_problems(rec, where, registry)
         out += _env_collision_problems(rec, where)
         out += _literal_problems(rec, where)

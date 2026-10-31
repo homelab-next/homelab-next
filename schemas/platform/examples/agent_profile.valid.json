@@ -19,6 +19,7 @@
     "analyst"
   ],
   "data_tier": "local-only",
+  "tlp_ceiling": "red",
   "budgets": {
     "max_input_tokens": 32000,
     "max_output_tokens": 2000,

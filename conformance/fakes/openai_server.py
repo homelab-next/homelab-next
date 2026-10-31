@@ -20,7 +20,9 @@ test can make a backend slow, erroring, malformed or hung.
 
 With ``api_keys`` it behaves like a small model gateway: every ``/v1`` call needs
 ``Authorization: Bearer <one of the keys>`` (else 401 ``auth_error``), and a key listed in
-``key_limits`` is served that many calls, then answered 429 ``rate_limit_exceeded``.
+``key_limits`` is served that many calls, then answered 429 ``rate_limit_exceeded``.  A key
+listed in ``key_models`` may call only those models: any other is answered 403
+``key_model_access_denied`` (the scope a gateway gives each key).
 
 Conformance use: this is the fake for the ``inference`` capability.  It speaks only the
 protocol; nothing here is product specific.
@@ -123,6 +125,7 @@ class FakeOpenAIServer:
         context_length: int | dict[str, int] | None = None,
         api_keys: list[str] | None = None,
         key_limits: dict[str, int] | None = None,
+        key_models: dict[str, list[str]] | None = None,
         host: str = LOOPBACK,
         port: int = 0,
     ):
@@ -138,6 +141,7 @@ class FakeOpenAIServer:
         self.context_length = context_length
         self.api_keys = set(api_keys or ())
         self.key_limits = dict(key_limits or {})
+        self.key_models = {k: set(v) for k, v in (key_models or {}).items()}
         self._key_calls: dict[str, int] = {}
         self.requests: list[dict] = []
         self._lock = threading.Lock()
@@ -199,6 +203,15 @@ class FakeOpenAIServer:
         if token in self.key_limits and n > self.key_limits[token]:
             return 429, f"rate limit exceeded: {self.key_limits[token]} requests per window"
         return None
+
+    def scope(self, authorization: str | None, model: Any) -> tuple[int, str] | None:
+        """``None`` when the (admitted) key may call ``model``, else ``(403, message)``: a key in
+        ``key_models`` is scoped to those models."""
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        allowed = self.key_models.get(token)
+        if allowed is None or model in allowed:
+            return None
+        return 403, f"key not allowed to access model {model!r}"
 
     def _find_fault(self, path: str, model: str | None) -> Fault | None:
         with self._lock:
@@ -264,6 +277,13 @@ class FakeOpenAIServer:
                 self._error(status, message, etype)
                 return True
 
+            def _out_of_scope(self, model: Any) -> bool:
+                verdict = server.scope(self.headers.get("Authorization"), model)
+                if verdict is None:
+                    return False
+                self._error(*verdict, "key_model_access_denied")
+                return True
+
             def _apply_fault(self, fault: Fault) -> bool:
                 if fault.kind == "http_error":
                     self._error(fault.status, "injected fault", "fault")
@@ -308,7 +328,7 @@ class FakeOpenAIServer:
                 fault = server._find_fault(path, model)
                 if fault and self._apply_fault(fault):
                     return
-                if self._refused():
+                if self._refused() or self._out_of_scope(model):
                     return
                 if path not in (
                     "/v1/chat/completions",

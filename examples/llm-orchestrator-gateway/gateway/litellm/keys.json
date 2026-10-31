@@ -19,6 +19,7 @@
       "metadata": {
         "owner": "home-vllm-a",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "llm-orchestrator-example"
       }
     },
@@ -31,6 +32,7 @@
       "metadata": {
         "owner": "home-vllm-b",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "llm-orchestrator-example"
       }
     },

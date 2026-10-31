@@ -10,6 +10,7 @@
       "metadata": {
         "owner": "profile:reader",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "lab-in-a-box"
       }
     },
@@ -23,6 +24,7 @@
       "metadata": {
         "owner": "profile:responder",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "lab-in-a-box"
       }
     },
@@ -35,6 +37,7 @@
       "metadata": {
         "owner": "conformance-throttle",
         "data_tier": "local-only",
+        "tlp_ceiling": "red",
         "hnx-managed": "lab-in-a-box"
       },
       "rpm_limit": 3

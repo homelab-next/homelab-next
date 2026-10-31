@@ -154,6 +154,146 @@ def cloud_roles(roles: dict[str, Doc]) -> set[str]:
     return out
 
 
+#: the TLP ceiling of a model role whose prompts can leave the lab (ADR-0033 decision 10); a local
+#: role's is ``red``
+CLOUD_CEILING = tlp.Label.CLEAR
+#: the most a role that leaves the lab may be raised to, and only with the provider's terms on
+#: record (``provider_terms`` on each of its ``leaves_lab`` bindings): ``amber`` and above never
+RAISED_CEILING = tlp.Label.GREEN
+#: what ``provider_terms`` must record for a raised ceiling: the provider keeps no prompt and
+#: trains on none
+PROVIDER_TERMS = {"retention": "none", "training": "none"}
+
+
+def _chain(roles: dict[str, Doc], name: str) -> list[str]:
+    """``name`` and its fallback chain as far as it resolves (a dangling or looping fallback ends
+    it, as :func:`cloud_roles` reads it)."""
+    out, cur = [], name
+    while cur in roles and cur not in out:
+        out.append(cur)
+        cur = str(roles[cur].get("fallback", "")).removeprefix("mdl:")
+    return out
+
+
+def _leaving(roles: dict[str, Doc], name: str) -> list[tuple[str, int, Doc]]:
+    """(role, index, binding) of every ``leaves_lab`` binding on ``name`` and its chain."""
+    return [
+        (step, i, b)
+        for step in _chain(roles, name)
+        for i, b in enumerate(roles[step].get("bindings", []))
+        if isinstance(b, dict) and b.get("leaves_lab") is True
+    ]
+
+
+def _terms_recorded(binding: Doc) -> bool:
+    terms = binding.get("provider_terms")
+    return isinstance(terms, dict) and all(terms.get(k) == v for k, v in PROVIDER_TERMS.items())
+
+
+def _declared_raise(role: Doc) -> bool:
+    """The role declares the raised ceiling, in an accepted spelling (validation holds it to the
+    canonical one; anything else raises nothing)."""
+    value = role.get("tlp_ceiling")
+    return value is not None and tlp.read(value) is RAISED_CEILING
+
+
+def role_ceiling(roles: dict[str, Doc], role: str) -> tlp.Label:
+    """The TLP ceiling of model role ``role`` (``mdl:<role>`` or the bare name) in the role table's
+    ``roles`` (ADR-0033 decision 10; docs/modules.md, "Model roles").
+
+    A role no prompt can leave the lab through (no ``leaves_lab`` binding on it or down its
+    fallback chain, as :func:`cloud_roles` reads it) is ``red``, and so is a role the table does
+    not hold (nothing is sent to it). A role that leaves the lab is ``clear``; it is ``green`` only
+    when every role on its chain that leaves the lab declares ``tlp_ceiling: green`` and every
+    ``leaves_lab`` binding on the chain records the provider's terms (``provider_terms``:
+    ``retention: none``, ``training: none``), since a request may be served by any of them. It is
+    never ``amber`` or above. The ceiling adds to ``grants.cloud_models``; it replaces nothing.
+    """
+    name = role.removeprefix("mdl:")
+    if "mdl:" + name not in cloud_roles(roles):
+        return tlp.Label.RED
+    cloud = cloud_roles(roles)
+    steps = [s for s in _chain(roles, name) if "mdl:" + s in cloud]
+    if all(_declared_raise(roles[s]) for s in steps) and all(
+        _terms_recorded(b) for _, _, b in _leaving(roles, name)
+    ):
+        return RAISED_CEILING
+    return CLOUD_CEILING
+
+
+def role_ceilings(roles: dict[str, Doc]) -> dict[str, tlp.Label]:
+    """``mdl:<role>`` -> :func:`role_ceiling` for every role of the table."""
+    return {"mdl:" + name: role_ceiling(roles, name) for name in sorted(roles)}
+
+
+def role_ceiling_problems(roles: dict[str, Doc]) -> list[str]:
+    """What the role table declares about TLP ceilings that does not hold (ADR-0033 decision 10).
+    Each would otherwise read as a ceiling other than the one declared, so validation refuses it:
+
+    * ``tlp_ceiling`` that is not ``clear`` or ``green`` (``amber`` and above are never granted to a
+      role that leaves the lab, and an unknown value is not a label);
+    * ``tlp_ceiling`` on a role that does not leave the lab (a local role's ceiling is ``red``);
+    * ``tlp_ceiling: green`` while a ``leaves_lab`` binding on the role or down its chain does not
+      record the provider's terms, or while a role down its chain that leaves the lab is not raised;
+    * ``provider_terms`` on a binding that does not leave the lab.
+    """
+    out: list[str] = []
+    cloud = cloud_roles(roles)
+    for name in sorted(roles):
+        r = roles[name]
+        if not isinstance(r, dict):
+            continue
+        for i, b in enumerate(r.get("bindings", [])):
+            if isinstance(b, dict) and "provider_terms" in b and b.get("leaves_lab") is not True:
+                out.append(
+                    f"mdl:{name}: bindings[{i}] records provider_terms but does not leave the lab "
+                    "(leaves_lab: true); the terms describe a provider outside it"
+                )
+        if "tlp_ceiling" not in r:
+            continue
+        try:
+            declared = tlp.parse(r["tlp_ceiling"])
+        except ValueError as exc:
+            out.append(f"mdl:{name}: tlp_ceiling: {exc}")
+            continue
+        if str(declared) != r["tlp_ceiling"]:
+            out.append(
+                f"mdl:{name}: tlp_ceiling {r['tlp_ceiling']!r} is not written as {str(declared)!r}"
+            )
+            continue
+        if "mdl:" + name not in cloud:
+            out.append(
+                f"mdl:{name}: declares tlp_ceiling {declared}, but no prompt of it can leave the "
+                "lab: a local role's ceiling is red, and tlp_ceiling only raises a cloud role's"
+            )
+            continue
+        if declared > RAISED_CEILING:
+            out.append(
+                f"mdl:{name}: tlp_ceiling {declared} on a role whose prompts can leave the lab: "
+                f"amber and above are never granted to one (at most {RAISED_CEILING}, with the "
+                "provider's terms on record)"
+            )
+            continue
+        if declared is not RAISED_CEILING:
+            continue
+        for step, i, b in _leaving(roles, name):
+            if not _terms_recorded(b):
+                at = "" if step == name else f" (down its fallback chain, mdl:{step})"
+                out.append(
+                    f"mdl:{name}: tlp_ceiling green needs the provider's terms on every binding "
+                    f"that leaves the lab, and bindings[{i}]{at} records no provider_terms with "
+                    "retention: none and training: none"
+                )
+        for step in _chain(roles, name)[1:]:
+            if "mdl:" + step in cloud and not _declared_raise(roles[step]):
+                out.append(
+                    f"mdl:{name}: tlp_ceiling green, but it falls back to mdl:{step}, which "
+                    f"leaves the lab at the clear ceiling: raise mdl:{step} too, or the role "
+                    "stays clear"
+                )
+    return out
+
+
 def _rows(doc: Doc, mod_dir: Path, load) -> dict[str, Doc]:
     rows: dict[str, Doc] = {}
     for e in doc.get("contributes", {}).get("services", []):
@@ -818,6 +958,7 @@ def site_problems(
     grants = site.get("grants", {})
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
+    out += role_ceiling_problems(roles)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
     for m in sel.values():

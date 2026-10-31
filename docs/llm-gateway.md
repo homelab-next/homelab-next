@@ -1,6 +1,6 @@
 ---
-summary: 'The LLM gateway where a model role becomes a backend and model id: generated config, the locality rule, lab-in-a-box, conformance and running LiteLLM.'
-summary_of: outline:sha256:57e2025448d5c133
+summary: 'The LLM gateway, where a role becomes a backend and model id: generated config, the locality rule, TLP labels on requests, lab-in-a-box, conformance, LiteLLM.'
+summary_of: outline:sha256:5a47e561dbb9bf66
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # LLM gateway
@@ -136,6 +136,47 @@ Anything else counts as cloud. So a hand-edited `fallbacks`, `context_window_fal
 fails `make gateway-check`, even though the generator would never have written it
 (`tests/generators/test_llm_gateway.py` covers both the refusal and the audit).
 
+## TLP labels on model requests
+
+Every model role has a TLP ceiling ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)
+decision 10; [Model-role ceilings](modules.md#model-role-ceilings-adr-0033-decision-10)): `red` for a
+role that stays in the lab, `clear` for one whose prompts can leave it, `green` only with the
+provider's terms in the role table, never `amber` or above. A request carries the label of
+everything its caller assembled, and for a role that leaves the lab it is judged at the higher of
+that label and the sending profile's own TLP ceiling, so a profile that may hold `amber` cannot send
+to a cloud role whatever its request claims. A request above the role's ceiling is refused, and a
+request with no label is `red`.
+
+The gateway is LiteLLM run the supported way, with **no admission code** (ADR-0022): it cannot read
+a request's label. So the rule is split where it can be enforced:
+
+- **At render time, by key scope.** Every key carries its sending ceiling: a profile's
+  `tlp_ceiling`, a spec key's own `tlp_ceiling` (a canonical label that agrees with its
+  `data_tier`), or what its `data_tier` allows (`cloud-allowed`: `clear`; anything else: `red`).
+  A role leaves the lab, for the gateway, when the role table says so (`leaves_lab` on the chain)
+  **or** the spec puts a binding on the chain on a `cloud` backend; one the table does not mark
+  never rises above `clear`, since only a `leaves_lab` binding records the terms that raise it.
+  The generator refuses a key scoped (directly or down a fallback chain) to a role whose ceiling
+  is below the key's: every request from it would be refused. It also runs the role table's
+  ceiling rules. Today this mostly coincides with the locality rule (a key above `clear` is
+  `local-only`), and adds that a table's `leaves_lab` is honoured even where the spec calls the
+  backend local.
+- **In `--check`, by audit.** `litellm/keys.json` gives each key's `metadata.tlp_ceiling`. The
+  audit reads it as data (missing or edited: `red`) and refuses a key that lists a model the
+  rendered config deploys to the cloud whose ceiling is below it. A role the spec reads as local
+  but the file deploys out is held at `clear`. Bifrost's virtual keys carry no metadata: its audit
+  holds every `local-only` key (the only kind above `clear`) to local providers, as before.
+- **Per request, by the caller.** `homelabnext.registry.model_tlp.admit(roles, role, claimed,
+  sender=send_ceiling(...))` is the rule as a library function. It returns an `Admission` whose
+  `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`) and `record()` the
+  caller logs, allowed or refused. A client in front of the gateway applies it to each request; the
+  gateway's key scope is the backstop that holds even when a caller does not.
+
+What this does not do: the gateway does not see a request's claimed label, so a caller that
+mislabels its context below its profile's ceiling is bounded only by that ceiling (decision 11's
+higher-of rule), and one that skips `admit` entirely is bounded only by its key's scope. The
+egress content checks of decision 13 on gateway requests are a later step.
+
 ## Lab-in-a-box
 
 The lab's spec is `compose/lab-in-a-box/config/llm-gateway/gateway.yml`. It uses
@@ -194,6 +235,13 @@ no state between calls, and is not tied to any product. It reads the endpoint fr
 come from the role table, not from the gateway itself. The lab ships two target files:
 `targets/inference-gateway.yml` (LiteLLM) and `targets/inference-gateway-bifrost.yml`. Switching
 gateways means changing the target file and passing this suite.
+
+A target that also declares `tlp-ceiling` (`TlpCeilingGateway`) adds
+`gateway-refuses-role-above-key-ceiling`: on a key whose sending TLP ceiling is above a cloud
+role's (`over_ceiling_key`, `over_ceiling_model`; and `over_ceiling_served`, a role it may call),
+the call to the cloud role is a 401 or 403 from the chat itself and the call to the other role is
+served. The lab's targets do not declare it: the lab-in-a-box gateway has no role that leaves the
+lab.
 
 ## Running LiteLLM: the supported shape
 

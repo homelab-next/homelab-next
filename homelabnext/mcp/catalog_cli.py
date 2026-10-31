@@ -68,6 +68,7 @@ def _check(args) -> int:
     if reg_path is None:
         notes.append(("registry", "none beside the catalog and no --registry: endpoints, hosts "
                                   "and egress not cross-checked"))  # fmt: skip
+    notes += [("tlp", n) for n in servers.tlp_notes(cat)]
     counts = {"profile": 0, "manifest": 0}
     judged = ""
     if problems and grants:

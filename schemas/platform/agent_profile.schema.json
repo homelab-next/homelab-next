@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/agent_profile/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/platform/agent_profile/1.2",
   "title": "Agent profile (compiled)",
-  "description": "The compiled, least-privilege profile for one agent. mcp must be a subset of mcp_ceiling (checked by tools/schema_check.py check_profile_ceiling). Model is a role alias, never a model id. Budgets are hard caps; context is referenced by logical id. 1.1 declares reads_untrusted (additive, optional, boolean; absent means true): a ceiling policy that marks the profile a reader overrides false (hnx mcp catalog render refuses it).",
+  "description": "The compiled, least-privilege profile for one agent. mcp must be a subset of mcp_ceiling (checked by tools/schema_check.py check_profile_ceiling). Model is a role alias, never a model id. Budgets are hard caps; context is referenced by logical id. 1.1 declares reads_untrusted (additive, optional, boolean; absent means true): a ceiling policy that marks the profile a reader overrides false (hnx mcp catalog render refuses it). 1.2 adds tlp_ceiling (additive, optional; ADR-0033 decision 12): the profile's TLP ceiling as the ceiling policy attests it, agreeing with data_tier; absent, it is read from data_tier.",
   "type": "object",
   "properties": {
     "id": {
@@ -55,6 +55,16 @@
         "local-only",
         "cloud-allowed"
       ]
+    },
+    "tlp_ceiling": {
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The profile's TLP ceiling, attested by the ceiling policy (ADR-0033 decision 12); agrees with data_tier (local-only is above clear, cloud-allowed is clear)."
     },
     "budgets": {
       "type": "object",

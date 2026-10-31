@@ -673,6 +673,7 @@ def test_a_lean_profile_cannot_declare_itself_local_only_to_render_a_local_only_
     """The policy, not the profile, attests ``data_tier: local-only`` (round 4 design note)."""
     doc = yaml.safe_load((SPECS / "policy" / "ceilings.yml").read_text())
     del doc["ceilings"]["profile:collector"]["data_tier"]
+    del doc["ceilings"]["profile:collector"]["tlp_ceiling"]  # it attests the tier it derives
     unattested = CeilingPolicy.from_mapping(doc, source="an unattested policy")
     with pytest.raises(clients.RenderError, match="does not attest data_tier: local-only"):
         clients.render_profile(CATALOG, COLLECTOR, "claude-code", policy=unattested)

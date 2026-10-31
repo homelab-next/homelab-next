@@ -12,7 +12,10 @@ admin key, plus the three methods of feature ``gateway``
   truth rather than with itself;
 * ``with_key(token)`` - the same endpoint with another bearer key, or none;
 * ``throttled()`` - a client on the key that the generated config limits (``throttle_key``,
-  ``throttle_model``, ``throttle_requests``: the lab's ``conformance-throttle`` key).
+  ``throttle_model``, ``throttle_requests``: the lab's ``conformance-throttle`` key);
+* ``over_ceiling()`` (feature ``tlp-ceiling``) - a client on a key whose sending TLP ceiling is
+  above a cloud role's (``over_ceiling_key``), the role it must be refused
+  (``over_ceiling_model``) and one it may call (``over_ceiling_served``).
 
 Keys are ``secret:`` references, read from ``HNX_SECRET_<NAME>`` at every call (never held).
 Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
@@ -41,6 +44,7 @@ class GatewayTarget(OpenAICompat):
         key_env: str,
         declared: Sequence[str],
         throttle: tuple[str, str, int] | None = None,
+        over_ceiling: tuple[str, str, str] | None = None,
         model: str | None = None,
         timeout: float = 30.0,
         features: Sequence[str] = ("embeddings", "streaming", "gateway"),
@@ -57,6 +61,7 @@ class GatewayTarget(OpenAICompat):
         self._url = base_url
         self._declared = list(declared)
         self._throttle = throttle
+        self._over = over_ceiling
         self._timeout = timeout
         self._plaintext = allow_plaintext
         if model:
@@ -82,14 +87,26 @@ class GatewayTarget(OpenAICompat):
                 "feature gateway needs throttle_key, throttle_model, throttle_requests"
             )
         env, model, n = self._throttle
+        return self._keyed(env), model, n
+
+    def over_ceiling(self) -> tuple[OpenAICompat, str, str]:
+        if self._over is None:
+            raise AdapterConfigError(
+                "feature tlp-ceiling needs over_ceiling_key, over_ceiling_model, "
+                "over_ceiling_served"
+            )
+        env, refused, served = self._over
+        return self._keyed(env), refused, served
+
+    def _keyed(self, env: str) -> OpenAICompat:
+        """A client on the key held in ``env``, read at every call."""
         read = env_secret(env)
-        client = OpenAICompat(
+        return OpenAICompat(
             self._url,
             auth=lambda: f"Bearer {read()}",
             timeout=self._timeout,
             allow_plaintext=self._plaintext,
         )
-        return client, model, n
 
 
 def make(
@@ -99,6 +116,9 @@ def make(
     throttle_key: str | None = None,
     throttle_model: str | None = None,
     throttle_requests: int | None = None,
+    over_ceiling_key: str | None = None,
+    over_ceiling_model: str | None = None,
+    over_ceiling_served: str | None = None,
     model: str | None = None,
     capability: str = "llm-gateway",
     timeout: float = 30.0,
@@ -121,12 +141,20 @@ def make(
                 "throttle_key, throttle_model and throttle_requests go together"
             )
         throttle = (secret_env_name(throttle_key), throttle_model, int(throttle_requests))
+    over = None
+    if over_ceiling_key or over_ceiling_model or over_ceiling_served:
+        if not (over_ceiling_key and over_ceiling_model and over_ceiling_served):
+            raise AdapterConfigError(
+                "over_ceiling_key, over_ceiling_model and over_ceiling_served go together"
+            )
+        over = (secret_env_name(over_ceiling_key), over_ceiling_model, over_ceiling_served)
     ep = resolve(capability, env_only=True, schemes=("http", "https"))
     return GatewayTarget(
         ep.url,
         key_env=secret_env_name(key),
         declared=declared,
         throttle=throttle,
+        over_ceiling=over,
         model=model,
         timeout=timeout,
         allow_plaintext=allow_plaintext,

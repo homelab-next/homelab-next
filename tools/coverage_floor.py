@@ -36,6 +36,7 @@ coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed cha
 * ``homelabnext/agent/screen.py``   -- the injection screen in front of the model
 * ``homelabnext/workflows``         -- workflow runs: the broker executor and approval binding
 * ``homelabnext/registry/limits.py`` -- the model rate/token/cost budget (throttle + alert)
+* ``homelabnext/registry/model_tlp.py`` -- a model request's TLP label against its role's ceiling
 * ``homelabnext/context``          -- context retrieval: scope enforcement and inactive records
 * ``homelabnext/mcp``              -- the read-only MCP server: path refusal, scope intersection
 * ``homelabnext/status/agents/auth.py``   -- the status hub's private-tier front door + access log
@@ -78,6 +79,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/agent/screen.py": ("tests/agent",),
     "homelabnext/workflows": ("tests/workflows",),
     "homelabnext/registry/limits.py": ("tests/models",),
+    "homelabnext/registry/model_tlp.py": ("tests/models",),
     "homelabnext/context": ("tests/context", "conformance/context"),
     "homelabnext/mcp": ("tests/mcp",),
     "homelabnext/status/agents/auth.py": ("tests/status",),

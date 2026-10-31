@@ -44,6 +44,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from homelabnext import tlp
+
 from .errors import SpecError
 
 DEFAULT_CLASSES = Path(__file__).with_name("tool_classes.yml")
@@ -212,6 +214,8 @@ class ToolClasses:
                 "status": rec.get("status"),
                 "reason": rec.get("reason"),
                 "data_tier": rec.get("data_tier"),
+                # the label of what it returns: its tlp, or what its data_tier allows
+                "tlp": str(servers.record_label(rec)),
                 "replaced_by": rec.get("replaced_by"),
                 "internet": reaches_internet(rec),
                 "acts_via": rec.get("acts_via"),
@@ -343,15 +347,60 @@ def table_capability_classes(path: str | Path | None = None) -> dict[str, list[s
     return {str(k): list(v or ()) for k, v in (caps or {}).items()}
 
 
+def server_label(meta: Mapping[str, Any]) -> tlp.Label:
+    """The TLP label of what a catalog server returns, from its catalog entry (``tlp``, as
+    :func:`homelabnext.mcp.servers.record_label` derived it), read as data; an entry without one
+    reads from its ``data_tier`` the same way (``cloud-allowed``: clear; anything else: red)."""
+    if meta.get("tlp") is not None:
+        return tlp.read(meta["tlp"])
+    return tlp.Label.CLEAR if meta.get("data_tier") == "cloud-allowed" else tlp.Label.RED
+
+
+def receive_ceiling(tlp_ceiling: Any = None, data_tier: Any = None) -> tlp.Label:
+    """The TLP ceiling a profile receives data at (ADR-0033 decision 12): its declared
+    ``tlp_ceiling`` (read as data: a value that is not a label is ``red`` here, and refused by
+    :func:`tlp_ceiling_problems`), else what its ``data_tier`` already lets it receive:
+    ``local-only`` data (``red``) for a local-only profile, ``clear`` for any other, so a profile
+    that declares no ceiling is granted nothing it was not granted before."""
+    if tlp_ceiling is not None:
+        return tlp.read(tlp_ceiling)
+    return tlp.Label.RED if data_tier == "local-only" else tlp.Label.CLEAR
+
+
+def tlp_ceiling_problems(doc: Mapping[str, Any], who: str = "profile") -> list[str]:
+    """A profile's declared ``tlp_ceiling`` is a canonical label that agrees with its
+    ``data_tier`` (decision 12: ``local-only`` is above ``clear``, ``cloud-allowed`` is
+    ``clear``)."""
+    from homelabnext.registry.model_tlp import tier_disagreement
+
+    if doc.get("tlp_ceiling") is None:
+        return []
+    who = _shown(who)
+    raw = doc["tlp_ceiling"]
+    try:
+        label = tlp.parse(raw)
+    except ValueError:
+        return [f"{who}: tlp_ceiling is not a TLP label (one of {', '.join(tlp.LABELS)})"]
+    if raw != str(label):
+        return [f"{who}: tlp_ceiling is not written as {str(label)!r}"]
+    if doc.get("data_tier") is None:
+        return []
+    bad = tier_disagreement(doc.get("data_tier"), label, f"tlp_ceiling {label}")
+    return [f"{who}: {bad}"] if bad else []
+
+
 def grant_problems(
     grants: Mapping[str, Any],
     classes: ToolClasses | None = None,
     who: str = "profile",
     data_tier: str | None = None,
+    tlp_ceiling: Any = None,
 ) -> list[str]:
     """MCP grants the catalog does not allow, for any profile (reader or actor): a server the
-    catalog does not hold, a retired or draft one, and a ``local-only`` server granted to a
-    profile whose ``data_tier`` is ``cloud-allowed`` (its context may go to a cloud model)."""
+    catalog does not hold, a retired or draft one, a ``local-only`` server granted to a
+    profile whose ``data_tier`` is ``cloud-allowed`` (its context may go to a cloud model), and,
+    for a profile (``data_tier`` or ``tlp_ceiling`` given), a server whose ``tlp`` is above the
+    profile's TLP ceiling (:func:`receive_ceiling`, ADR-0033 decision 12)."""
     classes = classes or default_classes()
     who = _shown(who)
     problems: list[str] = []
@@ -397,6 +446,14 @@ def grant_problems(
                 f"{who} may send its context to the cloud (its data_tier is not local-only) "
                 f"but is granted MCP server {name!r}, whose data is local-only"
             )
+        elif data_tier is not None or tlp_ceiling is not None:
+            label = server_label(meta)
+            ceiling = receive_ceiling(tlp_ceiling, data_tier)
+            if label > ceiling:
+                problems.append(
+                    f"{who} is granted MCP server {name!r}, which returns data labelled {label}, "
+                    f"above the profile's TLP ceiling {ceiling} (ADR-0033 decision 12)"
+                )
     return problems
 
 
@@ -590,7 +647,8 @@ def profile_problems(
     tier = doc.get("data_tier") if isinstance(doc.get("data_tier"), str) else None
     problems: list[str] = []
     if READERS in rules:
-        problems += grant_problems(grants, classes, who, tier)
+        problems += tlp_ceiling_problems(doc, who)
+        problems += grant_problems(grants, classes, who, tier, doc.get("tlp_ceiling"))
         if is_reader(doc):
             problems += reader_problems(grants, classes, who)
     if BROKER in rules:

@@ -52,6 +52,7 @@ parameters:                      # typed, per instance; delivered in env
 instance: notes-{profile}-{lane} # the name a client sees
 egress: none                     # or [svc:<name>, host:<name>, internet]
 data_tier: local-only            # what it returns may reach local-only profiles only
+tlp: red                         # 1.3: the TLP label of what it returns; agrees with data_tier
 capabilities: [cap:records-propose]   # the platform capabilities it gives access to
 implements: [cap:context]        # homelab-next contracts it implements (its conformance suite)
 tools:
@@ -65,6 +66,16 @@ reviews: [...]                   # check, audit, approve (homelabnext.reviews)
 
 The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-write`, `egress`,
 `send`, `credential`. A server's classes are the union of its tools'.
+
+`tlp` (1.3, [ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md) decisions 11 and
+12) is the TLP label of what the server returns, from the terms of the data behind it: what its
+tool output carries into a model request. It agrees with `data_tier`: `local-only` is a label above
+`clear`, `cloud-allowed` is `clear`, and the check refuses a record where they disagree (or whose
+`tlp` is not a canonical label). A record without `tlp` is read from its `data_tier`
+(`servers.record_label`: `clear` for `cloud-allowed`, `red` for `local-only`, the most restrictive
+reading), and `hnx mcp catalog check` names every such record in one note. A profile is granted
+the server only when its `tlp` is at or below the profile's `tlp_ceiling`
+([agent profiles](agent.md#profile-compiler)).
 
 A server with an **acting** tool (a class in the table's `broker_only`: `exec`, `file-write`,
 `send`, `credential`) says how it acts (1.1, [ADR-0030](adr/0030-agents-act-only-through-the-broker.md)):
@@ -257,7 +268,8 @@ entry N)`.
 - every agent profile and context manifest in the checkout (or `--grants PATH...`) grants only
   catalog ids whose status is `active` or `deprecated` (an allowlist: `draft`, `retired` and
   anything else are refused), of a server with a known `data_tier`, never a `local-only` server to a
-  profile whose `data_tier` is not `local-only`, a reader holds no exec, file-write, egress or
+  profile whose `data_tier` is not `local-only`, never a server whose `tlp` is above the profile's
+  TLP ceiling, a reader holds no exec, file-write, egress or
   credential server, and no profile holds an acting server that does not act through the broker
   unless it is a reviewed direct exception its ceiling policy lists (G-13). A `deprecated` grant passes with a note pointing at the record's reason and
   naming its `replaced_by`. The compiler, `hnx agent verify`, `hnx agent lint` and `render` apply

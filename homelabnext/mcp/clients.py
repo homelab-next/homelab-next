@@ -821,7 +821,7 @@ def profile_refusals(
             problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
     problems += policy.attestation_problems(
         str(doc.get("id")), doc.get("data_tier"), doc.get("model_role"), doc.get("mcp") or (),
-        classes,
+        classes, doc.get("tlp_ceiling"),
     )  # fmt: skip
     return problems
 
