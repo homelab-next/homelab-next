@@ -29,8 +29,9 @@ For every schema under ``schemas/<dir>/`` (top level only):
    frozen copy at its own minor (a warning, an error under ``--strict``); and the schema is an
    *additive* evolution of its frozen baseline
    (``schemas/_frozen/<major>.<minor-at-freeze>/...``) unless the major version
-   was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: proposed, no
-   loader or pilot yet) has no baseline and may change freely; ``--freeze`` skips it, and
+   was bumped.  A **draft** schema (``"x-draft": "<why, naming its ADR>"``: its ADR is still
+   proposed; runtime code may already read it, and then its ``x-draft`` says so and an overlay
+   pins the core commit) has no baseline and may change freely; ``--freeze`` skips it, and
    freezing it means removing ``x-draft``.  A draft is refused when **any** frozen baseline of
    its major exists: only a schema never frozen, or a new major, can be a draft.  Baselines are
    found by the ``$id`` name (``platform/guest``), never by file name, so renaming a file does not
@@ -1063,6 +1064,38 @@ def baselines(
     return list((frozen_index(root) if index is None else index).get(pid[0], []))
 
 
+#: an ``x-draft`` claim that no code reads the schema yet
+_NOT_READ_CLAIM = re.compile(r"\bno (?:loader|reader|runtime)\b|\bnot (?:read|loaded)\b", re.I)
+
+
+def draft_claims(root: Path) -> list[Problem]:
+    """A draft whose ``x-draft`` says nothing reads it ("no loader yet") while runtime code under
+    ``homelabnext/`` names its file (the schema generator ``homelabnext/schemas/`` aside): the
+    precondition the reason states is false, so the reason must say who reads the draft."""
+    code = root / "homelabnext"
+    if not code.is_dir():
+        return []
+    texts = [
+        f.read_text(encoding="utf-8", errors="replace")
+        for f in sorted(code.rglob("*.py"))
+        if "schemas" not in f.relative_to(code).parts[:1]
+    ]
+    probs: list[Problem] = []
+    for p in schema_files(root):
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        if not is_draft(doc) or not _NOT_READ_CLAIM.search(doc["x-draft"]):
+            continue
+        if any(f'"{p.name}"' in t for t in texts):
+            probs.append(
+                Problem(
+                    p.relative_to(root).as_posix(),
+                    "x-draft says no code reads this schema, but homelabnext/ names "
+                    f"{p.name}: say who reads it (and that an overlay pins the core commit)",
+                )
+            )
+    return probs
+
+
 def repo_problems(root: Path) -> list[Problem]:
     """Across files: one ``$id`` per schema file, and no frozen name that no live schema carries."""
     probs: list[Problem] = []
@@ -1312,7 +1345,9 @@ def check_repo(
     """Every schema's checks, plus the cross-file ones (one file per ``$id``, no orphaned frozen
     name) and, with ``base``, append-only ``_frozen/`` against that commit."""
     registry = build_registry(root)
-    probs: list[Problem] = repo_problems(root) + frozen_symlinks(root) + orphan_instances(root)
+    probs: list[Problem] = (
+        repo_problems(root) + frozen_symlinks(root) + orphan_instances(root) + draft_claims(root)
+    )
     index = frozen_index(root)
     known = known_ids(root)
     for p in schema_files(root, dirs):

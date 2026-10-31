@@ -18,8 +18,9 @@ SCHEMAS = [
     if p.relative_to(ROOT / "schemas").as_posix() != "platform/service.json"
     and not sc.is_draft(json.loads(p.read_text()))
 ]
-#: schemas still drafts (x-draft: proposed, no loader or pilot yet): no frozen baseline, free to
-#: change until their ADR is accepted; joining or leaving this set is a reviewed change
+#: schemas still drafts (x-draft: their ADR is proposed; the module loader already reads some):
+#: no frozen baseline, free to change until their ADR is accepted; joining or leaving this set is
+#: a reviewed change
 DRAFTS = {
     "platform/module.schema.json",
     "platform/lake_table.schema.json",

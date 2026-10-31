@@ -53,3 +53,27 @@ def test_a_file_no_schema_owns_is_an_error(tmp_path):
         "schemas/platform/examples/nosuchschema.case.json",
         "schemas/platform/negative/guest.case.txt",
     }
+
+
+# ----- a draft's reason may not claim nothing reads it while runtime code does -----
+
+
+def test_the_drafts_runtime_code_reads_say_so():
+    assert sc.draft_claims(ROOT) == []
+
+
+def test_a_no_loader_claim_on_a_draft_runtime_code_reads_is_an_error(tmp_path):
+    shutil.copytree(ROOT / "schemas", tmp_path / "schemas")
+    p = tmp_path / "schemas/platform/module_selection.schema.json"
+    s = json.loads(p.read_text())
+    s["x-draft"] = "ADR-0027 (proposed): the shape only, no loader yet; not frozen"
+    p.write_text(json.dumps(s))
+    assert sc.draft_claims(tmp_path) == []  # no runtime code in this tree names it
+    code = tmp_path / "homelabnext/modules/loader.py"
+    code.parent.mkdir(parents=True)
+    code.write_text('SCHEMA = _schema("platform", "module_selection.schema.json")\n')
+    gen = tmp_path / "homelabnext/schemas/gen.py"
+    gen.parent.mkdir(parents=True)
+    gen.write_text('OUT = "module.schema.json"\n')  # the generator names drafts it writes
+    where = [x.where for x in sc.draft_claims(tmp_path)]
+    assert where == ["schemas/platform/module_selection.schema.json"]
