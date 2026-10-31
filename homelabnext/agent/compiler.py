@@ -227,6 +227,10 @@ class CeilingPolicy:
             raise SpecError(f"{source}: expected a mapping with 'ceilings'")
         return cls(doc.get("ceilings"), source)
 
+    def covers(self, profile_id: str) -> bool:
+        """True when the policy has a ceiling entry for ``profile_id``."""
+        return profile_id in self._ceilings
+
     def ceiling(self, profile_id: str) -> dict[str, Any]:
         if profile_id not in self._ceilings:
             raise CeilingViolation([f"{self.source} has no ceiling for {profile_id}"])
@@ -556,16 +560,8 @@ def verify_profile(
     problems = schema_errors("agent", "profile", profile)
     if problems:
         return problems
+    # the policy's reader pin and attestations are applied there (one copy of those rules)
     problems += profile_problems(profile, classes, policy)
-    if (
-        policy is not None
-        and policy.requires_reader(profile["id"])
-        and profile.get("reads_untrusted") is False
-    ):
-        problems.append(
-            f"{policy.source} marks {profile['id']} as reading untrusted content "
-            "but the profile says reads_untrusted: false"
-        )
     ceiling = profile["ceiling"]
     if policy is not None:
         try:
@@ -573,14 +569,6 @@ def verify_profile(
         except CeilingViolation as exc:
             return list(exc.problems)
         problems += _ceiling_excess(_normal_ceiling(profile["ceiling"], "profile"), ceiling)
-        problems += policy.attestation_problems(
-            profile["id"],
-            profile.get("data_tier"),
-            profile.get("model_role"),
-            profile["grants"].get("mcp") or (),
-            classes,
-            profile.get("tlp_ceiling"),
-        )
     problems += check_ceiling(profile["grants"], ceiling)
     problems += check_budgets(profile["budgets"], ceiling.get("budgets"))
     try:

@@ -23,7 +23,8 @@ hnx mcp call section --args '{"id_or_path": "docs/graph.md", "heading": "...", "
 A client configuration starts it as a subprocess. Do not write that configuration by hand: the
 server is the `hnx-catalog` record of the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), and
 `hnx mcp catalog render --profile build/profile.json --client claude-code --policy policy.yml`
-writes the entry, with `--scope-from-profile` pointing at the profile and `--policy`/`--lock` at
+writes the entry, with `--scope-from-profile` pointing at the profile (its absolute path: render
+refuses a relative `profile_file`, which would resolve in the client's working directory) and `--policy`/`--lock` at
 the deployed ceiling policy and lock (render refuses a profile `hnx agent verify --policy` would
 refuse, and the server verifies it again at start against the same policy and lock).
 `hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.

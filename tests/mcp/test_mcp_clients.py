@@ -85,6 +85,25 @@ def test_every_client_renders_the_broker_agent(client):
     assert str(BROKER_AGENT) in block["hnx-catalog"]["args"]  # {profile_file}
 
 
+def test_the_scope_profile_path_is_absolute(monkeypatch):
+    """hnx-catalog reads its scope from {profile_file}: a relative path would resolve in the
+    client's working directory, where the agent may drop a wider locked profile."""
+    with pytest.raises(clients.RenderError, match="profile_file is not an absolute path"):
+        clients.render_profile(
+            CATALOG, BROKER_AGENT, "claude-code", registry=REGISTRY, policy=POLICY,
+            profile_file="build/profile.json",
+        )  # fmt: skip
+    # the documented one-off render with a relative --profile writes the resolved path
+    monkeypatch.chdir(BROKER_AGENT.parent)
+    text, _ = clients.render_profile(
+        CATALOG, BROKER_AGENT.name, "claude-code", registry=REGISTRY, policy=POLICY
+    )
+    args = json.loads(text)["mcpServers"]["hnx-catalog"]["args"]
+    assert args[args.index("--scope-from-profile") + 1] == str(BROKER_AGENT.resolve())
+    # a server that does not read the profile does not need one
+    assert clients.instances(CATALOG, {"id": "profile:a", "mcp": ["notes"]}, profile_file="")
+
+
 def test_claude_desktop_leaves_remote_servers_out_and_says_so():
     text, notes = clients.render_profile(
         CATALOG, READER, "claude-desktop", registry=REGISTRY, policy=POLICY

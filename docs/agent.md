@@ -180,6 +180,10 @@ through allowlisted broker actions (G-04).
   profile in the repository (specs, compiled `agent/profile`, the lean `platform/agent_profile`)
   and to every context manifest, where it *is* derivable: a manifest with an input section feeds
   untrusted content, so its `tools` obey the same rule. The lint fails when it finds no profile.
+  With `--policy` (as the G-03 and G-13 observables run it) the lint applies the policy's reader
+  pin and, for every profile the policy has an entry for, its attestations (`data_tier`,
+  `model_role`, `tlp_ceiling`, local-only and internet servers): `profile_problems` is the one
+  copy of those rules, shared by the lint, `verify_profile` and the client render.
 
 ### Actors act only on validated structured input (G-04)
 
@@ -343,7 +347,8 @@ manifest's `must_cite` sources are cited by an `ok` report.
 `start_session(manifest, inputs, profile, registry, runs_on=None, broker=None)` is how a session
 gets its pack: it renders the profile's **access block** and adds it as a required `stable`
 section named `access`, then calls `assemble_pack`. The block is derived from the compiled
-profile (digest-checked) and the registry, for the host the agent runs on (default: the host of
+profile (digest-checked for internal consistency; `verify_profile` with a lock pins the
+reviewed one) and the registry, for the host the agent runs on (default: the host of
 the registry's `agent-runtime` service):
 
 - who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
@@ -490,7 +495,8 @@ running platform.
 
 ## Agent memory (M-09)
 
-`homelabnext.agent.memory.MemoryStore` is the only way to change an agent's memory, and it takes
+`homelabnext.agent.memory.MemoryStore` is the only way to change an agent's **structured**
+memory, the scoped, keyed facts this section describes, and it takes
 only the `memory_updates` of a `report_result` (`apply_report`, which validates the report and,
 given the pack, checks it with `validate_report`) or a list of them (`apply_updates`). Updates
 are validated exactly as inside a report, then applied all or nothing: `add` needs a value and a
@@ -501,10 +507,21 @@ profile's memory.
 Reads are scoped to the owner: `read(profile, scope)` returns that profile's own entries in one
 of its `memory_scopes`; `owner=` naming another profile is a cross-agent read and is refused
 (`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call
-checks the profile's digest, so widening `memory_scopes` on a profile in hand gains nothing.
+checks the profile's digest, which catches a profile edited without recomputing it; it is not
+tamper protection, since anyone holding the dict can re-digest it (a changed `id` or wider
+`memory_scopes` then passes). The caller is platform code, not the model: load the profile with
+`verify_profile(..., policy=, lock=)` first, as `hnx mcp serve --scope-from-profile` does, to
+know it is the reviewed one.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
 
+
+Two stores are called memory, and only this one carries the M-09 guarantees. The broker's
+`memory.write` action (the `memory` lane of `examples/broker/manifest.yml`, [Broker](broker.md),
+[[broker]]) writes free-form per-agent note files under `<data-root>/memory/<profile>/`: no
+scopes, no keys, no retire, no schema. It is a scratch-notes lane, not a path into
+`MemoryStore`; whether to route it through `MemoryStore.apply_updates` or rename it is an open
+decision.
 ## Prompt templates (G-01)
 
 Every prompt the platform sends is a template under `homelabnext/agent/prompts/templates/`

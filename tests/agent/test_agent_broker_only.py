@@ -368,8 +368,9 @@ def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
     assert cli.main(["agent", "lint", str(prof), "--rule", READERS]) == 0
     assert cli.main(["agent", "lint", str(prof), "--rule", BROKER]) == 1
     pol = tmp_path / "policy.yml"
+    # the actor's local-only grants need the policy to attest local-only (lint applies it now)
     entry = {"mcp": ["lake", "records", "shell"], "capabilities": ["cap:lake-query"],
-             "tier": "read", "direct_mcp": ["shell"]}  # fmt: skip
+             "tier": "read", "direct_mcp": ["shell"], "data_tier": "local-only"}  # fmt: skip
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     capsys.readouterr()
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
@@ -509,7 +510,8 @@ def test_an_unused_direct_mcp_entry_is_a_note(tmp_path, capsys):
     prof.write_text(yaml.safe_dump(_actor(mcp=["lake"])))
     pol = tmp_path / "policy.yml"
     entry = {"mcp": ["lake"], "capabilities": ["cap:lake-query"], "tier": "read",
-             "direct_mcp": ["lake", "hnx-broker", "nothing-here"]}  # fmt: skip
+             "direct_mcp": ["lake", "hnx-broker", "nothing-here"],
+             "data_tier": "local-only"}  # fmt: skip
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
     err = capsys.readouterr().err

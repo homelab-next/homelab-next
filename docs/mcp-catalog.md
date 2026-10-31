@@ -167,7 +167,9 @@ entry N)`.
   flags, each once and with a value (`--root`, `--registry`, `--scope-from-profile`, `--policy`,
   `--lock`; `--socket`; `--scope-from-profile` only with `--policy` and `--lock`; the path flags
   `--root`, `--registry`, `--policy`, `--lock` and `--socket` absolute, since a relative one resolves in the
-  client's working directory), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
+  client's working directory; `--scope-from-profile` is the `{profile_file}` template, and render
+  refuses a `profile_file` that is not absolute and writes the profile's resolved path when none is
+  given), so no record reaches `invariants run --plugins-dir`, `--notify-cmd`,
   `broker run`, `workflows run`, `conform run` or `--out`; or a path bin under `origin.path`, which
   render writes absolute under the spec's `checkout_root:` (or `--checkout-root`; required,
   absolute, not a symlink) after checking it is a file there and not a symlink, and which check

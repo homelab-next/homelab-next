@@ -36,7 +36,7 @@ is present when required (always for `execute` and `privileged`). Anything else 
 
 ```yaml
 lanes:
-  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name>
+  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name> (free-form notes, not agent.memory.MemoryStore)
     kind: files
     root: memory
     per_actor: true              # the caller's own profile slug; default for files
