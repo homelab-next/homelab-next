@@ -20,7 +20,7 @@ from homelabnext.compute import (
     ZoneLookup,
     load_fleet,
     load_guests,
-    load_zones_file,
+    open_site,
     plan,
     render,
     validate,
@@ -128,7 +128,7 @@ def test_support_files_are_not_guests():
 
 
 def test_site_file_reader_matches_stub():
-    zones, domain = load_zones_file(SITE)
+    zones, domain = open_site(SITE)
     assert domain == "example.internal"
     assert zones.zone("data") == STUB.zone("data")
     assert zones.zone("nope") is None

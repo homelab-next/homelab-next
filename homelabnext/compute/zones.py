@@ -9,10 +9,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from homelabnext import sops
-
 from .model import ComputeError, ComputeUnreadable, ZoneFlow, ZoneInfo, ZoneLookup
 
 
@@ -44,19 +40,6 @@ def zone_from_mapping(z: Mapping[str, Any]) -> ZoneInfo:
         internet=(z.get("egress") or {}).get("internet"),
         subnet6=z.get("subnet6"),
     )
-
-
-def load_zones_file(path: str | Path) -> tuple[ZoneLookup, str | None]:
-    """Read the ``zones:`` list (and ``site.domain``) of a site.yml-shaped file."""
-    try:
-        doc = yaml.safe_load(sops.read_text(path))
-    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
-        raise ComputeUnreadable(f"cannot read site file {path}: {exc}") from exc
-    if not isinstance(doc, dict) or not isinstance(doc.get("zones"), list):
-        raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
-    zones = MappingZones(zone_from_mapping(z) for z in doc["zones"])
-    domain = (doc.get("site") or {}).get("domain")
-    return zones, domain
 
 
 class SiteAdapter:
@@ -155,13 +138,13 @@ def _ir_zone_rules(doc: Mapping[str, Any], zones: list[str]) -> list[Any]:
     ``homelabnext.network.ir`` builds the rules (protocol defaults, icmp beside ports, the
     ``to: any`` rules last); this only hands it the zone rules, so no registry is needed.
     """
-    from homelabnext.network.ir import _rules
+    from homelabnext.network.ir import firewall_rules
 
     fw = doc.get("firewall") or {}
     z2z = [dict(r) for r in fw.get("zone_to_zone") or [] if isinstance(r, Mapping)]
     nets: defaultdict[str, str] = defaultdict(str, dict.fromkeys(zones, ""))
     try:
-        return _rules({"firewall": {"zone_to_zone": z2z}, "zones": []}, None, nets, {})
+        return firewall_rules({"firewall": {"zone_to_zone": z2z}, "zones": []}, None, nets, {})
     except (KeyError, TypeError, ValueError) as exc:
         raise ComputeError(
             f"firewall.zone_to_zone: cannot read the rules ({exc!r}); check with hnx site validate"
@@ -178,8 +161,19 @@ def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
     protocols or ports (any).  ``service_exceptions`` (host-specific, to a service) are not zone
     flows and are not read.  An allow of a whole protocol after a port-level deny of it on the
     same pair (which the site validator refuses) cannot be written as allows and is an error.
+    A rule to ``any`` never stands for a one-way zone (``egress.one_way``), which nothing reaches.
     """
     zones = [str(z["id"]) for z in doc.get("zones") or [] if isinstance(z, Mapping) and z.get("id")]
+    # a one-way zone is never reached (the site validator refuses an allow to ``any`` on a site
+    # that has one); this is read without that validation, so ``any`` never stands for it here
+    one_way = {
+        str(z["id"])
+        for z in doc.get("zones") or []
+        if isinstance(z, Mapping)
+        and z.get("id")
+        and isinstance(z.get("egress"), Mapping)
+        and z["egress"].get("one_way")
+    }
     state: dict[tuple[str, str], dict[str, _Decided]] = {}
     for rule in _ir_zone_rules(doc, zones):
         if rule.src.kind != "zone":
@@ -187,7 +181,7 @@ def flows_from_site(doc: Mapping[str, Any]) -> tuple[ZoneFlow, ...]:
         if rule.dst.kind == "zone":
             dsts = [rule.dst.name]
         elif rule.dst.kind == "any":
-            dsts = list(zones)
+            dsts = [z for z in zones if z not in one_way]
         else:
             continue
         protos = TAILNET_PROTOCOLS if rule.protocol == "any" else (rule.protocol,)

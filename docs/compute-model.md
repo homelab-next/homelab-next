@@ -155,17 +155,20 @@ bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would
 traffic onto the network. Interface names are checked (Linux names,
 at most 15 characters), and a mirroring node's name must be one a guest can name.
 
-The model does not import a site package. It reads zones through a small protocol:
+The guest model (`homelabnext.compute.model`, `validate`) reads zones through a small protocol:
 
 ```python
 class ZoneLookup(Protocol):
     def zone(self, zone_id: str) -> ZoneInfo | None: ...  # id, subnet, gateway, dhcp_range, vlan_id
+    def all(self) -> list[ZoneInfo]: ...  # every zone (a guest's extra addresses are held against all)
 ```
 
+The site is read through the network package, never a second reader:
 `open_site(path)` reads the site document with `homelabnext.network.load_site` (the same loader as
-`hnx site`) and takes its `zones:` list and `site.domain`. It does not validate the site; run
-`hnx site validate` for that. `load_zones_file` is the loader-free reader kept for tools that only
-have a zones file. Tests can also pass a stub.
+`hnx site`, so duplicate keys are refused the same way) and takes its `zones:` list and
+`site.domain`; the zone flows come from the network IR's own `firewall_rules`, and compute
+validation uses the network validator's IPv6 prefix rules. It does not validate the site; run
+`hnx site validate` for that. Tests can also pass a stub (`MappingZones`).
 
 ## Rendering
 
