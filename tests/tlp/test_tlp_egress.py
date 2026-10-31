@@ -29,6 +29,10 @@ from homelabnext.tlp_egress import (
         ("TLP:GREEN report", [Label.GREEN]),
         ("TLP RED", [Label.RED]),  # no colon, a label word
         ("TLP protocol", []),  # no colon, no label word: prose
+        ("TLP AMBER STRICT", [Label.RED]),  # the colon-less form follows the same rules
+        ("TLP AMBER-STRICT", [Label.RED]),
+        ("TLP AMBER+STRICT", [Label.AMBER_STRICT]),
+        ("TLP green", [Label.GREEN]),
         # every other spelling of amber+strict is not a label: red (decision 1)
         ("TLP:AMBER STRICT", [Label.RED]),
         ("TLP:AMBER-STRICT", [Label.RED]),

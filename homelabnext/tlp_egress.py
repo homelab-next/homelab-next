@@ -42,7 +42,9 @@ __all__ = [
 #: a marker: ``TLP`` then a colon (``TLP:RED``, ``tlp : amber``), the word read by
 #: :func:`_marker_label`; or ``TLP`` then a label word with no colon (``TLP RED``)
 _COLON = re.compile(r"TLP\s*:\s*", re.IGNORECASE | re.ASCII)
-_BARE = re.compile(r"TLP\s+(CLEAR|WHITE|GREEN|AMBER|RED)(?![A-Za-z])", re.IGNORECASE | re.ASCII)
+_BARE = re.compile(
+    r"TLP\s+(?=(?:CLEAR|WHITE|GREEN|AMBER|RED)(?![A-Za-z]))", re.IGNORECASE | re.ASCII
+)
 _WORD = re.compile(r"[A-Za-z]+", re.ASCII)
 _PLUS_WORD = re.compile(r"\s*\+\s*([A-Za-z]+)", re.ASCII)
 _PLUS = re.compile(r"\s*\+", re.ASCII)
@@ -89,7 +91,8 @@ def _marker_label(rest: str) -> tlp.Label:
 def _scan(text: str) -> list[tlp.Label]:
     text = _normalised(text)
     out = [_marker_label(text[m.end() :]) for m in _COLON.finditer(text)]
-    out += [tlp.read(m.group(1)) for m in _BARE.finditer(text)]
+    # a colon-less marker starts with a label word and is read exactly as a colon one
+    out += [_marker_label(text[m.end() :]) for m in _BARE.finditer(text)]
     return out
 
 
