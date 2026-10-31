@@ -1360,29 +1360,20 @@ def check_repo(
 
 
 # ---------------------------------------------------------------- semantic checks
-NOTE_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.md$")
-
-
 def check_note_filename(filename: str, frontmatter: dict) -> list[str]:
-    """Filename must be ``<date>-<requesting-agent>-<slug>.md`` and agree with the frontmatter."""
-    m = NOTE_FILENAME_RE.match(filename)
-    if not m:
-        return [f"filename {filename!r} is not <YYYY-MM-DD>-<agent>-<slug>.md"]
-    date, rest = m.groups()
-    out = []
-    created = str(frontmatter.get("created", ""))
-    if created[:10] != date:
-        out.append(f"filename date {date} != created {created[:10]!r}")
-    agent = str(frontmatter.get("requesting_agent", "")).partition(":")[2]
-    if not agent or not (rest == agent or rest.startswith(agent + "-")) or rest == agent:
-        out.append(
-            f"filename must be '{date}-{agent}-<slug>' (requesting_agent {frontmatter.get('requesting_agent')!r})"
-        )
-    return out
+    """Filename must be ``<date>-<requesting-agent>-<slug>.md`` and agree with the frontmatter:
+    the records lane's own rule (:func:`homelabnext.records.notes.check_filename`, which
+    ``hnx records`` applies), never a second copy of it here."""
+    from homelabnext.records.notes import check_filename
+
+    return check_filename(filename, frontmatter)
 
 
 def check_kanban_board(items: list[dict]) -> list[str]:
-    """Cross-card rules the generator enforces fatally."""
+    """The ``registers/kanban_item`` cross-card rules JSON Schema cannot express (unique ids,
+    a step card names an open step of an existing project, a project with every step done is
+    not in ``partial``), in executable form: this repository ships no board generator, so a
+    board's own generator is held to these (schemas/registers/README.md)."""
     out: list[str] = []
     ids = [i["id"] for i in items if "id" in i and not i["id"].endswith("NEW")]
     for dup in sorted({x for x in ids if ids.count(x) > 1}):
