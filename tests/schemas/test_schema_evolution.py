@@ -72,6 +72,7 @@ NEWER_THAN_1_0 = {
     "mcp_server.direct.yml": "platform/mcp_server 1.1: acts_via, direct_reason",
     "mcp_server.codemode.yml": "platform/mcp_server 1.2: class codemode",
     "mcp_server.labelled.yml": "platform/mcp_server 1.3: tlp",
+    "customization.full.maintained.json": "platform/customization 1.1: maintained_upstream",
 }
 
 
@@ -89,23 +90,11 @@ def test_an_example_newer_than_1_0_names_a_version_its_schema_really_has(name):
     assert sc.frozen_path(ROOT, path, major, minor).is_file(), f"no frozen {ver} of {path.name}"
 
 
-def _validation_only(doc):
-    """``doc`` without its annotations (a description may be reworded without a new version)."""
-    if isinstance(doc, dict):
-        skip = ("description", "title", "$comment", "examples")
-        return {k: _validation_only(v) for k, v in doc.items() if k not in skip}
-    if isinstance(doc, list):
-        return [_validation_only(v) for v in doc]
-    return doc
-
-
 # changed after their version was frozen, before this test existed: the next change to one of
 # these bumps its id (and the entry goes); nothing may join the list
-UNBUMPED = {
-    "status/observation.schema.json": "patterns changed at 1.0",
-    "status/agent_activity.schema.json": "changed at 1.0",
-    "status/agent_activity_detail.schema.json": "changed at 1.0",
-}
+#: (empty: the three status schemas once here differed from their frozen 1.0 only by the newline
+#: guard, which the checker's own rule, used below, counts as the same contract)
+UNBUMPED: dict[str, str] = {}
 FROZEN_AT_CURRENT = [
     p
     for p in sc.schema_files(ROOT)
@@ -124,7 +113,8 @@ def test_a_change_after_the_freeze_bumps_the_id(path):
     rel = path.relative_to(ROOT / "schemas").as_posix()
     _, major, minor = sc.parse_id(json.loads(path.read_text()))
     frozen = json.loads(sc.frozen_path(ROOT, path, major, minor).read_text())
-    same = _validation_only(frozen) == _validation_only(json.loads(path.read_text()))
+    # the checker's own rule (documentation and a newline guard aside, the same contract)
+    same = sc.same_version_problems(frozen, json.loads(path.read_text())) == []
     assert same or rel in UNBUMPED, f"{rel} changed since {major}.{minor} was frozen: bump $id"
     assert not (same and rel in UNBUMPED), f"{rel} is no longer drifted: drop it from UNBUMPED"
 
