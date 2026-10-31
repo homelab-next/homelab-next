@@ -82,9 +82,13 @@ def _column(name: str, spec: Mapping[str, Any], required: bool) -> Column:
     if t == "string":
         if spec.get("format") == "date-time":
             return Column(name, "timestamp", required)
-        enum = spec.get("enum", ())
-        if not all(isinstance(v, str) for v in enum):
-            raise LakeError(f"column {name!r}: a string column's enum lists strings")
+        if "enum" not in spec:
+            return Column(name, "string", required)
+        enum = spec["enum"]
+        if not isinstance(enum, list) or not enum or not all(type(v) is str for v in enum):
+            raise LakeError(
+                f"column {name!r}: a string column's enum is a non-empty list of strings"
+            )
         return Column(name, "string", required, enum=tuple(enum))
     if t == "integer":
         return Column(name, "long", required)
@@ -93,6 +97,8 @@ def _column(name: str, spec: Mapping[str, Any], required: bool) -> Column:
     if t == "boolean":
         return Column(name, "boolean", required)
     if t == "array":
+        if "enum" in spec.get("items", {}):
+            raise LakeError(f"column {name!r}: an enum on list items is not supported")
         inner = _column("item", spec.get("items", {}), False).type
         if f"list<{inner}>" not in LISTS:
             raise LakeError(f"column {name!r}: arrays of {inner!r} are not supported")
@@ -189,6 +195,11 @@ def column_diffs(want: Mapping[str, str], have: Mapping[str, str]) -> list[str]:
 
 
 def row_label(row: Mapping[str, Any]) -> tlp.Label:
-    """A stored row's TLP label, read as data: a row without one, or with anything but a label
-    (a row stored before the column existed, a damaged value), is ``red`` (ADR-0033 decision 5)."""
-    return tlp.read(row.get(LABEL_COLUMN)) if isinstance(row, Mapping) else tlp.Label.RED
+    """A stored row's TLP label: the lake stores only the canonical spellings, so a row without
+    one, or with anything else (a row stored before the column existed, an alternate spelling
+    such as ``white`` or ``Green`` that a writer bypassing the lake stored, a damaged value), is
+    ``red`` (ADR-0033 decision 5)."""
+    value = row.get(LABEL_COLUMN) if isinstance(row, Mapping) else None
+    if type(value) is str and value in tlp.LABELS:
+        return tlp.parse(value)
+    return tlp.Label.RED

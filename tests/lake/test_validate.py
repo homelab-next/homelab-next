@@ -163,8 +163,13 @@ def test_one_unlabelled_row_refuses_the_whole_batch():
         ({"tlp": "amber+strict"}, "amber+strict"),
         ({}, "red"),  # a row stored before the column existed
         ({"tlp": None}, "red"),
-        ({"tlp": "Green"}, "green"),  # read as data: an accepted spelling
+        # the lake stores only the canonical spelling: anything else was stored around it
+        ({"tlp": "Green"}, "red"),
+        ({"tlp": " green"}, "red"),
+        ({"tlp": "TLP:GREEN"}, "red"),
+        ({"tlp": "white"}, "red"),
         ({"tlp": "gren"}, "red"),
+        ({"tlp": 1}, "red"),
         ("not a row", "red"),
     ],
 )
@@ -172,3 +177,57 @@ def test_a_stored_row_reads_its_label_or_red(stored, want):
     from homelabnext.lake.tables import row_label
 
     assert str(row_label(stored)) == want
+
+
+class _AlwaysEqual(str):
+    def __eq__(self, other):
+        return True
+
+    def __hash__(self):
+        return hash("red")
+
+
+def test_a_str_subclass_cannot_pass_the_label_check():
+    with pytest.raises(RowRejected, match="'bogus' is not one of"):
+        normalize_rows(S, [row(tlp=_AlwaysEqual("bogus"))])
+    stored = normalize_rows(S, [row(tlp=_AlwaysEqual("amber"))])[0]["tlp"]
+    assert type(stored) is str and stored == "amber"
+    from homelabnext.lake.tables import row_label
+
+    assert str(row_label({"tlp": _AlwaysEqual("clear")})) == "red"
+
+
+def test_a_label_object_is_refused_with_a_hint():
+    from homelabnext.tlp import Label
+
+    with pytest.raises(RowRejected, match="pass the canonical spelling"):
+        normalize_rows(S, [row(tlp=Label.CLEAR)])
+
+
+@pytest.mark.parametrize(
+    "spec, needle",
+    [
+        ({"type": "string", "enum": []}, "non-empty list"),
+        ({"type": "string", "enum": "red"}, "non-empty list"),
+        ({"type": "string", "enum": ["red", 1]}, "non-empty list"),
+        ({"type": "array", "items": {"type": "string", "enum": ["red"]}}, "list items"),
+    ],
+)
+def test_an_enum_the_lake_cannot_enforce_is_refused(spec, needle):
+    from homelabnext.lake import LakeError
+    from homelabnext.lake.tables import _column
+
+    with pytest.raises(LakeError, match=needle):
+        _column("c", spec, False)
+
+
+def test_an_enum_on_a_struct_field_is_enforced():
+    from homelabnext.lake.tables import _column
+    from homelabnext.lake.validate import _check
+
+    col = _column(
+        "s", {"type": "object", "properties": {"k": {"type": "string", "enum": ["a"]}}}, False
+    )
+    problems: list[str] = []
+    _check(col, {"k": "b"}, "s", problems)
+    assert problems and "'b' is not one of a" in problems[0]
