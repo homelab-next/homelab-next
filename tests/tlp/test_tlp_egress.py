@@ -33,6 +33,8 @@ from homelabnext.tlp_egress import (
         ("TLP AMBER-STRICT", [Label.RED]),
         ("TLP AMBER+STRICT", [Label.AMBER_STRICT]),
         ("TLP green", [Label.GREEN]),
+        ("TLP AMBERSTRICT", [Label.RED]),  # glued: not a label
+        ("TLP REDACTED", [Label.RED]),  # a word that starts like a label is read whole: red
         # every other spelling of amber+strict is not a label: red (decision 1)
         ("TLP:AMBER STRICT", [Label.RED]),
         ("TLP:AMBER-STRICT", [Label.RED]),
