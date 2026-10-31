@@ -256,6 +256,8 @@ _TIGHTENING_IF_NEW = (
         "minContains",
         "maxContains",
         "unevaluatedProperties",
+        "multipleOf",
+        "contentSchema",
     }
 )
 
@@ -509,7 +511,12 @@ def is_additive(
 
     Additive means every document valid under ``old`` stays valid under ``new``
     (checked structurally and conservatively): properties/enum members/types may
-    be added; nothing may be removed, required, or tightened.  ``known`` is the set of ``$id``
+    be added; nothing may be removed, required, or tightened.  One exception is policy, not
+    proof (``docs/interfaces.md`` section 6): a new property of an open object is not compared
+    with what the old schema applied to that undeclared key, since an undeclared key carries no
+    contract.  A new pattern property is compared (it can constrain a declared key), and so is
+    a new ``then``/``else`` beside an ``if`` unless no old document can meet its condition
+    (:func:`_admits_old`).  ``known`` is the set of ``$id``
     values a later-minor ``$ref`` may resolve to (:data:`_KNOWN_IDS`); a call without it keeps the
     enclosing call's (:func:`additive_problems` always sets it, empty when not given).
     """
@@ -606,11 +613,16 @@ def is_additive(
         elif key in _NUM_UPPER:
             if nv < ov:
                 out.append(f"{p}: lowered {ov} -> {nv}")
+        elif key == "multipleOf":
+            if ov != nv and not _divides(nv, ov):
+                out.append(f"{p}: changed {ov!r} -> {nv!r} (only a divisor of the old is additive)")
         elif key == "additionalProperties":
             if ov is not False and nv is False:
                 out.append(f"{p}: additionalProperties tightened to false")
-            elif isinstance(ov, dict) and isinstance(nv, dict):
-                out += is_additive(ov, nv, p)
+            elif isinstance(nv, dict) and ov is not False:
+                # ``true`` admits every value: compare as the empty schema, so a schema that now
+                # constrains the additional properties is a new constraint (it tightens)
+                out += is_additive({} if ov is True else ov, nv, p)
         elif key in {"properties", "$defs", "definitions", "patternProperties"}:
             strict = _STRICT_DEFS.get() or frozenset()
             for name, osub in ov.items():
@@ -620,6 +632,16 @@ def is_additive(
                 used = key in {"$defs", "definitions"} and name in strict
                 with _within(f"a {key} entry used from a non-monotone position" if used else None):
                     out += is_additive(osub, nv[name], f"{p}.{name}")
+            if key == "patternProperties" and isinstance(nv, dict) and isinstance(ov, dict):
+                for name, nsub in nv.items():
+                    if name in ov:
+                        continue
+                    if key == "patternProperties" and _constrains(nsub):
+                        # keys an old document carried may match the new pattern (beside a
+                        # declared property, an old pattern or additionalProperties): which
+                        # ones is a regex intersection the check does not decide, so it fails
+                        # closed
+                        out.append(f"{p}.{name}: new pattern property constrains existing keys")
         elif key in {"items", "contains", "not", "if", "then", "else", "propertyNames"}:
             if isinstance(ov, (dict, bool)):
                 with _within(_non_monotone_keyword(key, old, new)):
@@ -649,6 +671,9 @@ def is_additive(
             continue  # every old document already meets a branch (the old schema implies it)
         elif key in {"allOf", "anyOf", "oneOf", "if", "unevaluatedItems"} | _NEW_SUBSCHEMA:
             out.append(f"{path}.{key}: new constraint '{key}' added (tightens)")
+        elif key in {"then", "else"} and "if" in new and not _admits_old(path, new[key], old):
+            # beside an ``if`` the branch applies to the documents it picks, old ones included
+            out.append(f"{path}.{key}: new constraint '{key}' added (tightens)")
         elif key == "additionalProperties" and isinstance(new[key], dict):
             out.append(f"{path}.additionalProperties: new constraint (a schema) added (tightens)")
         elif key in {"dependentSchemas", "dependentRequired"}:
@@ -656,6 +681,88 @@ def is_additive(
         elif key == "type":
             out.append(f"{path}.type: type constraint added")
     return out
+
+
+def _divides(new: Any, old: Any) -> bool:
+    """``old`` is a whole multiple of ``new``: every multiple of ``old`` is one of ``new``."""
+    from fractions import Fraction
+
+    if isinstance(new, bool) or isinstance(old, bool):
+        return False
+    try:
+        q = Fraction(str(old)) / Fraction(str(new))
+    except (ValueError, ZeroDivisionError, TypeError):
+        return False
+    return q.denominator == 1
+
+
+def _constrains(sub: Any) -> bool:
+    """``sub`` can refuse a value (anything but ``true`` or a schema of annotations only)."""
+    if sub is True:
+        return False
+    return not (isinstance(sub, dict) and all(k in _ANNOTATIONS for k in sub))
+
+
+#: one step of a path that keeps the instance the same: a subschema there applies to the very
+#: document its parent does (``allOf[2]``, ``then``), never to a property or an item of it
+_IN_PLACE_STEP = re.compile(r"\.(?:allOf|anyOf|oneOf)\[\d+\]|\.then|\.else")
+
+
+def _admits_old(path: str, sub: Any, parent: dict) -> bool:
+    """``sub``, a new ``then``/``else`` at ``path``, accepts every document the old schema
+    accepted: it constrains nothing, or it is ``if``/``then`` (``else`` admitting old documents
+    in turn) whose ``if`` no old document can meet (:func:`_old_cannot_meet`); ``parent`` is
+    the old schema the branch is added beside.  This is how a
+    new value of a closed discriminator (records/note's ``type``) gets its own rules: its branch
+    sits in a new ``else``, where only a document carrying the new value is affected."""
+    if not _constrains(sub):
+        return True
+    if not isinstance(sub, dict) or "if" not in sub:
+        return False
+    if any(k not in _ANNOTATIONS and k not in {"if", "then", "else"} for k in sub):
+        return False
+    if "else" in sub and not _admits_old(path, sub["else"], parent):
+        return False
+    return _old_cannot_meet(path, sub["if"], parent)
+
+
+def _old_cannot_meet(path: str, cond: Any, parent: dict) -> bool:
+    """No document the old schema accepted meets ``cond``: ``cond`` requires a property to hold
+    a value (``const``, or ``enum``) the old top-level schema's enumeration of that property
+    excludes.  Only proven where ``path`` applies to the top-level document (in-place steps
+    only) and ``parent``, the old schema holding the new branch, really is reached from the
+    top-level one along it, so the old top-level ``properties`` speak for the same instance."""
+    roots = _ROOTS.get()
+    root = roots[0] if roots else None
+    if not path.startswith("$") or _IN_PLACE_STEP.sub("", path[1:]) != "":
+        return False
+    node: Any = root
+    for step in _IN_PLACE_STEP.findall(path[1:]):
+        m = re.fullmatch(r"\.(\w+)(?:\[(\d+)\])?", step)
+        if not m or not isinstance(node, dict):
+            return False
+        node = node.get(m.group(1))
+        if m.group(2) is not None:
+            i = int(m.group(2))
+            node = node[i] if isinstance(node, list) and i < len(node) else None
+    if node is not parent or not isinstance(root, dict) or not isinstance(cond, dict):
+        return False
+    old_props = root.get("properties") if isinstance(root.get("properties"), dict) else {}
+    props = cond.get("properties") if isinstance(cond.get("properties"), dict) else {}
+    for name in cond.get("required") or ():
+        want, have = props.get(name), old_props.get(name)
+        if not isinstance(want, dict) or not isinstance(have, dict):
+            continue
+        wanted = [want["const"]] if "const" in want else want.get("enum")
+        allowed = [have["const"]] if "const" in have else have.get("enum")
+        if (
+            isinstance(wanted, list)
+            and isinstance(allowed, list)
+            and wanted
+            and all(w not in allowed for w in wanted)
+        ):
+            return True
+    return False
 
 
 #: keywords that constrain through a subschema or a reference: new where the old schema had none,
