@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from agent_support import inputs, library, manifest, spec
 
 from homelabnext import cli
@@ -19,7 +20,7 @@ from homelabnext.agent import (
     session_problems,
     start_session,
 )
-from homelabnext.agent.access import level_of
+from homelabnext.agent.access import CLASS_LEVEL, level_of
 from homelabnext.registry import load
 
 REPO = Path(__file__).resolve().parents[2]
@@ -153,6 +154,24 @@ def test_levels_follow_the_worst_class():
     assert level_of(["egress"]) == "execute"
     assert level_of(["exec", "credential"]) == "privileged"
     assert level_of(None) == "unclassified"
+
+
+def test_every_class_of_the_table_has_a_level():
+    """A class without a CLASS_LEVEL entry would fall to 'privileged' silently (hnx-codemode,
+    which only reads, was rated above the broker)."""
+    table = yaml.safe_load((REPO / "homelabnext/agent/tool_classes.yml").read_text())
+    assert set(CLASS_LEVEL) == set(table["classes"])
+    assert level_of(["read", "codemode"]) == "read"
+
+
+def test_no_example_is_both_egress_and_send():
+    table = yaml.safe_load((REPO / "homelabnext/agent/tool_classes.yml").read_text())
+
+    def examples(cls):
+        inside = table["classes"][cls].split("(", 1)[1].split(")", 1)[0]
+        return {w.strip().removeprefix("a ").removeprefix("an ") for w in inside.split(",")}
+
+    assert examples("egress") & examples("send") == set()
 
 
 def test_cli_pack_with_profile_starts_a_session(profile, tmp_path, capsys):

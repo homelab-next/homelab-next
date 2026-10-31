@@ -513,7 +513,7 @@ def compile_profile(
         "data_tier": spec["data_tier"],
         **({"tlp_ceiling": tlp_ceiling} if tlp_ceiling is not None else {}),
         "budgets": {k: spec["budgets"][k] for k in BUDGET_KEYS},
-        "budget_mode": spec.get("budget_mode", "warn"),
+        "budget_mode": spec.get("budget_mode", "enforce"),
         "reads_untrusted": reads,
     }
     if include:

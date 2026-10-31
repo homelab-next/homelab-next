@@ -40,13 +40,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.3, additive: the review tier `audit` in `include.require_reviews`; 1.4, additive: `include.detail`),
-`agent/report_result` (1.1, additive: `output`),
-`agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
-1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
-`secrets`, `max_output_bytes`)
-and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional
-`operation` and `caller`), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+Each schema's current version is the last segment of its `$id` (`schemas/<family>/<name>.schema.json`); several have additive revisions past 1.0 (`agent/profile`, `broker/manifest`, `broker/handler`, `broker/decision`, `broker/audit` among them), so read the `$id` rather than a list here. Every version is frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 
@@ -120,7 +114,10 @@ The compiler:
    ceiling allows it;
 4. refuses an `include:` rule that would seed knowledge from something the profile is not granted
    (`IncludeViolation`, see "Linked knowledge" below);
-5. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`);
+5. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`),
+   and writes `budget_mode` (`enforce` unless the spec says `warn`): a field for the runtime that
+   meters a run, which no code in this package reads yet, so a cap is a cap only where that
+   runtime enforces it;
 6. sorts and de-duplicates lists, so source order never changes the result;
 7. records `provenance`: each part's id, source and content digest, plus the digest of the
    normalised spec;
@@ -156,16 +153,20 @@ through allowlisted broker actions (G-04).
   and broker tier, and the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]) every MCP server (the
   union of its tools' classes: `ToolClasses.load` derives the table's `mcp` section), to capability
   classes (`read`, `record-write`, `exec`, `file-write`,
-  `egress`, `credential`) and lists the classes a reader may not hold (`reader_forbidden`: exec,
-  file-write, egress, credential). A grant with several classes counts as its worst. A grant the
+  `egress`, `send`, `credential`, `codemode`) and lists the classes a reader may not hold
+  (`reader_forbidden`: exec, file-write, egress, send, credential, codemode) and those only the
+  broker may hold (`broker_only`: exec, file-write, send, credential). A grant with several classes counts as its worst. A grant the
   table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
   server means adding a reviewed catalog record (the repository's own read-only server,
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
   table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
   its own is refused (it would class servers by hand and skip the catalog's status and data-tier
   rules), and so is one whose `reader_forbidden` or `broker_only` leaves out a class the packaged
-  table lists, or that classes one of the packaged table's capabilities or tiers without a class
-  the packaged table gives it (`cap:dns: [read]`): a table may forbid more, never less.
+  table lists, or that classes one of the packaged table's capabilities or tiers without a
+  `reader_forbidden` or `broker_only` class the packaged table gives it (`cap:dns: [read]`): a
+  table may forbid more, never less. Other classes may differ (`cap:records: [read]` for a
+  packaged `record-write` loads), which changes a grant's level in the access block but not what
+  the reader and broker rules allow.
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a

@@ -523,15 +523,22 @@ def broker_problems(
     ``grants`` has ``mcp``, ``capabilities`` and optionally ``tier``.  ``direct`` is the ceiling
     policy's ``direct_mcp`` for this profile (:meth:`CeilingPolicy.direct_mcp`); ``None`` (no
     policy at hand) allows no ``acts_via: direct`` server.  An MCP server the catalog does not
-    hold is left to :func:`grant_problems`, which refuses it for every profile.
+    hold is refused here too (as an unknown capability or tier is): unknown is never assumed not
+    to act, so this rule fails closed on its own, whichever rules a lint runs.
     """
     classes = classes or default_classes()
     who = _shown(who)
     only = classes.broker_only
     problems: list[str] = []
-    for _, name in _entries(grants.get("mcp")):
+    for at, name in _entries(grants.get("mcp")):
         got = classes.classify("mcp", name)
-        acting = sorted(set(got or ()) & only)
+        if got is None:
+            problems.append(
+                f"{who} is granted an unknown MCP server (mcp entry {at}), which is not in the "
+                "catalog (unknown is never assumed not to act)"
+            )
+            continue
+        acting = sorted(set(got) & only)
         record = (classes.catalog or {}).get(name) or {}
         # a broker claim is judged by the broker front's own test below, not by the floor
         if record.get("below_floor") and record.get("acts_via") != "broker":

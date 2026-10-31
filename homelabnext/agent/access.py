@@ -13,8 +13,9 @@ One derivation feeds two consumers, so they cannot disagree:
 (:mod:`homelabnext.agent.terms`): the project's vocabulary and authorized scope.
 
 Levels.  A grant's level is the worst of its capability classes (``tool_classes.yml``):
-``read`` -> read, ``record-write``/``file-write`` -> write, ``exec``/``egress`` -> execute,
-``credential`` -> privileged.  A grant the table does not classify is listed as
+``read``/``codemode`` -> read, ``record-write``/``file-write`` -> write,
+``exec``/``egress``/``send`` -> execute, ``credential`` -> privileged (:data:`CLASS_LEVEL`,
+one entry per class of the table).  A grant the table does not classify is listed as
 ``unclassified`` (never assumed harmless).  Broker actions carry their own tier.
 
 Denials are explicit: every registry capability, MCP server and broker action the principal does
@@ -43,6 +44,7 @@ CLASS_LEVEL = {
     "send": "execute",
     "exec": "execute",
     "credential": "privileged",
+    "codemode": "read",  # searches and describes granted actions; running one is codemode.execute
 }
 _LEVEL_RANK = {lv: i for i, lv in enumerate(LEVELS)}
 

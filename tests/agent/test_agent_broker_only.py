@@ -521,3 +521,15 @@ def test_an_unused_direct_mcp_entry_is_a_note(tmp_path, capsys):
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
     assert "in direct_mcp" not in capsys.readouterr().err
+
+
+def test_an_unknown_mcp_server_fails_the_broker_rule_on_its_own():
+    """actors-act-via-broker alone (the G-13 observable) refuses a server the catalog does not
+    hold, as it does an unknown capability or tier: unknown is never assumed not to act."""
+    from homelabnext.agent.readers import broker_problems
+
+    got = broker_problems({"mcp": ["lake", "no-such-server"], "capabilities": []})
+    assert got == [
+        "profile is granted an unknown MCP server (mcp entry 2), which is not in the catalog "
+        "(unknown is never assumed not to act)"
+    ]
