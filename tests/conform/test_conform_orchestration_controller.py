@@ -5,7 +5,7 @@ The adapter runs the whole ``orchestration`` suite against the loopback stand-in
 controller's job API (``conformance/fakes/llm_orchestrator_api.py``, shapes cited from the Go code
 at ``a52a1c4``).  As recorded, the stand-in fails the same three MUST checks the live controller
 failed on 2026-10-22; with the proposed controller fixes turned on, it passes all of them.  The
-five capacity checks need ``admission``, which a52a1c4 lacks (they skip); with the in-flight route
+six capacity checks need ``admission``, which a52a1c4 lacks (they skip); with the in-flight route
 that landed upstream they run, the kill and restart hooks driving the stand-in's model of the
 controller's process kill and restart reconciliation.  The live run is described in
 docs/orchestration-controller.md.

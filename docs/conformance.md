@@ -45,8 +45,14 @@ HNX_CONFORM_TARGET=staging python -m pytest conformance/object-store
 `hnx conform` needs a source checkout (suites live in `conformance/`); `--root DIR` points at one.
 Exit codes follow the repository convention: `0` ok, `1` a check failed, too few checks executed
 (or a capability has no passing test), `2` misconfiguration (including a `--check` id no suite
-has), `100` the run could not be measured (the subject could not be built, for example the
-service is unreachable - neither a pass nor a failure).
+has, a waiver the suite cannot honour, a `builtin:` other than `fake`, `broken` or
+`broken:<mutant>`, or an adapter missing an endpoint or credential), `100` the run could not be
+measured (the subject could not be built, for example the service is unreachable - neither a
+pass nor a failure).  When several capabilities run (`run all`, `report`), each gets a verdict
+(`pass`, `fail`, `misconfigured`, `unmeasured`) and the exit code is the first of `1`, `2`,
+`100` that any verdict calls for: one real failure exits `1` however many others could not be
+measured, so an outage never hides a failure.  An adapter's missing setting is recorded for its
+capability and the others still run.  `--out` creates its directory.
 
 `hnx conform run` fails a capability that executed fewer than six checks (or, with `--check`,
 none of the selected ones): skips do not count, so a subject on which everything skips cannot
@@ -284,22 +290,37 @@ command handler is the trust boundary (`conformance/protocols/broker.py`).
 
 ```json
 {"schema": "homelabnext.conform.report/1", "target": "fake", "ok": true,
- "capabilities": {"secrets": {"suite": true, "passing": true, "executed": 11,
-                              "failed_must": [], "mutants": [{"name": "...", "detected": true}]}},
+ "verdicts": {"pass": 18, "fail": 0, "unmeasured": 0, "misconfigured": 0},
+ "capabilities": {"secrets": {"suite": true, "passing": true, "verdict": "pass", "executed": 11,
+                              "failed_must": [], "mutants": [{"name": "...", "detected": true}],
+                              "provenance": {"suite_sha256": "...", "tree_sha256": "...",
+                                             "git_sha": "...", "dirty": false,
+                                             "adapter": "builtin:fake"}}},
  "capabilities_without_passing_test": []}
 ```
+
+`verdict` is `fail` for no suite, a failing `must` check, too few checks, or a mutant not caught
+(or none to catch); `unmeasured` or `misconfigured` only when nothing else failed.  Provenance
+says what produced a result: `suite_sha256` hashes the suite file, `tree_sha256` every `.py`
+file under `conformance/suites`, `protocols` and `fakes` (the shared check code a suite imports),
+`dirty` whether the checkout had uncommitted changes (so `git_sha` alone does not name the code
+that ran), and an adapter binding also records `adapter_file` and its `adapter_sha256`.
 
 A capability has a **passing test** when its suite exists, executes at least six checks, has no
 failing `must` check, and (on the `fake` target) catches every one of its mutants.  Capabilities
 named in `capabilities.yml` but lacking a suite are listed too.
 
 `capabilities.yml` at the repository root is the list of capabilities this tree declares (the eighteen
-names, one per line under `capabilities:`).  The exporter and invariants X-04 and X-10 read it, so a
+names, one per line under `capabilities:`).  One reader validates it
+(`homelabnext.conform.registry.declared_capabilities`): the `capabilities` key must be present
+and hold a non-empty list of distinct names, or the report exits `2` and X-04 and X-10 report
+an error, never a pass with nothing tested.  The exporter, the graph and invariants X-04 and X-10 read it, so a
 deployment that adds a capability adds it there and must then ship its suite, or the report and the
 invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
 falls back to the built-in eighteen).  `make conform-check` (`tools/conform_coverage.py`) runs
 `hnx conform list` and `hnx conform report --json` and fails if any of the eighteen lacks a passing
-test; `make conform` runs every suite against the built-in fakes, and the nightly workflow runs
+test; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
+extended suites run under pytest), and the nightly workflow runs
 `hnx conform run all` after the lab-in-a-box smoke.
 
 `homelabnext/conform/plugins/x10_conformance.py` is the invariant plugin **X-10, "every

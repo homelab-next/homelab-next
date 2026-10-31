@@ -216,22 +216,36 @@ def x03(ctx: Context) -> CheckResult:
 # ---- X-04 -----------------------------------------------------------------------------------
 
 
+#: directories of ``conformance/`` that hold harness code, not a capability's test
+HARNESS_DIRS = frozenset({"suites", "protocols", "fakes", "targets", "fixtures"})
+
+
 def _capabilities(root: pathlib.Path) -> list[str] | None:
-    for cand in ("capabilities.yml", "registry/capabilities.yml"):
-        p = root / cand
-        if p.exists():
-            data = yaml.safe_load(p.read_text()) or {}
-            return [str(c) for c in data.get("capabilities", [])]
+    """The declared capabilities (the one validated reader, ``conform.registry``), else the
+    capability directories of ``conformance/``, else None.  Raises ``ConformError`` when
+    ``capabilities.yml`` exists but declares nothing usable."""
+    from homelabnext.conform.registry import declared_capabilities
+
+    declared = declared_capabilities(root)
+    if declared is not None:
+        return declared
     conf = root / "conformance"
     if conf.is_dir():
         return sorted(
-            d.name for d in conf.iterdir() if d.is_dir() and not d.name.startswith(("_", "."))
+            d.name
+            for d in conf.iterdir()
+            if d.is_dir() and not d.name.startswith(("_", ".")) and d.name not in HARNESS_DIRS
         )
     return None
 
 
 def x04(ctx: Context) -> CheckResult:
-    caps = _capabilities(ctx.root)
+    from homelabnext.conform.registry import ConformError
+
+    try:
+        caps = _capabilities(ctx.root)
+    except ConformError as exc:  # a file that declares nothing must not pass with 0 capabilities
+        return CheckResult(ERROR, str(exc))
     if caps is None:
         return CheckResult(SKIP, "no capabilities.yml or conformance/ tree")
     missing = [c for c in caps if not list((ctx.root / "conformance" / c).glob("test_*.py"))]

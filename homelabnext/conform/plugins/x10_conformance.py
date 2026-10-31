@@ -15,7 +15,9 @@ x10_conformance:register``), ``--plugins-dir`` pointing at this directory, or ``
 
 Pass: the report lists no capability without a passing test.  Fail: it lists some (evidence
 names each with its reason).  Skip: this tree has no ``conformance/suites``.  Error: the
-report could not be produced or parsed (could not measure).
+report could not be produced or parsed, names no capability, or the run was misconfigured
+(exit 2) or could not measure (exit 100); the exporter exits 1 whenever any capability really
+fails, however many others could not be measured, so an outage never hides a failure.
 
 The target is ``HNX_CONFORM_TARGET`` (default ``fake``), so a deployment can run the same
 invariant against its real services.
@@ -85,6 +87,8 @@ def x10(ctx: Context) -> CheckResult:
             f"[exit {rc}] the report and the exit code disagree "
             f"({len(missing)} capabilities without a passing test)",
         )
+    if not caps:  # a report on nothing proves nothing; the exporter refuses to write one
+        return CheckResult(ERROR, f"[exit {rc}] the conformance report names no capability")
     if missing:
         why = "; ".join(f"{c}: {caps.get(c, {}).get('reason', 'no passing test')}" for c in missing)
         return CheckResult(FAIL, f"capabilities without a passing test: {why}"[:700])
