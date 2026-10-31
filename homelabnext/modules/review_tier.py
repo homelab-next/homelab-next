@@ -137,6 +137,7 @@ GOVERNANCE = (
     "homelabnext/network/cli.py",
     "homelabnext/_yaml.py",
     "homelabnext/modules/scope.py",
+    "homelabnext/tlp.py",  # the TLP label type the rules read a dataset's declaration with
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
 )

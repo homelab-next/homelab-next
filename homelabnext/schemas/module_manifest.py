@@ -26,6 +26,7 @@ from homelabnext.modules.scope import (
     SCOPE_PARTS,
     scope_tree,
 )
+from homelabnext.tlp import LABELS
 
 __all__ = [
     "RESERVED_IDS",
@@ -828,9 +829,18 @@ def _defs() -> dict[str, Any]:
                     "Its import; the role validates traversal, symlinks and sizes in the tree it reads.",
                 ),
                 "retention": ref("retention"),
+                "tlp": {
+                    "enum": list(LABELS),
+                    "description": "The TLP label of any item that arrives without one, from the provider's terms, never from the processing stage (ADR-0033 decision 3). Absent, the dataset is red (decision 2): the lab's own data needs no declaration. The field sits under data, so a change is human-approve.",
+                },
+                "honour_item_labels": {
+                    "type": "boolean",
+                    "description": "Whether an item may keep a label of its own that is looser than tlp (ADR-0033 decision 3); it needs tlp beside it. Without it a looser item label is raised to tlp; a stricter one is always kept. It trusts the provider's labelling, so it is human-approve like the rest of data.",
+                },
             },
             ["id", "kind", "description", "export", "import", "retention"],
             "One dataset the module owns: removing the module exports it first, and never touches another module's data.",
+            dependentRequired={"honour_item_labels": ["tlp"]},
             allOf=[
                 {
                     "if": {"properties": {"kind": {"const": "lake-table"}}},

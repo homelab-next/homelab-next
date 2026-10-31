@@ -450,6 +450,26 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["data"][1].__setitem__("prefix", "."),
         "A dataset prefix names a directory, never the root.",
     ),
+    "dataset-tlp-unknown": (
+        F,
+        lambda d: d["data"][0].__setitem__("tlp", "black"),
+        "A dataset's TLP label is one of the five TLP 2.0 labels (ADR-0033 decision 1).",
+    ),
+    "dataset-tlp-not-canonical": (
+        F,
+        lambda d: d["data"][0].__setitem__("tlp", "TLP:AMBER"),
+        "A declared TLP label is written in its canonical spelling.",
+    ),
+    "dataset-honour-not-boolean": (
+        F,
+        lambda d: d["data"][0].__setitem__("honour_item_labels", "yes"),
+        "honour_item_labels is true or false, never a string that reads as true.",
+    ),
+    "dataset-honour-without-tlp": (
+        F,
+        lambda d: d["data"][0].__setitem__("honour_item_labels", True),
+        "honour_item_labels needs a tlp declaration beside it: an undeclared dataset is red.",
+    ),
     "remove-without-audit": (
         F,
         lambda d: d["lifecycle"]["remove"].pop("audit"),

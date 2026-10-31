@@ -64,6 +64,11 @@ def test_an_unchanged_example_manifest_has_no_tier(mid):
         ),
         ("publishing", lambda d: d["egress"].append({"from": "x", "to": "internet"}), "egress"),
         ("publishing", lambda d: d["data"][0].update(note="x"), "data"),
+        # a dataset's TLP declaration and the trust in its items' own labels (ADR-0033 decision 3):
+        # loosening, honouring and even tightening are all human-approve, as the rest of data is
+        ("publishing", lambda d: d["data"][0].update(tlp="clear"), "data"),
+        ("publishing", lambda d: d["data"][0].update(honour_item_labels=True), "data"),
+        ("publishing", lambda d: d["data"][0].update(tlp="red"), "data"),
         ("publishing", lambda d: d["interfaces"][0].update(gate=False), "interfaces"),
         ("example-orchestrator", lambda d: d["lifecycle"].update(note="x"), "lifecycle"),
         (
@@ -157,6 +162,9 @@ def test_an_unchanged_example_manifest_has_no_tier(mid):
         "control-plane",
         "egress",
         "data",
+        "data-tlp-loosened",
+        "data-honour-item-labels",
+        "data-tlp-declared-red",
         "interfaces",
         "lifecycle",
         "agent-needs-widened",

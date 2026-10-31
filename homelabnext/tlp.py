@@ -31,7 +31,7 @@ from collections.abc import Iterable
 from enum import Enum
 from types import MappingProxyType
 
-__all__ = ["LABELS", "Label", "allows", "parse", "read", "strictest"]
+__all__ = ["LABELS", "Label", "allows", "item_label", "parse", "read", "strictest"]
 
 
 class Label(Enum):
@@ -142,3 +142,29 @@ def allows(ceiling: Label, label: object) -> bool:
     if type(ceiling) is not Label:
         raise TypeError(f"ceiling must be a Label, not {type(ceiling).__name__}")
     return read(label) <= ceiling
+
+
+#: the default of :func:`item_label`'s ``item``: the item carried no label at all
+_ABSENT: object = object()
+
+
+def item_label(
+    declared: Label, item: object = _ABSENT, *, honour_item_labels: bool = False
+) -> Label:
+    """The label of one item from a source that declares ``declared`` (ADR-0033 decision 3).
+
+    ``item`` is the label the item carried from the source; leave it out when the item carried
+    none (its label field is missing), and only then does the item take the declaration. Anything
+    passed is read as data, so ``None`` (a JSON ``null`` in a label field), an empty string or a
+    misspelling is ``red``. A carried label is kept when it is stricter than the declaration, and
+    when looser only if the source declares ``honour_item_labels`` (a human-approve field); it is
+    otherwise raised to the declaration.
+    """
+    if type(declared) is not Label:
+        raise TypeError(f"declared must be a Label, not {type(declared).__name__}")
+    if item is _ABSENT:
+        return declared
+    carried = read(item)
+    if carried >= declared or honour_item_labels is True:
+        return carried
+    return declared

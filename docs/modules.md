@@ -520,6 +520,18 @@ host), `export` and `import` (`{formats: [...], via: role}`), `retention`. Roots
 slot instance it lives in; files and path defaults are relative to the module's data root on its host
 (`/var/lib/hnx-modules/<id>/`); contributed files to the module directory.
 
+A dataset may also declare its **TLP label** (ADR-0033 decision 3; [TLP labels](#tlp-labels-adr-0033)):
+`tlp`, one of `clear`, `green`, `amber`, `amber+strict`, `red` in its canonical spelling, is the
+label of any item that arrives without one, taken from the provider's terms (a feed's licence, an
+API's redistribution terms), never from the processing stage. A dataset that declares none is
+`red` (decision 2), so the lab's own data needs no declaration. `honour_item_labels: true` lets an
+item keep a label of its own that is looser than `tlp`; without it a looser item label is raised to
+`tlp`, and a stricter one is always kept (`homelabnext.tlp.item_label`; an unreadable item label,
+`null` included, is `red`; only an item whose label field is missing takes `tlp`).
+`honour_item_labels` needs `tlp` beside it, and a fallback's `data` override never changes either.
+Both sit under `data`, so any change to them, tightening included, is human-approve.
+`homelabnext.modules.rules.dataset_label` reads the declaration.
+
 - Removal exports first (`export_first`, default true); `false` needs a `discard_reason`. A removal
   deletes only the module's own namespaced data, never another module's (the namespaces cannot
   overlap).
@@ -675,8 +687,9 @@ unreadable or there are none), and `allows(ceiling, label)` takes only a parsed 
 spellings: the five labels, optionally `tlp:`-prefixed, in any ASCII case, with surrounding spaces,
 tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with another `Label`, and a
 `str` subclass is read through `str`'s own methods. The publishing sidecar's enum is held equal to `tlp.LABELS`.
-Source declarations, storage, reader ceilings and model-role ceilings follow in the order the ADR
-sets.
+`item_label(declared, item, honour_item_labels=...)` is the label of one item from a declared
+source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). Storage, reader
+ceilings and model-role ceilings follow in the order the ADR sets.
 
 ## Placement and isolation
 
