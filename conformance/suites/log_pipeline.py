@@ -27,6 +27,7 @@ from conformance.fakes.log_pipeline import (
     TlpKeepsSelfSetPipeline,
     TlpMergesSourcesPipeline,
     TlpNeverHonoursPipeline,
+    TlpNormalisesRoutePipeline,
     TlpNoRouteUnlabelledPipeline,
     TrustsSelfNonePipeline,
 )
@@ -230,7 +231,8 @@ def _(t):
         tags=["a", "b"],
     )
     got = _one(t, event, RUNTIME)
-    got.get("labels", {}).pop(tl.LABEL, None)  # the TLP label's own checks are below
+    if isinstance(got.get("labels"), dict):
+        got["labels"].pop(tl.LABEL, None)  # the TLP label's own checks are below
     want = copy.deepcopy(event)
     want["labels"][LABEL] = "model"
     assert got == want, f"event changed beyond the label: {got!r}"
@@ -308,6 +310,9 @@ def _(t):
     _tlp_is(_routed(t, _dns(), HONOURED), "green")
     got = _routed(t, _dns(message="m"), FEED)
     assert got.get("message") == "m" and got.get("dns") == _dns()["dns"], f"changed: {got!r}"
+    assert got["labels"].get(LABEL) == "none", f"the runtime label was lost: {got!r}"
+    # the event's own tlp field is an input, left as it came
+    assert _routed(t, _dns(tlp="amber"), FEED).get("tlp") == "amber"
 
 
 @SUITE.check(
@@ -317,8 +322,20 @@ def _(t):
 def _(t):
     _tlp_is(_routed(t, _dns(), UNKNOWN_ROUTE), "red")
     _tlp_is(_routed(t, _dns(), None), "red")
-    _tlp_is(_routed(t, _dns(), FEED.upper()), "red")
     _tlp_is(_routed(t, _dns(event={"dataset": FEED}, route=FEED), None), "red")
+
+
+class _Route(str):
+    pass
+
+
+@SUITE.check(
+    "tlp-route-exact",
+    "a route is a table key exactly: another case, padding or a non-string is red",
+)
+def _(t):
+    for route in (FEED.upper(), f" {FEED}", f"{FEED}\n", _Route(FEED.upper()), [FEED]):
+        _tlp_is(_routed(t, _dns(), route), "red")
 
 
 @SUITE.check(
@@ -347,24 +364,20 @@ def _(t):
 def _(t):
     _tlp_is(_routed(t, _dns(tlp="amber"), FEED), "amber")
     _tlp_is(_routed(t, _dns(TLP="TLP:RED"), FEED), "red")
+    _tlp_is(_routed(t, {**_dns(tlp="clear"), "Tlp ": "amber"}, FEED), "amber")  # the strictest
+    _tlp_is(_routed(t, _dns(labels={"tlp": "red"}), FEED), "red")
+    _tlp_is(_routed(t, {**_dns(), "labels.tlp": "amber"}, FEED), "amber")
     _tlp_is(_routed(t, _dns(tlp=None), FEED), "red")
     _tlp_is(_routed(t, _dns(tlp="amber-strict"), FEED), "red")
 
 
 @SUITE.check(
-    "tlp-looser-claim-raised",
-    "an item label looser than an unhonoured declaration is raised to it",
+    "tlp-looser-claim-needs-honour",
+    "a looser item label is raised to the declaration, unless the dataset honours item labels",
 )
 def _(t):
     _tlp_is(_routed(t, _dns(tlp="clear"), INTEL), "amber")
     _tlp_is(_routed(t, _dns(tlp="clear"), SIGHTINGS), "red")
-
-
-@SUITE.check(
-    "tlp-honoured-claim-kept",
-    "a looser item label is kept where the dataset honours item labels",
-)
-def _(t):
     _tlp_is(_routed(t, _dns(tlp="clear"), HONOURED), "clear")
     _tlp_is(_routed(t, _dns(tlp="tlp:clear"), HONOURED), "clear")
 
@@ -456,13 +469,18 @@ MUTANTS = {
     ),
     "tlp-honours-every-source": Mutant(
         TlpHonoursEverySourcePipeline,
-        "tlp-looser-claim-raised",
+        "tlp-looser-claim-needs-honour",
         "every source's looser item labels win",
     ),
     "tlp-never-honours": Mutant(
         TlpNeverHonoursPipeline,
-        "tlp-honoured-claim-kept",
+        "tlp-looser-claim-needs-honour",
         "honour_item_labels is ignored",
+    ),
+    "tlp-normalises-route": Mutant(
+        TlpNormalisesRoutePipeline,
+        "tlp-route-exact",
+        "the route is trimmed and lower-cased before the lookup",
     ),
     "tlp-merges-sources": Mutant(
         TlpMergesSourcesPipeline,

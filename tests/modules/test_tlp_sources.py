@@ -43,8 +43,12 @@ def test_an_unreadable_selection_or_declaration_is_refused():
         tlp_sources.render({"features": {"feeds": {}}}, MODS)
     bad = copy.deepcopy(MODS)
     bad["feeds"]["data"][0]["tlp"] = "black"
-    with pytest.raises(ValueError, match="not a TLP label"):
+    with pytest.raises(SourceTableError, match=r"feeds: a dataset cannot be read.*not a TLP label"):
         tlp_sources.render(SITE, bad)
+    nameless = copy.deepcopy(MODS)
+    del nameless["feeds"]["data"][0]["id"]
+    with pytest.raises(SourceTableError, match="feeds: a dataset cannot be read"):
+        tlp_sources.render(SITE, nameless)
 
 
 def test_write(tmp_path):

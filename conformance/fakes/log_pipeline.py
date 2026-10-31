@@ -38,8 +38,9 @@ class FakeLogPipeline:
         return enrich(r.event, r.observed, self.table)
 
     def _tlp(self, r: Any, event: dict[str, Any]) -> dict[str, Any]:
-        """The runtime-labelled event, given its TLP label (defective twins override)."""
-        return enrich_tlp(event, r.route, self.sources)
+        """The runtime-labelled event, given the TLP label of the event as it arrived (another
+        stage's changes never decide it; defective twins override)."""
+        return self._set_tlp(event, tl.label_for(r.event, r.route, self.sources))
 
     def _set_tlp(self, event: dict[str, Any], label: tlp.Label) -> dict[str, Any]:
         """``event`` with every spelling of the TLP label replaced by ``label``."""
@@ -172,15 +173,11 @@ class MergesTablesPipeline(FakeLogPipeline):
 
 
 # ---------------------------------------------------------------- the TLP label's defective twins
-def _claims(event):
-    return [v for k, v in event.items() if isinstance(k, str) and k.strip().casefold() == tl.CLAIM]
-
-
 class TlpIgnoresDeclarationPipeline(FakeLogPipeline):
     """Defect: an event that carries no label of its own is red whatever its source declares."""
 
     def _tlp(self, r, event):
-        if self.sources.lookup(r.route) is not None and not _claims(r.event):
+        if self.sources.lookup(r.route) is not None and not tl.claims(r.event):
             return self._set_tlp(event, tlp.Label.RED)
         return super()._tlp(r, event)
 
@@ -195,6 +192,14 @@ class TlpNoRouteUnlabelledPipeline(FakeLogPipeline):
             del out["labels"][tl.LABEL]
             return out
         return super()._tlp(r, event)
+
+
+class TlpNormalisesRoutePipeline(FakeLogPipeline):
+    """Defect: the route is trimmed and lower-cased, so a route that is not a table key matches."""
+
+    def _tlp(self, r, event):
+        route = r.route if r.route is None else str(r.route).strip().lower()
+        return enrich_tlp(event, route, self.sources)
 
 
 class TlpKeepsSelfSetPipeline(FakeLogPipeline):

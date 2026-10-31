@@ -1,13 +1,14 @@
 ---
 summary: 'The log-pipeline contract: hnx_runtime from the guest model by the address the collector saw, hnx_tlp from the route''s declaration; never the event.'
-summary_of: outline:sha256:1ac98975de20f463
+summary_of: outline:sha256:a49158449fd20cc4
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# The log pipeline and the runtime label
+# The log pipeline and its labels
 
 The `log-pipeline` slot (stage 2 of the SOC bundle, [modules](modules.md#the-soc-bundle-by-pipeline-stage))
-moves events from the collectors to the index and the lake. It has one contractual duty: to label
-the events of a **model runtime**, a guest that serves models or runs model-written code
+moves events from the collectors to the index and the lake. It has two contractual duties, each a
+label it sets and never takes from the event: the TLP label of every event
+([below](#the-tlp-label)), and the label of the events of a **model runtime**, a guest that serves models or runs model-written code
 (`cap:inference`, `cap:codemode-executor`; [compute model](compute-model.md#model-runtimes)), so
 that the detections written for them can tell those events from everyone else's.
 
@@ -80,14 +81,17 @@ checks cover, for the runtime label:
 
 and for the TLP label ([below](#the-tlp-label)):
 
-- an event on a declared route with no label of its own takes the declaration;
-- an unknown route, no route, or a route the event names itself is `red`;
+- an event on a declared route with no label of its own takes the declaration, keeping its
+  runtime label and its own `tlp` field;
+- an unknown route, no route, or a route the event names itself is `red`, and a route in another
+  case, padded or not a string is no table key;
 - a TLP label the event arrived with, nested, flat or in another case, is replaced;
-- a stricter item label is kept and one that is not a label is `red`; a looser one is raised to an
-  unhonoured declaration and kept where the dataset honours item labels;
+- a stricter item label, in any of its places and the strictest of several, is kept and one that
+  is not a label is `red`; a looser one is raised to the declaration unless the dataset honours
+  item labels;
 - a reloaded source table replaces the earlier one.
 
-Each of its twenty mutants is caught by its named check alone.
+Each of its twenty-one mutants is caught by its named check alone.
 
 The end-to-end evasion fixtures in `tests/logpipeline/evasion/` run the enrichment over the
 example table and then the rule. They show that a self-set label changes nothing:
@@ -114,10 +118,11 @@ runtime label it is never the event's word: the rule is
   read as a looser one.
 - **The declaration** is the dataset's `tlp` (absent is `red`) and `honour_item_labels`
   ([modules](modules.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
-  An item label the event carries in its `tlp` field (any spelling of the key up to case and
-  surrounding white space; several give the strictest) is kept when stricter, and when looser
-  only where the dataset honours item labels; a `tlp` field that is not a label, `null`
-  included, is `red`.
+  An item label the event carries in its `tlp` field, the flat `"labels.tlp"` key or
+  `labels.tlp` (any spelling of each up to case and surrounding white space; several give the
+  strictest) is kept when stricter, and when looser only where the dataset honours item labels;
+  one that is not a label, `null` included, is `red`. The label is decided by the event as it
+  arrived: an item label another stage drops still counts.
 - **Self-set labels** in `labels.hnx_tlp`, the flat `"labels.hnx_tlp"` key or any spelling of
   either are replaced. The event's own `tlp` field is left as it came: it is an input, and the
   lake writer stores `labels.hnx_tlp`, never it.
@@ -130,6 +135,20 @@ every event `red`. As with the runtime table, deploying it to the provider and r
 the selection changes is the provider's job.
 
 ## Limits
+
+The TLP label:
+
+- **The route is the collector's word.** A collector input wired to the wrong dataset labels its
+  events by that dataset's declaration. Give each input exactly one route, and review a change of
+  route as a change of declaration.
+- **`honour_item_labels` trusts the source.** A dataset that honours item labels takes a looser
+  label from the provider's own marking; that is why the field is human-approve.
+- **Pass-through.** A site with no `log-pipeline` stage sets no `hnx_tlp`, so its writer has no
+  label to store: the lake refuses an unlabelled row, and the writer must not invent one.
+- **Non-objects.** A record that is not an object carries no label; it is not a row the lake
+  would store.
+
+The runtime label:
 
 - **Pass-through.** A site whose `log-pipeline` is `pass-through` (single-box and small-lab in
   the examples) has no stage to apply the label, so no event carries it and the three rules never

@@ -12,9 +12,10 @@ named ``<module>/<dataset>`` and supplied beside the event by the collector, nev
 
 * the route is in the table: the label is the dataset's declaration through
   :func:`homelabnext.tlp.item_label` (decision 3).  An item label the event carries in its
-  ``tlp`` field (any spelling of the key that differs only in case or surrounding white space) is
-  kept when it is stricter, and when looser only if the dataset honours item labels; a ``tlp``
-  field that is not a label (``null`` included) is ``red``;
+  ``tlp`` field, in ``labels.tlp`` or as the flat ``"labels.tlp"`` key (any spelling of each that
+  differs only in case or surrounding white space; several give the strictest) is kept when it is
+  stricter, and when looser only if the dataset honours item labels; one that is not a label
+  (``null`` included) is ``red``;
 * the route is not in the table, there is none, or it is not a plain string: ``red``
   (decision 2).  Unlike the runtime label, an unknown source cannot stay unlabelled: a missing
   label must never read as a looser one;
@@ -153,16 +154,25 @@ def _is(key: Any, name: str) -> bool:
     return isinstance(key, str) and str.casefold(str.strip(key)) == name
 
 
+def claims(event: Mapping[str, Any]) -> list[Any]:
+    """The item labels ``event`` carries: its ``tlp`` field, the flat ``"labels.tlp"`` key and
+    ``labels.tlp``, in any spelling up to case and surrounding white space."""
+    out = [v for k, v in event.items() if _is(k, CLAIM) or _is(k, f"labels.{CLAIM}")]
+    for holder in [v for k, v in event.items() if _is(k, "labels") and isinstance(v, Mapping)]:
+        out += [v for k, v in holder.items() if _is(k, CLAIM)]
+    return out
+
+
 def label_for(event: Mapping[str, Any], route: Any, table: SourceTable) -> tlp.Label:
     """The TLP label of one object event that arrived on ``route`` (see the module doc)."""
     entry = table.lookup(route)
     if entry is None:
         return tlp.Label.RED
     declared, honour = entry
-    claims = [v for k, v in event.items() if _is(k, CLAIM)]
-    if not claims:
+    carried = claims(event)
+    if not carried:
         return tlp.item_label(declared, honour_item_labels=honour)
-    return max(tlp.item_label(declared, c, honour_item_labels=honour) for c in claims)
+    return max(tlp.item_label(declared, c, honour_item_labels=honour) for c in carried)
 
 
 def enrich_tlp(event: Any, route: Any, table: SourceTable) -> Any:

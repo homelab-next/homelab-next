@@ -5,8 +5,10 @@ The log pipeline labels each event from the dataset its collector input feeds
 (:mod:`homelabnext.logpipeline.tlp_labels`).  This is the table it joins on, rendered by
 ``hnx modules render`` from the site's selection: one source per dataset of every module the site
 runs, keyed ``<module>/<dataset>``, with the declaration :func:`rules.dataset_label` reads (``red``
-and not honoured where the dataset declares none).  A dataset of a module the site does not run is
-not a source, so an event routed to it is ``red``.
+and not honoured where the dataset declares none).  Every dataset kind is a source, a module's
+state and files included: a route to one that carries no events is harmless, and leaving one out
+would only make its events ``red``.  A dataset of a module the site does not run is not a source,
+so an event routed to it is ``red``.
 """
 
 from __future__ import annotations
@@ -32,9 +34,12 @@ def render(site: Doc, mods: dict[str, Doc]) -> Doc:
         raise tlp_labels.SourceTableError(f"the selection cannot be read: {exc}") from None
     rows = []
     for mid, doc in sel.items():
-        for ds in doc.get("data", []):
-            label, honour = rules.dataset_label(ds)
-            rows.append((f"{mid}/{ds['id']}", label, honour))
+        try:
+            for ds in doc.get("data", []):
+                label, honour = rules.dataset_label(ds)
+                rows.append((f"{mid}/{ds['id']}", label, honour))
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise tlp_labels.SourceTableError(f"{mid}: a dataset cannot be read: {exc}") from None
     return tlp_labels.table_doc(rows)
 
 

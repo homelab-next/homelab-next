@@ -40,11 +40,14 @@ The TLP label (:func:`homelabnext.logpipeline.enrich_tlp`):
 * Each record's ``route`` names the dataset its collector input feeds (``<module>/<dataset>``),
   supplied by the collector beside the event and never read out of it.  Every returned object
   event carries ``labels.hnx_tlp``: the route's declaration through
-  :func:`homelabnext.tlp.item_label` (an item label in the event's ``tlp`` field is kept when
+  :func:`homelabnext.tlp.item_label` (an item label in the event's ``tlp`` field, the flat
+  ``"labels.tlp"`` key or ``labels.tlp``, any spelling, the strictest of several, is kept when
   stricter, and when looser only if the dataset honours item labels; one that is not a label,
   ``null`` included, is ``red``), or ``red`` for a route the table does not hold, no route, or
-  one that is not a plain string.  Every spelling of ``hnx_tlp`` the event arrived with is
-  replaced, as for the runtime label; the event's own ``tlp`` field is left as it came.
+  one that is not a plain string.  The label is decided by the event **as it arrived**: an item
+  label another stage drops or rewrites still counts.  Every spelling of ``hnx_tlp`` the event
+  arrived with is replaced, as for the runtime label; the event's own ``tlp`` field is left as it
+  came.
 * The lake writer stores ``labels.hnx_tlp`` as the row's ``tlp`` column, never the event's
   ``tlp`` field.
 
