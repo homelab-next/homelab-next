@@ -15,12 +15,21 @@ the lab's engine, in order.  The rule:
 * only rows whose ``tlp`` is still null are touched, so running the plan twice changes nothing,
   and a row the writer already labelled keeps its label.
 
-Values are written into the statements as SQL literals (single quotes doubled): the plan is
-printed for review, not bound by a client.
+Values are written into the statements as SQL literals (single quotes doubled, the ANSI rule;
+the target is the lake's query engine, whose field access is ``"struct"."field"`` and whose
+``ADD COLUMN IF NOT EXISTS`` makes a second run harmless): the plan is printed for review, not
+bound by a client.  The table name is checked to be a plain or dotted identifier and a source
+value may hold no control character, so nothing in the plan can hide a second statement.  The
+plan ends with two checks for the operator: no row is left unlabelled, and the rows holding a
+non-canonical label (``white``, ``Green``, a damaged value) are listed for a human decision; they
+read as ``red`` until then and are never relabelled by a guess.  It assumes a source that does not
+honour item labels never stored stricter ones its items carried (the writer kept the stricter
+label, decision 3); where that is not so, map its values to a source declared ``red``.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -46,6 +55,11 @@ class Source:
     def backfill(self) -> tlp.Label:
         """The label its old rows get: red when its items' own labels were never stored."""
         return tlp.Label.RED if self.honour_item_labels else self.label
+
+
+_TABLE = re.compile(
+    r'(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\x00-\x1f]+")(?:\.(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"\x00-\x1f]+")){0,2}'
+)
 
 
 def _ident(name: str) -> str:
@@ -91,6 +105,11 @@ def plan(
     """
     if not schema.labelled:
         raise BackfillError(f"{schema.name}: the schema has no {LABEL_COLUMN} column to fill")
+    if type(table) is not str or _TABLE.fullmatch(table) is None:
+        raise BackfillError(f"{table!r} is not a table name (catalog.schema.table at most)")
+    bad = [v for v in source_map if type(v) is not str or any(ord(c) < 0x20 for c in v)]
+    if bad:
+        raise BackfillError(f"source values with a control character: {bad!r}")
     if not sources:
         raise BackfillError(f"{schema.name}: no source feeds it, so its rows stay red")
     for value, route in source_map.items():
@@ -110,4 +129,9 @@ def plan(
             )
     strictest = max(s.backfill for s in sources.values())
     out.append(f"UPDATE {table} SET {col} = {_literal(str(strictest))} WHERE {col} IS NULL")
+    canonical = ", ".join(_literal(v) for v in tlp.LABELS)
+    out.append(f"SELECT count(*) AS unlabelled FROM {table} WHERE {col} IS NULL")
+    out.append(
+        f"SELECT {col}, count(*) AS n FROM {table} WHERE {col} NOT IN ({canonical}) GROUP BY {col}"
+    )
     return out

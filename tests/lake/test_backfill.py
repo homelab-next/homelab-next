@@ -29,19 +29,22 @@ def test_the_plan():
         source_column="metadata.log_source",
     )
     assert steps[0] == 'ALTER TABLE "authentication" ADD COLUMN IF NOT EXISTS "tlp" VARCHAR'
-    by_value = {s.rsplit(" = ", 1)[1]: s for s in steps[1:-1]}
+    by_value = {s.rsplit(" = ", 1)[1]: s for s in steps[1:-3]}
     assert "SET \"tlp\" = 'clear'" in by_value["'sensor-a'"]
     # a source whose items' own labels were never stored is backfilled red
     assert "SET \"tlp\" = 'red'" in by_value["'sensor-b'"]
     assert "'o''brien'" in by_value  # a literal is quoted
-    assert all('WHERE "tlp" IS NULL' in s for s in steps[1:])
+    assert all('WHERE "tlp" IS NULL' in s for s in steps[1:-2])
     # everything else takes the strictest source's backfill label
-    assert steps[-1] == 'UPDATE "authentication" SET "tlp" = \'red\' WHERE "tlp" IS NULL'
+    assert steps[-3] == 'UPDATE "authentication" SET "tlp" = \'red\' WHERE "tlp" IS NULL'
+    # then the operator's checks: nothing unlabelled, and the non-canonical rows listed
+    assert steps[-2].startswith('SELECT count(*) AS unlabelled FROM "authentication"')
+    assert "NOT IN ('clear', 'green', 'amber', 'amber+strict', 'red')" in steps[-1]
 
 
 def test_without_a_source_column_every_row_takes_the_strictest():
     steps = plan(S, table="t", sources={"feeds/open": Source(Label.CLEAR)}, source_map={})
-    assert steps[1:] == ['UPDATE t SET "tlp" = \'clear\' WHERE "tlp" IS NULL']
+    assert steps[1:-2] == ['UPDATE t SET "tlp" = \'clear\' WHERE "tlp" IS NULL']
 
 
 def test_the_plan_runs_and_keeps_labelled_rows():
@@ -67,7 +70,7 @@ def test_the_plan_runs_and_keeps_labelled_rows():
     assert got.pop("auth-000000") == kept[0]
     assert set(got.values()) == {"green"}
     again = dict(db.execute('SELECT uid, tlp FROM "authentication"').fetchall())
-    for step in steps:  # a second run changes nothing
+    for step in steps[:-2]:  # a second run changes nothing
         db.execute(
             step.replace('"metadata"."log_source"', "json_extract(metadata, '$.log_source')")
         )
@@ -83,6 +86,10 @@ def test_the_plan_runs_and_keeps_labelled_rows():
         ({"source_column": "metadata.nope"}, "no field"),
         ({"source_column": "a.b.c"}, "one struct field"),
         ({"source_column": "class_uid"}, "not a string"),
+        ({"table": "t; DROP TABLE x"}, "not a table name"),
+        ({"table": "a.b.c.d"}, "not a table name"),
+        ({"table": 'lake."o\nx"'}, "not a table name"),
+        ({"source_map": {"a\nb": "feeds/open"}}, "control character"),
     ],
 )
 def test_plan_refuses(kwargs, needle):

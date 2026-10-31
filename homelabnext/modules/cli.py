@@ -722,10 +722,13 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
 
     try:
         table = SourceTable.load(args.sources)
-        missing = [r for r in args.route if table.lookup(r) is None]
+        found = {r: table.lookup(r) for r in args.route}
+        missing = [r for r, entry in found.items() if entry is None]
         if missing:
-            raise BackfillError(f"routes the source table does not hold: {missing}")
-        sources = {r: Source(*table.lookup(r)) for r in args.route}
+            raise BackfillError(f"--route: routes the source table does not hold: {missing}")
+        sources = {r: Source(*entry) for r, entry in found.items()}
+        if (args.map is None) != (args.source_column is None):
+            raise BackfillError("--map and --source-column go together")
         mapping = json.loads(args.map.read_text(encoding="utf-8")) if args.map else {}
         if not isinstance(mapping, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()
@@ -744,6 +747,11 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
     except (BackfillError, SourceTableError, OSError, ValueError) as exc:
         print(f"hnx modules tlp-backfill: {exc}", file=sys.stderr)
         return 2
+    print(
+        f"-- the TLP backfill of {args.qualified}: run it only if these are every route that "
+        f"feeds the table ({', '.join(sorted(sources))}); a missing one could leave unrecorded "
+        "rows a looser label"
+    )
     for step in steps:
         print(step + ";")
     return 0

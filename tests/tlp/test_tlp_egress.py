@@ -5,6 +5,7 @@ import pytest
 
 from homelabnext.tlp import Label
 from homelabnext.tlp_egress import (
+    NO_RECORD,
     analyzers_for,
     egress_check,
     egress_label,
@@ -24,9 +25,32 @@ from homelabnext.tlp_egress import (
         ("marked TLP:WHITE", [Label.CLEAR]),
         ("TLP:BLACK", [Label.RED]),  # an unknown word is red
         ("(TLP:CLEAR)", [Label.CLEAR]),
-        ("XTLP:RED", []),  # inside a word is not a marker
+        ("classifiedTLP:RED", [Label.RED]),  # a marker inside a word still counts
+        ("TLP:GREEN report", [Label.GREEN]),
+        ("TLP RED", [Label.RED]),  # no colon, a label word
+        ("TLP protocol", []),  # no colon, no label word: prose
+        # every other spelling of amber+strict is not a label: red (decision 1)
+        ("TLP:AMBER STRICT", [Label.RED]),
+        ("TLP:AMBER-STRICT", [Label.RED]),
+        ("TLP:AMBER and STRICT", [Label.RED]),
+        ("TLP:AMBERSTRICT", [Label.RED]),
+        ("TLP:AMBER+", [Label.RED]),
+        ("TLP:", [Label.RED]),
+        ("TLP:CLEAR+RED", [Label.RED]),
+        # hidden and look-alike characters are folded before reading
+        ("TLP\u00a0:RED", [Label.RED]),
+        ("TLP:\u200bRED", [Label.RED]),
+        ("TLP:AMBER\u200b+STRICT", [Label.AMBER_STRICT]),
+        ("TLP:\uff32ED", [Label.RED]),
+        ("\uff34\uff2c\uff30:GREEN", [Label.GREEN]),
+        # bodies that are not text
         (None, []),
-        (b"TLP:RED", []),
+        (3, []),
+        (b"TLP:RED", [Label.RED]),
+        (bytearray(b"tlp:amber"), [Label.AMBER]),
+        ({"note": ["fine", {"deep": "TLP:AMBER"}]}, [Label.AMBER]),
+        ({"TLP:RED": 1}, [Label.RED]),  # keys are read too
+        (object(), [Label.RED]),  # cannot be scanned
     ],
 )
 def test_markers(text, want):
@@ -46,21 +70,32 @@ def test_markers(text, want):
     ],
 )
 def test_egress_label(claimed, recorded, body, want):
-    assert egress_label(claimed, recorded, body) is want
+    assert egress_label(claimed, recorded=recorded, body=body) is want
 
 
-def test_without_a_record_the_claim_and_body_decide():
-    assert egress_label("green") is Label.GREEN
-    assert egress_label("green", body="TLP:AMBER") is Label.AMBER
+def test_the_record_must_be_passed_and_no_record_is_explicit():
+    with pytest.raises(TypeError):
+        egress_label("green")  # a caller cannot forget the record
+    assert egress_label("green", recorded=NO_RECORD) is Label.GREEN
+    assert egress_label("green", recorded=NO_RECORD, body="TLP:AMBER") is Label.AMBER
+    assert egress_label("green", recorded={"tlp": "clear"}) is Label.RED  # not a label
+
+
+def test_a_str_subclass_cannot_hide_a_marker():
+    class Quiet(str):
+        def __str__(self):
+            return "nothing"
+
+    assert markers(Quiet("TLP:RED")) == [Label.RED]
 
 
 def test_egress_check():
-    ok = egress_check(Label.GREEN, "clear", "green", "fine")
+    ok = egress_check(Label.GREEN, "clear", recorded="green", body="fine")
     assert ok.allowed and ok.label is Label.GREEN and ok.reason is None
-    no = egress_check(Label.CLEAR, "clear", "clear", "TLP:AMBER detail")
+    no = egress_check(Label.CLEAR, "clear", recorded="clear", body="TLP:AMBER detail")
     assert not no.allowed and no.label is Label.AMBER and "above" in no.reason
     with pytest.raises(TypeError):
-        egress_check("clear", "clear")
+        egress_check("clear", "clear", recorded=NO_RECORD)
 
 
 def test_job_label():
@@ -80,6 +115,7 @@ def test_analyzers_for():
         "d-local": "red",
         "e-undeclared": None,
         "f-odd": "TLP:AMBER",
+        7: "red",  # an analyzer named by anything but a string is skipped
     }
     assert analyzers_for(Label.CLEAR, maxima) == ["a-open", "b-community", "c-partner", "d-local"]
     assert analyzers_for(Label.GREEN, maxima) == ["b-community", "c-partner", "d-local"]
