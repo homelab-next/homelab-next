@@ -76,9 +76,10 @@ def _site(tmp_path: Path) -> Path:
     args = ["render", "--out", str(out), "--registry", str(REGISTRY), "--views", str(VIEWS),
             "--state", str(tmp_path / "s.json"), "--now", "2026-10-21T00:00:00Z",
             "--guests", str(lab / "guests"), "--guests-site", str(lab / "site.yml"),
-            "--guests-registry", str(lab / "services.yml"), "--maps", str(ROOT)]  # fmt: skip
+            "--guests-registry", str(lab / "services.yml"), "--maps", str(ROOT),
+            "--private-out", str(tmp_path / "private")]  # fmt: skip
     assert main(args) == 0
-    return out
+    return tmp_path / "private"
 
 
 def test_the_interactive_maps_in_a_browser(tmp_path, capsys):

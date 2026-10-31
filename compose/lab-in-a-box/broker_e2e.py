@@ -696,7 +696,9 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
     views = {
         "views_version": 1,
         "shell": {"title": "Lab broker hub", "main": "overview"},
-        "menu": [{"id": "overview", "title": "Overview", "panel": "exceptions"}],
+        # every view and export declares its TLP ceiling (ADR-0033): the public ones are clear
+        "exports": {e: {"tlp": "clear"} for e in ("status.json", "activity.csv", "activity.jsonl")},
+        "menu": [{"id": "overview", "title": "Overview", "panel": "exceptions", "tlp": "clear"}],
     }
     out = {}
     for name, doc in (("services", registry), ("agents", agents), ("views", views)):

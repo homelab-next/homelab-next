@@ -21,6 +21,7 @@ from homelabnext.compute.baselines import (
     resolve,
     set_problems,
 )
+from tests.front_door_pass import FrontDoorPass
 
 HERE = Path(__file__).resolve().parent
 FLEET = HERE / "fleet"
@@ -443,7 +444,7 @@ def test_the_page_is_on_the_menu_and_available_only_when_served():
     entry = next(m for m in _doc()["menu"] if m["id"] == "baselines")
     assert entry == {
         "id": "baselines", "title": "Baselines", "kind": "page", "panel": "baselines",
-        "href": "/baselines", "available": True,
+        "href": "/baselines", "available": True, "group": "private",  # withheld (ADR-0033)
     }  # fmt: skip
     assert not next(m for m in _doc(False)["menu"] if m["id"] == "baselines")["available"]
 
@@ -482,7 +483,7 @@ def test_serve_routes_the_page():
     from homelabnext.compute.pages import BaselineSite
     from homelabnext.status.serve import make_server
 
-    srv = make_server(_doc, baselines=BaselineSite(EXAMPLE, EXAMPLE_SITE))
+    srv = make_server(_doc, baselines=BaselineSite(EXAMPLE, EXAMPLE_SITE), agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:

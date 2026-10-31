@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# 1.10: every entry and every public export declares its TLP ceiling (ADR-0033)
+views_version: 1
+shell: {title: Lab status, main: overview}
+exports:
+  status.json: {tlp: clear}
+  activity.csv: {tlp: clear}
+  activity.jsonl: {tlp: clear}
+menu:
+  - {id: overview, title: Overview, panel: exceptions, tlp: clear}
+  - {id: dashboards, title: Dashboards, external: {service: dashboards}, tlp: clear}
+  - {id: agent-detail, title: Session detail, panel: agent-detail, group: private, tlp: red}

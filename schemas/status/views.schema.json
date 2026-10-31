@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/status/views/1.9",
+  "$id": "https://schemas.example.internal/homelabnext/status/views/1.10",
   "title": "Status hub views (views.yml)",
-  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. 1.1 adds the live agent-activity pages as panels (agents, activity, agent-analytics; agent-detail and agent-access-log, which must sit in the private group and render only for an authorized request) and the optional menu group. 1.2 adds the strategy pages as panels (strategy, requirements, objectives, rfis: homelabnext.strategy.pages, served by hnx status serve --strategy DIR). 1.3 adds the baselines page as a panel (the guest x defense-layer coverage matrix: homelabnext.compute.pages, served by hnx status serve --guests DIR --guests-site SITE). 1.4 adds the approvals page as a panel (the broker Approvals page, ADR-0017 stage 2b: homelabnext.status.approvals, served when agents.yml configures approvals), which must sit in the private group. 1.5 adds the generated map pages as panels (topology, dataflow, architecture, roadmap: homelabnext.status.maps, ADR-0018; the topology served with hnx status serve --guests DIR --guests-site SITE, the other three with --maps ROOT; hnx status render also writes them as static files). 1.6 adds the projects page as a panel (open projects with step progress, blocked work, work by strategy record: homelabnext.projects.pages, served by hnx status serve --projects DIR). 1.7 adds the directory pages as panels (links, schedule, roster: the service link directory, every scheduled job with its cadence and last/next run, the agent roster; homelabnext.status.maps, served with hnx status serve --maps ROOT and written by hnx status render). 1.8 adds the MCP servers directory page as a panel (mcp-servers: every MCP catalog server with its owner, origin and pin, transport, classes, grants, review and lifecycle; homelabnext.status.maps.mcp, served with hnx status serve --maps ROOT). 1.9 adds the orchestration page as a panel (agent jobs of the orchestration controller per profile, backend and lane, and one job's gateway turns: homelabnext.orchestration.pages, served by hnx status serve --orchestration DB). Evolve additively.",
+  "description": "The status hub shell: a main page and a left menu of views (ADR-0013). A view is a built-in panel (exceptions-first summary, per-module grid, source table) over a selection of the registered status sources, or an external link entry naming a registry service. Nothing here acts: the hub is read-only. 1.1 adds the live agent-activity pages as panels (agents, activity, agent-analytics; agent-detail and agent-access-log, which must sit in the private group and render only for an authorized request) and the optional menu group. 1.2 adds the strategy pages as panels (strategy, requirements, objectives, rfis: homelabnext.strategy.pages, served by hnx status serve --strategy DIR). 1.3 adds the baselines page as a panel (the guest x defense-layer coverage matrix: homelabnext.compute.pages, served by hnx status serve --guests DIR --guests-site SITE). 1.4 adds the approvals page as a panel (the broker Approvals page, ADR-0017 stage 2b: homelabnext.status.approvals, served when agents.yml configures approvals), which must sit in the private group. 1.5 adds the generated map pages as panels (topology, dataflow, architecture, roadmap: homelabnext.status.maps, ADR-0018; the topology served with hnx status serve --guests DIR --guests-site SITE, the other three with --maps ROOT; hnx status render also writes them as static files). 1.6 adds the projects page as a panel (open projects with step progress, blocked work, work by strategy record: homelabnext.projects.pages, served by hnx status serve --projects DIR). 1.7 adds the directory pages as panels (links, schedule, roster: the service link directory, every scheduled job with its cadence and last/next run, the agent roster; homelabnext.status.maps, served with hnx status serve --maps ROOT and written by hnx status render). 1.8 adds the MCP servers directory page as a panel (mcp-servers: every MCP catalog server with its owner, origin and pin, transport, classes, grants, review and lifecycle; homelabnext.status.maps.mcp, served with hnx status serve --maps ROOT). 1.9 adds the orchestration page as a panel (agent jobs of the orchestration controller per profile, backend and lane, and one job's gateway turns: homelabnext.orchestration.pages, served by hnx status serve --orchestration DB). 1.10 adds TLP ceilings (ADR-0033 decisions 6 and 8): tlp on every menu entry and exports, the TLP ceiling of each public export; hnx status views check refuses an entry or export without one, a public one that is not clear, a private one that is not red, and a public export or view no release transform serves. Evolve additively.",
   "type": "object",
   "additionalProperties": false,
   "required": ["views_version", "shell", "menu"],
@@ -18,10 +18,27 @@
         "act_via": {"$ref": "#/$defs/service_ref", "description": "Optional: where anything that changes something is done (the broker or approval path). The hub only links to it."}
       }
     },
-    "menu": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/view"}}
+    "menu": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/view"}},
+    "exports": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "1.10: the TLP ceiling of each public export the hub serves (status.json, and the activity exports of the agent pages). Each must be declared and clear; what leaves is what its release transform keeps (homelabnext/status/release_transforms.yml).",
+      "properties": {
+        "status.json": {"$ref": "#/$defs/ceiling"},
+        "activity.csv": {"$ref": "#/$defs/ceiling"},
+        "activity.jsonl": {"$ref": "#/$defs/ceiling"}
+      }
+    }
   },
   "$defs": {
     "view_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,40}$(?!\\n)"},
+    "tlp": {"enum": ["clear", "green", "amber", "amber+strict", "red"], "description": "1.10: a TLP 2.0 label in its canonical spelling (homelabnext.tlp.LABELS)."},
+    "ceiling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tlp"],
+      "properties": {"tlp": {"$ref": "#/$defs/tlp"}}
+    },
     "slug": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)", "maxLength": 63},
     "service_ref": {
       "type": "object",
@@ -51,7 +68,8 @@
             "modules": {"type": "array", "uniqueItems": true, "minItems": 1, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$(?!\\n)"}}
           }
         },
-        "external": {"$ref": "#/$defs/service_ref"}
+        "external": {"$ref": "#/$defs/service_ref"},
+        "tlp": {"$ref": "#/$defs/tlp", "description": "1.10: the view's TLP ceiling: clear for a public view (an external entry included), red for the private group. Required by hnx status views check."}
       },
       "oneOf": [
         {"required": ["panel"], "not": {"required": ["external"]}},

@@ -37,7 +37,9 @@ Schedule, Agent roster and MCP servers with ``--maps``), the Projects page (with
 :mod:`homelabnext.orchestration.pages`).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
-through the trusted front door.
+through the trusted front door.  So do the withheld pages (:data:`WITHHELD_PANELS`): every page
+that renders inputs of its own rather than a released document has no release transform yet
+(ADR-0033 decision 8), so it may sit only in the private group, at ``red``.
 
 A view's ``select`` (``sources``/``modules``) narrows its panel.  An external entry links to a
 registry service by name; ``optional`` entries whose service is not registered are listed as
@@ -54,10 +56,11 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.registry.model import Registry
 
+from . import release
 from .model import SEVERITY, STATES, SourceSpec, worst
 
 STATUS_SCHEMA = "homelabnext.status/1"
@@ -79,7 +82,7 @@ PAGE_PANELS = {
     # the broker Approvals page (homelabnext.status.approvals), with approvals: in agents.yml
     "approvals": "/approvals",
     # the generated maps (homelabnext.status.maps, ADR-0018): --guests for the topology,
-    # --maps ROOT for the other three; also written as <panel>.html by hnx status render
+    # --maps ROOT for the other three; also written as <panel>.html by render --private-out
     "topology": "/topology",
     "dataflow": "/dataflow",
     "architecture": "/architecture",
@@ -101,6 +104,35 @@ DIRECTORY_PANELS = frozenset({"links", "schedule", "roster", "mcp-servers"})
 GENERATED_PANELS = MAP_PANELS | DIRECTORY_PANELS
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
+#: the TLP ceiling of each tier (ADR-0033 decision 8): anonymous readers of the public view and
+#: its exports are granted ``clear``, the private tier behind the trusted front door ``red``.  A
+#: view declares exactly its tier's ceiling: a public one above ``clear`` would show what no
+#: grant allows, a private one below ``red`` would promise a filter the private pages do not run
+PUBLIC_CEILING = tlp.Label.CLEAR
+PRIVATE_CEILING = tlp.Label.RED
+#: page panels withheld from the public view: they render inputs of their own (repository
+#: files, a guest directory, the orchestration store, the full status document's observations
+#: and sessions) and no release transform shapes them yet (ADR-0033 decision 8: a public field
+#: with no transform is withdrawn).  Each may sit only in the private group, at ``red``, and is
+#: served only through the trusted front door; a public panel outside
+#: :data:`homelabnext.status.release.VIEWS` is refused (docs/status.md, "TLP ceilings and
+#: release transforms").
+WITHHELD_PANELS = (
+    frozenset(
+        {"strategy", "requirements", "objectives", "rfis", "baselines", "projects", "orchestration"}
+    )
+    | GENERATED_PANELS
+)
+#: the routes of the withheld pages, and the maps' shared script: a route that is one of them
+#: or below one (``/orchestration/job``) is served only through the trusted front door
+WITHHELD_ROUTES = (*sorted(PAGE_PANELS[p] for p in WITHHELD_PANELS), "/static/maps.js")
+
+
+def withheld_route(route: str) -> bool:
+    """Whether ``route`` belongs to a withheld page (:data:`WITHHELD_ROUTES`)."""
+    return any(route == r or route.startswith(r + "/") for r in WITHHELD_ROUTES)
+
+
 #: at most this many sessions go into status.json (worst state first)
 MAX_SESSIONS = 200
 _ATTENTION_ORDER = {s: -SEVERITY[s] for s in STATES}
@@ -126,10 +158,15 @@ def _validator():
 
 
 def views_problems(
-    doc: Any, registry: Registry | None = None, specs: Sequence[SourceSpec] | None = None
+    doc: Any,
+    registry: Registry | None = None,
+    specs: Sequence[SourceSpec] | None = None,
+    releases: release.Releases | None = None,
 ) -> list[str]:
     """Schema problems, then the cross-references: unique ids, a main panel view, selections that
-    name registered sources, external entries that name registered services (unless optional)."""
+    name registered sources, external entries that name registered services (unless optional),
+    and the TLP ceilings (:func:`ceiling_problems`) against ``releases`` (default: the hub's
+    registry, :func:`homelabnext.status.release.registry`)."""
     errs = sorted(_validator().iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path])
     out = [f"schema: {'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}" for e in errs]
     if out:
@@ -143,11 +180,16 @@ def views_problems(
     for v in doc["menu"]:
         if v.get("panel") in PAGE_PANELS and v.get("select"):
             out.append(f"view {v['id']}: the {v['panel']} page takes no select")
-        private = v.get("panel") in PRIVATE_PANELS
-        if private != (v.get("group") == PRIVATE_GROUP):
+        in_group = v.get("group") == PRIVATE_GROUP
+        if v.get("panel") in PRIVATE_PANELS and not in_group:
             out.append(
-                f"view {v['id']}: the {PRIVATE_GROUP!r} group holds exactly the private pages "
-                f"({', '.join(sorted(PRIVATE_PANELS))})"
+                f"view {v['id']}: the {v['panel']} page is private: it sits in the "
+                f"{PRIVATE_GROUP!r} group"
+            )
+        elif in_group and v.get("panel") not in PRIVATE_PANELS | WITHHELD_PANELS:
+            out.append(
+                f"view {v['id']}: the {PRIVATE_GROUP!r} group holds only the private and the "
+                f"withheld pages ({', '.join(sorted(PRIVATE_PANELS | WITHHELD_PANELS))})"
             )
     known_sources = {s.id for s in specs} if specs is not None else None
     known_modules = {s.module for s in specs} if specs is not None else None
@@ -164,6 +206,64 @@ def views_problems(
             out += _unregistered(f"view {v['id']}: external", v["external"], registry)
     if doc["shell"].get("act_via"):
         out += _unregistered("shell.act_via", doc["shell"]["act_via"], registry)
+    return out + ceiling_problems(doc, releases)
+
+
+def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None = None) -> list[str]:
+    """ADR-0033 decision 6 for the hub: every menu entry and every export declares a TLP ceiling
+    (``tlp``, a canonical label; the schema refuses any other spelling), a public one ``clear``
+    and a private one ``red``, and every public export and every public view whose data the hub
+    releases is served by a release transform whose output its ceiling allows.  Where the hub is
+    reachable from never enters into it: a reachable name, address or front door raises no
+    ceiling; only the private tier's grant does, and only for the private group."""
+    if releases is None:
+        try:
+            releases = release.registry()
+        except release.ReleaseError as exc:
+            return [str(exc)]
+    out: list[str] = []
+
+    def served(where: str, name: str, ceiling: tlp.Label) -> None:
+        ts = releases.serving(name)
+        if not ts:
+            out.append(f"{where}: no release transform serves {name!r}, so it is withdrawn")
+        out.extend(
+            f"{where}: release transform {t.id} outputs {t.output}, above the ceiling {ceiling}"
+            for t in ts
+            if not tlp.allows(ceiling, t.output)
+        )
+
+    for v in doc["menu"]:
+        private = v.get("group") == PRIVATE_GROUP
+        want = PRIVATE_CEILING if private else PUBLIC_CEILING
+        if "tlp" not in v:
+            out.append(f"view {v['id']}: declares no TLP ceiling (tlp: {want})")
+            continue
+        ceiling = tlp.parse(v["tlp"])
+        if ceiling != want:
+            tier = "a private view" if private else "a public view"
+            out.append(f"view {v['id']}: {tier}'s TLP ceiling is {want}, not {ceiling}")
+            continue
+        panel = v.get("panel")
+        if private or panel is None:
+            continue  # an external entry is a menu link: its fields are the status document's
+        if panel in release.VIEWS:
+            served(f"view {v['id']}", panel, ceiling)
+        else:  # a withheld page shown publicly would carry lab data with no transform
+            out.append(
+                f"view {v['id']}: the {panel} panel has no release transform, so it is "
+                f"withdrawn from the public view: put it in the {PRIVATE_GROUP!r} group (tlp: red)"
+            )
+    exports = doc.get("exports") or {}
+    for name in release.EXPORTS:
+        if name not in exports:
+            out.append(f"exports.{name}: declares no TLP ceiling (tlp: {PUBLIC_CEILING})")
+            continue
+        ceiling = tlp.parse(exports[name]["tlp"])
+        if ceiling != PUBLIC_CEILING:
+            out.append(f"exports.{name}: a public export's TLP ceiling is clear, not {ceiling}")
+            continue
+        served(f"exports.{name}", name, ceiling)
     return out
 
 
@@ -174,13 +274,16 @@ def _unregistered(where: str, ref: Mapping[str, Any], registry: Registry | None)
 
 
 def load_views(
-    path: str | Path, registry: Registry | None = None, specs: Sequence[SourceSpec] | None = None
+    path: str | Path,
+    registry: Registry | None = None,
+    specs: Sequence[SourceSpec] | None = None,
+    releases: release.Releases | None = None,
 ) -> dict[str, Any]:
     try:
         doc = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise ViewsUnreadable(f"cannot read views {path}: {exc}") from None
-    problems = views_problems(doc, registry, specs)
+    problems = views_problems(doc, registry, specs, releases)
     if problems:
         raise ViewsError(f"invalid views {path}", problems)
     return doc
@@ -428,6 +531,49 @@ def build_status(
             "sessions": [dict(r) for r in agents["sessions"][:MAX_SESSIONS]],
         },
     }
+
+
+def _tile_key(tile: Mapping[str, Any]) -> tuple:
+    """A released tile's order: worst state first, then most failing, stale, unknown, warning,
+    ok and total items, then the full released content, so equal keys mean identical tiles.  It
+    reads released fields only (a withheld state sorts first)."""
+    counts = tile.get("counts") if isinstance(tile.get("counts"), Mapping) else {}
+
+    def n(k: str) -> float:
+        v = counts.get(k)
+        return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else 0.0
+
+    return (
+        -SEVERITY.get(tile.get("state"), len(SEVERITY)),
+        *(-n(k) for k in ("fail", "stale", "unknown", "warn", "ok", "total")),
+        json.dumps(tile, sort_keys=True),
+    )
+
+
+def public_status(
+    doc: Mapping[str, Any], releases: release.Releases | None = None, *, contract: bool = False
+) -> dict[str, Any]:
+    """The public view of a status document: the document through its release transform
+    (ADR-0033 decision 7), so only the fields the transform keeps leave.  ``contract``: the
+    ``status.json`` export, which also never lists the private menu group (the page lists it
+    only for a request through the trusted front door).  ``ReleaseError`` when the transform is
+    missing or its output carries an unlisted field (fail closed).
+
+    The released module tiles (``modules`` and each ``views.*.modules``) are re-sorted by their
+    released content alone (:func:`_tile_key`): the internal document sorts them by module name,
+    and module names are public, so name order would map an anonymous tile back to its module.
+    The sort reads nothing the release dropped, and ties keep no name order worth anything:
+    tiles that tie are identical, byte for byte."""
+    releases = release.registry() if releases is None else releases
+    out = releases.release(release.STATUS_PUBLIC, "status.json", doc)
+    if isinstance(out.get("modules"), list):
+        out["modules"] = sorted(out["modules"], key=_tile_key)
+    for view in (out.get("views") or {}).values():
+        if isinstance(view, dict) and isinstance(view.get("modules"), list):
+            view["modules"] = sorted(view["modules"], key=_tile_key)
+    if contract:
+        out["menu"] = [m for m in out.get("menu", []) if m.get("group") != PRIVATE_GROUP]
+    return out
 
 
 def dumps(doc: Mapping[str, Any]) -> str:

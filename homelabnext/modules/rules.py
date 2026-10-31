@@ -1264,11 +1264,69 @@ def _binding_problems(site: Doc, mods: dict[str, Doc], sel: dict[str, Doc]) -> l
     return out
 
 
+#: the config keys of a publication's TLP (ADR-0033 decision 9): ``tlp_allowed`` above
+#: ``clear`` needs ``audience: community`` and a named ``access_control`` beside it
+TLP_ALLOWED, AUDIENCE, ACCESS_CONTROL = "tlp_allowed", "audience", "access_control"
+
+
+#: access controls that name nothing: a placeholder is not a control (compared lower-cased, with
+#: spaces, dots, dashes and slashes removed).  A deny-list is the honest limit here: the selection
+#: has no record of the community's access control to check the name against
+PLACEHOLDER_CONTROLS = frozenset(
+    {"", "none", "na", "nil", "null", "no", "x", "xx", "xxx", "tbd", "todo", "fixme", "unknown",
+     "public", "open", "anyone", "everyone", "nobody", "noauth", "n", "y", "yes", "true",
+     "false", "dash", "placeholder", "changeme", "example"}
+)  # fmt: skip
+
+
+def _placeholder(control: Any) -> bool:
+    if not isinstance(control, str):
+        return True
+    squashed = re.sub(r"[\s./_-]+", "", control).lower()
+    return squashed in PLACEHOLDER_CONTROLS or len(re.findall(r"[A-Za-z]", control)) < 3
+
+
+def _green_problems(where: str, spec: Doc, cfg: Doc) -> list[str]:
+    """``green`` is not public (ADR-0033 decision 9): a block whose ``tlp_allowed`` (its value,
+    else the manifest's default) is ``green`` must declare the publication's audience as a
+    community and name the access control that restricts it (not a placeholder:
+    :data:`PLACEHOLDER_CONTROLS`), each by its value or the manifest's default.  Anything above
+    ``green`` (``amber``, ``amber+strict``, ``red``, and a value that does not read, which is
+    ``red``) is refused outright: no audience or control lets a publication out at that label."""
+    if TLP_ALLOWED not in spec:
+        return []
+
+    def value(k: str) -> Any:
+        return cfg[k] if k in cfg else spec.get(k, {}).get("default")
+
+    label = tlp.read(value(TLP_ALLOWED))
+    if label == tlp.Label.CLEAR:
+        return []
+    if label > tlp.Label.GREEN:
+        return [
+            f"{where}.config.{TLP_ALLOWED}: {label} is never published (ADR-0033 decision 9): "
+            "the most a publication may carry is green, for a named community"
+        ]
+    audience, control = value(AUDIENCE), value(ACCESS_CONTROL)
+    missing = []
+    if audience != "community":
+        missing.append(f"{AUDIENCE}: community (not {audience!r})")
+    if _placeholder(control):
+        missing.append(f"{ACCESS_CONTROL} naming what restricts it to that community")
+    if not missing:
+        return []
+    return [
+        f"{where}.config.{TLP_ALLOWED}: {label} is not public (ADR-0033 decision 9): it needs "
+        + " and ".join(missing)
+    ]
+
+
 def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
     """A selection's config values: declared keys only, no address literal (the scope block is the
-    one place for addresses), and a secret-typed value is a secret in the module's own namespace
+    one place for addresses), a secret-typed value is a secret in the module's own namespace
     or one granted to it in grants.secrets (the same rule as a manifest default, so an overlay
-    value cannot read another module's secret)."""
+    value cannot read another module's secret), and a publication above ``clear`` names its
+    community audience and access control (:func:`_green_problems`)."""
     places = [
         (f"{sec}.{mid}", mid, b.get("config", {}))
         for sec in SECTION.values()
@@ -1283,6 +1341,7 @@ def _config_problems(site: Doc, sel: dict[str, Doc], grants: Doc) -> list[str]:
     out = []
     for where, mid, cfg in places:
         spec = sel.get(mid, {}).get("config", {})
+        out += _green_problems(where, spec, cfg)
         for k, v in cfg.items():
             if k not in spec:
                 out.append(f"{where}.config.{k}: the module declares no such key")
