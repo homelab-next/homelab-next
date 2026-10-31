@@ -38,6 +38,8 @@ from typing import Any
 
 from homelabnext import tlp
 
+from .runtime_labels import _is, drop_label
+
 #: the label key under ``labels``; ``FLAT_KEY`` is the same field as one dotted key
 LABEL = "hnx_tlp"
 FLAT_KEY = f"labels.{LABEL}"
@@ -149,11 +151,6 @@ class SourceTable:
         return None if key is None else self.sources.get(key)
 
 
-def _is(key: Any, name: str) -> bool:
-    """``key`` spells ``name`` up to case and surrounding white space."""
-    return isinstance(key, str) and str.casefold(str.strip(key)) == name
-
-
 def claims(event: Mapping[str, Any]) -> list[Any]:
     """The item labels ``event`` carries: its ``tlp`` field, the flat ``"labels.tlp"`` key and
     ``labels.tlp``, in any spelling up to case and surrounding white space."""
@@ -187,11 +184,7 @@ def enrich_tlp(event: Any, route: Any, table: SourceTable) -> Any:
         return copy.deepcopy(event)
     label = label_for(event, route, table)
     out = copy.deepcopy(dict(event))
-    for key in [k for k in out if _is(k, FLAT_KEY)]:
-        del out[key]
-    for holder in [v for k, v in out.items() if _is(k, "labels") and isinstance(v, dict)]:
-        for key in [k for k in holder if _is(k, LABEL)]:
-            del holder[key]
+    drop_label(out, FLAT_KEY, LABEL)
     if not isinstance(out.get("labels"), dict):
         out["labels"] = {}
     out["labels"][LABEL] = str(label)
