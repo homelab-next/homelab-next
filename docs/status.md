@@ -238,8 +238,9 @@ pinned to the hash of the page's one inline stylesheet (the page has no script),
 data:`, `frame-ancestors 'none'`, `base-uri 'none'` and `form-action 'none'`. The design follows
 the AOS-1 monitor's `hostAllowed` (MIT).
 
-`status.json` is the API; the HTML is one rendering of it. Shape (`schema:
-homelabnext.status/1`, additive evolution):
+`status.json` is the API; the HTML is one rendering of it. The **internal document** the hub
+builds has this shape (`schema: homelabnext.status/1`, additive evolution); it is what the
+hub's own pages read, and it is **not** what leaves as the public view (below):
 
 | Key | Shape |
 |---|---|
@@ -284,12 +285,30 @@ anonymous one; its grant shows only the private group.
 
 **Release transforms** (decision 7) are the only way the hub's `red` data reaches a `clear`
 reader. They are declared in `homelabnext/status/release_transforms.yml`: each names what it
-serves, its input label (`red`), its output label (`clear`), the fields it keeps and the fields
-it withdraws with the reason. Paths: `a.b` is field `b` of `a`, `a[]` each item of list `a`, `*`
-every key of a mapping keyed by data (the view ids). The release is an allow-list: a field not
-kept is dropped, a kept path keeps only a scalar or a list of scalars, and the output is checked
-against the same list, so a transform that passes an unlisted field fails, and the route answers
-`500 withdrawn` instead of serving it. A name no transform serves is withdrawn the same way. The
+serves, its input label (`red`), its output label (`clear`), the fields it keeps with the kind of
+value each may hold, and the fields it withdraws with the reason. Paths: `a.b` is field `b` of
+`a`, `a[]` each item of list `a`, `*` every key of a mapping keyed by data (the view ids). A
+release is three steps, each fail-closed:
+
+1. **The allow-list.** A field not kept is dropped; a kept path keeps a scalar only (a list of
+   scalars only through an explicit `x[]` path), so a mapping is kept only through the fields
+   listed under it.
+2. **The value check** (decision 7: released output passes the egress content checks). Every
+   kept value must match its kind: `slug` (a letter or digit, then letters, digits, `_`, `:`,
+   `-`; at most 80, no dot), `title` (letters, digits, spaces and `,'()+-`; at most 80), `time`
+   (RFC 3339, `Z`), `count`, `bool`, `const:<value>`, or `enum:<set>` over a closed set (item
+   and session states, the menu kinds, and the activity kinds, outcomes and surfaces of
+   `schemas/status/agent_activity.schema.json`). Every string must also hold no hostname-like
+   dotted name, no IP address, no path and no TLP marker (`homelabnext.tlp_egress.markers`, the
+   reader every egress point uses). A value that fails is replaced by `withheld` (`null` for a
+   count or a flag): never passed, and never a failed page. So a hostname-like agent, tool or
+   session id, a session id that is an address, or a page title that is not a title, leaves as
+   `withheld`.
+3. **The re-check.** Separate code flattens the output's key paths and compares them with the
+   keep list, so a transform that passes an unlisted field fails, and the route answers
+   `500 withdrawn` instead of serving it.
+
+A name no transform serves is withdrawn the same way. The
 code applies three, by id: `status-public` (`status.json` and the page), `agent-sessions-public`
 and `agent-events-public` (the agent pages and `/activity.csv`, `/activity.jsonl`); a registry
 without one of them is refused. The file is governance: CODEOWNERS names it and
@@ -297,12 +316,13 @@ without one of them is refused. The file is governance: CODEOWNERS names it and
 
 **The day-one migration** (decision 8) went through every field the public view and the public
 exports served, kept the ones that are safe as counts and health badges, and withdrew the rest;
-where it was unclear, the field was withdrawn. A field the hub adds later is dropped from the
+where it was unclear, the field was withdrawn. Nothing that identifies a lab system is kept beside
+its state: the public view says how many things are in which state, not which ones. A field the hub adds later is dropped from the
 public view until a transform keeps or withdraws it (a test fails until someone does).
 
 | Served | Kept | Withdrawn, and why |
 |---|---|---|
-| `status.json`, the page | `schema`, `generated_at`, `title`, `main`; `summary`; `menu[]` `id`, `title`, `kind`, `panel`, `group`, `available`; the `exceptions` counts (`ok`, `total`) and each attention item's `module` and `state`; each module's `module`, `state` and `counts`; each source's `id`, `module` and `state`; `agents.counts`; per session the agent fields below | `act_via` (the broker's address); a menu entry's `href` and `service` (an external entry's link is a lab service address; a page's path comes from the code, so page links still work, while an external entry shows as `lab only`); `live` and every other attention field (`item`, `summary`, `source`, `link` and the reading itself: item names are inventory, summaries are free text that can name hosts, paths and addresses); a module's `service`, `capability`, `sources`, `links` and `items`; a source's `kind`, `target`, `mapping`, intervals and timeouts, `what`, `ups`, `last_attempt`, `last_ok`, `error` and `clock_skew_s` (configuration, file paths, power layout and error text); `observations` (every raw reading) |
+| `status.json`, the page | `schema`, `generated_at`, `title`, `main`; `summary`; `menu[]` `id`, `title`, `kind`, `panel`, `group`, `available`; the `exceptions` counts (`ok`, `total`); each module tile's `state` and `counts`, with no name; `agents.counts`; per session the agent fields below | `act_via` (the broker's address); a menu entry's `href` and `service` (an external entry's link is a lab service address; a page's path comes from the code, so page links still work, while an external entry shows as `lab only`); `live` and the whole `attention` list (each item names what is failing, by module, source, item and summary, beside its state; the counts say how many); a module's name (`module`: which lab system is in which state), `service`, `capability`, `sources`, `links` and `items`; the whole source table (`sources` and each `sources` panel: a source id beside its state names which collector is failing, and the rest is configuration, file paths, power layout and error text; the Sources panel shows that it is withheld); `observations` (every raw reading) |
 | the Agents pages, `agents.sessions` | `session_id`, `parent_session_id`, `state`, `runtime`, `surface`, `agent`, `first_seen`, `last_seen`, `last_kind`, `last_outcome`, `last_tool`, and the counts (`events`, `tool_calls`, `denials`, `approvals`, `errors`, `prompts`, `tokens_in`, `tokens_out`, `cost_usd`, `idle_s`, `stuck_after_s`) | `host` (names a lab machine), `project` (names the repository or work, which can be private), `model` (which model, and so which provider, received the lab's prompts) |
 | the Activity and Agent analytics pages, `/activity.csv`, `/activity.jsonl` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface`, `agent`, `time`, `kind`, `tool`, `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | `host`, `project`, `model`, as above: the CSV drops their columns, the Agents page its Where and Model columns and the analytics page its By model table, and a `?project=` filter matches nothing |
 
@@ -322,14 +342,16 @@ Each sits in the `private` group at `red` (`WITHHELD_PANELS` in `homelabnext/sta
 | `topology`, `dataflow`, `architecture`, `roadmap` | `group: maps` | guests, zones, flows, the lab's controls; the topology reads every observation and the UPS states unfiltered |
 | `links`, `schedule`, `roster`, `mcp-servers` | `group: directory` | the service directory and its sign-ins, every scheduled job, the agent roster (which reads the sessions unfiltered) and the MCP servers with their grants |
 
-`hnx status serve` answers their routes only for a request through the trusted front door,
-access-logs each one like every private view, and answers `403` to anyone else, and always when
-no activity store with a front door is configured. They get the full document, since only the
+`hnx status serve` judges their routes (`WITHHELD_ROUTES`: each page's path, anything below it,
+and the maps' script) before any site does any work: `403` to anyone not through the trusted
+front door, the same `403` whether or not that site is configured, and always when no activity
+store with a front door is configured; a request that passes is access-logged like every private
+view. They get the full document, since only the
 `red` tier sees them; the public agent pages get the released one, even for their menu and title.
 `hnx status render` never writes them beside the public page: `--maps`, `--guests` and
-`--roster` need `--private-out DIR` (outside `--out`), and that directory is for the front door
-only. Each one becomes public again only with a release transform of its own. The egress content
-checks a released field passes as well (decision 13) come with the egress list.
+`--roster` need `--private-out DIR` (neither inside `--out` nor holding it), and that directory
+is for the front door only. Each one becomes public again only with a release transform of its
+own.
 
 ## 5. Events and the graph
 

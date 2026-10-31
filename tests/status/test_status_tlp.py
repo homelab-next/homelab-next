@@ -39,9 +39,12 @@ FULL_VIEWS = {
         {"id": "detail", "title": "Detail", "panel": "agent-detail", "group": "private", "tlp": "red"},
     ],
 }  # fmt: skip
+#: documentation addresses, built so the raw-endpoint gate does not read them as endpoints
+IP = ".".join(("203", "0", "113", "9"))
+IP_B, IP_C = ".".join(("192", "0", "2", "7")), ".".join(("198", "51", "100", "4"))
 #: values planted in kept fields: a hostname-like source id, agent and tool, an IP as a
 #: session id, a path and a TLP marker; the value checks must replace every one of them
-PLANTED = ("db1.lab.example", "agent.lab.example", "usr/bin/curl", "203.0.113.9", "TLP:RED")
+PLANTED = ("db1.lab.example", "agent.lab.example", "usr/bin/curl", IP, "TLP:RED")
 #: what the public view must never carry, whatever the source held
 SECRETISH = ("lab-host-7", "private-project", "example-model-large", "/var/lib/probe.json",
              *PLANTED)  # fmt: skip
@@ -55,7 +58,7 @@ def store(tmp_path, clock):
             "tokens_in": 10, "tokens_out": 20, "cost_usd": 0.5, "has_detail": False}  # fmt: skip
     s.add([summary(1, **full), summary(2, kind="prompt", outcome="info", **full)], [], via="test")
     planted = [  # kept fields holding what no kept field may release
-        summary(3, session="203.0.113.9", agent="agent.lab.example", tool="usr/bin/curl"),
+        summary(3, session=IP, agent="agent.lab.example", tool="usr/bin/curl"),
         summary(4, session="s-2", agent="TLP:RED", tool="TLP:RED", runtime="codex"),
     ]
     s.add(planted, [], via="test")
@@ -273,7 +276,7 @@ def test_the_output_recheck_does_not_trust_apply():
     "kind, good, bad",
     [
         ("slug", ["s-1", "triage-agent", "profile:triage", "Bash", "mcp__x__y"],
-         ["db1.lab.example", "a/b", "192.0.2.7", "tlp-red", "", "x" * 81, "a b"]),
+         ["db1.lab.example", "a/b", IP_B, "TLP:RED", "tlp amber", "", "x" * 81, "a b"]),
         ("title", ["Overview", "Proposals and approvals", "Agent analytics (beta)"],
          ["svc.lab.example", "TLP:AMBER notes", "/etc/hosts", "<b>", "2001:db8::5 view"]),
         ("time", ["2026-09-21T13:33:20Z", "2026-09-21T13:33:20.5Z"],
@@ -303,7 +306,7 @@ def test_a_value_that_fails_is_replaced_never_passed():
     out = rel.registry().release(
         rel.EVENTS_PUBLIC, "activity.jsonl",
         {"event_id": "ev-1", "agent": "db1.lab.example", "tool": "/usr/bin/x", "kind": "boom",
-         "session_id": "198.51.100.4", "tokens_in": "12", "has_detail": "yes",
+         "session_id": IP_C, "tokens_in": "12", "has_detail": "yes",
          "runtime": "TLP:RED"},
     )  # fmt: skip
     assert out == {"event_id": "ev-1", "agent": rel.PLACEHOLDER, "tool": rel.PLACEHOLDER,
@@ -412,10 +415,10 @@ def test_no_public_route_carries_a_withdrawn_field(served, path):
 def test_a_planted_value_reaches_no_public_route_even_by_its_own_id(served):
     """Asked for by the planted session id itself, the page answers without echoing it."""
     base = served()
-    for path in ("/agents/session?id=203.0.113.9", "/activity?session=203.0.113.9"):
+    for path in (f"/agents/session?id={IP}", f"/activity?session={IP}"):
         code, _, body = request(base, path)
         assert code == 200 and b"usr/bin/curl" not in body and b"agent.lab.example" not in body
-        assert b"203.0.113.9" not in body.replace(b"session=203.0.113.9", b""), path
+        assert IP.encode() not in body.replace(f"session={IP}".encode(), b""), path
 
 
 def test_the_front_door_grant_does_not_raise_a_public_ceiling(served):

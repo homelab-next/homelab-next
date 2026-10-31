@@ -671,13 +671,18 @@ The gate **verifies** a producer's TLP, never trusts it: an item's sidecar TLP i
 amber and unknown are excluded; the body is scanned for TLP markers and deny-listed names, which
 override the claim; only inert media types are accepted (`text/markdown`, `application/json`,
 `image/png`) and the gate renders HTML itself. **`green` is not public** (ADR-0033 decision 9):
-`tlp_allowed` stays `clear` by default, and a selection whose `tlp_allowed` (its value, else the
-manifest's default) is anything but `clear` must also set `audience: community` and name the
-access control that restricts the publication to that community (`access_control`, a sentence:
-the community's sign-in on the static host, say). The loader's site rules refuse it without both
-(`features.publishing.config.tlp_allowed: green is not public ...`); the rule holds for any module
-that declares a `tlp_allowed` key, read with `homelabnext.tlp.read`, so an unreadable value is held
-to it too. A module that requires a **model role whose prompts
+`tlp_allowed` stays `clear` by default. A selection whose `tlp_allowed` (its value, else the
+manifest's default) is `green` must also set `audience: community` and name the access control
+that restricts the publication to that community (`access_control`, a sentence: the community's
+sign-in on the static host, say). The loader's site rules refuse it without both
+(`features.publishing.config.tlp_allowed: green is not public ...`), and anything above `green`
+(`amber`, `amber+strict`, `red`, and a value that does not read, which is `red`) outright: no
+audience or control lets a publication out at that label. A placeholder is not an access control:
+`none`, `n/a`, `x`, `tbd`, `public` and the like, and anything with fewer than three letters, are
+refused (`PLACEHOLDER_CONTROLS` in `homelabnext/modules/rules.py`). That is a deny-list, and its
+limit is plain: the selection records no access control the name could be checked against, so a
+made-up sentence passes, and the review of the overlay is what catches it. The rule holds for any
+module that declares a `tlp_allowed` key, read with `homelabnext.tlp.read`. A module that requires a **model role whose prompts
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
 `grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
 

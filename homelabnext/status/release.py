@@ -37,7 +37,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import tlp
+from homelabnext import tlp, tlp_egress
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.status.agents.model import SESSION_STATES
 from homelabnext.status.model import STATES
@@ -114,19 +114,18 @@ KINDS = {
     "const": "exactly the value after the colon",
     "enum": "one of the closed set named after the colon (" + ", ".join(SETS) + ")",
 }
-# a dotted name with a letter in its first two labels (db1.lab.example, svc.local), an IP
-# address, a path, and a TLP marker.  TODO(ADR-0033): use homelabnext.tlp_egress.markers once
-# PR #169 lands, so the hub and the publishing gate read markers one way
+# a dotted name with a letter in its first two labels (db1.lab.example, svc.lab.example), an IP
+# address and a path; TLP markers are read by homelabnext.tlp_egress.markers, the one reader
+# every egress point uses (decision 13)
 _DOTTED = re.compile(r"[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*\.[A-Za-z][A-Za-z0-9-]*")
 _IP_TOKEN = re.compile(r"[0-9A-Fa-f:.%]{3,}")
 _PATHISH = re.compile(r"[/\\]|^~")
-_MARKER = re.compile(r"(?i)tlp\s*[:_ -]?\s*(?:clear|white|green|amber(?:\s*\+\s*strict)?|red)\b")
 
 
 def content_problem(text: str) -> str | None:
     """Why ``text`` may not leave in a released field, or None: a hostname-like dotted name, an
     IP address, a path or a TLP marker (the egress content checks, decision 13)."""
-    if _MARKER.search(text):
+    if tlp_egress.markers(text):
         return "a TLP marker"
     if _DOTTED.search(text):
         return "a dotted name"
