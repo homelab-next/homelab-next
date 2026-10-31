@@ -691,15 +691,16 @@ role has a TLP ceiling besides ([Model-role ceilings](#model-role-ceilings-adr-0
 
 ### Egress points (ADR-0033 decision 13)
 
-Data leaves its store at the points below. `homelabnext.tlp_egress` is the shared check each of
-them is to apply before anything leaves; the last column says where it is applied today. The check: the item's label is the strictest of the label it claims, the label recorded
-for it (`recorded` is a required argument, `NO_RECORD` for an item with none, so a caller cannot
-loosen an item by forgetting its record) and every TLP marker in its body; it leaves only at or
-below the destination's ceiling (`egress_check`). A body is read after folding look-alike and
-hidden characters (NFKC, format characters dropped); bytes are read as UTF-8, a mapping or a list
-leaf by leaf with its keys, and a body that cannot be scanned is `red`. A marker is `TLP:` and a
-word in any ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label
-word; any other spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
+Data leaves its store at the points below. `homelabnext.tlp_egress` is the shared check each of them
+is to apply before anything leaves; the last column says where it is applied today. The check: the
+item's label is the strictest of the label it claims, the label recorded for it (`recorded` is a
+required argument, `NO_RECORD` for an item with none, so a caller cannot loosen an item by
+forgetting its record) and every TLP marker in its body; it leaves only at or below the
+destination's ceiling (`egress_check`). A body is read after folding look-alike and hidden
+characters (NFKC, format characters dropped); bytes are read as UTF-8, a mapping or a list leaf by
+leaf with its keys, and a body that cannot be scanned is `red`. A marker is `TLP:` and a word in any
+ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label word; any other
+spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 
 | Egress point | Its ceiling comes from | What lets a module use it today | Checked today |
 |---|---|---|---|
@@ -707,14 +708,14 @@ word; any other spelling of `amber+strict`, an unknown word or a dangling `+` is
 | the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown | the hub's view ceilings and release transforms |
 | model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling |
 | enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) | none in this repository yet (`job_label`, `analyzers_for` are for the client) |
-| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's and the status hub's pages (`--notify-ceiling`) |
+| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's and the status hub's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
 | webhooks | the receiver's ceiling | `grants.egress` | not yet |
 | backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) | not yet |
 | the bus | its subscribers' ceilings | `cap:events` | not yet |
 | records and tickets (ADR-0010, ADR-0020) | their readers' ceilings | `cap:records`, `cap:cases` | not yet |
 | memory and embedding stores | their readers' ceilings | the agent's memory grants | not yet |
 | generated pages committed to a repository | `clear` for the public repository (ADR-0011) | not a module grant: the leak scans | the leak scans (no TLP check) |
-| logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners | `notify.CeilingSender` scans the title, body, tags and link |
+| logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners | what reaches a page in a message: `notify.CeilingSender` scans its title, body, tags, link, topic and email; no log screener applies the check |
 
 Where the last column says "not yet", what is enforced is the reach, not the content: a module
 reaches beyond the lab only through a grant the overlay gives (`grants.egress` for any host role's

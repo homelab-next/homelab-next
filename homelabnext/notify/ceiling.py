@@ -5,19 +5,24 @@ and error text that reach one, are egress points).
 :class:`CeilingSender` wraps a sender and applies the shared egress check
 (:func:`homelabnext.tlp_egress.egress_check`) to every message before it leaves: the message's
 label is the strictest of the label it claims (``Message.tlp``; none is ``red``) and every TLP
-marker in its title, body, tags and link.  A notification is not stored, so it has no recorded
-label.  A message above the channel's ceiling is not sent as written: a fixed notice goes in its
-place, at the same level, priority, topic and email target, saying only that a notification was
-withheld and at which label, so the page still arrives and nothing of its content leaves.  The
-notifier's state is unchanged by the swap: it still holds the problem as sent, and the recovery
-goes through the same check.
+marker in its title, body, tags, link, topic and email target.  A notification is not stored, so
+it has no recorded label.  A message above the channel's ceiling is not sent as written: a fixed
+notice goes in its place, at the same level and priority, to the channel's default topic and no
+extra email target, carrying only the fixed ``recovered`` tag when the message was a recovery and
+saying only that a notification was withheld and at which label.  So the page still arrives and
+nothing the message's producer wrote leaves.  The notifier's state is unchanged by the swap: it
+still holds the problem as sent, and the recovery, labelled at least as strictly as the problem
+(:meth:`Notifier._recover`), goes through the same check.
 
 The default ceiling is ``red``: a channel only the lab's operators read admits everything, and
-behaviour is unchanged until a channel is given a lower one.
+behaviour is unchanged until a channel is given a lower one.  No producer in this repository
+labels its messages yet, so on a channel below ``red`` every one of their pages arrives as the
+notice: safe, and only useful once producers claim labels.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 from homelabnext import tlp
@@ -28,6 +33,8 @@ from .core import Message, Sender
 __all__ = ["WITHHELD_TITLE", "CeilingSender", "ceiling_arg", "ceiling_from_flag"]
 
 WITHHELD_TITLE = "Notification withheld (TLP)"
+
+log = logging.getLogger("homelabnext.notify")
 
 
 class CeilingSender:
@@ -45,12 +52,24 @@ class CeilingSender:
         return f"CeilingSender({self.inner!r}, ceiling={self.ceiling})"
 
     def send(self, message: Message) -> None:
-        body = [message.title, message.body, list(message.tags), message.click or ""]
+        body = [
+            message.title,
+            message.body,
+            list(message.tags),
+            message.click or "",
+            message.topic or "",
+            message.email or "",
+        ]
         decision = egress_check(self.ceiling, message.tlp, recorded=NO_RECORD, body=body)
         if decision.allowed:
             self.inner.send(message)
             return
         self.withheld += 1
+        log.warning(
+            "notification withheld: labelled %s, above the channel's %s ceiling",
+            decision.label,
+            self.ceiling,
+        )
         notice = replace(
             message,
             title=WITHHELD_TITLE,
@@ -58,8 +77,10 @@ class CeilingSender:
                 f"A {message.level} notification labelled {decision.label} is above this "
                 f"channel's {self.ceiling} ceiling and was not sent; read it where it is held."
             ),
-            tags=(),
+            tags=("recovered",) if "recovered" in message.tags else (),
             click=None,
+            topic=None,
+            email=None,
             tlp=str(self.ceiling),
         )
         self.inner.send(notice)

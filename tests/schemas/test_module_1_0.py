@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -2034,9 +2035,26 @@ def test_the_registry_flags_exactly_the_listed_egress_slots():
     flagged = {s for s, d in SLOTS.items() if d.get("egress")}
     assert flagged == mr.EGRESS_SLOTS
     docs = (ROOT / "docs" / "modules.md").read_text()
-    table = docs.split("### Egress points", 1)[1].split("\n### ", 1)[0]
-    for slot in mr.EGRESS_SLOTS:
-        assert f"cap:{slot}" in table or slot == "static-hosting", slot
+    section = docs.split("### Egress points", 1)[1].split("\n### ", 1)[0]
+    rows = [r for r in section.splitlines() if r.startswith("| ") and "---" not in r][1:]
+    # the static host is the publishing gate's row (its grant, not a cap, opens it)
+    named = (
+        {"static-hosting"} if any(r.startswith("| the publishing gate") for r in rows) else set()
+    )
+    for r in rows:
+        grant = r.split(" | ")[2]
+        named |= {c.removeprefix("cap:") for c in re.findall(r"cap:[a-z-]+", grant)}
+    assert named == mr.EGRESS_SLOTS
+
+
+def test_a_listed_egress_slot_the_registry_does_not_flag_is_refused():
+    """Negative: the flag and the list are one fact, so a registry that drops the flag from a
+    listed slot is refused where a module reaches it."""
+    slots = copy.deepcopy(SLOTS)
+    del slots["notify"]["egress"]
+    name = "external-collector"
+    probs = mr.module_problems(MODULES[name], MODULES_DIR / name, slots, load, ROOTS)
+    assert "cap:notify: on the egress list, but the slot registry does not flag it egress" in probs
 
 
 def _with_unlisted_egress() -> dict:

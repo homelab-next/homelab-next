@@ -39,6 +39,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+from homelabnext import tlp
+
 log = logging.getLogger("homelabnext.notify")
 LEVELS = ("info", "warn", "crit")
 _LEVEL_PRIORITY = {"info": 3, "warn": 4, "crit": 5}
@@ -216,6 +218,7 @@ class Notifier:
                 "topic": message.topic,
                 "email": message.email,
                 "tags": list(message.tags),
+                "tlp": message.tlp,  # the recovery carries the problem's tags: its label too
                 "since": now,
             },
         )
@@ -231,6 +234,11 @@ class Notifier:
             recovery_title = f"Recovered: {title}"
         if not self._allow(key, scope):
             return False
+        # the recovery repeats the problem's tags (and its title when the caller gives no body),
+        # so it is labelled at least as strictly as the problem was (ADR-0033: the strictest of
+        # its inputs; a problem recorded with no claim is red), and the caller's body brings its
+        # own claim with it
+        claims = [rec.get("tlp")] + ([message.tlp] if message.body else [])
         msg = Message(
             key=key,
             title=recovery_title,
@@ -239,6 +247,7 @@ class Notifier:
             tags=("recovered", *rec.get("tags", [])),
             topic=rec.get("topic") or message.topic,
             email=rec.get("email") or message.email,
+            tlp=str(tlp.strictest(claims)),
         )
         self.sender.send(msg)
         now = self.clock()

@@ -512,7 +512,8 @@ request's page is dropped from it); each agent may send 20 messages an hour on i
 and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
 refusal is logged at WARNING once per agent and lane instead. `--notify-ceiling LABEL` (default
 `red`) is the channel's TLP ceiling: a page labelled above it is replaced by a content-free
-"withheld" notice at the same level, and a page claiming no label is `red`
+"withheld" notice at the same level, and a page claiming no label is `red`. The broker labels
+none of its pages yet, so a ceiling below `red` turns every page into that notice
 ([modules](modules.md#egress-points-adr-0033-decision-13)). With `--notify-pairs-dir DIR` (or
 `HNX_NOTIFY_PAIRS_DIR`), the notifier writes the pairs it holds to `DIR/broker/pairs.json` for the
 module census ([modules](modules.md#the-loader-at-deploy-time), "Notify pairs"). The census reads

@@ -581,12 +581,20 @@ def module_problems(
     # slot registry: declared slots, provisional only without a contract, privileged never
     for r in caps:
         out += _slot_ref_problems(r["cap"], r.get("provisional", False), slots, "requirement")
-    # an egress slot not on the egress list is refused wherever a module reaches or provides it
+    # an egress slot not on the egress list is refused wherever a module reaches or provides it,
+    # and so is a listed one the registry does not flag (the flag and the list are one fact)
     for name in sorted(reachable | set(doc.get("provides", {}).get("slots", {}))):
-        if slots.get(name, {}).get("egress") and name not in EGRESS_SLOTS:
+        if name not in slots:
+            continue  # an unknown slot: refused by the slot reference checks
+        flagged = slots[name].get("egress") is True
+        if flagged and name not in EGRESS_SLOTS:
             out.append(
                 f"cap:{name}: an egress slot not on the egress list (docs/modules.md, "
                 '"Egress points"; ADR-0033 decision 13)'
+            )
+        elif name in EGRESS_SLOTS and not flagged:
+            out.append(
+                f"cap:{name}: on the egress list, but the slot registry does not flag it egress"
             )
     for slot, e in doc.get("provides", {}).get("slots", {}).items():
         out += _slot_ref_problems("cap:" + slot, e.get("provisional", False), slots, "provider")
