@@ -212,8 +212,9 @@ alias. Panels:
   error, what it reports.
 
 Every other `panel:` is a page of its own (section 6): the agent pages, strategy, projects,
-baselines, approvals, the generated maps (`group: maps`) and the directory pages Links, Schedule
-and Agent roster (`group: directory`, views 1.7).
+baselines, approvals, the generated maps and the directory pages Links, Schedule and Agent
+roster (views 1.7). Every page but the agent pages is withheld from the public view and sits in
+the `private` group ([TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)).
 
 ## 4. The page and `status.json` (the contract)
 
@@ -271,8 +272,10 @@ and `render` and `serve` when they load the views, refuse:
   is granted `red`, and a lower ceiling would promise a filter its pages do not run;
 - a public export, or a public view whose data the hub releases (`exceptions`, `grid`, `sources`,
   `agents`, `activity`, `agent-analytics`), that no release transform serves, or one whose
-  transform's output its ceiling does not allow; a public page panel in neither that list nor the
-  unmigrated pages below.
+  transform's output its ceiling does not allow;
+- a public entry for any other panel: a page no release transform shapes is **withheld** and may
+  sit only in the `private` group, at `red` (below); and a `private` group entry that is neither a
+  private page nor a withheld one.
 
 Where the hub can be reached from never enters into it: binding another address,
 `--allowed-host`, a public hostname or a front door raises no ceiling. A request through the
@@ -306,14 +309,27 @@ public view until a transform keeps or withdraws it (a test fails until someone 
 The private pages are unchanged: the detail tier and the access log still show everything, at
 `red`, and only through the front door.
 
-**Not yet migrated.** The page panels that render inputs of their own rather than the status
-document or the activity summary (strategy, requirements, objectives, RFIs, baselines, projects,
-orchestration, the maps and the directory pages) declare their `clear` ceiling, but no release
-transform shapes their fields yet: they show what they showed before, which is lab data. Their
-transforms are the next step of the ADR's delivery (reader ceilings and the shared filter); until
-then, publish the hub through the front door only, or leave those panels out of a public
-`views.yml`. The egress content checks a released field passes as well (decision 13) come with
-the egress list.
+**Withheld pages.** The page panels that render inputs of their own rather than a released
+document have no release transform yet, so by decision 8 they are withdrawn from the public view.
+Each sits in the `private` group at `red` (`WITHHELD_PANELS` in `homelabnext/status/views.py`):
+
+| Panel | Moved from | Why it is withheld |
+|---|---|---|
+| `strategy`, `requirements`, `objectives`, `rfis` | public, no group | the lab's strategy records: priorities, intelligence requirements and their gaps |
+| `projects` | public, no group | the lab's own work, steps and blockers |
+| `orchestration` | public, no group | agent jobs, profiles, backends and gateway turns |
+| `baselines` | public, no group | per-guest defense coverage: which guest lacks which layer |
+| `topology`, `dataflow`, `architecture`, `roadmap` | `group: maps` | guests, zones, flows, the lab's controls; the topology reads every observation and the UPS states unfiltered |
+| `links`, `schedule`, `roster`, `mcp-servers` | `group: directory` | the service directory and its sign-ins, every scheduled job, the agent roster (which reads the sessions unfiltered) and the MCP servers with their grants |
+
+`hnx status serve` answers their routes only for a request through the trusted front door,
+access-logs each one like every private view, and answers `403` to anyone else, and always when
+no activity store with a front door is configured. They get the full document, since only the
+`red` tier sees them; the public agent pages get the released one, even for their menu and title.
+`hnx status render` never writes them beside the public page: `--maps`, `--guests` and
+`--roster` need `--private-out DIR` (outside `--out`), and that directory is for the front door
+only. Each one becomes public again only with a release transform of its own. The egress content
+checks a released field passes as well (decision 13) come with the egress list.
 
 ## 5. Events and the graph
 
@@ -552,16 +568,19 @@ hnx status render --out build/hub --guests examples/lab-topology/guests \
 ```
 
 `hnx status serve ... --maps . --invariants-results build/invariants/results.json` serves them
-live; `hnx status render --out DIR` with the same options writes each available map as
-`<panel>.html` beside `index.html`, and the static menu links to it. The architecture and the
+live, through the trusted front door only (the maps are withheld from the public view,
+[above](#tlp-ceilings-and-release-transforms)); `hnx status render --out DIR --private-out PRIV`
+with the same options writes each available map as `<panel>.html` into `PRIV`, never beside the
+public `index.html`. The architecture and the
 dataflow model are built once per process (they change only with the code); the topology, the
 dataflow's placement on guests and the roadmap are read on each request. A test keeps
 `docs/build-order.md` naming every checklist row and only real ones.
 
 ### Directory pages: links, schedule, agent roster
 
-Three more generated pages in the `directory` menu group (views 1.7, `panel: links | schedule |
-roster`), served with `--maps ROOT` and written by `hnx status render` as `<panel>.html`. Like the
+Three more generated pages (views 1.7, `panel: links | schedule | roster`), withheld like the
+maps in the `private` group, served with `--maps ROOT` through the front door and written by
+`hnx status render --private-out PRIV` as `<panel>.html`. Like the
 maps they are built only from the repository's data (`homelabnext/status/maps/links.py`,
 `schedule.py`, `roster.py`; goldens in `tests/maps/golden/maps/`, tests in
 `tests/maps/test_directory.py`), script-free under the hub's usual CSP, every value escaped. A
@@ -618,8 +637,8 @@ is the page's error, never read. Grants are never restated there (the schema ref
 and the broker manifests, so the page cannot disagree with what is enforced. A profile some file
 names without a roster entry, or a roster entry with no compiled profile, is listed with that
 gap. A session belongs to a profile when its `agent` is the profile id, its bare name or one of
-its `activity_names`. The page is public like the Agents page: its last session, state and
-runtimes come from `status.json`'s `agents.sessions`, the summary tier
+its `activity_names`. The page is withheld (private): its last session, state and
+runtimes come from the hub document's `agents.sessions`, the summary tier
 ([section 6](#6-agent-activity-stage-1b)), never the detail tier the private pages show.
 
 ### Pages

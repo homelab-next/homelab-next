@@ -297,24 +297,45 @@ def make_server(
 
         def _page(self, route: str, query: str, client: str | None) -> Any:
             """The first page site's response for ``route``, or None; the document is built
-            once, and only when some site is configured."""
-            # (site, whether its handler also judges the caller), in the order routes resolve
+            once, and only when some site is configured.
+
+            The withheld sites (strategy, projects, orchestration, baselines, the maps and the
+            directory pages) have no release transform (ADR-0033 decision 8): they answer only a
+            request through the trusted front door, are access-logged like every private view,
+            and are ``403`` for anyone else (and always, without an activity store's front
+            door).  The agent pages, which are public, get the released document only; the
+            Approvals page, private, judges the caller itself."""
+            # (site, how the caller is judged), in the order routes resolve
             sites = [
-                (approvals, True),
-                (strategy, False),
-                (projects, False),
-                (orchestration, False),
-                (baselines, False),
-                (maps, False),
-                (agents, True),
+                (approvals, "self"),
+                (strategy, "withheld"),
+                (projects, "withheld"),
+                (orchestration, "withheld"),
+                (baselines, "withheld"),
+                (maps, "withheld"),
+                (agents, "self"),
             ]
-            sites = [(s, auth) for s, auth in sites if s is not None]
+            sites = [(s, how) for s, how in sites if s is not None]
             if not sites:
                 return None
             doc = document()
-            for site, auth in sites:
-                args = (client, self.headers) if auth else ()
-                if hit := site.handle(route, query, doc, *args):
+            for site, how in sites:
+                if how == "self":
+                    view = doc
+                    if site is agents:
+                        try:  # the agent pages' shell: the released document, never the full one
+                            view = public_status(doc, releases)
+                        except ReleaseError:
+                            return 500, "text/plain; charset=utf-8", b"withdrawn: release failed\n"
+                    if hit := site.handle(route, query, view, client, self.headers):
+                        return hit
+                    continue
+                if hit := site.handle(route, query, doc):
+                    decision = agents.authorize(client, self.headers) if agents else None
+                    if decision is None or not decision.allowed:
+                        return 403, "text/plain; charset=utf-8", b"forbidden: private view\n"
+                    if agents.access_log is not None:
+                        agents.access_log.append(decision.user or "", route.lstrip("/"))
                     return hit
             return None
 

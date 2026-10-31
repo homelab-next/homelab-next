@@ -6,7 +6,10 @@
 # schemas/status/views.schema.json. Fictional, like every example.
 #
 # Every entry and every export declares its TLP ceiling (ADR-0033; docs/status.md, "TLP
-# ceilings and release transforms"): clear for the public view, red for the private group.
+# ceilings and release transforms"): clear for the public view, red for the private group. A
+# page that no release transform shapes yet (strategy, projects, orchestration, baselines, the
+# maps and the directory pages) is withheld: it sits in the private group and is served only
+# through the trusted front door.
 views_version: 1
 
 shell:
@@ -55,38 +58,6 @@ menu:
     title: Agent analytics
     panel: agent-analytics
     tlp: clear
-  # strategy to task (docs/strategy.md; listed as unavailable without --strategy)
-  - id: strategy
-    title: Strategy
-    panel: strategy
-    tlp: clear
-  - id: requirements
-    title: Requirements
-    panel: requirements
-    tlp: clear
-  - id: objectives
-    title: Objectives
-    panel: objectives
-    tlp: clear
-  - id: rfis
-    title: RFIs
-    panel: rfis
-    tlp: clear
-  # project management (docs/projects.md; listed as unavailable without --projects)
-  - id: projects
-    title: Projects
-    panel: projects
-    tlp: clear
-  # orchestration telemetry (docs/orchestration-telemetry.md; unavailable without --orchestration)
-  - id: orchestration
-    title: Orchestration
-    panel: orchestration
-    tlp: clear
-  # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
-  - id: baselines
-    title: Baselines
-    panel: baselines
-    tlp: clear
   - id: grafana
     title: Grafana
     external: {service: dashboards}
@@ -95,48 +66,88 @@ menu:
     title: Agentmetry
     external: {service: agentmetry, optional: true}
     tlp: clear
+  # the withheld pages: private until a release transform shapes them (ADR-0033)
+  # strategy to task (docs/strategy.md; listed as unavailable without --strategy)
+  - id: strategy
+    title: Strategy
+    panel: strategy
+    group: private
+    tlp: red
+  - id: requirements
+    title: Requirements
+    panel: requirements
+    group: private
+    tlp: red
+  - id: objectives
+    title: Objectives
+    panel: objectives
+    group: private
+    tlp: red
+  - id: rfis
+    title: RFIs
+    panel: rfis
+    group: private
+    tlp: red
+  # project management (docs/projects.md; listed as unavailable without --projects)
+  - id: projects
+    title: Projects
+    panel: projects
+    group: private
+    tlp: red
+  # orchestration telemetry (docs/orchestration-telemetry.md; unavailable without --orchestration)
+  - id: orchestration
+    title: Orchestration
+    panel: orchestration
+    group: private
+    tlp: red
+  # guest baselines (docs/compute-model.md; listed as unavailable without --guests)
+  - id: baselines
+    title: Baselines
+    panel: baselines
+    group: private
+    tlp: red
   # generated maps (ADR-0018; topology with --guests, the rest with --maps; unavailable without)
   - id: topology
     title: Topology
     panel: topology
-    group: maps
-    tlp: clear
+    group: private
+    tlp: red
   - id: dataflow
     title: Dataflow
     panel: dataflow
-    group: maps
-    tlp: clear
+    group: private
+    tlp: red
   - id: architecture
     title: Architecture
     panel: architecture
-    group: maps
-    tlp: clear
+    group: private
+    tlp: red
   - id: roadmap
     title: Roadmap
     panel: roadmap
-    group: maps
-    tlp: clear
+    group: private
+    tlp: red
   # directory pages generated from the repository (--maps; unavailable without)
   - id: links
     title: Links
     panel: links
-    group: directory
-    tlp: clear
+    group: private
+    tlp: red
   - id: schedule
     title: Schedule
     panel: schedule
-    group: directory
-    tlp: clear
+    group: private
+    tlp: red
   - id: roster
     title: Agent roster
     panel: roster
-    group: directory
-    tlp: clear
+    group: private
+    tlp: red
   - id: mcp-servers
     title: MCP servers
     panel: mcp-servers
-    group: directory
-    tlp: clear
+    group: private
+    tlp: red
   # rendered only for a request through the trusted front door (docs/status.md)
   - id: agent-detail
     title: Session detail

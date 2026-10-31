@@ -15,6 +15,7 @@ from homelabnext.graph import build, is_active
 from homelabnext.registers import ids
 from homelabnext.strategy.cli import main as cli
 from homelabnext.strategy.pages import ROUTES, StrategySite
+from tests.front_door_pass import FrontDoorPass
 
 
 @pytest.fixture(scope="module")
@@ -70,7 +71,7 @@ def test_the_pages_are_on_the_menu_and_available_only_when_served():
     for panel, href in zip(("strategy", "requirements", "objectives", "rfis"), ROUTES, strict=True):
         assert menu[panel] | {"available": True} == {
             "id": panel, "title": menu[panel]["title"], "kind": "page", "panel": panel,
-            "href": href, "available": True,
+            "href": href, "available": True, "group": "private",  # withheld (ADR-0033)
         }  # fmt: skip
     off = {m["id"]: m["available"] for m in _doc(strategy=False)["menu"]}
     assert not any(off[p] for p in ("strategy", "requirements", "objectives", "rfis"))
@@ -99,7 +100,7 @@ def test_serve_routes_the_pages_under_the_hub_csp():
     from homelabnext.status.serve import make_server
 
     site = StrategySite(EXAMPLE, clock=lambda: NOW.timestamp())
-    srv = make_server(_doc, strategy=site)
+    srv = make_server(_doc, strategy=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:

@@ -37,7 +37,9 @@ Schedule, Agent roster and MCP servers with ``--maps``), the Projects page (with
 :mod:`homelabnext.orchestration.pages`).  Their menu entries are
 ``available`` only when that part is configured.  The private pages (:data:`PRIVATE_PANELS`, the
 ``private`` menu group) are never in the public ``status.json`` and render only for a request
-through the trusted front door.
+through the trusted front door.  So do the withheld pages (:data:`WITHHELD_PANELS`): every page
+that renders inputs of its own rather than a released document has no release transform yet
+(ADR-0033 decision 8), so it may sit only in the private group, at ``red``.
 
 A view's ``select`` (``sources``/``modules``) narrows its panel.  An external entry links to a
 registry service by name; ``optional`` entries whose service is not registered are listed as
@@ -80,7 +82,7 @@ PAGE_PANELS = {
     # the broker Approvals page (homelabnext.status.approvals), with approvals: in agents.yml
     "approvals": "/approvals",
     # the generated maps (homelabnext.status.maps, ADR-0018): --guests for the topology,
-    # --maps ROOT for the other three; also written as <panel>.html by hnx status render
+    # --maps ROOT for the other three; also written as <panel>.html by render --private-out
     "topology": "/topology",
     "dataflow": "/dataflow",
     "architecture": "/architecture",
@@ -108,12 +110,14 @@ PRIVATE_GROUP = "private"
 #: grant allows, a private one below ``red`` would promise a filter the private pages do not run
 PUBLIC_CEILING = tlp.Label.CLEAR
 PRIVATE_CEILING = tlp.Label.RED
-#: public page panels that render inputs of their own (repository files, a guest directory, the
-#: orchestration store) rather than the status document or the activity summary: they declare
-#: their ``clear`` ceiling, and their release transforms are the next step of ADR-0033's
-#: migration (docs/status.md, "TLP ceilings and release transforms").  A public panel in neither
-#: this set nor :data:`homelabnext.status.release.VIEWS` is refused.
-UNMIGRATED_PAGES = (
+#: page panels withheld from the public view: they render inputs of their own (repository
+#: files, a guest directory, the orchestration store, the full status document's observations
+#: and sessions) and no release transform shapes them yet (ADR-0033 decision 8: a public field
+#: with no transform is withdrawn).  Each may sit only in the private group, at ``red``, and is
+#: served only through the trusted front door; a public panel outside
+#: :data:`homelabnext.status.release.VIEWS` is refused (docs/status.md, "TLP ceilings and
+#: release transforms").
+WITHHELD_PANELS = (
     frozenset(
         {"strategy", "requirements", "objectives", "rfis", "baselines", "projects", "orchestration"}
     )
@@ -166,11 +170,16 @@ def views_problems(
     for v in doc["menu"]:
         if v.get("panel") in PAGE_PANELS and v.get("select"):
             out.append(f"view {v['id']}: the {v['panel']} page takes no select")
-        private = v.get("panel") in PRIVATE_PANELS
-        if private != (v.get("group") == PRIVATE_GROUP):
+        in_group = v.get("group") == PRIVATE_GROUP
+        if v.get("panel") in PRIVATE_PANELS and not in_group:
             out.append(
-                f"view {v['id']}: the {PRIVATE_GROUP!r} group holds exactly the private pages "
-                f"({', '.join(sorted(PRIVATE_PANELS))})"
+                f"view {v['id']}: the {v['panel']} page is private: it sits in the "
+                f"{PRIVATE_GROUP!r} group"
+            )
+        elif in_group and v.get("panel") not in PRIVATE_PANELS | WITHHELD_PANELS:
+            out.append(
+                f"view {v['id']}: the {PRIVATE_GROUP!r} group holds only the private and the "
+                f"withheld pages ({', '.join(sorted(PRIVATE_PANELS | WITHHELD_PANELS))})"
             )
     known_sources = {s.id for s in specs} if specs is not None else None
     known_modules = {s.module for s in specs} if specs is not None else None
@@ -230,8 +239,11 @@ def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None =
             continue  # an external entry is a menu link: its fields are the status document's
         if panel in release.VIEWS:
             served(f"view {v['id']}", panel, ceiling)
-        elif panel not in UNMIGRATED_PAGES:
-            out.append(f"view {v['id']}: the {panel} panel has no release transform")
+        else:  # a withheld page shown publicly would carry lab data with no transform
+            out.append(
+                f"view {v['id']}: the {panel} panel has no release transform, so it is "
+                f"withdrawn from the public view: put it in the {PRIVATE_GROUP!r} group (tlp: red)"
+            )
     exports = doc.get("exports") or {}
     for name in release.EXPORTS:
         if name not in exports:

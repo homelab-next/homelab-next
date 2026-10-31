@@ -24,7 +24,7 @@ from homelabnext.status.agents.pages import AgentSite
 from homelabnext.status.model import iso
 from homelabnext.status.render import render_html, write
 from homelabnext.status.serve import LOOPBACK, make_server
-from homelabnext.status.views import public_status
+from homelabnext.status.views import WITHHELD_PANELS, public_status
 
 FULL_VIEWS = {
     "views_version": 1,
@@ -289,12 +289,14 @@ def test_render_writes_the_public_view(registry, store, clock, tmp_path):
 def served(tmp_path, clock, store, registry):
     servers = []
 
-    def start(releases=None):
-        site = AgentSite(store, front_door=front_door(tmp_path), clock=clock, releases=releases)
+    def start(releases=None, *, door=True, **sites):
+        fd = front_door(tmp_path) if door else None
+        site = AgentSite(store, front_door=fd, clock=clock, releases=releases)
         srv = make_server(
             lambda: _full_doc(registry, site),
             agents=site,
             releases=releases,
+            **sites,
             allow_remote=True,
             host=LOOPBACK,
             allowed_hosts=["status.lab.example"],
@@ -358,6 +360,62 @@ def test_a_failed_release_is_withdrawn_not_served(served):
     for path in PUBLIC:
         code, _, body = request(base, path)
         assert code == 500 and body == b"withdrawn: release failed\n", path
+
+
+@pytest.mark.parametrize("panel", sorted(WITHHELD_PANELS))
+def test_a_public_withheld_panel_is_refused(registry, specs, panel):
+    """A page no release transform shapes cannot be public, at any ceiling (decision 8)."""
+    doc = _example()
+    entry = next(v for v in doc["menu"] if v.get("panel") == panel)
+    assert entry["group"] == "private" and entry["tlp"] == "red"
+    entry.pop("group")
+    entry["tlp"] = "clear"
+    problems = views_problems(doc, registry, specs)
+    assert (
+        f"view {entry['id']}: the {panel} panel has no release transform, so it is withdrawn "
+        "from the public view: put it in the 'private' group (tlp: red)" in problems
+    )
+    entry["group"] = "maps"  # any other group is public too
+    assert any("has no release transform" in p for p in views_problems(doc, registry, specs))
+
+
+def test_a_released_view_is_not_in_the_private_group(registry, specs):
+    doc = _example()
+    _entry(doc, "activity").update(group="private", tlp="red")
+    assert any(
+        "view activity: the 'private' group holds only the private and the withheld pages" in p
+        for p in views_problems(doc, registry, specs)
+    )
+
+
+class _Withheld:
+    """A withheld page site (strategy, projects, ...): it serves lab data with no transform."""
+
+    def handle(self, route, query, doc):
+        if route == "/strategy":
+            return 200, "text/html; charset=utf-8", b"lab-host-7 private-project"
+        return None
+
+
+def test_a_withheld_page_is_served_only_through_the_front_door(served, tmp_path):
+    base = served(strategy=_Withheld())
+    for headers in ({}, {"Host": "status.lab.example"}):
+        code, _, body = request(base, "/strategy", headers=headers)
+        assert code == 403 and body == b"forbidden: private view\n"
+    code, _, body = request(base, "/strategy", headers=AUTHORIZED)
+    assert code == 200 and b"lab-host-7" in body
+    log = [json.loads(line) for line in (tmp_path / "access.jsonl").read_text().splitlines()]
+    assert {"user": "operator", "view": "strategy"}.items() <= log[-1].items()
+    no_door = served(strategy=_Withheld(), door=False)
+    assert request(no_door, "/strategy", headers=AUTHORIZED)[0] == 403
+
+
+def test_the_public_agent_pages_render_from_the_released_document(served):
+    """Their shell (menu, title, the change link) comes from the released document only."""
+    base = served()
+    for path in ("/agents", "/activity", "/agent-analytics"):
+        body = request(base, path)[2]
+        assert b"Make a change" not in body and b"Test lab" in body, path
 
 
 def test_the_registry_file_is_packaged():

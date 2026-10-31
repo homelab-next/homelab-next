@@ -64,7 +64,7 @@ class ProjectsSite:
         records = {r.uid: r for r in strategy_records(self.strategy)} if self.strategy else {}
         now = dt.datetime.fromtimestamp(self.clock(), dt.UTC)
         main = self._page(items, records, now)
-        html = shell_html(doc, "Projects", main, nav=nav_html(doc, live=True))
+        html = shell_html(doc, "Projects", main, nav=nav_html(doc, live=True, private=True))
         return 200, HTML, html.encode("utf-8")
 
     def _page(self, items: list[WorkItem], records: Mapping[str, Any], now: dt.datetime) -> str:

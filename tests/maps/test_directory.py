@@ -20,6 +20,7 @@ from homelabnext.status.cli import main
 from homelabnext.status.maps import MapSite, cadence, links, mcp, roster, schedule
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
+from tests.front_door_pass import FrontDoorPass
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "examples" / "services.yml"
@@ -454,7 +455,7 @@ def _doc(maps=(), agents=None):
 def test_the_directory_pages_are_a_menu_group_available_only_when_configured():
     menu = {m["id"]: m for m in _doc({"links"})["menu"]}
     for panel in ("links", "schedule", "roster", "mcp-servers"):
-        assert menu[panel]["group"] == "directory" and menu[panel]["href"] == f"/{panel}"
+        assert menu[panel]["group"] == "private" and menu[panel]["href"] == f"/{panel}"
         assert menu[panel]["available"] is (panel == "links")
     site = MapSite(root=ROOT, registry=load(REGISTRY))
     assert {"links", "schedule", "roster"} <= site.available()
@@ -479,7 +480,7 @@ def test_serve_routes_the_directory_pages():
     site = MapSite(root=ROOT, registry=load(REGISTRY))
     agents = {"counts": {}, "sessions": [{"agent": "triage-agent", "runtime": "claude-code",
               "state": "working", "last_seen": "2026-10-20T23:00:00Z"}]}  # fmt: skip
-    srv = make_server(lambda: _doc(site.available(), agents), maps=site)
+    srv = make_server(lambda: _doc(site.available(), agents), maps=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:
@@ -500,18 +501,19 @@ def test_serve_routes_the_directory_pages():
 
 
 def test_render_writes_the_directory_pages(tmp_path):
-    out = tmp_path / "site"
-    args = ["render", "--out", str(out), "--registry", str(REGISTRY), "--views", str(VIEWS),
+    site, out = tmp_path / "site", tmp_path / "private"
+    args = ["render", "--out", str(site), "--registry", str(REGISTRY), "--views", str(VIEWS),
             "--state", str(tmp_path / "s.json"), "--now", NOW, "--maps", str(ROOT),
-            "--roster", str(FIX / "roster" / "roster.yml")]  # fmt: skip
+            "--roster", str(FIX / "roster" / "roster.yml"), "--private-out", str(out)]  # fmt: skip
     assert main(args) == 0
+    assert "links.html" not in (site / "index.html").read_text()  # withheld (ADR-0033)
     for name in ("links.html", "schedule.html", "roster.html", "mcp-servers.html"):
         page = (out / name).read_text()
         assert_safe(page)
         assert 'href="index.html#view-overview"' in page and "cannot build" not in page
     assert "profile:watcher" in (out / "roster.html").read_text()
     assert f"next runs computed after {NOW}" in (out / "schedule.html").read_text()
-    assert '<a href="links.html">Links</a>' in (out / "index.html").read_text()
+    assert '<a href="links.html">Links</a>' in (out / "roster.html").read_text()
 
 
 def test_roster_option_is_checked(tmp_path, capsys):

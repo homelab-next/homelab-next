@@ -25,6 +25,7 @@ from homelabnext.status.maps.lab import Index, host_flows
 from homelabnext.status.maps.mdtables import parse_tables, split_row
 from homelabnext.status.model import sources_from_registry
 from homelabnext.status.views import build_status, load_views
+from tests.front_door_pass import FrontDoorPass
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = ROOT / "examples" / "services.yml"
@@ -602,7 +603,7 @@ def _doc(maps=()):
 def test_the_maps_are_a_menu_group_available_only_when_configured():
     menu = {m["id"]: m for m in _doc({"roadmap"})["menu"]}
     for panel in ("topology", "dataflow", "architecture", "roadmap"):
-        assert menu[panel]["group"] == "maps" and menu[panel]["href"] == f"/{panel}"
+        assert menu[panel]["group"] == "private" and menu[panel]["href"] == f"/{panel}"
         assert menu[panel]["available"] is (panel == "roadmap")
 
 
@@ -638,7 +639,7 @@ def test_serve_routes_the_maps():
     from homelabnext.status.serve import make_server
 
     site = MapSite(root=ROOT, registry=load(REGISTRY))
-    srv = make_server(lambda: _doc(site.available()), maps=site)
+    srv = make_server(lambda: _doc(site.available()), maps=site, agents=FrontDoorPass())
     threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
     host, port = srv.server_address[:2]
     try:
@@ -673,21 +674,26 @@ def test_the_script_is_served_only_with_an_interactive_map():
     assert code == 200 and ctype == assets.JS_TYPE and body.decode() == assets.js()
 
 
-def test_render_writes_the_maps_beside_the_page(tmp_path, capsys):
+def test_render_writes_the_maps_to_the_private_out_only(tmp_path, capsys):
+    """The maps are withheld from the public view (ADR-0033): never beside the public page."""
     results = tmp_path / "results.json"
     results.write_text(json.dumps(RESULTS))
-    out = tmp_path / "site"
+    out, private = tmp_path / "site", tmp_path / "private"
     args = ["render", "--out", str(out), "--registry", str(REGISTRY), "--views", str(VIEWS),
             "--state", str(tmp_path / "s.json"), "--now", "2026-10-21T00:00:00Z",
             "--guests", str(GUESTS), "--guests-site", str(SITE), "--maps", str(ROOT),
             "--invariants-results", str(results)]  # fmt: skip
-    assert main(args) == 0
-    names = sorted(p.name for p in out.iterdir())
-    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html", "mcp-servers.html",
-                     "roadmap.html", "roster.html", "schedule.html", "status.json",
-                     "topology.html"]  # fmt: skip
+    assert main(args) == 2 and "--private-out" in capsys.readouterr().err
+    assert main([*args, "--private-out", str(out / "maps")]) == 2  # inside the public out
+    assert main([*args, "--private-out", str(private)]) == 0
+    assert sorted(p.name for p in out.iterdir()) == ["index.html", "status.json"]
+    names = sorted(p.name for p in private.iterdir())
+    assert names == ["architecture.html", "dataflow.html", "links.html", "mcp-servers.html",
+                     "roadmap.html", "roster.html", "schedule.html", "topology.html"]  # fmt: skip
     index = (out / "index.html").read_text()
-    assert '<a href="topology.html">Topology</a>' in index
+    assert "topology.html" not in index and "Topology" not in index
+    assert '<a href="topology.html">Topology</a>' in (private / "roadmap.html").read_text()
+    out = private
     page = (out / "roadmap.html").read_text()
     assert 'href="index.html#view-overview"' in page and "invariants results of 2026-10-20" in page
     assert_safe(page)

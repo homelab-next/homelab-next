@@ -209,8 +209,8 @@ def nav_html(
     doc: Mapping[str, Any], *, live: bool = False, private: bool = False, home: str | None = None
 ) -> str:
     """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
-    pages; in the static file they are marked live-only, except the maps ``hnx status render``
-    writes beside it as ``<panel>.html``).  ``private``: the request passed the trusted front
+    pages; in the static file they are marked live-only, except the maps ``hnx status render
+    --private-out`` writes as ``<panel>.html``, linked from the private pages beside them).  ``private``: the request passed the trusted front
     door -- only then is the private group rendered at all, and then only its pages that are
     served (the Approvals entry appears only when approvals are configured).  ``home``: the page
     the panel anchors live on, for a static page other than ``index.html``."""
