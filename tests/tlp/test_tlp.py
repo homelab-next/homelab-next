@@ -209,9 +209,9 @@ def test_publishing_sidecar_uses_the_canonical_enum():
 @pytest.mark.parametrize(
     "declared, item, honour, want",
     [
-        # no label carried: the declaration
-        (Label.AMBER, None, False, Label.AMBER),
-        (Label.CLEAR, None, True, Label.CLEAR),
+        # a null label field is not a missing one: it reads red
+        (Label.CLEAR, None, False, Label.RED),
+        (Label.GREEN, None, True, Label.RED),
         # stricter carried labels are always kept
         (Label.GREEN, "amber", False, Label.AMBER),
         (Label.CLEAR, "tlp:red", False, Label.RED),
@@ -235,3 +235,9 @@ def test_item_label(declared, item, honour, want):
 def test_item_label_needs_a_parsed_declaration(declared):
     with pytest.raises(TypeError, match="declared must be a Label"):
         tlp.item_label(declared, "clear")
+
+
+def test_an_item_that_carried_no_label_takes_the_declaration():
+    for label in Label:
+        assert tlp.item_label(label) is label
+        assert tlp.item_label(label, honour_item_labels=True) is label

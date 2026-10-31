@@ -465,6 +465,11 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["data"][0].__setitem__("honour_item_labels", "yes"),
         "honour_item_labels is true or false, never a string that reads as true.",
     ),
+    "dataset-honour-without-tlp": (
+        F,
+        lambda d: d["data"][0].__setitem__("honour_item_labels", True),
+        "honour_item_labels needs a tlp declaration beside it: an undeclared dataset is red.",
+    ),
     "remove-without-audit": (
         F,
         lambda d: d["lifecycle"]["remove"].pop("audit"),

@@ -1384,8 +1384,10 @@ def dependants(slot: str, mods: dict[str, Doc], site: Doc | None = None) -> dict
 
 def dataset_label(ds: dict[str, Any]) -> tuple[tlp.Label, bool]:
     """A dataset's declared TLP label and whether its items' own labels are honoured when looser
-    (ADR-0033 decision 3): ``red`` when it declares none (decision 2). The schema has already
-    held ``tlp`` to a canonical label; :func:`homelabnext.tlp.parse` still refuses anything else.
+    (ADR-0033 decision 3): ``red`` and never honoured when it declares none (decision 2), since
+    ``honour_item_labels`` applies only beside a declaration. The schema has already held ``tlp``
+    to a canonical label; :func:`homelabnext.tlp.parse` still refuses anything else.
     """
-    declared = tlp.parse(ds["tlp"]) if "tlp" in ds else tlp.Label.RED
-    return declared, ds.get("honour_item_labels") is True
+    if "tlp" not in ds:
+        return tlp.Label.RED, False
+    return tlp.parse(ds["tlp"]), ds.get("honour_item_labels") is True

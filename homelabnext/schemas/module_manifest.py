@@ -835,11 +835,12 @@ def _defs() -> dict[str, Any]:
                 },
                 "honour_item_labels": {
                     "type": "boolean",
-                    "description": "Whether an item may keep a label of its own that is looser than tlp (ADR-0033 decision 3). Without it a looser item label is raised to tlp; a stricter one is always kept. It trusts the provider's labelling, so it is human-approve like the rest of data.",
+                    "description": "Whether an item may keep a label of its own that is looser than tlp (ADR-0033 decision 3); it needs tlp beside it. Without it a looser item label is raised to tlp; a stricter one is always kept. It trusts the provider's labelling, so it is human-approve like the rest of data.",
                 },
             },
             ["id", "kind", "description", "export", "import", "retention"],
             "One dataset the module owns: removing the module exports it first, and never touches another module's data.",
+            dependentRequired={"honour_item_labels": ["tlp"]},
             allOf=[
                 {
                     "if": {"properties": {"kind": {"const": "lake-table"}}},

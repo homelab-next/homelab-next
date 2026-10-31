@@ -526,8 +526,9 @@ label of any item that arrives without one, taken from the provider's terms (a f
 API's redistribution terms), never from the processing stage. A dataset that declares none is
 `red` (decision 2), so the lab's own data needs no declaration. `honour_item_labels: true` lets an
 item keep a label of its own that is looser than `tlp`; without it a looser item label is raised to
-`tlp`, and a stricter one is always kept (`homelabnext.tlp.item_label`; an unreadable item label is
-`red`). Both sit under `data`, so any change to them, tightening included, is human-approve.
+`tlp`, and a stricter one is always kept (`homelabnext.tlp.item_label`; an unreadable item label,
+`null` included, is `red`; only an item whose label field is missing takes `tlp`).
+`honour_item_labels` needs `tlp` beside it, and a fallback's `data` override never changes either. Both sit under `data`, so any change to them, tightening included, is human-approve.
 `homelabnext.modules.rules.dataset_label` reads the declaration.
 
 - Removal exports first (`export_first`, default true); `false` needs a `discard_reason`. A removal

@@ -144,18 +144,25 @@ def allows(ceiling: Label, label: object) -> bool:
     return read(label) <= ceiling
 
 
-def item_label(declared: Label, item: object = None, *, honour_item_labels: bool = False) -> Label:
+#: the default of :func:`item_label`'s ``item``: the item carried no label at all
+_ABSENT: object = object()
+
+
+def item_label(
+    declared: Label, item: object = _ABSENT, *, honour_item_labels: bool = False
+) -> Label:
     """The label of one item from a source that declares ``declared`` (ADR-0033 decision 3).
 
-    ``item`` is the label the item carried from the source, or ``None`` when it carried none: an
-    item with no label takes the declaration. A carried label is read as data, so an unreadable one
-    is ``red``. It is kept when it is stricter than the declaration; it is kept when looser only if
+    ``item`` is the label the item carried from the source; leave it out when the item carried
+    none (its label field is missing), and only then does the item take the declaration. Anything
+    passed is read as data, so ``None`` (a JSON ``null`` in a label field), an empty string or a
+    misspelling is ``red``. It is kept when it is stricter than the declaration; it is kept when looser only if
     the source declares ``honour_item_labels`` (a human-approve field), and is otherwise raised to
     the declaration.
     """
     if type(declared) is not Label:
         raise TypeError(f"declared must be a Label, not {type(declared).__name__}")
-    if item is None:
+    if item is _ABSENT:
         return declared
     carried = read(item)
     if carried >= declared or honour_item_labels is True:

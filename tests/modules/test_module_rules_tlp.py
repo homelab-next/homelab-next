@@ -18,7 +18,8 @@ def test_a_dataset_without_a_declaration_is_red_and_not_honoured():
         ({"tlp": "amber+strict"}, (Label.AMBER_STRICT, False)),
         ({"tlp": "green", "honour_item_labels": True}, (Label.GREEN, True)),
         ({"tlp": "green", "honour_item_labels": False}, (Label.GREEN, False)),
-        ({"honour_item_labels": True}, (Label.RED, True)),
+        # honouring needs a declaration beside it: undeclared stays red and unhonoured
+        ({"honour_item_labels": True}, (Label.RED, False)),
         # only True honours
         ({"tlp": "amber", "honour_item_labels": "yes"}, (Label.AMBER, False)),
         ({"tlp": "amber", "honour_item_labels": 1}, (Label.AMBER, False)),
