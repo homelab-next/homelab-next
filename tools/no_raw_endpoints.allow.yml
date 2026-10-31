@@ -49,6 +49,8 @@ allow:
     reason: screener tests plant documentation-range addresses to prove they are redacted from prompts
   - path: "ansible/roles/example_service/tasks/health.yml"
     reason: loopback health probe of the service the role just started (not a cross-service endpoint)
+  - path: "schemas/ocsf/negative/*.tlp-not-a-label.json"
+    reason: negative schema fixtures, each a copy of its table's example (documentation addresses only, RFC 5737) with a non-canonical TLP label
   - path: "schemas/events/negative/alert.created.wrong-type.json"
     reason: negative schema fixture; documentation address
   - path: "schemas/status/negative/observation.link-is-address.json"

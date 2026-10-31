@@ -41,8 +41,7 @@ class Column:
     type: str
     required: bool = False
     fields: tuple[Column, ...] = ()  # only for type == "struct"
-    #: the values a string column admits (its JSON Schema ``enum``); empty admits any string
-    enum: tuple[str, ...] = ()
+    enum: tuple[str, ...] = ()  # a string column's JSON Schema enum; empty admits any string
 
     def render(self) -> str:
         """Canonical type text, e.g. ``struct<ip: string, port: long>``."""

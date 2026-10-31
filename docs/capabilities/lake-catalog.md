@@ -179,6 +179,7 @@ Defined in [`homelabnext.lake.tables`](../../homelabnext/lake/tables.py).
 | `type` | `str` | required |  |
 | `required` | `bool` | `False` |  |
 | `fields` | `tuple[Column, ...]` | `()` | only for type == "struct" |
+| `enum` | `tuple[str, ...]` | `()` | a string column's JSON Schema enum; empty admits any string |
 
 #### `Column.render`
 
