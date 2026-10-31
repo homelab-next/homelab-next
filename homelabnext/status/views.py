@@ -533,6 +533,23 @@ def build_status(
     }
 
 
+def _tile_key(tile: Mapping[str, Any]) -> tuple:
+    """A released tile's order: worst state first, then most failing, stale, unknown, warning,
+    ok and total items, then the full released content, so equal keys mean identical tiles.  It
+    reads released fields only (a withheld state sorts first)."""
+    counts = tile.get("counts") if isinstance(tile.get("counts"), Mapping) else {}
+
+    def n(k: str) -> float:
+        v = counts.get(k)
+        return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else 0.0
+
+    return (
+        -SEVERITY.get(tile.get("state"), len(SEVERITY)),
+        *(-n(k) for k in ("fail", "stale", "unknown", "warn", "ok", "total")),
+        json.dumps(tile, sort_keys=True),
+    )
+
+
 def public_status(
     doc: Mapping[str, Any], releases: release.Releases | None = None, *, contract: bool = False
 ) -> dict[str, Any]:
@@ -540,9 +557,20 @@ def public_status(
     (ADR-0033 decision 7), so only the fields the transform keeps leave.  ``contract``: the
     ``status.json`` export, which also never lists the private menu group (the page lists it
     only for a request through the trusted front door).  ``ReleaseError`` when the transform is
-    missing or its output carries an unlisted field (fail closed)."""
+    missing or its output carries an unlisted field (fail closed).
+
+    The released module tiles (``modules`` and each ``views.*.modules``) are re-sorted by their
+    released content alone (:func:`_tile_key`): the internal document sorts them by module name,
+    and module names are public, so name order would map an anonymous tile back to its module.
+    The sort reads nothing the release dropped, and ties keep no name order worth anything:
+    tiles that tie are identical, byte for byte."""
     releases = release.registry() if releases is None else releases
     out = releases.release(release.STATUS_PUBLIC, "status.json", doc)
+    if isinstance(out.get("modules"), list):
+        out["modules"] = sorted(out["modules"], key=_tile_key)
+    for view in (out.get("views") or {}).values():
+        if isinstance(view, dict) and isinstance(view.get("modules"), list):
+            view["modules"] = sorted(view["modules"], key=_tile_key)
     if contract:
         out["menu"] = [m for m in out.get("menu", []) if m.get("group") != PRIVATE_GROUP]
     return out

@@ -317,7 +317,12 @@ without one of them is refused. The file is governance: CODEOWNERS names it and
 **The day-one migration** (decision 8) went through every field the public view and the public
 exports served, kept the ones that are safe as counts and health badges, and withdrew the rest;
 where it was unclear, the field was withdrawn. Nothing that identifies a lab system is kept beside
-its state: the public view says how many things are in which state, not which ones. A field the hub adds later is dropped from the
+its state: the public view says how many things are in which state, not which ones. The module
+tiles are re-sorted in the release by their released content alone (worst state first, then the
+most failing, stale, unknown, warning, ok and total items), never by name, since module names
+are public and name order would map a tile back to its module. A view that selects specific
+modules or sources (`governance`, `fleet` in the example) publishes that membership through its
+own configuration: its title and its tiles say which group of systems they count. A field the hub adds later is dropped from the
 public view until a transform keeps or withdraws it (a test fails until someone does).
 
 | Served | Kept | Withdrawn, and why |

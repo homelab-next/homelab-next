@@ -360,6 +360,38 @@ def test_the_public_status_carries_only_kept_fields(registry, store, clock):
     assert 'href="/agents"' in page and 'title="lab only">Dashboards' in page
 
 
+def _tiles_doc(registry, modules, order):
+    """A status document whose modules (name -> worst state) are listed in ``order``."""
+    views = {**FULL_VIEWS, "menu": [m for m in FULL_VIEWS["menu"] if m["id"] != "agents"]}
+    specs = [spec(f"src-{n}", service=n) for n in order]
+    t = iso(T0)
+    obs = [{"source": f"src-{n}", "module": n, "item": "x", "state": modules[n], "summary": "s",
+            "observed_at": t, "expires_at": t, "reported_state": modules[n], "history": []}
+           for n in order]  # fmt: skip
+    sources = [{**s.describe(), "state": "ok", "last_attempt": t, "last_ok": t, "error": None}
+               for s in specs]  # fmt: skip
+    snap = {"now": t, "observations": obs, "sources": sources}
+    return build_status(snap, views, registry, specs)
+
+
+def test_the_released_tiles_are_ordered_by_content_not_by_name(registry):
+    """Module names are public: alphabetical tiles would name them.  Two labs with the same
+    states and counts under different names, listed in different orders, release the same bytes."""
+    from homelabnext.status.views import dumps
+
+    a = _tiles_doc(registry, {"alpha": "fail", "beta": "ok", "gamma": "warn"},
+                   ["alpha", "beta", "gamma"])  # fmt: skip
+    b = _tiles_doc(registry, {"zulu": "fail", "kilo": "ok", "echo": "warn"},
+                   ["echo", "zulu", "kilo"])  # fmt: skip
+    assert [m["module"] for m in a["modules"]] != [m["module"] for m in b["modules"]]
+    pa, pb = public_status(a, contract=True), public_status(b, contract=True)
+    assert dumps(pa) == dumps(pb)
+    assert [m["state"] for m in pa["modules"]] == ["fail", "warn", "ok"]
+    assert [m["state"] for m in pa["views"]["grid"]["modules"]] == ["fail", "warn", "ok"]
+    assert render_html(public_status(a)) == render_html(public_status(b))
+    assert [m["module"] for m in a["modules"]] == ["alpha", "beta", "gamma"]  # internal: by name
+
+
 def test_render_writes_the_public_view(registry, store, clock, tmp_path):
     doc = _full_doc(registry, AgentSite(store, clock=clock))
     page, data = write(tmp_path, doc)
