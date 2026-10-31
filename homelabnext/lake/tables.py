@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 
 from .errors import LakeError, UnknownTable
 
@@ -30,6 +30,9 @@ SCHEMAS_ENV = paths.KIND_ENV["schemas"][0]  # HNX_SCHEMAS_DIR
 #: the lake namespace the core's own OCSF tables live in (``table:ocsf.<name>``); a module's
 #: tables live in its own (its id with ``-`` as ``_``), so no module may be named for this one
 CORE_NAMESPACE = "ocsf"
+#: the column a row's TLP label lives in (ADR-0033 decision 5): a table with it refuses a row
+#: written without a label, and a stored row without one reads as red (:func:`row_label`)
+LABEL_COLUMN = "tlp"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class Column:
     type: str
     required: bool = False
     fields: tuple[Column, ...] = ()  # only for type == "struct"
+    enum: tuple[str, ...] = ()  # a string column's JSON Schema enum; empty admits any string
 
     def render(self) -> str:
         """Canonical type text, e.g. ``struct<ip: string, port: long>``."""
@@ -57,6 +61,11 @@ class TableSchema:
     time_column: str
     partition: str  # e.g. "day(time)"
 
+    @property
+    def labelled(self) -> bool:
+        """Whether rows carry a TLP label (the :data:`LABEL_COLUMN`; ADR-0033 decision 5)."""
+        return LABEL_COLUMN in self.column_names
+
     def column(self, name: str) -> Column:
         for c in self.columns:
             if c.name == name:
@@ -71,9 +80,16 @@ class TableSchema:
 def _column(name: str, spec: Mapping[str, Any], required: bool) -> Column:
     t = spec.get("type")
     if t == "string":
-        return Column(
-            name, "timestamp" if spec.get("format") == "date-time" else "string", required
-        )
+        if spec.get("format") == "date-time":
+            return Column(name, "timestamp", required)
+        if "enum" not in spec:
+            return Column(name, "string", required)
+        enum = spec["enum"]
+        if not isinstance(enum, list) or not enum or not all(type(v) is str for v in enum):
+            raise LakeError(
+                f"column {name!r}: a string column's enum is a non-empty list of strings"
+            )
+        return Column(name, "string", required, enum=tuple(enum))
     if t == "integer":
         return Column(name, "long", required)
     if t == "number":
@@ -81,6 +97,8 @@ def _column(name: str, spec: Mapping[str, Any], required: bool) -> Column:
     if t == "boolean":
         return Column(name, "boolean", required)
     if t == "array":
+        if "enum" in spec.get("items", {}):
+            raise LakeError(f"column {name!r}: an enum on list items is not supported")
         inner = _column("item", spec.get("items", {}), False).type
         if f"list<{inner}>" not in LISTS:
             raise LakeError(f"column {name!r}: arrays of {inner!r} are not supported")
@@ -174,3 +192,14 @@ def column_diffs(want: Mapping[str, str], have: Mapping[str, str]) -> list[str]:
             diffs.append(f"column differs: expected `{want[n]}`, table has `{have[n]}`")
     diffs += [f"unexpected column in table: {have[n]}" for n in have if n not in want]
     return diffs
+
+
+def row_label(row: Mapping[str, Any]) -> tlp.Label:
+    """A stored row's TLP label: the lake stores only the canonical spellings, so a row without
+    one, or with anything else (a row stored before the column existed, an alternate spelling
+    such as ``white`` or ``Green`` that a writer bypassing the lake stored, a damaged value), is
+    ``red`` (ADR-0033 decision 5)."""
+    value = row.get(LABEL_COLUMN) if isinstance(row, Mapping) else None
+    if type(value) is str and value in tlp.LABELS:
+        return tlp.parse(value)
+    return tlp.Label.RED

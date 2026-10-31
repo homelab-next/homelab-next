@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/ocsf/network_activity/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/ocsf/network_activity/1.1",
   "title": "Network Activity",
   "description": "Pinned subset of the OCSF Network Activity class (OCSF 1.3.0, class_uid 4001) as stored in the lake. Flat top-level columns plus a few one-level structs; the lake table, Arrow schema and DDL are generated from this file (see homelabnext/lake).",
   "x-lake": {
@@ -147,6 +147,17 @@
     "bytes_out": {
       "type": "integer",
       "minimum": 0
+    },
+    "tlp": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The row's TLP 2.0 label (ADR-0033 decision 5), set by the writer from the source's declaration; the lake refuses a row without one. Not an OCSF attribute. A row stored before the column existed has none and reads as red."
     }
   }
 }

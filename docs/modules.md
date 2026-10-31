@@ -688,8 +688,11 @@ spellings: the five labels, optionally `tlp:`-prefixed, in any ASCII case, with 
 tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with another `Label`, and a
 `str` subclass is read through `str`'s own methods. The publishing sidecar's enum is held equal to `tlp.LABELS`.
 `item_label(declared, item, honour_item_labels=...)` is the label of one item from a declared
-source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). Storage, reader
-ceilings and model-role ceilings follow in the order the ADR sets.
+source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The lake stores the
+label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
+is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
+is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column, reader ceilings and
+model-role ceilings follow in the order the ADR sets.
 
 ## Placement and isolation
 

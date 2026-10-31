@@ -15,5 +15,6 @@ CREATE TABLE IF NOT EXISTS "network_activity" (
     "connection_uid" VARCHAR,
     "direction_id" BIGINT,
     "bytes_in" BIGINT,
-    "bytes_out" BIGINT
+    "bytes_out" BIGINT,
+    "tlp" VARCHAR
 );

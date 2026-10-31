@@ -15,5 +15,6 @@ CREATE TABLE IF NOT EXISTS "detection_finding" (
     "risk_score" BIGINT,
     "confidence_id" BIGINT,
     "attack_techniques" VARCHAR[],
-    "host_name" VARCHAR
+    "host_name" VARCHAR,
+    "tlp" VARCHAR
 );

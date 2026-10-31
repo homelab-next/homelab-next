@@ -15,5 +15,6 @@ CREATE TABLE IF NOT EXISTS "detection_finding" (
     "risk_score" INTEGER,
     "confidence_id" INTEGER,
     "attack_techniques" TEXT,
-    "host_name" TEXT
+    "host_name" TEXT,
+    "tlp" TEXT
 );

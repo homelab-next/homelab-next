@@ -15,5 +15,6 @@
   "user_name": "bob",
   "src_endpoint": {
     "ip": "203.0.113.7"
-  }
+  },
+  "tlp": "amber"
 }

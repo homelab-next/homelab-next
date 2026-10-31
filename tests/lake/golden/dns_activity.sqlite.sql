@@ -13,5 +13,6 @@ CREATE TABLE IF NOT EXISTS "dns_activity" (
     "query_hostname" TEXT NOT NULL,
     "query_type" TEXT,
     "rcode_id" INTEGER,
-    "answers" TEXT
+    "answers" TEXT,
+    "tlp" TEXT
 );

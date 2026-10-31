@@ -13,3 +13,4 @@
 19: query_type: string
 20: rcode_id: long
 21: answers: list<string>
+23: tlp: string

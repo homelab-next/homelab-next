@@ -50,6 +50,15 @@ One writer per `(table, source)` is assumed.
 ## Safety rules
 
 * Whole batch validated before any write; naive timestamps, unknown columns, wrong types refused.
+* Every row carries its TLP label (ADR-0033 decision 5): a table with the `tlp` column (every OCSF
+  table from 1.1) refuses a batch with any row whose label is missing or not one of the five
+  canonical spellings. The writer normalises with `homelabnext.tlp` first; the lake stores one
+  spelling. The column is optional in the schema, so a row stored before it existed stays valid.
+  `tables.row_label` reads only a canonical stored value as its label; a row without one, or with
+  any other value (an alternate spelling such as `white` or `Green` that a writer bypassing the
+  lake stored, a damaged value), is `red`. Until the backfill migration exists, a swap cannot
+  shadow-start from a lake whose rows predate the column: the copy is refused, as any write
+  without a label is.
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.
   There is no literal default.

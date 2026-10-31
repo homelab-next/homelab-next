@@ -32,6 +32,7 @@ def auth_row(uid: str, *, user: str = "alice", time: str = "2026-03-01T08:15:00Z
         "auth_protocol": "ssh",
         "is_mfa": False,
         "message": "login ok",
+        "tlp": "red",  # every row is written with its TLP label (ADR-0033 decision 5)
     }
     row.update(over)
     return row

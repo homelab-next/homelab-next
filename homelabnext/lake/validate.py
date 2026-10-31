@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .errors import RowRejected
-from .tables import Column, TableSchema
+from .tables import LABEL_COLUMN, Column, TableSchema
 
 
 def parse_timestamp(value: Any) -> datetime:
@@ -47,7 +47,15 @@ def _check(col: Column, value: Any, path: str, problems: list[str]) -> Any:
     t = col.type
     if t == "string":
         if not isinstance(value, str):
-            problems.append(f"{path}: expected string, got {type(value).__name__}")
+            hint = " (pass the canonical spelling, e.g. str(label))" if col.enum else ""
+            problems.append(f"{path}: expected string, got {type(value).__name__}{hint}")
+            return value
+        if col.enum:
+            # compared and stored as an exact str: a subclass's __eq__ never decides membership
+            text = str.__str__(value)
+            if text not in col.enum:
+                problems.append(f"{path}: {text!r} is not one of {', '.join(col.enum)}")
+            return text
         return value
     if t == "long":
         if isinstance(value, bool) or not isinstance(value, int):
@@ -112,6 +120,9 @@ def normalize_rows(schema: TableSchema, rows: Sequence[Mapping[str, Any]]) -> li
             if k not in known:
                 sub.append(f"{k}: unknown column")
         norm = {c.name: _check(c, row.get(c.name), c.name, sub) for c in schema.columns}
+        if schema.labelled and row.get(LABEL_COLUMN) is None:
+            # optional in the schema (an older row has none), required of every write
+            sub.append(f"{LABEL_COLUMN}: every row is written with its TLP label (ADR-0033)")
         problems.extend(f"row {i} {p}" for p in sub)
         out.append(norm)
     if problems:

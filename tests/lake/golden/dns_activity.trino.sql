@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS "lake"."ocsf"."dns_activity" (
     "query_hostname" VARCHAR NOT NULL,
     "query_type" VARCHAR,
     "rcode_id" BIGINT,
-    "answers" ARRAY(VARCHAR)
+    "answers" ARRAY(VARCHAR),
+    "tlp" VARCHAR
 )
 WITH (
     format = 'PARQUET',
