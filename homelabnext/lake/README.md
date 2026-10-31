@@ -56,7 +56,7 @@ One writer per `(table, source)` is assumed.
   spelling. The column is optional in the schema, so a row stored before it existed stays valid.
   `tables.row_label` reads only a canonical stored value as its label; a row without one, or with
   any other value (an alternate spelling such as `white` or `Green` that a writer bypassing the
-  lake stored, a damaged value), is `red`. Until the backfill migration exists, a swap cannot
+  lake stored, a damaged value), is `red`. Until the backfill below has run, a swap cannot
   shadow-start from a lake whose rows predate the column: the copy is refused, as any write
   without a label is.
 * The one-off TLP backfill of rows stored before the column (ADR-0033 decision 5) is a plan, never
@@ -65,6 +65,12 @@ One writer per `(table, source)` is assumed.
   recorded source's declaration (`red` for a source whose items' own labels were never stored),
   gives every other row the strictest source's label, and touches only rows still unlabelled, so a
   second run changes nothing.
+* Reading at a TLP ceiling (ADR-0033 decision 6): `ceiling.CeilingReader(lake, ceiling, schemas)`
+  builds its own `SELECT` (validated columns, `where` values bound as parameters, a bounded
+  `LIMIT`), adds the ceiling's row filter and checks each returned row's label, so a row above the
+  ceiling, unlabelled or with a non-canonical label never comes back below `red`. Raw `query` and
+  `named` are refused below `red`; a table without a `tlp` column is `red` only. The query engine's
+  own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.
   There is no literal default.

@@ -87,6 +87,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/generators/safe.py": ("tests/generators",),
     "homelabnext/tlp.py": ("tests/tlp",),
     "homelabnext/tlp_egress.py": ("tests/tlp",),
+    "homelabnext/lake/ceiling.py": ("tests/lake",),
     "tools/leak_scan.py": ("tools/tests/test_leak_scan.py",),
 }
 

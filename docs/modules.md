@@ -719,7 +719,11 @@ source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
 is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column, reader ceilings and
-model-role ceilings follow in the order the ADR sets.
+model-role ceilings follow in the order the ADR sets. Readers read at their ceiling: the query
+engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
+and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
+filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
+refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`).
 
 ## Placement and isolation
 
@@ -793,7 +797,41 @@ grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external
              cloud_models: {<module>: [mdl:<role>]}}
 scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
 lab_table_namespaces: [{namespace, why}]          # the lake namespaces that are the lab's own
+tlp_readers: [{reader, ceiling, write?, why}]     # every lake reader's TLP ceiling (ADR-0033)
+lake_catalog: <name>                              # the catalog their rules reach (with tlp_readers)
 ```
+
+`tlp_readers` (optional) gives every reader of the lake its TLP ceiling (ADR-0033 decision 6; see
+[TLP labels](#tlp-labels-adr-0033)). A reader is `profile:<id>` (an agent), `module:<id>` (a
+module's query consumer), `user:<name>` or `group:<name>` (people signing in to the query engine);
+`ceiling` is a canonical label; `write: true` also lets it insert and delete, never update (an
+update could rewrite a stored label), and only a `red` reader may write: a deliberate choice, since
+a writer sees what it writes. `lake_catalog` (required with the list) is the engine's name for the
+lake catalog. With the list, the loader requires every selected module that requires or prefers
+`cap:lake-query`, and every selected agent with a `cap:lake-query` need, to be listed (an unlisted
+one would read nothing), and refuses a reader listed twice or a writer below `red`; without it,
+and with lake readers selected, it notes that no row is filtered by its label.
+`hnx modules render` writes `lake-access.json`, the query engine's file-based access rules
+(`homelabnext.modules.lake_access`, first match wins):
+
+- `catalogs`: each reader reaches `lake_catalog` only (read-only, a writer all); every other
+  catalog, the engine's own system catalog included, is `none`;
+- `schemas`: nobody owns a schema through these rules; schema changes (a table created, the
+  `tlp` column added) run under the lake's own administrator, outside this file;
+- `tables`: per reader, the catalog's `information_schema` (metadata the engine narrows to what
+  the reader may see), then every table, `SELECT` with the row filter
+  `coalesce(tlp, 'red') IN (<labels at or below the ceiling>)` below `red` and no filter at `red`;
+  a table without a `tlp` column cannot be read below `red` (the filter fails the query);
+- `queries`: everyone may run queries; seeing or stopping another's is not granted.
+
+A principal matching several rules (a user in a group) gets the first, so user rules come before
+group rules and each tier runs from the lowest ceiling up: the most restrictive applies, whatever
+order the list was written in. A reader with a rule of its own (a `user:`, `profile:` or
+`module:` entry) gets that rule even when it is also in a group with a stricter one: the more
+specific entry is the one an approver read. A principal no rule names reads nothing. An operator step: the
+lake-query adapter must sign each reader in to the engine as the user named by its whole reader id
+(`profile:x`, `module:y`, `user:alice`), and a `group:` reader is the engine group named after the
+colon. Any change to the list or the catalog is human-approve (`hnx site review-tier`).
 
 `lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every
 module and the core (the full profile lists `archive` and `scratch`); the runtime check judges a

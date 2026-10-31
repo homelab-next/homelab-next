@@ -699,8 +699,14 @@ def _run(args: argparse.Namespace) -> int:
 
             print(
                 f"hnx modules render: wrote {written['limits']} limits and {written['egress']} "
-                f"egress file(s), and {written['tlp_sources']} TLP source(s) in "
-                f"{tlp_sources_file}, under {args.out}"
+                f"egress file(s), {written['tlp_sources']} TLP source(s) in "
+                f"{tlp_sources_file}"
+                + (
+                    f", {written['lake_readers']} lake reader rule(s) in lake-access.json"
+                    if "lake_readers" in written
+                    else ""
+                )
+                + f", under {args.out}"
             )
         print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
     if error:
@@ -748,19 +754,29 @@ def _render(
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
     from homelabnext.logpipeline.tlp_labels import SourceTableError
-    from homelabnext.modules import egress, limits, tlp_sources
+    from homelabnext.modules import egress, lake_access, limits, tlp_sources
 
     ins = ld.inputs(tree)
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
         src = tlp_sources.render(site, tree.mods)
-    except (limits.LimitsError, egress.EgressError, SourceTableError) as exc:
+        access = lake_access.render(site)
+    except (
+        limits.LimitsError,
+        egress.EgressError,
+        SourceTableError,
+        lake_access.LakeAccessError,
+    ) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
     tlp_sources.write(src, args.out)
-    return {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}, None
+    written = {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}
+    if access is not None:
+        lake_access.write(access, args.out)
+        written["lake_readers"] = len(access["tables"])
+    return written, None
 
 
 def main(argv: list[str] | None = None) -> int:

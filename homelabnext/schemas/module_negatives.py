@@ -607,6 +607,31 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["lab_table_namespaces"][0].__setitem__("namespace", "Archive.old"),
         "A lab table namespace is one catalog name of the inventory's shape.",
     ),
+    "tlp-reader-unknown-ceiling": (
+        "full",
+        lambda d: d["tlp_readers"][0].__setitem__("ceiling", "TLP:RED"),
+        "A reader's TLP ceiling is one of the five labels in its canonical spelling.",
+    ),
+    "tlp-reader-without-why": (
+        "full",
+        lambda d: d["tlp_readers"][0].pop("why"),
+        "Every lake reader says who it is and why it needs its ceiling.",
+    ),
+    "tlp-reader-write-not-boolean": (
+        "full",
+        lambda d: d["tlp_readers"][2].__setitem__("write", "yes"),
+        "A reader writes rows only with write: true.",
+    ),
+    "tlp-readers-without-catalog": (
+        "full",
+        lambda d: d.pop("lake_catalog"),
+        "The readers' access rules name the lake catalog they reach.",
+    ),
+    "tlp-reader-not-an-id": (
+        "full",
+        lambda d: d["tlp_readers"][0].__setitem__("reader", "everyone"),
+        "A reader is a profile, module, user or group id.",
+    ),
     "cloud-model-not-a-role": (
         "full",
         lambda d: d["grants"].__setitem__("cloud_models", {"publishing": ["main-reasoner"]}),
