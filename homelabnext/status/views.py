@@ -54,10 +54,11 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.registry.model import Registry
 
+from . import release
 from .model import SEVERITY, STATES, SourceSpec, worst
 
 STATUS_SCHEMA = "homelabnext.status/1"
@@ -101,6 +102,23 @@ DIRECTORY_PANELS = frozenset({"links", "schedule", "roster", "mcp-servers"})
 GENERATED_PANELS = MAP_PANELS | DIRECTORY_PANELS
 PRIVATE_PANELS = frozenset({"agent-detail", "agent-access-log", "approvals"})
 PRIVATE_GROUP = "private"
+#: the TLP ceiling of each tier (ADR-0033 decision 8): anonymous readers of the public view and
+#: its exports are granted ``clear``, the private tier behind the trusted front door ``red``.  A
+#: view declares exactly its tier's ceiling: a public one above ``clear`` would show what no
+#: grant allows, a private one below ``red`` would promise a filter the private pages do not run
+PUBLIC_CEILING = tlp.Label.CLEAR
+PRIVATE_CEILING = tlp.Label.RED
+#: public page panels that render inputs of their own (repository files, a guest directory, the
+#: orchestration store) rather than the status document or the activity summary: they declare
+#: their ``clear`` ceiling, and their release transforms are the next step of ADR-0033's
+#: migration (docs/status.md, "TLP ceilings and release transforms").  A public panel in neither
+#: this set nor :data:`homelabnext.status.release.VIEWS` is refused.
+UNMIGRATED_PAGES = (
+    frozenset(
+        {"strategy", "requirements", "objectives", "rfis", "baselines", "projects", "orchestration"}
+    )
+    | GENERATED_PANELS
+)
 #: at most this many sessions go into status.json (worst state first)
 MAX_SESSIONS = 200
 _ATTENTION_ORDER = {s: -SEVERITY[s] for s in STATES}
@@ -126,10 +144,15 @@ def _validator():
 
 
 def views_problems(
-    doc: Any, registry: Registry | None = None, specs: Sequence[SourceSpec] | None = None
+    doc: Any,
+    registry: Registry | None = None,
+    specs: Sequence[SourceSpec] | None = None,
+    releases: release.Releases | None = None,
 ) -> list[str]:
     """Schema problems, then the cross-references: unique ids, a main panel view, selections that
-    name registered sources, external entries that name registered services (unless optional)."""
+    name registered sources, external entries that name registered services (unless optional),
+    and the TLP ceilings (:func:`ceiling_problems`) against ``releases`` (default: the hub's
+    registry, :func:`homelabnext.status.release.registry`)."""
     errs = sorted(_validator().iter_errors(doc), key=lambda e: [str(p) for p in e.absolute_path])
     out = [f"schema: {'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}" for e in errs]
     if out:
@@ -164,6 +187,61 @@ def views_problems(
             out += _unregistered(f"view {v['id']}: external", v["external"], registry)
     if doc["shell"].get("act_via"):
         out += _unregistered("shell.act_via", doc["shell"]["act_via"], registry)
+    return out + ceiling_problems(doc, releases)
+
+
+def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None = None) -> list[str]:
+    """ADR-0033 decision 6 for the hub: every menu entry and every export declares a TLP ceiling
+    (``tlp``, a canonical label; the schema refuses any other spelling), a public one ``clear``
+    and a private one ``red``, and every public export and every public view whose data the hub
+    releases is served by a release transform whose output its ceiling allows.  Where the hub is
+    reachable from never enters into it: a reachable name, address or front door raises no
+    ceiling; only the private tier's grant does, and only for the private group."""
+    if releases is None:
+        try:
+            releases = release.registry()
+        except release.ReleaseError as exc:
+            return [str(exc)]
+    out: list[str] = []
+
+    def served(where: str, name: str, ceiling: tlp.Label) -> None:
+        ts = releases.serving(name)
+        if not ts:
+            out.append(f"{where}: no release transform serves {name!r}, so it is withdrawn")
+        out.extend(
+            f"{where}: release transform {t.id} outputs {t.output}, above the ceiling {ceiling}"
+            for t in ts
+            if not tlp.allows(ceiling, t.output)
+        )
+
+    for v in doc["menu"]:
+        private = v.get("group") == PRIVATE_GROUP
+        want = PRIVATE_CEILING if private else PUBLIC_CEILING
+        if "tlp" not in v:
+            out.append(f"view {v['id']}: declares no TLP ceiling (tlp: {want})")
+            continue
+        ceiling = tlp.parse(v["tlp"])
+        if ceiling != want:
+            tier = "a private view" if private else "a public view"
+            out.append(f"view {v['id']}: {tier}'s TLP ceiling is {want}, not {ceiling}")
+            continue
+        panel = v.get("panel")
+        if private or panel is None:
+            continue  # an external entry is a menu link: its fields are the status document's
+        if panel in release.VIEWS:
+            served(f"view {v['id']}", panel, ceiling)
+        elif panel not in UNMIGRATED_PAGES:
+            out.append(f"view {v['id']}: the {panel} panel has no release transform")
+    exports = doc.get("exports") or {}
+    for name in release.EXPORTS:
+        if name not in exports:
+            out.append(f"exports.{name}: declares no TLP ceiling (tlp: {PUBLIC_CEILING})")
+            continue
+        ceiling = tlp.parse(exports[name]["tlp"])
+        if ceiling != PUBLIC_CEILING:
+            out.append(f"exports.{name}: a public export's TLP ceiling is clear, not {ceiling}")
+            continue
+        served(f"exports.{name}", name, ceiling)
     return out
 
 
@@ -174,13 +252,16 @@ def _unregistered(where: str, ref: Mapping[str, Any], registry: Registry | None)
 
 
 def load_views(
-    path: str | Path, registry: Registry | None = None, specs: Sequence[SourceSpec] | None = None
+    path: str | Path,
+    registry: Registry | None = None,
+    specs: Sequence[SourceSpec] | None = None,
+    releases: release.Releases | None = None,
 ) -> dict[str, Any]:
     try:
         doc = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise ViewsUnreadable(f"cannot read views {path}: {exc}") from None
-    problems = views_problems(doc, registry, specs)
+    problems = views_problems(doc, registry, specs, releases)
     if problems:
         raise ViewsError(f"invalid views {path}", problems)
     return doc
@@ -428,6 +509,21 @@ def build_status(
             "sessions": [dict(r) for r in agents["sessions"][:MAX_SESSIONS]],
         },
     }
+
+
+def public_status(
+    doc: Mapping[str, Any], releases: release.Releases | None = None, *, contract: bool = False
+) -> dict[str, Any]:
+    """The public view of a status document: the document through its release transform
+    (ADR-0033 decision 7), so only the fields the transform keeps leave.  ``contract``: the
+    ``status.json`` export, which also never lists the private menu group (the page lists it
+    only for a request through the trusted front door).  ``ReleaseError`` when the transform is
+    missing or its output carries an unlisted field (fail closed)."""
+    releases = release.registry() if releases is None else releases
+    out = releases.release(release.STATUS_PUBLIC, "status.json", doc)
+    if contract:
+        out["menu"] = [m for m in out.get("menu", []) if m.get("group") != PRIVATE_GROUP]
+    return out
 
 
 def dumps(doc: Mapping[str, Any]) -> str:

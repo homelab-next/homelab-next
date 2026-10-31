@@ -1,6 +1,6 @@
 ---
 summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
-summary_of: outline:sha256:1d3907d2eca1ef48
+summary_of: outline:sha256:00ac3b56e4a255d4
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -184,18 +184,22 @@ hub.publish(publisher, observations, "svc:metrics")  # onto the bus (homelabnext
 ```yaml
 views_version: 1
 shell: {title: Northwind status, main: overview}   # optional act_via: {service: ...}
+exports: {status.json: {tlp: clear}, activity.csv: {tlp: clear}, activity.jsonl: {tlp: clear}}
 menu:
-  - {id: overview, title: Overview, panel: exceptions}
-  - {id: modules, title: All modules, panel: grid}
-  - {id: governance, title: Proposals and approvals, panel: grid, select: {sources: [proposals, approvals]}}
-  - {id: sources, title: Sources, panel: sources}
-  - {id: grafana, title: Grafana, external: {service: dashboards}}
-  - {id: agentmetry, title: Agentmetry, external: {service: agentmetry, optional: true}}
+  - {id: overview, title: Overview, panel: exceptions, tlp: clear}
+  - {id: modules, title: All modules, panel: grid, tlp: clear}
+  - {id: governance, title: Proposals and approvals, panel: grid, select: {sources: [proposals, approvals]}, tlp: clear}
+  - {id: sources, title: Sources, panel: sources, tlp: clear}
+  - {id: grafana, title: Grafana, external: {service: dashboards}, tlp: clear}
+  - {id: agentmetry, title: Agentmetry, external: {service: agentmetry, optional: true}, tlp: clear}
+  - {id: agent-detail, title: Session detail, panel: agent-detail, group: private, tlp: red}
 ```
 
 Schema: `schemas/status/views.schema.json`; `hnx status views check` also checks the menu ids are
-unique, `main` is a panel view, a `select` names registered sources and modules, and an external
-entry names a registered service unless it is `optional` (then it is shown as unavailable). An
+unique, `main` is a panel view, a `select` names registered sources and modules, an external
+entry names a registered service unless it is `optional` (then it is shown as unavailable), and
+every entry and export declares its TLP ceiling (views 1.10; see
+[TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)). An
 external link is built from the registry: the service's public hostname, else its capability
 alias. Panels:
 
@@ -246,6 +250,70 @@ homelabnext.status/1`, additive evolution):
 | `modules` | `[{module, state, counts, service, capability, sources, links, items}]`; `links` holds `svc:`/`cap:` ids and docs paths |
 | `sources` | the menu entries with `state` (`ok`, `warn` erroring, `fail` erroring liveness probe, `stale`, `unknown`), `last_attempt`, `last_ok`, `error` |
 | `observations` | every observation (`schemas/status/observation.schema.json`) with `state` effective, `reported_state` as recorded, and `history` (`[[time, state], ...]`) |
+
+That is the document the hub builds, and what its own pages read. What leaves as `/status.json`,
+the static `status.json` and the page (`/`, `index.html`) is its **public view**: only the fields
+the `status-public` release transform keeps (next section). A consumer of `status.json` reads the
+public view, so it cannot rely on a withdrawn key being present.
+
+### TLP ceilings and release transforms
+
+The hub's data is the lab's own, so it is `red` ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)
+decision 2). Every view and export is a reader with a TLP ceiling (decision 6), declared in
+`views.yml` as `tlp:` on each menu entry and under `exports:`, in the canonical spelling (the
+schema refuses `TLP:CLEAR`, `white`, `amber-strict` and anything else). `hnx status views check`,
+and `render` and `serve` when they load the views, refuse:
+
+- an entry or export with no ceiling;
+- a public entry (every entry outside the `private` group, an external link included) or a
+  public export whose ceiling is not `clear`: anonymous readers are granted `clear` (decision 8);
+- a private entry whose ceiling is not `red`: the private tier, behind the trusted front door,
+  is granted `red`, and a lower ceiling would promise a filter its pages do not run;
+- a public export, or a public view whose data the hub releases (`exceptions`, `grid`, `sources`,
+  `agents`, `activity`, `agent-analytics`), that no release transform serves, or one whose
+  transform's output its ceiling does not allow; a public page panel in neither that list nor the
+  unmigrated pages below.
+
+Where the hub can be reached from never enters into it: binding another address,
+`--allowed-host`, a public hostname or a front door raises no ceiling. A request through the
+front door gets the same `/status.json`, the same summary pages and the same exports as an
+anonymous one; its grant shows only the private group.
+
+**Release transforms** (decision 7) are the only way the hub's `red` data reaches a `clear`
+reader. They are declared in `homelabnext/status/release_transforms.yml`: each names what it
+serves, its input label (`red`), its output label (`clear`), the fields it keeps and the fields
+it withdraws with the reason. Paths: `a.b` is field `b` of `a`, `a[]` each item of list `a`, `*`
+every key of a mapping keyed by data (the view ids). The release is an allow-list: a field not
+kept is dropped, a kept path keeps only a scalar or a list of scalars, and the output is checked
+against the same list, so a transform that passes an unlisted field fails, and the route answers
+`500 withdrawn` instead of serving it. A name no transform serves is withdrawn the same way. The
+code applies three, by id: `status-public` (`status.json` and the page), `agent-sessions-public`
+and `agent-events-public` (the agent pages and `/activity.csv`, `/activity.jsonl`); a registry
+without one of them is refused. The file is governance: CODEOWNERS names it and
+`homelabnext/status/release.py`, so a change to either is a human approve.
+
+**The day-one migration** (decision 8) went through every field the public view and the public
+exports served, kept the ones that are safe as counts and health badges, and withdrew the rest;
+where it was unclear, the field was withdrawn. A field the hub adds later is dropped from the
+public view until a transform keeps or withdraws it (a test fails until someone does).
+
+| Served | Kept | Withdrawn, and why |
+|---|---|---|
+| `status.json`, the page | `schema`, `generated_at`, `title`, `main`; `summary`; `menu[]` `id`, `title`, `kind`, `panel`, `group`, `available`; the `exceptions` counts (`ok`, `total`) and each attention item's `module` and `state`; each module's `module`, `state` and `counts`; each source's `id`, `module` and `state`; `agents.counts`; per session the agent fields below | `act_via` (the broker's address); a menu entry's `href` and `service` (an external entry's link is a lab service address; a page's path comes from the code, so page links still work, while an external entry shows as `lab only`); `live` and every other attention field (`item`, `summary`, `source`, `link` and the reading itself: item names are inventory, summaries are free text that can name hosts, paths and addresses); a module's `service`, `capability`, `sources`, `links` and `items`; a source's `kind`, `target`, `mapping`, intervals and timeouts, `what`, `ups`, `last_attempt`, `last_ok`, `error` and `clock_skew_s` (configuration, file paths, power layout and error text); `observations` (every raw reading) |
+| the Agents pages, `agents.sessions` | `session_id`, `parent_session_id`, `state`, `runtime`, `surface`, `agent`, `first_seen`, `last_seen`, `last_kind`, `last_outcome`, `last_tool`, and the counts (`events`, `tool_calls`, `denials`, `approvals`, `errors`, `prompts`, `tokens_in`, `tokens_out`, `cost_usd`, `idle_s`, `stuck_after_s`) | `host` (names a lab machine), `project` (names the repository or work, which can be private), `model` (which model, and so which provider, received the lab's prompts) |
+| the Activity and Agent analytics pages, `/activity.csv`, `/activity.jsonl` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface`, `agent`, `time`, `kind`, `tool`, `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | `host`, `project`, `model`, as above: the CSV drops their columns, the Agents page its Where and Model columns and the analytics page its By model table, and a `?project=` filter matches nothing |
+
+The private pages are unchanged: the detail tier and the access log still show everything, at
+`red`, and only through the front door.
+
+**Not yet migrated.** The page panels that render inputs of their own rather than the status
+document or the activity summary (strategy, requirements, objectives, RFIs, baselines, projects,
+orchestration, the maps and the directory pages) declare their `clear` ceiling, but no release
+transform shapes their fields yet: they show what they showed before, which is lab data. Their
+transforms are the next step of the ADR's delivery (reader ceilings and the shared filter); until
+then, publish the hub through the front door only, or leave those panels out of a public
+`views.yml`. The egress content checks a released field passes as well (decision 13) come with
+the egress list.
 
 ## 5. Events and the graph
 
@@ -566,7 +634,7 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 | `/agents` | sessions with state badges and counts; filters `?runtime=`, `?state=`, `?project=` |
 | `/agents/session?id=` | one session's facts and timeline (a link to its private detail when authorized) |
 | `/activity` | the event stream, newest 200; filters `runtime`, `outcome`, `kind`, `session`; `?event=` opens the inspector |
-| `/activity.csv`, `/activity.jsonl` | the same selection exported, summary tier only (CSV cells that would run as a spreadsheet formula are quoted) |
+| `/activity.csv`, `/activity.jsonl` | the same selection exported, summary tier only, through the `agent-events-public` release transform (CSV cells that would run as a spreadsheet formula are quoted) |
 | `/agent-analytics` | counts by outcome, runtime, model, tool and day |
 | `/private/sessions`, `/private/session?id=`, `/private/event?id=`, `/private/access-log` | the detail tier and the access log: **private** |
 | `/approvals`, `POST /approvals/decide` | broker requests awaiting an approver, recent decisions, approve and deny: **private**, with an approver group (below) |

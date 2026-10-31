@@ -1,0 +1,366 @@
+# SPDX-License-Identifier: Apache-2.0
+"""TLP ceilings on the hub's views and exports, and the release transforms of its public view
+(ADR-0033 decisions 6, 7 and 8)."""
+
+from __future__ import annotations
+
+import copy
+import csv
+import io
+import json
+import threading
+from pathlib import Path
+
+import pytest
+import yaml
+from agent_helpers import AUTHORIZED, front_door, request, summary
+from status_helpers import ROOT, T0, VIEWS, spec
+
+from homelabnext import tlp
+from homelabnext.status import build_status, load_views, views_problems
+from homelabnext.status import release as rel
+from homelabnext.status.agents import ActivityStore
+from homelabnext.status.agents.pages import AgentSite
+from homelabnext.status.model import iso
+from homelabnext.status.render import render_html, write
+from homelabnext.status.serve import LOOPBACK, make_server
+from homelabnext.status.views import public_status
+
+FULL_VIEWS = {
+    "views_version": 1,
+    "shell": {"title": "Test lab", "main": "overview", "act_via": {"service": "dashboards"}},
+    "exports": {n: {"tlp": "clear"} for n in rel.EXPORTS},
+    "menu": [
+        {"id": "overview", "title": "Overview", "panel": "exceptions", "tlp": "clear"},
+        {"id": "grid", "title": "Grid", "panel": "grid", "tlp": "clear"},
+        {"id": "sources", "title": "Sources", "panel": "sources", "tlp": "clear"},
+        {"id": "agents", "title": "Agents", "panel": "agents", "tlp": "clear"},
+        {"id": "dashboards", "title": "Dashboards", "external": {"service": "dashboards"}, "tlp": "clear"},
+        {"id": "detail", "title": "Detail", "panel": "agent-detail", "group": "private", "tlp": "red"},
+    ],
+}  # fmt: skip
+#: what the public view must never carry, whatever the source held
+SECRETISH = ("lab-host-7", "private-project", "example-model-large", "/var/lib/probe.json")
+
+
+@pytest.fixture
+def store(tmp_path, clock):
+    s = ActivityStore(tmp_path / "activity.db", clock=clock)
+    full = {"host": "lab-host-7", "project": "private-project", "model": "example-model-large",
+            "surface": "local", "agent": "triage-agent", "parent_session_id": "s-0",
+            "tokens_in": 10, "tokens_out": 20, "cost_usd": 0.5, "has_detail": False}  # fmt: skip
+    s.add([summary(1, **full), summary(2, kind="prompt", outcome="info", **full)], [], via="test")
+    return s
+
+
+def _full_doc(registry, site):
+    """A status document with every field the hub writes today, each one populated."""
+    src = spec(
+        "a", kind="poll-file", file="/var/lib/probe.json", path=None, service="dashboards",
+        power={"ups": "ups-1", "model": "x", "feeds": [], "guests": []},
+    )  # fmt: skip
+    t = iso(T0)
+    obs = {"source": "a", "module": src.module, "item": "lab-host-7 disk", "state": "fail",
+           "summary": "lab-host-7 /var/lib full", "link": "status:a", "observed_at": t,
+           "expires_at": t, "value": 3, "work": True, "reported_state": "fail",
+           "history": [[t, "fail"]], "flags": ["late"]}  # fmt: skip
+    source = {**src.describe(), "state": "warn", "last_attempt": t, "last_ok": t,
+              "error": "lab-host-7 refused", "clock_skew_s": 4}  # fmt: skip
+    snap = {"now": t, "observations": [obs], "sources": [source]}
+    return build_status(snap, FULL_VIEWS, registry, [src], agents=site.summary())
+
+
+# ---------------------------------------------------------------- ceilings in views.yml
+def test_the_example_views_declare_every_ceiling(registry, specs):
+    doc = load_views(VIEWS, registry, specs)
+    assert {v["tlp"] for v in doc["menu"] if v.get("group") != "private"} == {"clear"}
+    assert {v["tlp"] for v in doc["menu"] if v.get("group") == "private"} == {"red"}
+    assert set(doc["exports"]) == set(rel.EXPORTS)
+
+
+def _example():
+    return yaml.safe_load(VIEWS.read_text(encoding="utf-8"))
+
+
+def _entry(doc, vid):
+    return next(v for v in doc["menu"] if v["id"] == vid)
+
+
+def _external(doc):
+    """The first external link entry: a menu link is a public view too."""
+    return next(v for v in doc["menu"] if "external" in v)
+
+
+@pytest.mark.parametrize(
+    "mutate, problem",
+    [
+        (lambda d: _entry(d, "overview").pop("tlp"), "view overview: declares no TLP ceiling"),
+        (lambda d: _external(d).pop("tlp"), ": declares no TLP ceiling (tlp: clear)"),
+        (lambda d: _entry(d, "topology").pop("tlp"), "view topology: declares no TLP ceiling"),
+        (lambda d: _entry(d, "agent-detail").pop("tlp"), "view agent-detail: declares no TLP"),
+        (lambda d: _entry(d, "overview").update(tlp="green"), "a public view's TLP ceiling is clear, not green"),
+        (lambda d: _entry(d, "activity").update(tlp="red"), "a public view's TLP ceiling is clear, not red"),
+        (lambda d: _external(d).update(tlp="amber"), "a public view's TLP ceiling is clear, not amber"),
+        (lambda d: _entry(d, "approvals").update(tlp="clear"), "a private view's TLP ceiling is red, not clear"),
+        (lambda d: d.pop("exports"), "exports.status.json: declares no TLP ceiling"),
+        (lambda d: d["exports"].pop("activity.csv"), "exports.activity.csv: declares no TLP ceiling"),
+        (lambda d: d["exports"]["activity.jsonl"].update(tlp="green"), "a public export's TLP ceiling is clear, not green"),
+        (lambda d: _entry(d, "overview").update(tlp="TLP:CLEAR"), "schema:"),
+        (lambda d: _entry(d, "overview").update(tlp="white"), "schema:"),
+        (lambda d: _entry(d, "overview").update(tlp="amber-strict"), "schema:"),
+        (lambda d: d["exports"].update({"other.csv": {"tlp": "clear"}}), "schema:"),
+    ],
+)  # fmt: skip
+def test_a_missing_or_wrong_ceiling_is_refused(registry, specs, mutate, problem):
+    doc = _example()
+    mutate(doc)
+    assert any(problem in p for p in views_problems(doc, registry, specs)), problem
+
+
+def test_reachability_never_raises_a_ceiling(registry, specs):
+    """A public page in a group of its own, or one that is reachable from outside, is still a
+    public view; only the private group's grant is red."""
+    doc = _example()
+    _entry(doc, "links").update(group="lab-only", tlp="red")
+    problems = views_problems(doc, registry, specs)
+    assert "view links: a public view's TLP ceiling is clear, not red" in problems
+
+
+def test_the_views_schema_spells_labels_as_the_label_type_does():
+    schema = json.loads((ROOT / "schemas/status/views.schema.json").read_text(encoding="utf-8"))
+    assert tuple(schema["$defs"]["tlp"]["enum"]) == tlp.LABELS
+
+
+# ---------------------------------------------------------------- the registry
+def test_the_hub_registry_is_valid_and_covers_what_the_hub_serves():
+    r = rel.registry()
+    for name in rel.EXPORTS:
+        (t,) = r.serving(name)
+        assert t.output == tlp.Label.CLEAR and t.input == tlp.Label.RED
+    for view in rel.VIEWS:
+        assert r.serving(view)
+
+
+def _registry_doc():
+    return yaml.safe_load(rel.REGISTRY.read_text(encoding="utf-8"))
+
+
+def test_a_public_export_or_view_with_no_transform_fails(registry, specs):
+    doc = _registry_doc()
+    doc["transforms"] = [t for t in doc["transforms"] if t["id"] != rel.STATUS_PUBLIC]
+    problems, transforms = rel.registry_problems(doc)
+    assert any(f"transform {rel.STATUS_PUBLIC}" in p and "not declared" in p for p in problems)
+    without = views_problems(_example(), registry, specs, rel.Releases(transforms))
+    assert (
+        "exports.status.json: no release transform serves 'status.json', so it is withdrawn"
+        in without
+    )
+    assert "view overview: no release transform serves 'exceptions', so it is withdrawn" in without
+    with pytest.raises(rel.ReleaseError, match="withdrawn"):
+        public_status({"schema": "x"}, rel.Releases(transforms))
+
+
+def test_a_transform_above_the_ceiling_fails(registry, specs):
+    doc = _registry_doc()
+    next(t for t in doc["transforms"] if t["id"] == rel.EVENTS_PUBLIC)["output"] = "green"
+    problems, transforms = rel.registry_problems(doc)
+    assert problems == []
+    out = views_problems(_example(), registry, specs, rel.Releases(transforms))
+    assert (
+        "exports.activity.csv: release transform agent-events-public outputs green, above the "
+        "ceiling clear" in out
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate, problem",
+    [
+        (lambda t: t.update(input="white-ish"), "input: not a TLP label"),
+        (lambda t: t.update(output="red", input="clear"), "stricter than its input"),
+        (lambda t: t["keep"].append("summary"), "overlaps another listed path"),
+        (lambda t: t["keep"].append("schema"), "overlaps another listed path"),
+        (lambda t: t["keep"].append("observations"), "keep and withdraw overlap"),
+        (lambda t: t["keep"].append("menu[].x-y"), "not a field path"),
+        (lambda t: t["withdraw"].append({"field": "extra"}), "with a reason"),
+        (lambda t: t["withdraw"].append({"field": "extra", "why": " "}), "with a reason"),
+        (lambda t: t["serves"].append("topology"), "serves 'topology'"),
+        (lambda t: t.update(keep=[]), "keep is a non-empty list"),
+        (lambda t: t.pop("withdraw"), "missing 'withdraw'"),
+        (lambda t: t.update(note="x"), "unknown key 'note'"),
+    ],
+)  # fmt: skip
+def test_a_malformed_transform_is_refused(mutate, problem):
+    doc = _registry_doc()
+    mutate(next(t for t in doc["transforms"] if t["id"] == rel.STATUS_PUBLIC))
+    problems, _ = rel.registry_problems(doc)
+    assert any(problem in p for p in problems), problems
+
+
+def test_an_export_served_twice_is_refused():
+    doc = _registry_doc()
+    next(t for t in doc["transforms"] if t["id"] == rel.SESSIONS_PUBLIC)["serves"].append(
+        "activity.csv"
+    )
+    problems, _ = rel.registry_problems(doc)
+    assert any("export activity.csv is served by 2 transforms" in p for p in problems)
+
+
+def test_the_registry_is_governance():
+    """A change to the release transforms is human-approve: CODEOWNERS names the registry and
+    the code that applies it."""
+    owners = (ROOT / ".github/CODEOWNERS").read_text(encoding="utf-8").splitlines()
+    rules = {line.split()[0] for line in owners if line.strip() and not line.startswith("#")}
+    for path in ("homelabnext/status/release_transforms.yml", "homelabnext/status/release.py"):
+        assert "/" + path in rules, path
+
+
+# ---------------------------------------------------------------- the transform itself
+def test_a_transform_passing_an_unlisted_field_fails():
+    t = rel.registry().by_id[rel.EVENTS_PUBLIC]
+    assert t.unlisted({"event_id": "e", "host": "lab-host-7"}) == ["host"]
+
+    class Leaky(rel.Transform):
+        def apply(self, data):
+            return dict(data)  # passes everything: the release must refuse it
+
+    leaky = Leaky(**{k: getattr(t, k) for k in t.__dataclass_fields__})
+    with pytest.raises(rel.ReleaseError, match="passed unlisted fields: host"):
+        rel.Releases([leaky]).release(rel.EVENTS_PUBLIC, "activity.csv", {"host": "lab-host-7"})
+
+
+def test_a_kept_path_never_keeps_a_mapping_whole():
+    t = rel.Transform("x", "x", ("status.json",), tlp.Label.RED, tlp.Label.CLEAR, ("a",), {})
+    assert t.apply({"a": {"secret": 1}}) == {}
+    assert t.apply({"a": [{"secret": 1}]}) == {}
+    assert t.apply({"a": [1, "b"]}) == {"a": [1, "b"]}
+
+
+def test_every_public_field_is_kept_or_withdrawn(registry, store, clock):
+    """The day-one migration (decision 8): every field the public view and the exports carry
+    today is listed by its transform, kept or withdrawn; a field added later fails here until
+    someone judges it (and is dropped from the public view meanwhile)."""
+    site = AgentSite(store, clock=clock)
+    doc = _full_doc(registry, site)
+    r = rel.registry()
+    status = r.by_id[rel.STATUS_PUBLIC]
+    assert status.unclassified(doc) == []
+    for e in store.events(limit=None):
+        assert r.by_id[rel.EVENTS_PUBLIC].unclassified(e) == []
+    for s in store.sessions():
+        assert r.by_id[rel.SESSIONS_PUBLIC].unclassified(s) == []
+    later = copy.deepcopy(doc)
+    later["modules"][0]["owner_email"] = "someone@lab.example"
+    assert status.unclassified(later) == ["modules[0].owner_email"]
+    assert "owner_email" not in json.dumps(public_status(later))
+
+
+def test_the_public_status_carries_only_kept_fields(registry, store, clock):
+    site = AgentSite(store, clock=clock)
+    doc = _full_doc(registry, site)
+    out = public_status(doc, contract=True)
+    text = json.dumps(out)
+    for s in SECRETISH:
+        assert s not in text, s
+    assert "observations" not in out and "act_via" not in out
+    assert out["summary"]["fail"] == 1 and out["modules"][0]["state"] == "fail"
+    assert out["views"]["overview"]["attention"][0] == {"module": out["modules"][0]["module"],
+                                                        "state": "fail"}  # fmt: skip
+    assert all("href" not in m and "service" not in m for m in out["menu"])
+    assert [m["id"] for m in out["menu"] if m.get("group") == "private"] == []
+    assert out["agents"]["counts"]["working"] + out["agents"]["counts"]["waiting"] >= 0
+    assert {"host", "project", "model"}.isdisjoint(out["agents"]["sessions"][0])
+    page = render_html(public_status(doc), live=True)
+    for s in SECRETISH:
+        assert s not in page, s
+    assert 'href="/agents"' in page and 'title="lab only">Dashboards' in page
+
+
+def test_render_writes_the_public_view(registry, store, clock, tmp_path):
+    doc = _full_doc(registry, AgentSite(store, clock=clock))
+    page, data = write(tmp_path, doc)
+    for f in (page, data):
+        body = f.read_text(encoding="utf-8")
+        assert not any(s in body for s in SECRETISH)
+    assert json.loads(data.read_text(encoding="utf-8")) == public_status(doc, contract=True)
+
+
+# ---------------------------------------------------------------- served
+@pytest.fixture
+def served(tmp_path, clock, store, registry):
+    servers = []
+
+    def start(releases=None):
+        site = AgentSite(store, front_door=front_door(tmp_path), clock=clock, releases=releases)
+        srv = make_server(
+            lambda: _full_doc(registry, site),
+            agents=site,
+            releases=releases,
+            allow_remote=True,
+            host=LOOPBACK,
+            allowed_hosts=["status.lab.example"],
+        )
+        threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+        servers.append(srv)
+        host, port = srv.server_address[:2]
+        return f"http://{host}:{port}"
+
+    yield start
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+
+
+PUBLIC = ["/", "/status.json", "/agents", "/agents/session?id=s-1", "/activity",
+          "/activity?event=ev-s-1-1", "/agent-analytics", "/activity.csv", "/activity.jsonl"]  # fmt: skip
+
+
+@pytest.mark.parametrize("path", PUBLIC)
+def test_no_public_route_carries_a_withdrawn_field(served, path):
+    base = served()
+    for headers in ({}, AUTHORIZED, {"Host": "status.lab.example"}):
+        code, _, body = request(base, path, headers=headers)
+        assert code == 200, (path, headers)
+        assert not any(s.encode() in body for s in SECRETISH), (path, headers)
+
+
+def test_the_front_door_grant_does_not_raise_a_public_ceiling(served):
+    base = served()
+    anon = request(base, "/status.json")[2]
+    assert request(base, "/status.json", headers=AUTHORIZED)[2] == anon
+    assert (
+        request(base, "/activity.jsonl", headers=AUTHORIZED)[2]
+        == request(base, "/activity.jsonl")[2]
+    )
+    assert b"private/sessions" not in request(base, "/")[2]  # the private group: grant only
+
+
+def test_the_exports_carry_only_their_transform(served):
+    base = served()
+    keep = set(rel.registry().by_id[rel.EVENTS_PUBLIC].keep)
+    rows = [json.loads(line) for line in request(base, "/activity.jsonl")[2].decode().splitlines()]
+    assert rows and all(set(r) <= keep for r in rows)
+    header = next(csv.reader(io.StringIO(request(base, "/activity.csv")[2].decode())))
+    assert header[:3] == ["time", "event_id", "session_id"]
+    assert set(header) <= keep and {"host", "project", "model"}.isdisjoint(header)
+
+
+def test_a_failed_release_is_withdrawn_not_served(served):
+    t = rel.registry()
+
+    class Leaky(rel.Transform):
+        def apply(self, data):
+            return dict(data)
+
+    leaky = rel.Releases(
+        Leaky(**{k: getattr(x, k) for k in x.__dataclass_fields__}) for x in t.transforms
+    )
+    base = served(leaky)
+    for path in PUBLIC:
+        code, _, body = request(base, path)
+        assert code == 500 and body == b"withdrawn: release failed\n", path
+
+
+def test_the_registry_file_is_packaged():
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"status/*.yml"' in pyproject
+    assert Path(rel.REGISTRY).is_file()

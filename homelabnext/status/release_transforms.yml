@@ -1,0 +1,212 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The status hub's release transforms (ADR-0033 decisions 7 and 8; docs/status.md, "TLP ceilings
+# and release transforms"). The hub's own data is the lab's, so it is `red` (decision 2); a
+# transform is the only way any of it reaches a `clear` reader. Each one names what it serves (a
+# public export or the view whose data it shapes), its input and output label, and an allow-list
+# of the fields it keeps. A field it does not keep is dropped, and every field the source carries
+# today is either kept or withdrawn here, with the reason (the day-one migration).
+#
+# This file is governance: a change to it needs a human approve (CODEOWNERS). Paths: `a.b` is
+# field `b` of mapping `a`, `a[]` each item of list `a`, `*` every key of a mapping whose keys are
+# data (view ids). A kept path keeps a scalar or a list of scalars; a mapping is kept only through
+# the fields listed under it. A withdrawn path withdraws everything under it.
+release_transforms_version: 1
+
+transforms:
+  - id: status-public
+    what: The public status document and the page drawn from it (health counts and badges).
+    serves: [status.json, exceptions, grid, sources]
+    input: red
+    output: clear
+    keep:
+      - schema
+      - generated_at
+      - title
+      - main
+      - summary.total
+      - summary.ok
+      - summary.warn
+      - summary.fail
+      - summary.unknown
+      - summary.stale
+      - menu[].id
+      - menu[].title
+      - menu[].kind
+      - menu[].panel
+      - menu[].group
+      - menu[].available
+      - views.*.panel
+      - views.*.ok
+      - views.*.total
+      - views.*.attention[].module
+      - views.*.attention[].state
+      - views.*.modules[].module
+      - views.*.modules[].state
+      - views.*.modules[].counts.total
+      - views.*.modules[].counts.ok
+      - views.*.modules[].counts.warn
+      - views.*.modules[].counts.fail
+      - views.*.modules[].counts.unknown
+      - views.*.modules[].counts.stale
+      - views.*.sources[].id
+      - views.*.sources[].module
+      - views.*.sources[].state
+      - modules[].module
+      - modules[].state
+      - modules[].counts.total
+      - modules[].counts.ok
+      - modules[].counts.warn
+      - modules[].counts.fail
+      - modules[].counts.unknown
+      - modules[].counts.stale
+      - sources[].id
+      - sources[].module
+      - sources[].state
+      - agents.counts.working
+      - agents.counts.waiting
+      - agents.counts.stuck
+      - agents.counts.errored
+      - agents.counts.done
+      - agents.sessions[].session_id
+      - agents.sessions[].parent_session_id
+      - agents.sessions[].state
+      - agents.sessions[].runtime
+      - agents.sessions[].surface
+      - agents.sessions[].agent
+      - agents.sessions[].first_seen
+      - agents.sessions[].last_seen
+      - agents.sessions[].last_kind
+      - agents.sessions[].last_outcome
+      - agents.sessions[].last_tool
+      - agents.sessions[].events
+      - agents.sessions[].tool_calls
+      - agents.sessions[].denials
+      - agents.sessions[].approvals
+      - agents.sessions[].errors
+      - agents.sessions[].prompts
+      - agents.sessions[].tokens_in
+      - agents.sessions[].tokens_out
+      - agents.sessions[].cost_usd
+      - agents.sessions[].idle_s
+      - agents.sessions[].stuck_after_s
+    withdraw:
+      - {field: "act_via", why: "the address of the lab's broker or approval service"}
+      - {field: "menu[].href", why: "an external entry's link is a lab service address (a page's path is fixed by the code, not data)"}
+      - {field: "menu[].service", why: "a registry service name is lab inventory"}
+      - {field: "views.*.live", why: "live work is per-item telemetry: item names, summaries and values"}
+      - {field: "views.*.attention[].source", why: "a source id paired with a failing item locates the fault"}
+      - {field: "views.*.attention[].item", why: "item names are lab inventory (hosts, jobs, monitors)"}
+      - {field: "views.*.attention[].summary", why: "free text from the source or its error, which can name hosts, paths and addresses"}
+      - {field: "views.*.attention[].link", why: "a link to the source's own page"}
+      - {field: "views.*.attention[].observed_at", why: "per-item telemetry"}
+      - {field: "views.*.attention[].expires_at", why: "per-item telemetry"}
+      - {field: "views.*.attention[].value", why: "per-item telemetry"}
+      - {field: "views.*.attention[].work", why: "per-item telemetry"}
+      - {field: "views.*.attention[].reported_state", why: "per-item telemetry"}
+      - {field: "views.*.attention[].history", why: "per-item telemetry"}
+      - {field: "views.*.attention[].flags", why: "per-item telemetry"}
+      - {field: "views.*.modules[].service", why: "a registry service name is lab inventory"}
+      - {field: "views.*.modules[].capability", why: "which product fills which capability is lab inventory"}
+      - {field: "views.*.modules[].sources", why: "the module's source ids beside its state locate the fault"}
+      - {field: "views.*.modules[].links", why: "links to the lab's service and capability pages"}
+      - {field: "views.*.modules[].items", why: "per-item telemetry (names, summaries, values)"}
+      - {field: "views.*.sources[].kind", why: "a source's collector and target are lab configuration"}
+      - {field: "views.*.sources[].service", why: "a registry service name is lab inventory"}
+      - {field: "views.*.sources[].capability", why: "lab inventory"}
+      - {field: "views.*.sources[].target", why: "the polled service or a file path on a lab host"}
+      - {field: "views.*.sources[].interval_s", why: "lab configuration"}
+      - {field: "views.*.sources[].stale_after_s", why: "lab configuration"}
+      - {field: "views.*.sources[].timeout_s", why: "lab configuration"}
+      - {field: "views.*.sources[].on_error", why: "lab configuration"}
+      - {field: "views.*.sources[].mapping", why: "how a product's payload is read is lab configuration"}
+      - {field: "views.*.sources[].reserved", why: "lab configuration"}
+      - {field: "views.*.sources[].what", why: "free text describing what the source reads"}
+      - {field: "views.*.sources[].ups", why: "the site's power layout"}
+      - {field: "views.*.sources[].last_attempt", why: "collection telemetry"}
+      - {field: "views.*.sources[].last_ok", why: "collection telemetry"}
+      - {field: "views.*.sources[].error", why: "free error text, which can name hosts, paths and addresses"}
+      - {field: "views.*.sources[].clock_skew_s", why: "collection telemetry"}
+      - {field: "modules[].service", why: "a registry service name is lab inventory"}
+      - {field: "modules[].capability", why: "which product fills which capability is lab inventory"}
+      - {field: "modules[].sources", why: "the module's source ids beside its state locate the fault"}
+      - {field: "modules[].links", why: "links to the lab's service and capability pages"}
+      - {field: "modules[].items", why: "per-item telemetry (names, summaries, values)"}
+      - {field: "sources[].kind", why: "a source's collector and target are lab configuration"}
+      - {field: "sources[].service", why: "a registry service name is lab inventory"}
+      - {field: "sources[].capability", why: "lab inventory"}
+      - {field: "sources[].target", why: "the polled service or a file path on a lab host"}
+      - {field: "sources[].interval_s", why: "lab configuration"}
+      - {field: "sources[].stale_after_s", why: "lab configuration"}
+      - {field: "sources[].timeout_s", why: "lab configuration"}
+      - {field: "sources[].on_error", why: "lab configuration"}
+      - {field: "sources[].mapping", why: "how a product's payload is read is lab configuration"}
+      - {field: "sources[].reserved", why: "lab configuration"}
+      - {field: "sources[].what", why: "free text describing what the source reads"}
+      - {field: "sources[].ups", why: "the site's power layout"}
+      - {field: "sources[].last_attempt", why: "collection telemetry"}
+      - {field: "sources[].last_ok", why: "collection telemetry"}
+      - {field: "sources[].error", why: "free error text, which can name hosts, paths and addresses"}
+      - {field: "sources[].clock_skew_s", why: "collection telemetry"}
+      - {field: "observations", why: "every reading, with item names, summaries, values and history: raw lab telemetry"}
+      - {field: "agents.sessions[].host", why: "names a lab machine"}
+      - {field: "agents.sessions[].project", why: "names the repository or work a session ran in, which can be private"}
+      - {field: "agents.sessions[].model", why: "which model, and so which provider, received the lab's prompts"}
+
+  - id: agent-sessions-public
+    what: Agent sessions on the Agents pages (state, counts and usage per session).
+    serves: [agents, agent-analytics]
+    input: red
+    output: clear
+    keep:
+      - session_id
+      - parent_session_id
+      - state
+      - runtime
+      - surface
+      - agent
+      - first_seen
+      - last_seen
+      - last_kind
+      - last_outcome
+      - last_tool
+      - events
+      - tool_calls
+      - denials
+      - approvals
+      - errors
+      - prompts
+      - tokens_in
+      - tokens_out
+      - cost_usd
+      - idle_s
+      - stuck_after_s
+    withdraw:
+      - {field: "host", why: "names a lab machine"}
+      - {field: "project", why: "names the repository or work a session ran in, which can be private"}
+      - {field: "model", why: "which model, and so which provider, received the lab's prompts"}
+
+  - id: agent-events-public
+    what: Agent activity events (summary tier) on the Activity and analytics pages and in the exports.
+    serves: [agents, activity, agent-analytics, activity.csv, activity.jsonl]
+    input: red
+    output: clear
+    keep:
+      - event_id
+      - session_id
+      - parent_session_id
+      - runtime
+      - surface
+      - agent
+      - time
+      - kind
+      - tool
+      - outcome
+      - tokens_in
+      - tokens_out
+      - cost_usd
+      - has_detail
+    withdraw:
+      - {field: "host", why: "names a lab machine"}
+      - {field: "project", why: "names the repository or work a session ran in, which can be private"}
+      - {field: "model", why: "which model, and so which provider, received the lab's prompts"}

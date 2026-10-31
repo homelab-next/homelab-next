@@ -172,10 +172,12 @@ def test_render_is_deterministic_self_contained_and_escaped(make_hub, registry, 
     b = write(tmp_path / "b", json.loads(json.dumps(doc)))
     assert [p.read_bytes() for p in a] == [p.read_bytes() for p in b]
     page = a[0].read_text()
-    assert "<script" not in page and "&lt;script&gt;" in page
+    assert "<script" not in page and "alert(1)" not in page  # a summary is withdrawn (ADR-0033)
     assert "Test &lt;lab&gt;" in page
     assert "http://" not in page and "cdn" not in page.lower()
     assert json.loads(a[1].read_text())["schema"] == "homelabnext.status/1"
+    full = render_html(doc)  # the renderer escapes whatever document it is given
+    assert "<script" not in full and "&lt;script&gt;" in full
 
 
 def test_status_json_contract_keys(make_hub, registry):
@@ -259,7 +261,9 @@ def test_a_blackholed_source_cannot_stall_the_console(served, make_hub):
         assert mods["svc-a"] == "stale"
         bg.join(10)
         srcs = {s["id"]: s for s in json.loads(_get(base + "/status.json")[2])["sources"]}
-        assert srcs["a"]["state"] == "stale" and srcs["a"]["error"] == "timeout after 0.5s"
+        assert srcs["a"]["state"] == "stale" and "error" not in srcs["a"]  # error text withdrawn
+        errors = {s["id"]: s["error"] for s in hub.snapshot()["sources"]}
+        assert errors["a"] == "timeout after 0.5s"
     finally:
         release.set()
 

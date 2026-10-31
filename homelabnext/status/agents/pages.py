@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """The agent pages of the hub: server-rendered, no script, filters in the query string.
 
-Summary tier (every viewer of the hub):
+Summary tier (every viewer of the hub; its ceiling is ``clear``, so every row these pages and
+exports show has been through its release transform, :mod:`homelabnext.status.release`: the
+``agent-sessions-public`` and ``agent-events-public`` transforms keep the fields they list and
+nothing else, for every viewer, the trusted front door's included):
 
 =================== ===============================================================================
 ``/agents``          sessions with state badges; filter chips by runtime, state, project
@@ -33,6 +36,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .. import release
 from ..render import _e, nav_html, shell_html
 from .auth import AccessLog, Decision, authorize
 from .config import FrontDoor
@@ -114,10 +118,12 @@ class AgentSite:
         *,
         front_door: FrontDoor | None = None,
         clock: Callable[[], float] = time.time,
+        releases: release.Releases | None = None,
     ):
         self.store = store
         self.front_door = front_door
         self.clock = clock
+        self.releases = release.registry() if releases is None else releases
         self.access_log = AccessLog(front_door.access_log, clock=clock) if front_door else None
 
     # ---------------------------------------------------------------- helpers
@@ -128,6 +134,22 @@ class AgentSite:
         """``status.json``'s ``agents`` block: sessions (summary tier) and counts by state."""
         sessions = self.store.sessions(now)
         return {"sessions": sessions, "counts": state_counts(sessions)}
+
+    def _events(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Summary events as ``view`` may show them (their release transform)."""
+        return [self.releases.release(release.EVENTS_PUBLIC, view, e) for e in rows]
+
+    def _sessions_of(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Derived sessions as ``view`` may show them (their release transform)."""
+        return [self.releases.release(release.SESSIONS_PUBLIC, view, s) for s in rows]
+
+    def _keeps(self, tid: str, view: str, field: str) -> bool:
+        return self.releases.transform(tid, view).keeps(field)
+
+    def _shown(self, tid: str, view: str, fields: str | tuple[str, ...]) -> bool:
+        """Whether a column over ``fields`` has anything to show after the release."""
+        names = (fields,) if isinstance(fields, str) else fields
+        return any(self._keeps(tid, view, f) for f in names)
 
     def _page(self, doc, title, main, decision, *, refresh=False) -> Response:
         nav = nav_html(doc, live=True, private=decision.allowed)
@@ -148,16 +170,19 @@ class AgentSite:
             "/activity": self._activity,
             "/agent-analytics": self._analytics,
         }
-        if route in pages:
-            return pages[route](q, doc, decision)
-        if route in ("/activity.csv", "/activity.jsonl"):
-            return self._export(route.rsplit(".", 1)[1], q)
+        try:  # every summary page and export goes through its release transform (fail closed)
+            if route in pages:
+                return pages[route](q, doc, decision)
+            if route in ("/activity.csv", "/activity.jsonl"):
+                return self._export(route.rsplit(".", 1)[1], q)
+        except release.ReleaseError:
+            return 500, "text/plain; charset=utf-8", b"withdrawn: release failed\n"
         return None
 
     # ---------------------------------------------------------------- summary pages
     def _sessions(self, q, doc, decision) -> Response:
-        all_rows = self.store.sessions()
-        rows = [
+        all_rows = self._sessions_of("agents", self.store.sessions())
+        rows = [  # after the release: a filter on a withdrawn field matches nothing
             s
             for s in all_rows
             if all(s.get(k) == q[k] for k in ("runtime", "state", "project") if k in q)
@@ -170,27 +195,37 @@ class AgentSite:
                 "/agents", q, "runtime", sorted({s["runtime"] for s in all_rows if s["runtime"]})
             )
             + _chips(
-                "/agents", q, "project", sorted({s["project"] for s in all_rows if s["project"]})
+                "/agents", q, "project",
+                sorted({s["project"] for s in all_rows if s.get("project")}),
             )
-        )
-        table = _table(
-            ("State", "Session", "Runtime", "Where", "Model", "Agent", "Parent", "Last tool",
-             "Tools", "Denied", "Approvals", "Tokens", "Cost", "Last event", "Idle"),
-            [
-                (
-                    _badge(s["state"]),
-                    f'<a href="{_e(_href("/agents/session", id=s["session_id"]))}"><code>'
-                    f"{_e(s['session_id'])}</code></a>",
-                    _n(s["runtime"]) + (f" ({_e(s['surface'])})" if s.get("surface") else ""),
-                    _e("/".join(x for x in (s.get("host"), s.get("project")) if x)),
-                    _n(s["model"]), _n(s["agent"]), _n(s["parent_session_id"]), _n(s["last_tool"]),
-                    _n(s["tool_calls"]), _n(s["denials"]), _n(s["approvals"]),
-                    _e(f"{s['tokens_in']}/{s['tokens_out']}") if s["tokens_in"] or s["tokens_out"] else "",
-                    _n(s["cost_usd"]), _n(s["last_seen"]), _e(f"{s['idle_s']}s"),
-                )
-                for s in rows
-            ],
         )  # fmt: skip
+        cols = [
+            ("State", "state", lambda s: _badge(s["state"])),
+            ("Session", "session_id",
+             lambda s: f'<a href="{_e(_href("/agents/session", id=s["session_id"]))}"><code>'
+             f"{_e(s['session_id'])}</code></a>"),
+            ("Runtime", "runtime",
+             lambda s: _n(s.get("runtime")) + (f" ({_e(s['surface'])})" if s.get("surface") else "")),
+            ("Where", ("host", "project"),
+             lambda s: _e("/".join(x for x in (s.get("host"), s.get("project")) if x))),
+            ("Model", "model", lambda s: _n(s.get("model"))),
+            ("Agent", "agent", lambda s: _n(s.get("agent"))),
+            ("Parent", "parent_session_id", lambda s: _n(s.get("parent_session_id"))),
+            ("Last tool", "last_tool", lambda s: _n(s.get("last_tool"))),
+            ("Tools", "tool_calls", lambda s: _n(s.get("tool_calls"))),
+            ("Denied", "denials", lambda s: _n(s.get("denials"))),
+            ("Approvals", "approvals", lambda s: _n(s.get("approvals"))),
+            ("Tokens", ("tokens_in", "tokens_out"),
+             lambda s: _e(f"{s.get('tokens_in') or 0}/{s.get('tokens_out') or 0}")
+             if s.get("tokens_in") or s.get("tokens_out") else ""),
+            ("Cost", "cost_usd", lambda s: _n(s.get("cost_usd"))),
+            ("Last event", "last_seen", lambda s: _n(s.get("last_seen"))),
+            ("Idle", "idle_s", lambda s: _e(f"{s['idle_s']}s") if s.get("idle_s") is not None else ""),
+        ]  # fmt: skip
+        cols = [c for c in cols if self._shown(release.SESSIONS_PUBLIC, "agents", c[1])]
+        table = _table(
+            [h for h, _, _ in cols], [tuple(cell(s) for _, _, cell in cols) for s in rows]
+        )
         main = f"<h2>Agents</h2><p>{head}</p>{chips}{table}"
         return self._page(doc, "Agents", main, decision, refresh=True)
 
@@ -199,13 +234,16 @@ class AgentSite:
         events = self.store.events(session=sid, limit=None, oldest_first=True) if sid else []
         if not events:
             return 404, HTML, b"unknown session\n"
-        s = next(r for r in self.store.sessions() if r["session_id"] == sid)
+        events = self._events("agents", events)
+        raw = next(r for r in self.store.sessions() if r["session_id"] == sid)
+        s = self._sessions_of("agents", [raw])[0]
         facts = "".join(
             f"<dt>{_e(k)}</dt><dd>{_n(s.get(k))}</dd>"
             for k in ("state", "runtime", "surface", "host", "project", "model", "agent",
                       "parent_session_id", "first_seen", "last_seen", "tool_calls", "denials",
                       "approvals", "errors", "tokens_in", "tokens_out", "cost_usd",
                       "stuck_after_s")
+            if self._keeps(release.SESSIONS_PUBLIC, "agents", k)
         )  # fmt: skip
         link = ""
         if decision.allowed:
@@ -238,8 +276,8 @@ class AgentSite:
         )
 
     def _activity(self, q, doc, decision) -> Response:
-        events = self._selection(q, STREAM_LIMIT)
-        recent = self.store.events(limit=2000)
+        events = self._events("activity", self._selection(q, STREAM_LIMIT))
+        recent = self._events("activity", self.store.events(limit=2000))
         chips = "".join(
             _chips("/activity", q, key, sorted({e[key] for e in recent if e.get(key)}))
             for key in ("runtime", "outcome", "kind")
@@ -268,6 +306,7 @@ class AgentSite:
         listing = _table(("Time", "Runtime", "Session", "Kind", "Tool", "Outcome", ""), rows)
         selected = self.store.event(q["event"]) if q.get("event") else None
         if selected:
+            selected = self._events("activity", [selected])[0]
             dl = "".join(f"<dt>{_e(k)}</dt><dd>{_n(v)}</dd>" for k, v in sorted(selected.items()))
             extra = ""
             if decision.allowed and selected.get("has_detail"):
@@ -283,19 +322,21 @@ class AgentSite:
         return self._page(doc, "Activity", main, decision, refresh=not selected)
 
     def _export(self, fmt: str, q: Mapping[str, str]) -> Response:
-        events = self._selection(q, EXPORT_LIMIT)
+        export = f"activity.{fmt}"
+        events = self._events(export, self._selection(q, EXPORT_LIMIT))
         if fmt == "jsonl":
             body = "".join(json.dumps(e, sort_keys=True) + "\n" for e in events)
             return 200, "application/x-ndjson; charset=utf-8", body.encode("utf-8")
+        columns = [c for c in _SUMMARY_COLUMNS if self._keeps(release.EVENTS_PUBLIC, export, c)]
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\n")
-        w.writerow(_SUMMARY_COLUMNS)
+        w.writerow(columns)
         for e in events:
-            w.writerow([_csv_cell(e.get(c)) for c in _SUMMARY_COLUMNS])
+            w.writerow([_csv_cell(e.get(c)) for c in columns])
         return 200, "text/csv; charset=utf-8", buf.getvalue().encode("utf-8")
 
     def _analytics(self, q, doc, decision) -> Response:
-        events = self.store.events(limit=None)
+        events = self._events("agent-analytics", self.store.events(limit=None))
 
         def counts(title: str, key: Callable[[Mapping[str, Any]], Any], top: int = 25) -> str:
             c = Counter(k for k in map(key, events) if k)
@@ -310,17 +351,20 @@ class AgentSite:
             (_e(d), *(_e(days[d][o]) for o in outcomes), _e(sum(days[d].values())))
             for d in sorted(days, reverse=True)[:30]
         ]
-        sessions = self.store.sessions()
+        sessions = self._sessions_of("agent-analytics", self.store.sessions())
         st = state_counts(sessions)
+        by = [("By outcome", "outcome"), ("By runtime", "runtime"), ("By model", "model"),
+              ("By tool", "tool")]  # fmt: skip
         main = (
             "<h2>Agent analytics</h2>"
             f"<p>{len(events)} events in {len(sessions)} sessions &middot; "
             + " ".join(f"{_badge(k)} {v}" for k, v in st.items())
             + "</p>"
-            + counts("By outcome", lambda e: e.get("outcome"))
-            + counts("By runtime", lambda e: e.get("runtime"))
-            + counts("By model", lambda e: e.get("model"))
-            + counts("By tool", lambda e: e.get("tool"))
+            + "".join(
+                counts(title, lambda e, k=k: e.get(k))
+                for title, k in by
+                if self._keeps(release.EVENTS_PUBLIC, "agent-analytics", k)
+            )
             + "<h3>By day</h3>"
             + _table(("Day", *outcomes, "Total"), day_rows)
         )

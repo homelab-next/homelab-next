@@ -670,7 +670,14 @@ publish gate only.
 The gate **verifies** a producer's TLP, never trusts it: an item's sidecar TLP is a claim; red,
 amber and unknown are excluded; the body is scanned for TLP markers and deny-listed names, which
 override the claim; only inert media types are accepted (`text/markdown`, `application/json`,
-`image/png`) and the gate renders HTML itself. A module that requires a **model role whose prompts
+`image/png`) and the gate renders HTML itself. **`green` is not public** (ADR-0033 decision 9):
+`tlp_allowed` stays `clear` by default, and a selection whose `tlp_allowed` (its value, else the
+manifest's default) is anything but `clear` must also set `audience: community` and name the
+access control that restricts the publication to that community (`access_control`, a sentence:
+the community's sign-in on the static host, say). The loader's site rules refuse it without both
+(`features.publishing.config.tlp_allowed: green is not public ...`); the rule holds for any module
+that declares a `tlp_allowed` key, read with `homelabnext.tlp.read`, so an unreadable value is held
+to it too. A module that requires a **model role whose prompts
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
 `grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
 
@@ -691,8 +698,11 @@ tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with anothe
 source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The lake stores the
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
-is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column, reader ceilings and
-model-role ceilings follow in the order the ADR sets.
+is one of the canonical spellings). The status hub's views and exports declare their TLP
+ceilings, and its public view and exports serve only what its release transforms keep
+([status](status.md#tlp-ceilings-and-release-transforms)). Pipeline tagging, the backfill of rows
+stored before the column, the remaining reader ceilings and model-role ceilings follow in the
+order the ADR sets.
 
 ## Placement and isolation
 

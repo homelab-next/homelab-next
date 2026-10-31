@@ -1516,8 +1516,46 @@ SITE_DEFECTS.update(
             lambda s, m: m["external-collector"]["requires"]["hosts"][1].__setitem__("count", 16),
             "box: cpu",
         ),
+        # ADR-0033 decision 9: green is not public
+        "green publishing without an audience": (
+            "full",
+            lambda s, m: (
+                s["features"]["publishing"]
+                .setdefault("config", {})
+                .update(tlp_allowed="green", access_control="the community's sign-in")
+            ),
+            "features.publishing.config.tlp_allowed: green is not public (ADR-0033 decision 9): "
+            "it needs audience: community (not 'public')",
+        ),
+        "green publishing without an access control": (
+            "full",
+            lambda s, m: (
+                s["features"]["publishing"]
+                .setdefault("config", {})
+                .update(tlp_allowed="green", audience="community", access_control="  ")
+            ),
+            "it needs access_control naming what restricts it to that community",
+        ),
+        "a manifest whose default publishes green without either": (
+            "full",
+            lambda s, m: m["publishing"]["config"]["tlp_allowed"].__setitem__("default", "green"),
+            "it needs audience: community (not 'public') and access_control",
+        ),
     }
 )
+
+
+def test_green_publishing_with_a_community_and_its_access_control_is_accepted():
+    """Both declared, by the selection (or by the manifest's defaults), and green passes."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    site["features"]["publishing"]["config"] = {
+        "tlp_allowed": "green",
+        "audience": "community",
+        "access_control": "the partner community's sign-in on the static host",
+    }
+    assert site_problems(site, mods) == []
+    site["features"]["publishing"]["config"] = {"tlp_allowed": "clear", "audience": "public"}
+    assert site_problems(site, mods) == []
 
 
 def test_a_site_rule_refuses_the_defect(case):
