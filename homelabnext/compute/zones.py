@@ -100,12 +100,13 @@ def _site_error(exc: Exception) -> ComputeError:
     return cls(str(exc))
 
 
-def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
-    """Read zones and the domain through the network model's own loader.
+def read_site(path: str | Path) -> Mapping[str, Any]:
+    """The site document, read once by the network model's own loader.
 
     ``homelabnext.network.load_site`` is the one reader of a site document, so a file that parses
     for ``hnx site`` parses here the same way (duplicate keys rejected, same error text).  This
-    does not run the site validation: use ``hnx site validate`` for that.
+    does not run the site validation: use ``hnx site validate`` for that.  Every ``site_*``
+    reader below takes the path and reads it this way; :func:`site_facts` reads it once for all.
     """
     from homelabnext.network.loader import SiteError, load_site
 
@@ -113,11 +114,20 @@ def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
         doc = load_site(path)
     except SiteError as exc:
         raise _site_error(exc) from exc
-    zones = doc.get("zones")
-    if not isinstance(zones, list):
+    if not isinstance(doc, Mapping) or not isinstance(doc.get("zones"), list):
         raise ComputeError(f"{path}: expected a mapping with a 'zones' list")
+    return doc
+
+
+def zones_from_site(doc: Mapping[str, Any]) -> tuple[ZoneLookup, str | None]:
+    """The zones and the domain of a site document."""
     domain = (doc.get("site") or {}).get("domain")
-    return MappingZones(zone_from_mapping(z) for z in zones), domain
+    return MappingZones(zone_from_mapping(z) for z in doc["zones"]), domain
+
+
+def open_site(path: str | Path) -> tuple[ZoneLookup, str | None]:
+    """Read zones and the domain through the network model's own loader (:func:`read_site`)."""
+    return zones_from_site(read_site(path))
 
 
 #: the protocols a Tailscale rule can name (an IR rule for ``any`` covers them all)
@@ -246,68 +256,62 @@ def addresses_from_site(doc: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
 
 
 def site_addresses(path: str | Path) -> dict[str, tuple[str, ...]]:
-    """:func:`addresses_from_site` for a site file, read by the network model's own loader."""
-    from homelabnext.network.loader import SiteError, load_site
-
-    try:
-        doc = load_site(path)
-    except SiteError as exc:
-        raise _site_error(exc) from exc
-    return addresses_from_site(doc) if isinstance(doc, Mapping) else {}
+    """:func:`addresses_from_site` for a site file."""
+    return addresses_from_site(read_site(path))
 
 
 def site_delegated6(path: str | Path) -> Any:
     """The site's ``delegated_prefixes6`` (site 1.5) as written, or None when it declares none:
     returned unjudged, for compute validation to judge (an unusable value is a problem there,
     never read as "no declaration")."""
-    from homelabnext.network.loader import SiteError, load_site
-
-    try:
-        doc = load_site(path)
-    except SiteError as exc:
-        raise _site_error(exc) from exc
-    return doc.get("delegated_prefixes6") if isinstance(doc, Mapping) else None
+    return read_site(path).get("delegated_prefixes6")
 
 
 def site_power(path: str | Path) -> dict[str, Any] | None:
     """The site's power facts (:func:`homelabnext.power.site_power`) for a site file, or None
     when it has no ``power`` section."""
-    from homelabnext.network.loader import SiteError, load_site
     from homelabnext.power import site_power as facts
 
-    try:
-        doc = load_site(path)
-    except SiteError as exc:
-        raise _site_error(exc) from exc
-    return facts(doc) if isinstance(doc, Mapping) else None
+    return facts(read_site(path))
 
 
 def site_flows(path: str | Path) -> tuple[ZoneFlow, ...]:
-    """:func:`flows_from_site` for a site file, read by the network model's own loader."""
-    from homelabnext.network.loader import SiteError, load_site
-
-    try:
-        doc = load_site(path)
-    except SiteError as exc:
-        raise _site_error(exc) from exc
-    return flows_from_site(doc) if isinstance(doc, Mapping) else ()
+    """:func:`flows_from_site` for a site file."""
+    return flows_from_site(read_site(path))
 
 
 def site_deploy(path: str | Path) -> dict[str, Any] | None:
     """The deploy's tailnet access (:func:`homelabnext.tailnet.site_deploy`) for a site file, or
     None when it declares none; an invalid declaration is an error (the same rules as
     ``hnx site validate``), never read as "no deploy access"."""
-    from homelabnext.network.loader import SiteError, load_site
+    return deploy_from_site(read_site(path), path)
+
+
+def deploy_from_site(doc: Mapping[str, Any], where: str | Path = "site") -> dict[str, Any] | None:
+    """:func:`site_deploy` for a site document already read."""
     from homelabnext.tailnet import deploy_problems
     from homelabnext.tailnet import site_deploy as access
 
-    try:
-        doc = load_site(path)
-    except SiteError as exc:
-        raise _site_error(exc) from exc
-    if not isinstance(doc, Mapping):
-        return None
     problems = deploy_problems(doc)
     if problems:
-        raise ComputeError(f"{path}: invalid tailnet.deploy", problems)
+        raise ComputeError(f"{where}: invalid tailnet.deploy", problems)
     return access(doc)
+
+
+def site_facts(path: str | Path) -> dict[str, Any]:
+    """Everything ``hnx guests`` takes from the site, from ONE read of the file (a SOPS-encrypted
+    site is decrypted once): ``zones``, ``domain`` and the :func:`homelabnext.compute.load_fleet`
+    keywords ``flows``, ``power``, ``deploy``, ``site_addresses`` and ``delegated6``."""
+    from homelabnext.power import site_power as power
+
+    doc = read_site(path)
+    zones, domain = zones_from_site(doc)
+    return {
+        "zones": zones,
+        "domain": domain,
+        "flows": flows_from_site(doc),
+        "power": power(doc),
+        "deploy": deploy_from_site(doc, path),
+        "site_addresses": addresses_from_site(doc),
+        "delegated6": doc.get("delegated_prefixes6"),
+    }

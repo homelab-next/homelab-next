@@ -536,3 +536,15 @@ def test_hcl_quote_escapes_template_sequences():
 def test_terraform_provider_constraint_is_bounded(good):
     tf = render(good, "terraform-proxmox")["providers.tf"]
     assert 'version = "~> 0.60"' in tf and ">=" not in tf
+
+
+def test_hnx_guests_reads_the_site_once(monkeypatch):
+    """Zones, flows, power, deploy access, addresses and prefixes all come from one read of the
+    site file (a SOPS-encrypted site is decrypted once, and every fact is of the same bytes)."""
+    import homelabnext.network.loader as loader
+
+    calls = []
+    real = loader.load_site
+    monkeypatch.setattr(loader, "load_site", lambda p: calls.append(p) or real(p))
+    assert hnx.main(["guests", "validate", str(FLEET), "--site", str(SITE)]) == 0
+    assert len(calls) == 1
