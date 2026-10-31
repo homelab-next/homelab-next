@@ -4,7 +4,9 @@ summary_of: outline:sha256:91c8e47d3eaaa755
 ---
 # ADR-0033: Data carries a TLP label from its source; every reader has a TLP ceiling
 
-- **Status:** proposed
+- **Status:** accepted (2026-10-31, by the operator; the code is in, and the lab-side steps
+  (the backfill run, loading `lake-access.json`, re-recording the parity cassette) are operator
+  follow-ups)
 - **Date:** 2026-10-30
 - **Related:** ADR-0001 (additive schemas); ADR-0011 and ADR-0021, which classify repositories
   and files and are unchanged by this ADR (a file in the public repository is `clear` by
