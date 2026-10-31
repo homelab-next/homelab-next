@@ -77,6 +77,11 @@ def x10(ctx: Context) -> CheckResult:
     if rc >= 100:
         return CheckResult(ERROR, f"[exit {rc}] conformance run could not measure: {out[-300:]}")
     doc = _parse(text)
+    if rc == 2 and doc is not None:  # a report whose verdicts include a misconfigured binding
+        bad = [c for c, e in doc["capabilities"].items() if e.get("verdict") == "misconfigured"]
+        return CheckResult(
+            ERROR, f"[exit 2] conformance run misconfigured for: {', '.join(bad) or '?'}"[:700]
+        )
     if rc == 2 or doc is None:
         return CheckResult(ERROR, f"[exit {rc}] no usable conformance report: {out[-300:]}")
     missing = doc["capabilities_without_passing_test"]

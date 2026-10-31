@@ -315,3 +315,21 @@ def test_cli_entry_point_still_imports():
         check=False,
     )
     assert p.returncode == 0 and "lake-query" in p.stdout
+
+
+def test_x10_names_the_misconfigured_capabilities(tmp_path):
+    from homelabnext.conform.plugins import x10_conformance as x10
+
+    (tmp_path / "conformance" / "suites").mkdir(parents=True)
+    doc = {
+        "schema": report.SCHEMA,
+        "capabilities_without_passing_test": ["secrets"],
+        "capabilities": {"secrets": {"passing": False, "verdict": "misconfigured"}},
+    }
+
+    def run(argv, timeout=120):
+        Path(argv[argv.index("--out") + 1]).write_text(json.dumps(doc))
+        return 2, ""
+
+    r = x10.x10(Context(tmp_path, run))
+    assert r.status == ERROR and "misconfigured for: secrets" in r.evidence
