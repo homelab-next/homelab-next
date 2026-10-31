@@ -305,7 +305,10 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   length of a key.
   Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
   redacted: the screener cannot tell a fixture from real data. Version numbers, dates, UUIDs,
-  hashes and commit ids in prose, CVE and ATT&CK ids are not. Private, loopback, link-local and
+  hashes and commit ids in prose, CVE and ATT&CK ids are not. A dotted quad counts as a version
+  only right after `v`, `ver`, `version` or `OID` as whole words; after `@` (`root@`, `git@`,
+  URL userinfo), a comparison operator (`==`, `!=`, `>=`) or a word such as `server` it is an
+  address (the leak scanner's wider version context is not used here). Private, loopback, link-local and
   CGNAT addresses are redacted unless the manifest sets `screen: {redact_private_ips: false}`.
   Screening is on by default; `screen: {redact: false, reason: ...}` opts out, and the reason is
   required. The pack's `screen` block records the settings, the screened sections and counts per
@@ -359,7 +362,11 @@ and threat vocabulary kept for external threats. Its single source is the packag
 `make check`), so every session pack carries the same text and the pack digest pins it.
 
 `access` and `terms` are reserved section names: a manifest that defines either is refused, so a
-manifest cannot replace or remove what the agent is told. The manifest's persona must be the profile's. Stable content is
+manifest cannot replace or remove what the agent is told. The manifest's persona must be the profile's,
+and `session_problems(manifest, profile)` must find nothing: a profile with
+`reads_untrusted: false` (an actor) is never given a `source: input` section (it receives a
+reader's validated output through a handoff, G-04), every manifest `tools` entry is an MCP server
+the profile is granted, and every manifest `memory_scopes` entry is one of the profile's. Stable content is
 never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
 `hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
 

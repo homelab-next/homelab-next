@@ -556,9 +556,8 @@ class Screener:
                 return  # zero-padded octets: a date or version, not an address
             # the context ends at the address: a short window keeps this linear (a search of
             # the whole prefix per address was quadratic); longer padding only redacts more
-            ctx = shapes.VERSION_CONTEXT_RE.search(text[max(0, m.start() - 32) : m.start()])
-            # the leak scanner's version context, except a lone "=": "src=<address>" is a value
-            if ctx and ctx.group(0).strip() != "=":
+            # not the leak scanner's wider context: "@", "==" and "server" precede addresses
+            if shapes.SCREEN_VERSION_CONTEXT_RE.search(text[max(0, m.start() - 32) : m.start()]):
                 return
         else:
             groups = [g for g in raw.split(":") if g]

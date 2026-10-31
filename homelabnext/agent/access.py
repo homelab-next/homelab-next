@@ -248,6 +248,38 @@ def render_access_block(block: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) -> list[str]:
+    """Why ``manifest`` may not feed a session of ``profile`` (empty: it may).
+
+    The manifest is bound to a persona and the profile declares what the agent may hold, so the
+    two are only both in hand here:
+
+    * an actor (``reads_untrusted: false``) is never given a ``source: input`` section, the raw
+      content a reader exists to turn into validated structured output (G-03/G-04);
+    * every manifest tool is an MCP server the profile is granted, so the pack never lists a tool
+      its own access block denies;
+    * every manifest memory scope is one of the profile's own ``memory_scopes``.
+    """
+    pid = profile.get("id")
+    problems: list[str] = []
+    if profile.get("reads_untrusted", True) is False:
+        raw = sorted(s["name"] for s in manifest.get("sections", []) if s.get("source") == "input")
+        if raw:
+            problems.append(
+                f"{pid} declares reads_untrusted: false, but the manifest feeds it untrusted "
+                f"input sections {raw}: an actor gets a reader's validated output, not raw input"
+            )
+    granted = set((profile.get("grants") or {}).get("mcp") or [])
+    extra = sorted(set(manifest.get("tools") or []) - granted)
+    if extra:
+        problems.append(f"manifest tools {extra} are not MCP servers {pid} is granted")
+    scopes = set(profile.get("memory_scopes") or [])
+    wider = sorted(set(manifest.get("memory_scopes") or []) - scopes)
+    if wider:
+        problems.append(f"manifest memory scopes {wider} are not {pid}'s memory_scopes")
+    return problems
+
+
 def start_session(
     manifest: Mapping[str, Any],
     inputs: Mapping[str, Any],
@@ -269,7 +301,7 @@ def start_session(
     The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
     either is refused, so a manifest cannot replace or remove what the agent is told about its
     access and about the project's terms and scope.  The profile's persona
-    must be the manifest's.  Stable content is never cut, so a block that does not fit
+    must be the manifest's, and :func:`session_problems` must find nothing.  Stable content is never cut, so a block that does not fit
     ``budget_chars`` defers the pack instead of being truncated.
     """
     _check_profile(profile)
@@ -283,6 +315,9 @@ def start_session(
             f"manifest persona {manifest.get('persona')!r} is not the profile's "
             f"{profile.get('persona')!r}"
         )
+    problems = session_problems(manifest, profile)
+    if problems:
+        raise SpecError("; ".join(problems))
     if knowledge is not None and (knowledge.profile, knowledge.profile_digest) != (
         profile["id"],
         profile["digest"],

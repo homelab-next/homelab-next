@@ -16,6 +16,7 @@ from homelabnext.agent import (
     assemble_pack,
     compile_profile,
     render_access_block,
+    session_problems,
     start_session,
 )
 from homelabnext.agent.access import level_of
@@ -113,6 +114,29 @@ def test_session_start_refuses_bad_inputs(profile, registry, what):
         del p["digest"]
     with pytest.raises(SpecError):
         start_session(m, inputs(), p, registry, runs_on=host)
+
+
+def test_an_actor_is_never_fed_raw_input_sections(registry):
+    actor = compile_profile({**spec(), "reads_untrusted": False}, library())
+    with pytest.raises(SpecError, match=r"reads_untrusted: false.*\['findings', 'memory'\]"):
+        start_session(manifest(), inputs(), actor, registry)
+    m = manifest()
+    m["sections"] = [s for s in m["sections"] if s["source"] != "input"]
+    m["must_cite"] = []
+    pack, _ = start_session(m, {**inputs(), "sections": {}}, actor, registry)
+    assert pack["status"] == "ready"
+    assert session_problems(m, actor) == []
+
+
+def test_manifest_tools_and_memory_scopes_stay_within_the_profile(profile, registry):
+    m = manifest()
+    m["tools"] = ["lake", "shell", "ssh"]
+    with pytest.raises(SpecError, match=r"manifest tools \['shell', 'ssh'\] are not MCP servers"):
+        start_session(m, inputs(), profile, registry)
+    m = manifest()
+    m["memory_scopes"] = ["analyst", "someone-else"]
+    with pytest.raises(SpecError, match=r"memory scopes \['someone-else'\]"):
+        start_session(m, inputs(), profile, registry)
 
 
 def test_a_block_that_does_not_fit_defers_instead_of_being_cut(profile, registry):

@@ -264,6 +264,27 @@ positives:
     type: ip
     text: ["The scanner was 192.0.2.200."]
     secrets: [192.0.2.200]
+  # "@", comparison operators and words ending in "ver"/"oid" are not version context here
+  - id: ipv4-after-user-at
+    type: ip
+    text: ["ssh root@192.0.2.21 then scp ops@198.51.100.22:/tmp/x ."]
+    secrets: [192.0.2.21, 198.51.100.22]
+  - id: ipv4-git-remote
+    type: ip
+    text: ["remote git@203.0.113.23:infra/repo.git"]
+    secrets: [203.0.113.23]
+  - id: ipv4-url-userinfo
+    type: ip
+    text: ["GET http://bob@192.0.2.24/admin"]
+    secrets: [192.0.2.24]
+  - id: ipv4-filter-operators
+    type: ip
+    text: ["ip.dst==198.51.100.25 && ip.src != 203.0.113.26 || addr>=192.0.2.27"]
+    secrets: [198.51.100.25, 203.0.113.26, 192.0.2.27]
+  - id: ipv4-after-ver-suffix-words
+    type: ip
+    text: ["server 192.0.2.28 and driver: 198.51.100.29 (avoid 203.0.113.30)"]
+    secrets: [192.0.2.28, 198.51.100.29, 203.0.113.30]
 
   # -------------------------------------------------------------- national ids
   - id: ssn-dashed
