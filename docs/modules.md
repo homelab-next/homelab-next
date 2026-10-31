@@ -1,6 +1,6 @@
 ---
 summary: 'Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.'
-summary_of: outline:sha256:102954101a771a44
+summary_of: outline:sha256:27050e1c0b4b6ecd
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Provider, feature and core modules: the module manifest
@@ -674,6 +674,43 @@ override the claim; only inert media types are accepted (`text/markdown`, `appli
 can leave the lab** (a role-table binding marked `leaves_lab`, model roles 1.3) needs
 `grants.cloud_models` (see [Trust tiers](#trust-tiers-what-selecting-a-module-grants)).
 
+### Egress points (ADR-0033 decision 13)
+
+Data leaves its store at the points below. `homelabnext.tlp_egress` is the shared check each of
+them is to apply before anything leaves; **no egress point calls it yet**, and wiring them is the
+next step. The check: the item's label is the strictest of the label it claims, the label recorded
+for it (`recorded` is a required argument, `NO_RECORD` for an item with none, so a caller cannot
+loosen an item by forgetting its record) and every TLP marker in its body; it leaves only at or
+below the destination's ceiling (`egress_check`). A body is read after folding look-alike and
+hidden characters (NFKC, format characters dropped); bytes are read as UTF-8, a mapping or a list
+leaf by leaf with its keys, and a body that cannot be scanned is `red`. A marker is `TLP:` and a
+word in any ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label
+word; any other spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
+
+| Egress point | Its ceiling comes from | What lets a module use it today |
+|---|---|---|
+| the publishing gate (the static host) | `tlp_allowed` (`clear`, `green` for a community audience) | `grants.publish` |
+| the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown |
+| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` |
+| enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) |
+| notification channels | the channel's reader ceiling | `cap:notify` (a send class) |
+| webhooks | the receiver's ceiling | `grants.egress` |
+| backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) |
+| the bus | its subscribers' ceilings | `cap:events` |
+| records and tickets (ADR-0010, ADR-0020) | their readers' ceilings | `cap:records`, `cap:cases` |
+| memory and embedding stores | their readers' ceilings | the agent's memory grants |
+| generated pages committed to a repository | `clear` for the public repository (ADR-0011) | not a module grant: the leak scans |
+| logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners |
+
+What is enforced today is the reach, not the content: a module reaches beyond the lab only through
+a grant the overlay gives (`grants.egress` for any host role's network egress, `grants.publish` for
+the static host, `grants.cloud_models` for a model role that leaves the lab). The ADR's rule that
+an egress capability not on this list is refused like `grants.publish` is not implemented yet. An
+enrichment lookup is labelled by the records that cause it (`job_label`: their strictest label,
+`red` with none, raised to the submitter's ceiling) and is to be sent only to analyzers whose
+declared maximum admits it; an analyzer with no maximum, or one that is not a canonical label, is
+sent nothing.
+
 ### TLP labels (ADR-0033)
 
 Data is labelled with TLP 2.0 ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)):
@@ -799,7 +836,10 @@ and with lake readers selected, it notes that no row is filtered by its label.
 
 A principal matching several rules (a user in a group) gets the first, so user rules come before
 group rules and each tier runs from the lowest ceiling up: the most restrictive applies, whatever
-order the list was written in. A principal no rule names reads nothing. An operator step: the
+order the list was written in. One exception to "most restrictive": a principal that has an entry
+of its own (`user:`, `profile:` or `module:`) is judged by that entry, even when it is also in a
+group with a stricter one, because user rules come before group rules; give such a principal the
+ceiling it should have in its own entry. A principal no rule names reads nothing. An operator step: the
 lake-query adapter must sign each reader in to the engine as the user named by its whole reader id
 (`profile:x`, `module:y`, `user:alice`), and a `group:` reader is the engine group named after the
 colon. Any change to the list or the catalog is human-approve (`hnx site review-tier`).

@@ -56,9 +56,15 @@ One writer per `(table, source)` is assumed.
   spelling. The column is optional in the schema, so a row stored before it existed stays valid.
   `tables.row_label` reads only a canonical stored value as its label; a row without one, or with
   any other value (an alternate spelling such as `white` or `Green` that a writer bypassing the
-  lake stored, a damaged value), is `red`. Until the backfill migration exists, a swap cannot
+  lake stored, a damaged value), is `red`. Until the backfill below has run, a swap cannot
   shadow-start from a lake whose rows predate the column: the copy is refused, as any write
   without a label is.
+* The one-off TLP backfill of rows stored before the column (ADR-0033 decision 5) is a plan, never
+  an execution: `backfill.plan` (and `hnx modules tlp-backfill`, from render's
+  `tlp-sources.json`) prints the statements in order. It adds the column, labels a row by its
+  recorded source's declaration (`red` for a source whose items' own labels were never stored),
+  gives every other row the strictest source's label, and touches only rows still unlabelled, so a
+  second run changes nothing.
 * Reading at a TLP ceiling (ADR-0033 decision 6): `ceiling.CeilingReader(lake, ceiling, schemas)`
   builds its own `SELECT` (validated columns, `where` values bound as parameters, a bounded
   `LIMIT`), adds the ceiling's row filter and checks each returned row's label, so a row above the
