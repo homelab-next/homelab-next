@@ -210,6 +210,7 @@ lab_table_namespaces:
 - namespace: archive
 - namespace: scratch
   why: ad hoc analysis tables, dropped by hand
+lake_catalog: lake
 tlp_readers:
 - reader: module:external-collector
   ceiling: red

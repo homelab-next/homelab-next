@@ -211,6 +211,7 @@ lab_table_namespaces:
   why: the lab's own long-term copies of retired tables
 - namespace: scratch
   why: ad hoc analysis tables, dropped by hand
+lake_catalog: lake
 tlp_readers:
 - reader: module:external-collector
   ceiling: red

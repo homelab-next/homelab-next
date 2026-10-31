@@ -617,6 +617,16 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["tlp_readers"][0].pop("why"),
         "Every lake reader says who it is and why it needs its ceiling.",
     ),
+    "tlp-reader-write-not-boolean": (
+        "full",
+        lambda d: d["tlp_readers"][2].__setitem__("write", "yes"),
+        "A reader writes rows only with write: true.",
+    ),
+    "tlp-readers-without-catalog": (
+        "full",
+        lambda d: d.pop("lake_catalog"),
+        "The readers' access rules name the lake catalog they reach.",
+    ),
     "tlp-reader-not-an-id": (
         "full",
         lambda d: d["tlp_readers"][0].__setitem__("reader", "everyone"),

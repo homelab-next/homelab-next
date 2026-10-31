@@ -110,6 +110,8 @@ FIELDS = {
     "scope.exclude": "the carve-outs every reader honours",
     "grants": "what a selected module may do beyond its own slot",
     "lab_table_namespaces": "a table in a listed namespace is the lab's own and is never judged",
+    "tlp_readers": "which TLP ceiling each lake reader gets: raising one shows it more (ADR-0033)",
+    "lake_catalog": "the catalog every lake reader's access rules reach",
     "selection": "hosts (addresses, isolated), slots, features, core and providers and their "
     "placement decide what runs where and what it may reach",
 }
@@ -438,7 +440,8 @@ def _selection_rest(o: dict, n: dict) -> list[Change]:
             if len(parts) >= 3 and parts[0] == "hosts" and parts[2] == "capacity":
                 changes.append(Change(path, OWNER, SELECTION_OWNER["hosts.*.capacity"]))
             else:
-                changes.append(Change(path, HUMAN, f"{how}: {FIELDS['selection']}"))
+                why = FIELDS[k] if k in ("tlp_readers", "lake_catalog") else FIELDS["selection"]
+                changes.append(Change(path, HUMAN, f"{how}: {why}"))
     return changes
 
 

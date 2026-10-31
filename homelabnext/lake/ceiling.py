@@ -44,8 +44,13 @@ class CeilingReader:
         if type(ceiling) is not tlp.Label:
             raise TypeError(f"ceiling must be a Label, not {type(ceiling).__name__}")
         self._lake = lake
-        self.ceiling = ceiling
+        self._ceiling = ceiling
         self._schemas = dict(schemas)
+
+    @property
+    def ceiling(self) -> tlp.Label:
+        """The ceiling this reader reads at (fixed when it is made)."""
+        return self._ceiling
 
     def select(
         self,
@@ -58,13 +63,15 @@ class CeilingReader:
         """Rows of ``table`` at or below the ceiling: ``columns`` (default all) where each
         ``where`` column equals its value.  ``tlp`` is always selected, so every row says its
         label."""
-        schema = self._schemas.get(table)
+        schema = self._schemas.get(table) if type(table) is str else None
         if schema is None:
             raise CeilingError(f"unknown table {table!r}")
         if not schema.labelled and self.ceiling is not tlp.Label.RED:
             raise CeilingError(f"{table}: has no {LABEL_COLUMN} column; only red reads it")
         known = set(schema.column_names)
         cols = list(columns) if columns is not None else list(schema.column_names)
+        if not cols:
+            raise CeilingError(f"{table}: select at least one column")
         bad = [c for c in [*cols, *(where or {})] if type(c) is not str or c not in known]
         if bad:
             raise CeilingError(f"{table}: not its columns: {bad!r}")

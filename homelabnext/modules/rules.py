@@ -1408,7 +1408,8 @@ def lake_readers(sel: dict[str, Doc]) -> dict[str, str]:
             out[f"module:{mid}"] = f"module {mid}"
         for agent in doc.get("contributes", {}).get("agents", []) or []:
             if any(n.get("cap") == LAKE_QUERY for n in agent.get("needs", []) or []):
-                out[str(agent.get("profile"))] = f"{mid}'s agent {agent.get('key')}"
+                profile = agent.get("profile") or f"profile:{agent.get('key')}"
+                out[str(profile)] = f"{mid}'s agent {agent.get('key')}"
     return out
 
 
@@ -1419,6 +1420,8 @@ def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
     if "tlp_readers" not in site:
         return []
     out: list[str] = []
+    if not isinstance(site.get("lake_catalog"), str):
+        out.append("tlp_readers: lake_catalog names the lake catalog the readers' rules reach")
     seen: set[str] = set()
     for entry in site.get("tlp_readers") or []:
         if not isinstance(entry, dict):

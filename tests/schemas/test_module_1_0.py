@@ -1110,6 +1110,8 @@ SELECTION_NEGATIVES = {
     "tlp-reader-unknown-ceiling": "tlp_readers/0/ceiling",
     "tlp-reader-without-why": "tlp_readers/0",
     "tlp-reader-not-an-id": "tlp_readers/0/reader",
+    "tlp-reader-write-not-boolean": "tlp_readers/2/write",
+    "tlp-readers-without-catalog": "$",
 }
 
 

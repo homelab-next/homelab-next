@@ -1577,7 +1577,14 @@ def module_selection_schema() -> dict[str, Any]:
             "scope": scope,
             "lab_table_namespaces": lab_namespaces,
             "tlp_readers": tlp_readers,
+            "lake_catalog": pat(
+                "[a-z][a-z0-9_]{0,62}",
+                "The query engine's name for the lake catalog: the only catalog lake-access.json "
+                "lets a reader reach (required with tlp_readers).",
+                63,
+            ),
         },
+        "dependentRequired": {"tlp_readers": ["lake_catalog"]},
         "$defs": {"scope_entry": scope_entry_schema(), "scope_source": scope_source_schema()},
     }
 

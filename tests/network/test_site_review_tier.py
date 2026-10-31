@@ -697,3 +697,22 @@ def test_a_path_outside_the_root_is_human(lab):
     root, base = lab
     (r,), _ = rt.review(root, base, site="../x.yml")
     assert r.tier == rt.HUMAN and "fail closed" in r.changes[0].why
+
+
+def test_every_change_to_a_lake_reader_ceiling_is_human():
+    """ADR-0033 decision 6: raising a ceiling shows a reader more, lowering one can blind a
+    pipeline; both, and the catalog the rules reach, are a human's call."""
+    base = {
+        **_sel(SCOPE),
+        "lake_catalog": "lake",
+        "tlp_readers": [{"reader": "group:soc", "ceiling": "green", "why": "w"}],
+    }
+    for change in (
+        {"tlp_readers": [{"reader": "group:soc", "ceiling": "red", "why": "w"}]},
+        {"tlp_readers": [{"reader": "group:soc", "ceiling": "clear", "why": "w"}]},
+        {"tlp_readers": []},
+        {"lake_catalog": "other"},
+    ):
+        got = rt.scope_changes(base, {**base, **change})
+        assert got and {c.tier for c in got} == {rt.HUMAN}, change
+        assert all("TLP ceiling" in c.why or "catalog" in c.why for c in got), got

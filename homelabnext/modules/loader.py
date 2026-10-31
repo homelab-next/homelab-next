@@ -1482,6 +1482,11 @@ def check(
     except KeyError:
         return Report(sorted(set(problems)), notes)  # site_problems reported it
     problems += pair_problems(sel)
+    if "tlp_readers" not in site and mr.lake_readers(sel):
+        notes.append(
+            "the lake's readers have no TLP ceilings (tlp_readers): render writes no "
+            "lake-access.json, and the query engine filters no row by its label"
+        )
     fetched = [n for n, m in sel.items() if m.get("origin", {}).get("kind") != "in-tree"]
     if lock is not None or fetched:
         the_lock = lock

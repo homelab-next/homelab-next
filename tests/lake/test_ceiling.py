@@ -115,3 +115,13 @@ def test_row_filter_sql():
         tlp.row_filter_sql(Label.GREEN, "tlp); DROP TABLE x; --")
     with pytest.raises(TypeError):
         tlp.at_or_below("green")
+
+
+def test_the_ceiling_is_fixed_and_odd_arguments_are_refused(lake):
+    reader = CeilingReader(lake, Label.CLEAR, SCHEMAS)
+    with pytest.raises(AttributeError):
+        reader.ceiling = Label.RED
+    with pytest.raises(CeilingError, match="unknown table"):
+        reader.select(["authentication"])
+    with pytest.raises(CeilingError, match="at least one column"):
+        reader.select("authentication", [])
