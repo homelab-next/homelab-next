@@ -150,7 +150,10 @@ items go `stale` after the source's `stale_after_s`, like any other reading.
 in its own thread under its own `timeout_s`: a pass takes at most the longest timeout, and a hung
 or raising source is an error for itself only. A source whose previous poll is still running is
 not started again (no thread pile-up). `--notify-topic T` pages transitions through the
-registry's `notify` service; with `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
+registry's `notify` service, at the channel's TLP ceiling (`--notify-ceiling LABEL`, default `red`; a
+message labelled above it, or claiming no label while the ceiling is below `red`, is replaced by a
+content-free "withheld" notice: [modules](modules.md#egress-points-adr-0033-decision-13)); with
+`--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
 also writes the pairs it holds to `DIR/status/pairs.json` for the module census
 ([modules](modules.md#the-loader-at-deploy-time), "Notify pairs"; the census reads
 `/var/lib/homelabnext/notify-pairs`, and counts a status record for 900 s after the pass that

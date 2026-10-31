@@ -219,9 +219,10 @@ def test_serve_pages_through_ntfy_with_a_token_by_secret_reference(tmp_path, mon
     )  # fmt: skip
     svc = _service(args)
     assert svc.notifier is not None and svc._scoped, "per-agent budgets"
-    req = svc.notifier.sender.build_request(Message(key="k", title="t", body="b"))
+    req = svc.notifier.sender.inner.build_request(Message(key="k", title="t", body="b"))
     assert req.full_url == f"{override}/broker"
     assert req.get_header("Authorization") == "Bearer fake-ntfy-token-3c1"
+    assert str(svc.notifier.sender.ceiling) == "red", "the channel ceiling defaults to red"
     assert "fake-ntfy-token-3c1" not in repr(vars(args))
     with pytest.raises(ValueError, match="secret reference"):
         notifier_from_args(argparse.Namespace(**{**vars(args), "notify_token": "fake-literal"}))
@@ -310,10 +311,10 @@ def test_the_notify_topic_can_stay_out_of_the_process_list(tmp_path, monkeypatch
     (tmp_path / "topic").write_text("hnx-ops-7f3\n")
     n = notifier_from_args(_notify_args(tmp_path, notify_topic=None, notify_token=None,
                                         notify_topic_file=str(tmp_path / "topic")))  # fmt: skip
-    assert n.sender.default_topic == "hnx-ops-7f3"
+    assert n.sender.inner.default_topic == "hnx-ops-7f3"
     monkeypatch.setenv("HNX_BROKER_NOTIFY_TOPIC", "from-env")
     n = notifier_from_args(_notify_args(tmp_path, notify_topic=None, notify_token=None))
-    assert n.sender.default_topic == "from-env"
+    assert n.sender.inner.default_topic == "from-env"
 
 
 def test_a_failed_notification_is_logged_at_most_every_few_minutes(tmp_path, caplog):
