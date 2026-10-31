@@ -1107,6 +1107,9 @@ SELECTION_NEGATIVES = {
     "cloud-model-not-a-role": "grants/cloud_models/publishing/0",
     "lab-namespace-without-why": "lab_table_namespaces/0",
     "lab-namespace-not-a-name": "lab_table_namespaces/0/namespace",
+    "tlp-reader-unknown-ceiling": "tlp_readers/0/ceiling",
+    "tlp-reader-without-why": "tlp_readers/0",
+    "tlp-reader-not-an-id": "tlp_readers/0/reader",
 }
 
 
@@ -1539,6 +1542,10 @@ def test_a_provider_agent_is_bound_under_providers():
     site["providers"] = {
         "example-lake": {"agents": {"example-lake-curator": {"lanes": {"real": "platform"}}}}
     }
+    # the copied agent reads the lake, so the site gives it a ceiling (ADR-0033 decision 6)
+    site["tlp_readers"].append(
+        {"reader": "profile:example-lake-curator", "ceiling": "red", "why": "the lake's curator"}
+    )
     assert site_problems(site, mods) == []
     assert sc.errors_for(SELECTION, site, REG) == []
 

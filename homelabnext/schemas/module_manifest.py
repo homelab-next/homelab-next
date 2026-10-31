@@ -1515,6 +1515,33 @@ def module_selection_schema() -> dict[str, Any]:
         "is a problem; without it such a table is not judged. A namespace that is a module id's "
         "(the id with - read as _), the core's, or listed twice is refused (loader).",
     )
+    tlp_readers = arr(
+        obj(
+            {
+                "reader": pat(
+                    "(?:profile|module|user|group):[a-z0-9][a-z0-9._-]{0,62}",
+                    "Who reads the lake: an agent profile, a module (its query consumer), or a "
+                    "person or group signing in to the query engine.",
+                    80,
+                ),
+                "ceiling": {
+                    "enum": list(LABELS),
+                    "description": "The most restrictive TLP label this reader receives (ADR-0033 decision 6).",
+                },
+                "write": {
+                    "type": "boolean",
+                    "description": "Also writes rows (a pipeline's writer); only a red reader may.",
+                },
+                "why": text(200, "Who this is and why it needs this ceiling."),
+            },
+            ["reader", "ceiling", "why"],
+        ),
+        "Every reader of the lake with its TLP ceiling (ADR-0033 decision 6). With the list, every "
+        "selected module that requires or prefers cap:lake-query, and every selected agent that "
+        "needs it, must be listed, and hnx modules render writes the query engine's row filters "
+        "(lake-access.json): a reader not listed reads nothing. A reader listed twice, or one that "
+        "writes below red, is refused (loader). Any change to it is human-approve.",
+    )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
@@ -1549,6 +1576,7 @@ def module_selection_schema() -> dict[str, Any]:
             "grants": grants,
             "scope": scope,
             "lab_table_namespaces": lab_namespaces,
+            "tlp_readers": tlp_readers,
         },
         "$defs": {"scope_entry": scope_entry_schema(), "scope_source": scope_source_schema()},
     }

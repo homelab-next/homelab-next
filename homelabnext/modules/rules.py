@@ -820,6 +820,7 @@ def site_problems(
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
+    out += tlp_reader_problems(site, sel)
     for m in sel.values():
         for need in m["requires"].get("scope", []):
             try:
@@ -1391,3 +1392,50 @@ def dataset_label(ds: dict[str, Any]) -> tuple[tlp.Label, bool]:
     if "tlp" not in ds:
         return tlp.Label.RED, False
     return tlp.parse(ds["tlp"]), ds.get("honour_item_labels") is True
+
+
+#: the slot whose consumers read the lake (ADR-0033 decision 6)
+LAKE_QUERY = "cap:lake-query"
+
+
+def lake_readers(sel: dict[str, Doc]) -> dict[str, str]:
+    """Every lake reader the selected modules hold, reader id -> what it is: each module that
+    requires or prefers ``cap:lake-query`` (``module:<id>``) and each of its agents that needs it
+    (``profile:<id>``)."""
+    out: dict[str, str] = {}
+    for mid, doc in sel.items():
+        if any(c.get("cap") == LAKE_QUERY for c in _caps(doc)):
+            out[f"module:{mid}"] = f"module {mid}"
+        for agent in doc.get("contributes", {}).get("agents", []) or []:
+            if any(n.get("cap") == LAKE_QUERY for n in agent.get("needs", []) or []):
+                out[str(agent.get("profile"))] = f"{mid}'s agent {agent.get('key')}"
+    return out
+
+
+def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
+    """The selection's ``tlp_readers`` (ADR-0033 decision 6): a reader listed twice, a label that
+    is not canonical, a writer below red, and, when the list is declared, a lake reader of the
+    selected modules it leaves out (that reader would read nothing)."""
+    if "tlp_readers" not in site:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in site.get("tlp_readers") or []:
+        if not isinstance(entry, dict):
+            out.append("tlp_readers: an entry is not a mapping")
+            continue
+        reader = entry.get("reader")
+        if reader in seen:
+            out.append(f"tlp_readers: {reader} is listed twice")
+        seen.add(reader)
+        if entry.get("ceiling") not in tlp.LABELS:
+            out.append(f"tlp_readers: {reader}: ceiling {entry.get('ceiling')!r} is not a label")
+        elif entry.get("write") is True and entry["ceiling"] != "red":
+            out.append(f"tlp_readers: {reader} writes rows, so its ceiling is red")
+    for reader, what in sorted(lake_readers(sel).items()):
+        if reader not in seen:
+            out.append(
+                f"tlp_readers: {reader} ({what}) reads the lake but has no ceiling: "
+                "it would read nothing"
+            )
+    return out
