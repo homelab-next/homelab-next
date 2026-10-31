@@ -492,3 +492,17 @@ def test_lane_usage_shows_each_actors_share_of_a_shared_lane(tmp_path):
     write(files, tmp_path, ACTOR, {"name": "a.md", "content": "x"}, NOW, ledger=tmp_path / "l")
     [row] = usage(files, tmp_path, ledger=tmp_path / "l")
     assert row["actors"] == {ACTOR: {"files": 1, "bytes": 1, "used": 0.5, "warn": False}}
+
+
+def test_the_broker_matches_profiles_with_the_schemas_profile_id():
+    """The profile pattern was written out twice in the broker (and once more in the schema);
+    the one copy left must stay the schema's ``profile_id``."""
+    import json
+    from pathlib import Path
+
+    from homelabnext.broker import lanes, service
+
+    ids = Path(__file__).resolve().parents[2] / "schemas" / "ids" / "logical-id.schema.json"
+    want = json.loads(ids.read_text())["$defs"]["profile_id"]["pattern"]
+    assert lanes.PROFILE_RE.pattern.replace("(", "", 1).replace(")$", "$") == want
+    assert not hasattr(service, "_PROFILE_RE")

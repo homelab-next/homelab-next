@@ -65,6 +65,7 @@ from datetime import datetime
 from typing import Any
 
 from homelabnext._http import content_length
+from homelabnext.broker import approval_note_max
 from homelabnext.broker.state import is_id
 
 from .agents.auth import AccessLog, Decision, authorize
@@ -78,7 +79,7 @@ PAGE = "/approvals"
 DECIDE = "/approvals/decide"
 TOKEN_TTL_S = 1800
 MAX_FORM_BYTES = 8192
-MAX_NOTE = 2000
+MAX_NOTE = approval_note_max()  # the approval schema's limit: one source
 RECENT = 20
 FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}
