@@ -21,5 +21,6 @@
     "T1110",
     "T1110.001"
   ],
-  "host_name": "srv-01.example.internal"
+  "host_name": "srv-01.example.internal",
+  "tlp": "red"
 }

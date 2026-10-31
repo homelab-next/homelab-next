@@ -25,5 +25,6 @@
   "logon_type_id": 3,
   "auth_protocol": "ssh",
   "is_mfa": false,
-  "message": "login ok"
+  "message": "login ok",
+  "tlp": "red"
 }

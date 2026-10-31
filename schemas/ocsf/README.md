@@ -24,6 +24,11 @@ Conventions
 * The `x-lake` block carries what JSON Schema cannot: `table`, `key` (the **content key**, `uid`,
   used for idempotent replay), `time_column`, `partition` (`day(time)`), `ocsf_class_uid`,
   `ocsf_version`.
+* `tlp` (1.1) is the row's TLP 2.0 label (ADR-0033 decision 5), a top-level string column limited
+  to the five canonical spellings. It labels the **row**, set by the writer from the source's
+  declaration; it is not OCSF's `osint.tlp`, which is the label an intelligence source gave one
+  indicator. The column is optional in the schema (a row written before 1.1 has none and reads as
+  `red`), and the lake refuses every new row without one.
 * Timestamps need an explicit offset. Detections are referenced by logical id (`det:...`), never an
   engine rule number.
 * Each schema has examples (`examples/`) that validate and negatives (`negative/`) that must not.

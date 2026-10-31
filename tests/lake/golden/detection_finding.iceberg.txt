@@ -15,3 +15,4 @@
 18: confidence_id: long
 19: attack_techniques: list<string>
 21: host_name: string
+22: tlp: string

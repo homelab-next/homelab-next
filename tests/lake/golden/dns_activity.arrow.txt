@@ -13,3 +13,4 @@ query_hostname: string not null
 query_type: string
 rcode_id: int64
 answers: list<element: string>
+tlp: string

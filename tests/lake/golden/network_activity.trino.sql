@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS "lake"."ocsf"."network_activity" (
     "connection_uid" VARCHAR,
     "direction_id" BIGINT,
     "bytes_in" BIGINT,
-    "bytes_out" BIGINT
+    "bytes_out" BIGINT,
+    "tlp" VARCHAR
 )
 WITH (
     format = 'PARQUET',

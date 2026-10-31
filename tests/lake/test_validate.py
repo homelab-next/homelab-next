@@ -116,3 +116,59 @@ def test_an_int_too_long_to_print_is_still_a_row_problem(sign):
         normalize_rows(v, [doc])
     with pytest.raises(RowRejected, match=r"activity_id: a .*16610-bit integer is outside"):
         normalize_rows(S, [row(activity_id=huge)])
+
+
+# ---------------------------------------------------------------- the row's TLP label (ADR-0033)
+def test_every_table_is_labelled_with_the_five_labels():
+    from homelabnext import tlp
+    from homelabnext.lake import load_schemas
+
+    for s in load_schemas().values():
+        assert s.labelled and s.column("tlp").enum == tlp.LABELS
+
+
+@pytest.mark.parametrize("label", ["clear", "green", "amber", "amber+strict", "red"])
+def test_a_row_with_a_label_is_written(label):
+    assert normalize_rows(S, [row(tlp=label)])[0]["tlp"] == label
+
+
+@pytest.mark.parametrize("missing", [{"tlp": None}, "drop"])
+def test_a_row_without_a_label_is_refused(missing):
+    r = row()
+    if missing == "drop":
+        r.pop("tlp")
+    else:
+        r.update(missing)
+    with pytest.raises(RowRejected, match="written with its TLP label"):
+        normalize_rows(S, [r])
+
+
+@pytest.mark.parametrize("bad", ["TLP:AMBER", "Amber", "white", "amber-strict", "black", "", 3])
+def test_only_a_canonical_label_is_written(bad):
+    # the writer normalises (homelabnext.tlp) before it writes; the lake stores one spelling
+    with pytest.raises(RowRejected, match="tlp"):
+        normalize_rows(S, [row(tlp=bad)])
+
+
+def test_one_unlabelled_row_refuses_the_whole_batch():
+    rows = [row(uid="a-1", tlp="clear"), row(uid="a-2", tlp=None)]
+    with pytest.raises(RowRejected, match="row 1 tlp"):
+        normalize_rows(S, rows)
+
+
+@pytest.mark.parametrize(
+    "stored, want",
+    [
+        ({"tlp": "green"}, "green"),
+        ({"tlp": "amber+strict"}, "amber+strict"),
+        ({}, "red"),  # a row stored before the column existed
+        ({"tlp": None}, "red"),
+        ({"tlp": "Green"}, "green"),  # read as data: an accepted spelling
+        ({"tlp": "gren"}, "red"),
+        ("not a row", "red"),
+    ],
+)
+def test_a_stored_row_reads_its_label_or_red(stored, want):
+    from homelabnext.lake.tables import row_label
+
+    assert str(row_label(stored)) == want

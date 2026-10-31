@@ -14,5 +14,6 @@ CREATE TABLE IF NOT EXISTS "authentication" (
     "dst_endpoint" TEXT,
     "logon_type_id" INTEGER,
     "auth_protocol" TEXT,
-    "is_mfa" INTEGER
+    "is_mfa" INTEGER,
+    "tlp" TEXT
 );

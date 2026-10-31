@@ -14,5 +14,6 @@ CREATE TABLE IF NOT EXISTS "authentication" (
     "dst_endpoint" STRUCT("ip" VARCHAR, "port" BIGINT, "hostname" VARCHAR),
     "logon_type_id" BIGINT,
     "auth_protocol" VARCHAR,
-    "is_mfa" BOOLEAN
+    "is_mfa" BOOLEAN,
+    "tlp" VARCHAR
 );

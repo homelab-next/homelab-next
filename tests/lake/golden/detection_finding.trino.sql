@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS "lake"."ocsf"."detection_finding" (
     "risk_score" BIGINT,
     "confidence_id" BIGINT,
     "attack_techniques" ARRAY(VARCHAR),
-    "host_name" VARCHAR
+    "host_name" VARCHAR,
+    "tlp" VARCHAR
 )
 WITH (
     format = 'PARQUET',

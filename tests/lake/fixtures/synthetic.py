@@ -8,6 +8,8 @@ from typing import Any
 
 BASE = datetime(2026, 3, 1, 0, 0, 0, tzinfo=UTC)
 META = {"version": "1.3.0", "product": "example-sensor", "log_source": "sensor-a"}
+#: every TLP label, so each table stores all five (ADR-0033 decision 5)
+TLPS = ("clear", "green", "amber", "amber+strict", "red")
 USERS = ["alice", "bob", "carol", "dave", "erin"]
 HOSTS = [f"srv-{i:02d}.example.internal" for i in range(1, 5)]
 
@@ -23,6 +25,7 @@ def authentication(n: int = 60) -> list[dict[str, Any]]:
         rows.append(
             {
                 "uid": f"auth-{i:06d}",
+                "tlp": TLPS[i % len(TLPS)],
                 "time": _t(7 * i),
                 "class_uid": 3002,
                 "category_uid": 3,
@@ -53,6 +56,7 @@ def network_activity(n: int = 40) -> list[dict[str, Any]]:
         rows.append(
             {
                 "uid": f"net-{i:06d}",
+                "tlp": TLPS[i % len(TLPS)],
                 "time": _t(11 * i + 1),
                 "class_uid": 4001,
                 "category_uid": 4,
@@ -76,6 +80,7 @@ def dns_activity(n: int = 30) -> list[dict[str, Any]]:
     return [
         {
             "uid": f"dns-{i:06d}",
+            "tlp": TLPS[i % len(TLPS)],
             "time": _t(13 * i + 2),
             "class_uid": 4003,
             "category_uid": 4,
@@ -96,6 +101,7 @@ def detection_finding(n: int = 12) -> list[dict[str, Any]]:
     return [
         {
             "uid": f"det-{i:06d}",
+            "tlp": TLPS[i % len(TLPS)],
             "time": _t(37 * i + 3),
             "class_uid": 2004,
             "category_uid": 2,
@@ -118,6 +124,7 @@ def vulnerability_finding(n: int = 12) -> list[dict[str, Any]]:
     return [
         {
             "uid": f"vuln-{i:06d}",
+            "tlp": TLPS[i % len(TLPS)],
             "time": _t(41 * i + 4),
             "class_uid": 2002,
             "category_uid": 2,

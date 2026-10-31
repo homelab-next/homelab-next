@@ -14,3 +14,4 @@ dst_endpoint: struct<ip: string, port: int64, hostname: string>
 logon_type_id: int64
 auth_protocol: string
 is_mfa: bool
+tlp: string

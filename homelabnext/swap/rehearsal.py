@@ -37,7 +37,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext.lake.base import normalize_rows
 from homelabnext.parity import ParityQuery, RowRules, compare_queries
 
@@ -113,6 +113,7 @@ def seed_rows(n_auth: int = 36, n_dns: int = 12) -> dict[str, list[dict[str, Any
                 "logon_type_id": 3,
                 "auth_protocol": "ssh",
                 "is_mfa": i % 2 == 0,
+                "tlp": tlp.LABELS[i % len(tlp.LABELS)],
             }
         )
     dns = []
@@ -131,6 +132,7 @@ def seed_rows(n_auth: int = 36, n_dns: int = 12) -> dict[str, list[dict[str, Any
                 "query_type": ("A", "AAAA", "TXT")[i % 3],
                 "rcode_id": 0,
                 "answers": [_addr("203.0.113", i + 1)] if i % 3 != 2 else [],
+                "tlp": tlp.LABELS[i % len(tlp.LABELS)],
             }
         )
     return {"authentication": auth, "dns_activity": dns}

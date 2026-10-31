@@ -14,3 +14,4 @@
 23: logon_type_id: long
 24: auth_protocol: string
 25: is_mfa: boolean
+26: tlp: string
