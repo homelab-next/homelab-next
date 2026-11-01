@@ -539,9 +539,7 @@ def test_no_tailscale_binding_means_an_empty_policy(tmp_path):
 
 
 # ---------------------------------------------------------------- the example lab's playbook
-@pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+@pytest.mark.requires_tool("ansible-playbook")
 def test_the_example_labs_playbook_passes_ansible_syntax_check(tmp_path):
     f = fleet_at(EXAMPLE, EXAMPLE_SITE)
     for target in ("baseline-playbook", "inventory"):

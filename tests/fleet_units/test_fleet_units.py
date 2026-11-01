@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -137,7 +136,7 @@ def test_duplicate_and_empty_specs_refused():
             fu.render(bad)
 
 
-@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="systemd-analyze not installed")
+@pytest.mark.requires_tool("systemd-analyze")
 def test_calendar_expressions_parse_with_systemd_analyze():
     for e in yaml.safe_load(SPEC.read_text()):
         cals = e["on_calendar"] if isinstance(e["on_calendar"], list) else [e["on_calendar"]]

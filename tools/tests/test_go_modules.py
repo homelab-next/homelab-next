@@ -4,7 +4,6 @@ module at <module>/tools/go.mod belongs to its module); Go outside every module,
 go.mod and a go.work fail instead of hiding code from the job."""
 
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -67,7 +66,7 @@ def test_go_that_no_module_covers_or_a_workspace_is_a_problem(files, links, why)
     assert len(found) == 1 and why in found[0], found
 
 
-git_missing = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+git_missing = pytest.mark.requires_tool("git")
 
 
 def _repo(tmp_path: Path, layout: dict[str, str]) -> Path:
