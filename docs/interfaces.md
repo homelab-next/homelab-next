@@ -56,8 +56,8 @@ homelabnext/
   lake/         query, catalog, write, fakes        (W3)   extras: lake, trino
   notify/       state-diffed, dedup-keyed send      (W5)   core
   state/        cursors and history, atomic writes  (W5)   core
-  records/      propose/finding/completion          (W5)   core (+ records for pydantic)
-  decide/       decision specs, replay, eval        (W7)   extra: decide
+  records/      propose/finding/completion          (W5)   core (the records extra is unused)
+  decide/       decision specs, replay, eval        (W7)   core (the decide extra is unused)
   golden/       golden-task format and runner       (W7)   core
   models/       model store manifest, serving plan  (ADR-0023)  core (+ yaml for the serving spec)
   paths.py      locates schemas/, profiles/, examples/  (W16)  core
