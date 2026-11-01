@@ -1,6 +1,6 @@
 ---
-summary: 'The event seam: the CloudEvents-style envelope, validation, the idempotent publisher, forwarder contract, consumers, seam contract tests, deploy events.'
-summary_of: outline:sha256:faf60060e76d62bb
+summary: 'The event seam: what goes on the bus, the envelope, validation, the idempotent publisher, forwarder contract, consumers, contract tests, deploy events.'
+summary_of: outline:sha256:5032ecc0072ea895
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Events: envelope, validation and the idempotent publisher
@@ -8,13 +8,47 @@ summary_of: outline:sha256:faf60060e76d62bb
 `homelabnext.events` is the client side of the event seam. Schemas: `schemas/events/` (a
 CloudEvents 1.0 compatible envelope plus the reaction-seam types).
 
-* **Publishers never speak the bus.** They hand the envelope to a *forwarder* over HTTP
+* **Publishers do not speak the bus.** They hand the envelope to a *forwarder* over HTTP
   (`HttpForwarder`); what sits behind the forwarder (a broker, a queue, a file) is its business.
+  The one exception is a transactional outbox relay, which publishes through the `EventBus`
+  protocol (`conformance/protocols/events.py`): the broker's `hnx broker relay`
+  ([docs/broker.md](broker.md#publishing-events-the-outbox-relay)). ADR-0009 names both paths;
+  the event id is the idempotency key on each.
 * **`build_event` / `validate_event`** check the envelope and, when one exists, the per-type schema
   (`homelabnext.task.queued` -> `schemas/events/task.queued.schema.json`). Unknown types are checked
   against the envelope only.
 * **The `id` is the idempotency key.** `derive_event_id(type, source, dedupe_key)` makes it a pure
   function of the event's identity, so the same occurrence always has the same id.
+
+## What goes on the bus
+
+ADR-0009 allows three classes of event on the bus: **reaction** triggers (something reacts to the
+occurrence), per-item **record**s (one low-volume event per item or item version, never a metrics
+or log stream) and **decision** events. Telemetry stays direct (collector to lake) and control
+stays typed RPC. Every type under `schemas/events/` has its class here
+(`tests/events/test_bus_publish_paths.py` fails on a type without one):
+
+| Type | Class |
+|---|---|
+| `homelabnext.alert.created` | reaction |
+| `homelabnext.case.opened` | reaction |
+| `homelabnext.task.queued` | reaction |
+| `homelabnext.schedule.fired` | reaction |
+| `homelabnext.deploy.changed` | reaction |
+| `homelabnext.scope.denied` | reaction |
+| `homelabnext.swap.step` | reaction |
+| `homelabnext.agent.job.failed` | reaction |
+| `homelabnext.agent.activity` | record |
+| `homelabnext.agent.job.finished` | record |
+| `homelabnext.project.changed` | record |
+| `homelabnext.status.observed` | record |
+| `homelabnext.decision.requested` | decision |
+| `homelabnext.decision.returned` | decision |
+| `homelabnext.proposal.created` | decision |
+| `homelabnext.proposal.decided` | decision |
+
+The envelope carries no TLP label yet (ADR-0033), so every event reads `red` to a TLP check, and
+the bus is an egress point whose content is not yet checked (`docs/modules.md`, the egress table).
 
 ## Publisher protocol
 

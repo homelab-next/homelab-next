@@ -1241,3 +1241,22 @@ def test_the_running_check_and_the_core_collision_check_declare_the_same_tables(
     assert "table:external_collector.extra" in ld._module_tables(
         tree.mods["external-collector"], tree.dirs["external-collector"], load
     )
+
+
+def test_a_slot_registry_entry_that_breaks_its_schema_is_a_problem_not_a_crash(tmp_path, capsys):
+    reg = yaml.safe_load((EXAMPLES / "slots.yml").read_text())
+    reg["slots"]["dns"] = {**reg["slots"]["dns"], "layer": 4}  # not a slot field
+    bad = tmp_path / "slots.yml"
+    bad.write_text(yaml.safe_dump(reg))
+    code, out = run(capsys, "--slots", str(bad))
+    assert code == 1
+    assert "slots: dns: schema:" in out.out
+
+
+def test_the_deploy_check_refuses_another_slot_registry(tmp_path, capsys):
+    code = mcli.main(
+        ["check", "--root", str(ROOT), "--overlay", str(tmp_path), "--deploy", "--slots",
+         str(EXAMPLES / "slots.yml")]
+    )  # fmt: skip
+    assert code == 2
+    assert "--deploy refuses --slots" in capsys.readouterr().err

@@ -311,3 +311,76 @@ def test_cli_skip_leaves_a_criterion_out_and_out_dir_is_created(tmp_path, capsys
     assert inv_main(argv) == 1
     assert inv_main([*argv, "--skip", "F-01"]) == 0
     assert "F-01" not in json.loads(out.read_text())["results"]
+
+
+def test_only_exit_ignores_carried_results_and_drops_criteria_gone_from_the_register(tmp_path):
+    previous = {
+        "results": {
+            "A-01": {"status": "fail", "evidence": "x", "checked_at": "t"},
+            "GONE-1": {"status": "error", "evidence": "x", "checked_at": "t"},
+        }
+    }
+    cs = [crit("A-01", "exit 1"), crit("B-01", "exit 0")]
+    doc = run(cs, tmp_path, only={"B-01"}, previous=previous)
+    assert set(doc["results"]) == {"A-01", "B-01"}  # A-01 carried, GONE-1 dropped
+    assert overall_exit(doc, {"B-01"}) == 0
+    assert overall_exit(doc) == 1
+
+
+def test_main_only_exit_is_judged_over_the_criteria_it_ran(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(
+        REGISTER.replace("{cmd}", "exit 1")
+        + REGISTER.split("criteria:\n", 1)[1].replace("F-01", "F-02").replace("{cmd}", "exit 0")
+    )
+    out = tmp_path / "results.json"
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(out), "--no-notify"]
+    assert inv_main(argv) == 1
+    assert inv_main([*argv, "--only", "F-02"]) == 0  # F-01's carried fail does not decide it
+    assert set(json.loads(out.read_text())["results"]) == {"F-01", "F-02"}
+
+
+def test_observables_run_through_the_injectable_context_runner(tmp_path):
+    calls = []
+
+    def fake(argv, timeout=120):
+        calls.append((argv, timeout))
+        return {"probe-ok": 0, "probe-killed": -9}[argv[-1]], "out"
+
+    cs = [crit("A-01", "probe-ok", timeout=7), crit("B-01", "probe-killed")]
+    doc = run_criteria(cs, Context(tmp_path, fake), clock=lambda: T0)
+    assert [c[0][-1] for c in calls] == ["probe-ok", "probe-killed"] and calls[0][1] == 7
+    assert doc["results"]["A-01"]["status"] == "pass"
+    assert doc["results"]["B-01"]["status"] == "error"  # killed by a signal: did not finish
+    assert "signal 9" in doc["results"]["B-01"]["evidence"]
+
+
+def test_cli_pages_go_through_the_channel_ceiling(tmp_path, capsys):
+    """A page is an egress point (ADR-0033 decision 13): its evidence is lab data (red), so on a
+    channel below red the fixed withheld notice goes out, never the evidence."""
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(REGISTER.replace("{cmd}", "echo secret-evidence-text; exit 1"))
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(tmp_path / "r.json")]
+    argv += ["--state", str(tmp_path / "s.json"), "--notify-ceiling", "green"]
+    assert inv_main(argv) == 1
+    out = capsys.readouterr().out
+    page = out[out.index("[page]") :]
+    assert "Notification withheld (TLP)" in page and "F-01" not in page
+    assert "secret-evidence-text" not in page
+
+
+def test_cli_an_unlabelled_page_reads_as_red_so_an_amber_channel_withholds_it(tmp_path, capsys):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(REGISTER.replace("{cmd}", "exit 1"))
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(tmp_path / "r.json")]
+    argv += ["--state", str(tmp_path / "s.json"), "--notify-ceiling", "amber"]
+    assert inv_main(argv) == 1
+    assert "Notification withheld (TLP)" in capsys.readouterr().out
+
+
+def test_cli_a_misspelt_notify_ceiling_is_a_usage_error(tmp_path, capsys):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(REGISTER.replace("{cmd}", "exit 0"))
+    with pytest.raises(SystemExit) as exc:
+        inv_main(["run", str(reg), "--notify-ceiling", "gren"])
+    assert exc.value.code == 2

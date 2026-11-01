@@ -36,7 +36,7 @@ is present when required (always for `execute` and `privileged`). Anything else 
 
 ```yaml
 lanes:
-  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name>
+  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name> (free-form notes, not agent.memory.MemoryStore)
     kind: files
     root: memory
     per_actor: true              # the caller's own profile slug; default for files
@@ -650,7 +650,9 @@ The broker never talks to the bus while it decides. Every event it emits (`decis
 `homelabnext.broker.relay`) is written to `<state>/outbox/<event id>.json` with its place in emit
 order, and `hnx broker relay`, a second process under **its own user**, publishes it
 (`homelabnext.broker.relay`). A bus outage therefore delays events and never blocks or fails a
-decision, and `hnx broker serve` keeps needing no network at all.
+decision, and `hnx broker serve` keeps needing no network at all. This relay is the second publish path
+ADR-0009 sanctions (the first is the forwarder, [docs/events.md](events.md)): it publishes through
+the `EventBus` protocol, whose repeated-id answer it relies on after a crash.
 
 * **In order, at least once.** Each pass publishes the oldest undelivered events (at most
   `--batch`, default 100) one after another, as `<prefix>.<event type>` with the event id as the
@@ -918,7 +920,7 @@ it authenticates a person, then speaks to the socket with `BrokerClient`
 | op | fields | result |
 |---|---|---|
 | `pending` | - | `{"requests": [{request_id, action, actor, target, params, created, digest, approved, approval_state}]}` |
-| `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most the approval schema's `maxLength`, 500 chars) | the approval document (`schemas/broker/approval`) |
+| `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most 500 chars, the approval schema's `note.maxLength`) | the approval document (`schemas/broker/approval`) |
 | `deny` | as `approve` | the denial document |
 | `audit` | optional filters `action`, `caller`, `outcome`, `operation`, `request_id`; `tail` (default 50, 0-500) | `{"records": [...]}` (`schemas/broker/audit`) |
 

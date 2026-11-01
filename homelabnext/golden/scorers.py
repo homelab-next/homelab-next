@@ -86,7 +86,11 @@ def _parse_json(out: str) -> Any:
 
 
 def json_fields(out: str, e: dict) -> tuple[float, str]:
-    """Output is a JSON object; ``fields`` maps key -> expected value or ``{min,max,one_of}``."""
+    """Output is a JSON object; ``fields`` maps key -> expected value or ``{min,max,one_of}``.
+
+    The score is the share of fields that match: a field failing two constraints counts once.
+    An empty dict is an expected value (``{}``), not an empty constraint that accepts anything.
+    """
     try:
         doc = _parse_json(out)
     except ValueError:
@@ -97,12 +101,13 @@ def json_fields(out: str, e: dict) -> tuple[float, str]:
     if not fields:
         return 1.0, "valid JSON object"
     bad: list[str] = []
+    failed: set[str] = set()
     for key, want in fields.items():
+        before = len(bad)
         if key not in doc:
             bad.append(f"{key}: missing")
-            continue
-        got = doc[key]
-        if isinstance(want, dict) and set(want) <= {"min", "max", "one_of"}:
+        elif isinstance(want, dict) and want and set(want) <= {"min", "max", "one_of"}:
+            got = doc[key]
             if "one_of" in want and got not in want["one_of"]:
                 bad.append(f"{key}: {got!r} not in {want['one_of']}")
             if isinstance(got, (int, float)) and not isinstance(got, bool):
@@ -112,12 +117,12 @@ def json_fields(out: str, e: dict) -> tuple[float, str]:
                     bad.append(f"{key}: {got} > {want['max']}")
             elif ("min" in want or "max" in want) and "one_of" not in want:
                 bad.append(f"{key}: not a number")
-        elif got != want:
-            bad.append(f"{key}: expected {want!r}, got {got!r}")
+        elif doc[key] != want:
+            bad.append(f"{key}: expected {want!r}, got {doc[key]!r}")
+        if len(bad) > before:
+            failed.add(key)
     if bad:
-        return (len(fields) - len(bad)) / len(fields) if len(bad) < len(fields) else 0.0, "; ".join(
-            bad
-        )
+        return (len(fields) - len(failed)) / len(fields), "; ".join(bad)
     return 1.0, "all fields match"
 
 

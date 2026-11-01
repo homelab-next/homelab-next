@@ -41,8 +41,9 @@ from ``make invariants``) for each criterion's state.  ``--maps`` also gives the
 Links (the registry's services), Schedule (every timer, CI schedule, workflow pack and collector
 with its cadence and last/next run), Agent roster (``--roster FILE``, default
 ``ROOT/examples/status/roster.yml``) and MCP servers (``--mcp-catalog DIR``, default
-``ROOT/examples/mcp``).  ``render`` writes each available page as ``<panel>.html``
-beside ``index.html``.
+``ROOT/examples/mcp``).  ``render`` writes each available page as ``<panel>.html`` into
+``--private-out DIR``, with the private ``index.html`` their menus link back to, never beside the
+public ``index.html`` of ``--out`` (they are withheld from the public view: ADR-0033).
 
 ``--site`` (every subcommand but ``catalog``) adds one ``poll-nut`` source per UPS the site
 monitors by nut, from the registry's upsd template (``homelabnext.status.power``), with what

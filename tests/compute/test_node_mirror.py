@@ -92,7 +92,7 @@ def test_a_mirroring_node_name_must_be_a_path_safe_node_name(tmp_path):
         render(fleet_with(tmp_path, {"../etc": {"mirror": MIRROR}}), "node-mirror")
 
 
-@pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck not installed")
+@pytest.mark.requires_tool("shellcheck")
 def test_the_script_passes_shellcheck(tmp_path):
     out = render(fleet_with(tmp_path, {"hv-a": {"mirror": MIRROR}}), "node-mirror")
     script = tmp_path / "hnx-mirror.sh"

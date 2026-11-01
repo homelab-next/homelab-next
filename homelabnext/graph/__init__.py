@@ -18,9 +18,9 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     runs_on        svc -> host: registry host
     in_zone        host -> zone: registry hosts.zone
     depends_on     svc -> svc: registry upstreams
-    serves         svc -> zone: registry clients; req -> req: FFIR -> CCIR, PIR -> CCIR/FFIR
+    serves         svc, req -> zone, req: registry clients; requirement serves (FFIR, PIR)
     exposes        svc -> mcp: registry mcp
-    implements     adapter, mcp -> cap: target binding, contract import, make_fake; MCP catalog
+    implements     adapter, mcp -> cap: target binding, contract import, make_fake; MCP catalog implements
     served_by      mcp -> svc: MCP catalog transport endpoint
     reaches        mcp -> svc, host: MCP catalog egress
     fronts         mcp -> cap: MCP catalog capabilities
@@ -50,7 +50,7 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     backed_by      mdl -> svc: model role bindings[].backend
     falls_back_to  mdl -> mdl: model role fallback
     defines        broker -> action: broker manifest actions
-    grants         profile, human, zone -> cap, mcp, action, svc, broker: keyring grants (level)
+    grants         profile, human, zone -> cap, mcp, action, svc, broker: keyring principals[].grants (attrs: level, approval)
     applies_to     custom -> cap, svc, host: customization scope
     governed_by    custom -> adr: customization contract
     links          custom, doc, adr -> any: customization links; Markdown and [[wiki]] links
@@ -60,11 +60,11 @@ Edge vocabulary (``from -> to: asserted by``; the table is :data:`.vocab.EDGE_TY
     observes       status -> svc, cap: registry status_sources (declaring service, its capability)
     polls          status -> svc: registry status_sources target.service
     supports       req -> objective: requirement supports (SO, OO, TO)
-    child_of       objective -> objective, strategy: parent (an SO hangs from the strategy)
-    measured_by    objective -> measure: objective measures
-    binds          measure -> inv, status: measure source binding
+    child_of       objective, req -> objective, strategy, req: parent (an SO: the strategy; a PIR: its PIR)
+    measured_by    objective -> measure: a measure's parent
+    binds          measure -> inv, status: measure source binding (invariant:, status:)
     raised_by      rfi -> measure, req: rfi raised_by
-    tasked_to      req, rfi -> profile, human: tasked_to naming a known principal
+    tasked_to      req, rfi -> profile, human: tasked_to, where it names a known principal
 
 Node kinds and their id forms are :data:`.vocab.NODE_KINDS`.
 """

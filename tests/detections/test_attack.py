@@ -394,3 +394,38 @@ def test_shipped_example_rules_validate_against_shipped_wazuh_snapshot():
 
     snap = attack.load_snapshot(snap_path)
     assert attack.validate_rules(load_rules(repo / "detections"), snap) == []
+
+
+# ---- validate-techniques: could-not-measure on a bad snapshot; the attribute-only advertising form
+def test_validate_techniques_missing_or_malformed_snapshot_is_could_not_measure(tmp_path, capsys):
+
+    det = Path(__file__).resolve().parents[2] / "detections"
+    assert (
+        main(["--root", str(det), "validate-techniques", "--snapshot", str(tmp_path / "nope.yml")])
+        == 100
+    )
+    bad = tmp_path / "bad.yml"
+    bad.write_text("engine: x\n")  # no header fields, no ids
+    assert main(["--root", str(det), "validate-techniques", "--snapshot", str(bad)]) == 100
+    assert "could not load" in capsys.readouterr().err
+
+
+def test_a_backend_advertising_only_a_snapshot_path_is_validated(tmp_path, monkeypatch, capsys):
+    from homelabnext.detections import adapters
+
+    det = Path(__file__).resolve().parents[2] / "detections"
+    shipped = next((det / "attack_snapshots").glob("*.yml"))
+
+    class SnapshotOnly:
+        name = "snapshot-only"
+        known_ids_snapshot = Path("attack_snapshots") / shipped.name  # relative to the root
+
+        def compile(self, rule, target):  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+    adapters.get_backend("generic")  # register the built-ins first
+    monkeypatch.setitem(adapters._REGISTRY, "snapshot-only", SnapshotOnly())
+    assert main(["--root", str(det), "validate-techniques", "--backend", "snapshot-only"]) == 0
+    assert "all known" in capsys.readouterr().out
+    monkeypatch.setattr(SnapshotOnly, "known_ids_snapshot", tmp_path / "gone.yml")
+    assert main(["--root", str(det), "validate-techniques", "--backend", "snapshot-only"]) == 100

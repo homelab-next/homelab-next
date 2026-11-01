@@ -16,9 +16,10 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ├── .hnx-private-overlay.yml       marker: enables `private_leak_check.py private`, lists vault files
 ├── .sops.yaml                     which paths are sealed, to which age recipients
 ├── .gitignore                     keys and decrypted scratch copies never get added
-├── .github/CODEOWNERS             owner review on workflows, deploy tools, sealing rules
+├── .github/CODEOWNERS             owner review on every path (`*`), with why the main ones matter
 ├── .github/workflows/
-│   ├── checks.yml                 every pull request: private_leak_check (no secrets)
+│   ├── checks.yml                 every pull request, no secrets: leak check, loader, site
+│   │                              review tier, swap gate, and `checks` (the required one)
 │   └── deploy.yml                 manual dispatch from main, Environment `production`
 ├── ansible.cfg                    roles from ./hnx, vault password from bin/vault-pass-client.py
 ├── ansible/
@@ -30,10 +31,13 @@ lab-private/                       (a new PRIVATE repository; copy this director
 ├── lab/                           the lab, laid out like the public examples/ (HNX_EXAMPLES_DIR)
 │   ├── services.yml  site.yml  guests/  registers/  strategy/  customizations/
 │   └── sealed/*.sops.yaml         sealed per file (.sops.yaml rule)
-└── locks/deploy.in, deploy.txt     the deploy job's own tools, locked with hashes
+└── locks/deploy.in, deploy.txt     the deploy job's own tools, locked with hashes (you make
+                                   deploy.txt; the skeleton ships deploy.in only)
 ```
 
 To start one: create an empty private repository, copy these files in, delete `fictional: true`
 from the marker, replace the fake recipients with yours and `@lab-owner-fake` in CODEOWNERS with
-your GitHub user, and follow the runbook RB 3,
+your GitHub user, lock the deploy's tools (`uv pip compile locks/deploy.in --generate-hashes
+--universal -o locks/deploy.txt`, then commit `locks/deploy.txt`: the deploy installs it with
+`--require-hashes` and fails without it), and follow the runbook RB 3,
 [First deploy from the private repository](../registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md).

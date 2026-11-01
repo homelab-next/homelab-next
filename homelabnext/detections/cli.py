@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CLI: ``python -m homelabnext.detections <cmd>`` (to be mounted as ``hnx detections``)."""
+"""CLI: ``python -m homelabnext.detections <cmd>``, also mounted as ``hnx detections``."""
 
 from __future__ import annotations
 
@@ -7,15 +7,19 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 from . import attack, coverage, detmap, lint
-from .adapters import Target, get_backend
+from .adapters import Target, UnsupportedConstruct, get_backend
 from .runner import run_all
 from .sigma import load_mapping, load_rules
 
 
 def _resolve_known_ids(root: Path, backend_name: str, snapshot_arg: str | None):
-    """Snapshot explicitly named (``--snapshot``) wins; otherwise ask the backend; return
-    ``None`` when neither path produces a known set.
+    """Snapshot explicitly named (``--snapshot``) wins; otherwise ask the backend, through its
+    ``known_technique_ids()`` method or, when it has none, its ``known_ids_snapshot`` path
+    (relative to the detections root, or absolute); return ``None`` when neither path produces
+    a known set. A named or advertised snapshot that cannot be read raises.
     """
     if snapshot_arg:
         return attack.load_snapshot(snapshot_arg)
@@ -25,12 +29,31 @@ def _resolve_known_ids(root: Path, backend_name: str, snapshot_arg: str | None):
         return None
     fn = getattr(be, "known_technique_ids", None)
     if fn is None:
-        return None
+        snap = getattr(be, "known_ids_snapshot", None)
+        if snap is None:
+            return None
+        path = Path(snap)
+        return attack.load_snapshot(path if path.is_absolute() else root / path)
     try:
         ids = fn(root)
     except TypeError:
         ids = fn()
     return ids or None
+
+
+def mapping_for(root: Path, backend: str) -> Path | None:
+    """``mappings/<backend>.yml`` when the backend has its own field map, else
+    ``mappings/generic.yml`` (with a warning for a non-generic backend), else ``None``."""
+    own = root / "mappings" / f"{backend}.yml"
+    if own.exists():
+        return own
+    generic = root / "mappings" / "generic.yml"
+    if backend != "generic":
+        print(
+            f"warning: no mappings/{backend}.yml; compiling {backend} with the generic field map",
+            file=sys.stderr,
+        )
+    return generic if generic.exists() else None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,23 +124,37 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "lint-ids":
         m = detmap.load(mapfile) if mapfile.exists() else None
         files = a.paths or lint.find_agent_files(Path("."))
-        probs = lint.lint_no_rule_numbers(files, m)
+        probs = lint.lint_agent_ids(files, m, str(mapfile))
         print("\n".join(probs) or "no engine rule numbers in agent-facing files")
         return 1 if probs else 0
     if a.cmd == "compile":
         m = detmap.load(mapfile) if mapfile.exists() else {"entries": {}}
-        fm = root / "mappings" / "generic.yml"
-        tgt = Target(a.backend, load_mapping(fm if fm.exists() else None), m["entries"])
+        fm = mapping_for(root, a.backend)
+        tgt = Target(a.backend, load_mapping(fm), m["entries"])
         be = get_backend(a.backend)
-        # an unsupported (inert) or deprecated rule is tested but never shipped to an engine
-        arts = [be.compile(r, tgt) for r in load_rules(root) if r.deployable]
+        # an unsupported (inert) or deprecated rule is tested but never shipped to an engine;
+        # a rule this engine cannot express is reported and left out, never aborting the bundle
+        arts, skipped = [], []
+        for r in load_rules(root):
+            if not r.deployable:
+                continue
+            try:
+                arts.append(be.compile(r, tgt))
+            except UnsupportedConstruct as exc:
+                skipped.append(f"{r.det_id}: not expressible in {a.backend} ({exc})")
         sys.stdout.write(
             be.bundle(arts) if hasattr(be, "bundle") else "\n".join(x.content for x in arts)
         )
-        return 0
+        for line in skipped:
+            print(f"left out of the bundle: {line}", file=sys.stderr)
+        return 1 if skipped else 0
     if a.cmd == "validate-techniques":
         rules = load_rules(root)
-        known = _resolve_known_ids(root, a.backend, a.snapshot)
+        try:
+            known = _resolve_known_ids(root, a.backend, a.snapshot)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"could not load the ATT&CK known-id snapshot: {exc}", file=sys.stderr)
+            return 100  # could not measure (invariants-runner convention)
         if known is None:
             print(
                 f"no ATT&CK known-id snapshot for backend {a.backend!r}; set its "

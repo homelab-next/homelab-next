@@ -6,7 +6,7 @@
     "192.0.2.10": {
       "value": "none",
       "guest": "guest:hv-a",
-      "capability": "cap:events"
+      "capability": "cap:hypervisor"
     },
     "192.0.2.20": {
       "value": "none",

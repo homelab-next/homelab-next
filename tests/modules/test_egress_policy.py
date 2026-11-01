@@ -378,12 +378,37 @@ def test_protocols_are_the_registry_s():
     assert sorted(enum) == sorted(eg.PROTOCOLS)
 
 
-def test_an_internet_role_never_reaches_dns_over_tls_or_quic_outside_the_lab():
+@pytest.mark.parametrize("port", [53, 853])
+def test_an_internet_role_never_reaches_any_dns_outside_the_lab(port):
+    """Plain DNS (53) as well as DNS over TLS and QUIC (853): a public resolver is never reached,
+    and the lab's own resolvers stay reachable because their accepts come first."""
     host = SITES["full"]["features"]["publishing"]["placement"]["publisher"]
     pub = chain(render("full")[f"{host}/hnx-egress.nft"], "publishing", "publisher")
-    drop = pub.index("meta l4proto { tcp, udp } th dport 853 drop")
+    drop = pub.index(f"meta l4proto {{ tcp, udp }} th dport {port} drop")
     assert drop < pub.index("ip daddr != @not_internet4 accept")
     assert drop < pub.index("ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept")
+    lab = [i for i, ln in enumerate(pub) if re.fullmatch(r"ip6? daddr [0-9a-f.:]+ .*accept", ln)]
+    assert lab and max(lab) < drop  # the lab's resolvers (and slots) are accepted before it
+
+
+def test_the_labs_own_public_addresses_are_never_the_internet():
+    """``scope.trusted.wan`` is what the internet sees the lab as: its port forwards lead back
+    into the lab, so an ``internet`` role must not reach them."""
+    site = copy.deepcopy(SITES["full"])
+    wan4 = str(ipaddress.ip_network((0x5DB8_D800, 29)))  # global, outside every special range
+    wan6 = f"{_global6(0x77)}/64"
+    site["scope"]["trusted"]["wan"] = [wan4, wan6]
+    v4, v6 = _sets(render(site)["data-core/hnx-egress.nft"])
+    for addr in (ipaddress.ip_network(wan4)[1], ipaddress.ip_network(wan6)[1]):
+        assert any(addr in n for n in (v4 if addr.version == 4 else v6)), addr
+    assert not any(ipaddress.ip_address(0x0808_0808) in n for n in v4)  # the internet still is
+
+
+def test_a_dynamic_wan_source_is_refused_by_the_egress_render():
+    site = copy.deepcopy(SITES["full"])
+    site["scope"]["trusted"]["wan"] = [{"source": "wan-address"}]
+    with pytest.raises(eg.EgressError, match=r"trusted\.wan.*dynamic"):
+        render(site)
 
 
 def _global6(zone: int, host: int | None = None) -> str:
@@ -507,3 +532,48 @@ def test_render_cli_notes_the_missing_network_model(tmp_path, capsys):
     for f in nfts:
         _, v6 = _sets(f.read_text())
         assert any(ipaddress.ip_address(_global6(0x30, 9)) in n for n in v6)
+
+
+def test_a_requirement_reaches_its_slot_only_from_the_roles_it_names():
+    """``requires``/``prefers`` ``capabilities[].hosts``: a role it leaves out reaches none of
+    those slots (only DNS stays); naming the role, or naming none, reaches them as before."""
+    site = SITES["full"]
+    host = site["features"]["publishing"]["placement"]["publisher"]
+    before = chain(render("full")[f"{host}/hnx-egress.nft"], "publishing", "publisher")
+
+    def scoped(hosts):
+        mods = copy.deepcopy(MODULES)
+        for block in ("requires", "prefers"):
+            for c in mods["publishing"].get(block, {}).get("capabilities", []):
+                c["hosts"] = hosts
+        return chain(render(site, mods)[f"{host}/hnx-egress.nft"], "publishing", "publisher")
+
+    assert scoped(["publisher"]) == before
+    left_out = scoped(["another-role"])
+    assert left_out != before
+    accepts = [ln for ln in left_out if re.match(r"ip6? daddr [0-9a-f.:]+ ", ln)]
+    assert accepts and all(re.search(r" (tcp|udp) dport 53 accept$", ln) for ln in accepts)
+
+
+def test_a_svc_target_naming_a_provider_row_is_refused_by_check_as_by_render():
+    """A provider's rows are reached by their slot or instance name; naming one of its rows
+    directly is no service, for the site rules as for the generator (it once passed the one and
+    failed the other)."""
+    from homelabnext.modules import loader as ld
+
+    mods = copy.deepcopy(MODULES)
+    mods["publishing"]["egress"][0]["to"].append("svc:example-object-store-console")
+    tree = ld.Tree(mods, {n: MODULES_DIR / n for n in mods}, dict.fromkeys(mods, "fixture"))
+    ins = ld.inputs(tree)
+    all_rows = copy.deepcopy(ins.rows)
+    console = {**rows("example-object-store")["object-store"], "capability": "object-store"}
+    all_rows["example-object-store"]["example-object-store-console"] = console
+    slots = load(MODULES_DIR / "slots.yml")["slots"]
+    roles = json.loads((ROOT / "examples/model_roles.json").read_text())["roles"]
+    probs = mr.site_problems(
+        SITES["full"], mods, slots, rows=all_rows, units=ins.units,
+        privileged_units=ins.privileged_units, roles=roles,
+    )  # fmt: skip
+    assert any("svc:example-object-store-console, which is no service" in p for p in probs)
+    with pytest.raises(eg.EgressError, match="svc:example-object-store-console is no selected"):
+        eg.render(SITES["full"], mods, lambda m: all_rows.get(m, {}))

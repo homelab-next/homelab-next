@@ -83,10 +83,25 @@ class Target:
             ) from None
 
 
+def _builtin(capability: str, value: Any) -> str:
+    """``fake``, ``broken`` or ``broken:<mutant>``; anything else is refused.
+
+    Without this, ``builtin: fakes`` (or any other word) fell through to the first deliberately
+    broken fake, so a typo ran a defective subject and reported its failures as the target's.
+    """
+    v = str(value)
+    _, colon, mutant = v.partition(":")
+    if v in ("fake", "broken") or (v.startswith("broken:") and colon and mutant):
+        return v
+    raise ConformError(
+        f"{capability}: builtin must be 'fake', 'broken' or 'broken:<mutant>', not {v!r}"
+    )
+
+
 def binding_from_mapping(capability: str, m: Mapping[str, Any]) -> Binding:
     """Build a binding from the mapping form used by ``homelabnext.conform.run``."""
     if m.get("fake") or m.get("builtin"):
-        return Binding(capability, builtin=str(m.get("builtin") or "fake"))
+        return Binding(capability, builtin=_builtin(capability, m.get("builtin") or "fake"))
     adapter = m.get("adapter")
     if not isinstance(adapter, str) or ":" not in adapter:
         raise ConformError(f"{capability}: 'adapter' must look like 'package.module:factory'")
@@ -198,7 +213,7 @@ def make_factory(
     cap = binding.capability
     if binding.builtin:
         mod = load_module(cap, root)
-        if binding.builtin == "fake":
+        if _builtin(cap, binding.builtin) == "fake":
             return mod.make_fake
         _, _, mutant = binding.builtin.partition(":")
         mutants = mod.MUTANTS

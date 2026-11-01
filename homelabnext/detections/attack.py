@@ -27,9 +27,10 @@ The pieces
   (``...; parent T1059 is known - tag the parent and keep T1059.999 in the description``)
   instead of a bare "unknown".
 
-Backends may ADVERTISE their known ids by implementing ``Backend.known_technique_ids()`` (see
-``homelabnext.detections.adapters.KnownTechniques``). The CLI's ``validate-techniques`` command
-and ``lint`` can both consume either a loaded snapshot file or a backend's advertised set.
+Backends may ADVERTISE their known ids by implementing ``Backend.known_technique_ids()``, or by
+setting only ``known_ids_snapshot`` (see ``homelabnext.detections.adapters.KnownTechniques``).
+The CLI's ``validate-techniques`` command consumes a snapshot file named with ``--snapshot`` or
+the backend's advertised set; ``lint`` does not read known ids.
 """
 
 from __future__ import annotations

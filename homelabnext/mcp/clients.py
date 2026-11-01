@@ -221,6 +221,12 @@ def instances(
     bad_file = unsafe_value(profile_file)
     if bad_file:
         problems.append(f"{pid}: profile_file {bad_file}")
+    elif any(_uses_profile_file(cat.get(sid)) for sid in names) and (
+        why := servers.anchor_problem(profile_file, "profile_file")
+    ):
+        # the server reads its scope from this file: a relative path resolves in the client's
+        # working directory, where the agent may drop a wider profile of its own
+        problems.append(f"{pid}: {why}")
     for what, value in [*(("lane", lane) for lane in lanes), *([("home", home)] if home else [])]:
         if not isinstance(value, str) or not NAME.fullmatch(value):
             problems.append(f"{pid}: a {what} is not a plain name ({NAME.pattern})")
@@ -289,6 +295,12 @@ def instances(
     if problems:
         raise RenderError(problems)
     return out
+
+
+def _uses_profile_file(rec: Mapping[str, Any] | None) -> bool:
+    """True when ``rec``'s arguments name ``{profile_file}`` (the server reads the profile)."""
+    args = ((rec or {}).get("transport") or {}).get("args") or ()
+    return any(servers.PROFILE_FILE in servers.TEMPLATE.findall(str(a)) for a in args)
 
 
 # ------------------------------------------------------------------------------- one instance
@@ -770,7 +782,7 @@ def profile_refusals(
     would not have produced."""
     from homelabnext.agent.compiler import verify_profile
     from homelabnext.agent.errors import AgentError, CeilingViolation
-    from homelabnext.agent.readers import ToolClasses, profile_problems, reader_problems
+    from homelabnext.agent.readers import ToolClasses, profile_problems
 
     try:
         classes = ToolClasses.from_catalog(cat)
@@ -793,7 +805,8 @@ def profile_refusals(
     )
     if problems:
         return [f"not a compiled or lean agent profile: {p}" for p in problems]
-    problems = profile_problems(doc, classes, policy)  # the broker rule's direct_mcp too
+    # with the policy: its reader pin, attestations and the broker rule's direct_mcp too
+    problems = profile_problems(doc, classes, policy)
     over = sorted(set(doc.get("mcp") or ()) - set(doc.get("mcp_ceiling") or ()))
     if over:
         problems.append(f"mcp outside mcp_ceiling: {over}")
@@ -803,14 +816,6 @@ def profile_refusals(
             "a lean profile is rendered against the ceiling policy too (spec policy:, --policy): "
             "its own mcp_ceiling is whatever last edited the file",
         ]
-    if policy.requires_reader(str(doc.get("id"))) and doc.get("reads_untrusted") is False:
-        # the policy owner, not the file, says whether this profile reads untrusted content
-        # (verify_profile's rule for a compiled one); judge it as the reader it is
-        problems.append(
-            f"{policy.source} marks {doc.get('id')} as reading untrusted content "
-            "but the profile says reads_untrusted: false"
-        )
-        problems += reader_problems(doc, classes, str(doc.get("id", "profile")))
     try:
         ceiling = policy.ceiling(str(doc.get("id")))
     except CeilingViolation as exc:
@@ -819,10 +824,6 @@ def profile_refusals(
         wide = sorted(set(doc.get(key) or ()) - set(ceiling.get(key) or ()))
         if wide:
             problems.append(f"{key} outside the policy's ceiling ({policy.source}): {wide}")
-    problems += policy.attestation_problems(
-        str(doc.get("id")), doc.get("data_tier"), doc.get("model_role"), doc.get("mcp") or (),
-        classes, doc.get("tlp_ceiling"),
-    )  # fmt: skip
     return problems
 
 
@@ -868,7 +869,7 @@ def render_profile(
         cat, _rendered_ids(cat, client, [prof]), registry=registry, review_policy=review_policy
     )
     insts = instances(
-        cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(profile_path)
+        cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(p.resolve())
     )
     notes = deprecation_notes(cat, prof) + anchor_host_problems(ctx)[1]
     if client == "llm-orchestrator":
@@ -997,7 +998,7 @@ def render_spec(
             prof,
             lanes=lanes,
             params=entry.get("params") or {},
-            profile_file=str(entry.get("profile_file") or pf),
+            profile_file=str(entry.get("profile_file") or pf.resolve()),
         )
         every += insts
         if client == "llm-orchestrator":
@@ -1046,7 +1047,7 @@ def render_spec(
                     prof,
                     lanes=lanes,
                     params=_home_params(entry.get("params") or {}, out.get("params"), prof),
-                    profile_file=str(entry.get("profile_file") or pf),
+                    profile_file=str(entry.get("profile_file") or pf.resolve()),
                     home=str(out.get("home") or ""),
                 )
             text, skipped = render_home(home_insts, client, cat, registry, what, ctx)

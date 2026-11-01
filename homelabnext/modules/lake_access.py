@@ -17,9 +17,12 @@ the first matching rule wins and a principal no rule matches is denied:
   and delete, never update: an update could rewrite a stored label;
 * ``queries``: everyone may run queries; seeing or stopping another's is not granted.
 
-A principal can match several rules (a user in a group), and the first match wins, so rules are
-ordered so the most restrictive applies: user rules (``profile:``, ``module:``, ``user:``) before
-group rules, each tier by ascending ceiling, then by reader id.  A ``profile:``, ``module:`` or
+A principal can match several rules (a user in a group), and the first match wins.  Rules are
+ordered user rules (``profile:``, ``module:``, ``user:``) before group rules, each tier by
+ascending ceiling, then by reader id, whatever order the list was written in: among groups the
+most restrictive applies, but a principal with an entry of its own is judged by that entry, even
+when it is also in a group with a stricter ceiling (group membership is the engine's, not known
+here), so its own entry must carry the ceiling it should have (docs/modules.md says the same).  A ``profile:``, ``module:`` or
 ``user:`` reader is the engine user whose name is the whole reader id (``user:alice`` signs in as
 ``user:alice``); a ``group:`` reader is the engine group of the part after the colon.
 """
@@ -89,7 +92,7 @@ def render(site: dict[str, Any]) -> dict[str, Any] | None:
         if reader in seen:
             raise LakeAccessError(f"tlp_readers: {reader} is listed twice")
         seen.add(reader)
-    # the most restrictive rule a principal matches comes first
+    # a principal's own entry first, then groups, each from the lowest ceiling up
     parsed.sort(key=lambda p: (p[1] == "group", p[2].rank, p[0]))
     cat = f"^{re.escape(catalog)}$"
     catalogs, tables = [], []

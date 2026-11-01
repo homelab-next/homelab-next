@@ -90,6 +90,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.agent.digest import digest_of
+from homelabnext.orchestration.model import CONTROLLER_SOURCE
 
 from .pack import WorkflowError, git_files, load_doc, schema_errors
 from .runner import MODEL_KINDS, is_risky
@@ -104,14 +105,15 @@ from .st2_runtime import (
     approved_run_pack,
     pinned_sources,
 )
-from .validate import Problem, Universe, load_universe, validate_repo
+from .validate import Problem, Universe, handler_problem, load_universe, validate_repo
 
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
 DEFAULT_OUT = Path("workflows") / "stackstorm"
 JOB_FAILED_EVENT = "homelabnext.agent.job.failed"
 #: the orchestration controller's event source (its default ``events.source``): the one producer
-#: a pack reacting to ``agent.job.failed`` may pin
-ORCHESTRATOR_SOURCE = "svc:llm-orchestrator"
+#: a pack reacting to ``agent.job.failed`` may pin.  One constant with the telemetry's default
+#: (``homelabnext.orchestration.CONTROLLER_SOURCE``), so the two cannot drift apart
+ORCHESTRATOR_SOURCE = CONTROLLER_SOURCE
 DISPATCH_ACTIONS = ("agent.job.submit",)
 #: params ``agent.job.submit`` never carries: the controller refuses ``input`` (400) and ignores
 #: ``resubmits`` (it counts a run's lineage itself)
@@ -384,7 +386,9 @@ def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
 def cron_params(cron: str) -> dict[str, Any]:
     """Five cron fields (UTC) -> CronTimer parameters.  Day of week becomes names (``mon-fri``):
     cron counts 0 = Sunday, the CronTimer's scheduler counts 0 = Monday, and names cannot be
-    misread.  Raises ValueError on a field it cannot translate exactly."""
+    misread.  A range that starts at cron's Sunday is split (``0-4`` -> ``sun,mon-thu``), because
+    Sunday is the last day of the scheduler's week and ``sun-thu`` would run backwards there.
+    Raises ValueError on a field it cannot translate exactly."""
     fields = cron.split()
     if len(fields) != 5:
         raise ValueError("a schedule is five cron fields")
@@ -425,6 +429,12 @@ def _dow(tok: str) -> str:
     b = int(m.group(2))
     if a > b:
         raise ValueError(f"day of week: {tok!r} wraps")
+    if a == b:
+        return _DOW[a]
+    if a == 0:
+        # Sunday ends the scheduler's week, so ``sun-thu`` would be a reversed range there:
+        # split cron's leading Sunday off and keep the rest a forward range (0-7 is every day).
+        return "mon-sun" if b == 7 else f"sun,{_dow(f'1-{b}')}"
     return f"{_DOW[a]}-{_DOW[b]}"
 
 
@@ -1044,27 +1054,6 @@ def render_repo(
         binding_path=rel,
     )
     return res, binding
-
-
-def handler_problem(root: Path, manifest_rel: str, handler: str) -> str | None:
-    """Why ``handler`` (relative to the manifest's directory) is not in the tree, pinned: the file
-    and a ``<stem>.handler.json`` beside it whose ``handler_digest`` is the file's."""
-    from homelabnext.broker.execute import file_digest
-
-    base = (root / manifest_rel).parent
-    path = base / handler
-    if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
-        return f"handler {handler} is not in the tree"
-    doc_path = path.with_name(path.name.rsplit(".", 1)[0] + ".handler.json")
-    try:
-        doc = json.loads(doc_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return f"handler {handler} has no handler document {doc_path.name}"
-    if not isinstance(doc, Mapping) or doc.get("handler") != handler:
-        return f"{doc_path.name} does not name {handler}"
-    if doc.get("handler_digest") != file_digest(path):
-        return f"{doc_path.name}: handler_digest is not the digest of {handler}"
-    return None
 
 
 def drift(rendered: Mapping[str, str], out_dir: Path, base: str) -> list[Problem]:

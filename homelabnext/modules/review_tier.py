@@ -13,7 +13,9 @@ other change needs only the **owner**.  Everything fails closed: a new, removed,
 unreadable or linked manifest or file, a key the module schema (as of the base commit) does not
 define, a list it cannot key, keys it cannot compare, and, without a readable slot registry at
 both the base and the head, every slot change are human-approve.  A change to what decides the
-tier (the slot registry, the module schema, CODEOWNERS, this module) is human-approve too, and so
+tier (the slot registry, the module schema, CODEOWNERS, this module), to what sets up CI's
+interpreter and packages (the ``python-deps`` action, the constraints, ``pyproject.toml``) and to
+the release transforms (ADR-0033 decision 7) is human-approve too, and so
 is a change to what vouches for a model a swap rebinds to (:data:`EVIDENCE`, :data:`EVIDENCE_DIRS`:
 the model store, the evaluation reports and the golden suites, which the swap check reads from the
 base, so vetting a model is its own reviewed change), and so is a change to the model role table
@@ -25,7 +27,8 @@ raising one is a human's to approve).
 The approval itself is the pull request's code-owner review: :func:`review` reads CODEOWNERS **as
 of the base commit** (the rules GitHub applies to the pull request) and reports a problem for every
 human-approve change without a valid owner.  It does not read approvals; nothing here
-authenticates a reviewer.
+authenticates a reviewer, and while ``main``'s ruleset requires no review the tier is advisory
+(docs/modules.md, "Trust tiers").
 """
 
 from __future__ import annotations
@@ -142,6 +145,15 @@ GOVERNANCE = (
     "homelabnext/tlp.py",  # the TLP label type the rules read a dataset's declaration with
     "tools/schema_check.py",  # which re-exports it for the repository's tools
     ".github/workflows/ci.yml",  # the step that runs the check
+    # what sets up the interpreter and the packages every other CI job runs (the trusted-gates job
+    # takes the base's copies; the rest take the change's, so a change here steers them)
+    ".github/actions/python-deps/action.yml",
+    "constraints/bootstrap.txt",
+    "constraints/ci.txt",
+    "pyproject.toml",
+    # what may leave the lab through a release transform (ADR-0033 decision 7: human-approve)
+    "homelabnext/status/release_transforms.yml",
+    "homelabnext/status/release.py",
 )
 #: what vouches for a model in a swap (homelabnext.modules.swap_evidence reads each from the base,
 #: so a change here is the vetting step that a later rebind relies on): the model store, the

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from conformance.protocols.broker import BrokerError
+from homelabnext.codemode.runner import read_index
 
 __all__ = ["INSTRUCTIONS", "SERVER_NAME", "TOOLS", "CodemodeIndex", "build_server", "serve"]
 
@@ -42,7 +43,8 @@ TOOLS: dict[str, str] = {
     "codemode_search": (
         "Find the actions you may call from a Code Mode program: name, the call a program "
         "writes, a summary, tier, kind and whether it needs a person's approval (which pauses "
-        "the program). An empty query lists them all."
+        "the program). An empty query lists them, up to limit (20, at most 50); total says how "
+        "many there are."
     ),
     "codemode_describe": (
         "One action's exact JSON Schema parameters, its result type and schema, and its call "
@@ -70,10 +72,12 @@ class CodemodeIndex:
     def _entries(self) -> dict[str, dict[str, Any]]:
         profile, names = self.granted()
         slug = profile.split(":", 1)[1] if profile.startswith("profile:") else ""
-        path = self.directory / slug / "search.json"
-        if not slug or path.is_symlink() or path.parent.is_symlink() or not path.is_file():
+        if not slug:
             raise IndexRefused(f"no Code Mode index for {profile}")
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        try:  # the runner's own loader: no symlink, a regular file no other user may write
+            doc = read_index(self.directory / slug)
+        except (OSError, ValueError):
+            raise IndexRefused(f"no Code Mode index for {profile}") from None
         if not isinstance(doc, Mapping) or doc.get("profile") != profile:
             raise IndexRefused(f"the index at {slug}/search.json is not {profile}'s")
         return {

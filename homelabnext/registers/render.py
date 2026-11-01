@@ -352,6 +352,25 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
             + "</article>"
             for i, t in sorted(retired.items())
         )
+    legacy = reg.get("retired_legacy") or {}
+    if legacy:  # an id the register once used wrongly; the checklist row keeps it
+        body += "<h2>Earlier uses of checklist ids</h2>" + "".join(
+            f'<article id="legacy-{e(i)}"><h3>{e(i)} <span class="pill skip">earlier use</span>'
+            "</h3>"
+            + _dl(
+                [
+                    (
+                        "Replaced by",
+                        f'<a href="#{e(t["replaced_by"])}">{e(t["replaced_by"])}</a>'
+                        if t.get("replaced_by")
+                        else "",
+                    ),
+                    ("Reason", _p(t["reason"])),
+                ]
+            )
+            + "</article>"
+            for i, t in sorted(legacy.items())
+        )
     verdict = invariants_verdict(counts)
     summary = f"{verdict} - " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
     if results and results.get("last_run"):
@@ -363,6 +382,7 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
         "last_run": (results or {}).get("last_run"),
         "criteria": merged,
         "retired": retired,
+        "retired_legacy": legacy,
     }
     return page("Invariants", body, summary), json.loads(json.dumps(doc, default=str))
 
@@ -386,22 +406,29 @@ def repo_root(start: pathlib.Path) -> pathlib.Path:
 
 def load_sources(src_dir, policy_path=None, results_path=None) -> dict:
     """Every register of ``src_dir`` loaded and validated (fatal), plus the review policy, the
-    invariants results and the repository root they were checked against."""
-    from homelabnext.reviews import ReviewError, load_policy
+    invariants results and the repository root they were checked against.
+
+    The policy is ``policy_path``, else ``review-policy.yml`` in or beside ``src_dir``; finding
+    none fails closed (:data:`homelabnext.reviews.NO_POLICY`) when there are lessons or runbooks
+    for it to judge (the invariants take no reviews).  ``policy_path=False`` is the explicit
+    opt-out (``--no-review-policy``): no review tier is checked."""
+    from homelabnext.reviews import ReviewError, require_policy
 
     src = pathlib.Path(src_dir)
-    pp = pathlib.Path(policy_path) if policy_path else find_policy(src)
-    try:
-        policy = load_policy(pp) if pp else None
-    except ReviewError as ex:
-        raise RegisterError("review policy", ex.problems) from None
-    out: dict = {"policy": policy, "lessons": None, "runbooks": None, "invariants": None}
+    out: dict = {"policy": None, "lessons": None, "runbooks": None, "invariants": None}
     if path := register_source(src, "lessons"):
         out["lessons"] = load_register(path, "lessons")
     if path := register_source(src, "runbooks"):
         out["runbooks"] = load_register(path, "runbooks")
     if (src / "invariants.yml").exists():
         out["invariants"] = load_register(src / "invariants.yml")
+    reviewed = out["lessons"] is not None or out["runbooks"] is not None
+    try:  # after the registers, so a broken record is named before a missing policy
+        if policy_path is not False and (reviewed or policy_path):
+            pp = pathlib.Path(policy_path) if policy_path else find_policy(src)
+            out["policy"] = require_policy(pp)
+    except ReviewError as ex:
+        raise RegisterError("review policy", ex.problems) from None
     rp = pathlib.Path(results_path) if results_path else src / "invariants.results.json"
     out["results"] = json.loads(rp.read_text()) if rp.exists() else None
     out["root"] = repo_root(src)

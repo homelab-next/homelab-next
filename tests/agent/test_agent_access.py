@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from agent_support import inputs, library, manifest, spec
 
 from homelabnext import cli
@@ -16,9 +17,10 @@ from homelabnext.agent import (
     assemble_pack,
     compile_profile,
     render_access_block,
+    session_problems,
     start_session,
 )
-from homelabnext.agent.access import level_of
+from homelabnext.agent.access import CLASS_LEVEL, level_of
 from homelabnext.registry import load
 
 REPO = Path(__file__).resolve().parents[2]
@@ -115,6 +117,29 @@ def test_session_start_refuses_bad_inputs(profile, registry, what):
         start_session(m, inputs(), p, registry, runs_on=host)
 
 
+def test_an_actor_is_never_fed_raw_input_sections(registry):
+    actor = compile_profile({**spec(), "reads_untrusted": False}, library())
+    with pytest.raises(SpecError, match=r"reads_untrusted: false.*\['findings', 'memory'\]"):
+        start_session(manifest(), inputs(), actor, registry)
+    m = manifest()
+    m["sections"] = [s for s in m["sections"] if s["source"] != "input"]
+    m["must_cite"] = []
+    pack, _ = start_session(m, {**inputs(), "sections": {}}, actor, registry)
+    assert pack["status"] == "ready"
+    assert session_problems(m, actor) == []
+
+
+def test_manifest_tools_and_memory_scopes_stay_within_the_profile(profile, registry):
+    m = manifest()
+    m["tools"] = ["lake", "shell", "ssh"]
+    with pytest.raises(SpecError, match=r"manifest tools \['shell', 'ssh'\] are not MCP servers"):
+        start_session(m, inputs(), profile, registry)
+    m = manifest()
+    m["memory_scopes"] = ["analyst", "someone-else"]
+    with pytest.raises(SpecError, match=r"memory scopes \['someone-else'\]"):
+        start_session(m, inputs(), profile, registry)
+
+
 def test_a_block_that_does_not_fit_defers_instead_of_being_cut(profile, registry):
     m = manifest()
     m["budget_chars"] = 900
@@ -129,6 +154,24 @@ def test_levels_follow_the_worst_class():
     assert level_of(["egress"]) == "execute"
     assert level_of(["exec", "credential"]) == "privileged"
     assert level_of(None) == "unclassified"
+
+
+def test_every_class_of_the_table_has_a_level():
+    """A class without a CLASS_LEVEL entry would fall to 'privileged' silently (hnx-codemode,
+    which only reads, was rated above the broker)."""
+    table = yaml.safe_load((REPO / "homelabnext/agent/tool_classes.yml").read_text())
+    assert set(CLASS_LEVEL) == set(table["classes"])
+    assert level_of(["read", "codemode"]) == "read"
+
+
+def test_no_example_is_both_egress_and_send():
+    table = yaml.safe_load((REPO / "homelabnext/agent/tool_classes.yml").read_text())
+
+    def examples(cls):
+        inside = table["classes"][cls].split("(", 1)[1].split(")", 1)[0]
+        return {w.strip().removeprefix("a ").removeprefix("an ") for w in inside.split(",")}
+
+    assert examples("egress") & examples("send") == set()
 
 
 def test_cli_pack_with_profile_starts_a_session(profile, tmp_path, capsys):

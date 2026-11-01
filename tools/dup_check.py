@@ -7,12 +7,12 @@
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:dup-baseline, make:dup-check]
 #   invariant: [M-03]
-#   inputs: the tracked Python files and tools/dup_check.baseline.json
+#   inputs: the tracked Python files and tools/dup_check.baseline.json; the base commit's baseline (--base, --ci-base)
 #   outputs: one line per new clone (both copies) or stale baseline entry; the rewritten baseline with --update-baseline
 #   exit:
 #     "0": no clone beyond the baseline and no stale entry
-#     "1": a new or grown clone, or a stale baseline entry
-#     "2": usage error, a bad baseline, or an update that would raise the total
+#     "1": a new or grown clone, a stale baseline entry, or a baseline loosened against the base
+#     "2": usage error, a bad baseline, an unusable base, or an update that would raise the total
 """Gate: duplicated code is a ratchet, never a growth.
 
 Tokenises every tracked Python file (``git ls-files``, the stdlib ``tokenize`` module), finds token
@@ -47,7 +47,11 @@ churn it. Each entry also carries winnowed fingerprints of its tokens: a clone t
 grew or a third copy is not. ``check`` fails on a clone the baseline does not cover and on a
 baseline entry that matches nothing (the clone was removed: run ``--update-baseline`` so the file
 shrinks). ``--update-baseline`` rewrites the file and refuses to raise the duplicated-line total
-unless ``--allow-increase REASON`` is given; the reason is kept in the file.
+unless ``--allow-increase REASON`` is given; the reason is kept in the file. ``--base REV`` /
+``--ci-base`` (CI) also hold the committed baseline to the base commit's, so a hand edit cannot
+loosen it: unless the baseline records an increase the base's does not, its parameters must be
+the base's and no clone may be new against the base's baseline, and the base's recorded increases
+must stay as they were.
 
 Split with M-03 (the ``shared_helpers_lint`` tool): M-03 is semantic. It flags a notify, state or
 lake helper written outside its shared library whether or not it was copied, and its allowlist
@@ -57,7 +61,9 @@ findings; nothing here is excused by the M-03 allowlist, and M-03 does not read 
 
 Usage: python tools/dup_check.py [ROOT] [--baseline FILE] [--update-baseline [--allow-increase R]]
        [--mode exact|normalised] [--min-tokens N] [--min-lines N] [--list] [--json]
-Exit: 0 clean, 1 new/grown clone or stale entry, 2 usage, bad baseline or a refused increase.
+       [--base REV | --ci-base]
+Exit: 0 clean, 1 new/grown clone, stale entry or a baseline loosened against the base, 2 usage,
+bad baseline, an unusable base or a refused increase.
 """
 
 from __future__ import annotations
@@ -505,6 +511,14 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     ap.add_argument("--allow-increase", metavar="REASON", help="let an update raise the total")
     ap.add_argument("--list", action="store_true", help="print every clone, baselined or not")
     ap.add_argument("--json", action="store_true")
+    based = ap.add_mutually_exclusive_group()
+    based.add_argument("--base", help="a commit whose baseline may not be exceeded")
+    based.add_argument(
+        "--ci-base",
+        action="store_true",
+        help="pick --base by homelabnext.gitbase.ci_base "
+        "(GITHUB_EVENT_NAME, HNX_PR_BASE, HNX_PUSH_BEFORE)",
+    )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -575,6 +589,14 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         )
         return 2
     new, stale, shrunk = compare(clones, baseline)
+    try:
+        rev = _pick_base(root, args, out)
+        grew = against_base(root, rev, bpath, baseline, clones, out) if rev else []
+    except BaselineError as exc:
+        print(f"dup_check: {exc}", file=err)
+        return 2
+    for g in grew:
+        print(f"dup_check: {g}", file=err)
     if args.json:
         doc = {
             "summary": {"clones": len(clones), "duplicated_lines": dup, "total_lines": total},
@@ -598,7 +620,77 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
                 file=out,
             )
         print(f"dup_check: {len(new)} new, {len(stale)} stale; {summary}", file=out)
-    return 1 if new or stale or errors else 0
+    return 1 if new or stale or errors or grew else 0
+
+
+def _pick_base(root: Path, args, out) -> str | None:
+    if args.base is not None and not args.base.strip():
+        raise BaselineError("--base needs a commit (an empty value would skip the check)")
+    if not args.ci_base:
+        return args.base
+    repo = str(Path(__file__).resolve().parents[1])
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from homelabnext.gitbase import ci_base_from_env  # the one --ci-base rule
+
+    try:
+        rev, why = ci_base_from_env(root)
+    except ValueError as exc:
+        raise BaselineError(str(exc)) from None
+    print(f"dup_check: base {rev or '-'} ({why})", file=out)
+    return rev
+
+
+def against_base(root: Path, rev: str, bpath: Path, baseline: dict, clones, out) -> list[str]:
+    """The committed baseline against the one at ``rev``, so it cannot be loosened by hand: unless
+    the baseline records an increase the base's does not (``--update-baseline --allow-increase
+    REASON``, which a reviewer reads), its parameters must be the base's and no clone may be new
+    against the base's baseline.  The base's recorded increases must stay as they were."""
+
+    def git(*a: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *a], capture_output=True, check=False)
+
+    if git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode:
+        raise BaselineError(f"--base {rev}: not a commit here")
+    try:
+        rel = bpath.resolve().relative_to(root).as_posix()
+    except ValueError:
+        raise BaselineError(f"--base: the baseline {bpath} is not in {root}") from None
+    if git("cat-file", "-e", f"{rev}:{rel}").returncode:
+        return []  # no baseline at the base yet: nothing to ratchet against
+    shown = git("show", f"{rev}:{rel}")
+    if shown.returncode:
+        raise BaselineError(f"--base {rev}: cannot read {rel}")
+    try:
+        then = json.loads(shown.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BaselineError(f"--base {rev}: {rel} is not JSON ({exc})") from None
+    if not isinstance(then, dict) or not all(
+        isinstance(then.get(k), dict) for k in ("params", "clones")
+    ):
+        raise BaselineError(f"--base {rev}: {rel} is not a dup_check baseline")
+    was = list(then.get("increases") or [])
+    now = list(baseline.get("increases") or [])
+    if now[: len(was)] != was:
+        return [f"the increases the base's baseline records were changed or removed ({rel})"]
+    if len(now) > len(was):
+        for inc in now[len(was) :]:
+            reason = inc.get("reason") if isinstance(inc, dict) else inc
+            print(f"dup_check: an increase is recorded against the base: {reason}", file=out)
+        return []
+    problems = []
+    if baseline["params"] != then["params"]:
+        problems.append(
+            f"parameters {baseline['params']} differ from the base's {then['params']} with no "
+            "recorded increase (--update-baseline --allow-increase REASON)"
+        )
+        return problems
+    for c in compare(clones, then)[0]:
+        problems.append(
+            f"clone not in the base's baseline ({c.size} tokens): {c.where()}; the baseline only "
+            "shrinks (--update-baseline --allow-increase REASON records a deliberate increase)"
+        )
+    return problems
 
 
 if __name__ == "__main__":

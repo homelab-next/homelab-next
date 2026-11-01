@@ -14,9 +14,12 @@
 #     "2": the report could not be produced
 """Gate: every one of the eighteen capabilities has a passing conformance test.
 
-Runs ``hnx conform list`` and ``hnx conform report --json`` (the exporter behind invariant X-10)
-and fails when any capability of ``homelabnext.conform.CAPABILITIES`` is missing from the report,
-has no suite, or is not ``passing``.  The report is written to ``build/conform-report.json``.
+Runs ``hnx conform list`` and ``hnx conform report --out build/conform-report.json`` (the
+exporter behind invariant X-10) and fails when any capability of
+``homelabnext.conform.CAPABILITIES`` is missing from the report, has no suite, or is not
+``passing``.  Like X-10, the report is read from that file, never scraped from stdout (an
+adapter imported during the run can print anything), and its verdicts must agree with the
+exporter's exit code.
 
 Usage: python tools/conform_coverage.py [--root DIR] [--target fake]
 Exit: 0 all pass, 1 some capability lacks a passing test, 2 the report could not be produced.
@@ -35,6 +38,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from homelabnext.conform import CAPABILITIES  # noqa: E402
+from homelabnext.conform.report import SCHEMA, exit_code  # noqa: E402
 
 
 def _hnx(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -57,12 +61,29 @@ def missing_passes(report: dict, expected: tuple[str, ...] = CAPABILITIES) -> li
         elif not row.get("suite"):
             out.append(f"{cap}: no suite")
         elif not row.get("passing"):
-            out.append(f"{cap}: suite does not pass (failed must: {row.get('failed_must')})")
+            out.append(
+                f"{cap}: suite does not pass ({row.get('verdict', 'fail')}: "
+                f"{row.get('reason', 'failed must: ' + str(row.get('failed_must')))})"
+            )
     out += [
         f"{c}: listed without a passing test"
         for c in report.get("capabilities_without_passing_test", [])
     ]
     return sorted(set(out))
+
+
+def read_report(path: Path) -> dict | None:
+    """The report in ``path``, or None unless it is one well-formed report of this schema."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
+        return None
+    caps = doc.get("capabilities")
+    if not isinstance(caps, dict) or not all(isinstance(e, dict) for e in caps.values()):
+        return None
+    return doc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,15 +96,21 @@ def main(argv: list[str] | None = None) -> int:
     if listing.returncode != 0:
         sys.stderr.write(listing.stderr)
         return 2
-    rep = _hnx(args.root, "report", "--json", "--target", args.target)
-    try:
-        report = json.loads(rep.stdout)
-    except ValueError:
-        sys.stderr.write(f"conform_coverage: no JSON report (rc={rep.returncode})\n{rep.stderr}")
-        return 2
     out = args.root / "build" / "conform-report.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out.unlink(missing_ok=True)  # never judge a report left over from an earlier run
+    rep = _hnx(args.root, "report", "--out", str(out), "--target", args.target)
+    sys.stdout.write(rep.stdout)
+    report = read_report(out)
+    if report is None:
+        sys.stderr.write(f"conform_coverage: no usable report in {out} (rc={rep.returncode})\n")
+        sys.stderr.write(rep.stderr)
+        return 2
+    if exit_code(report) != rep.returncode:
+        sys.stderr.write(
+            f"conform_coverage: the report's verdicts mean exit {exit_code(report)}, "
+            f"the exporter exited {rep.returncode}\n{rep.stderr}"
+        )
+        return 2
     problems = missing_passes(report)
     for p in problems:
         sys.stderr.write(f"conform_coverage: {p}\n")

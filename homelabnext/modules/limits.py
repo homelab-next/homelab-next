@@ -33,7 +33,9 @@ placed host (``<host>/``):
   mounted; a half-built one is removed).  One module's failure does not stop the others.
   ``--check`` changes nothing and exits 3 while any cap is missing or wrong.
 
-A cap is never grown or shrunk in place: a different size is refused until the data is moved out.
+An image cap is never grown or shrunk in place: a different size is refused until the data is
+moved out.  A ZFS cap is set to the new size in place (ZFS itself refuses a ``refquota`` below
+what the dataset uses, and a ``refreservation`` the pool cannot hold).
 The data root keeps its owner and mode; the module's role owns them, and its units name it in
 ``read_write_paths``.  ``gpu_memory_mb`` has no systemd control: it stays a placement sum only.
 A role placed on a ``kind: external`` host is not rendered (that host is outside the lab and runs
@@ -352,7 +354,8 @@ def _readme(rows, caps, external) -> str:
         "anything). A role's own services join their slice with `Slice=`: a service outside its",
         "slice runs unlimited. A role reaching MemoryHigh (90 %) is throttled and at MemoryMax it",
         "is killed: there is no swap past it. GPU memory has no systemd limit: it is a placement",
-        "sum only. A cap is not grown in place: to change one, move the data out and rerun.",
+        "sum only. An image cap is not resized in place: to change one, move the data out and",
+        "rerun. A ZFS cap is resized in place (ZFS refuses a quota below what the dataset uses).",
         "",
         "| Host | Module | Host role | CPU | Memory | Disk | GPU memory |",
         "|---|---|---|---|---|---|---|",

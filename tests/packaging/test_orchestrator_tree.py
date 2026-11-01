@@ -2,7 +2,6 @@
 """The repository is ready for Go modules (orchestrator/ first) before any Go code lands: build
 outputs are ignored, the module is owned and dependency-updated, and MANIFEST.in prunes it."""
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +14,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import go_modules
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.requires_tool("git")
 @pytest.mark.parametrize(
     ("path", "ignored"),
     [
@@ -39,7 +38,7 @@ def test_go_build_outputs_are_ignored_and_sources_are_not(path, ignored):
     assert (r.returncode == 0) is ignored
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.requires_tool("git")
 def test_a_directory_named_for_the_test_tld_is_not_ignored_like_a_test_binary(tmp_path):
     # verify3.md: *.test also matched directories, so fixtures under a reserved-TLD name such as
     # examples/zones/ca.test/ were silently left out of git (check-ignore needs them on disk to
@@ -84,7 +83,7 @@ def test_dependabot_updates_go_modules_like_the_other_ecosystems():
         assert go[key] == pip[key], key
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.requires_tool("git")
 def test_every_discovered_go_module_has_a_dependabot_entry():
     """Dependabot cannot glob for modules: its gomod directories are listed by hand, and every
     module tools/go_modules.py discovers (and its linters' module) must be among them."""

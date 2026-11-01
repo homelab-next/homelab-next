@@ -386,6 +386,59 @@ def test_an_odd_spelling_that_names_nothing_is_denied_even_under_unknown_allow(t
     assert g.in_scope("unlisted-host").code == "unknown-allowed"
 
 
+@pytest.mark.parametrize("unknown", ["deny", "allow"])
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "198.51.100.30:22",
+        "scratch-b.example.invalid:8006",
+        "https://scratch-b.example.invalid/",
+        "https://ops@scratch-b.example.invalid:8006/api?x=1",
+        "ops@scratch-b.example.invalid",
+        "root@198.51.100.30",
+        "198.51.100.30/32",
+        "[2001:db8::30]:22",
+        "[2001:db8::30]",
+        "2001:db8::30/128",
+        "http://[2001:db8::30]:8080/",
+        "scratch-b:22",
+        "SCRATCH-B.example.invalid.:22",
+    ],
+)
+def test_a_compound_spelling_of_an_out_of_scope_target_is_out(ref, unknown):
+    t = [
+        Target(
+            "guest:scratch-b",
+            aliases=("198.51.100.30", "2001:db8::30", "scratch-b.example.invalid"),
+            scope="out",
+        )
+    ]
+    d = ScopeGuard(t, ScopePolicy(unknown=unknown)).in_scope(ref)
+    assert not d.allow and d.code == "explicit-out" and d.canonical == "guest:scratch-b", ref
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://nothing.example.invalid/",
+        "nothing.example.invalid:443",
+        "ops@nothing.example.invalid",
+        "198.51.100.0/24",  # a network names no single target
+        "[2001:db8::99]:22",
+        "https:///no-host",
+    ],
+)
+def test_an_unresolved_compound_reference_is_denied_even_under_unknown_allow(ref):
+    d = ScopeGuard(TARGETS, ScopePolicy(unknown="allow")).in_scope(ref)
+    assert not d.allow and d.code == "unknown-target", ref
+
+
+def test_a_bare_unknown_name_or_id_still_follows_the_unknown_policy():
+    g = ScopeGuard(TARGETS, ScopePolicy(unknown="allow"))
+    for ref in ("nothing", "vmid:4242", "guest:nothing"):
+        assert g.in_scope(ref).code == "unknown-allowed", ref
+
+
 def test_service_inherits_scope_from_its_host_guest():
     guests = [Target("guest:scratch-a", scope="out", vmid=9001), Target("guest:prod-a")]
     reg = {

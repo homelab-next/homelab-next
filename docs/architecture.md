@@ -30,8 +30,9 @@ recorded in the [ADR log](adr/README.md); the Python interfaces are in
 
 - **The hypervisor is not a seam** (ADR-0012). Its exit is "restore from backup and rebuild from
   git", and the only test worth paying for is that rebuild.
-- **No bus under the data plane** (ADR-0009). A bus belongs at the reaction seam only; telemetry
-  stays a direct, buffered stream, and control stays typed request/response.
+- **No bus under the data plane** (ADR-0009). A bus carries reaction triggers, per-item records
+  and decision events only (`docs/events.md`, "What goes on the bus"); telemetry stays a direct,
+  buffered stream, and control stays typed request/response.
 - **No internal framework.** The spine is libraries and generators. If a proposed abstraction
   needs its own service, database and on-call, it is a product and needs its own exit.
 - **No lowest-common-denominator contracts.** Where an open standard is implemented well (S3,
@@ -60,8 +61,12 @@ The "example tenants" are illustrations only: the reference environment in
 | 12 | Observability, alerting, backup, power | OpenMetrics, state-diffed paging, export hooks (ADR-0008) | a metrics stack, ntfy* | `notify` suite; restore drill |
 | 13 | Governance and control plane | Records lifecycle as an API (ADR-0010), approvals bound to a request digest; projects and work items linked to strategy records by uid (ADR-0020) | a broker, the records library, a project tool (OpenProject) | lifecycle and fixture runs, `projects` suite |
 
-Eighteen capabilities carry a conformance directory (fourteen at first drop, ADR-0005, then
+Eighteen core capabilities carry a conformance suite (fourteen at first drop, ADR-0005, then
 `context`, `projects`, `codemode-executor` and `codemode-runner`); the list is authoritative in [interfaces.md](interfaces.md).
+Extended suites (`backup`, `dns`, `edge` and others, [conformance.md](conformance.md)) ship beside
+them and run in CI too, outside the eighteen that `make conform-check` counts. The platform names
+more capabilities than either list (`hypervisor`, `metrics`, the module slots): every one is
+classed in `homelabnext/agent/tool_classes.yml`, and a guest may declare any of them.
 
 ## The spine
 

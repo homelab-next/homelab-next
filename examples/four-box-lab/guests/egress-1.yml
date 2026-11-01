@@ -23,7 +23,7 @@ firewall_rules:
     - {name: ntp-services, proto: udp, ports: "123", source: "zone:services"}
     - {name: ntp-data, proto: udp, ports: "123", source: "zone:data"}
     - {name: ntp-edge, proto: udp, ports: "123", source: "zone:edge"}
-capability: cap:context
+capability: cap:dns
 capability_groups: [cap_edge]
 tags: [prod]
 owners: {primary: platform-team}

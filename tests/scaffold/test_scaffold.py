@@ -31,7 +31,7 @@ def test_role_scaffold_passes_the_linter_cli(tmp_path):
     assert r.returncode == 0, r.stdout
 
 
-@pytest.mark.skipif(shutil.which("ansible-playbook") is None, reason="ansible not installed")
+@pytest.mark.requires_tool("ansible-playbook")
 def test_role_scaffold_main_runs_under_ansible(tmp_path):
     scaffold.new("role", "billing_api", tmp_path)
     (tmp_path / "p.yml").write_text(

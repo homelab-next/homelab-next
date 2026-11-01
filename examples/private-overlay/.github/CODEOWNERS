@@ -5,6 +5,13 @@
 # from the pull request itself, so without this a pull request could rewrite checks.yml to pass.
 # While you are the only writer, GitHub cannot let you approve your own pull request: merge as
 # admin (the rule binds everyone else) and turn the bypass off when a second writer joins.
+#
+# Deny by default: the first rule owns every path, so a path added later (or one the lines below
+# leave out: the inventory and known_hosts that pick the deploy's targets, lab/customizations/
+# whose hooks run tasks, the sealed files) needs the owner's review too.  GitHub applies the LAST
+# matching rule, so a line below may name a narrower owner but must never name none.  The lines
+# below say why each path matters; they are kept for that, not for coverage.
+*                             @lab-owner-fake
 
 # the workflows, and this file
 /.github/                     @lab-owner-fake
@@ -13,6 +20,10 @@
 /runner/                      @lab-owner-fake
 /ansible.cfg                  @lab-owner-fake
 /ansible/playbooks/           @lab-owner-fake
+# which hosts the deploy reaches, as whom and through what (ansible_host, ssh args, become), and
+# the host keys it trusts
+/ansible/inventory/           @lab-owner-fake
+/ansible/known_hosts          @lab-owner-fake
 /locks/                       @lab-owner-fake
 # what the lab claims as its own: the site's delegated IPv6 prefixes (a model runtime's lab-only
 # rule trusts them), its zones, egress, firewall allows and tailnet, and the selection's scope and
@@ -34,6 +45,10 @@
 /lab/model-serving/model_store.json  @lab-owner-fake
 /lab/model_roles.eval.json    @lab-owner-fake
 /lab/model-evals/             @lab-owner-fake
+# hooks and profiles that add tasks to a role's run
+/lab/customizations/          @lab-owner-fake
+# who may sign in over SSH: the certificate roles, their principals, TTLs and groups
+/lab/ssh-ca.yml               @lab-owner-fake
 # what must be sealed, and to whom
 /.sops.yaml                   @lab-owner-fake
 /.hnx-private-overlay.yml     @lab-owner-fake

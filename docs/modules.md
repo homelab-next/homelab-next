@@ -80,9 +80,13 @@ examples/modules/<id>/module.yml  the fictional examples (this draft), examples/
 ```
 
 The id equals the directory name and is the graph node `module:<id>`. An overlay module whose id
-equals a shipped one is an **error**, never a silent override. The loader puts only
-`hnx_modules/<id_>` of each module on the import path; a module shipping `hnx_modules/<other>/` or
-`homelabnext/` is refused.
+equals a shipped one is an **error**, never a silent override. A module's
+`python/` tree holds only its own package, `hnx_modules/<id_>/`: the manifest rules
+(`homelabnext.modules.rules.code_tree_problems`) refuse another module's `hnx_modules/<other>/`,
+`homelabnext/`, any other top-level module, an `hnx_modules/__init__.py` (it would end the
+namespace package) and a symlink anywhere in it, so the tree can never shadow code that is not
+the module's. No loader imports module code yet; the one that does puts `python/` on the import
+path, so this rule is what keeps that path to the module's own package.
 
 ## The manifest at a glance
 
@@ -186,8 +190,10 @@ that guard rules no module may contribute about itself.
 Every slot has a descriptor; `examples/modules/slots.yml` is the draft data for the slots the
 examples use, and the contract-test rules read it. The fields and their rules are a draft schema
 of their own, `platform/slot` 1.0 (`schemas/platform/slot.schema.json`, `x-draft`): every
-`slots.yml` entry validates against it, each contract names a real protocol file, and the
-privileged set is pinned to the six trust roots named below, each with a conformance suite.
+`slots.yml` entry validates against it (the loader checks every entry before a rule reads it and
+reports one that does not, leaving it out of the registry), each contract names a real protocol
+file, and the privileged set is pinned to the six trust roots named below, each with a
+conformance suite.
 `platform/capability` stays 1.0 until the ADR is accepted: 1.0 allows undeclared keys, so adding
 these fields' rules to it would refuse a 1.0 descriptor that happened to carry one, which is not
 an additive change. Capability descriptor 1.1 takes them then (a deliberate, documented break, or
@@ -211,7 +217,7 @@ is subsumed by the providers' and core modules' `requires`.
 
 | Key | Entry | Notes |
 |---|---|---|
-| `capabilities` | `{cap, version, features, formats, instance, provisional, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract |
+| `capabilities` | `{cap, version, features, formats, instance, provisional, hosts, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract; `hosts` (optional, the module's own host roles) scopes which roles the [egress policy](#egress-and-publishing) lets reach the slot, every role when absent |
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
 | `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
@@ -259,7 +265,9 @@ that `refquota` and `refreservation`; on any other filesystem an ext4 image of t
 in full, is mounted there by a generated `.mount` unit, keeping the root's owner and mode. It never
 mounts over existing files or a mount it did not make, finishes what a failed run left, carries on
 with the next module when one fails, and `--check` reports without changing anything (exit 3 while
-a cap is owed). A cap is not grown in place (move the data out and rerun); `disk_gb: 0` is no cap.
+a cap is owed). An image cap is not resized in place (move the data out and rerun); a ZFS cap is
+set to the new size in place (ZFS refuses a `refquota` below what the dataset uses); `disk_gb: 0`
+is no cap.
 Roles on `kind: external` hosts are listed, not rendered: those hosts are outside the lab. GPU
 memory has no systemd control and stays a placement sum. `hnx modules render` writes these limits
 from the overlay's selection (`homelabnext/modules/cli.py`).
@@ -378,7 +386,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
 | shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config.<module>: [cap:edge\|cap:idp]` (a site rule) | overlay owner |
-| egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
+| egress | traffic beyond required slots (a required or preferred slot is reached without a grant, by the roles its `hosts` names or every role; a privileged one is gated by the review tier, human) | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
 **Never contributed**: ceilings, broker actions and approvers, review policy, grants, and runtime
@@ -425,7 +433,11 @@ through (`homelabnext/_yaml.py`, `homelabnext/modules/scope.py`). `GOVERNANCE` i
 lists them all, and a test derives the direct imports of the two tiers, `swap_evidence.py` and
 `swap.py`, so a new import that is not listed fails the suite. Their wider import tree is not
 listed: CI runs the gates with the base commit's code (the `trusted-gates` job), so a pull request
-cannot weaken its own gate. So is a change to what vouches for a model a swap rebinds to (the model store, the
+cannot weaken its own gate through them, though it can still edit the workflow that runs the job
+(below, "What runs the gate"). A change to what sets up CI's interpreter and packages
+(`.github/actions/python-deps/action.yml`, `constraints/bootstrap.txt`, `constraints/ci.txt`,
+`pyproject.toml`) and to the release transforms (`homelabnext/status/release_transforms.yml`,
+`homelabnext/status/release.py`; ADR-0033 decision 7) is human-approve too. So is a change to what vouches for a model a swap rebinds to (the model store, the
 evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist
 until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"), and so
 is a change to the model role table (`examples/model_roles.json`) or to a swap record
@@ -599,8 +611,9 @@ that slot's round trip").
 ## Egress and publishing
 
 `egress:` is `none` (the default) or, per host role of the module's own, the registry services and
-`internet` it may reach beyond the slots it requires; a `svc:` target must be a registry service
-the site has (a selected slot or instance, or a selected module's row). A grant names its
+`internet` it may reach beyond the slots it requires or prefers; a `svc:` target must be a registry service
+the site has (a selected slot or instance, or a selected feature or core module's row; a
+provider's rows are reached by its slot or instance). A grant names its
 targets: `grants.egress.<module>.<role>: [internet, svc:broker, external]`. Every `internet` target
 and every authority or privileged service (`svc:secrets`, `svc:broker`, `svc:idp`, the instances
 that fill those slots) must be listed for that role, and so must `external` for a `kind: external`
@@ -634,11 +647,13 @@ role's chain, which accepts:
   port of its placed hosts when it has no row (address-granular: give the provider rows to narrow
   it); a provider with no host role runs outside the lab and is reached only over `internet`;
 - each `svc:` target (a feature or core module's row, a slot or an instance);
-- with `internet`, global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
-  so the role resolves through the lab's resolvers): every special-purpose range (private, shared, loopback,
-  link-local, documentation, benchmarking, multicast, reserved, NAT64 and the other
-  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader), every
-  host's `addresses` and, when `hnx modules render --network FILE` (with `--overlay DIR`,
+- with `internet`, global unicast only, except DNS (port 53) and DNS over TLS and over QUIC (port
+  853), tcp and udp, so the role resolves through the lab's resolvers (the `dns` allows above; a
+  `dns` provider that runs outside the lab is not reached): every special-purpose range (private,
+  shared, loopback, link-local, documentation, benchmarking, multicast, reserved, NAT64 and the
+  other IPv4-embedding prefixes), `scope.trusted.nets` and `scope.trusted.wan` (the lab's own
+  public addresses, so not the port forwards behind them either; both read by the strict scope
+  reader, which refuses a dynamic WAN source), every host's `addresses` and, when `hnx modules render --network FILE` (with `--overlay DIR`,
   `DIR/lab/site.yml` by default; or `egress.render(..., network=)`) gives the network model, every zone's `subnet6` and every `delegated_prefixes6`
   prefix are never the internet. Over IPv6 the accept also requires `2000::/3`, so nothing
   outside global unicast passes whatever the deny-list holds. **Without the network model**
@@ -655,8 +670,12 @@ cgroup present, before `network-pre.target`; the module's fleet units start only
 `hnx-egress.timer` reloads it every 30 seconds, because nftables resolves a cgroup once (a
 restarted role slice falls under the `hnx.slice` drop until then). A failed load keeps the policy
 already loaded; before the first successful load at boot `hnx.slice` is unfiltered, so watch the
-service for failure. Requirements are the module's, not a role's: every role of a module reaches
-the slots the module requires, authority slots included.
+service for failure. A requirement or preference reaches its slot for the host roles its `hosts`
+names, and for every role of the module when it names none, authority slots included. **A slot
+reached by requirement needs no egress grant**, privileged or not: its gate is the review tier
+(human for a privileged slot, [Trust tiers](#trust-tiers-what-selecting-a-module-grants)), and `hosts` is how a module keeps a
+role that never uses the secrets store or the broker from reaching it. The grant covers only the
+`egress:` targets above.
 
 **What it does not cover**: connections the module accepts (inbound is the network model's and the
 edge's; replies pass as established); loopback, so modules on one host reach each other's local
@@ -713,7 +732,7 @@ spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 | the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown | the hub's view ceilings and release transforms |
 | model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling |
 | enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) | none in this repository yet (`job_label`, `analyzers_for` are for the client) |
-| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's and the status hub's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
+| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's, the status hub's and the invariants runner's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
 | webhooks | the receiver's ceiling | `grants.egress` | not yet |
 | backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) | not yet |
 | the bus | its subscribers' ceilings | `cap:events` | not yet |
@@ -753,8 +772,11 @@ tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with anothe
 source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The lake stores the
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
-is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column and
-reader ceilings follow in the order the ADR sets. Readers read at their ceiling: the query
+is one of the canonical spellings). The log pipeline tags each event from its source's declaration
+(`homelabnext.logpipeline.tlp_labels`, the `hnx_tlp` label), and `hnx modules tlp-backfill`
+(`homelabnext.lake.backfill`) writes the statements that label rows stored before the column;
+running them, and loading the generated `lake-access.json` into the query engine, are the
+operator's steps on a real lab. Readers read at their ceiling: the query
 engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
 and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
 filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
@@ -1239,9 +1261,12 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    compared, and the report says so; one it merely leaves out is refused by the schema, never
    read as "nothing runs". The fleet units and the recovery pairs come from the hosts, and the
    agents from the running broker where the census asks one
-   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers and tables
-   are not reported by the hosts, so a gathered inventory names them in `not_gathered`, and only a
-   hand-written one compares them.
+   ([The loader at deploy time](#the-loader-at-deploy-time)). MCP servers are gathered when at
+   least one host lists its installed client configurations, and tables when one host lists the
+   lake catalog; otherwise a gathered inventory names them in `not_gathered`. Service rows are
+   never gathered by name (a socket names no row): a gathered inventory names them in
+   `not_gathered`, the loader judges each selected row by whether its placed host listens on its
+   port, and only a hand-written inventory compares them by name.
 
 ### The loader at deploy time
 
@@ -1255,7 +1280,8 @@ runs the loader twice, and both always run:
    `lab/modules.yml`, the role table `lab/model_roles.json`, the core registry `lab/services.yml`,
    the MCP catalog `lab/mcp/` and the keyring) into a problem instead of the note an ad-hoc check
    prints: a deploy never checks the repository's examples in place of the lab. The slot registry
-   is the pinned `hnx` checkout's own (`examples/modules/slots.yml`), never the overlay's. With
+   is the pinned `hnx` checkout's own (`examples/modules/slots.yml`), never the overlay's
+   (`--deploy` refuses `--slots`). With
    modules selected and no `lab/review-policy.yml`, the check says so: the supply chain then
    refuses every fetched module, so a lab of in-tree modules needs no policy, and one that fetches
    a module cannot load it without one.
@@ -1328,8 +1354,9 @@ written (UTC), the host's boot id, and the writer's pid and start time.
   `module=` yet**: until a module loader registers a module's pairs with it, a module's pair seen
   running is bound to no module, and the loader reports it as no module's or the core's.
 
-The census reads each owner's record at the fixed directory `/var/lib/homelabnext/notify-pairs`
-(`module_census_pairs_dir`; no glob) in one step, with the role's `notify_pairs_records` module, so
+The census reads each owner's record at `/var/lib/homelabnext/notify-pairs`
+(`module_census_pairs_dir`, a role default the overlay's deploy workflow pins on the command line,
+so its inventory cannot repoint it; no glob) in one step, with the role's `notify_pairs_records` module, so
 nothing can be swapped between a check and a read. No link is followed at any step; each directory
 on the way must be writable by no one but its owner; the record must be a regular file of at most
 256 KiB (a FIFO never blocks the read); otherwise the census fails. Beside each record the host
@@ -1381,7 +1408,8 @@ included. The answer is the agent keys whose profile the manifest both maps a tr
 and grants something, names only, and it is audited. An agent, a relay, the Code Mode runner and
 a sandbox are refused it (`not-the-operator`), and an unlisted root `unknown-caller`; `hnx`
 then names the `operators` key. Only that one task becomes root (`module_census_hnx_cli`, an
-absolute path, default `/opt/hnx/bin/hnx`); the systemctl queries stay unprivileged. A broker that
+absolute path, default `/opt/hnx/bin/hnx`, pinned on the deploy's command line like
+`module_census_systemctl_cli`); the systemctl queries stay unprivileged. A broker that
 refuses fails the census, never passes it. Each answered line must be one agent key, or the census is unreadable; `agents` is
 the union over every broker asked, and stays in `not_gathered` when no host's census asked one (a
 lab whose inventory sets no socket has not shown which agents run, which is never read as
@@ -1718,11 +1746,14 @@ and `meaning_changes` is recorded, never checked.
   the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
   base commit's own code**: a detached worktree of the base, imported with `python -P` (the
   checkout's own package never on the path, which the job asserts), reading the change only as data
-  (`--root`). A pull request run still takes the workflow file and the dependency constraints from
-  the change, so this rests on both being human-approve (`.github/workflows/ci.yml` is governance,
-  `constraints/` is in CODEOWNERS), a review `main`'s ruleset does not yet require;
-  `pull_request_target` is never used. Until a base carries
-  `swap-gate` (the change that adds it), the job runs the change's own and says so.
+  (`--root`). Nothing of the change runs before the gates: the job calls `actions/setup-python`
+  directly rather than the checkout's `python-deps` action, calls the interpreter by the absolute
+  path it reports, and installs pip and the checker's dependencies from the base's constraints and
+  `pyproject.toml`. A base that cannot run a gate fails the job; the change's own code never stands
+  in. A pull request run still takes the workflow file from the change, so this rests on
+  `.github/workflows/ci.yml` being human-approve (it is governance), a review `main`'s ruleset does
+  not yet require, until a ruleset requires the job from the default branch; the privileged
+  pull-request trigger is never used.
 
   What none of this proves: a report's `live` is the claim of whoever ran it, now one a code owner
   reviewed, not one checked for provenance; and a library caller that assembles its own

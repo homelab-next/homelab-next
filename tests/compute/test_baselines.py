@@ -356,9 +356,7 @@ def test_playbook_without_a_set_or_bound_role_is_a_no_op_play(tmp_path):
         assert "# no baseline set" in text or "# no control is bound" in text, why
 
 
-@pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+@pytest.mark.requires_tool("ansible-playbook")
 def test_playbook_without_a_set_or_bound_role_passes_ansible_syntax_check(tmp_path):
     env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1")
     for why, text in _no_baseline_playbooks(tmp_path).items():

@@ -368,8 +368,9 @@ def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
     assert cli.main(["agent", "lint", str(prof), "--rule", READERS]) == 0
     assert cli.main(["agent", "lint", str(prof), "--rule", BROKER]) == 1
     pol = tmp_path / "policy.yml"
+    # the actor's local-only grants need the policy to attest local-only (lint applies it now)
     entry = {"mcp": ["lake", "records", "shell"], "capabilities": ["cap:lake-query"],
-             "tier": "read", "direct_mcp": ["shell"]}  # fmt: skip
+             "tier": "read", "direct_mcp": ["shell"], "data_tier": "local-only"}  # fmt: skip
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     capsys.readouterr()
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
@@ -509,7 +510,8 @@ def test_an_unused_direct_mcp_entry_is_a_note(tmp_path, capsys):
     prof.write_text(yaml.safe_dump(_actor(mcp=["lake"])))
     pol = tmp_path / "policy.yml"
     entry = {"mcp": ["lake"], "capabilities": ["cap:lake-query"], "tier": "read",
-             "direct_mcp": ["lake", "hnx-broker", "nothing-here"]}  # fmt: skip
+             "direct_mcp": ["lake", "hnx-broker", "nothing-here"],
+             "data_tier": "local-only"}  # fmt: skip
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
     err = capsys.readouterr().err
@@ -519,3 +521,15 @@ def test_an_unused_direct_mcp_entry_is_a_note(tmp_path, capsys):
     pol.write_text(yaml.safe_dump({"ceilings": {"profile:actor": entry}}))
     assert cli.main(["agent", "lint", str(prof), "--policy", str(pol)]) == 0
     assert "in direct_mcp" not in capsys.readouterr().err
+
+
+def test_an_unknown_mcp_server_fails_the_broker_rule_on_its_own():
+    """actors-act-via-broker alone (the G-13 observable) refuses a server the catalog does not
+    hold, as it does an unknown capability or tier: unknown is never assumed not to act."""
+    from homelabnext.agent.readers import broker_problems
+
+    got = broker_problems({"mcp": ["lake", "no-such-server"], "capabilities": []})
+    assert got == [
+        "profile is granted an unknown MCP server (mcp entry 2), which is not in the catalog "
+        "(unknown is never assumed not to act)"
+    ]

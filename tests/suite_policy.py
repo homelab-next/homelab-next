@@ -27,7 +27,15 @@ broken install cannot pass as a skip.  ``HNX_REQUIRE_TOOLS`` names the required 
 older switch for Go, still means ``go``.  The decision is made by the helper from the tool's
 name, not by reading the wording of a skip afterwards: a test that skips for a tool on its own
 (its own ``skipif``, an early return) is outside the contract, so every such test goes through
-the helper (``tests/gates/test_suite_policy.py`` checks the tools CI requires).
+the helper, or through the ``@pytest.mark.requires_tool("name", ...)`` marker, which calls it
+before any fixture is set up (``tests/gates/test_suite_policy.py`` checks the tools CI requires,
+and that no test skips through ``skipif(shutil.which(...))``).
+
+**Required modules.**  ``HNX_REQUIRE_MODULES`` (comma-separated module names, e.g.
+``duckdb,pyiceberg,mcp,ansible``) names the optional extras that must import: an
+``importorskip`` skip (``could not import 'X'``) of a listed module, or of a submodule of one,
+is a failure there instead of a skip, so a broken extra cannot pass as a skip in the job that
+installs it.  This one is read from the skip's reason, which pytest itself words.
 
 **Quarantine.**  ``@pytest.mark.quarantine(owner="team-or-handle", until="YYYY-MM-DD",
 reason="...")`` lets a known-flaky test keep running without breaking the build (it becomes a
@@ -58,6 +66,7 @@ import pytest
 from tests import shard_report
 
 QUARANTINE = "quarantine"
+REQUIRES_TOOL = "requires_tool"
 _STATE = pytest.StashKey[dict]()
 
 
@@ -137,6 +146,11 @@ def pytest_configure(config: pytest.Config) -> None:
         f"{QUARANTINE}(owner, until, reason): known-flaky test, runs as non-strict xfail until "
         "the date (tests/suite_policy.py)",
     )
+    config.addinivalue_line(
+        "markers",
+        f"{REQUIRES_TOOL}(*names): the test needs these external tools: require_tool() for each "
+        "before any fixture (tests/suite_policy.py)",
+    )
     shard = config.getoption("shard")
     try:
         index, count = shard_report.parse_shard(shard) if shard else (1, 1)
@@ -176,6 +190,29 @@ def required_tools(env: dict[str, str] | None = None) -> set[str]:
     return tools
 
 
+def required_modules(env: dict[str, str] | None = None) -> set[str]:
+    """The modules the environment requires to import: ``HNX_REQUIRE_MODULES`` (comma-separated)."""
+    env = os.environ if env is None else env
+    return {m.strip() for m in env.get("HNX_REQUIRE_MODULES", "").split(",") if m.strip()}
+
+
+#: pytest.importorskip's own wording of its skip
+_IMPORTORSKIP = re.compile(r"^could not import '([A-Za-z0-9_.]+)'")
+
+
+def required_module_skipped(reason: str, required: set[str]) -> str | None:
+    """The required module an ``importorskip`` skip with ``reason`` names (itself or the package
+    it is a submodule of), else None."""
+    m = _IMPORTORSKIP.match(reason.strip())
+    if not m:
+        return None
+    parts = m[1].split(".")
+    return next(
+        (".".join(parts[:i]) for i in range(1, len(parts) + 1) if ".".join(parts[:i]) in required),
+        None,
+    )
+
+
 def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
     """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
     PATH).  Missing: skip with ``"<name> is not installed"``, or fail when the environment
@@ -200,6 +237,14 @@ def _silent_skip(config: pytest.Config, rep) -> None:
     if not rep.skipped or hasattr(rep, "wasxfail"):
         return
     reason = _reason(rep.longrepr)
+    module = required_module_skipped(reason, required_modules())
+    if module:
+        rep.outcome = "failed"
+        rep.longrepr = (
+            f"{reason.strip()}: {module} must import here (HNX_REQUIRE_MODULES requires it), so "
+            "this is a broken install, not a skip"
+        )
+        return
     if skip_reason_allowed(reason, _state(config)["skip_patterns"]):
         return
     rep.outcome = "failed"
@@ -245,10 +290,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
     info = item.stash.get(_STATE, None)
     if info and info.get("problem"):
         pytest.fail(info["problem"], pytrace=False)
+    for mark in item.iter_markers(REQUIRES_TOOL):
+        if not mark.args or not all(isinstance(a, str) and a for a in mark.args):
+            pytest.fail(f"{REQUIRES_TOOL} needs one or more tool names", pytrace=False)
+        for name in mark.args:
+            require_tool(name)  # before any fixture: skips, or fails where the tool is required
 
 
 def _budget(st: dict, suite: str) -> float:

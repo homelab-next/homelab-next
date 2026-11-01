@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """hnx registers: build the pages, convert between the two register forms, refresh links.
 
-build SRC_DIR OUT_DIR [--results FILE] [--policy FILE]
-                     validate and render lessons/runbooks/invariants (fatal)
+build SRC_DIR OUT_DIR [--results FILE] [--policy FILE | --no-review-policy | --no-policy]
+                     validate and render lessons/runbooks/invariants (fatal); no review policy
+                     given or found is refused unless opted out (either spelling)
 split FILE.yml DIR   a single-file register -> one record file per entry
 join DIR FILE.yml    the reverse (for review or a downstream tool)
 links DIR... [--check]
                      regenerate each record's `## Links` block; --check only reports stale
                      ones (exit 1)
-review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json]
+review SRC_DIR [--today YYYY-MM-DD] [--strict] [--json] [--policy FILE | --no-review-policy]
                      what the lesson review should do (missing reviews, retire, incorporate,
                      supersede, update, keep); warns and exits 0 unless --strict
 summaries PATH... [--json]
@@ -25,9 +26,10 @@ events migrate PATH...
 events add RECORD EVENT.yml [--require-reviews]
                      validate one event (review, recurrence, verified) against the register as it
                      will be, then append it to RECORD's sidecar under a fresh name
-decide REGISTER_ROOT RECORDS_ROOT --as ISSUER:SUBJECT [--dry-run] [--json] [--policy FILE]
+decide REGISTER_ROOT RECORDS_ROOT --as ISSUER:SUBJECT [--dry-run] [--json]
+       [--policy FILE | --no-review-policy | --no-policy]
                      apply, deny or hold every register-transition intent in the records inbox
-                     (exit 0; 1 on a fatal error)
+                     (exit 0; 1 on a fatal error, and when no review policy is found)
 """
 
 import argparse
@@ -39,6 +41,27 @@ from pathlib import Path
 from . import RegisterError, build_all, join_register, split_register, stale_links
 
 
+def _policy_args(p: argparse.ArgumentParser, where: str) -> None:
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "--policy", help=f"review policy (default review-policy.yml in or beside {where})"
+    )
+    g.add_argument(
+        "--no-review-policy",
+        "--no-policy",
+        dest="no_review_policy",
+        action="store_true",
+        help="run without a review policy (a local experiment; either spelling); without this, "
+        "none found is refused",
+    )
+
+
+def _policy_path(ns):
+    """``--policy FILE``, ``False`` for ``--no-review-policy``/``--no-policy``, else None (look
+    it up; none found fails closed, :data:`homelabnext.reviews.NO_POLICY`)."""
+    return False if ns.no_review_policy else ns.policy
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hnx registers", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -48,7 +71,7 @@ def main(argv=None) -> int:
     b.add_argument(
         "--results", help="invariants results JSON (default SRC/invariants.results.json)"
     )
-    b.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    _policy_args(b, "SRC")
     s = sub.add_parser("split", help="convert lessons.yml/runbooks.yml into a record directory")
     s.add_argument("src")
     s.add_argument("dir")
@@ -64,7 +87,7 @@ def main(argv=None) -> int:
     rv.add_argument("--strict", action="store_true", help="exit 1 when anything is due")
     rv.add_argument("--json", action="store_true", help="machine-readable output")
     rv.add_argument("--results", help="invariants results JSON (default SRC/...results.json)")
-    rv.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    _policy_args(rv, "SRC")
     sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
     sm.add_argument("paths", nargs="*")
     sm.add_argument("--json", action="store_true", help="machine-readable output")
@@ -90,11 +113,7 @@ def main(argv=None) -> int:
     dc.add_argument("register_root")
     dc.add_argument("records_root")
     dc.add_argument("--as", dest="decided_by", required=True, help="issuer:subject of the decider")
-    dcp = dc.add_mutually_exclusive_group()
-    dcp.add_argument("--policy", help="review policy (default review-policy.yml in or beside root)")
-    dcp.add_argument(
-        "--no-policy", action="store_true", help="decide without review tiers (no policy found)"
-    )
+    _policy_args(dc, "the register root")
     dc.add_argument("--dry-run", action="store_true", help="report, write and move nothing")
     dc.add_argument("--json", action="store_true", help="machine-readable output")
     ns = ap.parse_args(argv)
@@ -106,21 +125,13 @@ def main(argv=None) -> int:
         if ns.cmd == "summaries":
             return _summaries(ns)
         if ns.cmd == "build":
-            from .render import find_policy
-
-            if not ns.policy and find_policy(Path(ns.src)) is None:
-                print(
-                    f"[registers] warning: no review-policy.yml in or beside {ns.src}: no review"
-                    " tier is checked (pass --policy FILE)",
-                    file=sys.stderr,
-                )
-            for p in build_all(ns.src, ns.out, ns.results, ns.policy):
+            for p in build_all(ns.src, ns.out, ns.results, _policy_path(ns)):
                 print(p)
         elif ns.cmd == "review":
             from .due import review
             from .render import load_sources
 
-            rep = review(load_sources(ns.src, ns.policy, ns.results), ns.today)
+            rep = review(load_sources(ns.src, _policy_path(ns), ns.results), ns.today)
             if ns.json:
                 print(json.dumps(rep.as_json(), indent=2, sort_keys=True))
             else:
@@ -231,7 +242,7 @@ def _decide(ns) -> int:
     from .transitions import TransitionDecider
 
     try:
-        policy = False if ns.no_policy else load_policy(ns.policy) if ns.policy else None
+        policy = False if ns.no_review_policy else load_policy(ns.policy) if ns.policy else None
     except ReviewError as ex:
         raise RegisterError("review policy", ex.problems) from None
     try:

@@ -459,3 +459,17 @@ def test_the_script_rejects_unknown_arguments(host):
     _r, _m, _u, _mount, run = host
     r, _ = run("--nope")
     assert r.returncode == 2
+
+
+def test_the_readme_says_how_each_kind_of_cap_changes_size():
+    """The script resizes a ZFS cap in place and refuses to resize an image: the README says
+    both, so neither is a surprise (it once said no cap is ever resized in place)."""
+    files = render("small-lab")
+    script = files["data/hnx-module-quota.sh"]
+    zfs = script.split('fstype" = zfs ]; then', 1)[1].split("\n  fi\n", 1)[0]
+    assert 'zfs set refquota="${gb}G" refreservation="${gb}G"' in zfs  # resized in place
+    assert "move the data out, remove the image and rerun" in script  # an image is not
+    readme = " ".join(files["README.md"].split())
+    assert "An image cap is not resized in place" in readme
+    assert "A ZFS cap is resized in place" in readme
+    assert "A cap is not grown in place" not in readme

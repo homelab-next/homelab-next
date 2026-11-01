@@ -7,3 +7,8 @@ ssh_hardening_required:
   pubkeyauthentication: "yes"
 # The connection sshd -T evaluates Match blocks for: the kept account from the local host.
 ssh_hardening_match_spec: "user={{ ssh_hardening_keep_user }},host=localhost,addr=127.0.0.1"  # no-raw-endpoint: allow the loopback connection sshd -T evaluates Match blocks for
+# One OpenSSH public key line: a CA is a plain key; a revoked entry may also be a certificate.
+ssh_hardening_ca_key_pattern: '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) AAAA[A-Za-z0-9+/]+={0,3}( [ -~]{1,128})?\Z'
+ssh_hardening_revoked_key_pattern: '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com|(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519|sk-ecdsa-sha2-nistp256)-cert-v01@openssh\.com) AAAA[A-Za-z0-9+/]+={0,3}( [ -~]{1,128})?\Z'
+# Where sshd looks for the kept account's keys (the home getent reports).
+ssh_hardening_authorized_keys_path: "{{ (ssh_hardening_account.stdout.split(':') + [''] * 7)[5] or '/nonexistent' }}/.ssh/authorized_keys"

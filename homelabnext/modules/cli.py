@@ -237,6 +237,27 @@ def _core(
     return core, [*problems, *found]
 
 
+def _slot_entries(registry: dict[str, Any]) -> tuple[dict[str, Any], list[ld.Problem]]:
+    """The slot registry's entries that validate against ``platform/slot``, and a problem for
+    each one that does not (the rules read only the valid ones, so a bad entry is reported, never
+    a crash and never read as a slot)."""
+    entries = registry.get("slots")
+    if entries is None:
+        return {}, []
+    if not isinstance(entries, dict):
+        return {}, [ld.Problem("slots", "slots: not a mapping of slot names to entries")]
+    schema = ld._schema("platform", "slot.schema.json")
+    good: dict[str, Any] = {}
+    out: list[ld.Problem] = []
+    for name in sorted(entries, key=str):
+        errs = ld._errors(schema, entries[name])
+        if errs:
+            out += [ld.Problem("slots", f"{name}: schema: {e}") for e in errs]
+        else:
+            good[name] = entries[name]
+    return good, out
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="hnx modules", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -554,6 +575,11 @@ def _run(args: argparse.Namespace) -> int:
         raise ld.LoaderError("--deploy needs --overlay (the lab the deploy applies)")
     if deploy and args.examples:
         raise ld.LoaderError("--deploy refuses --examples (a deploy never loads the fixtures)")
+    if deploy and args.slots:
+        raise ld.LoaderError(
+            "--deploy refuses --slots (the slot registry is the pinned checkout's own, never "
+            "the overlay's)"
+        )
     for flag in (
         "site",
         "slots",
@@ -669,9 +695,10 @@ def _run(args: argparse.Namespace) -> int:
     for what, doc in (("slot registry", slots), ("role table", roles)):
         if not isinstance(doc, dict):
             raise ld.LoaderError(f"the {what} is not a mapping")
+    slot_entries, slot_problems = _slot_entries(slots)
     report = ld.check(
         tree,
-        slots=slots.get("slots") or {},
+        slots=slot_entries,
         roles=roles.get("roles") or {},
         in_tree_roots=in_tree,
         core=core,
@@ -682,7 +709,7 @@ def _run(args: argparse.Namespace) -> int:
         budget=budget,
         empty_selection=empty,
     )
-    found = sorted({*problems, *registry_problems, *report.problems, *fallbacks})
+    found = sorted({*problems, *registry_problems, *slot_problems, *report.problems, *fallbacks})
     notes += report.notes
     written: dict[str, int] = {}
     error = None
