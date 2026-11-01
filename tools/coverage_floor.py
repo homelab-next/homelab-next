@@ -28,7 +28,8 @@ coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed cha
 scope guard, the records lifecycle, the decide cascade, the agent's grant ceiling, reader rule,
 handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
 MCP server, the status hub's front door, ingest and approval paths, the generators' backstop, the
-TLP label type, egress and reader ceilings, and the leak scan.  Nothing else lists them in full.
+TLP label type, egress and reader ceilings, the SSH certificate authority, and the leak
+scan.  Nothing else lists them in full.
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
   --json FILE  evaluate one existing ``coverage json`` report for every unit instead of running
@@ -75,6 +76,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/tlp_egress.py": ("tests/tlp",),
     "homelabnext/lake/ceiling.py": ("tests/lake",),
     "homelabnext/notify/ceiling.py": ("tests/notify",),
+    "homelabnext/sshca.py": ("tests/sshca",),
     "tools/leak_scan.py": ("tools/tests/test_leak_scan.py",),
 }
 

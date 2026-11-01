@@ -486,6 +486,7 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
     assert "/.hnx-private-overlay.yml" in rules
     assert rules.get("/lab/site.yml")  # the site's delegated IPv6 prefixes are trusted, not proved
     assert rules.get("/lab/modules.yml")  # the selection's scope and grants widen trust too
+    assert rules.get("/lab/ssh-ca.yml")  # who may sign in over SSH, and for how long
     # the rest of what the lab trusts: hnx site review-tier rates every change to these human
     for path in (
         "/lab/services.yml",

@@ -308,3 +308,11 @@ def test_lock_pins_the_reviewed_digest():
     edited["digest"] = profile_digest(edited)
     assert any("not the reviewed" in x for x in verify_profile(edited, policy=_policy(), lock=lock))
     assert any("not in the lock" in x for x in verify_profile(p, policy=_policy(), lock={}))
+
+
+def test_budget_mode_defaults_to_enforce():
+    """Budgets are hard caps unless a spec opts into warn."""
+    s = spec()
+    del s["budget_mode"]
+    assert compile_profile(s, library())["budget_mode"] == "enforce"
+    assert compile_profile({**s, "budget_mode": "warn"}, library())["budget_mode"] == "warn"

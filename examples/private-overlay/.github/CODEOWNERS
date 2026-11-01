@@ -47,6 +47,8 @@
 /lab/model-evals/             @lab-owner-fake
 # hooks and profiles that add tasks to a role's run
 /lab/customizations/          @lab-owner-fake
+# who may sign in over SSH: the certificate roles, their principals, TTLs and groups
+/lab/ssh-ca.yml               @lab-owner-fake
 # what must be sealed, and to whom
 /.sops.yaml                   @lab-owner-fake
 /.hnx-private-overlay.yml     @lab-owner-fake

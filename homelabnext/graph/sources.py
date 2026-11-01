@@ -325,15 +325,19 @@ def read_capabilities(b: Builder) -> None:
     adapter -implements-> cap (target-file bindings, client adapters the contract imports, the
     fake), adapter -for-> product (a target file of a compose stack binds the capability that
     stack's same-named service provides), cap -loads_schema-> schema (``_schema_links``)."""
-    from homelabnext.conform.registry import CAPABILITIES, EXTENDED, load_module
+    from homelabnext.conform.registry import (
+        CAPABILITIES,
+        EXTENDED,
+        declared_capabilities,
+        load_module,
+    )
     from homelabnext.sop import capabilities as caps
 
     for name in CAPABILITIES:
         b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="core")
     for name in EXTENDED:
         b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="extended")
-    listed = _yaml(b.root / "capabilities.yml") or {}
-    for name in listed.get("capabilities") or ():
+    for name in declared_capabilities(b.root) or ():  # the one validated reader of the file
         b.declare(f"cap:{name}", "cap", "capabilities.yml")
     tc = _yaml(b.root / "homelabnext/agent/tool_classes.yml") or {}
     for cid, classes in sorted((tc.get("capabilities") or {}).items()):

@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .core import CheckResult, Suite, run_checks
+from .adapters._env import AdapterConfigError
+from .core import CheckResult, Suite, run_checks, validate_selection
 from .registry import ConformError, find_root, load_module, load_suite
 from .target import (
     Binding,
@@ -24,17 +25,24 @@ from .target import (
 
 __all__ = [
     "MIN_CHECKS",
+    "VERDICTS",
     "CapabilityRun",
     "MutantRun",
+    "git_dirty",
     "git_sha",
     "mutation_runs",
     "run",
     "run_capability",
     "suite_digest",
+    "tree_digest",
 ]
 
 #: a suite with fewer executed checks than this is not a conformance test
 MIN_CHECKS = 6
+
+#: the four outcomes of a capability (docs/conformance.md "Exit codes"): a real failure is
+#: never filed as an outage, and an outage is never a pass
+VERDICTS = ("pass", "fail", "unmeasured", "misconfigured")
 
 
 @dataclass
@@ -43,6 +51,9 @@ class CapabilityRun:
     target: str
     results: list[CheckResult] = field(default_factory=list)
     error: str | None = None  # the run could not be measured (factory failed, ...)
+    #: what ``error`` is: "unmeasured" (the subject could not be built) or "misconfigured"
+    #: (the adapter lacks an endpoint or credential it needs)
+    error_kind: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
     only: list[str] | None = None  # the --check selection, if any
 
@@ -85,13 +96,22 @@ class CapabilityRun:
         """A *passing test*: measured, no MUST failure, and enough checks really executed."""
         return self.ok and len(self.executed) >= MIN_CHECKS
 
+    @property
+    def verdict(self) -> str:
+        """One of :data:`VERDICTS` for this run."""
+        if self.error is not None:
+            return self.error_kind or "unmeasured"
+        return "pass" if self.ok else "fail"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "capability": self.capability,
             "target": self.target,
+            "verdict": self.verdict,
             "ok": self.ok,
             "passing": self.passing,
             "error": self.error,
+            "error_kind": self.error_kind,
             "too_few": self.too_few,
             "provenance": dict(self.meta),
             "counts": {
@@ -119,6 +139,10 @@ def run_capability(
     try:
         suite = load_suite(capability, root)
         binding = tgt.binding(capability)
+        try:  # a bad waiver or selection is misconfiguration, decided before any subject is built
+            validate_selection(suite, waive=binding.waive, only=only)
+        except ValueError as exc:
+            raise ConformError(str(exc)) from exc
         run_obj.meta = provenance(capability, binding, root)
         factory = make_factory(binding, suite, root)
         run_obj.results = run_checks(
@@ -130,10 +154,13 @@ def run_capability(
         )
     except ConformError:
         raise
-    except ValueError as exc:  # bad waiver / selection: misconfiguration
-        raise ConformError(str(exc)) from exc
+    except AdapterConfigError as exc:  # a missing endpoint or credential, for this run alone
+        run_obj.error = f"adapter misconfigured: {exc}"
+        run_obj.error_kind = "misconfigured"
     except Exception as exc:  # the subject could not even be built: could not measure
+        # (a ValueError from a factory, such as a JSONDecodeError from a probe, lands here too)
         run_obj.error = f"could not build subject: {type(exc).__name__}: {exc}"
+        run_obj.error_kind = "unmeasured"
     return run_obj
 
 
@@ -153,11 +180,43 @@ def run(
 
 
 def suite_digest(capability: str, root: str | Path | None = None) -> str | None:
-    """sha256 of the suite module file, so a report says exactly which checks produced it."""
+    """sha256 of the suite module file alone (see :func:`tree_digest` for the shared code)."""
     path = getattr(load_module(capability, root), "__file__", None)
     if not path:
         return None
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return _file_sha256(path)
+
+
+def _file_sha256(path: str | Path) -> str | None:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+#: the harness code a suite's checks are made of: the suite imports shared check logic
+#: (``_util``, ``_lake``), its Protocol and its fakes, so hashing the suite file alone does not
+#: say which checks ran
+TREE_DIRS = ("suites", "protocols", "fakes")
+
+
+def tree_digest(root: str | Path | None = None) -> str | None:
+    """sha256 over every ``.py`` file under ``conformance/{suites,protocols,fakes}``.
+
+    Each file contributes its path relative to ``conformance/`` and the sha256 of its bytes, in
+    sorted order, so a renamed, added or edited file changes the digest.  None without the tree.
+    """
+    conf = find_root(root) / "conformance"
+    files = sorted(
+        f for d in TREE_DIRS if (conf / d).is_dir() for f in (conf / d).rglob("*.py") if f.is_file()
+    )
+    if not files:
+        return None
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.relative_to(conf).as_posix().encode() + b"\0")
+        h.update((_file_sha256(f) or "unreadable").encode() + b"\n")
+    return h.hexdigest()
 
 
 def git_sha(root: str | Path | None = None) -> str | None:
@@ -176,17 +235,39 @@ def git_sha(root: str | Path | None = None) -> str | None:
     return out if p.returncode == 0 and out else None
 
 
+def git_dirty(root: str | Path | None = None) -> bool | None:
+    """Whether the checkout has uncommitted changes (``git status --porcelain`` is not empty),
+    so a ``git_sha`` is not taken for the code that ran.  None: not a git tree, or no git."""
+    try:
+        p = subprocess.run(
+            ["git", "-C", str(find_root(root)), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(p.stdout.strip()) if p.returncode == 0 else None
+
+
 def provenance(capability: str, binding: Binding, root: str | Path | None = None) -> dict[str, Any]:
-    """What a result was measured with: suite file hash, checkout SHA, adapter and its file."""
+    """What a result was measured with: the suite file hash and the hash of the whole harness
+    tree (suites, protocols, fakes), the checkout SHA and whether the tree was dirty, and the
+    adapter with its file and that file's hash."""
     meta: dict[str, Any] = {
         "suite_sha256": suite_digest(capability, root),
+        "tree_sha256": tree_digest(root),
         "git_sha": git_sha(root),
+        "dirty": git_dirty(root),
     }
     if binding.builtin:
         meta["adapter"] = f"builtin:{binding.builtin}"
     else:
         meta["adapter"] = binding.adapter
-        meta["adapter_file"] = adapter_origin(binding.adapter or "", root)
+        origin = adapter_origin(binding.adapter or "", root)
+        meta["adapter_file"] = origin
+        meta["adapter_sha256"] = _file_sha256(origin) if origin else None
     return meta
 
 
