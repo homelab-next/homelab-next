@@ -85,7 +85,8 @@ The `admit` task checks the event against its schema and re-checks the same trig
 offline runner's code, so the rule and the pack cannot disagree about what fires. A pack triggered by
 `homelabnext.schedule.fired` instead takes a `schedule: {id, cron}` in its rule and becomes a
 `core.st2.CronTimer` rule (UTC; day of week rendered as names, because cron counts 0 = Sunday and
-the timer's scheduler counts 0 = Monday). A schedule may not restrict both day of month and day of
+the timer's scheduler counts 0 = Monday; a range that starts at Sunday is split, so `0-4` becomes
+`sun,mon-thu`, never the backwards `sun-thu`). A schedule may not restrict both day of month and day of
 week (`st2-cron`): cron fires when either matches, the CronTimer's scheduler only when both do;
 bind two schedules instead. `admit` builds the event from the firing. Its id derives
 from the schedule and the firing time, so a timer that fires twice for the same time makes one event.
@@ -101,7 +102,10 @@ does not hold is skipped. `enrich` `pick` and `extract-iocs` are computed. An `a
 broker request with the runner's own `action_request`. `lookup`, `decide` and `prompt` steps do not
 run on StackStorm yet, and the renderer refuses a pack that has one (`st2-step`). The two packs that
 use them (`new-critical-alert` and `phishing-report`) stay unbound until the runtime can reach the
-table and decision services.
+table and decision services. Those two and `case-opened-notify` are also not in `workflows/deploy.yml`:
+their handlers (`case-open`, `notify-page`, `notify-post`, `dns-block-domains`) are site code that is
+not in this tree, and their triggers pin no producer, which `hnx workflows validate` refuses for any
+pin (`docs/workflows.md`, Deploying) just as the render does (`st2-handler`, `st2-source`).
 
 **Actions and approvals.** In `live` mode a risky action goes to the broker as `submit`. Risky means
 the manifest gives it tier `execute` or `privileged`, or sets `requires_approval`. The broker holds
@@ -246,6 +250,13 @@ when that is longer, and a second delivery ends its run `duplicate` before any s
 CronTimer that fires twice for the same time builds the same event id, so it is one run too. The
 bound that holds when two deliveries race inside the same instant is the same as for coalescing
 (below): the controller's idempotency key.
+
+`admit` records the id when it admits the event, before any step runs, and the bridge acknowledges
+a delivery once the webhook answers 2xx, which is before the workflow runs. So a run that fails
+after `admit` (a broker outage, a runner crash) is not redelivered: a second delivery of the same
+event inside the window ends `duplicate`. That run's failure is visible in StackStorm's execution
+history, not recovered. There is no replay command yet. Recovering means re-emitting the event, by
+hand, under a new id from its producer.
 
 ## Coalescing bursts
 

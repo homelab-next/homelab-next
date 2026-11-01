@@ -9,7 +9,8 @@ def spec_doc(**over):
         "id": "unit-spec",
         "version": 1,
         "question_set": ["Is it fine?"],
-        "decision_table": [{"when": "fine", "then": "accept"}, {"when": "otherwise", "then": "escalate"}],
+        "decision_table": [{"when": "fine", "then": "accept"}, {"when": "noise", "then": "reject"},
+                           {"when": "otherwise", "then": "escalate"}],
         "tiers": [
             {"name": "floor"},
             {"name": "small", "model_role": "mdl:fast-classifier", "min_confidence": 0.8},

@@ -6,7 +6,7 @@ Protocol ``systemone/1`` (JSON over HTTP):
 ``POST /v1/systemone/decide``  request ``{"spec": str, "id": str, "text": str,
 "impact"?: low|medium|high|critical, "fields"?: object}``; response 200
 ``{"protocol": "systemone/1", "spec": str, "decision": {...}, "trace": [...]}`` where
-``decision`` carries ``verdict`` (a label, or ``human``), ``tier``, ``confidence``, ``impact``,
+``decision`` carries ``verdict`` (one of ``DecisionSpec.verdicts``), ``tier``, ``confidence``, ``impact``,
 ``escalated``, ``acted``, ``interim`` and ``audit``.  ``verdict == "human"`` is an escalation and
 never an answer.  Errors are ``{"error": {"code": str, "message": str}}`` with 400 (bad request),
 404 (unknown spec) or 500 (adapter failure; the adapter never fabricates a decision).
