@@ -7,7 +7,7 @@ import json
 
 from netutil import render
 
-from homelabnext.network import build_ir
+from homelabnext.network import adapters, build_ir
 from homelabnext.network.plan import compute_plan, write_rendered
 
 
@@ -76,3 +76,25 @@ def test_json_form_is_machine_readable(ir):
 def test_summary_only_omits_diffs(ir):
     text = compute_plan("zonefile", render("zonefile", ir), None).render(diffs=False)
     assert "+++ desired" not in text and "+ create var/lib/hnx/zones/example.internal.zone" in text
+
+
+#: the controller adapter, whose payloads are object documents (name the slot, not the product)
+[CONTROLLER] = adapters.names_for("switch")
+
+
+def test_a_created_and_a_deleted_payload_list_their_objects(ir, tmp_path):
+    rendered = adapters.get(CONTROLLER).render(ir)
+    nets = next(
+        c for c in compute_plan(CONTROLLER, rendered, None).changes if c.path == "networks.json"
+    )
+    names = [o["name"] for o in json.loads(rendered["networks.json"])["objects"]]
+    assert nets.action == "create" and names
+    assert [(o.key, o.action) for o in nets.objects] == [(n, "create") for n in names]
+    assert f"    + {names[0]}" in compute_plan(CONTROLLER, rendered, None).render()
+    write_rendered(rendered, tmp_path)
+    gone = {k: v for k, v in rendered.items() if k != "networks.json"}
+    nets = next(
+        c for c in compute_plan(CONTROLLER, gone, tmp_path).changes if c.path == "networks.json"
+    )
+    assert nets.action == "delete"
+    assert [(o.key, o.action) for o in nets.objects] == [(n, "delete") for n in names]

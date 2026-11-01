@@ -111,6 +111,8 @@ class Policy:
     zones: dict[str, str]  # zone id -> subnet
     rules: tuple[Rule, ...]
     zones6: dict[str, str] = field(default_factory=dict)  # zone id -> subnet6, zones with one
+    #: zones with ``egress.one_way``: nothing reaches them, the router's own resolver included
+    one_way: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,8 @@ class NetworkIR:
             for r in d["policy"]["rules"]:
                 for side in ("src", "dst"):
                     del r[side]["zone"]
+        if not self.policy.one_way:
+            del d["policy"]["one_way"]  # a site without one digests exactly as before
         if not self.router.wan6:
             del d["router"]["wan6"]  # a site without one digests exactly as before site 1.6
         return d
@@ -326,7 +330,7 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
         for r in doc.get("dns", {}).get("resolvers", [])
     )
 
-    rules = _rules(doc, reg, nets, host_addr)
+    rules = firewall_rules(doc, reg, nets, host_addr)
     switches = tuple(_switch(sw) for sw in doc.get("switches", []))
 
     router = doc["router"]
@@ -351,7 +355,13 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
         reservations=reservations,
         dns_records=tuple(records),
         resolvers=resolvers,
-        policy=Policy("deny", nets, tuple(rules), nets6),
+        policy=Policy(
+            "deny",
+            nets,
+            tuple(rules),
+            nets6,
+            tuple(sorted(z["id"] for z in zones if z["egress"].get("one_way"))),
+        ),
         switches=switches,
         router=RouterPlan(
             router["id"],
@@ -367,7 +377,9 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
     return replace(ir, digest=hashlib.sha256(blob.encode("utf-8")).hexdigest())
 
 
-def _rules(doc: dict, reg: Any, nets: dict[str, str], host_addr: dict[str, str]) -> list[Rule]:
+def firewall_rules(
+    doc: dict, reg: Any, nets: dict[str, str], host_addr: dict[str, str]
+) -> list[Rule]:
     fw = doc["firewall"]
     out: list[Rule] = []
 

@@ -3,8 +3,9 @@
 
 Pure functions over plain data, shared by the site model (:mod:`homelabnext.network.validate`,
 ``hnx site validate``) and the guest model (:func:`homelabnext.compute.zones.site_deploy`, read
-by the ``tailscale-acl`` target), so the one rule set is written once and the compute model still
-never imports the site-model package (the same split as :mod:`homelabnext.power`).
+by the ``tailscale-acl`` target), so the one rule set is written once, outside both packages (the
+same split as :mod:`homelabnext.power`).  The compute package does read the site through the
+network package (its loader, the IR's ``firewall_rules``); this module is not that boundary.
 
 The site declares (1.2)::
 
@@ -24,8 +25,10 @@ nodes advertise); no owner; an owner that is a tag; a control character (a line 
 value.  Tailscale's ``tagOwners`` accepts users,
 ``group:``, ``autogroup:`` and tags, but a tag owner lets every node carrying that tag apply the
 deploy tag to itself (a zone tag owner: any node of that zone becomes the deploy), so the owners
-are people only: a user login (``name@domain``), a ``group:`` or an admin autogroup
-(``autogroup:admin``, ``owner``, ``it-admin``, ``network-admin``; not ``autogroup:member``).
+are people only: a user login (``name@domain``) or an admin autogroup (``autogroup:admin``,
+``owner``, ``it-admin``, ``network-admin``; not ``autogroup:member``).  A ``group:`` is refused
+too: the rendered policy defines no ``groups``, since the site has nowhere to declare a group's
+members, and Tailscale refuses a policy that names a group it does not define.
 """
 
 from __future__ import annotations
@@ -86,10 +89,17 @@ def deploy_problems(doc: Mapping[str, Any]) -> list[str]:
             if isinstance(o, str) and o.startswith("tag:"):
                 out.append(
                     f"{w}.owners: {o!r} is a tag: every node carrying it could tag itself "
-                    f"{tag!r}; name a user, group: or admin autogroup:"
+                    f"{tag!r}; name a user or an admin autogroup:"
                 )
             elif not isinstance(o, str) or not OWNER_RE.match(o):
-                out.append(f"{w}.owners: {o!r} is not a user, group: or admin autogroup: owner")
+                out.append(f"{w}.owners: {o!r} is not a user or admin autogroup: owner")
+            elif o.startswith("group:"):
+                # the rendered policy has no ``groups`` block (the site cannot declare one), and
+                # Tailscale refuses a policy naming a group it does not define
+                out.append(
+                    f"{w}.owners: {o!r} is a group, and the site declares no groups for the "
+                    "policy; name a user or an admin autogroup:"
+                )
     zones = dep.get("zones")
     if not isinstance(zones, list) or not zones:
         out.append(f"{w}.zones: list the zones the deploy reaches (no wildcard)")

@@ -54,11 +54,3 @@ def read_tree(directory: str | Path) -> dict[str, str]:
         for p in sorted(d.rglob("*"))
         if p.is_file()
     }
-
-
-def write_tree(directory: str | Path, files: Mapping[str, str]) -> None:
-    d = Path(directory)
-    for rel, text in files.items():
-        dest = d / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")

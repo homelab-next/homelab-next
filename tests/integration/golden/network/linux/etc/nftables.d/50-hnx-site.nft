@@ -39,6 +39,7 @@ table inet hnx_site {
         ct state invalid drop
         iifname "lo" accept
         ip protocol icmp accept
+        iifname "vlan50" meta l4proto { tcp, udp } th dport 53 drop comment "one-way zone sandbox: no resolver"
         iifname "vlan*" udp dport { 53, 67 } accept
         iifname "vlan*" tcp dport 53 accept
         ip saddr @z_mgmt tcp dport 22 accept comment "ssh from management zone mgmt"

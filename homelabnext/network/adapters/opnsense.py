@@ -17,6 +17,7 @@ from .base import Adapter, AdapterDeferred, Rendered
 
 class OpnsenseAdapter(Adapter):
     name = "opnsense"
+    roles = frozenset({"network"})
     status = "deferred"
     summary = "deferred: config-XML fragments need a real instance to be provable"
 
