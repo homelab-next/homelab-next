@@ -33,7 +33,10 @@ and the file is named for it.  The invariants file may tombstone an id under a t
         reason: meant checklist L-07 (runbook verifies), not F-02 (network segments)
 
 ``check_lost`` counts a tombstoned id as present; ``duplicates`` refuses an id that is both
-live and retired.  A record directory has no tombstones: a uid is never reused, so a record is
+live and retired.  A second block, ``retired_legacy:``, holds the register's own earlier uses of
+an id that is a live ``docs/checklist.md`` row with another meaning (the register once numbered
+a criterion wrongly): ``check_lost`` counts those too, but ``duplicates`` does not, because the
+id belongs to the checklist row and its criterion takes it when the row is automated (ADR-0019).  A record directory has no tombstones: a uid is never reused, so a record is
 retired through its lifecycle (a status), never deleted.
 
 The migration to uids (``hnx records assign-uids``) renames ``LL-001.md`` to ``<uid>.md`` and
@@ -326,18 +329,24 @@ def ids_in(text: str, spec: RegisterSpec) -> list[str]:
     return [i for i, _ in split_entries(text, spec)[1]]
 
 
-_RETIRED_HEAD = re.compile(r"^retired:[ \t]*(?:#.*)?$")
+#: the tombstone blocks: ``retired`` (never reused) and ``retired_legacy`` (a checklist row's id
+#: the register once used with another meaning; the row's criterion may take it)
+RETIRED_BLOCKS = ("retired", "retired_legacy")
 _KEY = re.compile(r"^([ \t]+)([^\s#:][^:]*?)[ \t]*:(?:[ \t]|$)")
 
 
-def retired_in(text: str, spec: RegisterSpec) -> list[str]:
-    """Ids tombstoned under the top-level ``retired:`` block mapping (read as text).
+def retired_in(text: str, spec: RegisterSpec, block: str = "retired") -> list[str]:
+    """Ids tombstoned under the top-level ``retired:`` block mapping (read as text), or under
+    ``block`` (``retired_legacy``).
 
     Keys are the lines at the block's first indentation level; only keys that look like this
     register's ids count (the schema validator reports any other key).
     """
+    if block not in RETIRED_BLOCKS:
+        raise ValueError(f"unknown tombstone block {block!r}")
+    head = re.compile(rf"^{block}:[ \t]*(?:#.*)?$")
     lines = text.splitlines()
-    start = next((i for i, ln in enumerate(lines) if _RETIRED_HEAD.match(ln)), None)
+    start = next((i for i, ln in enumerate(lines) if head.match(ln)), None)
     if start is None:
         return []
     rx = re.compile(spec.id_re)
@@ -360,7 +369,9 @@ def retired_in(text: str, spec: RegisterSpec) -> list[str]:
 def _known(text: str, spec: RegisterSpec) -> set[str]:
     """Every key the file accounts for: live entries plus tombstones (and, for a joined
     records file written before uids, its numbered ids)."""
-    keys = set(ids_in(text, spec)) | set(retired_in(text, spec))
+    keys = set(ids_in(text, spec))
+    for block in RETIRED_BLOCKS:
+        keys |= set(retired_in(text, spec, block))
     if spec.key == "uid":
         keys |= {m.group(1) for m in re.finditer(rf"(?m)^- id: ({_LEGACY.pattern})\s*$", text)}
     return keys
@@ -492,8 +503,9 @@ def _lost_events(root: pathlib.Path, relpath: str, revs: tuple[str, ...]) -> lis
 
 
 def duplicates(text: str, spec: RegisterSpec) -> list[str]:
-    """Keys that occur more than once in a single-file register, counting a tombstone as an
-    occurrence (a live entry reusing a retired invariant id is a duplicate)."""
+    """Keys that occur more than once in a single-file register, counting a ``retired:``
+    tombstone as an occurrence (a live entry reusing a retired invariant id is a duplicate); a
+    ``retired_legacy:`` one is not (that id is a checklist row's, free for its criterion)."""
     seen: set[str] = set(retired_in(text, spec))
     dupes: set[str] = set()
     for ident in ids_in(text, spec):
