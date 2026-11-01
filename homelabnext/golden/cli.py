@@ -15,6 +15,11 @@
                            fake model behind the fake inference server and the fake broker world;
                            ``--check REPORT`` fails unless the committed report is current and
                            passing, ``--out REPORT`` (re)writes it.  Exit 0 pass, 1 fail.
+``hnx golden run``         a golden suite against a role, through the LLM gateway (the
+                           ``llm-gateway`` capability, the role as the model, the key in
+                           ``--key-env``): what a consumer calls.  ``--direct`` resolves the
+                           role's backend instead (host-side; ``--key-env`` then names the
+                           backend's key).  Exit 0 pass, 1 fail, 2 usage.
 ``hnx golden canary``      the egress canary (docs/compute-model.md, "The egress canary"): live
                            against every binding of a role (``--registry`` and ``--roles``), or
                            against a scripted fake (``--fake benign|incident``).  Exit 0 pass,
@@ -30,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.registry import load as load_registry
-from homelabnext.registry.models import ModelResolver, RoleTable
+from homelabnext.registry.models import GatewayResolver, ModelResolver, RoleTable
 
 from .runner import client_completer, run_suite
 from .tasks import load_suite
@@ -44,6 +49,12 @@ def main(argv: list[str]) -> int:
     run.add_argument("--registry", required=True)
     run.add_argument("--roles", required=True, help="model role table (JSON)")
     run.add_argument("--role", help="alias to test (default: the suite's role)")
+    run.add_argument(
+        "--direct",
+        action="store_true",
+        help="call the role's backend, not the gateway (host-side checks of a binding only)",
+    )
+    _key_env(run, "the gateway key (with --direct: the backend's key)")
     run.add_argument("--json", action="store_true")
     pins = sub.add_parser("pins", help="model pins and their evaluation report (G-11)")
     pins.add_argument("action", choices=("check", "report"))
@@ -56,6 +67,7 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="check: fail a canary entry that ran against the fake (an overlay with real models)",
     )
+    _key_env(pins, "report, live: the backends' key (each binding is called directly)")
     cm = sub.add_parser(
         "codemode", help="Code Mode vs classic MCP mode suites against the fakes (CM-6)"
     )
@@ -75,6 +87,7 @@ def main(argv: list[str]) -> int:
     can.add_argument("--roles", help="model role table (JSON, live)")
     can.add_argument("--fake", choices=("benign", "incident"), help="a scripted fake model")
     can.add_argument("--samples", type=int, help="samples per task (default: the suite's)")
+    _key_env(can, "live: the backend's key (each binding is called directly)")
     can.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "canary":
@@ -87,14 +100,35 @@ def main(argv: list[str]) -> int:
     role = args.role or suite.role
     if not role:
         ap.error("no alias: pass --role or set 'role' in the suite")
-    resolver = ModelResolver(load_registry(args.registry), RoleTable.load(args.roles))
-    completer, model_id = client_completer(resolver, role)
+    api_key = _api_key(args)
+    how = ModelResolver if args.direct else GatewayResolver
+    resolver = how(load_registry(args.registry), RoleTable.load(args.roles))
+    completer, model_id = client_completer(resolver, role, api_key=api_key)
     rep = run_suite(suite, completer, role=role, model_id=model_id)
     if args.json:
         print(json.dumps(rep.to_dict(timing=True), indent=2, sort_keys=True))
     else:
         print(rep.render_text(), end="")
     return 0 if rep.ok else 1
+
+
+def _key_env(p: argparse.ArgumentParser, what: str) -> None:
+    p.add_argument("--key-env", metavar="VAR", help=f"environment variable holding {what}")
+
+
+def _api_key(args: argparse.Namespace) -> str | None:
+    """The key named by ``--key-env`` (never on the command line, so not in a process list)."""
+    import os
+
+    if not args.key_env:
+        return None
+    value = os.environ.get(args.key_env)
+    if not value:
+        print(
+            f"golden {args.cmd}: --key-env {args.key_env}: the variable is not set", file=sys.stderr
+        )
+        raise SystemExit(2)  # usage
+    return value
 
 
 def _pins(args: argparse.Namespace) -> int:
@@ -104,7 +138,7 @@ def _pins(args: argparse.Namespace) -> int:
     suites = args.suite or list(pins.DEFAULT_SUITES)
     if args.action == "report":
         if args.registry:
-            factory, tiers, canary_for, name = _live(args.registry, table)
+            factory, tiers, canary_for, name = _live(args.registry, table, _api_key(args))
             rep = pins.run_eval(
                 table,
                 suites,
@@ -159,7 +193,7 @@ def _canary(args: argparse.Namespace) -> int:
     else:  # pragma: no cover - needs a real model server
         table = RoleTable.load(args.roles)
         resolver = ModelResolver(load_registry(args.registry), table)
-        canary_for = _binding_completer(resolver)
+        canary_for = _binding_completer(resolver, _api_key(args))
         for b in table.get(args.role).bindings:  # every binding, not the first that resolves
             runs.append((canary_for(args.role, b)[0], args.role, b.model_id))
     reports = []
@@ -182,13 +216,15 @@ def _canary(args: argparse.Namespace) -> int:
     return 0 if all(r["summary"]["ok"] for r in reports) else 1
 
 
-def _binding_completer(resolver: ModelResolver):  # pragma: no cover - needs a real model server
+def _binding_completer(
+    resolver: ModelResolver, api_key: str | None = None
+):  # pragma: no cover - needs a real model server
     """``(role, binding) -> (completer, "live")``: the canary's completer for one binding, which
     returns the whole ChatResult so the canary sees ``finish_reason``."""
     from homelabnext.registry.models import ModelClient
 
     def canary_for(role: str, binding: Any) -> tuple[Any, str]:
-        client = ModelClient(resolver.resolve_binding(role, binding))
+        client = ModelClient(resolver.resolve_binding(role, binding), api_key=api_key)
         return (lambda messages, params: client.chat(messages, **params)), "live"
 
     return canary_for
@@ -235,7 +271,9 @@ def _codemode(args: argparse.Namespace) -> int:
     return 0 if rep["summary"]["ok"] else 1
 
 
-def _live(registry: str, table: RoleTable):  # pragma: no cover - needs a real model server
+def _live(
+    registry: str, table: RoleTable, api_key: str | None = None
+):  # pragma: no cover - needs a real model server
     from homelabnext.decide.evalset import EXAMPLES
     from homelabnext.decide.spec import load_spec
     from homelabnext.decide.tiers import ModelTier
@@ -246,15 +284,15 @@ def _live(registry: str, table: RoleTable):  # pragma: no cover - needs a real m
     tiers = {}
     for t in spec.tiers:
         if t.model_role:
-            client = ModelClient(resolver.resolve(t.model_role))
+            client = ModelClient(resolver.resolve(t.model_role), api_key=api_key)
             tiers[t.name] = ModelTier(
                 t.name, lambda m, c=client: c.chat(m), spec.question_set, spec.answer_labels
             )
 
     def factory(role: str):
-        return client_completer(resolver, role)
+        return client_completer(resolver, role, api_key=api_key)
 
-    return factory, tiers, _binding_completer(resolver), "live"
+    return factory, tiers, _binding_completer(resolver, api_key), "live"
 
 
 if __name__ == "__main__":

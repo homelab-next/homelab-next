@@ -65,7 +65,10 @@ def main(argv: list[str]) -> int:
         if args.roles:
             try:
                 problems = bindings_problems(store, RoleTable.load(args.roles))
-            except (RoleTableError, OSError, ValueError) as exc:
+            except RoleTableError as exc:  # readable but invalid: 1, as serving reports it
+                print(f"models: role table {args.roles}: {exc}", file=sys.stderr)
+                return 1
+            except (OSError, ValueError) as exc:  # unreadable or not JSON
                 print(f"models: role table {args.roles}: {exc}", file=sys.stderr)
                 return 2
         for p in problems:

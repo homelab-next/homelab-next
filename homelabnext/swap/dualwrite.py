@@ -119,6 +119,9 @@ class DualWriter:
         self.journal: Any = None
         #: the last replay failure per component (``id()``), cleared by its next success
         self.last_failure: dict[int, BaseException] = {}
+        #: set once the mirror is stopped (forward-only): a write goes to the primary alone and
+        #: nothing new is sent to, or parked for, the secondary; batches already parked stay owed
+        self.forward_only = False
 
     def rerouted(self, primary: Any, secondary: Any) -> DualWriter:
         """A writer for a new direction that keeps this one's parked batches, divergences and stats.
@@ -133,6 +136,7 @@ class DualWriter:
         new._order = self._order
         new.journal = self.journal
         new.last_failure = self.last_failure
+        new.forward_only = self.forward_only
         return new
 
     def _park(self, p: _Pending) -> None:
@@ -191,6 +195,8 @@ class DualWriter:
         primary_result: WriteResult,
         order: int = 0,
     ) -> None:
+        if self.forward_only:  # the mirror is stopped: the secondary is owed nothing new
+            return
         parked = _Pending(table, rows, key, source, high_water, self.secondary, order)
         if self.owed_to(self.secondary):  # never send a batch past older ones still parked
             self.replay_pending(owed_to=self.secondary)

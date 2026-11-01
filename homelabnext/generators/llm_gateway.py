@@ -73,7 +73,7 @@ from homelabnext import tlp
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.models.store import ProblemsError
 from homelabnext.modules import rules as module_rules
-from homelabnext.registry.model import secret_env_name
+from homelabnext.registry.model import RegistryError, secret_env_name
 from homelabnext.registry.model_tlp import send_ceiling, tier_disagreement
 from homelabnext.registry.models import RoleTable, RoleTableError
 
@@ -91,12 +91,12 @@ __all__ = [
     "render_file",
 ]
 
-SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*$")
-SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
-MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
-SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*\Z")
+SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
+MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
+SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
-HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
 #: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
@@ -319,6 +319,27 @@ def limit_problems(where: str, raw: Any, *, allowed: Iterable[str]) -> list[str]
     return problems
 
 
+def _deployment_share_problems(rname: str, role: Any) -> list[str]:
+    """A role's limit is the role's, not each binding's.  LiteLLM enforces rpm/tpm and
+    ``max_budget`` per deployment (one per binding), and its pre-call checks move an over-limit
+    request onto the next deployment, so a role with ``n`` bindings gets ``1/n`` of the per-minute
+    share on each (rounded down: never looser).  A share that rounds to nothing is refused."""
+    n = len(role.bindings)
+    out: list[str] = []
+    for k in ("max_requests", "max_tokens"):
+        count = role.limits.get(k)
+        if not count or n < 2:
+            continue
+        share = per_minute(int(count), int(role.limits["window_s"]))
+        if share is not None and share // n < 1:
+            out.append(
+                f"mdl:{rname}: limits.{k} {count:g} per {role.limits['window_s']:g}s is {share} a "
+                f"minute, which cannot be split over its {n} bindings (the proxy limits each "
+                "deployment) without loosening it: raise the count or bind fewer backends"
+            )
+    return out
+
+
 def _limits(where: str, raw: Any, problems: list[str]) -> dict[str, Any]:
     if raw is None:
         return {}
@@ -467,9 +488,10 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
 
     for rname, role in sorted(table.roles.items()):
         if role.limits:
-            problems += limit_problems(
+            found = limit_problems(
                 f"mdl:{rname}", role.limits, allowed=("window_s", *ROLE_LIMIT_KEYS)
             )
+            problems += found or _deployment_share_problems(rname, role)
         for b in role.bindings:
             if b.backend not in backends:
                 problems.append(
@@ -477,6 +499,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                 )
 
     problems += _provider_collisions(table, backends)
+    problems += leaves_lab_problems(raw_roles, backends, roles_path)
 
     local_only: dict[str, str] = {}
     agent_roles: dict[str, str] = {}
@@ -809,17 +832,49 @@ def _key_ceiling(where: str, doc: Mapping[str, Any], tier: Any, problems: list[s
     return label
 
 
+def leaves_lab_problems(
+    raw_roles: Mapping[str, Any], backends: Mapping[str, Backend], roles_path: str
+) -> list[str]:
+    """Every binding the spec puts on a cloud backend is marked ``leaves_lab: true`` in the role
+    table, and no binding on a local backend is (ADR-0033 decision 10).
+
+    The role table is the one source of a role's ``leaves_lab`` and so of its TLP ceiling: the
+    per-request rule (:func:`homelabnext.registry.model_tlp.admit`) and ``grants.cloud_models``
+    read it and nothing else.  A cloud binding the table does not mark would let ``admit`` judge
+    the role as staying in the lab (ceiling ``red``) while this gateway sends its prompts out, so
+    the disagreement is refused here rather than reconciled."""
+    problems: list[str] = []
+    for rname, r in sorted(raw_roles.items()):
+        if not isinstance(r, Mapping):
+            continue
+        for i, b in enumerate(r.get("bindings") or []):
+            if not isinstance(b, Mapping):
+                continue
+            be = backends.get(str(b.get("backend", "")).removeprefix("svc:"))
+            if be is None:
+                continue  # reported as an undeclared backend
+            marked = b.get("leaves_lab") is True
+            where = f"{roles_path}: mdl:{rname} bindings[{i}] (svc:{be.name})"
+            if be.locality == "cloud" and not marked:
+                problems.append(
+                    f"{where}: the gateway spec puts it on a cloud backend but the role table "
+                    "does not mark it leaves_lab: true, so the role's TLP ceiling would read as "
+                    "red (ADR-0033 decision 10); mark it, or bind a local backend"
+                )
+            elif be.locality != "cloud" and marked:
+                problems.append(
+                    f"{where}: marked leaves_lab: true but the gateway spec puts it on a local "
+                    "backend; the role table and the gateway must agree where prompts go"
+                )
+    return problems
+
+
 def role_ceilings(spec: Spec, raw_roles: Mapping[str, Any]) -> dict[str, tlp.Label]:
     """Role -> its TLP ceiling at this gateway (ADR-0033 decision 10): the role table's
-    (:func:`homelabnext.modules.rules.role_ceiling`), but never above clear for a role whose chain
-    the spec puts on a cloud backend while the table marks no ``leaves_lab`` (the raise needs the
-    provider's terms, which only a ``leaves_lab`` binding records)."""
-    out: dict[str, tlp.Label] = {}
-    for role in spec.table.roles:
-        ceiling = module_rules.role_ceiling(dict(raw_roles), role)
-        cloud = any("cloud" in localities(spec, step) for step in chain(spec.table, role))
-        out[role] = module_rules.CLOUD_CEILING if cloud and ceiling is tlp.Label.RED else ceiling
-    return out
+    (:func:`homelabnext.modules.rules.role_ceiling`), exactly what
+    :func:`homelabnext.registry.model_tlp.admit` reads.  :func:`leaves_lab_problems` has already
+    refused a spec whose cloud bindings the table does not mark, so the two cannot disagree."""
+    return {role: module_rules.role_ceiling(dict(raw_roles), role) for role in spec.table.roles}
 
 
 def tlp_problems(spec: Spec) -> list[str]:
@@ -851,12 +906,15 @@ def _env_ref_bifrost(secret: str) -> str:
     return f"env.{secret_env_name(secret)}"
 
 
-def _per_minute(count: float, window_s: float) -> int:
-    """The validated per-minute form of a limit (:func:`per_minute`; the loader refused the rest)."""
+def _per_minute(count: float, window_s: float, deployments: int = 1) -> int:
+    """The validated per-minute form of a limit (:func:`per_minute`; the loader refused the rest),
+    split evenly over ``deployments`` and rounded down."""
     share = per_minute(int(count), int(window_s))
-    if share is None:  # unreachable after load_spec: never render a looser limit
-        raise GatewaySpecError(f"{count:g} per {window_s:g}s has no per-minute form")
-    return share
+    if share is None or share // deployments < 1:  # unreachable after load_spec: never looser
+        raise GatewaySpecError(
+            f"{count:g} per {window_s:g}s has no per-minute form over {deployments} deployment(s)"
+        )
+    return share // deployments
 
 
 def _duration(window_s: float) -> str:
@@ -881,6 +939,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
     notes: list[str] = []
     for rname, role in sorted(spec.table.roles.items()):
         lim = role.limits
+        n = len(role.bindings)  # the proxy limits each deployment: each gets 1/n of the role's
         for i, b in enumerate(role.bindings):
             be = spec.backends[b.backend]
             params: dict[str, Any] = {}
@@ -892,11 +951,11 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             params["api_key"] = _env_ref_litellm(be.api_key) if be.api_key else "no-key"
             params["order"] = i + 1
             if lim.get("max_requests"):
-                params["rpm"] = _per_minute(lim["max_requests"], lim["window_s"])
+                params["rpm"] = _per_minute(lim["max_requests"], lim["window_s"], n)
             if lim.get("max_tokens"):
-                params["tpm"] = _per_minute(lim["max_tokens"], lim["window_s"])
+                params["tpm"] = _per_minute(lim["max_tokens"], lim["window_s"], n)
             if lim.get("max_cost"):
-                params["max_budget"] = lim["max_cost"]
+                params["max_budget"] = lim["max_cost"] / n
                 params["budget_duration"] = _duration(lim["window_s"])
             info: dict[str, Any] = {"id": f"{rname}-{i + 1}"}
             if role.kind == "embedding":
@@ -913,8 +972,11 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
                 f"mdl:{rname}: limits are per {lim['window_s']:g}s; LiteLLM counts per minute, "
                 "so rpm/tpm are the per-minute share rounded down (never looser)"
             )
-        if len(role.bindings) > 1 and (lim.get("max_requests") or lim.get("max_tokens")):
-            notes.append(f"mdl:{rname}: rpm/tpm apply per deployment ({len(role.bindings)} here)")
+        if n > 1 and lim:
+            notes.append(
+                f"mdl:{rname}: the proxy limits each deployment, so each of its {n} gets 1/{n} of "
+                "the role's rpm/tpm (rounded down) and max_budget: the sum is never looser"
+            )
     fallbacks = [
         {rname: _fallback_targets(spec, rname)}
         for rname in sorted(spec.table.roles)
@@ -1776,7 +1838,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     except GatewaySpecError as exc:
         print(f"gateway: {exc}", file=sys.stderr)
         return 1
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, yaml.YAMLError, RegistryError) as exc:
+        # an unreadable spec, profile or registry (a profile that is not JSON is a ValueError)
         print(f"gateway: cannot read spec: {exc}", file=sys.stderr)
         return 2
     out = Path(args.out_dir)

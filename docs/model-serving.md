@@ -209,8 +209,13 @@ per-GPU units retire themselves. It restarts only instances whose unit changed.
 
 `health` is K-14 on the host. Each instance must answer `/health`, and `/v1/models` must list the
 role's model id with `max_model_len` equal to the role's `max_context_tokens`. The test holds its
-verdict equal to `homelabnext.registry.models.probe`, the gateway-side K-14 probe, on the same
+verdict equal to `homelabnext.registry.models.probe`, the host-side K-14 probe, on the same
 answers: a matching model passes; another context, an unreported context, or another model fails.
+That probe asks each backend directly (it checks a binding's model id and loaded context, which
+the gateway does not expose), so against a keyed vLLM it must carry the backend key
+(`probe(..., api_key=...)`, `check_serving(..., api_key=...)`); without it the answer is a 401 and
+the verdict `error`. Consumers, and `hnx golden run` by default, go through the gateway with their
+own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 
 ### `open_webui`
 

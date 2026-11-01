@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homelabnext.state import atomic_write_text
+
 from .decommission import Retired, retired_from_record, scan
 from .flip import FlipError, flip_text, load_doc, plan_flip
 from .record import sha256_file
@@ -205,7 +207,8 @@ class ManualBackend(Backend):
             assert self.registry is not None
             if not plan.empty:
                 text = self.registry.read_text(encoding="utf-8")
-                self.registry.write_text(flip_text(text, plan), encoding="utf-8")
+                # atomic: a crash mid-write must not leave a torn registry (mode is kept)
+                atomic_write_text(self.registry, flip_text(text, plan))
         except (FlipError, OSError) as exc:
             return Outcome(False, str(exc))
         return Outcome(True, plan.diff(), {"diff": plan.diff(), "plan": plan.to_dict()})

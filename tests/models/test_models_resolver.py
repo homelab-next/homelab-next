@@ -120,6 +120,26 @@ def test_schema_example_loads():
         (lambda d: d["roles"]["fast-classifier"].update(fallback="mdl:main-reasoner"), "loops"),
         (lambda d: d["roles"]["embedder"].update(kind="image"), "kind"),
         (lambda d: d["roles"]["embedder"].update(bindings=[]), "at least one binding"),
+        # these used to escape as AttributeError / TypeError tracebacks, not RoleTableError
+        (lambda d: d["roles"]["embedder"].update(bindings=["svc:x"]), r"bindings\[0\] must be"),
+        (lambda d: d["roles"]["embedder"].update(bindings="svc:x"), "bindings must be a list"),
+        (
+            lambda d: d["roles"]["embedder"]["bindings"][0].update(priority="first"),
+            "priority must be an integer",
+        ),
+        (
+            lambda d: d["roles"]["embedder"].update(limits={"window_s": "60"}),
+            "limits needs window_s",
+        ),
+        (lambda d: d["roles"]["embedder"].update(fallback=3), "fallback"),
+        (lambda d: d["roles"]["embedder"].update(max_context_tokens="8k"), "max_context_tokens"),
+        (lambda d: d["roles"]["embedder"].update(params=[1]), "params must be a mapping"),
+        # a name with a trailing newline used to pass the slug check (``$`` matches before it)
+        (lambda d: d["roles"].update({"embedder\n": d["roles"].pop("embedder")}), "slug"),
+        (
+            lambda d: d["roles"]["embedder"]["bindings"][0].update(backend="svc:inference-small\n"),
+            "svc:",
+        ),
     ],
 )
 def test_malformed_tables_are_refused(mutate, needle):
@@ -127,3 +147,67 @@ def test_malformed_tables_are_refused(mutate, needle):
     mutate(doc)
     with pytest.raises(RoleTableError, match=needle):
         RoleTable.from_dict(doc)
+
+
+# --- through the gateway, and keyed backends (ADR-0007 decisions 2-3) ------------------------------
+def _gateway_registry():
+    import copy as _copy
+
+    import yaml
+
+    from homelabnext.registry.model import build_registry
+
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    for name, port in (("inference-large", 8001), ("inference-small", 8002), ("llm-gateway", 4000)):
+        svc = _copy.deepcopy(doc["services"]["inference"])
+        svc.update(capability=name, port=port)
+        doc["services"][name] = svc
+    return build_registry(doc)
+
+
+def test_the_gateway_resolver_sends_the_role_and_the_callers_key():
+    """A consumer reaches the gateway capability with the role as the model and its own key;
+    without the key the gateway answers 401 (no backend is ever resolved)."""
+    from conformance.fakes.openai_server import FakeOpenAIServer
+    from homelabnext.registry import FakeDNS, Resolver
+    from homelabnext.registry.models import GatewayResolver, ModelError
+
+    gw = FakeOpenAIServer(
+        models=["main-reasoner"], default_reply="via the gateway", api_keys=["sk-agent"]
+    ).start()
+    try:
+        reg = _gateway_registry()
+        res = Resolver(reg, dns=FakeDNS(), hosts={}, environ={"HNX_ENDPOINT_LLM_GATEWAY": gw.url})
+        r = GatewayResolver(reg, RoleTable.from_dict(role_doc()), res)
+        rm = r.resolve("mdl:main-reasoner")
+        assert (rm.model_id, rm.backend, rm.base_url) == ("main-reasoner", "llm-gateway", gw.url)
+        out = ModelClient(rm, api_key="sk-agent").chat([{"role": "user", "content": "hi"}])
+        assert out.text == "via the gateway"
+        with pytest.raises(ModelError) as ei:
+            ModelClient(rm).chat([{"role": "user", "content": "hi"}])
+        assert ei.value.status == 401
+        with pytest.raises(UnknownRole):
+            r.resolve("mdl:not-a-role")
+        with pytest.raises(ResolutionError):
+            r.resolve_binding("main-reasoner", r.table.get("main-reasoner").bindings[0])
+    finally:
+        gw.stop()
+
+
+def test_the_k14_probe_carries_a_keyed_backends_key(registry):
+    """A backend that requires its key (a serving engine with an API key) answers 401 to a keyless probe;
+    the host-side probe passes the backend's own key."""
+    from conformance.fakes.openai_server import FakeOpenAIServer
+    from homelabnext.registry import FakeDNS, Resolver
+    from homelabnext.registry.models import ModelResolver, probe
+
+    model_id = RoleTable.from_dict(role_doc()).get("main-reasoner").bindings[0].model_id
+    keyed = FakeOpenAIServer(models=[model_id], api_keys=["backend-key"]).start()
+    try:
+        env = {"HNX_ENDPOINT_INFERENCE_LARGE": keyed.url}
+        res = Resolver(registry, dns=FakeDNS(), hosts={}, environ=env)
+        rm = ModelResolver(registry, RoleTable.from_dict(role_doc()), res).resolve("main-reasoner")
+        assert probe(rm).status == "error"
+        assert probe(rm, api_key="backend-key").ok
+    finally:
+        keyed.stop()

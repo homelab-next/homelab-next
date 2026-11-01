@@ -89,6 +89,7 @@ def adv(ws, capsys, now, *names, extra=()):
         capsys,
         "advance",
         ws / "s.swap.json",
+        "--rehearsal",
         "--now",
         now,
         "--scan-root",
@@ -134,7 +135,9 @@ def test_full_swap_via_cli(ws, capsys):
     # nothing attested: the gate refuses, exit 1, and the record says so
     code, out, _ = adv(ws, capsys, T0)
     assert code == 1 and "REFUSED step declare" in out
-    code, out, _ = run(capsys, "advance", ws / "s.swap.json", "--dry-run", "--now", T0)
+    code, out, _ = run(
+        capsys, "advance", ws / "s.swap.json", "--dry-run", "--rehearsal", "--now", T0
+    )
     assert code == 0 and "dry run: step declare" in out
     assert adv(ws, capsys, T0, "conformance-old")[0] == 0
     assert adv(ws, capsys, T0, "conformance-new", "shadow")[0] == 0
@@ -186,6 +189,7 @@ def test_rollback_via_cli_restores_the_registry_text(ws, capsys):
         ws / "s.swap.json",
         "--reason",
         "p99 latency regression on candidate",
+        "--rehearsal",
         "--now",
         "2026-05-02T12:00:00+00:00",
         *attest(ws, "canary"),
@@ -193,6 +197,50 @@ def test_rollback_via_cli_restores_the_registry_text(ws, capsys):
     assert code == 0 and "route restored: True" in out
     assert (ws / "services.yml").read_text() == original
     assert record.load(ws / "s.swap.json")["status"] == "rolled_back"
+
+
+def test_a_forged_clock_needs_rehearsal_and_is_named_in_the_record(ws, capsys):
+    """--now passes the soak and rollback-window gates in seconds: without --rehearsal it is a
+    usage error, and with it every transition it writes names the forged clock."""
+    start(ws, capsys)
+    p = ws / "s.swap.json"
+    code, _, err = run(capsys, "advance", p, "--now", "2099-01-01T00:00:00+00:00")
+    assert code == 2 and "pass --rehearsal" in err
+    code, _, err = run(capsys, "rollback", p, "--reason", "rehearsing the undo", "--now", T0)
+    assert code == 2 and "pass --rehearsal" in err
+    assert len(record.load(p)["transitions"]) == 1  # nothing written
+    assert adv(ws, capsys, T0, "conformance-old")[0] == 0
+    assert record.load(p)["transitions"][-1]["actor"] == "operator@rehearsal-clock"
+
+
+def test_step_evidence_is_written_0600(ws, capsys):
+    """A step's evidence (a parity report carries row data) is 0600 like every evidence file."""
+    start(ws, capsys)
+    assert adv(ws, capsys, T0, "conformance-old")[0] == 0
+    ev = next(ws.glob("*.evidence"))
+    files = sorted(ev.iterdir())
+    assert files and all(f.stat().st_mode & 0o777 == 0o600 for f in files), files
+
+
+def test_a_clock_behind_the_record_is_refused(ws, capsys):
+    start(ws, capsys)
+    assert adv(ws, capsys, "2026-05-02T10:00:00+00:00", "conformance-old")[0] == 0
+    before = record.load(ws / "s.swap.json")
+    code, _, err = adv(ws, capsys, T0, "conformance-new", "shadow")
+    assert code == 1 and "earlier than the record's last transition" in err
+    assert record.load(ws / "s.swap.json") == before
+
+
+def test_record_verify_refuses_transition_times_that_go_backwards(ws, capsys):
+    start(ws, capsys)
+    p = ws / "s.swap.json"
+    assert adv(ws, capsys, "2026-05-02T10:00:00+00:00", "conformance-old")[0] == 0
+    d = record.load(p)
+    t = d["transitions"][-1]
+    t["at"] = "2026-04-01T00:00:00Z"
+    t["hash"] = record.chain_hash(t["prev"], t, None)
+    d["updated_at"] = t["at"]
+    assert any("transition times may not go backwards" in x for x in record.record_problems(d))
 
 
 def test_record_command_validates_notes_and_detects_tampering(ws, capsys):

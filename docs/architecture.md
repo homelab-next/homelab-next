@@ -78,7 +78,7 @@ generators, DNS records and YAML.
 | **Schemas in git** | Contracts are JSON Schema files, additive evolution only, vendor schemas pinned, frozen baselines checked in CI | `schemas/`, `tools/schema_check.py` (ADR-0001) |
 | **Registry and aliases** | One `services.yml`; every capability reachable as `<capability>.svc.<domain>`; an environment override for tests and staging; a CI gate against raw endpoints | `homelabnext/registry/`, `tools/no_raw_endpoints.py` (ADR-0002) |
 | **Shared client libraries** | One library per data seam (lake, notify, state, records, events), each with an in-memory fake | `homelabnext/` (ADR-0003) |
-| **Role interface** | Roles declare an argument spec and five hook task sets (health, readiness, backup, upgrade, export); inventory groups are capabilities | `ansible/`, `tools/role_lint.py` (ADR-0004) |
+| **Role interface** | Roles declare an argument spec and six hook task sets (health, readiness, backup, restore, upgrade, export); inventory groups are capabilities | `ansible/`, `tools/role_lint.py` (ADR-0004) |
 | **Conformance harness** | One runnable swap test per capability, run against a fake in CI and against real containers nightly | `conformance/`, `compose/lab-in-a-box/` (ADR-0005) |
 | **Detections as code** | Sigma rules plus fixtures, cited by logical id, never by an engine's rule number | `detections/` (ADR-0006) |
 | **Model-role aliases** | Consumers name a role; only the gateway maps roles to backends | `homelabnext/registry/models.py` (ADR-0007) |

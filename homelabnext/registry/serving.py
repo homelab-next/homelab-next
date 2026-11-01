@@ -53,8 +53,10 @@ def check_serving(
     timeout: float = 5.0,
     transport: Transport | None = None,
     topic: str | None = None,
+    api_key: str | None = None,
 ) -> list[ProbeResult]:
-    """Probe every role, alert on what changed, and return the results."""
-    results = probe_all(resolver, timeout=timeout, transport=transport)
+    """Probe every role, alert on what changed, and return the results.  The probe asks each
+    backend directly (host-side K-14); ``api_key`` is the backend key a keyed backend needs."""
+    results = probe_all(resolver, timeout=timeout, transport=transport, api_key=api_key)
     report(results, notifier, topic=topic)
     return results

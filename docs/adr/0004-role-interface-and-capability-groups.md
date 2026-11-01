@@ -1,5 +1,5 @@
 ---
-summary: Service roles ship argument specs and five tagged task sets; inventory capability groups are what playbooks target, never host names.
+summary: Service roles ship argument specs and six tagged task sets; inventory capability groups are what playbooks target, never host names.
 summary_of: outline:sha256:b3d0e1b40715040f
 ---
 # ADR-0004: Roles declare an interface and inventory groups are capabilities
@@ -16,12 +16,13 @@ live" is then a role name, not a group, and role drift is detected only by accid
 
 ## Decision
 
-1. Every service role ships `meta/argument_specs.yml` (inputs, types, defaults) and five tagged
-   task sets: `health`, `readiness`, `backup`, `upgrade`, `export`. A role without them does not
-   deploy.
+1. Every service role ships `meta/argument_specs.yml` (inputs, types, defaults) and six tagged
+   task sets: `health`, `readiness`, `backup`, `restore`, `upgrade`, `export`. A role without them
+   does not deploy.
 2. Inventory has capability groups (`cap_siem`, `cap_lake`, `cap_query`, `cap_inference`,
    `cap_edge`, `cap_idp`, `cap_secrets`, `cap_orchestration`, `cap_broker`, `cap_cases`,
-   `cap_tip`, `cap_monitoring`); playbooks target groups, never host names.
+   `cap_tip`, `cap_monitoring`, and more as capabilities are added: the list is open-ended);
+   playbooks target groups, never host names.
 3. Roles take endpoints from the registry (ADR-0002), never from their own defaults.
 4. A shared `compose_app` role carries the common container pattern.
 5. A scheduled check-mode run of every service role is an invariant; a non-empty diff is red.

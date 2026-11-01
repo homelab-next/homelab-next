@@ -6,8 +6,9 @@ summary_of: outline:sha256:5a47e561dbb9bf66
 # LLM gateway
 
 The gateway is the one place where a model role (ADR-0007) becomes a backend and a model id. Every
-consumer (agents, the decision cascade, tools) calls the `inference` capability with a role name
-and its own key. The gateway enforces that key's scope and limits and forwards the call to the
+consumer (agents, the decision cascade, tools) calls the `llm-gateway` capability with a role name
+as the model and its own key (the `inference` capability names a serving engine, which consumers do
+not call). The gateway enforces that key's scope and limits and forwards the call to the
 backend. The decision on which product does this is [ADR-0022](adr/0022-llm-gateway-litellm.md):
 **LiteLLM, run the supported way**. Bifrost is the tested alternate.
 
@@ -53,7 +54,10 @@ It writes:
 
 - **`litellm/config.yaml`**. The `model_list` has one entry per binding, and `model_name` is the
   role. Binding priority becomes `order`. Role `limits` become per-deployment `rpm`/`tpm` (the
-  per-minute share, rounded down) and `max_budget`. LiteLLM counts only per minute, so a limit
+  per-minute share, rounded down) and `max_budget`. LiteLLM limits each deployment and its
+  pre-call checks move an over-limit request onto the next one, so a role with `n` bindings gives
+  each deployment `1/n` of the share and of the budget (rounded down): the sum is never above the
+  declared figure, and a share that rounds to nothing is refused. LiteLLM counts only per minute, so a limit
   must have a window of whole minutes and at least one call a minute: `1` per `3600` s or `5` per
   `10` s is refused rather than rendered looser (`1` rpm, `30` rpm). Counts are whole numbers of
   at least 1; `max_requests: 0` is refused, never rendered as unlimited. Bifrost gets the
@@ -155,18 +159,19 @@ a request's label. So the rule is split where it can be enforced:
 - **At render time, by key scope.** Every key carries its sending ceiling: a profile's
   `tlp_ceiling`, a spec key's own `tlp_ceiling` (a canonical label that agrees with its
   `data_tier`), or what its `data_tier` allows (`cloud-allowed`: `clear`; anything else: `red`).
-  A role leaves the lab, for the gateway, when the role table says so (`leaves_lab` on the chain)
-  **or** the spec puts a binding on the chain on a `cloud` backend; one the table does not mark
-  never rises above `clear`, since only a `leaves_lab` binding records the terms that raise it.
-  The generator refuses a key scoped (directly or down a fallback chain) to a role whose ceiling
+  A role leaves the lab when the role table says so (`leaves_lab` on the chain), and the table
+  and the spec must agree: the generator refuses a binding the spec puts on a `cloud` backend
+  that the table does not mark `leaves_lab: true`, and a `leaves_lab` binding on a local backend.
+  So the ceiling the gateway scopes keys by is exactly the one `admit` reads; a quietly
+  reconciled disagreement would let `admit` judge a cloud role as staying in the lab (`red`) and
+  allow an `amber` request the gateway then sends out. The generator refuses a key scoped (directly or down a fallback chain) to a role whose ceiling
   is below the key's: every request from it would be refused. It also runs the role table's
   ceiling rules. Today this mostly coincides with the locality rule. A key whose ceiling is above
   `clear` must be `data_tier: local-only` (decision 12), and the locality rule keeps every
   local-only key off cloud roles, so key scope only ever lets a `clear`-ceiling key reach a role
   that leaves the lab. A role raised to `green` is therefore reachable at `green` only through
   per-request `admit` (a `cloud-allowed` sender whose request claims `green`), not by giving a
-  `green`-ceiling key that role. What the TLP rule adds to key scope is that a table's
-  `leaves_lab` is honoured even where the spec calls the backend local.
+  `green`-ceiling key that role.
 - **In `--check`, by audit.** `litellm/keys.json` gives each key's `metadata.tlp_ceiling`. The
   audit reads it as data (missing or edited: `red`) and refuses a key that reaches a model the
   rendered config deploys to the cloud whose ceiling is below it: a model it lists, an `aliases`
@@ -178,8 +183,11 @@ a request's label. So the rule is split where it can be enforced:
   sender=send_ceiling(...))` is the rule as a library function. It returns an `Admission` whose
   `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`, `invalid-role-table`
   for a table with an entry that is not the schema's shape) and `record()` the
-  caller logs, allowed or refused. A client in front of the gateway applies it to each request; the
-  gateway's key scope is the backstop that holds even when a caller does not.
+  caller logs, allowed or refused. The component that assembles a request's context (the agent
+  runtime) is meant to apply it to each request; the gateway's key scope is the backstop that
+  holds even when a caller does not. **No component in this repository calls `admit` yet**
+  (ADR-0033, amendment to decision 11): until one does, key scope and the `--check` audit are the
+  only enforcement, and a role raised to `green` is reached only by `clear`-ceiling keys.
 
 What this does not do: the gateway does not see a request's claimed label, so a caller that
 mislabels its context below its profile's ceiling is bounded only by that ceiling (decision 11's

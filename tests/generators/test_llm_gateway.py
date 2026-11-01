@@ -26,6 +26,10 @@ LAB = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"
 LAB_SPEC = LAB / "gateway.yml"
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 
+#: the proxy config file and the per-deployment parameter key it renders
+PROXY_CONFIG = "litellm/config.yaml"
+DEPLOY_PARAMS = "litellm_params"
+
 ROLES = {
     "version": 1,
     "roles": {
@@ -41,7 +45,9 @@ ROLES = {
         },
         "cloud-reasoner": {
             "tier": "large",
-            "bindings": [{"backend": "svc:cloud", "model_id": "example-cloud-1"}],
+            "bindings": [
+                {"backend": "svc:cloud", "model_id": "example-cloud-1", "leaves_lab": True}
+            ],
         },
     },
 }
@@ -100,8 +106,8 @@ def test_render_both_gateways_from_one_spec(tmp_path):
         "litellm/config.yaml",
         "litellm/keys.json",
     ]
-    lt = yaml.safe_load(files["litellm/config.yaml"])
-    names = {d["model_name"]: d["litellm_params"] for d in lt["model_list"]}
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    names = {d["model_name"]: d[DEPLOY_PARAMS] for d in lt["model_list"]}
     assert sorted(names) == ["agent-local", "cloud-reasoner", "small-local"]  # role = alias
     assert names["agent-local"]["model"] == "openai/example-27b"
     want = "http://infer-a.svc.example.internal:8000/v1"  # no-raw-endpoint: allow rendered alias
@@ -198,6 +204,14 @@ def test_an_agent_role_may_not_fall_back_across_providers_even_cloud_allowed(tmp
     (tmp_path / "profile.researcher.json").write_text(json.dumps(prof))
     with pytest.raises(gw.GatewaySpecError, match="falls back across providers to mdl:small-local"):
         gw.render_file(make_spec(tmp_path, roles, profiles=["profile.*.json"]))
+
+
+def test_render_reports_an_unreadable_profile_as_unreadable_input(tmp_path, capsys):
+    """A profile that is not JSON used to escape the CLI as a traceback."""
+    (tmp_path / "profile.broken.json").write_text("{not json")
+    spec = make_spec(tmp_path, profiles=["profile.*.json"])
+    assert hnx(["gen", "gateway", "render", str(spec), str(tmp_path / "out")]) == 2
+    assert "gateway: cannot read spec" in capsys.readouterr().err
 
 
 def test_a_non_agent_cloud_role_may_fall_back_to_local(tmp_path):
@@ -321,7 +335,7 @@ def test_two_cloud_backends_of_one_provider_are_refused(tmp_path):
     roles = copy.deepcopy(ROLES)
     roles["roles"]["second-cloud"] = {
         "tier": "large",
-        "bindings": [{"backend": "svc:cloud-b", "model_id": "example-cloud-2"}],
+        "bindings": [{"backend": "svc:cloud-b", "model_id": "example-cloud-2", "leaves_lab": True}],
     }
     backends = spec_doc()["backends"] | {
         "svc:cloud-b": {
@@ -431,6 +445,40 @@ def test_a_role_limit_that_would_render_looser_is_refused(tmp_path):
     roles = copy.deepcopy(ROLES)
     roles["roles"]["small-local"]["limits"] = {"window_s": 3600, "max_requests": 1}
     with pytest.raises(gw.GatewaySpecError, match=r"mdl:small-local: limits\.max_requests 1 per"):
+        gw.render_file(make_spec(tmp_path, roles))
+
+
+def _two_binding_roles(limits):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["small-local"]["bindings"].append(
+        dict(roles["roles"]["small-local"]["bindings"][0], backend="svc:infer-a", priority=1)
+    )
+    roles["roles"]["small-local"]["limits"] = limits
+    return roles
+
+
+def test_a_role_limit_is_split_over_its_proxy_deployments(tmp_path):
+    """The proxy limits each deployment and moves an over-limit request to the next one, so the
+    role's declared figure is shared out: the sum over its deployments is never above it."""
+    limits = {"window_s": 60, "max_requests": 7, "max_tokens": 1001, "max_cost": 3.0}
+    files = gw.render_file(make_spec(tmp_path, _two_binding_roles(limits)))
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    deps = [d[DEPLOY_PARAMS] for d in lt["model_list"] if d["model_name"] == "small-local"]
+    assert len(deps) == 2
+    assert sum(d["rpm"] for d in deps) <= 7 and [d["rpm"] for d in deps] == [3, 3]
+    assert sum(d["tpm"] for d in deps) <= 1001
+    assert sum(d["max_budget"] for d in deps) <= 3.0
+    # Bifrost limits the role once, at the declared figure
+    gov = json.loads(files["bifrost/config.json"])["governance"]
+    rl = next(r for r in gov["rate_limits"] if r["id"] == "rl-role-small-local")
+    assert rl["request_max_limit"] == 7
+
+
+def test_a_role_limit_too_small_to_split_over_its_bindings_is_refused(tmp_path):
+    roles = _two_binding_roles({"window_s": 60, "max_requests": 1})
+    with pytest.raises(
+        gw.GatewaySpecError, match=r"mdl:small-local: limits\.max_requests 1 per 60s is 1 a minute"
+    ):
         gw.render_file(make_spec(tmp_path, roles))
 
 
@@ -985,7 +1033,7 @@ def test_every_key_carries_its_sending_tlp_ceiling(tmp_path):
     assert spec.ceilings == {
         "agent-local": gw.tlp.Label.RED,
         "small-local": gw.tlp.Label.RED,
-        # the spec puts it on a cloud backend: clear, though the table marks no leaves_lab
+        # the table marks its cloud binding leaves_lab: clear, as admit() reads it too
         "cloud-reasoner": gw.tlp.Label.CLEAR,
     }
     keys = {k["key_alias"]: k for k in json.loads(gw.render(spec)[KEYS])["keys"]}
@@ -1014,18 +1062,66 @@ def test_a_role_table_ceiling_the_rules_refuse_is_refused(tmp_path):
 
 
 def test_a_key_above_a_cloud_roles_ceiling_is_not_scoped_to_it(tmp_path):
-    """The table marks the role leaves_lab while the spec calls its backend local: the locality
-    rule passes (it reads the spec), and the TLP rule (which reads the table too) refuses the
-    local-only key scoped to it."""
-    roles = copy.deepcopy(ROLES)
-    roles["roles"]["small-local"]["bindings"][0]["leaves_lab"] = True
+    """A local-only key (sending ceiling red) scoped to a role the table marks leaves_lab is
+    refused: every request from it would be above the role's ceiling."""
+    keys = spec_doc()["keys"]
+    keys[0]["roles"] = ["mdl:agent-local", "mdl:cloud-reasoner"]
     with pytest.raises(gw.GatewaySpecError) as ei:
-        gw.load_spec(make_spec(tmp_path, roles))
+        gw.load_spec(make_spec(tmp_path, keys=keys))
     msg = str(ei.value)
     assert (
-        "key local-agent sends at TLP ceiling red but may call mdl:small-local (down a fallback "
-        "chain), whose prompts can leave the lab at ceiling clear"
+        "key local-agent sends at TLP ceiling red but may call mdl:cloud-reasoner, whose prompts "
+        "can leave the lab at ceiling clear"
     ) in msg, msg
+
+
+def test_a_cloud_binding_the_role_table_does_not_mark_leaves_lab_is_refused(tmp_path):
+    """The spec puts the role on a cloud backend while the table marks no leaves_lab: admit()
+    (which reads the table) would judge it as staying in the lab, ceiling red, and admit an
+    amber request the gateway then sends out.  Refused rather than reconciled."""
+    roles = copy.deepcopy(ROLES)
+    del roles["roles"]["cloud-reasoner"]["bindings"][0]["leaves_lab"]
+    with pytest.raises(gw.GatewaySpecError) as ei:
+        gw.load_spec(make_spec(tmp_path, roles))
+    assert (
+        "mdl:cloud-reasoner bindings[0] (svc:cloud): the gateway spec puts it on a cloud backend "
+        "but the role table does not mark it leaves_lab: true"
+    ) in str(ei.value)
+
+
+def test_a_leaves_lab_binding_on_a_local_backend_is_refused(tmp_path):
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["small-local"]["bindings"][0]["leaves_lab"] = True
+    with pytest.raises(
+        gw.GatewaySpecError,
+        match=r"mdl:small-local bindings\[0\] \(svc:infer-b\): "
+        "marked leaves_lab: true but the gateway spec puts it on a local backend",
+    ):
+        gw.load_spec(make_spec(tmp_path, roles))
+
+
+def test_admit_and_the_gateway_agree_on_every_roles_ceiling_and_leaves_lab(tmp_path):
+    """One source: the ceiling and leaves_lab the per-request rule reads are the gateway's."""
+    from homelabnext.modules.rules import cloud_roles
+    from homelabnext.registry import model_tlp
+
+    spec = gw.load_spec(make_spec(tmp_path))
+    cloud = {
+        r
+        for r in spec.table.roles
+        if any("cloud" in gw.localities(spec, s) for s in gw.chain(spec.table, r))
+    }
+    assert {r.removeprefix("mdl:") for r in cloud_roles(ROLES["roles"])} == cloud
+    for role, ceiling in spec.ceilings.items():
+        a = model_tlp.admit(ROLES["roles"], role, "clear", sender=gw.tlp.Label.CLEAR)
+        assert (a.ceiling, a.leaves_lab) == (ceiling, role in cloud), role
+    amber = model_tlp.admit(
+        ROLES["roles"],
+        "mdl:cloud-reasoner",
+        "amber",
+        sender=model_tlp.send_ceiling(data_tier="cloud-allowed"),
+    )
+    assert not amber.allowed and amber.reason == model_tlp.ABOVE_CEILING
 
 
 @pytest.mark.parametrize(
