@@ -260,6 +260,26 @@ def test_same_named_proposals_from_two_agents_get_two_files(tmp_path):
     assert [r.outcome for r in importer.apply(rows, call, "profile:importer")] == ["filed"] * 2
 
 
+def test_import_stops_at_the_lane_write_rate_instead_of_collecting_refusals(tmp_path):
+    """The importer sent every remaining file after the lane's write rate was spent, each one
+    refused in turn (and over the socket counted against the importer's refusal limit)."""
+    for i in range(4):
+        (tmp_path / f"2026-09-04-agent-a-fix-{i}.md").write_text(_proposal("agent-a"))
+    sent = []
+
+    def call(params):
+        sent.append(params["slug"])
+        if len(sent) > 1:
+            err = BrokerError("rate")
+            err.reason = "lane-rate-exceeded"
+            raise err
+        return {"path": params["slug"]}
+
+    rows = importer.apply(importer.read_dir(tmp_path), call, "profile:importer")
+    assert [r.outcome for r in rows] == ["filed", "refused", "not-attempted", "not-attempted"]
+    assert len(sent) == 2 and "lane-rate-exceeded" in rows[2].problem
+
+
 def test_two_sources_mapping_to_one_name_are_a_conflict(tmp_path):
     text = "---\ntitle: Same title\nrisk: low\nrollback: undo\ncreated: 2026-09-04\n---\n"
     (tmp_path / "a.md").write_text(text)

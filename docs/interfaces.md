@@ -396,9 +396,15 @@ that humans edit are YAML validated by the JSON Schema of the same name.
 - Distribution version: SemVer, `0.x` until the first stable drop. The single source is
   `homelabnext/_version.py`; `CHANGELOG.md` must hold a section for it (`tools/check_changelog.py`).
 - Schemas: the major version is in `$id` and, for versioned families, the filename
-  (`<class>.v1.json`). Within a major version evolution is **additive only** (new optional
-  properties, new enum values only where the schema says the set is open). Removing, renaming or
-  tightening is a new major with a dual-write window (ADR-0001). `tools/schema_check.py` enforces it.
+  (`<class>.v1.json`). Within a major version evolution is **additive only**: new optional
+  properties, new enum values, relaxed bounds, a wider type. Every enum may grow within a major,
+  so a consumer refuses or ignores a value it does not know rather than assume the set is closed.
+  On an open object (no `additionalProperties: false`) a new optional property is accepted as
+  additive although a document could have carried that key undeclared: an undeclared key of an
+  open object carries no contract. Removing, renaming or tightening (a new `required`,
+  `multipleOf`, pattern property, `then`/`else` beside an `if`, or schema for
+  `additionalProperties`) is a new major with a dual-write window (ADR-0001).
+  `tools/schema_check.py` enforces it.
 - Python API: a name listed in section 2.1 follows SemVer once `1.0` ships; before that, a change
   to a listed signature needs a note in `CHANGELOG.md` under "Changed".
 - Capability contracts: a conformance check is never removed; it may be added. A new check ships
