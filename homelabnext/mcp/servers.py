@@ -276,10 +276,10 @@ def _validator() -> Any:
     from jsonschema import Draft202012Validator
 
     from homelabnext import paths
-    from homelabnext.agent.schemas import _registry
+    from homelabnext.schema_registry import schema_registry
 
     schema = json.loads(paths.schema_file(*SCHEMA[:1], f"{SCHEMA[1]}.schema.json").read_text())
-    return Draft202012Validator(schema, registry=_registry())
+    return Draft202012Validator(schema, registry=schema_registry())
 
 
 def _message(e: Any) -> str:

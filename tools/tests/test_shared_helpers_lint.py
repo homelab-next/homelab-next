@@ -96,6 +96,13 @@ def _rules(src: str) -> list[str]:
             'def rank(t):\n    return {"privileged": 9, "read": 0, "execute": 2, "write": 1}[t]\n',
             "tiers",
         ),
+        ("from referencing import Registry\nreg = Registry()\n", "schema"),
+        ("from referencing import Registry as R\nreg = R()\n", "schema"),
+        (
+            "from referencing import Resource\ndef f(d):\n    return Resource.from_contents(d)\n",
+            "schema",
+        ),
+        ("import referencing.jsonschema as j\nr = j.DRAFT202012.create_resource({})\n", "schema"),
     ],
 )
 def test_flags_private_helpers(src, rule):
@@ -115,6 +122,9 @@ def test_flags_private_helpers(src, rule):
         "from homelabnext.grants import TIER_RANK\nTIER_RANK['read']\n",
         # a subset of the tiers is not a ranking of them
         'LEVEL = {"read": "read", "write": "write"}\n',
+        "from homelabnext.schema_registry import validator\nvalidator('ids', 'common.schema.json')\n",
+        # a Registry that is not referencing's (the invariants' own) is not a schema registry
+        "from homelabnext.invariants.api import Registry\nreg = Registry()\n",
     ],
 )
 def test_allows_shared_library_use(src):
@@ -145,6 +155,7 @@ def test_owners_and_tests_are_out_of_scope(tmp_path):
         tmp_path,
         {
             "homelabnext/lake/fake.py": "import sqlite3\n",
+            "homelabnext/schema_registry.py": "from referencing import Registry\nRegistry()\n",
             "tests/lake/test_x.py": "import duckdb\n",
             "pkg/test_y.py": "import smtplib\n",
         },

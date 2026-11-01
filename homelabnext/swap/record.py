@@ -42,7 +42,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from homelabnext.paths import schema_file, schemas_dir
+from homelabnext.paths import schema_file
 
 RECORD_VERSION = "1.0"
 STEPS = (
@@ -254,21 +254,9 @@ _VALIDATOR = None
 def _validator():
     global _VALIDATOR
     if _VALIDATOR is None:
-        from jsonschema import Draft202012Validator
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT202012
+        from homelabnext.schema_registry import validator
 
-        reg: Registry = Registry()
-        for p in sorted(schemas_dir().rglob("*.json")):
-            if "_frozen" in p.parts:
-                continue
-            d = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(d, dict) and "$id" in d:
-                reg = reg.with_resource(
-                    d["$id"], Resource.from_contents(d, default_specification=DRAFT202012)
-                )
-        schema = json.loads(schema_path().read_text(encoding="utf-8"))
-        _VALIDATOR = Draft202012Validator(schema, registry=reg)
+        _VALIDATOR = validator("platform", "swap_record.schema.json")
     return _VALIDATOR
 
 

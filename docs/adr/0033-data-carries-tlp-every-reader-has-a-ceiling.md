@@ -241,11 +241,12 @@ The standard for this already exists and the lab's threat-intel sources already 
   backfill. Until a table is backfilled its rows read `red` and are hidden from looser readers:
   the intended failure direction.
 - So far labels live on lake rows and source declarations, and are checked at the lake, the
-  status hub and the model gateway. The event envelope, records and tickets, broker action
-  results and the context store's documents carry none (decisions 4 and 11 name labels there
-  that no schema has yet), so everything assembled from them reads `red`, and a caller labelling
-  a model request from them can only label it `red`. Adding an optional label (absent reads
-  `red`) and `derived_from` to each is follow-up work; until then the bus, records and memory
+  status hub and the model gateway. The event envelope has an optional label (`tlp`, absent
+  reads `red`) and `derivedfrom` since envelope 1.2, which no producer sets yet; records and
+  tickets, broker action results and the context store's documents carry none (decisions 4 and
+  11 name labels there that no schema has yet), so everything assembled from them reads `red`,
+  and a caller labelling a model request from them can only label it `red`. Adding the label to
+  the rest, and producers that set it, is follow-up work; until then the bus, records and memory
   stores stay "not yet" egress points (`docs/modules.md`).
 - Rollups for wider audiences come from the same data through release transforms, not a separate
   pipeline.
