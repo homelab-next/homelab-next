@@ -11,6 +11,7 @@ import os
 import string
 import sys
 import textwrap
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -199,10 +200,25 @@ def test_a_name_no_rule_classifies_is_never_made_up():
 
 
 def test_a_soft_deleted_secret_is_reported_not_overwritten():
-    with FakeOpenBao(tokens=(TOKEN,), deleted=("secret/a/b",)) as bao:
-        out = seed(["a/b"], load_spec(TEMPLATE), OpenBaoKV(bao.url, TOKEN), given={"a/b": "v"})
+    # KV v2 `delete_version_after` stamps every version with a FUTURE deletion_time when it is
+    # written: such a version is live until then, and only a passed deletion_time is deleted
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    times = {
+        "secret/a/later": "2026-11-08T12:00:00.123456789Z",
+        "secret/a/past": "2026-10-31T12:00:00.5Z",
+        "secret/a/offset": "2026-11-01T13:30:00+02:00",  # 11:30 UTC: already gone
+    }
+    values = {k: {"value": "v"} for k in times}
+    with FakeOpenBao(values, tokens=(TOKEN,), deleted=("secret/a/b",), deletion_times=times) as bao:
+        kv = OpenBaoKV(bao.url, TOKEN, now=lambda: now)
+        out = seed(["a/b"], load_spec(TEMPLATE), kv, given={"a/b": "v"})
         assert out[0].openbao == "error" and "deleted" in out[0].detail
         assert not [c for c in bao.calls if c[0] == "POST"]
+        assert [kv.state(n) for n in ("a/later", "a/past", "a/offset")] == [
+            "present",
+            "deleted",
+            "deleted",
+        ]
 
 
 def test_external_values_are_asked_for_or_read_from_files(tmp_path):
@@ -259,6 +275,8 @@ state = json.load(open(state_path)) if os.path.exists(state_path) else {"folders
 def save():
     json.dump(state, open(state_path, "w"))
 if args[0] == "sync":
+    if os.path.exists(os.path.join(here, "bw-sync-fail")):
+        sys.exit("sync failed: server unreachable")
     print("Syncing complete.")
 elif args[:2] == ["list", "folders"]:
     print(json.dumps([f for f in state["folders"] if args[3] in f["name"]]))
@@ -333,7 +351,7 @@ def test_vaultwarden_keeps_what_it_has_and_honours_the_exclusions(bw):
     }
 
 
-def test_a_dry_run_creates_nothing_in_vaultwarden(bw):
+def test_a_dry_run_creates_nothing_in_the_password_manager(bw):
     state, log, _ = bw
     with FakeOpenBao(tokens=(TOKEN,)) as bao:
         out = seed(
@@ -426,3 +444,16 @@ def test_seed_without_openbao_settings_is_a_usage_error(tmp_path, monkeypatch, c
     monkeypatch.delenv("BAO_ADDR", raising=False)
     assert main(["seed", str(lab(tmp_path)), "--spec", str(TEMPLATE)]) == 2
     assert "BAO_ADDR is not set" in capsys.readouterr().err
+
+
+def test_a_password_manager_that_fails_is_an_error_and_no_session_a_usage_error(
+    tmp_path, bw, bao_env, monkeypatch, capsys
+):
+    _, _, bindir = bw
+    args = ["seed", str(lab(tmp_path)), "--spec", str(TEMPLATE), "--yes", "--vaultwarden"]
+    (bindir / "bw-sync-fail").write_text("")
+    assert main(args) == 1  # the backend failed: an error, not the caller's mistake
+    assert "bw sync" in capsys.readouterr().err
+    monkeypatch.delenv("BW_SESSION")
+    assert main(args) == 2  # the caller's settings: a usage error
+    assert "BW_SESSION" in capsys.readouterr().err
