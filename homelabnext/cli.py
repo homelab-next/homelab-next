@@ -199,7 +199,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.decommission.cli").main(a),
     ),
     "docs": (
-        "generate/check docs: systems (one SOP page per service), capabilities (contract reference), index (docs/README.md descriptions from page summaries)",
+        "generate/check docs: systems (one SOP page per service), capabilities (contract reference), index (docs/README.md descriptions from page summaries), facts (counts, tool classes, schema versions in the pages)",
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
     "agent": (

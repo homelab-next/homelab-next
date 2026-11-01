@@ -155,7 +155,7 @@ failure.  From Python: `homelabnext.conform.run("object-store", {"adapter": "pkg
 
 ## The capabilities
 
-The eighteen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
+The <!-- hnx:gen:fact:capability-count-word -->eighteen<!-- /hnx:gen --> names are fixed by `docs/interfaces.md`.  Contracts that already have a library
 (lake, notify, records, detections, context, projects) reuse it; the rest are the Protocols in
 `conformance/protocols/`.
 

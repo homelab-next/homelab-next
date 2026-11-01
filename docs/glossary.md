@@ -6,9 +6,11 @@ summary_of: outline:sha256:050f5dfb3c4eafcd
 
 **Capability.** A job the platform needs done, named independently of the product that does it
 (`lake-query`, `notify`, `detections`). Each capability has a contract, a fake and a conformance
-test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth, `projects` (project management) the sixteenth, `codemode-executor` (the Code Mode sandbox, ADR-0031) the seventeenth and `codemode-runner` (its runner, the handler of `codemode.execute`) the eighteenth; the list is in `docs/interfaces.md` section 3. Seven **extended** suites (`EXTENDED` in
-`homelabnext/conform/registry.py`: backup, dns, edge and others) also carry a conformance directory
-without being core capabilities. Not to be confused with a **`cap:` id** (a grant class in
+test. There are <!-- hnx:gen:fact:capability-count-word -->eighteen<!-- /hnx:gen --> core capabilities (<!-- hnx:gen:fact:capabilities -->`lake-query`, `lake-catalog`, `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`, `broker`, `secrets`, `idp`, `records`, `detections`, `context`, `projects`, `codemode-executor`, `codemode-runner`<!-- /hnx:gen -->;
+`CAPABILITIES` in `homelabnext/conform/registry.py`, also in `docs/interfaces.md` section 3);
+fourteen existed at the first drop and the rest were added by later decisions. The
+<!-- hnx:gen:fact:extended-count-word -->seven<!-- /hnx:gen --> **extended** suites (<!-- hnx:gen:fact:extended-suites -->`backup`, `dns`, `edge`, `broker-tokens`, `orchestration-features`, `migration`, `log-pipeline`<!-- /hnx:gen -->; `EXTENDED` in the same
+file) also carry a conformance directory without being core capabilities. Not to be confused with a **`cap:` id** (a grant class in
 `homelabnext/agent/tool_classes.yml`, what an agent profile may use), a **`cap_` group** (an
 inventory group that places a role on hosts, ADR-0004) or a **slot** (below).
 

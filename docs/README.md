@@ -81,12 +81,15 @@ generated and checked the same way.
 Obsidian keeps its settings in `docs/.obsidian/`; that folder is ignored by git and never
 committed. Links to source files (`../conformance/...`) leave the vault and only resolve on GitHub.
 
-The generated pages are checked in `make check` and CI:
+The generated pages, and the generated facts inside authored pages (`fact:NAME` spans, the same
+comment markers as the systems pages: the capability names and counts, the tool classes, every
+schema's version; `hnx docs facts generate` rewrites them), are checked in `make check` and CI:
 
 ```
 hnx docs capabilities check                                # docs/capabilities/ is current
 hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
 hnx docs index check docs/README.md docs/adr/README.md    # index and ADR log descriptions match page summaries
+hnx docs facts check                                       # capability names, tool classes, schema versions in pages
 hnx scripts catalog --check                                # docs/scripts/catalog.* is current
 hnx graph check                                            # no dangling edge or duplicate id
 ```
