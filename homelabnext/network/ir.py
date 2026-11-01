@@ -237,6 +237,68 @@ def ipv6_form(rule: Rule, zones6: dict[str, str]) -> Rule | None:
     return replace(rule, id=f"{rule.id}:v6", src=src, dst=dst)
 
 
+@dataclass(frozen=True)
+class Verdict:
+    """What the policy does with one packet: ``action`` (allow | deny) and the rule that decided
+    it, ``None`` for the default action."""
+
+    action: str
+    rule: Rule | None = None
+
+    @property
+    def reason(self) -> str:
+        if self.rule is None:
+            return "firewall.default_action"
+        return f"{self.rule.id}: {self.rule.comment}" if self.rule.comment else self.rule.id
+
+
+#: the protocols a query names (a rule's ``any`` matches each)
+QUERY_PROTOCOLS = ("tcp", "udp", "icmp")
+
+
+def _selector_matches(sel: Selector, addr, zone_nets) -> bool:
+    if sel.kind in ("zone", "host"):
+        return any(addr in ipaddress.ip_network(c) for c in sel.cidrs)
+    if sel.kind == "any":
+        return True
+    inside = any(addr in n for n in zone_nets)
+    if sel.kind == "internet":
+        return not inside
+    if sel.kind == "intranet":
+        return inside
+    raise ValueError(f"unknown selector kind {sel.kind!r}")
+
+
+def evaluate(policy: Policy, src: str, dst: str, protocol: str, port: int | None = None) -> Verdict:
+    """The verdict first match gives one forwarded packet from address ``src`` to ``dst``.
+
+    This is the evaluation order of the module doc, over :attr:`Policy.rules` for IPv4 and over
+    each rule's :func:`ipv6_form` for IPv6 (both addresses one family).  An address in no zone of
+    its family is the internet.  ``tcp`` and ``udp`` need ``port``; ``icmp`` takes none.  Return
+    traffic and the router's own services (its input chain) are outside it, as in the IR."""
+    a, b = ipaddress.ip_address(src), ipaddress.ip_address(dst)
+    if a.version != b.version:
+        raise ValueError(f"{src} and {dst} are not one address family")
+    if protocol not in QUERY_PROTOCOLS:
+        raise ValueError(f"protocol {protocol!r}: one of {', '.join(QUERY_PROTOCOLS)}")
+    if (protocol == "icmp") != (port is None):
+        raise ValueError("tcp and udp need a port; icmp takes none")
+    if a.version == 6:
+        rules = [f for f in (ipv6_form(r, policy.zones6) for r in policy.rules) if f]
+        nets = [ipaddress.ip_network(n) for n in policy.zones6.values()]
+    else:
+        rules = list(policy.rules)
+        nets = [ipaddress.ip_network(n) for n in policy.zones.values()]
+    for r in rules:
+        if r.protocol not in ("any", protocol):
+            continue
+        if r.ports and port not in r.ports:
+            continue
+        if _selector_matches(r.src, a, nets) and _selector_matches(r.dst, b, nets):
+            return Verdict(r.action, r)
+    return Verdict(policy.default_action)
+
+
 def _zone_selector(zid: str, nets: dict[str, str]) -> Selector:
     return Selector("zone", zid, (nets[zid],))
 
