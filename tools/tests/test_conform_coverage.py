@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The conformance coverage gate: passes this tree, fails on a missing or failing capability."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -44,3 +45,54 @@ def test_failing_and_suiteless_capabilities_are_reported():
 def test_this_tree_passes(capsys):
     assert gate.main([]) == 0
     assert "all 18 capabilities" in capsys.readouterr().out
+
+
+def _fake_hnx(monkeypatch, rc, report=None, stdout=""):
+    """``gate._hnx`` that answers ``list`` and writes ``report`` to the ``--out`` path."""
+    import subprocess
+
+    def run(root, *args):
+        if args[0] == "report" and report is not None:
+            out = Path(args[args.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report))
+        code = 0 if args[0] == "list" else rc
+        return subprocess.CompletedProcess(args, code, stdout if args[0] == "report" else "", "")
+
+    monkeypatch.setattr(gate, "_hnx", run)
+
+
+def _verdict_report(failing=()):
+    from homelabnext.conform.report import SCHEMA
+
+    rep = _ok_report()
+    rep["schema"] = SCHEMA
+    for c, e in rep["capabilities"].items():
+        e["verdict"] = "fail" if c in failing else "pass"
+        e["passing"] = c not in failing
+    rep["capabilities_without_passing_test"] = list(failing)
+    return rep
+
+
+def test_the_report_comes_from_the_out_file_never_stdout(monkeypatch, tmp_path):
+    # a clean-looking report printed by an adapter, and no report file: could not be produced
+    _fake_hnx(monkeypatch, 0, None, stdout=json.dumps(_verdict_report()))
+    assert gate.main(["--root", str(tmp_path)]) == 2
+
+
+def test_verdicts_that_disagree_with_the_exit_code_are_not_judged(monkeypatch, tmp_path):
+    _fake_hnx(monkeypatch, 0, _verdict_report(failing=["idp"]))
+    assert gate.main(["--root", str(tmp_path)]) == 2
+    _fake_hnx(monkeypatch, 1, _verdict_report(failing=["idp"]))
+    assert gate.main(["--root", str(tmp_path)]) == 1
+    _fake_hnx(monkeypatch, 0, _verdict_report())
+    assert gate.main(["--root", str(tmp_path)]) == 0
+    assert (tmp_path / "build" / "conform-report.json").is_file()
+
+
+def test_a_report_left_over_from_an_earlier_run_is_not_judged(monkeypatch, tmp_path):
+    stale = tmp_path / "build" / "conform-report.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(json.dumps(_verdict_report()))
+    _fake_hnx(monkeypatch, 100, None)
+    assert gate.main(["--root", str(tmp_path)]) == 2

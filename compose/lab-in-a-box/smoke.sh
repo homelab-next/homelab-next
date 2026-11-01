@@ -79,6 +79,18 @@ eval "$from_env"
 status=0
 conform_state="skipped"
 conform_note=""
+# one "<capability> <real|fake> <pass|fail|no-suite>" line per conformance run (report.json)
+conform_caps_file="$report_dir/conform-caps.txt"
+: >"$conform_caps_file"
+
+# conform_missing_suite RC LOG CAP: true only when `hnx conform run CAP` failed because no suite
+# ships for CAP: exit 2 with the CLI's own message for that case, at the start of a line.  Any
+# other non-zero exit (1 a check failed, 2 a misconfigured adapter, 100 could not measure) is a
+# failure, whatever product text ("HTTP Error 404: Not Found") a failing check's evidence holds.
+conform_missing_suite() {
+  [ "$1" -eq 2 ] || return 1
+  grep -qE "^hnx conform: (suite for '$3' not found|unknown capability '$3')" "$2"
+}
 
 collect_logs() {
   dc ps -a >"$report_dir/ps.txt" 2>&1
@@ -99,10 +111,14 @@ import json, pathlib, sys
 d = pathlib.Path(sys.argv[1])
 checks = d / "checks.json"
 doc = json.loads(checks.read_text()) if checks.exists() else {"checks": [], "ok": False}
+caps_file = d / "conform-caps.txt"
+rows = caps_file.read_text().split("\n") if caps_file.exists() else []
+# which capabilities ran against a real container and which only against the built-in fake
+caps = {r.split()[0]: {"subject": r.split()[1], "result": r.split()[2]} for r in rows if r.strip()}
 report = {
     "ok": sys.argv[2] == "0",
     "checks": doc["checks"],
-    "conformance": {"state": sys.argv[3], "note": sys.argv[4]},
+    "conformance": {"state": sys.argv[3], "note": sys.argv[4], "capabilities": caps},
 }
 (d / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 print(f"smoke.sh: report written to {d / 'report.json'}")
@@ -154,18 +170,27 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
   for cap in $conform_caps; do
     # a real-product adapter for this capability, when one ships, replaces the built-in fake
     target_args=""
-    [ -f "$here/targets/$cap.yml" ] && target_args="--target $here/targets/$cap.yml"
+    subject="fake"
+    if [ -f "$here/targets/$cap.yml" ]; then
+      target_args="--target $here/targets/$cap.yml"
+      subject="real"
+    fi
     echo "smoke.sh: conformance: $cap ${target_args:-(built-in fake)}"
     # shellcheck disable=SC2086  # target_args is empty or two words on purpose
     if $conform_cmd "$cap" $target_args >"$report_dir/conform-$cap.log" 2>&1; then
       # the suite's own verdict line (capability, checks executed) into the job log
       grep -E "^(PASS|FAIL)" "$report_dir/conform-$cap.log" | tail -n 1 | sed 's/^/smoke.sh:   /'
+      echo "$cap $subject pass" >>"$conform_caps_file"
+      # a pass against the built-in fake says nothing about the real container
+      [ "$subject" = "fake" ] && conform_note="$conform_note $cap:fake-only"
     else
       rc=$?
       # a capability whose suite is not shipped yet is skipped; any other failure fails the run
-      if grep -qiE "no (such )?(suite|capability)|not (implemented|found|available)|unknown capability" "$report_dir/conform-$cap.log"; then
+      if conform_missing_suite "$rc" "$report_dir/conform-$cap.log" "$cap"; then
         conform_note="$conform_note $cap:no-suite"
+        echo "$cap $subject no-suite" >>"$conform_caps_file"
       else
+        echo "$cap $subject fail" >>"$conform_caps_file"
         conform_note="$conform_note $cap:FAIL($rc)"
         conform_state="fail"
         status=1
