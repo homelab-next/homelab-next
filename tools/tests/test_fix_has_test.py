@@ -218,6 +218,24 @@ def test_a_module_the_fix_adds_counts_as_failing_when_imported_from_its_package(
     assert gate.prove(c, cwd=r) is None
 
 
+def test_a_name_imported_from_a_package_the_fix_adds_no_module_for_cannot_prove_it(tmp_path):
+    # the fix adds pkg/other.py, but the test needs pkg.ghost: no module of that name is added
+    test = "from pkg import ghost\n\ndef test_cap():\n    assert ghost.CAP == 10\n"
+    r, commit = _repo(tmp_path)
+    commit("feat: pkg", **{"mod.py": "def clamp(x):\n    return x\n", "pkg/__init__.py": ""})
+    sha = commit(
+        "fix: clamp",
+        **{
+            "mod.py": CLAMP.format(cap=10),
+            "pkg/other.py": "CAP = 10\n",
+            "tests/test_mod.py": PY_PATH + test,
+        },
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "ghost" in problem and "which the fix does not add" in problem
+
+
 CAPPED = (
     "from dataclasses import dataclass\n\n"
     "@dataclass\nclass Cap:\n    at: int = 10\n{field}\n"
