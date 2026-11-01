@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# The lockout guard comes first: the kept account must exist and hold a key. A changed drop-in is
+# The lockout guard comes first: the kept account must exist and keep a way in, an authorized key
+# that is not revoked or, only with ssh_hardening_keep_user_cert_only, a trusted user CA and a
+# principal listed for it. The CA, principals and revoked-key files are written next (a CA or
+# revoked file only after ssh-keygen -l parses it), so a drop-in naming them never goes live
+# before they exist. A changed drop-in is
 # staged (outside sshd_config.d's *.conf glob), and a test configuration that reads the staged
 # file before the main one (so it wins, as the live drop-in will) must pass sshd -t and, through
-# sshd -T for the kept account, be key-only, refuse root and admit that account. Only then does it
+# sshd -T for the kept account, be key-only, refuse root, admit that account and name the files
+# the role wrote. Only then does it
 # replace the live file. Replacing it leaves a reload-pending marker that only a successful reload
 # removes, so a failed (or disabled) reload is retried on the next run.
 - name: Validate the inputs
@@ -17,17 +22,36 @@
 
 - name: Look for the kept account's authorized keys
   ansible.builtin.stat:
-    path: "{{ (ssh_hardening_account.stdout.split(':') + [''] * 7)[5] or '/nonexistent' }}/.ssh/authorized_keys"
+    path: "{{ ssh_hardening_authorized_keys_path }}"
   register: ssh_hardening_keys
 
-- name: Refuse to make SSH key-only for an account that has no key
+- name: Read the kept account's authorized keys
+  when: ssh_hardening_keys.stat.exists and ssh_hardening_keys.stat.size > 0
+  ansible.builtin.slurp:
+    src: "{{ ssh_hardening_authorized_keys_path }}"
+  register: ssh_hardening_keys_text
+
+- name: Refuse to make SSH key-only for an account that would have no way in
+  vars:
+    # the key blobs (the base64 field after the key type; options before it are skipped)
+    ssh_hardening_key_blobs: >-
+      {{ ((ssh_hardening_keys_text.content | default('')) | b64decode)
+         | regex_findall('(?:^|\s)(?:ssh-|ecdsa-|sk-)\S+\s+(AAAA[A-Za-z0-9+/]+={0,3})') | unique }}
+    ssh_hardening_revoked_blobs: "{{ ssh_hardening_revoked_keys | map('split') | map(attribute=1) | list }}"
+    ssh_hardening_ca_blobs: "{{ ssh_hardening_trusted_user_ca_keys | map('split') | map(attribute=1) | list }}"
+    ssh_hardening_by_key: "{{ ssh_hardening_key_blobs | difference(ssh_hardening_revoked_blobs) | length > 0 }}"
+    ssh_hardening_by_cert: >-
+      {{ ssh_hardening_keep_user_cert_only | bool
+         and ssh_hardening_ca_blobs | difference(ssh_hardening_revoked_blobs) | length > 0
+         and (ssh_hardening_authorized_principals[ssh_hardening_keep_user] | default([])) | length > 0 }}
   ansible.builtin.assert:
     that:
       - ssh_hardening_account.rc == 0
-      - ssh_hardening_keys.stat.exists and ssh_hardening_keys.stat.size > 0
+      - ssh_hardening_by_key | bool or ssh_hardening_by_cert | bool
     fail_msg: >-
-      ssh_hardening: {{ ssh_hardening_keep_user }} does not exist or has no
-      .ssh/authorized_keys in its home; key-only SSH would lock it out
+      ssh_hardening: {{ ssh_hardening_keep_user }} does not exist, or has no unrevoked key in
+      .ssh/authorized_keys in its home and no certificate path (ssh_hardening_keep_user_cert_only
+      with an unrevoked user CA and a principal listed for it); key-only SSH would lock it out
 
 - name: Put the kept account in the first allow group
   when: ssh_hardening_manage_membership | bool
@@ -47,6 +71,53 @@
     path: "{{ ssh_hardening_state_dir }}"
     state: directory
     mode: "0700"
+
+- name: Write the user CA keys (only a file ssh-keygen parses replaces the live one)
+  when: ssh_hardening_trusted_user_ca_keys | length > 0
+  ansible.builtin.copy:
+    dest: "{{ ssh_hardening_trusted_user_ca_file }}"
+    content: "{{ ssh_hardening_trusted_user_ca_keys | join('\n') }}\n"
+    mode: "0644"
+    validate: "{{ ssh_hardening_keygen_cli }} -l -f %s"
+
+- name: Write the revoked keys (only a file ssh-keygen parses replaces the live one)
+  when: ssh_hardening_revoked_keys | length > 0
+  ansible.builtin.copy:
+    dest: "{{ ssh_hardening_revoked_keys_file }}"
+    content: "{{ ssh_hardening_revoked_keys | join('\n') }}\n"
+    mode: "0644"
+    validate: "{{ ssh_hardening_keygen_cli }} -l -f %s"
+
+- name: Ensure the principals directory exists
+  ansible.builtin.file:
+    path: "{{ ssh_hardening_principals_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write each listed account's principals
+  ansible.builtin.copy:
+    dest: "{{ ssh_hardening_principals_dir }}/{{ item.key }}"
+    content: "{{ item.value | join('\n') }}\n"
+    mode: "0644"
+  loop: "{{ ssh_hardening_authorized_principals | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: List the principals files
+  ansible.builtin.find:
+    paths: "{{ ssh_hardening_principals_dir }}"
+    file_type: any
+    hidden: true
+  register: ssh_hardening_principal_files
+
+- name: Remove the principals of accounts no longer listed (their certificates stop working)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ ssh_hardening_principal_files.files | map(attribute='path')
+       | reject('in', ssh_hardening_authorized_principals.keys() | map('regex_replace', '^', ssh_hardening_principals_dir ~ '/') | list)
+       | list }}
 
 - name: Compare the drop-in with the live file
   ansible.builtin.template:
