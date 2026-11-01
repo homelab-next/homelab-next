@@ -69,8 +69,8 @@ from functools import cache
 from typing import Any, Protocol
 
 from homelabnext.agent.digest import digest_of
+from homelabnext.grants import TIER_RANK, grant_for, tier_exceeds
 
-TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 #: what a caller may do to a request that already exists (``execute`` is :func:`decide`)
 ACCESS_OPERATIONS = ("read", "cancel")
 DEFAULT_APPROVAL_TTL_S = 900
@@ -234,17 +234,10 @@ def _evaluate(manifest, request, approval, actual, now):
     entry = next((a for a in manifest.get("actions", []) if a["action"] == request["action"]), None)
     if entry is None:
         return "deny", "default-deny", None
-    grant = next(
-        (
-            g
-            for g in manifest.get("grants", [])
-            if g["profile"] == request["actor"] and request["action"] in g["actions"]
-        ),
-        None,
-    )
+    grant = grant_for(manifest, request["actor"], request["action"])
     if grant is None:
         return "deny", "not-granted", None
-    if TIER_RANK[entry["tier"]] > TIER_RANK[grant["max_tier"]]:
+    if tier_exceeds(entry["tier"], grant["max_tier"]):
         return "deny", "tier-exceeds-grant", None
     if not entry.get("handler"):
         return "deny", "handler-missing", None

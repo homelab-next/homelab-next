@@ -40,6 +40,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from homelabnext.grants import grant_for, tier_exceeds
+
 from .digest import digest_of
 from .errors import AgentError
 from .readers import is_reader, profile_problems
@@ -47,7 +49,6 @@ from .report import validate_report
 from .schemas import schema_errors
 
 OUTPUT_REF = "$output."
-_TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 _SEAL = object()  # only accept() can build an Accepted
 # formats the stock jsonschema FormatChecker always checks, with no optional package, and that
 # admit no free text ("email" only checks for an "@"; "hostname" needs an optional package)
@@ -422,13 +423,10 @@ def _grant_problems(manifest: Mapping[str, Any], actor: str, action: str) -> lis
     entry = next((a for a in manifest.get("actions", []) if a["action"] == action), None)
     if entry is None:
         return [f"{action}: not in broker manifest {manifest.get('manifest_id')!r}"]
-    grant = next(
-        (g for g in manifest.get("grants", []) if g["profile"] == actor and action in g["actions"]),
-        None,
-    )
+    grant = grant_for(manifest, actor, action)
     if grant is None:
         return [f"{action}: {actor} holds no broker grant for it"]
-    if _TIER_RANK[entry["tier"]] > _TIER_RANK[grant["max_tier"]]:
+    if tier_exceeds(entry["tier"], grant["max_tier"]):
         return [f"{action}: tier {entry['tier']} is above {actor}'s max_tier {grant['max_tier']}"]
     return []
 

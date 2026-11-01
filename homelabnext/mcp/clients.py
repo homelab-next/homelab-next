@@ -70,7 +70,7 @@ _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
 
 
 def refuse_unsound_records(
-    cat: servers.Catalog,
+    cat: servers.ServerCatalog,
     sids: Iterable[str],
     *,
     registry: Any = None,
@@ -183,7 +183,7 @@ def granted(profile: Mapping[str, Any]) -> list[str]:
     return sorted({str(x) for x in g.get("mcp") or ()})
 
 
-def deprecation_notes(cat: servers.Catalog, profile: Mapping[str, Any]) -> list[str]:
+def deprecation_notes(cat: servers.ServerCatalog, profile: Mapping[str, Any]) -> list[str]:
     """A note per granted server that is deprecated (still rendered), naming its replacement
     (never its free-text ``reason``: a value, and a note reaches logs)."""
     out = []
@@ -199,7 +199,7 @@ def deprecation_notes(cat: servers.Catalog, profile: Mapping[str, Any]) -> list[
 
 
 def instances(
-    cat: servers.Catalog,
+    cat: servers.ServerCatalog,
     profile: Mapping[str, Any],
     *,
     lanes: Iterable[str] = ("real",),
@@ -453,7 +453,7 @@ def home_servers(
 
 
 def generated_note(
-    cat: servers.Catalog, what: str, records: Mapping[str, Mapping[str, Any]] | None = None
+    cat: servers.ServerCatalog, what: str, records: Mapping[str, Mapping[str, Any]] | None = None
 ) -> str:
     """The header of a rendered file, with the digest of the records it was built from (only
     those: editing a record a file does not hold never makes that file drift)."""
@@ -469,7 +469,7 @@ def generated_note(
 def render_home(
     insts: list[Instance],
     client: str,
-    cat: servers.Catalog,
+    cat: servers.ServerCatalog,
     registry: Any,
     what: str,
     ctx: servers.LaunchContext | None = None,
@@ -537,7 +537,9 @@ def orch_kind(
 
 
 def orch_catalog(
-    cat: servers.Catalog, granted_ids: Iterable[str] = (), ctx: servers.LaunchContext | None = None
+    cat: servers.ServerCatalog,
+    granted_ids: Iterable[str] = (),
+    ctx: servers.LaunchContext | None = None,
 ) -> tuple[str, list[str]]:
     """``configs/mcp_catalog.yaml``: every grantable stdio server as a kind.  A server that
     cannot be a kind is skipped with a note, or refused when a rendered profile is granted it.
@@ -764,7 +766,7 @@ def load_lock(path: str | Path) -> dict[str, str]:
 
 def profile_refusals(
     doc: Mapping[str, Any],
-    cat: servers.Catalog,
+    cat: servers.ServerCatalog,
     policy: Any = None,
     lock: Mapping[str, str] | None = None,
 ) -> list[str]:
@@ -828,7 +830,10 @@ def profile_refusals(
 
 
 def _load_profile(
-    path: Path, cat: servers.Catalog, policy: Any = None, lock: Mapping[str, str] | None = None
+    path: Path,
+    cat: servers.ServerCatalog,
+    policy: Any = None,
+    lock: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -844,7 +849,7 @@ def _load_profile(
 
 
 def render_profile(
-    cat: servers.Catalog,
+    cat: servers.ServerCatalog,
     profile_path: str | Path,
     client: str,
     *,
@@ -1111,7 +1116,7 @@ def anchor_host_problems(ctx: servers.LaunchContext) -> tuple[list[str], list[st
 
 
 def _rendered_ids(
-    cat: servers.Catalog, client: str, profiles: Iterable[Mapping[str, Any]]
+    cat: servers.ServerCatalog, client: str, profiles: Iterable[Mapping[str, Any]]
 ) -> set[str]:
     """The records a render writes: the profiles' grants, and for llm-orchestrator every
     grantable record (its catalog holds a kind per grantable stdio server)."""

@@ -33,13 +33,16 @@ reports:
   lake    a raw lake-query client: importing ``trino``, ``duckdb``, ``pyiceberg`` or ``sqlite3``,
           or a string naming the Trino REST endpoint ``/v1/statement``
           -> use ``homelabnext.lake`` (``LakeClient`` and its adapters)
+  tiers   a private ranking of the broker tiers: a dict literal whose keys are exactly ``read``,
+          ``write``, ``execute`` and ``privileged``
+          -> use ``homelabnext.grants`` (``TIER_RANK``, ``grant_for``, ``tier_exceeds``)
   schema  a private JSON-schema registry: a call to ``referencing.Registry()``,
           ``referencing.Resource.from_contents`` or ``<specification>.create_resource``
           -> use ``homelabnext.schema_registry`` (``schema_registry``, ``registry_of``,
           ``validator``)
 
 The shared libraries own their seam (``homelabnext/notify``, ``homelabnext/state``,
-``homelabnext/lake``, ``homelabnext/schema_registry.py``). Test code is out of scope (tests exercise the seams on purpose). Every other
+``homelabnext/lake``, ``homelabnext/grants.py``, ``homelabnext/schema_registry.py``). Test code is out of scope (tests exercise the seams on purpose). Every other
 exemption is an entry in ``tools/shared_helpers.allow.yml`` naming the path, the rule and the
 reason, so the list is reviewed in one place; an entry that no longer matches anything is
 reported as stale.
@@ -72,12 +75,14 @@ RULES = {
     "notify": "private notification sender; use homelabnext.notify (Notifier + Sender)",
     "state": "ad-hoc JSON state file; use homelabnext.state (StateStore / KeyedState)",
     "lake": "raw lake-query client; use homelabnext.lake (LakeClient and its adapters)",
+    "tiers": "private broker tier ranking; use homelabnext.grants (TIER_RANK, grant_for)",
     "schema": "private schema registry; use homelabnext.schema_registry",
 }
 OWNERS = {
     "notify": ("homelabnext/notify/",),
     "state": ("homelabnext/state/",),
     "lake": ("homelabnext/lake/",),
+    "tiers": ("homelabnext/grants.py",),
     "schema": ("homelabnext/schema_registry.py",),
 }
 SKIP_DIRS = {
@@ -109,6 +114,7 @@ HTTP_SEND = {
 NTFY_HEADERS = {"title", "priority", "tags", "x-title", "x-priority", "x-tags"}
 LAKE_MODULES = ("trino", "duckdb", "pyiceberg", "sqlite3")
 ATOMIC = {"os.replace", "os.rename"}
+BROKER_TIERS = frozenset({"read", "write", "execute", "privileged"})
 SCHEMA_BUILD = {"referencing.Registry", "referencing.Resource.from_contents"}
 STATE_WORD = re.compile(r"(?i)(?:^|[^a-z])state(?:s|_file|_path|_dir)?(?:[^a-z]|$)")
 
@@ -243,6 +249,13 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
             and "/v1/statement" in node.value
         ):
             found.append(Finding(rel, node.lineno, "lake", "names the Trino REST endpoint"))
+        if (
+            isinstance(node, ast.Dict)
+            and len(node.keys) == len(BROKER_TIERS)
+            and all(isinstance(k, ast.Constant) for k in node.keys)
+            and {k.value for k in node.keys} == BROKER_TIERS  # type: ignore[union-attr]
+        ):
+            found.append(Finding(rel, node.lineno, "tiers", "ranks the broker tiers itself"))
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):

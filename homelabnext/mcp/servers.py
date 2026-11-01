@@ -8,7 +8,7 @@ example data is (``HNX_EXAMPLES_DIR``, ``HNX_DATA_DIR``; ``docs/private-overlay.
 
 Everything else that knows about MCP servers is derived from it:
 
-* the ``mcp`` section of the capability-class table (:meth:`Catalog.classes`, read by
+* the ``mcp`` section of the capability-class table (:meth:`ServerCatalog.classes`, read by
   :meth:`homelabnext.agent.readers.ToolClasses.load`): a server's classes are the union of its
   tools' classes, so ``hnx agent`` levels and the reader rule judge the catalog's servers;
 * the knowledge graph's ``mcp:<id>`` nodes and their edges (``homelabnext.graph.sources``);
@@ -49,7 +49,7 @@ import yaml
 
 from homelabnext import tlp
 from homelabnext.registry.model import secret_env_name
-from homelabnext.registry.model_tlp import tier_disagreement
+from homelabnext.registry.model_tlp import tier_disagreement, tier_label
 
 from . import credentials
 
@@ -127,13 +127,17 @@ PROFILE_FILE = "profile_file"
 SECRET_KEY = credentials.SECRET_KEY
 
 
-class CatalogError(ValueError):
-    """The catalog cannot be read at all (a missing directory, a file that is not YAML)."""
+class ServerCatalogError(ValueError):
+    """The server catalog cannot be read at all (a missing directory, a file that is not YAML).
+
+    Not :class:`homelabnext.mcp.catalog.CatalogError`, the repository MCP server's own error."""
 
 
 @dataclass
-class Catalog:
-    """The records of one catalog directory, by id (``servers``) and by file (``files``)."""
+class ServerCatalog:
+    """The records of one MCP server catalog directory, by id (``servers``) and by file
+    (``files``).  Not :class:`homelabnext.mcp.catalog.Catalog`, the repository MCP server's tools
+    over a checkout."""
 
     root: Path
     servers: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -192,16 +196,16 @@ def _read(path: Path) -> Any:
     try:
         return yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise CatalogError(f"{path}: cannot read: {credentials.reason(exc)}") from None
+        raise ServerCatalogError(f"{path}: cannot read: {credentials.reason(exc)}") from None
 
 
-def load(path: str | Path | None = None) -> Catalog:
+def load(path: str | Path | None = None) -> ServerCatalog:
     """Read every ``*.yml`` record of a catalog directory (not validated: :func:`check`).  Another
     record-like file (``*.yaml``, ``*.json``) is a load problem, never silently skipped."""
     root = Path(path) if path is not None else default_dir()
     if not root.is_dir():
-        raise CatalogError(f"{root}: no MCP catalog directory")
-    cat = Catalog(root)
+        raise ServerCatalogError(f"{root}: no MCP catalog directory")
+    cat = ServerCatalog(root)
     for f in sorted(root.iterdir()):
         if f.is_file() and f.suffix.lower() in (".yml", ".yaml", ".json") and f.suffix != ".yml":
             cat.problems.append(
@@ -224,11 +228,11 @@ def load(path: str | Path | None = None) -> Catalog:
 
 
 @cache
-def _cached(path: str) -> Catalog:
+def _cached(path: str) -> ServerCatalog:
     return load(path)
 
 
-def load_cached(path: str | Path | None = None) -> Catalog:
+def load_cached(path: str | Path | None = None) -> ServerCatalog:
     """:func:`load`, cached per resolved directory for the process (the class table, the graph)."""
     root = Path(path) if path is not None else default_dir()
     return _cached(str(root.resolve()))
@@ -244,7 +248,7 @@ def record_digest(record: Mapping[str, Any]) -> str:
 def file_digest(path: str | Path) -> str:
     doc = _read(Path(path))
     if not isinstance(doc, Mapping):
-        raise CatalogError(f"{path}: a record must be a mapping")
+        raise ServerCatalogError(f"{path}: a record must be a mapping")
     return record_digest(doc)
 
 
@@ -770,7 +774,7 @@ def record_label(rec: Mapping[str, Any]) -> tlp.Label:
     and the default of unlabelled data (decision 2)."""
     if rec.get("tlp") is not None:
         return tlp.read(rec["tlp"])
-    return tlp.Label.CLEAR if rec.get("data_tier") == "cloud-allowed" else tlp.Label.RED
+    return tier_label(rec.get("data_tier"))
 
 
 def tlp_problems(rec: Mapping[str, Any], where: str) -> list[str]:
@@ -788,7 +792,7 @@ def tlp_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     return [f"{where}: {bad}"] if bad else []
 
 
-def tlp_notes(cat: Catalog) -> list[str]:
+def tlp_notes(cat: ServerCatalog) -> list[str]:
     """A note naming the records that declare no ``tlp`` (each is read from its ``data_tier``,
     :func:`record_label`): one line for the catalog, not one per record."""
     unlabelled = [f"{sid} ({record_label(rec)})" for sid, rec in cat if "tlp" not in rec]
@@ -1322,7 +1326,7 @@ def _lifecycle_problems(rec: Mapping[str, Any], where: str) -> list[str]:
     ]
 
 
-def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) -> list[str]:
+def _registry_problems(cat: ServerCatalog, registry: Any, skip: Iterable[str] = ()) -> list[str]:
     """Registry cross-references; ``skip``: records that failed the schema (no follow-on noise)."""
     out: list[str] = []
     skip = set(skip)
@@ -1384,7 +1388,9 @@ def _registry_problems(cat: Catalog, registry: Any, skip: Iterable[str] = ()) ->
     return out
 
 
-def _review_problems(cat: Catalog, policy: Any, only: Iterable[str] | None = None) -> list[str]:
+def _review_problems(
+    cat: ServerCatalog, policy: Any, only: Iterable[str] | None = None
+) -> list[str]:
     from homelabnext.reviews import evaluate, missing_message
 
     out: list[str] = []
@@ -1409,7 +1415,7 @@ def _review_problems(cat: Catalog, policy: Any, only: Iterable[str] | None = Non
     return out
 
 
-def integrity_problems(cat: Catalog) -> list[str]:
+def integrity_problems(cat: ServerCatalog) -> list[str]:
     """What makes a catalog unfit to judge a grant against: a load problem (two records with one
     id, a record that is not a mapping), an id that is not its file name, a record that fails the
     schema (an unknown status or data tier).  A subset of :func:`check`, computed once per load."""
@@ -1424,7 +1430,7 @@ def integrity_problems(cat: Catalog) -> list[str]:
     return list(cat._integrity)
 
 
-def default_policy(cat: Catalog) -> Any:
+def default_policy(cat: ServerCatalog) -> Any:
     """The review policy ``check`` uses by default: ``review-policy.yml`` beside the catalog
     directory, or None."""
     from homelabnext.reviews import load_policy
@@ -1434,7 +1440,7 @@ def default_policy(cat: Catalog) -> Any:
 
 
 def record_problems(
-    cat: Catalog,
+    cat: ServerCatalog,
     sids: Iterable[str],
     policy: Any = None,
     source_root: Path | None = None,
@@ -1449,7 +1455,7 @@ def record_problems(
 
 
 def check(
-    cat: Catalog,
+    cat: ServerCatalog,
     *,
     registry: Any = None,
     vocabulary: Iterable[str] | None = None,
@@ -1525,3 +1531,23 @@ def check(
     if policy is not None:
         out += _review_problems(cat, policy, keep)
     return out
+
+
+#: the names before the rename (``homelabnext.mcp.catalog`` has its own ``Catalog`` and
+#: ``CatalogError``): kept for one release, each use warns
+_RENAMED = {"Catalog": "ServerCatalog", "CatalogError": "ServerCatalogError"}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _RENAMED:
+        import warnings
+
+        new = _RENAMED[name]
+        warnings.warn(
+            f"homelabnext.mcp.servers.{name} is renamed {new} (homelabnext.mcp.catalog has its "
+            f"own {name}); the old name goes in the next release",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

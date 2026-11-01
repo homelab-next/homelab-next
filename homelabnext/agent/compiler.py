@@ -42,12 +42,16 @@ Rules, all enforced here and tested:
 
 from __future__ import annotations
 
+import copy
+import json
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from homelabnext import tlp
+from homelabnext.grants import TIER_RANK
 from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
 from homelabnext.registry.model_tlp import data_tier_of, tier_disagreement
 
@@ -61,6 +65,7 @@ from .errors import (
     MissingPartError,
     ReaderViolation,
     SpecError,
+    UnverifiedProfile,
 )
 from .include import normalise_include
 from .readers import (
@@ -76,7 +81,6 @@ from .readers import (
 )
 from .schemas import schema_errors
 
-TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 BUDGET_KEYS = ("max_input_tokens", "max_output_tokens", "max_runtime_s", "max_tool_calls")
 #: an MCP catalog id (``schemas/platform/mcp_server.schema.json`` ``slug``)
 _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
@@ -557,6 +561,8 @@ def verify_profile(
     Nor does the broker rule, except for a direct exception (the policy's ``direct_mcp``): any
     profile holding an acting grant that does not go through the broker is refused.
     """
+    if isinstance(profile, VerifiedProfile):
+        profile = profile.data()
     problems = schema_errors("agent", "profile", profile)
     if problems:
         return problems
@@ -587,6 +593,149 @@ def verify_profile(
         elif pinned != profile["digest"]:
             problems.append(f"digest {profile['digest']} is not the reviewed {pinned}")
     return problems
+
+
+#: only this module holds it, so only :func:`verified_profile` constructs a VerifiedProfile
+_VERIFIED = object()
+
+
+class VerifiedProfile(Mapping[str, Any]):
+    """A compiled profile that :func:`verify_profile` passed against a ceiling policy **and** a
+    lock of reviewed digests: the only profile type the consumers that act on one accept
+    (:func:`~homelabnext.agent.access.start_session` and ``access_block``,
+    :class:`~homelabnext.agent.memory.MemoryStore`,
+    :func:`~homelabnext.agent.knowledge.select_knowledge`,
+    :func:`~homelabnext.agent.keyring.build_keyring`).
+
+    A dict that carries a digest proves nothing: anyone who can edit it can recompute the digest.
+    This type can only be made by :func:`verified_profile` / :func:`load_verified_profile`
+    (constructing it directly raises ``TypeError``), and it is read-only: it holds its own deep
+    copy, and every value read from it is a fresh copy, so the profile that was verified is the
+    profile every consumer sees.  It reads like the profile mapping (``p["id"]``, ``p.get``);
+    :meth:`data` returns a plain dict copy."""
+
+    __slots__ = ("_doc", "_policy_source")
+
+    def __init__(self, doc: Mapping[str, Any], policy_source: str, token: object = None) -> None:
+        if token is not _VERIFIED:
+            raise TypeError(
+                "VerifiedProfile is made only by verified_profile() or load_verified_profile() "
+                "(a profile checked against the ceiling policy and the lock)"
+            )
+        object.__setattr__(self, "_doc", copy.deepcopy(dict(doc)))
+        object.__setattr__(self, "_policy_source", policy_source)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("a VerifiedProfile is read-only")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("a VerifiedProfile is read-only")
+
+    def __getitem__(self, key: str) -> Any:
+        return copy.deepcopy(self._doc[key])
+
+    def __iter__(self):
+        return iter(self._doc)
+
+    def __len__(self) -> int:
+        return len(self._doc)
+
+    def __copy__(self) -> VerifiedProfile:
+        return self
+
+    def __deepcopy__(self, memo: Any) -> VerifiedProfile:
+        return self
+
+    def __reduce__(self):
+        raise TypeError("a VerifiedProfile is not pickled; verify the profile where it is used")
+
+    def __repr__(self) -> str:
+        return f"VerifiedProfile({self._doc.get('id')!r}, {self._doc.get('digest')!r})"
+
+    @property
+    def policy_source(self) -> str:
+        """The ceiling policy it was verified against (its ``source``)."""
+        return self._policy_source
+
+    def data(self) -> dict[str, Any]:
+        """A plain, mutable copy of the profile document."""
+        return copy.deepcopy(self._doc)
+
+
+def verified_profile(
+    profile: Mapping[str, Any],
+    *,
+    policy: CeilingPolicy,
+    lock: Mapping[str, str],
+    classes: ToolClasses | None = None,
+) -> VerifiedProfile:
+    """``profile`` as a :class:`VerifiedProfile`, or :class:`UnverifiedProfile` naming every
+    problem :func:`verify_profile` finds with ``policy`` and ``lock`` (both required: without
+    them a profile is checked only against itself)."""
+    if not isinstance(policy, CeilingPolicy):
+        raise UnverifiedProfile(["a profile is verified only against a CeilingPolicy (policy=)"])
+    if not isinstance(lock, Mapping):
+        raise UnverifiedProfile(["a profile is verified only against a lock of reviewed digests"])
+    if not isinstance(profile, Mapping):
+        raise UnverifiedProfile(["a compiled agent profile is a mapping"])
+    doc = copy.deepcopy(dict(profile))
+    problems = verify_profile(doc, policy=policy, lock=lock, classes=classes)
+    if problems:
+        pid = doc.get("id", "<no id>")
+        raise UnverifiedProfile([f"{pid}: profile does not verify: " + "; ".join(problems)])
+    return VerifiedProfile(doc, policy.source, _VERIFIED)
+
+
+def load_verified_profile(
+    path: str | Path,
+    policy: CeilingPolicy,
+    lock: Mapping[str, str],
+    *,
+    classes: ToolClasses | None = None,
+) -> VerifiedProfile:
+    """Read a compiled profile file (JSON, or YAML) and verify it (:func:`verified_profile`)."""
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+        if path.suffix == ".json":
+            doc = json.loads(text)
+        else:
+            import yaml
+
+            try:
+                doc = yaml.safe_load(text)
+            except yaml.YAMLError as exc:
+                raise ValueError(str(exc)) from None
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise UnverifiedProfile([f"cannot read profile {path}: {exc}"]) from None
+    try:
+        return verified_profile(doc, policy=policy, lock=lock, classes=classes)
+    except UnverifiedProfile as exc:
+        raise UnverifiedProfile([f"{path}: {p}" for p in exc.problems]) from None
+
+
+def lock_from_mapping(doc: Any, source: str = "lock") -> dict[str, str]:
+    """The reviewed digests of a lock file's document, ``{profiles: {<profile id>: <digest>}}``."""
+    lock = doc.get("profiles") if isinstance(doc, Mapping) else None
+    if not isinstance(lock, Mapping) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in lock.items()
+    ):
+        raise SpecError(f"{source}: expected a 'profiles' mapping of profile id -> digest")
+    return dict(lock)
+
+
+def require_verified(profile: Any, use: str) -> VerifiedProfile:
+    """``profile`` if it is a :class:`VerifiedProfile`; else :class:`UnverifiedProfile` saying
+    that ``use`` takes only one (a dict, digested or not, is refused)."""
+    if isinstance(profile, VerifiedProfile):
+        return profile
+    raise UnverifiedProfile(
+        [
+            f"{use} needs a VerifiedProfile (verified_profile(profile, policy=, lock=) or "
+            f"load_verified_profile), not a {type(profile).__name__}: a profile's own digest "
+            "is recomputed by whoever edits it"
+        ]
+    )
 
 
 def _plain(obj: Any) -> Any:

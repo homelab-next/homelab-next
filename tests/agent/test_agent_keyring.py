@@ -1,17 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """The keyring comes from the sources (checklist M-12): generated, and 0 drift from them."""
 
-import copy
 import json
 import shutil
 from pathlib import Path
 
 import pytest
 import yaml
-from agent_support import library, spec
+from agent_support import library, spec, verified, write_policy_lock
 
 from homelabnext import cli
-from homelabnext.agent import SpecError, build_keyring, compile_profile
+from homelabnext.agent import (
+    SpecError,
+    UnverifiedProfile,
+    build_keyring,
+    compile_profile,
+    profile_digest,
+)
 from homelabnext.agent.keyring import build_from_sources, drift, render_keyring
 from homelabnext.registry import load
 
@@ -32,7 +37,7 @@ def test_the_committed_keyring_has_no_drift_from_its_sources(capsys):
 
 
 def test_every_principal_of_every_source_is_in_the_keyring(registry):
-    reader = compile_profile(spec(), library())
+    reader = verified(compile_profile(spec(), library()))
     doc = build_keyring(registry, [reader], broker=BROKER)
     rows = {r["principal"]: r for r in doc["principals"]}
     assert rows["profile:reader"]["kind"] == "agent"
@@ -47,33 +52,45 @@ def test_every_principal_of_every_source_is_in_the_keyring(registry):
 
 
 def test_build_is_deterministic(registry):
-    a = compile_profile(spec(), library())
+    a = verified(compile_profile(spec(), library()))
     s = spec()
     s["id"] = "profile:second"
-    b = compile_profile(s, library())
+    b = verified(compile_profile(s, library()))
     assert render_keyring(build_keyring(registry, [a, b])) == render_keyring(
         build_keyring(registry, [b, a])
     )
 
 
-def test_an_edited_or_duplicated_profile_is_refused(registry):
+@pytest.mark.parametrize("redigest", [False, True])
+def test_an_edited_or_duplicated_profile_is_refused(registry, redigest):
     p = compile_profile(spec(), library())
-    bad = copy.deepcopy(p)
-    bad["grants"]["capabilities"].append("cap:secrets")
-    with pytest.raises(SpecError, match="digest"):
+    bad = dict(p, grants={**p["grants"], "capabilities": ["cap:lake-query", "cap:secrets"]})
+    if redigest:  # an honest digest of an edited profile proves nothing
+        bad["digest"] = profile_digest(bad)
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         build_keyring(registry, [bad])
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
+        build_keyring(registry, [p])  # a dict, even an unedited one
     with pytest.raises(SpecError, match="twice"):
-        build_keyring(registry, [p, p])
+        build_keyring(registry, [verified(p), verified(p)])
 
 
 @pytest.fixture
 def lab(tmp_path):
     shutil.copy(REPO / "examples" / "services.yml", tmp_path / "services.yml")
     (tmp_path / "profiles").mkdir()
-    (tmp_path / "profiles" / "p.json").write_text(json.dumps(compile_profile(spec(), library())))
+    p = compile_profile(spec(), library())
+    (tmp_path / "profiles" / "p.json").write_text(json.dumps(p))
+    write_policy_lock(tmp_path, p)
     (tmp_path / "sources.yml").write_text(
         yaml.safe_dump(
-            {"registry": "services.yml", "profiles": ["profiles/*.json"], "out": "keyring.json"}
+            {
+                "registry": "services.yml",
+                "profiles": ["profiles/*.json"],
+                "policy": "policy.json",
+                "lock": "lock.json",
+                "out": "keyring.json",
+            }
         )
     )
     assert cli.main(["agent", "keyring", "build", str(tmp_path / "sources.yml")]) == 0
@@ -85,7 +102,9 @@ def test_drift_is_caught_when_a_source_changes(lab, capsys):
     s = spec()
     s["capabilities"] = ["cap:lake-query", "cap:records-propose"]
     s["tier"] = "write"
-    (lab / "profiles" / "p.json").write_text(json.dumps(compile_profile(s, library())))
+    p = compile_profile(s, library())
+    (lab / "profiles" / "p.json").write_text(json.dumps(p))
+    write_policy_lock(lab, p)  # the reviewed change: the policy and the lock move with it
     assert cli.main(["agent", "keyring", "check", str(lab / "sources.yml")]) == 1
     err = capsys.readouterr().err
     assert "principal profile:reader differs" in err and "keyring build" in err
@@ -119,3 +138,20 @@ def test_a_sources_file_naming_nothing_is_refused(tmp_path, capsys):
     shutil.copy(REPO / "examples" / "services.yml", tmp_path / "services.yml")
     assert cli.main(["agent", "keyring", "check", str(tmp_path / "s.yml")]) == 1
     assert "names no file" in capsys.readouterr().err
+
+
+def test_a_profile_is_verified_against_the_sources_policy_and_lock(lab, capsys):
+    """An edited profile file is refused even with its digest recomputed, and a sources file
+    with profiles but no policy or lock is refused."""
+    path = lab / "profiles" / "p.json"
+    edited = json.loads(path.read_text())
+    edited["memory_scopes"] = ["analyst", "someone-else"]
+    edited["digest"] = profile_digest(edited)
+    path.write_text(json.dumps(edited))
+    assert cli.main(["agent", "keyring", "check", str(lab / "sources.yml")]) == 1
+    assert "is not the reviewed" in capsys.readouterr().err
+    doc = yaml.safe_load((lab / "sources.yml").read_text())
+    del doc["lock"]
+    (lab / "sources.yml").write_text(yaml.safe_dump(doc))
+    assert cli.main(["agent", "keyring", "check", str(lab / "sources.yml")]) == 1
+    assert "name both" in capsys.readouterr().err

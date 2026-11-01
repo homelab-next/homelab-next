@@ -5,7 +5,7 @@ section, generated docs/terms.md from the one packaged source."""
 from pathlib import Path
 
 import pytest
-from agent_support import inputs, library, manifest, spec
+from agent_support import inputs, library, manifest, spec, verified
 
 from homelabnext import cli
 from homelabnext.agent import (
@@ -31,7 +31,7 @@ def registry():
 
 @pytest.fixture
 def profile():
-    return compile_profile(spec(), library())
+    return verified(compile_profile(spec(), library()))
 
 
 def _sections(pack, name):

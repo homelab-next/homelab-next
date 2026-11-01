@@ -41,7 +41,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
 All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
-`agent/context_manifest` (1.1), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+`agent/context_manifest` (1.2), `agent/golden_task` (1.1), `broker/manifest` (1.8),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
 frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
@@ -135,6 +135,14 @@ recomputing it*; anyone can recompute a sha256. To pin the reviewed profile, com
 next to the policy, `{profiles: {<profile id>: <digest>}}`, and pass it as `lock`: a profile whose
 digest is not the pinned one is refused. Without `policy`, `verify_profile` checks the profile
 against its own stored ceiling, which proves internal consistency only.
+
+The consumers that act on a profile (`start_session` and `access_block`, `MemoryStore`,
+`select_knowledge`, `build_keyring`) take only a `VerifiedProfile`, never a dict: one made by
+`verified_profile(profile, policy=, lock=)` or `load_verified_profile(path, policy, lock)`, which
+run `verify_profile` with both and raise `UnverifiedProfile` on any problem. It cannot be
+constructed directly, it is read-only (every value read from it is a copy), and a dict, digested
+or not, is refused with `UnverifiedProfile`: whoever can edit a profile can recompute its digest,
+but not the lock.
 
 Raising a ceiling is a reviewed change to the policy file, never a compiler option.
 
@@ -263,9 +271,10 @@ one of them only through the broker:
 
 `compile_profile` raises `BrokerViolation` (after the catalog check, whatever the ceiling allows);
 `verify_profile` judges a compiled profile with the policy's `direct_mcp`; `hnx agent lint` runs
-both rules (`--rule readers-cannot-act|actors-act-via-broker` runs one and prints its own count,
-`--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the tree
-serving both); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
+both rules and the pairing rule below (`--rule
+readers-cannot-act|actors-act-via-broker|manifests-fit-their-profiles` runs one and prints its own
+count, `--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the
+tree serving all three); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
 a module contributes no acting record and gives its own agent no acting grant) refuse the same.
 Checklist G-13 runs the lint with `--rule actors-act-via-broker` and the ceiling policy,
 G-03 with `--rule readers-cannot-act`, and G-04's observable runs the broker rule before its tests.
@@ -353,10 +362,10 @@ manifest's `must_cite` sources are cited by an `ok` report.
 
 `start_session(manifest, inputs, profile, registry, runs_on=None, broker=None)` is how a session
 gets its pack: it renders the profile's **access block** and adds it as a required `stable`
-section named `access`, then calls `assemble_pack`. The block is derived from the compiled
-profile (digest-checked for internal consistency; `verify_profile` with a lock pins the
-reviewed one) and the registry, for the host the agent runs on (default: the host of
-the registry's `agent-runtime` service):
+section named `access`, then calls `assemble_pack`. The block is derived from the profile, a
+`VerifiedProfile` (verified against the policy and the lock; a dict is refused), and the
+registry, for the host the agent runs on (default: the host of the registry's `agent-runtime`
+service):
 
 - who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
   content, broker tier, its own memory scopes and budgets;
@@ -378,9 +387,14 @@ manifest cannot replace or remove what the agent is told. The manifest's persona
 and `session_problems(manifest, profile)` must find nothing: a profile with
 `reads_untrusted: false` (an actor) is never given a `source: input` section (it receives a
 reader's validated output through a handoff, G-04), every manifest `tools` entry is an MCP server
-the profile is granted, and every manifest `memory_scopes` entry is one of the profile's. Stable content is
-never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
-`hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
+the profile is granted, and every manifest `memory_scopes` entry is one of the profile's; a
+manifest that names its `profiles` (context manifest 1.2) feeds no other profile. `hnx agent lint`
+runs the same `session_problems` (rule `manifests-fit-their-profiles`) for every manifest against
+every linted profile of each id its `profiles` names, so a mismatched pair is found before a
+session starts; a named profile no linted file has is a problem, and a manifest that names none is
+a note. Stable content is never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
+`hnx agent pack MANIFEST --inputs F --profile P --policy POLICY --lock LOCK --registry R
+[--runs-on HOST] [--broker M]` (the profile is verified against the policy and the lock first).
 
 ## Linked knowledge: `include:` rules
 
@@ -471,7 +485,7 @@ include:
   (`content unreadable`) whatever other rules say.
 
 ```
-hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \
+hnx agent pack MANIFEST --inputs F --profile P --policy POLICY --lock LOCK --registry R [--root .] \
     [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 ```
 
@@ -484,7 +498,9 @@ Tests: `tests/agent/test_agent_knowledge.py`.
 ADR-0002 lists keyring rows among the outputs generated from the registry; checklist M-11 asks
 for every principal with grants by level and denials. The keyring is therefore a **generated**
 document (`homelabnext/agent/keyring.py`) whose only inputs are the sources that already decide
-access: the registry, the compiled agent profiles and, optionally, the broker manifest. It uses
+access: the registry, the compiled agent profiles (each verified against the ceiling `policy`
+and the `lock` of reviewed digests the sources file names; `examples/keyring/policy.yml` and
+`lock.yml` for the example) and, optionally, the broker manifest. It uses
 the same derivation as the access block, so the two cannot disagree. Principals: every profile,
 every profile the broker grants actions to without a compiled profile in the set
 (`profile: null`), every broker approver, and every registry zone (`kind: network`, which
@@ -513,12 +529,11 @@ profile's memory.
 
 Reads are scoped to the owner: `read(profile, scope)` returns that profile's own entries in one
 of its `memory_scopes`; `owner=` naming another profile is a cross-agent read and is refused
-(`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call
-checks the profile's digest, which catches a profile edited without recomputing it; it is not
-tamper protection, since anyone holding the dict can re-digest it (a changed `id` or wider
-`memory_scopes` then passes). The caller is platform code, not the model: load the profile with
-`verify_profile(..., policy=, lock=)` first, as `hnx mcp serve --scope-from-profile` does, to
-know it is the reviewed one.
+(`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call takes
+a `VerifiedProfile` (verified against the policy and the lock) and refuses a dict with
+`UnverifiedProfile`, so a profile re-digested with a changed `id` or wider `memory_scopes` gets no
+access. The caller is platform code, not the model: it loads the profile with
+`load_verified_profile(path, policy, lock)`.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
 
@@ -663,10 +678,11 @@ for any broker implementation: run the same rows against it.
 hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.json]
 hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
-               [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
+               [--profile PROFILE.json --policy POLICY.yml --lock profiles.lock
+                --registry services.yml [--runs-on HOST] [--broker M]]
                [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
-hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker] [--policy POLICY.yml]
+hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker|manifests-fit-their-profiles] [--policy POLICY.yml]
 hnx agent prompts lint [TEMPLATE|DIR ...]
 hnx agent prompts render TEMPLATE [--values VALUES.yml]
 hnx agent injection run [--fake fence|naive | --role ROLE --registry R --roles T] [--out F] [--check GOLDEN]
