@@ -53,7 +53,9 @@ One writer per `(table, source)` is assumed.
 * Every row carries its TLP label (ADR-0033 decision 5): a table with the `tlp` column (every OCSF
   table from 1.1) refuses a batch with any row whose label is missing or not one of the five
   canonical spellings. The writer normalises with `homelabnext.tlp` first; the lake stores one
-  spelling. The column is optional in the schema, so a row stored before it existed stays valid.
+  spelling. A log-pipeline event becomes a row through `rows.row_from_event(event, schema)`: the
+  row's `tlp` is the event's `labels.hnx_tlp`, never the event's own `tlp` field, and an event
+  without a canonical `hnx_tlp` is refused. The column is optional in the schema, so a row stored before it existed stays valid.
   `tables.row_label` reads only a canonical stored value as its label; a row without one, or with
   any other value (an alternate spelling such as `white` or `Green` that a writer bypassing the
   lake stored, a damaged value), is `red`. Until the backfill below has run, a swap cannot
@@ -62,7 +64,9 @@ One writer per `(table, source)` is assumed.
 * The one-off TLP backfill of rows stored before the column (ADR-0033 decision 5) is a plan, never
   an execution: `backfill.plan` (and `hnx modules tlp-backfill`, from render's
   `tlp-sources.json`) prints the statements in order. It adds the column, labels a row by its
-  recorded source's declaration (`red` for a source whose items' own labels were never stored),
+  recorded source's declaration only where a human has recorded that its items carried no labels
+  of their own (`--items-carried-no-labels <route>`; every other source's rows are `red`, as an
+  item's own label, possibly stricter, was never stored),
   gives every other row the strictest source's label, and touches only rows still unlabelled, so a
   second run changes nothing.
 * Reading at a TLP ceiling (ADR-0033 decision 6): `ceiling.CeilingReader(lake, ceiling, schemas)`

@@ -109,8 +109,18 @@ def test_the_example_guests_pass():
         ({**NODES, "hv-2": {"power": {"ups": "ups-z"}}}, [HOST], "'ups-z' is not a UPS"),
         (NODES, [{**HOST, "power": {"ups": "none"}}], "none needs a reason"),
         ({**NODES, "nas-1": {"power": {"ups": "ups-a"}}}, [HOST], "differs from _nodes.yml"),
+        # a malformed ups is reported, not a TypeError from the resolution after it
+        (NODES, [{**HOST, "power": {"ups": 5}}], "power.ups must name one or more UPS ids"),
+        ({**NODES, "hv-2": {"power": {"ups": {"a": 1}}}}, [HOST], "power.ups must name"),
     ],
-    ids=["vm-own-power", "unknown-ups", "none-no-reason", "declared-twice"],
+    ids=[
+        "vm-own-power",
+        "unknown-ups",
+        "none-no-reason",
+        "declared-twice",
+        "ups-not-a-list",
+        "node-ups-a-mapping",
+    ],
 )
 def test_a_guest_power_rule_fails_on_a_bad_input(nodes, guests, message):
     problems = power.fleet_problems(FACTS, nodes, guests)

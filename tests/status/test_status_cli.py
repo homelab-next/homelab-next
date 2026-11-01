@@ -93,13 +93,24 @@ def test_collect_records_the_notify_pairs_it_holds_for_the_census(tmp_path, caps
     pairs.mkdir()
     collect = ["collect", "--registry", str(REGISTRY), "--root", str(ROOT),
                "--state", str(tmp_path / "state.json"), "--notify-topic", "status",
-               "--notify-pairs-dir", str(pairs), *FILE_SOURCES]  # fmt: skip
+               "--notify-ceiling", "red", "--notify-pairs-dir", str(pairs), *FILE_SOURCES]  # fmt: skip
     assert main(collect) == 0
     # the file sources page nothing here, so no message leaves; the pairs are recorded anyway
     assert "notifications sent: 0" in capsys.readouterr().out
     held = parse_record((pairs / "status" / "pairs.json").read_text(), "status").pairs
     assert {"problem": STATUS_ITEM[0], "recovery": STATUS_ITEM[1]} in held
     assert not (pairs / "broker").exists()
+
+
+def test_collect_refuses_a_notify_topic_without_a_ceiling_before_collecting(tmp_path, capsys):
+    """Negative: a notification channel is a reader, and a reader with no declared TLP ceiling is
+    refused (ADR-0033 decision 6), never given red."""
+    state = tmp_path / "state.json"
+    collect = ["collect", "--registry", str(REGISTRY), "--root", str(ROOT), "--state", str(state),
+               "--notify-topic", "status", *FILE_SOURCES]  # fmt: skip
+    assert main(collect) == 2
+    assert "--notify-ceiling" in capsys.readouterr().err
+    assert not state.exists()
 
 
 def test_collect_refuses_a_misspelt_notify_ceiling_before_collecting(tmp_path, capsys):

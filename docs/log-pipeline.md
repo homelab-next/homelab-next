@@ -118,14 +118,18 @@ runtime label it is never the event's word: the rule is
   read as a looser one.
 - **The declaration** is the dataset's `tlp` (absent is `red`) and `honour_item_labels`
   ([modules](modules.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
-  An item label the event carries in its `tlp` field, the flat `"labels.tlp"` key or
-  `labels.tlp` (any spelling of each up to case and surrounding white space; several give the
-  strictest) is kept when stricter, and when looser only where the dataset honours item labels;
+  An item label the event carries (`homelabnext.logpipeline.tlp_labels.claims`: its `tlp`
+  field, the flat `"labels.tlp"` key or `labels.tlp`; a `tlp:` tag in `tags`, a string or a tag
+  object's `name`; the `tlp` of an OCSF `osint` entry; a STIX TLP marking-definition id in
+  `object_marking_refs`; any spelling of each key up to case and surrounding white space; several
+  give the strictest) is kept when stricter, and when looser only where the dataset honours item labels;
   one that is not a label, `null` included, is `red`. The label is decided by the event as it
   arrived: an item label another stage drops still counts.
 - **Self-set labels** in `labels.hnx_tlp`, the flat `"labels.hnx_tlp"` key or any spelling of
   either are replaced. The event's own `tlp` field is left as it came: it is an input, and the
-  lake writer stores `labels.hnx_tlp`, never it.
+  lake writer stores `labels.hnx_tlp`, never it: `homelabnext.lake.rows.row_from_event(event,
+  schema)` is that mapping (the row's `tlp` from `labels.hnx_tlp`, the event's `tlp` dropped, an
+  event without a canonical `hnx_tlp` refused for a labelled table).
 
 The table is `tlp-sources.json` (`homelabnext.logpipeline.tlp_sources/v1`), written by
 `hnx modules render` from the site's selection: one source per dataset of every module the site

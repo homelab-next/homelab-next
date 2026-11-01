@@ -14,8 +14,9 @@ nothing the message's producer wrote leaves.  The notifier's state is unchanged 
 still holds the problem as sent, and the recovery, labelled at least as strictly as the problem
 (:meth:`Notifier._recover`), goes through the same check.
 
-The default ceiling is ``red``: a channel only the lab's operators read admits everything, and
-behaviour is unchanged until a channel is given a lower one.  No producer in this repository
+A channel has no default ceiling (decision 6: a reader with no declared TLP ceiling is refused):
+a command that pages declares it (``--notify-ceiling``), ``red`` for a channel only the lab's
+operators read, and is refused without one.  No producer in this repository
 labels its messages yet, so on a channel below ``red`` every one of their pages arrives as the
 notice: safe, and only useful once producers claim labels.
 """
@@ -87,11 +88,14 @@ class CeilingSender:
 
 
 def ceiling_from_flag(value: object) -> tlp.Label:
-    """``--notify-ceiling`` parsed as a declaration: ``None`` (the flag not given) is ``red``, a
-    parsed label is itself, and anything but a label is refused (``ValueError``), never read as
-    ``red``."""
+    """``--notify-ceiling`` parsed as a declaration: a parsed label is itself, and ``None`` (the
+    flag not given) or anything but a label is refused (``ValueError``), never read as ``red``: a
+    channel without a declared ceiling is refused (ADR-0033 decision 6)."""
     if value is None:
-        return tlp.Label.RED
+        raise ValueError(
+            "--notify-ceiling: a notification channel must declare its TLP ceiling "
+            "(red for a channel only the lab's operators read; ADR-0033 decision 6)"
+        )
     if type(value) is tlp.Label:
         return value
     try:

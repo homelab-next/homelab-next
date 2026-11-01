@@ -150,7 +150,8 @@ items go `stale` after the source's `stale_after_s`, like any other reading.
 in its own thread under its own `timeout_s`: a pass takes at most the longest timeout, and a hung
 or raising source is an error for itself only. A source whose previous poll is still running is
 not started again (no thread pile-up). `--notify-topic T` pages transitions through the
-registry's `notify` service, at the channel's TLP ceiling (`--notify-ceiling LABEL`, default `red`; a
+registry's `notify` service, at the channel's TLP ceiling (`--notify-ceiling LABEL`, required with
+`--notify-topic` and `red` for a channel only the operators read; a
 message labelled above it, or claiming no label while the ceiling is below `red`, is replaced by a
 content-free "withheld" notice: [modules](modules.md#egress-points-adr-0033-decision-13)); with
 `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
@@ -1076,7 +1077,7 @@ error is the source's error. A `status` summary always starts with the raw flags
 on battery, discharging; 87% charge, 25m runtime, load 33%`).
 
 **On battery is an event.** A UPS on battery is only `warn`, which does not page, but losing
-mains power is exactly what someone should hear about: `hnx status collect --notify-topic T`
+mains power is exactly what someone should hear about: `hnx status collect --notify-topic T --notify-ceiling red`
 also sends **"UPS on battery"** through the same state-diffed Notifier, one key per UPS
 (`status-power/<source>/<ups>`): `on-battery` (warn) and `low-battery` (crit, `OB` with `LB`)
 page, line power (`OL` or `BYPASS`, without `OB`) is `ok` and sends the one **"UPS back on line
