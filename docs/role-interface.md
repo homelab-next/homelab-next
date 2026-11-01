@@ -55,7 +55,8 @@ A hook that cannot be implemented yet still exists and says so explicitly
   `compose_app` goes further: see section 6.
 * A task that uses a secret-looking variable carries `no_log: true` (RL011). No
   `shell` or `raw`, and no `command` given a templated free-form string: use `argv`
-  (RL012). TLS validation is never turned off (RL013). No privileged container or
+  (RL012); a `script` `cmd` or an `expect` `command` (a shell, or a shell-like split, reads it)
+  may be templated only when every expression ends in `| quote`. TLS validation is never turned off (RL013). No privileged container or
   container-runtime socket (docker, containerd, podman, CRI-O) in `defaults/`, `vars/` or
   `templates/` (RL014).
 * Versions are pinned; in real use they come from the registry row.
