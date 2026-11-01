@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: shared-helpers-lint
 #   kind: check
-#   purpose: Fail when a private notify, state or lake-query helper is re-implemented outside the shared libraries (reviewed allowlist).
+#   purpose: Fail when a private notify, state, lake-query or schema-registry helper is re-implemented outside the shared libraries (reviewed allowlist).
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:helpers-lint]
 #   invariant: [M-03]
@@ -15,7 +15,7 @@
 #     "2": usage error or a missing dependency
 """Gate (checklist M-03): helpers are shared, not copied.
 
-Three seams have one shared library each, with a fake (ADR-0003). Code outside the library that
+Four seams have one shared library each, with a fake (ADR-0003). Code outside the library that
 re-implements the seam is a private helper: it drifts, it has no fake, and its failure modes are
 not the ones the library was tested for. This lint walks the AST of every runtime Python file and
 reports:
@@ -33,9 +33,13 @@ reports:
   lake    a raw lake-query client: importing ``trino``, ``duckdb``, ``pyiceberg`` or ``sqlite3``,
           or a string naming the Trino REST endpoint ``/v1/statement``
           -> use ``homelabnext.lake`` (``LakeClient`` and its adapters)
+  schema  a private JSON-schema registry: a call to ``referencing.Registry()``,
+          ``referencing.Resource.from_contents`` or ``<specification>.create_resource``
+          -> use ``homelabnext.schema_registry`` (``schema_registry``, ``registry_of``,
+          ``validator``)
 
 The shared libraries own their seam (``homelabnext/notify``, ``homelabnext/state``,
-``homelabnext/lake``). Test code is out of scope (tests exercise the seams on purpose). Every other
+``homelabnext/lake``, ``homelabnext/schema_registry.py``). Test code is out of scope (tests exercise the seams on purpose). Every other
 exemption is an entry in ``tools/shared_helpers.allow.yml`` naming the path, the rule and the
 reason, so the list is reviewed in one place; an entry that no longer matches anything is
 reported as stale.
@@ -68,11 +72,13 @@ RULES = {
     "notify": "private notification sender; use homelabnext.notify (Notifier + Sender)",
     "state": "ad-hoc JSON state file; use homelabnext.state (StateStore / KeyedState)",
     "lake": "raw lake-query client; use homelabnext.lake (LakeClient and its adapters)",
+    "schema": "private schema registry; use homelabnext.schema_registry",
 }
 OWNERS = {
     "notify": ("homelabnext/notify/",),
     "state": ("homelabnext/state/",),
     "lake": ("homelabnext/lake/",),
+    "schema": ("homelabnext/schema_registry.py",),
 }
 SKIP_DIRS = {
     ".git",
@@ -103,6 +109,7 @@ HTTP_SEND = {
 NTFY_HEADERS = {"title", "priority", "tags", "x-title", "x-priority", "x-tags"}
 LAKE_MODULES = ("trino", "duckdb", "pyiceberg", "sqlite3")
 ATOMIC = {"os.replace", "os.rename"}
+SCHEMA_BUILD = {"referencing.Registry", "referencing.Resource.from_contents"}
 STATE_WORD = re.compile(r"(?i)(?:^|[^a-z])state(?:s|_file|_path|_dir)?(?:[^a-z]|$)")
 
 
@@ -236,6 +243,14 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
             and "/v1/statement" in node.value
         ):
             found.append(Finding(rel, node.lineno, "lake", "names the Trino REST endpoint"))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _dotted(node.func, aliases)
+            if name in SCHEMA_BUILD or (
+                name.startswith("referencing.jsonschema.") and name.endswith(".create_resource")
+            ):
+                found.append(Finding(rel, node.lineno, "schema", f"calls {name}"))
 
     for scope, nodes in _scopes(tree):
         calls = [n for n in nodes if isinstance(n, ast.Call)]

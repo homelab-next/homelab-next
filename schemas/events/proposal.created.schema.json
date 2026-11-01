@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/proposal.created/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/events/proposal.created/1.2",
   "title": "Event homelabnext.proposal.created",
   "description": "An agent filed a proposal note (records lane inbox). Notifies the approver; the note itself is the record.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.2"
     },
     {
       "properties": {

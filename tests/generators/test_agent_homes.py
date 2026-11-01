@@ -321,12 +321,13 @@ def _home(tmp_path: Path, name: str, body: bytes | str) -> Path:
 def _roles(tmp_path: Path, model_id: str) -> Path:
     path = tmp_path / "roles.json"
     doc = {
+        "version": 1,
         "roles": {
             "main-reasoner-a": {
                 "tier": "large",
                 "bindings": [{"backend": "svc:vllm-a", "model_id": model_id}],
             }
-        }
+        },
     }
     path.write_text(json.dumps(doc), encoding="utf-8")
     return path

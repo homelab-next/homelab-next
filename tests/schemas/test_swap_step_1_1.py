@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
 CURRENT = json.loads((ROOT / "schemas/events/swap.step.schema.json").read_text())
 FROZEN_10 = json.loads((ROOT / "schemas/_frozen/1.0/events/swap.step.schema.json").read_text())
+FROZEN_13 = json.loads((ROOT / "schemas/_frozen/1.3/events/swap.step.schema.json").read_text())
 FROZEN_12 = json.loads((ROOT / "schemas/_frozen/1.2/events/swap.step.schema.json").read_text())
 FROZEN_11 = json.loads((ROOT / "schemas/_frozen/1.1/events/swap.step.schema.json").read_text())
 FIXTURES = sorted((Path(__file__).parent / "fixtures").glob("swap.step.*.json"))
@@ -48,10 +49,12 @@ def _event(name: str, step: int = 1) -> dict:
     }
 
 
-def test_version_is_1_2_and_1_1_and_1_2_are_frozen():
-    """1.2 only retargets the envelope ref to envelope 1.1; 1.1 is what added the step names."""
-    assert CURRENT["$id"].endswith("/events/swap.step/1.2")
-    assert CURRENT == FROZEN_12
+def test_version_is_1_3_and_1_1_to_1_3_are_frozen():
+    """1.2 and 1.3 only retarget the envelope ref (to envelope 1.1, then 1.2); 1.1 is what added
+    the step names."""
+    assert CURRENT["$id"].endswith("/events/swap.step/1.3")
+    assert CURRENT == FROZEN_13
+    assert FROZEN_12["$id"].endswith("/events/swap.step/1.2")
     assert FROZEN_11["$id"].endswith("/events/swap.step/1.1")
     assert FROZEN_10["$id"].endswith("/events/swap.step/1.0")
 
