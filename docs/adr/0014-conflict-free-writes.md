@@ -7,6 +7,7 @@ summary_of: outline:sha256:b4515abf6dbe6242
 - **Status:** proposed
 - **Date:** 2026-10-20
 - **Amended:** 2026-10-21 by ADR-0019 (see the amendment at the end of Decision)
+- **Amended-by:** ADR-0019
 - **Related:** ADR-0010, `docs/registers.md`, `homelabnext/registers/events.py`,
   `homelabnext/registers/transitions.py`, `schemas/registers/register_event.schema.json`
 

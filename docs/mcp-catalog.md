@@ -64,8 +64,8 @@ author: agent:example-builder
 reviews: [...]                   # check, audit, approve (homelabnext.reviews)
 ```
 
-The classes are `tool_classes.yml`'s: `read`, `record-write`, `exec`, `file-write`, `egress`,
-`send`, `credential`. A server's classes are the union of its tools'.
+The classes are `tool_classes.yml`'s: <!-- hnx:gen:fact:tool-classes -->`read`, `record-write`, `exec`, `file-write`, `egress`, `send`, `credential`, `codemode`<!-- /hnx:gen -->. A server's classes are the
+union of its tools'.
 
 `tlp` (1.3, [ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md) decisions 11 and
 12) is the TLP label of what the server returns, from the terms of the data behind it: what its

@@ -125,7 +125,7 @@ fails `make gateway-check`, even though the generator would never have written i
 ## TLP labels on model requests
 
 Every model role has a TLP ceiling ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md)
-decision 10; [Model-role ceilings](modules.md#model-role-ceilings-adr-0033-decision-10)): `red` for a
+decision 10; [Model-role ceilings](modules/tlp.md#model-role-ceilings-adr-0033-decision-10)): `red` for a
 role that stays in the lab, `clear` for one whose prompts can leave it, `green` only with the
 provider's terms in the role table, never `amber` or above. A request carries the label of
 everything its caller assembled, and for a role that leaves the lab it is judged at the higher of

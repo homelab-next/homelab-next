@@ -1,12 +1,12 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:90b1ba432500f24634895bfe78f24a3450bb8b7d81e057b67633c59436ddb94d",
+    "classes": "sha256:fc9a0948ace4dbaa4c47fdcceab225e6c31d5f2719aa13ed96e559a58338bcb1",
     "profiles": {
       "profile:reader": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
-    "registry": "73428ffc58f979b06c07f2162b88d9022850ad8e37bb26a7492bae5abde1239c"
+    "registry": "c0e15ae1139784297c5164f39a025a321b6a77d6af06692277809a413c32d6bd"
   },
   "keyring_version": 1,
   "principals": [
@@ -67,6 +67,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:lake-query"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:llm-gateway"
         },
         {
           "reason": "not granted (default deny)",
@@ -192,6 +196,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:lake-catalog"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:llm-gateway"
         },
         {
           "reason": "not granted (default deny)",
@@ -325,6 +333,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:lake-query"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:llm-gateway"
         },
         {
           "reason": "not granted (default deny)",
@@ -500,6 +512,12 @@
           "resource": "svc:lake-query"
         },
         {
+          "endpoint": "llm-gateway.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:llm-gateway"
+        },
+        {
           "endpoint": "notify.svc.example.internal",
           "kind": "service",
           "level": "connect",
@@ -544,6 +562,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:inference"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:llm-gateway"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -659,6 +681,10 @@
         },
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:llm-gateway"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:notify"
         },
         {
@@ -764,6 +790,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:lake-query"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:llm-gateway"
         },
         {
           "reason": "zone not a client (default deny)",

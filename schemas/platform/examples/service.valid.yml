@@ -213,6 +213,23 @@ services:
     tls: none
     tags: [compute, inference]
 
+  llm-gateway:
+    # the one place a model role becomes a backend and a model id (docs/llm-gateway.md); its
+    # product (ADR-0022) is named by the gateway spec, not here: the product-name lint keeps a new
+    # product name out of the core registry
+    capability: llm-gateway
+    impl: example-llm-gateway
+    host: infer-core
+    protocol: http
+    port: 4000
+    health: {kind: http, path: /health/liveliness, expect_status: 200}
+    metrics: {path: /metrics}
+    upstreams: [inference]
+    owner: ml-team
+    version: "1.0.0"
+    tls: none
+    tags: [compute, inference]
+
   agent-runtime:
     capability: agent-runtime
     impl: orchestrator
@@ -221,7 +238,7 @@ services:
     port: 8088
     health: {kind: http, path: /healthz, expect_status: 200}
     metrics: {path: /metrics}
-    upstreams: [lake-query, inference, notify, events, secrets]
+    upstreams: [lake-query, llm-gateway, notify, events, secrets]
     owner: ml-team
     version: "0.3.0"
     tls: none

@@ -155,7 +155,7 @@ failure.  From Python: `homelabnext.conform.run("object-store", {"adapter": "pkg
 
 ## The capabilities
 
-The eighteen names are fixed by `docs/interfaces.md`.  Contracts that already have a library
+The <!-- hnx:gen:fact:capability-count-word -->eighteen<!-- /hnx:gen --> names are fixed by `docs/interfaces.md`.  Contracts that already have a library
 (lake, notify, records, detections, context, projects) reuse it; the rest are the Protocols in
 `conformance/protocols/`.
 
@@ -184,7 +184,7 @@ Extended suites (listed with `--all`, not among the eighteen): `backup` (immutab
 verified restores, retention), `dns` (zone semantics the registry's aliases rely on), `edge`
 (reverse-proxy routing and forward-auth hygiene), `broker-tokens` (the broker's Code Mode tokens),
 `migration` (a stateful slot's export and its validated `import_`: the import MUST of ADR-0027
-follow-up 7, see [modules](modules.md#data-and-lifecycle-safety)), `log-pipeline` (the runtime
+follow-up 7, see [modules](modules/data.md#data-and-lifecycle-safety)), `log-pipeline` (the runtime
 label the model-runtime detections match, from the guest model's table and the observed address,
 and the TLP label the lake stores, from the route's declaration, never the event's own; see
 [log pipeline](log-pipeline.md)) and

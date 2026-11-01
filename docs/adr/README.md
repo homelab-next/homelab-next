@@ -12,6 +12,11 @@ only (`example.internal`, RFC 5737 addresses); see `CONTRIBUTING.md`.
 The one-line column is each ADR's front-matter `summary:`, written by
 `hnx docs index generate docs/adr/README.md` and checked in CI; edit the summary, not the row.
 An ADR's status is the **Status** line in its own file.
+Three optional header fields link ADRs, each a comma-separated list of ADR ids:
+**Amends** and **Amended-by** are a reciprocal pair (an ADR that names another in its **Amended:**
+line lists it under **Amended-by**), and **Depends-on** names the decisions an ADR rests on. The
+test refuses a one-sided pair, an unknown id, and an accepted ADR that depends on one that is not
+accepted (the status values themselves are the operator's).
 
 A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
 component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.

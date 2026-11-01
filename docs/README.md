@@ -66,7 +66,7 @@ generated and checked the same way.
 - [Knowledge graph](graph.md) ([[graph]]): <!-- hnx:gen:summary:graph.md -->The knowledge graph of everything in the repo that names something else: commands, querying, node kinds, edge types and what is not in the graph yet.<!-- /hnx:gen -->
 - [MCP server](mcp.md) ([[mcp]]): <!-- hnx:gen:summary:mcp.md -->The read-only stdio MCP server (hnx mcp serve) over this checkout: its tools, documents served in levels, its security model and the broker's tool server.<!-- /hnx:gen -->
 - [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]): <!-- hnx:gen:summary:mcp-catalog.md -->The MCP catalog, one record per MCP server: the record, fatal rules, adding a server, instances, rendering client configs, importing a lab and reviews.<!-- /hnx:gen -->
-- [Feature and provider modules](modules.md) ([[modules]]): <!-- hnx:gen:summary:modules.md -->Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, slot registry and requires and prefers.<!-- /hnx:gen --> Draft (ADR-0027, proposed).
+- [Feature and provider modules](modules.md) ([[modules]]): <!-- hnx:gen:summary:modules.md -->Draft module manifest for provider, feature and core modules (ADR-0027, proposed): why, words, layout, the manifest, the three kinds and its reference pages.<!-- /hnx:gen --> Draft (ADR-0027, proposed).
 - [Glossary](glossary.md) ([[glossary]]): <!-- hnx:gen:summary:glossary.md -->Glossary of the project's terms, such as capability, seam, contract, fake and conformance, each defined in a short entry.<!-- /hnx:gen -->
 - [Terms and scope](terms.md) ([[terms]]): <!-- hnx:gen:summary:terms.md -->What the project's words mean and its scope: our activity and how we use threat vocabulary, shared by every agent and reader.<!-- /hnx:gen -->
 
@@ -81,12 +81,15 @@ generated and checked the same way.
 Obsidian keeps its settings in `docs/.obsidian/`; that folder is ignored by git and never
 committed. Links to source files (`../conformance/...`) leave the vault and only resolve on GitHub.
 
-The generated pages are checked in `make check` and CI:
+The generated pages, and the generated facts inside authored pages (`fact:NAME` spans, the same
+comment markers as the systems pages: the capability names and counts, the tool classes, every
+schema's version; `hnx docs facts generate` rewrites them), are checked in `make check` and CI:
 
 ```
 hnx docs capabilities check                                # docs/capabilities/ is current
 hnx docs systems check examples/services.yml docs/systems  # docs/systems/ matches the registry
 hnx docs index check docs/README.md docs/adr/README.md    # index and ADR log descriptions match page summaries
+hnx docs facts check                                       # capability names, tool classes, schema versions in pages
 hnx scripts catalog --check                                # docs/scripts/catalog.* is current
 hnx graph check                                            # no dangling edge or duplicate id
 ```

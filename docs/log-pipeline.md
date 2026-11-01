@@ -5,7 +5,7 @@ summary_of: outline:sha256:a49158449fd20cc4
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The log pipeline and its labels
 
-The `log-pipeline` slot (stage 2 of the SOC bundle, [modules](modules.md#the-soc-bundle-by-pipeline-stage))
+The `log-pipeline` slot (stage 2 of the SOC bundle, [modules](modules/slots.md#the-soc-bundle-by-pipeline-stage))
 moves events from the collectors to the index and the lake. It has two contractual duties, each a
 label it sets and never takes from the event: the TLP label of every event
 ([below](#the-tlp-label)), and the label of the events of a **model runtime**, a guest that serves models or runs model-written code
@@ -117,7 +117,7 @@ runtime label it is never the event's word: the rule is
   runtime label, an unknown source cannot stay unlabelled, because a missing label must never
   read as a looser one.
 - **The declaration** is the dataset's `tlp` (absent is `red`) and `honour_item_labels`
-  ([modules](modules.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
+  ([modules](modules/data.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
   An item label the event carries (`homelabnext.logpipeline.tlp_labels.claims`: its `tlp`
   field, the flat `"labels.tlp"` key or `labels.tlp`; a TLP tag in `tags`, a string or a tag
   object's `name`, read with the same marker grammar as the egress check (`homelabnext.tlp.tag_label`:

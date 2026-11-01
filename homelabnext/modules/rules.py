@@ -205,7 +205,7 @@ def _declared_raise(role: Doc) -> bool:
 
 def role_ceiling(roles: dict[str, Doc], role: str) -> tlp.Label:
     """The TLP ceiling of model role ``role`` (``mdl:<role>`` or the bare name) in the role table's
-    ``roles`` (ADR-0033 decision 10; docs/modules.md, "Model roles").
+    ``roles`` (ADR-0033 decision 10; docs/modules.md, "Model-role ceilings").
 
     A role no prompt can leave the lab through (no ``leaves_lab`` binding on it or down its
     fallback chain, as :func:`cloud_roles` reads it) is ``red``, and so is a role the table does
