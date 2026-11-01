@@ -1,6 +1,6 @@
 ---
-summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, review tiers and deploys.'
-summary_of: outline:sha256:abc61770a4181b65
+summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, deploys and SSH certificates.'
+summary_of: outline:sha256:29a71d429b78fa98
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
