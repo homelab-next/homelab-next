@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # `make check` is the one command contributors and CI run.  Gates whose tool does not exist
-# yet (they arrive with later tasks) are skipped with a visible note, never silently.
+# yet (they arrive with later tasks) are skipped with a visible note, never silently.  Every
+# command `check` runs also runs in a required CI job (tools/tests/test_make_matches_ci.py).
 
 PY ?= python3
 RUFF ?= $(PY) -m ruff
@@ -14,7 +15,7 @@ REGISTERS_OUT := build/registers
 .PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check licence-check clean"
 	@echo "experimental and frozen components (tools/experimental.yml; never in check): experimental"
 	@echo "Code Mode golden suites (CM-6; frozen, run by experimental): codemode-golden-report"
 	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
@@ -375,6 +376,13 @@ leak-scan-history:
 
 changelog-check:
 	$(PY) tools/check_changelog.py
+
+# ADR-0011 decision 4 against what is pinned and deployed: every package constraints/ pins and
+# every compose image has a reviewed licence in tools/licences.yml, and no linked one is copyleft
+.PHONY: licence-check
+check: licence-check
+licence-check:
+	$(PY) tools/licence_check.py
 
 # batch-3 hygiene gates, prerequisites of `check` (make merges this with the rule above):
 #   M-03 no private notify/state/lake helpers outside the shared libraries, and no copy-paste

@@ -27,6 +27,8 @@
 #   conform    conformance capabilities it owns (homelabnext.conform.registry.EXPERIMENTAL is
 #              their union): `hnx conform report` and `make conform-check` leave them out unless
 #              named, and a gate here runs `hnx conform report --capability` for each
+#   code       optional: modules of its own inside a security-critical unit, which the coverage
+#              floor (tools/coverage_floor.py) leaves out of that unit, as it leaves out the tests
 components:
   stackstorm:
     status: experimental
@@ -43,6 +45,10 @@ components:
     gates:
       - python -m homelabnext.cli workflows st2 check
     invariants: [R-09]
+    code:
+      - homelabnext/workflows/st2.py
+      - homelabnext/workflows/st2_bridge.py
+      - homelabnext/workflows/st2_runtime.py
   code-mode:
     status: frozen
     decided: 2026-10-31

@@ -14,10 +14,12 @@ from __future__ import annotations
 import datetime as dt
 import re
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+from test_ci_runs_tests import without_network
 
 from tests.experimental_marker import experimental as ex
 
@@ -39,9 +41,9 @@ def _expand(line: str, variables: dict[str, str]) -> str:
     return line.replace("$(PY)", "python")
 
 
-def make_check_lines(text: str) -> list[str]:
-    """Every recipe line `make check` runs: the recipes of ``check`` and of its prerequisites,
-    transitively, ``$(MAKE) <target>`` calls included, with simple variables expanded."""
+def make_rules(text: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Each target's prerequisites and recipe lines (``check:`` may be given more than once; the
+    lists are merged, as make merges them), with simple variables expanded."""
     variables = {m[1]: m[2].strip() for m in re.finditer(r"^([A-Z_]+) [:?]?= (.*)$", text, re.M)}
     prereqs: dict[str, list[str]] = {}
     recipes: dict[str, list[str]] = {}
@@ -54,23 +56,33 @@ def make_check_lines(text: str) -> list[str]:
                 prereqs.setdefault(current, []).extend(m[2].split("#")[0].split())
             continue
         if line.startswith("\t") and current:
-            recipes.setdefault(current, []).append(line.strip())
+            recipes.setdefault(current, []).append(_expand(line.strip(), variables))
         elif not line.startswith("\t"):
             current = None
-    seen: set[str] = set()
-    todo = ["check"]
-    out: list[str] = []
+    return prereqs, recipes
+
+
+def make_target_lines(text: str, target: str) -> dict[str, list[str]]:
+    """The recipe lines `make <target>` runs, per target: ``target``'s and its prerequisites',
+    transitively, ``$(MAKE) <target>`` calls included."""
+    prereqs, recipes = make_rules(text)
+    seen: dict[str, list[str]] = {}
+    todo = [target]
     while todo:
-        target = todo.pop()
-        if target in seen:
+        t = todo.pop()
+        if t in seen:
             continue
-        seen.add(target)
-        todo += prereqs.get(target, [])
-        for line in recipes.get(target, []):
-            line = _expand(line, variables)
-            out.append(line)
+        seen[t] = recipes.get(t, [])
+        todo += prereqs.get(t, [])
+        for line in seen[t]:
             todo += re.findall(r"\$\(MAKE\)\s+([A-Za-z0-9_.-]+)", line)
-    return out
+    return seen
+
+
+def make_check_lines(text: str) -> list[str]:
+    """Every recipe line `make check` runs: the recipes of ``check`` and of its prerequisites,
+    transitively, ``$(MAKE) <target>`` calls included, with simple variables expanded."""
+    return [line for lines in make_target_lines(text, "check").values() for line in lines]
 
 
 def ci_lines(doc: dict, *, skip: tuple[str, ...] = (JOB,)) -> list[str]:
@@ -165,6 +177,9 @@ def test_the_minimal_entry_parses():
         ({"invariants": ["P8"]}, "is not a criterion id"),
         ({"owner": "x"}, "owner: unknown key"),
         ({"conform": ["projects"]}, "no gate runs `hnx conform report --capability projects`"),
+        ({"code": ["tests/strategy/conftest.py"]}, "is not a Python module outside the tests"),
+        ({"code": ["docs/strategy.md"]}, "is not a Python module outside the tests"),
+        ({"code": ["homelabnext/no_such_module.py"]}, "is not a path in the repository"),
     ],
 )
 def test_a_bad_entry_is_refused(entry, words):
@@ -284,3 +299,45 @@ def test_the_listed_tests_are_marked_and_others_are_not():
     assert not ex.is_experimental("tests/workflows/test_workflows_validate.py", paths)
     assert ex.is_experimental("tests/codemode/test_runner.py", paths)
     assert not ex.is_experimental("tests/mcp/test_mcp_launch.py", paths)
+
+
+def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
+    """A ``pytest`` run in a job that blocks must deselect the marker, or name only test paths
+    none of which is, or holds, an experimental one."""
+    out = []
+    for line in ci_lines(ci_doc):
+        words = shlex.split(without_network(line)) if "pytest" in line else []
+        if words[:3] != ["python", "-m", "pytest"]:
+            continue
+        if "-m" in words and words[words.index("-m") + 1] == ex.BLOCKING_SELECT:
+            continue
+        named = [w for w in words[3:] if w.startswith(("tests/", "tools/tests/", "conformance/"))]
+        inside = [p for w in named for p in paths if p.startswith(w.rstrip("/") + "/")]
+        if not named or inside or any(ex.is_experimental(w, paths) for w in named):
+            out.append(f"a blocking job's pytest selects experimental tests: {line}")
+    return out
+
+
+def test_no_blocking_job_selects_an_experimental_test():
+    ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    paths = ex.marked_paths(ex.load())
+    assert blocking_selection_problems(ci, paths) == []
+    ci["jobs"]["schemas"]["steps"].append({"run": "python -m pytest -q tests/workflows"})
+    assert blocking_selection_problems(ci, paths)
+
+
+def test_the_coverage_gate_selects_its_tests_like_the_blocking_jobs(tmp_path, monkeypatch):
+    # the coverage job runs tools/coverage_floor.py, which starts a pytest of its own per unit
+    sys.path.insert(0, str(ROOT / "tools"))
+    import coverage_floor
+
+    cmds = []
+
+    def fake_run(cmd, **_):
+        cmds.append(cmd)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+    coverage_floor.run_tests(tmp_path / "g.json", ("tests/workflows",), ["homelabnext/workflows"])
+    (cmd,) = cmds
+    assert cmd[cmd.index("-m", 3) + 1] == ex.BLOCKING_SELECT

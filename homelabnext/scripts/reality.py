@@ -67,6 +67,8 @@ _INTERPRETERS = {"env", "python", "python3", "bash", "sh", "exec"}
 _PATHLIKE = r"(?:\./)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh|bash)"
 # a path anywhere in a command line (for callers of known scripts)
 _MENTION = re.compile(r"(?:^|(?<=[\s;&|(=\"'/]))(?P<p>" + _PATHLIKE + r")(?![\w.-])", re.M)
+# a detached worktree of this repository made in a CI job (``git worktree add ... "$RUNNER_TEMP/X"``)
+_WORKTREE = re.compile(r"\$RUNNER_TEMP/[A-Za-z0-9_-]+/(?=[A-Za-z0-9_])")
 # a path in command position: run directly or through an interpreter (for unknown files)
 _COMMAND = re.compile(
     r"(?:^|[;&|(]|&&|\|\||\brun:)\s*(?:(?:/usr/bin/env\s+)?(?:python3?|bash|sh|\.)\s+(?:-\S+\s+)*)?"
@@ -265,7 +267,10 @@ def _workflows(real: Reality, idx: _Index) -> None:
         scheduled = isinstance(on, dict) and "schedule" in on
         for job_id, job in (doc.get("jobs") or {}).items():
             runs = [s.get("run", "") for s in (job or {}).get("steps", []) if isinstance(s, dict)]
-            _record(real, idx, f"ci:{wf.stem}/{job_id}", "\n".join(r for r in runs if r), scheduled)
+            # a worktree of another commit of this repository (trusted-gates' base checker,
+            # regression-tests' judge) holds the same scripts: "$RUNNER_TEMP/base/tools/x.py" runs x
+            text = _WORKTREE.sub("", "\n".join(r for r in runs if r))
+            _record(real, idx, f"ci:{wf.stem}/{job_id}", text, scheduled)
 
 
 def _precommit(real: Reality, idx: _Index) -> None:
