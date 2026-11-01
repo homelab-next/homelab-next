@@ -25,9 +25,9 @@ MODEL_RUNTIMES: tuple[str, ...] = ("cap:inference", "cap:codemode-executor")
 
 
 def _known_caps() -> frozenset[str]:
-    from .model import KNOWN_CAPABILITIES
+    from .model import guest_capabilities
 
-    return frozenset(f"cap:{c}" for c in KNOWN_CAPABILITIES)
+    return guest_capabilities()
 
 
 def _in_range(ip: ipaddress.IPv4Address, rng: tuple[str, str]) -> bool:
@@ -382,7 +382,13 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
             )
         )
     if g.capability not in _known_caps():
-        out.append(Problem(g.id, f"capability {g.capability} is not a known capability"))
+        out.append(
+            Problem(
+                g.id,
+                f"capability {g.capability} is not a known capability (one the class table "
+                "homelabnext/agent/tool_classes.yml or the conformance harness names)",
+            )
+        )
     ok_groups = allowed_groups()
     for grp in g.groups:
         if grp not in ok_groups:
