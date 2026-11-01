@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/platform/module_selection/1.0",
-  "x-draft": "ADR-0027 (proposed): the loader checks it (hnx modules check); not frozen",
+  "x-draft": "ADR-0027 (proposed): read by the module loader (homelabnext.modules.loader) and at deploy time; not frozen until ADR-0027 is accepted after the pilot, so an overlay pins the core commit it is validated against",
   "title": "Module selection",
   "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
   "type": "object",

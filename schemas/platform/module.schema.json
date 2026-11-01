@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/platform/module/1.0",
-  "x-draft": "ADR-0027 (proposed): the loader exists (hnx modules check), no pilot yet; not frozen, may change before acceptance",
+  "x-draft": "ADR-0027 (proposed): read by the module loader (homelabnext.modules.loader, hnx modules check) and at deploy time; not frozen until ADR-0027 is accepted after the pilot, so an overlay pins the core commit it is validated against",
   "title": "Module manifest",
-  "description": "One provider, feature or core module (ADR-0027, proposed; docs/modules.md): <modules>/<id>/module.yml. A provider fills slots with one product (the only place a product name may appear); a feature is an optional, removable mission naming slots, model roles, interfaces and host roles; a core module (id core-*) is always installed and is the home of the staff agents and other core consumers, so a swap's dependants re-check sees them. Every name a module claims is bound to its id; authority is never contributed. The loader (homelabnext.modules.loader, hnx modules check) enforces the rules JSON Schema cannot express; docs/modules.md lists them.",
+  "description": "One provider, feature or core module (ADR-0027, proposed; docs/modules.md): <modules>/<id>/module.yml. A provider fills slots with one product (the only place a product name may appear); a feature is an optional, removable mission naming slots, model roles, interfaces and host roles; a core module (id core-*) is always installed and is the home of the staff agents and other core consumers, so a swap's dependants re-check sees them. Every name a module claims is bound to its id; authority is never contributed. The rules JSON Schema cannot express are the module loader's (homelabnext.modules.loader, hnx modules check); docs/modules.md lists them.",
   "type": "object",
   "additionalProperties": false,
   "required": [

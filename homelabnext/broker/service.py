@@ -439,9 +439,9 @@ def _manifest_names(manifest: Mapping[str, Any]) -> list[tuple[str, Any]]:
 
 
 def _control_problems(what: str, names: Sequence[tuple[str, Any]]) -> list[str]:
-    """A name holding a control character: a schema pattern's ``$`` matches before a trailing
-    newline, so ``profile:triage\\n`` passes the schema; it is refused here (the value is not
-    repeated)."""
+    """A name holding a control character: a schema pattern without the ``(?!\\n)`` guard (an
+    action name; the ``ids/`` ids and slugs carry it) matches before a trailing newline, so
+    ``service.status\\n`` passes the schema; it is refused here (the value is not repeated)."""
     return [
         f"{what}: {where} holds a control character"
         for where, value in names
