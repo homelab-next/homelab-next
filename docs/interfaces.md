@@ -495,7 +495,7 @@ change until its ADR is accepted):
 | `platform/module_swap` | 1.0 | `schemas/platform/module_swap.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
-| `platform/service` | 2.7 | `schemas/platform/service.json` | stable |
+| `platform/service` | 2.8 | `schemas/platform/service.json` | stable |
 | `platform/site` | 1.6 | `schemas/platform/site.schema.json` | stable |
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
