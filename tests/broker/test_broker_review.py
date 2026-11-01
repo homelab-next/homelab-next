@@ -152,22 +152,24 @@ def test_an_invalid_audit_record_still_leaves_a_record(tmp_path):
 
 
 def test_the_request_digest_is_keyed_over_secret_arguments(tmp_path):
+    # "zzzz" is low-entropy but holds no hex digit, so it cannot occur by chance inside the
+    # stored digests or the HMAC (a "1234" secret failed whenever a sha256 contained it).
     svc = BrokerService(tmp_path / "state", clock=Clock())
     spec = {"user": ArgSpec("str"), "pw": ArgSpec("str", secret=True)}
     svc.register("ops.login", lambda **kw: "ok", spec)
     svc.allow("ops", ["ops.login"])
-    rid = svc.submit("ops", "ops.login", {"user": "svc", "pw": "1234"})
+    rid = svc.submit("ops", "ops.login", {"user": "svc", "pw": "zzzz"})
     req = svc.state.get_request(rid)["request"]
     clear = digest_of(
-        {"action": "ops.login", "actor": "ops", "params": {"user": "svc", "pw": "1234"}}
+        {"action": "ops.login", "actor": "ops", "params": {"user": "svc", "pw": "zzzz"}}
     )
     assert req["digest"] != clear, "a low-entropy secret could be brute-forced from the digest"
     assert req["digest"] == request_digest(req), "the stored request still binds its digest"
-    assert "1234" not in json.dumps(req)
-    again = svc.submit("ops", "ops.login", {"user": "svc", "pw": "1234"})
+    assert "zzzz" not in json.dumps(req)
+    again = svc.submit("ops", "ops.login", {"user": "svc", "pw": "zzzz"})
     assert svc.state.get_request(again)["request"]["params"]["pw"] == req["params"]["pw"]
     other = BrokerService(tmp_path / "state", clock=Clock())  # same state: the same key
-    assert other._keyed("1234") == req["params"]["pw"]
+    assert other._keyed("zzzz") == req["params"]["pw"]
     assert svc.run("ops", rid) == "ok"
 
 
