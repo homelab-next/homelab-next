@@ -125,8 +125,8 @@ from typing import Any
 
 from conformance.protocols.broker import BrokerError, Denied, InvalidArguments
 
+from . import approval_note_max
 from .service import TRANSPORT_PEER, BrokerService, ManifestError
-from .state import APPROVAL_NOTE_MAX
 from .tokens import BEARER_PREFIX as _TOKEN_PREFIX
 from .tokens import MAX_BEARER_BYTES
 
@@ -241,7 +241,6 @@ _AUDIT_OPS = frozenset(
 )
 #: a transport refusal of a token op is audited as the operation it carries
 _AUDITED_AS = {"token-call": "call", "token-submit": "submit", "token-run": "run"}
-_MAX_NOTE = APPROVAL_NOTE_MAX  # the approval schema's note.maxLength: one limit
 _MAX_NAME = 64
 
 log = logging.getLogger("homelabnext.broker.server")
@@ -770,8 +769,9 @@ def _relay_op(svc: BrokerService, who: Identity, op: str, body: Mapping[str, Any
     if issuer != who.issuer:  # exact, like the approver allowlist the issuer qualifies
         raise _IssuerMismatch
     note = body.get("note")
-    if note is not None and not (isinstance(note, str) and len(note) <= _MAX_NOTE):
-        raise _BadField(f"note is a string of at most {_MAX_NOTE} characters")
+    limit = approval_note_max()
+    if note is not None and not (isinstance(note, str) and len(note) <= limit):
+        raise _BadField(f"note is a string of at most {limit} characters")
     fn = svc.approve if op == "approve" else svc.deny
     return fn(rid, f"{issuer}:{subject}", note=note)
 

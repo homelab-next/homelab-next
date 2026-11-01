@@ -27,6 +27,11 @@ def known_names() -> set[str]:
     return set(_ADAPTERS)
 
 
+def names_for(role: str) -> set[str]:
+    """The adapter names a site may select for ``role`` (network, dns or switch)."""
+    return {n for n, a in _ADAPTERS.items() if role in a.roles}
+
+
 def get(name: str) -> Adapter:
     """Return the adapter ``name`` or raise :class:`UnknownAdapter`."""
     try:
@@ -49,4 +54,5 @@ __all__ = [
     "get",
     "known_names",
     "listing",
+    "names_for",
 ]

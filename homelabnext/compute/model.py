@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Guest model: the parsed, schema-valid view of ``guest.schema.json`` plus the zone interface.
 
-The compute model never imports the site-model package.  It codes against the small
-:class:`ZoneLookup` protocol; a stub, a plain mapping, a ``site.yml`` reader and an adapter for
-``homelabnext.network.load_site`` all satisfy it (see :mod:`homelabnext.compute.zones`).
+This module does not import the site-model package: it codes against the small
+:class:`ZoneLookup` protocol, which a stub, a plain mapping and the ``homelabnext.network.load_site``
+reader (:func:`homelabnext.compute.zones.open_site`) all satisfy.  The rest of the compute package
+does read the site through the network package (its loader, the IR's ``firewall_rules``, the
+validator's IPv6 prefix rules), so there is one reader of a site, not two.
 """
 
 from __future__ import annotations

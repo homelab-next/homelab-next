@@ -392,10 +392,10 @@ def test_the_note_limit_is_the_one_the_broker_stores(served, broker):
 
     from homelabnext import paths
     from homelabnext.agent.schemas import schema_errors
-    from homelabnext.broker import server
+    from homelabnext.broker import approval_note_max
 
     schema = jsonlib.loads(paths.schema_file("broker", "approval.schema.json").read_text())
-    assert MAX_NOTE == schema["properties"]["note"]["maxLength"] == server._MAX_NOTE
+    assert MAX_NOTE == schema["properties"]["note"]["maxLength"] == approval_note_max()
     doc = {"note": "x" * MAX_NOTE}  # the note alone: other fields' errors are not this test's
     assert not [e for e in schema_errors("broker", "approval", doc) if e.startswith("note")]
     assert [e for e in schema_errors("broker", "approval", {"note": "x" * (MAX_NOTE + 1)})

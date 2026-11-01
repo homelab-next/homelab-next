@@ -65,7 +65,8 @@ from datetime import datetime
 from typing import Any
 
 from homelabnext._http import content_length
-from homelabnext.broker.state import APPROVAL_NOTE_MAX, is_id
+from homelabnext.broker import approval_note_max
+from homelabnext.broker.state import is_id
 
 from .agents.auth import AccessLog, Decision, authorize
 from .agents.config import ApprovalsSettings, FrontDoor
@@ -78,8 +79,7 @@ PAGE = "/approvals"
 DECIDE = "/approvals/decide"
 TOKEN_TTL_S = 1800
 MAX_FORM_BYTES = 8192
-#: the longest note the broker stores (the approval schema's ``note.maxLength``)
-MAX_NOTE = APPROVAL_NOTE_MAX
+MAX_NOTE = approval_note_max()  # the approval schema's limit: one source
 RECENT = 20
 FORM_FIELDS = frozenset({"request_id", "digest", "decision", "token", "note"})
 _REQUIRED = FORM_FIELDS - {"note"}

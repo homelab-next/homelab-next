@@ -132,6 +132,12 @@ A handler document pins the file and says how to run it:
  "description": "...", "idempotent": true, "audit": true}
 ```
 
+The handler document and its manifest entry must agree on `handler`, `tier` and
+`requires_approval`: `hnx broker validate` (and `serve`) refuses a manifest where they differ,
+in either direction, so a handler's "this needs a person's approval" can never be overridden by a
+manifest entry that says `false`. A service built from documents that were not validated still
+requires approval when either one asks for it.
+
 A handler document (1.2) may also carry `result_schema`: a JSON Schema object describing the
 handler's `output` once decoded as JSON. The broker checks only that it is a valid 2020-12 schema
 when it loads the document (a malformed one refuses the manifest, naming the file); it does **not**
@@ -179,6 +185,13 @@ python -c "from homelabnext.broker.execute import file_digest as d; print(d('exa
 hnx broker validate examples/broker/manifest.yml
 ```
 
+`hnx broker validate SERVED --decision-table TABLE` also refuses a served manifest where it is
+less strict than a decision table, a manifest other documents are checked against whose handlers
+are the site's (`workflows/broker.manifest.json`, see [workflows](workflows.md)): for each action
+both declare, a different tier or a dropped approval; for each profile the table grants, an
+action it does not grant or a higher `max_tier`; and `allow_agent_approvers` the table does not
+set. The served manifest may leave out any action (default deny) and add its own.
+
 ## Approvals
 
 1. `submit` of an action that needs approval stores the request `pending` and emits
@@ -211,7 +224,10 @@ hnx broker validate examples/broker/manifest.yml
 2. An approver listed in the manifest's `approvers` runs `approve` or `deny`. The approval document
    (`schemas/broker/approval`) names the request digest and expires after `approval_ttl_s`
    (default 900 s). Self-approval, an unlisted approver and an agent approver (unless
-   `allow_agent_approvers`) are refused by the same rules for a denial as for an approval.
+   `allow_agent_approvers`) are refused by the same rules for a denial as for an approval. A
+   denial is judged by those approver rules alone: a request whose action, grant, tier or handler
+   was withdrawn after it was filed can no longer be approved, but it can still be denied (so it
+   leaves the Approvals page and frees its actor's `pending_per_actor` slot).
    `decision.returned` records the verdict and who decided: `tier_used: human` for a person,
    `agent` for an approver of kind agent (or one naming a granted profile) under
    `allow_agent_approvers`, so a consumer that acts on a person's approval (StackStorm's A03) can
@@ -482,7 +498,7 @@ whose fourteen mutants are each caught by their own check alone. Unit tests:
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.5; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.8; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -510,8 +526,11 @@ stops it instead of failing every page; a send that fails later is logged at WAR
 every five minutes) and audited `notify-failed`. State lives in `<state>/notify.json` (a settled
 request's page is dropped from it); each agent may send 20 messages an hour on its own budget,
 and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
-refusal is logged at WARNING once per agent and lane instead. `--notify-ceiling LABEL` (default
-`red`) is the channel's TLP ceiling: a page labelled above it is replaced by a content-free
+refusal is logged at WARNING once per agent and lane instead. `--notify-ceiling LABEL` (or
+`$HNX_BROKER_NOTIFY_CEILING`) is the channel's TLP ceiling, and a topic without one stops `serve`
+([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md) decision 6: a reader with no
+declared ceiling is refused; declare `red` only for a channel only the operators read). A page
+labelled above the ceiling is replaced by a content-free
 "withheld" notice at the same level, and a page claiming no label is `red`. The broker labels
 none of its pages yet, so a ceiling below `red` turns every page into that notice
 ([modules](modules.md#egress-points-adr-0033-decision-13)). With `--notify-pairs-dir DIR` (or
@@ -522,7 +541,8 @@ module census ([modules](modules.md#the-loader-at-deploy-time), "Notify pairs").
 `DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a
 link, stops the broker at start.
 
-A peer is listed once, as a caller *or* a relay (`hnx broker validate` refuses a peer in both);
+A peer is listed once, in exactly one role: a caller, a relay, an operator, a Code Mode runner
+or a sandbox (`hnx broker validate` refuses a peer listed in two);
 user names are resolved when the service starts, and an unknown one stops it. Linux only: macOS
 and the BSDs have `getpeereid` instead, which Python does not expose portably, so the server
 refuses to start there rather than accept an unauthenticated caller.
@@ -567,7 +587,7 @@ Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read w
 (`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
 
-Refusals are rate limited per peer: a caller or an unknown peer with more than
+Refusals are rate limited per peer: a caller, an operator or an unknown peer with more than
 `refusal_limit.max` refused requests (any answer but `ok`, whatever its kind: an unknown action,
 a malformed request, `unknown-caller`, `not-pending`, `too-many-pending`, a failed handler, ...;
 only the broker's own faults are not counted: `internal-error`, `busy`, `audit-unavailable`,
@@ -577,8 +597,11 @@ rate-limits a healthy agent) within `refusal_limit.window_s` seconds (manifest 1
 default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
 being parsed. The limit is audited **once per peer and window** (`operation: connect`,
 `reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,
-so a looping or hostile agent can fill neither the audit trail nor the disk. Approval relays are
-exempt, as they are from the connection cap.
+so a looping or hostile agent can fill neither the audit trail nor the disk. Approval relays and
+the Code Mode runner are exempt (relays as they are from the connection cap). A sandbox's refusals
+before a token is admitted are counted per presented token, and requests presenting no known token
+count against a per-uid ceiling ten times the limit; refusals after a token was admitted are
+bounded by the token's own call cap instead.
 
 ### A systemd unit
 
@@ -1076,7 +1099,17 @@ same day reports `lane-exists` and adds nothing (a re-run on a later day files t
 run `--apply` once, after a clean dry run); the slug keeps the original agent's name, so two
 agents' proposals with the same title get two files, and two source files that would still share
 one name are a `conflict` (the second is not filed). Exit status 1 when any file could not be mapped or
-filed, or conflicts. A
+filed, or conflicts.
+
+**The import is rate-limited like any agent.** Each file is one `proposal.file` write, so a large
+queue meets the proposals lane's write rate (`max_writes_per_hour`, 120 an hour on a shared lane by
+default), its per-actor share (`max_files_per_actor`, an eighth of `max_files` by default) and,
+over `--socket`, the importer's own `refusal_limit`. The importer stops at the first
+`lane-rate-exceeded`, `lane-quota-exceeded` or `rate-limited` and reports every remaining file
+`not-attempted` (exit 1) rather than sending each to be refused; re-run `--apply` once the window
+clears (the files already filed report `exists`). For a queue of more than about a hundred, raise
+the lane's `max_writes_per_hour` and `max_files_per_actor` for the import in the manifest, and set
+them back afterwards. A
 suggested order: run the broker in `shadow` beside the guard hook, import the queue, point the
 agents at the MCP tools, then remove the agents' write access to the old directory.
 

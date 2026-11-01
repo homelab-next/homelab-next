@@ -365,6 +365,72 @@ def test_denial_ends_the_request(tmp_path):
     assert verdicts == ["reject"]
 
 
+def test_a_request_whose_grant_was_withdrawn_can_still_be_denied(tmp_path):
+    """A denial ran the whole decide(), grant and tier included: once an agent's grant was
+    withdrawn its outstanding requests could never be denied (not-granted), stayed pending and
+    paged, and held the actor's pending quota.  A denial is judged by the approver rules only."""
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    manifest, docs = load_manifest(EXAMPLE)
+    for g in manifest["grants"]:
+        g["actions"] = [a for a in g["actions"] if a != "service.restart"]
+    revoked = BrokerService(tmp_path / "state", manifest, handler_docs=docs,
+                            base_dir=EXAMPLE.parent, data_root=tmp_path / "data",
+                            clock=Clock())  # fmt: skip
+    with pytest.raises(Denied) as info:
+        revoked.approve(rid, APPROVER)  # an approval still needs the request to be runnable
+    assert info.value.reason == "not-granted"
+    for who, reason in (
+        ("sso:triage", "approval-self-approved"),
+        ("sso:stranger", "approval-approver-not-allowed"),
+    ):
+        with pytest.raises(Denied) as info:
+            revoked.deny(rid, who)  # the approver rules still hold for a denial
+        assert info.value.reason == reason
+    revoked.deny(rid, APPROVER, note="grant withdrawn")
+    assert revoked.state.state_of(rid) == "denied" and revoked.pending() == []
+
+
+def test_the_approval_note_limit_is_the_schemas_and_is_never_echoed(tmp_path):
+    """The relay and the hub took 2000 characters while the approval schema allows 500, so a
+    501-2000 character note was accepted at the door, then refused with no reason and with the
+    whole note quoted back in the error."""
+    from homelabnext.broker import approval_note_max
+    from homelabnext.status import approvals
+
+    limit = approval_note_max()
+    schema = json.loads((ROOT / "schemas/broker/approval.schema.json").read_text())
+    assert limit == schema["properties"]["note"]["maxLength"] == approvals.MAX_NOTE
+    svc = _svc(tmp_path)
+    rid = _restart(svc)
+    with pytest.raises(InvalidArguments) as info:
+        svc.approve(rid, APPROVER, note="q" * (limit + 1))
+    assert info.value.reason == "approval-invalid" and "qqqq" not in str(info.value)
+    assert svc.approve(rid, APPROVER, note="q" * limit)["note"] == "q" * limit
+
+
+def test_a_handler_that_requires_approval_is_never_overridden_by_its_manifest(tmp_path):
+    """decide() read only the manifest's requires_approval: a handler document saying true under
+    a manifest entry saying false passed validation and ran with no approval at all."""
+    manifest, docs = load_manifest(EXAMPLE)
+    doc = next(d for d in docs if d["action"] == "service.status")
+    doc["requires_approval"] = True
+    problems = validate_manifest(manifest, EXAMPLE.parent)[1]
+    assert problems == [], "the files on disk agree"
+    from homelabnext.broker import check_manifest_handlers
+
+    exec_actions = [a for a in manifest["actions"] if not a["handler"].startswith("builtin/")]
+    [problem] = check_manifest_handlers({"actions": exec_actions}, docs)
+    assert "service.status" in problem and "requires_approval" in problem
+    svc = BrokerService(tmp_path / "state", manifest, handler_docs=docs, base_dir=EXAMPLE.parent,
+                        data_root=tmp_path / "data", clock=Clock())  # fmt: skip
+    with pytest.raises(Denied) as info:  # built from unvalidated documents: still fail closed
+        svc.call(AGENT, "service.status", {}, target="svc:queue")
+    assert info.value.reason == "approval-required"
+    row = next(r for r in svc.actions_for(AGENT) if r["action"] == "service.status")
+    assert row["needs_approval"] is True
+
+
 def test_an_allowed_request_is_not_awaiting_approval(tmp_path):
     svc = _svc(tmp_path)
     rid = svc.submit(AGENT, "memory.write", {"name": "a.md", "content": "x"})
