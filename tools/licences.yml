@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+# The licence register (tools/licence_check.py; ADR-0011 decision 4): every Python package
+# constraints/*.txt pins and every image a compose/ stack runs, with its licence (an SPDX
+# expression: ids joined by AND or OR, no parentheses) and how this repository uses it. Owned in
+# CODEOWNERS with the rest of tools/: an entry here is a reviewed licence decision.
+#
+#   kind   linked: held to the linked-code rule, which refuses a copyleft licence (GPL, AGPL,
+#                  SSPL; LGPL and MPL are allowed unmodified). The default for a Python package:
+#                  anything homelabnext/ imports, any extra's dependency, and what they pull in.
+#          tool:   a program run as its own process that homelabnext/ never imports (the reason
+#                  says how it runs; NOTICE names a copyleft one).
+#          service: a container image a compose file runs (the reason says where its licence
+#                  is stated).
+#   reason required for tool and service.
+#
+# The Python licences are the PyPI metadata of the pinned versions (License-Expression, else the
+# License field or classifier). A new pin or image fails `make licence-check` until it is listed
+# here, and an entry nothing pins any more fails it too; a version bump of a listed package is
+# left to CI's dependency review, which reads the licence of every changed dependency.
+python:
+  annotated-types: {spdx: MIT, kind: linked}
+  ansible-core: {spdx: GPL-3.0-or-later, kind: tool, reason: "run as ansible-playbook by the role tests and deploys; homelabnext/ never imports it (NOTICE, ADR-0011)"}
+  anyio: {spdx: MIT, kind: linked}
+  arrow: {spdx: Apache-2.0, kind: linked}
+  attrs: {spdx: MIT, kind: linked}
+  boolean-py: {spdx: BSD-2-Clause, kind: linked}
+  build: {spdx: MIT, kind: linked}
+  cachecontrol: {spdx: Apache-2.0, kind: linked}
+  cachetools: {spdx: MIT, kind: linked}
+  certifi: {spdx: MPL-2.0, kind: linked}
+  cffi: {spdx: MIT-0, kind: linked}
+  chardet: {spdx: 0BSD, kind: linked}
+  charset-normalizer: {spdx: MIT, kind: linked}
+  click: {spdx: BSD-3-Clause, kind: linked}
+  colorama: {spdx: BSD-3-Clause, kind: linked}
+  coverage: {spdx: Apache-2.0, kind: linked}
+  cryptography: {spdx: Apache-2.0 OR BSD-3-Clause, kind: linked}
+  cyclonedx-bom: {spdx: Apache-2.0, kind: linked}
+  cyclonedx-python-lib: {spdx: Apache-2.0, kind: linked}
+  defusedxml: {spdx: PSF-2.0, kind: linked}
+  duckdb: {spdx: MIT, kind: linked}
+  filelock: {spdx: MIT, kind: linked}
+  fqdn: {spdx: MPL-2.0, kind: linked}
+  fsspec: {spdx: BSD-3-Clause, kind: linked}
+  h11: {spdx: MIT, kind: linked}
+  httpcore2: {spdx: BSD-3-Clause, kind: linked}
+  httpx2: {spdx: BSD-3-Clause, kind: linked}
+  httpx2-jsfetch: {spdx: BSD-3-Clause, kind: linked}
+  idna: {spdx: BSD-3-Clause, kind: linked}
+  iniconfig: {spdx: MIT, kind: linked}
+  isoduration: {spdx: ISC, kind: linked}
+  jinja2: {spdx: BSD-3-Clause, kind: linked}
+  jsonpointer: {spdx: BSD-3-Clause, kind: linked}
+  jsonschema: {spdx: MIT, kind: linked}
+  jsonschema-specifications: {spdx: MIT, kind: linked}
+  lark: {spdx: MIT, kind: linked}
+  license-expression: {spdx: Apache-2.0, kind: linked}
+  lxml: {spdx: BSD-3-Clause, kind: linked}
+  markdown-it-py: {spdx: MIT, kind: linked}
+  markupsafe: {spdx: BSD-3-Clause, kind: linked}
+  mcp: {spdx: MIT, kind: linked}
+  mcp-types: {spdx: MIT, kind: linked}
+  mdurl: {spdx: MIT, kind: linked}
+  mmh3: {spdx: MIT, kind: linked}
+  msgpack: {spdx: Apache-2.0, kind: linked}
+  nats-py: {spdx: Apache-2.0, kind: linked}
+  opentelemetry-api: {spdx: Apache-2.0, kind: linked}
+  packageurl-python: {spdx: MIT, kind: linked}
+  packaging: {spdx: Apache-2.0 OR BSD-2-Clause, kind: linked}
+  pip: {spdx: MIT, kind: linked}
+  pip-api: {spdx: Apache-2.0, kind: linked}
+  pip-audit: {spdx: Apache-2.0, kind: linked}
+  pip-requirements-parser: {spdx: MIT, kind: linked}
+  platformdirs: {spdx: MIT, kind: linked}
+  pluggy: {spdx: MIT, kind: linked}
+  py-serializable: {spdx: Apache-2.0, kind: linked}
+  pyarrow: {spdx: Apache-2.0, kind: linked}
+  pycparser: {spdx: BSD-3-Clause, kind: linked}
+  pydantic: {spdx: MIT, kind: linked}
+  pydantic-core: {spdx: MIT, kind: linked}
+  pygments: {spdx: BSD-2-Clause, kind: linked}
+  pyiceberg: {spdx: Apache-2.0, kind: linked}
+  pyiceberg-core: {spdx: Apache-2.0, kind: linked}
+  pyjwt: {spdx: MIT, kind: linked}
+  pyparsing: {spdx: MIT, kind: linked}
+  pyproject-hooks: {spdx: MIT, kind: linked}
+  pyroaring: {spdx: MIT, kind: linked}
+  pytest: {spdx: MIT, kind: linked}
+  pytest-cov: {spdx: MIT, kind: linked}
+  python-dateutil: {spdx: Apache-2.0 AND BSD-3-Clause, kind: linked}
+  python-multipart: {spdx: Apache-2.0, kind: linked}
+  pywin32: {spdx: PSF-2.0, kind: linked}
+  pyyaml: {spdx: MIT, kind: linked}
+  referencing: {spdx: MIT, kind: linked}
+  requests: {spdx: Apache-2.0, kind: linked}
+  resolvelib: {spdx: ISC, kind: linked}
+  rfc3339-validator: {spdx: MIT, kind: linked}
+  rfc3986-validator: {spdx: MIT, kind: linked}
+  rfc3987-syntax: {spdx: MIT, kind: linked}
+  rich: {spdx: MIT, kind: linked}
+  rpds-py: {spdx: MIT, kind: linked}
+  ruff: {spdx: MIT, kind: linked}
+  setuptools: {spdx: MIT, kind: linked}
+  six: {spdx: MIT, kind: linked}
+  sortedcontainers: {spdx: Apache-2.0, kind: linked}
+  sqlalchemy: {spdx: MIT, kind: linked}
+  sse-starlette: {spdx: BSD-3-Clause, kind: linked}
+  starlette: {spdx: BSD-3-Clause, kind: linked}
+  strictyaml: {spdx: MIT, kind: linked}
+  tenacity: {spdx: Apache-2.0, kind: linked}
+  tomli: {spdx: MIT, kind: linked}
+  tomli-w: {spdx: MIT, kind: linked}
+  truststore: {spdx: MIT, kind: linked}
+  typing-extensions: {spdx: PSF-2.0, kind: linked}
+  typing-inspection: {spdx: MIT, kind: linked}
+  tzdata: {spdx: Apache-2.0, kind: linked}
+  uri-template: {spdx: MIT, kind: linked}
+  urllib3: {spdx: MIT, kind: linked}
+  uvicorn: {spdx: BSD-3-Clause, kind: linked}
+  webcolors: {spdx: BSD-3-Clause, kind: linked}
+  zstandard: {spdx: BSD-3-Clause, kind: linked}
+images:
+  binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
+  dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store; run as its own service, nothing of it is shipped here (NOTICE)"}
+  hnx-lab-broker: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
+  hnx-lab-fakes: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
+  litellm/litellm-database: {spdx: MIT, kind: service, reason: "the LLM gateway; MIT outside the project's enterprise/ directory, which has its own licence and is not used"}
+  louislam/uptime-kuma: {spdx: MIT, kind: service, reason: "the uptime monitor; the project's LICENSE"}
+  nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE"}
+  openbao/openbao: {spdx: MPL-2.0, kind: service, reason: "the secrets store; the project's LICENSE"}
+  postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence"}
+  prom/prometheus: {spdx: Apache-2.0, kind: service, reason: "the metrics service; the project's LICENSE"}
+  quay.io/lakekeeper/catalog: {spdx: Apache-2.0, kind: service, reason: "the lake catalog; the project's LICENSE"}
+  trinodb/trino: {spdx: Apache-2.0, kind: service, reason: "the lake query engine; the project's LICENSE"}

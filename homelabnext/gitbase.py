@@ -6,16 +6,23 @@ One rule for every check that takes ``--ci-base`` (``tools/schema_check.py``,
 package so a CLI never loads a file from the checkout to find it.  It is still the code of
 whatever is installed: in a pull request's own CI run that is the pull request's, which is why the
 gates that must not trust the change run from a checkout of the base (``.github/workflows/ci.yml``,
-job ``trusted-gates``; docs/modules.md, "Swap record 1.2")."""
+job ``trusted-gates``; docs/modules.md, "Swap record 1.2").
+
+It is also the one copy of the rule for CI's shell steps: ``python -m homelabnext.gitbase`` prints
+the base commit (the reason goes to stderr), and the jobs that compare with a base call it rather
+than writing the rule out again (``register-ids`` and ``regression-tests``, with
+``--allow-root``; ``trusted-gates`` reads this file from the commit it trusts and calls
+:func:`ci_base_from_env`, refusing a root commit)."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
-__all__ = ["ZERO_SHA", "add_base_arguments", "ci_base", "ci_base_from_env"]
+__all__ = ["ZERO_SHA", "add_base_arguments", "ci_base", "ci_base_from_env", "main"]
 
 ZERO_SHA = "0" * 40
 
@@ -87,3 +94,38 @@ def add_base_arguments(parser: argparse.ArgumentParser) -> None:
         help="pick the base like tools/schema_check.py --ci-base (GITHUB_EVENT_NAME, "
         "HNX_PR_BASE, HNX_PUSH_BEFORE)",
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Print the base commit :func:`ci_base_from_env` picks for the repository at ``--root``.
+
+    Exit 0 with the commit on stdout; exit 1 when there is no rule for the event, the base is not
+    readable, or the checkout is shallow; and for a root commit (which has no base) unless
+    ``--allow-root``, which prints nothing and exits 0 instead.  The reason is always on stderr."""
+    ap = argparse.ArgumentParser(
+        prog="python -m homelabnext.gitbase",
+        description="print the commit a CI check compares the working tree with",
+    )
+    ap.add_argument("--root", type=Path, default=Path("."), help="the repository (default: .)")
+    ap.add_argument(
+        "--allow-root",
+        action="store_true",
+        help="a root commit has no base: print nothing and exit 0 (default: an error)",
+    )
+    args = ap.parse_args(argv)
+    try:
+        sha, why = ci_base_from_env(args.root)
+    except ValueError as exc:
+        print(f"gitbase: {exc}", file=sys.stderr)
+        return 1
+    if sha is None and not args.allow_root:
+        print(f"gitbase: no base: {why}", file=sys.stderr)
+        return 1
+    print(f"gitbase: base {sha or '-'} ({why})", file=sys.stderr)
+    if sha:
+        print(sha)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

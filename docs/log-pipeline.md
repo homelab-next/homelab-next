@@ -119,9 +119,10 @@ runtime label it is never the event's word: the rule is
 - **The declaration** is the dataset's `tlp` (absent is `red`) and `honour_item_labels`
   ([modules](modules.md#data-and-lifecycle-safety)), applied with `homelabnext.tlp.item_label`.
   An item label the event carries (`homelabnext.logpipeline.tlp_labels.claims`: its `tlp`
-  field, the flat `"labels.tlp"` key or `labels.tlp`; a `tlp:` tag in `tags`, a string or a tag
-  object's `name`; the `tlp` of an OCSF `osint` entry; a STIX TLP marking-definition id in
-  `object_marking_refs`; any spelling of each key up to case and surrounding white space; several
+  field, the flat `"labels.tlp"` key or `labels.tlp`; a TLP tag in `tags`, a string or a tag
+  object's `name`, read with the same marker grammar as the egress check (`homelabnext.tlp.tag_label`:
+  `tlp:red`, `TLP : RED`, `[TLP:AMBER]`, `TLP-GREEN`); the `tlp` of an OCSF `osint` entry; a STIX
+  TLP marking-definition id in `object_marking_refs` (`homelabnext.tlp.stix_marking_label`); any spelling of each key up to case and surrounding white space; several
   give the strictest) is kept when stricter, and when looser only where the dataset honours item labels;
   one that is not a label, `null` included, is `red`. The label is decided by the event as it
   arrived: an item label another stage drops still counts.

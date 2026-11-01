@@ -12,7 +12,9 @@ that reach a notification) is to apply the same rule before anything leaves; doc
   was recorded, and a marker stricter than both wins;
 * the item leaves only when that label is at or below the destination's ceiling.
 
-:func:`egress_label` and :func:`egress_check` are that rule.  Enrichment lookups are egress too:
+:func:`egress_label` and :func:`egress_check` are that rule; the markers are read by
+:func:`homelabnext.tlp.markers` (re-exported here), the one marker grammar.  Enrichment lookups
+are egress too:
 :func:`job_label` labels a lookup by the records that cause it, raised to the submitter's ceiling,
 and :func:`analyzers_for` names the analyzers whose declared maximum admits it (a maximum is a
 declaration, so it must be a canonical label: any other value is refused, never skipped; an
@@ -24,12 +26,11 @@ Standard library only.
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from homelabnext import tlp
+from homelabnext.tlp import markers
 
 __all__ = [
     "NO_RECORD",
@@ -41,26 +42,6 @@ __all__ = [
     "markers",
 ]
 
-#: a marker: ``TLP`` then a colon (``TLP:RED``, ``tlp : amber``), the word read by
-#: :func:`_marker_label`; or ``TLP`` then a label word with no colon, after any run of white space
-#: and up to three other characters that are neither a letter nor a digit, or none (``TLP RED``,
-#: ``TLP    RED``, ``TLP-AMBER``, ``TLP_RED``, ``TLP/AMBER``, ``[TLP=RED]``, ``TLP--GREEN``,
-#: ``TLP  -  RED``, ``TLPRED``): the spellings report headers, column-padded tables, file names
-#: and exports use.  White space is never counted against the three, so padding cannot hide one.
-_COLON = re.compile(r"TLP\s*:\s*", re.IGNORECASE | re.ASCII)
-_BARE = re.compile(
-    r"TLP(?!\s*:)\s*(?:[^A-Za-z0-9\s]{1,3}\s*)?(?=(?:CLEAR|WHITE|GREEN|AMBER|RED))",
-    re.IGNORECASE | re.ASCII,
-)
-_WORD = re.compile(r"[A-Za-z]+", re.ASCII)
-_PLUS_WORD = re.compile(r"\s*\+\s*([A-Za-z]+)", re.ASCII)
-_PLUS = re.compile(r"\s*\+", re.ASCII)
-#: ``strict`` within a few characters of ``amber`` in any other spelling (``amber-strict``,
-#: ``amber strict``, ``amber and strict``): not a label, so red (decision 1)
-_NEAR_STRICT = re.compile(r"[^A-Za-z]{0,3}(?:[A-Za-z]{1,4}[^A-Za-z]{1,3})?strict", re.I | re.ASCII)
-#: a body nested deeper than this is not scanned to the end, so it is red
-_MAX_DEPTH = 32
-
 
 class _NoRecord:
     def __repr__(self) -> str:
@@ -70,60 +51,6 @@ class _NoRecord:
 #: pass as ``recorded`` for an item that has no recorded label (never the default: a caller that
 #: holds one must pass it)
 NO_RECORD = _NoRecord()
-
-
-def _normalised(text: str) -> str:
-    """``text`` as a marker reader sees it: compatibility forms folded (fullwidth letters become
-    ASCII), format characters (zero-width and the like) removed, every white space a space."""
-    folded = unicodedata.normalize("NFKC", str.__str__(text))
-    return "".join(" " if ch.isspace() else ch for ch in folded if unicodedata.category(ch) != "Cf")
-
-
-def _marker_label(rest: str) -> tlp.Label:
-    """The label a ``TLP:`` marker gives, ``rest`` being what follows the colon."""
-    word = _WORD.match(rest)
-    if word is None:
-        return tlp.Label.RED  # TLP: and then no ASCII word
-    after = rest[word.end() :]
-    plus_word = _PLUS_WORD.match(after)
-    if plus_word is not None:
-        return tlp.read(f"{word.group(0)}+{plus_word.group(1)}")
-    if _PLUS.match(after):
-        return tlp.Label.RED  # a dangling +
-    if word.group(0).lower() == "amber" and _NEAR_STRICT.match(after):
-        return tlp.Label.RED  # amber-strict, amber strict: not a label
-    return tlp.read(word.group(0))
-
-
-def _scan(text: str) -> list[tlp.Label]:
-    text = _normalised(text)
-    out = [_marker_label(text[m.end() :]) for m in _COLON.finditer(text)]
-    # a colon-less marker starts with a label word and is read exactly as a colon one
-    out += [_marker_label(text[m.end() :]) for m in _BARE.finditer(text)]
-    return out
-
-
-def markers(body: object, _depth: int = 0) -> list[tlp.Label]:
-    """Every TLP marker in ``body`` as a label.  Text is read after folding look-alikes; bytes are
-    read as UTF-8; a mapping or a list is read leaf by leaf, keys included.  ``None`` holds no
-    marker; anything else (a number is fine, an object is not) is read as ``red``, since a body
-    that cannot be scanned cannot be shown to hold no stricter marker."""
-    if body is None or type(body) in (bool, int, float):
-        return []
-    if _depth > _MAX_DEPTH:
-        return [tlp.Label.RED]
-    if isinstance(body, str):
-        return _scan(body)
-    if isinstance(body, (bytes, bytearray)):
-        return _scan(bytes(body).decode("utf-8", errors="replace"))
-    if isinstance(body, Mapping):
-        out: list[tlp.Label] = []
-        for k, v in body.items():
-            out += markers(k, _depth + 1) + markers(v, _depth + 1)
-        return out
-    if isinstance(body, (list, tuple)):
-        return [label for item in body for label in markers(item, _depth + 1)]
-    return [tlp.Label.RED]
 
 
 def egress_label(claimed: object, *, recorded: object, body: object = None) -> tlp.Label:
@@ -181,10 +108,12 @@ def analyzers_for(job: tlp.Label, maxima: Mapping[str, object]) -> list[str]:
     for name, maximum in sorted(named, key=lambda kv: kv[0]):
         if maximum is None:
             continue
-        if type(maximum) is not str or maximum not in tlp.LABELS:
+        try:
+            ceiling = tlp.parse_stored(maximum)
+        except ValueError:
             raise ValueError(
                 f"analyzer {name!r}: its maximum {maximum!r} is not one of {', '.join(tlp.LABELS)}"
-            )
-        if tlp.allows(tlp.parse(maximum), job):
+            ) from None
+        if tlp.allows(ceiling, job):
             out.append(name)
     return out

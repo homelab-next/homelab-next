@@ -780,7 +780,13 @@ operator's steps on a real lab. Readers read at their ceiling: the query
 engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
 and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
 filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
-refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`). The status hub's views and
+refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`). `reader_for(lake, reader,
+tlp_readers, schemas)` gives a consumer its reader at the ceiling its `tlp_readers` entry declares
+and refuses a reader with none; a read at `red` always names a `RedGrant` (a `red` reader's comes
+from its declaration's `why`; the swap and parity tools, which copy and compare every row, hold
+their own and read through `raw_query`), and `tests/lake/test_lake_read_boundary.py` fails on a
+module outside `homelabnext/lake/` that imports the lake library and calls a client's `query` or
+`named` itself. The status hub's views and
 exports declare their TLP ceilings, and its public view and exports serve only what its release
 transforms keep ([status](status.md#tlp-ceilings-and-release-transforms)). Model roles, model
 requests, agent profiles and MCP servers carry their ceilings and labels (below).
@@ -1746,7 +1752,10 @@ and `meaning_changes` is recorded, never checked.
   the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
   base commit's own code**: a detached worktree of the base, imported with `python -P` (the
   checkout's own package never on the path, which the job asserts), reading the change only as data
-  (`--root`). Nothing of the change runs before the gates: the job calls `actions/setup-python`
+  (`--root`). The ratchets that hold a change to the base run there too, the base's
+  `tools/schema_check.py`, `product_name_lint.py`, `dup_check.py` and `register_ids.py check-lost`
+  under `python -I` (the other jobs' copies are quick feedback a change can edit), and the
+  regression-tests job judges fixes with the base's `tools/fix_has_test.py`. Nothing of the change runs before the gates: the job calls `actions/setup-python`
   directly rather than the checkout's `python-deps` action, calls the interpreter by the absolute
   path it reports, and installs pip and the checker's dependencies from the base's constraints and
   `pyproject.toml`. A base that cannot run a gate fails the job; the change's own code never stands
