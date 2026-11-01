@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx swap``: plan, start, status, advance, rollback, record.
 
-Exit codes: 0 success, 1 a gate refused / the record is invalid / a rollback was refused,
-2 usage or I/O error.
+Exit codes: 0 success, 1 a gate refused / the record is invalid / a rollback was refused or
+left incomplete, 2 usage or I/O error.
+
+``--now`` (advance, rollback) overrides the clock the soak and rollback-window gates measure, so it
+needs ``--rehearsal`` too, and every transition it writes carries the actor
+``<actor>@rehearsal-clock``.  No clock may read earlier than the record's last transition.
 
 ``advance`` and ``rollback`` use the :class:`ManualBackend`: gates that need a real system are
 satisfied by attestation files (``--attest parity=parity.json``, JSON containing ``"ok": true``)
@@ -62,7 +66,16 @@ def _add_backend(p: argparse.ArgumentParser) -> None:
     p.add_argument("--allow", action="append", default=[], help="file of allow globs")
     for opt in ("host", "alias", "env-var", "unit", "word"):
         p.add_argument(f"--retired-{opt}", action="append", default=[])
-    p.add_argument("--now", help="override the clock (RFC 3339 with offset), for rehearsals")
+    p.add_argument(
+        "--now",
+        help="override the clock (RFC 3339 with offset); only with --rehearsal, since the soak "
+        "and rollback-window gates measure time",
+    )
+    p.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="allow --now: the transitions it writes carry the actor <actor>@rehearsal-clock",
+    )
     p.add_argument("--actor", default="operator")
     p.add_argument("--evidence-dir")
 
@@ -163,7 +176,21 @@ def _backend(args: argparse.Namespace, doc: dict[str, Any], rec_path: Path) -> M
     )
 
 
+#: what an overridden clock adds to the actor of every transition it writes
+REHEARSAL_SUFFIX = "@rehearsal-clock"
+
+
 def _runner(args: argparse.Namespace) -> SwapRunner:
+    actor = args.actor
+    if args.now:
+        # a forged clock passes the soak and rollback-window gates in seconds: refuse it unless
+        # the operator says this is a rehearsal, and mark every transition it writes
+        if not args.rehearsal:
+            raise SystemExit(
+                f"hnx swap {args.cmd}: --now overrides the clock the soak and rollback-window "
+                "gates measure; pass --rehearsal as well (the record then names the forged clock)"
+            )
+        actor = actor[: 64 - len(REHEARSAL_SUFFIX)] + REHEARSAL_SUFFIX
     path = Path(args.record)
     doc = rec.load(path)
     return SwapRunner(
@@ -171,7 +198,7 @@ def _runner(args: argparse.Namespace) -> SwapRunner:
         _backend(args, doc, path),
         evidence_dir=args.evidence_dir,
         clock=_now(args),
-        actor=args.actor,
+        actor=actor,
     )
 
 
@@ -292,6 +319,9 @@ def _cmd_advance(args: argparse.Namespace) -> int:
         if exc.result.reverted:
             print("  the previous route was restored")
         return 1
+    except SwapError as exc:  # nothing to advance, or a clock behind the record: refused
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 1
     if res.dry_run:
         print(f"dry run: step {res.step} pre-conditions {'pass' if res.passed else 'FAIL'}")
         _print_gates(res.gates)
@@ -310,6 +340,9 @@ def _cmd_rollback(args: argparse.Namespace) -> int:
         doc = runner.rollback(args.reason)
     except RollbackRefused as exc:
         print(f"ROLLBACK REFUSED: {exc}", file=sys.stderr)
+        return 1
+    except SwapError as exc:  # an incomplete rollback (or a clock behind the record) failed it
+        print(f"ROLLBACK FAILED: {exc}", file=sys.stderr)
         return 1
     print(
         f"rolled back from {doc['rollback']['from_step']}; route restored: {doc['rollback']['restored_route']}"

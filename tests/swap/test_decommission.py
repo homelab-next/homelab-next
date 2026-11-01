@@ -103,10 +103,28 @@ def test_allow_globs_and_default_exclusions(tmp_path):
 
 
 def test_binary_and_missing_root(tmp_path):
+    """A file that is not UTF-8 is still searched (it used to be skipped silently)."""
     (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00oldlake")
-    assert scan([tmp_path], RET) == []
+    assert [(f.path, f.term) for f in scan([tmp_path], RET)] == [("blob.bin", "oldlake")]
     with pytest.raises(FileNotFoundError):
         scan([tmp_path / "nope"], RET)
+
+
+def test_files_the_scan_cannot_read_are_findings_unless_allowed(tmp_path, monkeypatch):
+    """A clean scan proves no reference remains only if every file was read: an oversized file
+    or a symbolic link is an ``unscanned`` finding, which an allow glob can excuse."""
+    import homelabnext.swap.decommission as dec
+
+    monkeypatch.setattr(dec, "MAX_BYTES", 16)
+    (tmp_path / "big.log").write_text("x" * 64, encoding="utf-8")
+    (tmp_path / "elsewhere.txt").write_text("oldlake\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "link.cfg").symlink_to(tmp_path / "elsewhere.txt")
+    found = {(f.kind, f.path) for f in scan([tmp_path / "sub"], RET)}
+    assert found == {("unscanned", "link.cfg")}
+    found = {(f.kind, f.path) for f in scan([tmp_path], RET, allow=["elsewhere.txt"])}
+    assert found == {("unscanned", "big.log"), ("unscanned", "sub/link.cfg")}
+    assert scan([tmp_path], RET, allow=["elsewhere.txt", "big.log", "sub/link.cfg"]) == []
 
 
 def test_retired_from_record_keeps_names_the_flip_kept():

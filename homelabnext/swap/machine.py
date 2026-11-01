@@ -448,7 +448,7 @@ class SwapRunner:
         if doc["status"] != "active":
             raise SwapError(f"swap {doc['swap_id']} is {doc['status']}; nothing to advance")
         name = doc["current_step"]
-        now = self.clock()
+        now = self._now(doc)
         ctx = _Ctx(doc, self.backend, now, closure)
         pre = _pre(ctx, name)
         if dry_run:
@@ -539,7 +539,10 @@ class SwapRunner:
         d = self._evidence_dir or self.path.parent / (doc["swap_id"] + ".evidence")
         d.mkdir(parents=True, exist_ok=True)
         fname = f"{name}.{attempt:02d}.json"
-        (d / fname).write_text(text, encoding="utf-8")
+        from homelabnext.state import atomic_write_text
+
+        # 0600 and atomic, as every other evidence file: a parity report carries row data
+        atomic_write_text(d / fname, text, mode=0o600)
         failed = [g.id for g in gates if not g.passed]
         summary = (
             f"{name} passed ({len(gates)} gates)"
@@ -573,7 +576,7 @@ class SwapRunner:
             )
         if len(reason) < 10:
             raise RollbackRefused("a rollback needs a reason of at least 10 characters")
-        now = rec.stamp(self.clock())
+        now = rec.stamp(self._now(doc))
         before = doc["route"]["before"]
         was_flipped = doc["route"]["flipped"]
         actions: list[str] = []
@@ -698,13 +701,26 @@ class SwapRunner:
         doc = self.record()
         rec.append_transition(
             doc,
-            at=rec.stamp(self.clock()),
+            at=rec.stamp(self._now(doc)),
             event="note",
             step=doc["current_step"],
             actor=self.actor,
             note=text,
         )
         rec.save(self.path, doc)
+
+    def _now(self, doc: dict[str, Any]) -> datetime:
+        """The clock, refused when it reads earlier than the record's last transition: the soak
+        and rollback-window gates measure from transition times, so time may not run backwards
+        (and :func:`homelabnext.swap.record.record_problems` refuses a log where it does)."""
+        now = self.clock()
+        last = doc["transitions"][-1]["at"] if doc["transitions"] else None
+        if last is not None and now < rec.parse_stamp(last):
+            raise SwapError(
+                f"the clock reads {rec.stamp(now)}, earlier than the record's last transition "
+                f"({last}): refusing to write a transition that goes back in time"
+            )
+        return now
 
     @staticmethod
     def _passed(doc: dict[str, Any], name: str) -> bool:

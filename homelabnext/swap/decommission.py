@@ -9,6 +9,11 @@ variable, systemd unit and documentation mention. A clean scan is the gate for t
 Matching is word-bounded (``lake-core`` does not match ``lake-core-2``), case-insensitive for
 names and aliases, case-sensitive for environment variables. History that legitimately names the
 retired product (changelog, ADRs, swap records) is excluded with allow globs, never silently.
+
+Nothing is skipped silently either: a file that is not UTF-8 is scanned with undecodable bytes
+replaced (a binary config can still name the retired host), and a file the scan cannot read, one
+over :data:`MAX_BYTES`, or a symbolic link (its target may lie outside the root) is a finding of
+kind ``unscanned``, so the gate fails until it is fixed or allow-listed.
 """
 
 from __future__ import annotations
@@ -62,7 +67,7 @@ class Retired:
 
 @dataclass(frozen=True)
 class Finding:
-    kind: str  # registry-host | registry-impl | registry-env-var | unit-file | systemd-unit | env-var | alias | doc | host | impl | word | reference
+    kind: str  # registry-host | registry-impl | registry-env-var | unit-file | systemd-unit | env-var | alias | doc | host | impl | word | reference | unscanned
     path: str
     line: int
     text: str
@@ -118,19 +123,23 @@ def _iter_files(root: Path) -> Iterable[Path]:
     for p in sorted(root.rglob("*")):
         if any(part in SKIP_DIRS for part in p.relative_to(root).parts):
             continue
-        if p.is_file() and not p.is_symlink():
+        if p.is_symlink() or p.is_file():  # a symlink is reported, never followed
             yield p
 
 
 def _scan_file(
     path: Path, rel: str, retired: Retired, base_kind: str | None = None
 ) -> list[Finding]:
+    if path.is_symlink():
+        return [Finding("unscanned", rel, 0, "a symbolic link: not followed", "")]
     try:
-        if path.stat().st_size > MAX_BYTES:
-            return []
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
+        size = path.stat().st_size
+        if size > MAX_BYTES:
+            return [Finding("unscanned", rel, 0, f"{size} bytes, over {MAX_BYTES}", "")]
+        # a file that is not UTF-8 is still searched: its ASCII names survive the replacement
+        text = path.read_bytes().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return [Finding("unscanned", rel, 0, f"cannot read: {type(exc).__name__}", "")]
     pats = [(k, t, _pattern(t, cs)) for k, t, cs in retired.terms()]
     found: list[Finding] = []
     for no, line in enumerate(text.splitlines(), 1):
