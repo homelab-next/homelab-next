@@ -48,8 +48,8 @@ MARKER = "experimental"
 #: the pytest selection of the components' tests (the blocking runs select its complement)
 SELECT = f"{MARKER} and not live"
 BLOCKING_SELECT = f"not live and not {MARKER}"
-_KEYS = {"status", "decided", "why", "until", "docs", "tests", "gates", "invariants"}
-_REQUIRED = _KEYS - {"invariants"}
+_KEYS = {"status", "decided", "why", "until", "docs", "tests", "gates", "invariants", "code"}
+_REQUIRED = _KEYS - {"invariants", "code"}
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _INVARIANT = re.compile(r"^[A-Z]-[0-9]{2}\Z")
 
@@ -71,6 +71,7 @@ class Component:
     tests: tuple[str, ...]
     gates: tuple[str, ...]
     invariants: tuple[str, ...] = ()
+    code: tuple[str, ...] = ()
 
 
 def _strings(where: str, value: object, problems: list[str], *, empty_ok: bool = False):
@@ -120,13 +121,17 @@ def parse(doc: object, root: Path = ROOT) -> list[Component]:
         invariants = _strings(
             f"{where}.invariants", entry.get("invariants", []), problems, empty_ok=True
         )
-        for path in (*docs, *tests):
+        code = _strings(f"{where}.code", entry.get("code", []), problems, empty_ok=True)
+        for path in (*docs, *tests, *code):
             p = PurePosixPath(path)
             if p.is_absolute() or ".." in p.parts or not (root / path).exists():
                 problems.append(f"{where}: {path} is not a path in the repository")
         for path in tests:
             if not (path.startswith("tests/") or path.startswith("tools/tests/")):
                 problems.append(f"{where}.tests: {path} is not under tests/ or tools/tests/")
+        for path in code:
+            if not path.endswith(".py") or path.startswith(("tests/", "tools/tests/")):
+                problems.append(f"{where}.code: {path} is not a Python module outside the tests")
         for gate in gates:
             words = shlex.split(gate)
             if words[:2] != ["python", "-m"] or len(words) < 3:
@@ -145,6 +150,7 @@ def parse(doc: object, root: Path = ROOT) -> list[Component]:
                 tests=tests,
                 gates=gates,
                 invariants=invariants,
+                code=code,
             )
         )
     seen: dict[str, str] = {}

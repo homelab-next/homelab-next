@@ -1763,7 +1763,10 @@ and `meaning_changes` is recorded, never checked.
   the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
   base commit's own code**: a detached worktree of the base, imported with `python -P` (the
   checkout's own package never on the path, which the job asserts), reading the change only as data
-  (`--root`). Nothing of the change runs before the gates: the job calls `actions/setup-python`
+  (`--root`). The ratchets that hold a change to the base run there too, the base's
+  `tools/schema_check.py`, `product_name_lint.py`, `dup_check.py` and `register_ids.py check-lost`
+  under `python -I` (the other jobs' copies are quick feedback a change can edit), and the
+  regression-tests job judges fixes with the base's `tools/fix_has_test.py`. Nothing of the change runs before the gates: the job calls `actions/setup-python`
   directly rather than the checkout's `python-deps` action, calls the interpreter by the absolute
   path it reports, and installs pip and the checker's dependencies from the base's constraints and
   `pyproject.toml`. A base that cannot run a gate fails the job; the change's own code never stands
