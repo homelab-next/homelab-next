@@ -357,6 +357,18 @@ def test_review_suggests_retiring_a_pitfall_its_invariant_already_proves(src):
     assert again.id == U["LL-001"] and again.reason == "missing agent check, agent audit"
 
 
+def test_review_marks_a_make_target_it_cannot_run_as_unverified(src):
+    p = src / "lessons" / f("LL-001")
+    p.write_text(
+        p.read_text().replace(
+            "review_by: 2027-01-17", "review_by: 2027-01-17\nretired_by: [M-03, 'make:check']"
+        )
+    )
+    rep = review(load_sources(src), dt.date(2026, 10, 19))
+    (retire,) = [d for d in rep.items if d.action == "retire"]
+    assert "(unverified: make:check - only an invariant is run)" in retire.reason
+
+
 def test_review_suggests_superseding_by_a_newer_practice(src):
     old = src / "lessons" / f("LL-005")
     new = copy.copy(old.read_text())

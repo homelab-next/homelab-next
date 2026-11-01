@@ -131,6 +131,9 @@ a legacy code from `aliases.yml` (with a deprecation warning), into the uid. Uid
 work linked to an objective into a reading for a **MOP** of that objective. Completion is
 activity, so a MOE follows the doctrine rule `activity_never_moe` (passed as `doctrine=`, the
 shipped doctrine by default): `error` refuses it, `warn` reads it with a warning, `off` reads it.
+It is a library helper for now: no measure `source:` binding calls it yet (the bindings `hnx
+strategy measure` reads are `invariant:`, `status:`, `records:`, `manual` and `none`), so a
+project's completion reaches a MOP only through code that calls it and records the `value` event.
 Nothing here ever changes an objective's status: achievement is a reviewed transition in the
 strategy repository (for a real lab, the private overlay's `lab/strategy/`: part of Veritas,
 [ADR-0028](adr/0028-veritas-single-source-of-truth.md)).
