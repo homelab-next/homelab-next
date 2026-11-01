@@ -11,8 +11,11 @@ from pathlib import Path
 import pytest
 from netutil import render
 
-from homelabnext.network import build_ir, load_site, validate
+from homelabnext.network import adapters, build_ir, load_site, validate
+from homelabnext.network.adapters import AdapterError
 
+#: the controller adapter, the one switch adapter (name the slot, not the product)
+[CONTROLLER] = adapters.names_for("switch")
 EXAMPLE = Path(__file__).resolve().parents[2] / "schemas/platform/examples/site.port-mirror.yml"
 
 
@@ -137,14 +140,29 @@ def test_a_bad_mirror_is_refused(mdoc, registry, mutate, needle):
     assert any(needle in e for e in errs), (needle, errs)
 
 
-def test_other_models_may_mirror_several_sources_to_one_port(mdoc, registry):
-    """The one-source limit is the UniFi adapter's, not the model's: a SPAN session on another
-    switch may copy several ports to one destination."""
-    mdoc["switches"][0]["model"] = "linux"
+def test_the_ir_keeps_every_mirror_source(mdoc, registry):
+    """The one-source limit is the UniFi adapter's, not the model's: the IR carries every source,
+    for a switch adapter that can copy several ports to one destination."""
     _mirror(mdoc)["mirror_from"] = [1, "2-3"]
-    assert validate(mdoc, registry).ok, validate(mdoc, registry).errors
     port = next(p for p in build_ir(mdoc, registry).switches[0].ports if p.port == 9)
     assert port.mirror_from == (1, 2, 3)
+
+
+def test_a_switch_the_controller_renders_mirrors_one_source_whatever_its_model(mdoc, registry):
+    """The network adapter renders every switch, so the limit follows the adapter: a switch whose
+    model is not unifi, under a unifi network, used to validate with two sources and render
+    only the first."""
+    assert mdoc["adapters"]["network"] == CONTROLLER
+    mdoc["switches"][0]["model"] = "linux"
+    _mirror(mdoc)["mirror_from"] = [1, 2]
+    errs = validate(mdoc, registry).errors
+    assert any("one source port to one port" in e for e in errs), errs
+
+
+def test_the_controller_refuses_a_second_source_rather_than_drop_it(mdoc, registry):
+    _mirror(mdoc)["mirror_from"] = [1, 2]
+    with pytest.raises(AdapterError, match=r"port 9 mirrors ports \[1, 2\]"):
+        render(CONTROLLER, build_ir(mdoc, registry))
 
 
 def test_a_mirror_of_management_or_one_way_zones_warns_and_names_them(mdoc, registry):

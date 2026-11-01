@@ -5,7 +5,8 @@
 ``enforce: error | warn | off``.  A validation rule's finding fails the check (error), is printed
 (warn) or is not looked for (off); a computed rule (the self-measured cap, cold start, trends)
 applies unless it is off.  A rule the file does not name takes its default from
-:data:`DEFAULT_RULES`, the nine-rule MOE/MOP doctrine the project ships with, so another
+:data:`DEFAULT_RULES`, the nine-rule MOE/MOP doctrine plus two cascade rules (``baseline_so``,
+``so_supported``) the project ships with, so another
 discipline writes only what it changes.
 
 The rules and where they act (the rest of the doctrine needs judgment; the file lists it under

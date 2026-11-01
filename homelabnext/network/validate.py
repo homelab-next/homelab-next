@@ -346,9 +346,19 @@ def validate(doc: Any, registry: Any) -> Report:
 
 
 def _semantic(doc: dict, reg: Any, r: Report) -> None:
-    from .adapters import known_names
+    from .adapters import known_names, names_for
 
     adapter_names = known_names()
+
+    def wrong_role(where: str, name: str, role: str) -> None:
+        # a known adapter selected for a job it does not do renders nothing for it: a dns
+        # adapter named as the router would render no firewall at all
+        if name in adapter_names and name not in names_for(role):
+            r.error(
+                f"{where}: {name!r} is not a {role} adapter; "
+                f"{role} adapters: {', '.join(sorted(names_for(role)))}"
+            )
+
     _walk_literals(doc, "", r)
 
     zones = doc["zones"]
@@ -450,6 +460,7 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         r.error(
             f"router.model: unknown adapter {router['model']!r}; known: {', '.join(sorted(adapter_names))}"
         )
+    wrong_role("router.model", router["model"], "network")
     _need_service(reg, router["mgmt_endpoint"], "router.mgmt_endpoint", r)
     pin = router.get("tls_pin", {}).get("sha256", "")
     if pin.startswith("REPLACE_WITH_"):
@@ -484,6 +495,7 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         switch_ids.add(sid)
         if sw["model"] not in adapter_names:
             r.error(f"switch {sid}: unknown adapter {sw['model']!r}")
+        wrong_role(f"switch {sid}: model", sw["model"], "switch")
         mac = sw.get("device_mac")
         if mac:
             if mac in macs:
@@ -530,9 +542,10 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
         for where, ports, sources in mirrors:
             if len(set(sources)) != len(sources):
                 r.error(f"{where}: mirror_from lists a port twice")
-            # a SPAN session copies sources to ONE destination; UniFi (the one switch adapter)
-            # takes a single source port per destination port
-            if sw["model"] == "unifi" and (len(ports) != 1 or len(sources) != 1):
+            # a SPAN session copies sources to ONE destination; UniFi (the one switch adapter,
+            # which renders every switch when it renders the network) takes a single source port
+            # per destination port
+            if "unifi" in (sw["model"], network_adapter) and (len(ports) != 1 or len(sources) != 1):
                 r.error(
                     f"{where}: the unifi adapter mirrors one source port to one port; "
                     "give each mirror port its own entry with one mirror_from port"
@@ -596,6 +609,8 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
     for key in ("network", "dns"):
         if key in adapters and adapters[key] not in adapter_names:
             r.error(f"adapters.{key}: unknown adapter {adapters[key]!r}")
+        elif key in adapters:
+            wrong_role(f"adapters.{key}", adapters[key], key)
 
 
 def _need_service(reg: Any, ref: str, where: str, r: Report) -> bool:
@@ -630,10 +645,21 @@ def _firewall(doc: dict, reg: Any, zone_ids: dict[str, dict], r: Report) -> None
             r.error(f"{where}: a deny applies to the whole zone pair; remove ports/protocols")
         if "ports" in rule and set(rule.get("protocols", ["tcp"])) <= {"icmp"}:
             r.error(f"{where}: ports need tcp or udp in protocols")
+        elif "ports" in rule and "icmp" in rule.get("protocols", []):
+            # ICMP has no ports: the IR could only drop it from the rule, which is a different
+            # policy than the one written
+            r.error(f"{where}: icmp has no ports; give it its own rule without ports")
         if rule["action"] == "allow" and src in one_way:
             r.error(f"{where}: one-way zone {src!r} may only send through service_exceptions")
         if rule["action"] == "allow" and dst in one_way:
             r.error(f"{where}: allow into one-way zone {dst!r} breaks its contract")
+        if rule["action"] == "allow" and dst == "any" and one_way:
+            # 'any' covers every zone, the one-way ones included, and adapters render it with no
+            # destination match: the allow would open the one-way zone to the source
+            r.error(
+                f"{where}: allow to 'any' reaches one-way zone(s) {', '.join(sorted(one_way))}; "
+                "name the zones it may reach instead"
+            )
         if rule.get("one_way_contract"):
             if src not in one_way:
                 r.error(f"{where}: one_way_contract on zone {src!r}, which is not egress.one_way")

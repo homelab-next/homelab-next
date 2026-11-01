@@ -16,7 +16,11 @@ append-only event files beside the page, ``docs/systems/<service>.events/``
 events migrate docs/systems`` moves it out), and ``status: reviewed`` is checked against the review policy (``system-page.reviewed``), with no
 TODO(human) left.  A review's digest (:func:`page_digest`) covers only what people own, the
 ``hnx:todo`` blocks and any human front-matter field, never the ``hnx:gen`` blocks, so
-regenerating machine facts keeps a review current and editing the prose drops it.
+regenerating machine facts keeps a review current and editing the prose drops it.  Because the
+digest sees nothing else, :func:`check_pages` fails a page whose structure differs from a fresh
+render (:func:`outside_blocks`): prose outside the blocks, an unknown ``hnx:gen`` block (which
+regeneration would keep and nothing would check), a missing or duplicated block, a changed
+heading.
 """
 
 from __future__ import annotations
@@ -298,18 +302,50 @@ def generate_pages(reg: Registry, out_dir: str | Path, catalog: Any = None) -> G
     return res
 
 
+def skeleton(text: str) -> list[str]:
+    """The page's structure with every block's content removed: its headings, block markers and
+    anything else outside a block, front-matter excluded, one stripped non-blank line each.
+    Two pages of one service share it unless text sits outside the blocks, a block was added,
+    dropped or duplicated, or a heading changed."""
+    m = FRONT_RE.match(text)
+    body = text[m.end() :] if m else text
+    body = GEN_RE.sub(lambda g: f"<!-- hnx:gen:{g['name']} --><!-- /hnx:gen -->", body)
+    body = TODO_BLOCK_RE.sub(lambda t: f"<!-- hnx:todo:{t['name']} --><!-- /hnx:todo -->", body)
+    return [line.strip() for line in body.splitlines() if line.strip()]
+
+
+def outside_blocks(text: str, fresh: str) -> list[str]:
+    """What ``text`` has outside its blocks that the freshly rendered ``fresh`` does not (or
+    the reverse): the review digest covers only the ``hnx:todo`` blocks, so prose written
+    anywhere else would ship under a review that never saw it."""
+    have, want = skeleton(text), skeleton(fresh)
+    if have == want:
+        return []
+    extra = [x for x in have if x not in want]
+    gone = [x for x in want if x not in have]
+    dup = sorted({x for x in have if x.startswith("<!-- hnx:") and have.count(x) > 1})
+    out = [f"outside the blocks: {x[:60]!r}" for x in extra[:3]]
+    out += [f"missing: {x[:60]!r}" for x in gone[:3]]
+    out += [f"duplicate block: {x}" for x in dup]
+    return out or ["blocks or headings out of order"]
+
+
 @dataclass
 class CheckReport:
     missing: list[str] = field(default_factory=list)  # registry row without a page
     orphans: list[str] = field(default_factory=list)  # page without a registry row
     stale: list[str] = field(default_factory=list)  # generated block differs from the registry
     malformed: list[str] = field(default_factory=list)
+    # page -> text outside the blocks, an unknown, missing or duplicate block (the review digest
+    # cannot see it, so it fails rather than ship unreviewed)
+    unblocked: dict[str, list[str]] = field(default_factory=dict)
     todo_open: dict[str, int] = field(default_factory=dict)  # page -> unfilled TODO blocks
     review_problems: list[str] = field(default_factory=list)  # fatal review rule or claim
     drafts: dict[str, list[str]] = field(default_factory=dict)  # draft -> tiers `reviewed` needs
 
     def ok(self, require_complete: bool = False) -> bool:
         bad = self.missing or self.orphans or self.stale or self.malformed or self.review_problems
+        bad = bad or self.unblocked
         return not bad and not (require_complete and any(self.todo_open.values()))
 
     def lines(self) -> list[str]:
@@ -317,6 +353,11 @@ class CheckReport:
         out += [f"orphan page (no registry row): {n}" for n in self.orphans]
         out += [f"stale generated block (run `hnx docs systems generate`): {n}" for n in self.stale]
         out += [f"malformed page: {n}" for n in self.malformed]
+        out += [
+            f"text outside the hnx:gen/hnx:todo blocks (move it into the section's todo block,"
+            f" which the review covers): {n}: {'; '.join(why)}"
+            for n, why in sorted(self.unblocked.items())
+        ]
         out += [f"review: {p}" for p in self.review_problems]
         return out
 
@@ -446,8 +487,11 @@ def check_pages(
             rep.missing.append(s.name)
             continue
         text = p.read_text(encoding="utf-8")
-        if refresh_page(text, render_page(reg, s, catalog)) != text:
+        fresh = render_page(reg, s, catalog)
+        if refresh_page(text, fresh) != text:
             rep.stale.append(p.name)
+        if why := outside_blocks(text, fresh):
+            rep.unblocked[p.name] = why
         rep.todo_open[p.name] = _unfilled(text)
         _review_page(p.name, text, yaml.safe_load(FRONT_RE.match(text)["fm"]), policy, rep, p)
     rep.orphans = sorted(p.name for n, p in by_service.items() if n not in reg.services)

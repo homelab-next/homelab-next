@@ -13,6 +13,7 @@ from .base import Adapter, Rendered, header
 
 class DnsmasqAdapter(Adapter):
     name = "dnsmasq"
+    roles = frozenset({"dns"})
     summary = "dnsmasq drop-ins: DHCP pools, DHCP reservations, local DNS records"
 
     def render(self, ir: NetworkIR) -> Rendered:
