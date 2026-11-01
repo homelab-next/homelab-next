@@ -277,6 +277,7 @@ has no section below.
 - `hnx site plan` listed no object names for a created or deleted JSON payload (it compared against `{}`, which has no `objects` list).
 - `hnx guests` read (and SOPS-decrypted) the site file six times per run; it now reads it once (`homelabnext.compute.zones.site_facts`).
 - The four-box example put the unreachable detonation box and the sensor in `cap_siem`, the SIEM manager's group; neither is a SIEM manager.
+- `make schemas` and `make ids-check` compare with a base only when `BASE=<rev>` is given, as their comments say: the `BASE ?= origin/main` written for `modules-review-tier` is global in make, so both always compared with `origin/main` and failed on a clone without it. The review-tier and swap targets default their base through `REVIEW_BASE` (`BASE` when given, else `origin/main`).
 
 ### Security
 - An agent can no longer expire a standing requirement through the strategy decider: `to: expired` applies only when the record's dated LTIOV is before the decider's today, whoever filed the intent (the policy has no review tier for an expiry because time decides it; docs/strategy.md, "RFIs from gaps").
