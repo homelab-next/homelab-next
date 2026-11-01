@@ -105,9 +105,9 @@ def main(argv: list[str] | None = None) -> int:
 
     custom = ns.customizations
     if custom is None:
-        from homelabnext.customization.loader import resolve_settings
+        from homelabnext.customization.loader import REPO_ROOT, resolve_settings
 
-        settings = resolve_settings()
+        settings = resolve_settings(root=REPO_ROOT)  # what `hnx custom` loads by default
         custom = [settings.public_dir, *settings.local_dirs]
     try:
         plan = assign_uids(ns.trees, also=ns.also, customizations=custom, dry_run=ns.dry_run)
