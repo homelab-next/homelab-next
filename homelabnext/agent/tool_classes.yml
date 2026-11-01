@@ -103,4 +103,16 @@ capabilities:
   cap:exposure-management: [exec]
   cap:records-db: [file-write]
   cap:static-hosting: [file-write]
-
+  # the capabilities the other example registries use (examples/four-box-lab, lab-topology,
+  # minimal); each would otherwise be unclassified, refused to every profile, and an overlay would
+  # hand-patch this table or grant a broader class to get it
+  cap:apt-cache: [read]  # a package cache: an agent only fetches through it
+  cap:network-sensor: [read]  # an intrusion-detection sensor's alerts and flows
+  cap:ntp: [read]
+  cap:ups-monitor: [read, exec]  # reads UPS state; its commands (a forced shutdown) act
+  cap:dns-secondary: [exec]  # like cap:dns: changing what a zone answers acts on every client
+  cap:dns-upstream: [exec]  # the resolver the lab forwards to: like cap:dns
+  cap:detonation: [exec]  # runs submitted samples in a sandbox
+  cap:dfir: [exec, credential]  # runs collections and commands on endpoints, reads what is there
+  cap:router-console: [exec, credential]  # the network controller: routing, VLANs, firewall, admin
+  cap:password-manager: [credential]
