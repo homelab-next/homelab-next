@@ -714,7 +714,7 @@ The private pages and the `private` menu group exist only for a request that pas
    status.lab.example {
    	request_header -*auth-request*
    	request_header -*auth_request*
-   	import hnx_forward_auth
+   	import hnx_forward_auth hub-approvers,hub-private-viewers
    	reverse_proxy <the hub's capability alias and port> {
    		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
    	}
@@ -736,8 +736,11 @@ registry's `auth-proxy` service, oauth2-proxy by default, run with `--set-xauthr
 registry's `idp` service, Keycloak by default, its realm imported from the generated
 `idp/realm.json`, which requires a second factor at sign-in). The generated `hnx_forward_auth`
 snippet proxies the auth proxy's `/oauth2/*` paths under the hub's own host, asks its
-`/oauth2/auth` check about every other request and sends a signed-out browser to
-`/oauth2/sign_in`.
+`/oauth2/auth` check about every other request with `allowed_groups` set to the groups of the
+hub's `roles` (its argument on the import; the auth proxy answers `403` to a signed-in user in
+none of them, so only viewers and approvers reach the hub at all) and sends a signed-out browser
+to `/oauth2/sign_in`. To let other signed-in people see the hub's non-private pages, give their
+group a role of its own on the hub's row (say `reader`); the hub ignores roles it does not read.
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
 examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.

@@ -2394,8 +2394,9 @@ def _templated(text: str) -> bool:
     return bool(TEMPLATE_TEXT.search(CADDY_COMMENT.sub(r"\1", text)))
 
 
-#: an import of the generated snippet by a config that does not define it
-IMPORTS_GENERATED = re.compile(r"(?m)^[ \t]*import[ \t]+hnx_forward_auth[ \t]*$")
+#: an import of the generated snippet by a config that does not define it (with its argument, the
+#: site's allowed groups)
+IMPORTS_GENERATED = re.compile(r"(?m)^[ \t]*import[ \t]+hnx_forward_auth(?:[ \t]+\S+)*[ \t]*$")
 
 
 @dataclass

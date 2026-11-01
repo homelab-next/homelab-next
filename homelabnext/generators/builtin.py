@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from collections import defaultdict
+from urllib.parse import quote
 
 import yaml
 
@@ -147,7 +149,16 @@ def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None
     strip a client could name its own user or groups to the service.  The delete and
     ``forward_auth`` sit in one ``route``, which runs its directives in the order written
     (``forward_auth`` otherwise sorts before ``request_header``, and the strip would delete the
-    auth proxy's own headers instead)."""
+    auth proxy's own headers instead).
+
+    **Who is let in.**  The snippet takes one argument, the site's allowed groups (a site
+    imports it as ``import hnx_forward_auth <group>,<group>``, see :func:`allowed_groups_arg`),
+    and asks the check ``/oauth2/auth?allowed_groups=<them>``: the auth proxy answers 2xx only
+    for a signed-in user in one of them and **403** for any other signed-in user, so being in
+    the realm is not enough to reach an app.  Only a 401 (not signed in) goes to the sign-in
+    page; a 403 is passed to the browser as it is, never redirected (signing in again would
+    answer 403 again, a loop).  The return target ``rd`` is the request URI query-escaped
+    (``{http.request.uri_escaped}``), so a query with ``&`` comes back whole."""
     identity = identity or IDENTITY_HEADERS
     strip = identity.strip_lines("\t\t")
     return (
@@ -162,17 +173,41 @@ def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None
         "\t\t# client-sent identity headers never reach the service, whatever the auth proxy answers\n"
         f"{strip}"
         f"\t\tforward_auth {endpoint} {{\n"
-        f"\t\t\turi {AUTH_PROXY_CHECK}\n"
+        f"\t\t\turi {AUTH_PROXY_CHECK}?{ALLOWED_GROUPS_PARAM}={{args[0]}}\n"
         "\t\t\theader_up X-Real-IP {remote_host}\n"
         f"\t\t\tcopy_headers {' '.join(identity.headers)}\n"
         "\t\t\t@hnx_sign_in status 401\n"
         "\t\t\thandle_response @hnx_sign_in {\n"
-        f"\t\t\t\tredir * {AUTH_PROXY_SIGN_IN}?rd={{scheme}}://{{host}}{{uri}}\n"
+        f"\t\t\t\tredir * {AUTH_PROXY_SIGN_IN}?rd={{scheme}}://{{host}}{{http.request.uri_escaped}}\n"
         "\t\t\t}\n"
         "\t\t}\n"
         "\t}\n"
         "}\n"
     )
+
+
+#: the auth proxy check's query parameter naming the groups a signed-in user must be in one of
+ALLOWED_GROUPS_PARAM = "allowed_groups"
+_GROUP = re.compile(r"[a-z][a-z0-9-]{0,62}")
+
+
+def allowed_groups_arg(s: Service) -> str:
+    """The groups a public ``auth: idp`` site lets in, as the ``hnx_forward_auth`` argument: the
+    sorted union of the groups of every role in the service's ``roles`` (the group-to-role
+    table the realm grants), each URL-encoded, joined by ``,`` (the auth proxy splits the
+    ``allowed_groups`` value on ``,``).  A service with no ``roles`` is refused: an empty
+    ``allowed_groups`` admits every signed-in user, so such a site would let the whole realm in."""
+    groups = sorted({g for gs in s.roles.values() for g in gs})
+    if not groups:
+        raise ValueError(
+            f"{s.name} has auth: idp and a public hostname but no roles: the edge lets in "
+            "only the groups of a service's group-to-role table, and with none it would let in "
+            "every signed-in user (give it roles, ADR-0034)"
+        )
+    for g in groups:
+        if not _GROUP.fullmatch(g):
+            raise ValueError(f"{s.name}: group {g!r} is not lower case and '-'")
+    return ",".join(quote(g, safe="") for g in groups)
 
 
 def _auth_proxy(reg: Registry) -> Service | None:
@@ -210,7 +245,9 @@ def caddy(reg: Registry) -> dict[str, str]:
         # the snippet's route (a handle added beside it, a matcher on a route) and a site with
         # no forward auth that reaches the same service under another name still reach it
         # without them; the route-level strip in the snippet stays as well
-        auth_block = strip + ("\timport hnx_forward_auth\n" if s.auth == "idp" else "")
+        auth_block = strip
+        if s.auth == "idp":
+            auth_block += f"\timport hnx_forward_auth {allowed_groups_arg(s)}\n"
         proxy_block = ""
         if s.front_door and s.auth == "idp":
             # the shared secret that tells the service this request came through the edge (and

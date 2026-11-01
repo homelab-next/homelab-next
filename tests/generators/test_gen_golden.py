@@ -320,12 +320,20 @@ def test_idp_realm_grants_each_group_exactly_the_registry_roles():
             hub, roles={**hub.roles, "viewer": (*hub.roles["viewer"], "lab-viewers")})},
     )  # fmt: skip
     assert realm_grants(_realm(more))["lab-viewers"] == {
-        "dashboards": {"viewer"}, "status-hub": {"viewer"}
+        **realm_grants(realm)["lab-viewers"], "status-hub": {"viewer"}
     }  # fmt: skip
 
 
+#: the edge generator's one output
+EDGE, EDGE_OUT = "caddy", "caddy/sites.caddy"
+
+
+def _sites(reg=REG) -> str:
+    return generate(reg, [EDGE])[EDGE][EDGE_OUT]
+
+
 def test_caddy_only_public_hosts_and_forward_auth():
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    text = _sites()
     public = [s for s in REG.services.values() if s.public_hostname]
     # one proxy per public site, plus the snippet's /oauth2/* proxy to the auth proxy
     assert text.count("reverse_proxy") == len(public) + 1
@@ -346,7 +354,7 @@ def test_forward_auth_strips_every_client_sent_identity_header_first():
     contains-wildcard per spelling of the mark (*auth-request*, *auth_request*) covers them all."""
     from homelabnext.edge_identity import AUTH_PROXY_CHECK, IDENTITY_HEADERS
 
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    text = _sites()
     snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
     lines = [ln.strip() for ln in snippet.splitlines()]
     [copy] = [ln for ln in lines if ln.startswith("copy_headers ")]
@@ -354,13 +362,13 @@ def test_forward_auth_strips_every_client_sent_identity_header_first():
     assert copied == list(IDENTITY_HEADERS.headers)
     assert all(IDENTITY_HEADERS.carries_mark(h) for h in copied), "the strip covers them"
     auth_at = next(i for i, ln in enumerate(lines) if ln.startswith("forward_auth "))
-    assert lines[auth_at + 1] == f"uri {AUTH_PROXY_CHECK}"
+    assert lines[auth_at + 1] == f"uri {AUTH_PROXY_CHECK}?allowed_groups={{args[0]}}"
     strips = [ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")]
     assert strips == [f"-{p}" for p in IDENTITY_HEADERS.strip_patterns()]
     # in one route, so they run in the order written (forward_auth sorts before request_header)
     route_at = lines.index("route {")
     assert route_at < min(i for i, ln in enumerate(lines) if ln.startswith("request_header"))
-    assert "redir * /oauth2/sign_in?rd={scheme}://{host}{uri}" in lines
+    assert "redir * /oauth2/sign_in?rd={scheme}://{host}{http.request.uri_escaped}" in lines
     assert snippet.count("{") == snippet.count("}") + 1  # balanced but for the snippet's own
 
 
@@ -371,7 +379,7 @@ def test_every_public_site_strips_identity_headers_at_site_level_first():
     with no forward auth (the IdP's own) strips them as well."""
     from homelabnext.edge_identity import IDENTITY_HEADERS
 
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+    text = _sites()
     sites = [b for b in text.split("\n\n") if b.startswith(tuple("abcdefghijklmnopqrstuvwxyz"))]
     gated = {
         s.public_hostname for s in REG.services.values() if s.auth == "idp" and s.public_hostname
@@ -381,8 +389,84 @@ def test_every_public_site_strips_identity_headers_at_site_level_first():
     for site in sites:
         lines = [ln.strip() for ln in site.splitlines()[1:] if not ln.strip().startswith("#")]
         assert lines[: len(want)] == want, site
-        imports = lines[len(want)] == "import hnx_forward_auth"
+        imports = lines[len(want)].startswith("import hnx_forward_auth ")
         assert imports == (site.split()[0] in gated), site
+
+
+def _site(text: str, host: str) -> list[str]:
+    block = next(b for b in text.split("\n\n") if b.startswith(f"{host} {{"))
+    return [ln.strip() for ln in block.splitlines()]
+
+
+def test_each_public_idp_site_lets_in_exactly_its_role_groups():
+    """Being signed in to the realm is not enough to reach an app: each site asks the check
+    for exactly the groups its group-to-role table names (the sorted union over its roles), so
+    the auth proxy answers 403 to any other signed-in user."""
+    text = _sites()
+    gated = [s for s in REG.sorted_services() if s.auth == "idp" and s.public_hostname]
+    assert gated
+    for s in gated:
+        [imp] = [ln for ln in _site(text, s.public_hostname) if ln.startswith("import ")]
+        want = ",".join(sorted({g for gs in s.roles.values() for g in gs}))
+        assert imp == f"import hnx_forward_auth {want}", s.name
+    status = _site(text, "status.lab.example")
+    assert "import hnx_forward_auth hub-approvers,hub-private-viewers" in status
+    # the snippet hands the argument to the check, and nothing else names the groups
+    snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    assert "uri /oauth2/auth?allowed_groups={args[0]}" in snippet
+    assert snippet.count("{args[0]}") == 1
+
+
+def test_a_role_change_reaches_only_that_site():
+    hub = REG.services["status-hub"]
+    more = dataclasses.replace(
+        REG, services={**REG.services, "status-hub": dataclasses.replace(
+            hub, roles={**hub.roles, "reader": ("lab-viewers",)})},
+    )  # fmt: skip
+    before = _sites()
+    after = _sites(more)
+    assert "import hnx_forward_auth hub-approvers,hub-private-viewers,lab-viewers" in _site(
+        after, "status.lab.example"
+    )
+    assert _site(after, "dashboards.lab.example") == _site(before, "dashboards.lab.example")
+
+
+def test_a_public_idp_site_without_roles_fails_generation():
+    """An empty allowed_groups admits every signed-in user, so a public auth: idp site with no
+    group-to-role table is refused rather than published open to the whole realm."""
+    up = REG.services["uptime"]
+    bare = dataclasses.replace(
+        REG, services={**REG.services, "uptime": dataclasses.replace(up, roles={})}
+    )
+    with pytest.raises(ValueError, match=r"uptime .*no roles"):
+        _sites(bare)
+
+
+def test_a_group_name_with_a_separator_fails_generation():
+    up = REG.services["uptime"]
+    odd = dataclasses.replace(
+        REG, services={**REG.services, "uptime": dataclasses.replace(
+            up, roles={"viewer": ("ops,admins",)})},
+    )  # fmt: skip
+    with pytest.raises(ValueError, match="lower case"):
+        _sites(odd)
+
+
+def test_only_a_signed_out_answer_goes_to_sign_in():
+    """A 401 (not signed in) goes to the sign-in page, its return target query-escaped so a
+    query with & survives; a 403 (signed in, in none of the site's groups) is passed on as it
+    is: sending it to sign in would answer 403 again, a loop."""
+    text = _sites()
+    snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    lines = [ln.strip() for ln in snippet.splitlines()]
+    matchers = [ln for ln in lines if ln.startswith("@")]
+    assert matchers == ["@hnx_sign_in status 401"]
+    assert [ln for ln in lines if ln.startswith("handle_response")] == [
+        "handle_response @hnx_sign_in {"
+    ]
+    [redir] = [ln for ln in lines if ln.startswith("redir ")]
+    assert redir.endswith("rd={scheme}://{host}{http.request.uri_escaped}")
+    assert "{uri}" not in redir
 
 
 def test_docs_page_lists_dependants():

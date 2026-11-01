@@ -282,6 +282,8 @@ services:
     tls: none
     auth: idp
     public_hostname: metrics.lab.example
+    # who the edge lets in (ADR-0034): a public auth: idp site admits only its roles' groups
+    roles: {viewer: [lab-viewers, platform-team]}
     tags: [ops, monitoring]
     status_sources:
       - id: metrics-alerts
@@ -323,6 +325,7 @@ services:
     tls: none
     auth: idp
     public_hostname: uptime.lab.example
+    roles: {viewer: [lab-viewers, platform-team]}
     tags: [ops, monitoring]
     status_sources:
       - id: uptime-monitors

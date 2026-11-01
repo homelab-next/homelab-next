@@ -249,5 +249,6 @@ services:
     tls: none
     auth: idp
     public_hostname: dashboards.lab.example
+    roles: {viewer: [lab-viewers], editor: [platform-team], admin: [lab-admins]}
     backup_job: daily-core
     tags: [ops, ui]

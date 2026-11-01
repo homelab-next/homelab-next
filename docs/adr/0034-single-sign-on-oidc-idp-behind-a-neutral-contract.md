@@ -54,8 +54,24 @@ one IdP product.
    oauth2-proxy) next to the edge, for every app with no OIDC login of its own. The generated
    `hnx_forward_auth` Caddy snippet proxies the auth proxy's `/oauth2/*` paths under each site,
    asks its `/oauth2/auth` check about every other request, copies the identity headers on a
-   2xx and redirects a 401 to `/oauth2/sign_in`. A public `auth: idp` service with no auth proxy
-   in the registry fails generation rather than being published without a login.
+   2xx and redirects a 401 to `/oauth2/sign_in` (the return target `rd` query-escaped, so a
+   query with `&` comes back whole). A public `auth: idp` service with no auth proxy in the
+   registry fails generation rather than being published without a login.
+   **The edge lets in only the service's own groups, not every realm user.** Each site imports
+   the snippet with one argument, the sorted union of the groups of its `roles` (rule 5),
+   URL-encoded and joined by `,`, and the check is `/oauth2/auth?allowed_groups=<them>`. The
+   auth proxy (oauth2-proxy's `AuthOnly` handler, `checkAllowedGroups`) answers 202 for a
+   signed-in user in at least one of them, 401 for no session, and **403** for a signed-in user
+   in none; an *empty* `allowed_groups` imposes no restriction. So the Caddy generator
+   **refuses a public `auth: idp` service without `roles`** (it would admit the whole realm)
+   and a group name outside lower case and `-`; every such service in the examples and
+   fixtures has a table. A 403 is passed to the browser unchanged, never redirected to sign-in
+   (the user is signed in; signing in again would answer 403 again, a loop). A config that
+   imports the generated snippet without its argument is refused by the edge lint (an
+   argument past those given), since Caddy itself would leave the placeholder to run time.
+   Who may reach a multi-tier app (the status hub's non-private pages) is therefore its role
+   table too: a group that should only see those pages gets a role of its own that the app
+   does not read.
 4. **One identity-header set** (`homelabnext.edge_identity.IDENTITY_HEADERS`): by default the
    auth proxy's `X-Auth-Request-User`, `-Groups` and `-Email`, groups joined by `,`, and the mark
    `auth-request` that every identity header carries. The Caddy generator, the edge lint (F-23)

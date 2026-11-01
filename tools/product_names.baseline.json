@@ -1460,7 +1460,7 @@
    "vllm": 47
   },
   "tests/generators/test_gen_golden.py": {
-   "caddy": 16,
+   "caddy": 7,
    "prometheus": 4
   },
   "tests/generators/test_gen_injection.py": {

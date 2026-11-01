@@ -1120,11 +1120,22 @@ def test_the_generated_snippet_resolves_where_it_is_not_defined():
     # a documented site imports the generated snippet without defining it
     assert (
         _rules(
-            "app.lab.example {\n\trequest_header -*hnxid*\n\timport hnx_forward_auth\n"
+            "app.lab.example {\n\trequest_header -*hnxid*\n\timport hnx_forward_auth app-users\n"
             "\treverse_proxy app:8080\n}\n"
         )
         == []
     )
+
+
+def test_the_generated_snippet_without_its_groups_fails_closed():
+    """The generated snippet's check takes the site's allowed groups as its argument; an import
+    without one would ask the auth proxy with no group at all (every signed-in user admitted),
+    so the lint refuses to expand it."""
+    found = _rules(
+        "app.lab.example {\n\trequest_header -*hnxid*\n\timport hnx_forward_auth\n"
+        "\treverse_proxy app:8080\n}\n"
+    )
+    assert [(r, "past the 0 argument" in d) for _, r, d in found] == [("parse", True)]
 
 
 def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
@@ -2253,7 +2264,7 @@ def _platform_site(route_strips: str, site_strips: str) -> str:
 
     snippet = _forward_auth_snippet("auth-proxy:4180")
     snippet = snippet.replace(IDENTITY_HEADERS.strip_lines("\t\t"), route_strips)
-    return snippet + f"\napp.lab.example {{\n{site_strips}\timport hnx_forward_auth\n\treverse_proxy app:8080\n}}\n"  # fmt: skip
+    return snippet + f"\napp.lab.example {{\n{site_strips}\timport hnx_forward_auth app-users\n\treverse_proxy app:8080\n}}\n"  # fmt: skip
 
 
 def test_the_platform_snippet_passes(platform_identity):
