@@ -82,7 +82,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: none declared
+- Depended on by: [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->
@@ -92,7 +92,8 @@ author: unknown
 ## Credentials and access
 
 <!-- hnx:gen:access -->
-- Authentication: `none`
+- Authentication: `idp`
+- Public hostname: `uptime.lab.example`
 - Endpoint override variable: `HNX_ENDPOINT_UPTIME`
 <!-- /hnx:gen -->
 

@@ -210,8 +210,8 @@ def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
     """What the lab's edge adds after a login: the front-door secret and the identity."""
     out = {
         "Host": HUB_HOST,
-        "X-Authentik-Username": user,
-        "X-Authentik-Groups": f"{VIEWER_GROUP}|{APPROVER_GROUP}",
+        "X-Auth-Request-User": user,
+        "X-Auth-Request-Groups": f"{VIEWER_GROUP},{APPROVER_GROUP}",
     }
     if secret is not None:
         out["X-Hnx-Front-Door"] = secret
@@ -668,13 +668,14 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
             "edge-proxy": {**svc, "capability": "edge-proxy", "impl": "caddy", "protocol": "https",
                            "port": 443, "health": {"kind": "tcp"}, "upstreams": ["status-hub"],
                            "version": "2.11.7", "tls": "public"},
-            "idp": {**svc, "capability": "idp", "impl": "authentik", "protocol": "https",
+            "idp": {**svc, "capability": "idp", "impl": "keycloak", "protocol": "https",
                     "port": 9443, "health": {"kind": "tcp"}, "version": "0.0.0", "tls": "internal"},
             "status-hub": {**svc, "capability": "status-hub", "impl": "homelabnext",
                            "protocol": "http", "port": 8099,
                            "health": {"kind": "http", "path": "/status.json", "expect_status": 200},
                            "version": "0.1.0", "tls": "none", "auth": "idp",
                            "public_hostname": HUB_HOST,
+                           "roles": {"viewer": [VIEWER_GROUP], "approver": [APPROVER_GROUP]},
                            "front_door": {"header": "X-Hnx-Front-Door",
                                           "secret": "secret:status/front-door-secret"}},
         },
@@ -684,12 +685,10 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
         "store": "activity.db",
         "retention_days": 1,
         "detail": False,
-        "private": {"service": "status-hub", "viewer_group": VIEWER_GROUP,
-                    "access_log": "access.jsonl"},
+        "private": {"service": "status-hub", "access_log": "access.jsonl"},
         "approvals": {
             "socket": socket_path,
             "issuer": "sso",
-            "approver_group": APPROVER_GROUP,
             "public_origin": f"https://{HUB_HOST}",
         },
     }  # fmt: skip

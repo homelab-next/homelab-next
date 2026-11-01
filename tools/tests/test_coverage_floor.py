@@ -34,6 +34,7 @@ def _report(**overrides):
         "homelabnext/status/approvals.py": _file(10, 9),
         "homelabnext/status/serve.py": _file(10, 9),
         "homelabnext/generators/safe.py": _file(10, 9),
+        "homelabnext/edge_identity.py": _file(10, 9),
         "homelabnext/tlp.py": _file(10, 9),
         "homelabnext/tlp_egress.py": _file(10, 9),
         "homelabnext/lake/ceiling.py": _file(10, 9),

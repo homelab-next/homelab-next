@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# the private tier without its access log: every private view must be logged (1.4 dropped
+# viewer_group from the required keys, the access log stays required)
+agents_version: 1
+store: build/status/agents/activity.db
+private: {service: status-hub}

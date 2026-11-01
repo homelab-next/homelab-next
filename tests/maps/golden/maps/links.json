@@ -2,14 +2,30 @@
  "counts": {
   "private_tier": 1,
   "public": 2,
-  "services": 4,
-  "web": 3
+  "services": 5,
+  "web": 4
  },
  "lab": "harbor",
  "zones": [
   {
    "description": "shared tools",
    "services": [
+    {
+     "access": "lab only",
+     "auth": "its own login",
+     "capability": "auth-proxy",
+     "description": "",
+     "endpoint": null,
+     "health": "http://auth-proxy.svc.example.internal:4180/ping",
+     "href": "http://auth-proxy.svc.example.internal:4180/",
+     "impl": "oauth2-proxy",
+     "mcp": null,
+     "name": "auth-proxy",
+     "owner": "identity-team",
+     "private_tier": false,
+     "tags": [],
+     "version": "7.15.5"
+    },
     {
      "access": "public",
      "auth": "its own login",

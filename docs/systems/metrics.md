@@ -82,7 +82,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: [notify](notify.md) ([[systems/notify|notify]])
-- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]])
+- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->
@@ -92,7 +92,8 @@ author: unknown
 ## Credentials and access
 
 <!-- hnx:gen:access -->
-- Authentication: `none`
+- Authentication: `idp`
+- Public hostname: `metrics.lab.example`
 - Endpoint override variable: `HNX_ENDPOINT_METRICS`
 <!-- /hnx:gen -->
 

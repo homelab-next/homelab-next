@@ -32,7 +32,7 @@ from homelabnext.status.serve import LOOPBACK, make_server
 DIGEST = "sha256:" + "ab" * 32
 OTHER_DIGEST = "sha256:" + "cd" * 32
 RID = "req-0a1b2c3d4e5f6a7b"
-APPROVER = {**AUTHORIZED, "X-Authentik-Groups": "staff|hub-approvers"}
+APPROVER = {**AUTHORIZED, "X-Auth-Request-Groups": "staff,hub-approvers"}
 VIEWER = dict(AUTHORIZED)  # in the viewer group, not the approver group
 DOC_ADDR = ".".join(["192", "0", "2", "10"])
 KEY = b"fake-csrf-key-0123456789abcdef!!"
@@ -96,7 +96,7 @@ class FakeBroker:
 
 
 SETTINGS = ApprovalsSettings(
-    socket=Path("/run/x.sock"), issuer="sso", approver_group="hub-approvers"
+    socket=Path("/run/x.sock"), issuer="sso", approver_groups=frozenset({"hub-approvers"})
 )
 
 
@@ -199,10 +199,15 @@ def test_request_filter_and_an_unreachable_broker(served, broker):
     [
         (DOC_ADDR, APPROVER, 403, 403),  # not from the trusted proxy
         (LOOPBACK, {**APPROVER, "X-Hnx-Front-Door": "fake-wrong-secret"}, 403, 403),
-        (LOOPBACK, {k: v for k, v in APPROVER.items() if k != "X-Authentik-Username"}, 403, 403),
-        (LOOPBACK, {**APPROVER, "X-Authentik-Groups": "staff"}, 403, 403),  # neither group
+        (LOOPBACK, {k: v for k, v in APPROVER.items() if k != "X-Auth-Request-User"}, 403, 403),
+        (LOOPBACK, {**APPROVER, "X-Auth-Request-Groups": "staff"}, 403, 403),  # neither group
         (LOOPBACK, VIEWER, 200, 403),  # viewer, not approver: reads, never decides
-        (LOOPBACK, {**APPROVER, "X-Authentik-Groups": "hub-approvers"}, 200, 200),  # approver only
+        (
+            LOOPBACK,
+            {**APPROVER, "X-Auth-Request-Groups": "hub-approvers"},
+            200,
+            200,
+        ),  # approver only
         (LOOPBACK, APPROVER, 200, 200),
     ],
 )
@@ -411,7 +416,7 @@ def test_approve_files_the_front_door_identity_and_re_submits_are_idempotent(
     served, broker, tmp_path
 ):
     base, site = served()
-    headers = {**APPROVER, "X-Authentik-Username": "operator.one"}
+    headers = {**APPROVER, "X-Auth-Request-User": "operator.one"}
     form = _form(site, user="operator.one", note="ok to restart")
     status, _, body = _post(base, form, headers)
     assert status == 200 and "approved" in body.decode()
@@ -430,7 +435,7 @@ def test_a_non_canonical_username_is_not_folded_and_cannot_decide(served, broker
     """The IdP's usernames are case-sensitive: ``Operator`` is not ``operator``, so the hub never
     lower-cases one into the other's allowlist entry; it refuses to decide for it."""
     base, site = served()
-    headers = {**APPROVER, "X-Authentik-Username": user}
+    headers = {**APPROVER, "X-Auth-Request-User": user}
     status, _, body = _post(base, _form(site, user=user), headers)
     assert status == 403 and "canonical" in body.decode() and broker.calls == []
     assert _log(tmp_path)[-1]["reason"] == "username is not a canonical approver subject"
@@ -594,7 +599,7 @@ def test_config(tmp_path, registry):
     assert cfg.approvals == ApprovalsSettings(
         socket=Path("/run/hnx-broker/broker.sock"),
         issuer="sso",
-        approver_group="hub-approvers",
+        approver_groups=frozenset({"hub-approvers"}),
         csrf_key=CSRF_KEY.encode(),
         public_origin="https://status.lab.example",
     )
@@ -607,11 +612,69 @@ def test_config(tmp_path, registry):
     with pytest.raises(AgentsConfigError, match="needs private"):
         _cfg(tmp_path, registry, drop_private=True)
     with pytest.raises(AgentsConfigError, match="must differ"):
-        _cfg(tmp_path, registry, approver_group="hub-private-viewers")
+        _cfg(tmp_path, _with_roles(registry, viewer=["hub-private-viewers"],
+                                   approver=["hub-approvers", "hub-private-viewers"]))  # fmt: skip
     with pytest.raises(AgentsConfigError, match="socket"):
         _cfg(tmp_path, registry, socket="relative/broker.sock")
     off = _cfg(tmp_path, registry, secret=None)  # no front-door secret: no private tier
     assert off.approvals is None and any("approvals page disabled" in w for w in off.warnings)
+
+
+def _with_roles(registry, **roles):
+    """The registry with the status-hub row's group-to-role table replaced (``None``: no table)."""
+    hub = registry.services["status-hub"]
+    table = {r: tuple(g) for r, g in roles.items() if g is not None}
+    return dataclasses.replace(
+        registry,
+        services={**registry.services, "status-hub": dataclasses.replace(hub, roles=table)},
+    )
+
+
+def test_the_groups_come_from_the_registry_row(tmp_path, registry):
+    """ADR-0034: the hub's viewer and approver groups are the registry row's roles, the one
+    group-to-role table the IdP realm is rendered from; agents.yml cannot name others."""
+    two = _with_roles(registry, viewer=["hub-private-viewers", "lab-viewers"],
+                      approver=["hub-approvers"])  # fmt: skip
+    cfg = _cfg(tmp_path, two)
+    assert cfg.front_door.viewer_groups == {"hub-private-viewers", "lab-viewers"}
+    assert cfg.approvals.approver_groups == {"hub-approvers"}
+    with pytest.raises(AgentsConfigError, match="drop approver_group here"):
+        _cfg(tmp_path, registry, approver_group="hub-approvers")
+    with pytest.raises(AgentsConfigError, match="no 'approver' role"):
+        _cfg(tmp_path, _with_roles(registry, viewer=["hub-private-viewers"]))
+
+
+def test_a_row_without_roles_still_reads_the_deprecated_keys(tmp_path, registry):
+    bare = _with_roles(registry)
+    with pytest.raises(AgentsConfigError, match=r"no roles\.viewer"):
+        _cfg(tmp_path, bare)
+    doc = yaml.safe_load((ROOT / "examples" / "status" / "agents.yml").read_text())
+    doc.pop("ingest")
+    doc["private"]["viewer_group"] = "hub-private-viewers"
+    doc["approvals"]["approver_group"] = "hub-approvers"
+    path = tmp_path / "legacy.yml"
+    path.write_text(yaml.safe_dump(doc))
+    cfg = load_config(path, bare, lambda ref: CSRF_KEY if ref == CSRF_REF else FAKE_SECRET)
+    assert cfg.front_door.viewer_groups == {"hub-private-viewers"}
+    assert cfg.approvals.approver_groups == {"hub-approvers"}
+
+
+def test_the_identity_headers_are_the_platforms_only(tmp_path, registry):
+    """A hub reading a header the edge neither strips nor copies would trust a header a client
+    can send: agents.yml may restate the platform's names, never choose others."""
+    doc = yaml.safe_load((ROOT / "examples" / "status" / "agents.yml").read_text())
+    doc.pop("ingest")
+    path = tmp_path / "agents.yml"
+    for key, value in (("identity_header", "X-Remote-User"), ("groups_header", "X-Groups")):
+        bad = json.loads(json.dumps(doc))
+        bad["private"][key] = value
+        path.write_text(yaml.safe_dump(bad))
+        with pytest.raises(AgentsConfigError, match=rf"private\.{key}"):
+            load_config(path, registry, lambda ref: FAKE_SECRET)
+    doc["private"]["identity_header"] = "X-Auth-Request-User"
+    path.write_text(yaml.safe_dump(doc))
+    cfg = load_config(path, registry, lambda ref: CSRF_KEY if ref == CSRF_REF else FAKE_SECRET)
+    assert cfg.front_door.identity_header == "X-Auth-Request-User"
 
 
 # ---------------------------------------------------------------- the persistent CSRF key
@@ -769,13 +832,15 @@ def test_round_trip_through_a_real_broker_socket(tmp_path, clock, registry):
             if sock.exists():
                 break
             time.sleep(0.1)
-        settings = ApprovalsSettings(socket=sock, issuer="sso", approver_group="hub-approvers")
+        settings = ApprovalsSettings(
+            socket=sock, issuer="sso", approver_groups=frozenset({"hub-approvers"})
+        )
         site = ApprovalsSite.from_settings(settings, front_door(tmp_path), clock=clock)
         srv = make_server(lambda: _doc(registry), approvals=site)
         threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
         base = "http://{}:{}".format(*srv.server_address[:2])
         try:
-            who = {**APPROVER, "X-Authentik-Username": "operator-one"}
+            who = {**APPROVER, "X-Auth-Request-User": "operator-one"}
             status, _, body = request(base, "/approvals", headers=who)
             pending = svc.pending()[0]
             assert status == 200 and rid in body.decode() and pending["digest"] in body.decode()

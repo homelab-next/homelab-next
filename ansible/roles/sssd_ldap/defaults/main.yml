@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# SUPERSEDED (ADR-0034 rule 7): SSH logins move to short-lived SSH certificates signed by the
+# secret store after an OIDC login, with no IdP LDAP outpost; this role stays until that lands.
+#
 # Central auth (control central-auth, applied per guest): sssd resolving and authenticating
 # directory accounts against the identity provider's LDAP outpost, found by logical id (LDAPS
 # only, certificate checked). The bind credential is a secret reference resolved at run time and

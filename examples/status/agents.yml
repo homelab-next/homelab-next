@@ -16,13 +16,11 @@ stuck_after_s:
   models: {example-model-large: 1200}
 
 # the private tier: only through the registry's status-hub front door (the edge adds
-# X-Hnx-Front-Door from secret:status/front-door-secret), for identities in the viewer group
+# X-Hnx-Front-Door from secret:status/front-door-secret), for identities in a viewer group: the
+# groups the status-hub row's roles.viewer names in the registry (ADR-0034), never named here
 private:
   service: status-hub
   # trusted_proxies: [edge-core]     # default: the hosts of every edge-proxy service
-  identity_header: X-Authentik-Username
-  groups_header: X-Authentik-Groups
-  viewer_group: hub-private-viewers
   access_log: build/status/agents/access.jsonl
 
 # the push ingest (hnx status ingest): one bearer token per sender
@@ -37,14 +35,14 @@ ingest:
 
 # the broker Approvals page (/approvals; ADR-0017 stage 2b): the hub relays approve/deny to the
 # broker socket for issuer sso, as the person the front door authenticated. Viewers see the
-# queue; only the approver group (never the viewer group) may decide. The hub's user must be in
-# the broker manifest's approval_relays with this issuer. csrf_key names the form tokens' HMAC key
-# (at least 32 characters): every hub instance with it accepts the others' tokens, across restarts.
+# queue; only an approver group (the row's roles.approver, never a viewer group) may decide.
+# The hub's user must be in the broker manifest's approval_relays with this issuer. csrf_key names
+# the form tokens' HMAC key (at least 32 characters): every hub instance with it accepts the
+# others' tokens, across restarts.
 # public_origin is the page's origin as browsers see it: a decision's Origin must equal it (scheme,
 # host and port).
 approvals:
   socket: /run/hnx-broker/broker.sock
   issuer: sso
-  approver_group: hub-approvers
   csrf_key: "secret:status/approvals-csrf-secret"
   public_origin: https://status.lab.example

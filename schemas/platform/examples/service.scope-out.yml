@@ -37,6 +37,19 @@ hosts:
   edge-core:    {address: 203.0.113.10,    zone: edge,    role: edge}
 
 services:
+  auth-proxy:
+    capability: auth-proxy
+    impl: oauth2-proxy
+    host: edge-core
+    protocol: http
+    port: 4180
+    health: {kind: http, path: /ping, expect_status: 200}
+    upstreams: [idp]
+    owner: identity-team
+    version: "7.15.5"
+    tls: none
+    auth: own
+
   dns:
     capability: dns
     impl: technitium

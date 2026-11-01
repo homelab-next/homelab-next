@@ -309,9 +309,10 @@ criteria:
     so; CI's schemas job pins Caddy and requires it.
   expect_regex: edge strips identity headers
   remediation: >-
-    Put request_header -*authentik* first in every site that runs forward_auth or proxies in a
-    config that has one, and forward_auth
-    in a route that first runs request_header -*authentik* (or deletes each copied header in
+    Put the strip of the declared identity-header set (request_header -*auth-request* and
+    request_header -*auth_request*, homelabnext.edge_identity) first in every site that runs
+    forward_auth or proxies in a config that has one, and forward_auth
+    in a route that first runs that strip (or deletes each copied header in
     every - and _ spelling), as the generated sites and hnx_forward_auth snippet do, and pin
     Caddy 2.11.2 or later. Otherwise a client sends its own username or groups, on a path that
     skips the auth route or when the identity provider's answer omits them, and the service

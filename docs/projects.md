@@ -247,7 +247,7 @@ strategy work package changed by anyone but the sync user is noted for the next 
 |---|---|
 | types, statuses, custom fields, relations, cross-project relations, boards (action boards since 17.3), webhooks, API tokens, LDAP | Community |
 | read-only work package status (hard lock) | Enterprise Basic: on Community the permission-isolated Strategy project does the job |
-| SSO with OIDC or SAML (an Authentik front door) | Enterprise Professional: on Community use Authentik's LDAP outpost or local accounts |
+| SSO with OIDC or SAML (the lab's OIDC IdP, ADR-0034) | Enterprise Professional: on Community use local accounts behind the edge's forward-auth proxy |
 | the MCP server | Enterprise Professional: agents on Community use the REST API (this adapter) |
 | hierarchy custom fields, programs and portfolios, custom project phases | Enterprise |
 

@@ -25,6 +25,7 @@ import yaml
 
 from homelabnext import paths
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.edge_identity import IDENTITY_HEADERS
 from homelabnext.registry.model import (
     Registry,
     secret_env_name,
@@ -71,7 +72,7 @@ class FrontDoor:
     secret: str
     identity_header: str
     groups_header: str
-    viewer_group: str
+    viewer_groups: frozenset[str]
     access_log: Path
 
 
@@ -111,14 +112,14 @@ MIN_CSRF_KEY_CHARS = 32
 @dataclass(frozen=True)
 class ApprovalsSettings:
     """The Approvals page (:mod:`homelabnext.status.approvals`): the broker socket the hub
-    relays through, the SSO issuer it vouches for, the group allowed to decide and the HMAC key
+    relays through, the SSO issuer it vouches for, the groups allowed to decide and the HMAC key
     of its form tokens (``csrf_key``, from the secret store; None: a per-process key) and the
     page's public origin (``public_origin``, ``scheme://host[:port]``, what a decision's
     ``Origin`` must equal; None: compared with the request's ``Host``)."""
 
     socket: Path
     issuer: str
-    approver_group: str
+    approver_groups: frozenset[str]
     timeout_s: float = 10.0
     csrf_key: bytes | None = field(default=None, repr=False)
     public_origin: str | None = None
@@ -216,6 +217,50 @@ def _csrf_key(
     return value.encode("utf-8")
 
 
+def _identity_headers(priv: Mapping[str, Any]) -> list[str]:
+    """``private.identity_header``/``groups_header`` (1.0-1.3) may only restate the platform's
+    identity-header set (:data:`homelabnext.edge_identity.IDENTITY_HEADERS`): the edge strips
+    and copies those and no other, so a hub reading another name would trust a header a
+    client can send."""
+    problems = []
+    for key, want in (
+        ("identity_header", IDENTITY_HEADERS.user),
+        ("groups_header", IDENTITY_HEADERS.groups),
+    ):
+        got = priv.get(key)
+        if got is not None and got.lower() != want.lower():
+            problems.append(
+                f"private.{key} {got!r}: the edge strips and copies {want} (the platform's "
+                "identity-header set, homelabnext.edge_identity); drop the key"
+            )
+    return problems
+
+
+def _role_groups(
+    doc: Mapping[str, Any], svc: Any, role: str, where: str, key: str
+) -> tuple[frozenset[str], list[str]]:
+    """The groups holding ``role`` of the hub's registry row (``roles``, ADR-0034: the one
+    group-to-role table) or, for a row without ``roles``, the deprecated agents.yml ``key``."""
+    table = getattr(svc, "roles", None) or {}
+    legacy = (doc.get(where) or {}).get(key)
+    if table:
+        if legacy is not None:
+            return frozenset(), [
+                f"{where}.{key}: service {svc.name} declares roles in the registry, the one "
+                f"group-to-role table; drop {key} here (roles.{role} names the groups)"
+            ]
+        groups = frozenset(table.get(role, ()))
+        if not groups:
+            return groups, [f"service {svc.name}: roles has no {role!r} role"]
+        return groups, []
+    if legacy is None:
+        return frozenset(), [
+            f"service {svc.name}: no roles.{role} in the registry (nor {where}.{key}): name the "
+            f"groups that hold the {role} role"
+        ]
+    return frozenset({legacy}), []
+
+
 def build_config(
     doc: Mapping[str, Any], registry: Registry, secrets: SecretLookup, *, base: Path = Path(".")
 ) -> AgentsConfig:
@@ -236,6 +281,7 @@ def build_config(
         ),
     )
     priv = doc.get("private")
+    viewers: frozenset[str] = frozenset()
     if priv:
         svc = registry.services.get(priv["service"])
         if svc is None or not svc.front_door:
@@ -245,6 +291,10 @@ def build_config(
                     f"private.service {priv['service']!r} is not a registry service with a front_door"
                 ],
             )
+        viewers, probs = _role_groups(doc, svc, "viewer", "private", "viewer_group")
+        probs += _identity_headers(priv)
+        if probs:
+            raise AgentsConfigError("invalid agents config", probs)
         trusted, probs = _proxies(registry, priv.get("trusted_proxies"))
         if probs:
             raise AgentsConfigError("invalid agents config", probs)
@@ -262,9 +312,9 @@ def build_config(
                 trusted=trusted,
                 header=svc.front_door["header"],
                 secret=secret,
-                identity_header=priv.get("identity_header", "X-Authentik-Username"),
-                groups_header=priv.get("groups_header", "X-Authentik-Groups"),
-                viewer_group=priv["viewer_group"],
+                identity_header=IDENTITY_HEADERS.user,
+                groups_header=IDENTITY_HEADERS.groups,
+                viewer_groups=viewers,
                 access_log=base / priv["access_log"],
             )
     appr = doc.get("approvals")
@@ -276,11 +326,18 @@ def build_config(
                     "approvals needs private: the page is served behind the private tier's front door"
                 ],
             )
-        if appr["approver_group"] == priv["viewer_group"]:
+        svc = registry.services[priv["service"]]
+        approvers, probs = _role_groups(doc, svc, "approver", "approvals", "approver_group")
+        if probs:
+            raise AgentsConfigError("invalid agents config", probs)
+        if approvers & viewers:
             # a viewer may read the queue; deciding is a separate grant, never the same group
             raise AgentsConfigError(
                 "invalid agents config",
-                ["approvals.approver_group must differ from private.viewer_group"],
+                [
+                    "the approver groups must differ from the viewer groups (shared: "
+                    f"{', '.join(sorted(approvers & viewers))})"
+                ],
             )
         if cfg.front_door is None:
             cfg.warnings.append("approvals page disabled: the private tier's front door is off")
@@ -288,7 +345,7 @@ def build_config(
             cfg.approvals = ApprovalsSettings(
                 socket=Path(appr["socket"]),
                 issuer=appr["issuer"],
-                approver_group=appr["approver_group"],
+                approver_groups=approvers,
                 timeout_s=float(appr.get("timeout_s", 10)),
                 csrf_key=_csrf_key(doc, registry, secrets, cfg.warnings),
                 public_origin=appr.get("public_origin"),

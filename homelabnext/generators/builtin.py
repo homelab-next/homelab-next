@@ -9,6 +9,15 @@ from collections import defaultdict
 
 import yaml
 
+from homelabnext.edge_identity import (
+    AUTH_PROXY_CALLBACK,
+    AUTH_PROXY_CAPABILITY,
+    AUTH_PROXY_CHECK,
+    AUTH_PROXY_PREFIX,
+    AUTH_PROXY_SIGN_IN,
+    IDENTITY_HEADERS,
+    IdentityHeaders,
+)
 from homelabnext.registry.model import Registry, Service, secret_env_name
 
 from .core import MARKER, register
@@ -124,63 +133,88 @@ def hosts_file(reg: Registry) -> dict[str, str]:
 
 
 # 3 ---------------------------------------------------------------- Caddy
-#: the identity headers forward_auth copies from the IdP's answer onto the request
-FORWARD_AUTH_HEADERS = ("X-Authentik-Username", "X-Authentik-Groups")
-#: the word every identity header of the IdP's carries.  The snippet deletes every client-sent
-#: header whose name contains it, in any case and with any separators: a CGI-style upstream
-#: (PHP-FPM, WSGI ``environ``, Django ``META``) folds ``-`` and ``_`` alike, so
-#: ``X-Authentik-Groups``, ``X_Authentik_Groups`` and the mixed ``X-Authentik_Groups`` all become
-#: ``HTTP_X_AUTHENTIK_GROUPS``, and a prefix wildcard per spelling misses the mixed ones (Caddy up
-#: to 2.11.1 passes them; 2.11.7's ``reverse_proxy`` happens to drop every name with an ``_``)
-IDENTITY_HEADER_MARK = "authentik"
+def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None) -> str:
+    """The ``hnx_forward_auth`` snippet (ADR-0034): the auth proxy's own paths, then the check.
 
-
-def _forward_auth_snippet(endpoint: str) -> str:
-    """The ``hnx_forward_auth`` snippet.  Before ``forward_auth`` runs, every identity header a
-    *client* sent is deleted (``request_header -*authentik*``: Caddy matches a ``*x*`` delete
+    ``handle /oauth2/*`` proxies the auth proxy's sign-in, callback and sign-out under the site's
+    own host (Caddy sorts ``handle`` before ``route``).  Every other request goes through
+    ``forward_auth`` to the auth proxy's check: a 2xx copies the identity headers of
+    :data:`~homelabnext.edge_identity.IDENTITY_HEADERS` onto the request, a 401 redirects to the
+    sign-in page.  Before ``forward_auth`` runs, every identity header a *client* sent is deleted
+    (``request_header -*auth-request*`` and ``-*auth_request*``: Caddy matches a ``*x*`` delete
     case-insensitively anywhere in the name, so every separator and case spelling goes): Caddy
-    2.9.0 to 2.11.1 keep a client-sent header that the IdP's answer omits, so without the strip a
-    client could name its own user or groups to the service.  The delete and ``forward_auth`` sit
-    in one ``route``, which runs its directives in the order written (``forward_auth`` otherwise
-    sorts before ``request_header``, and the strip would delete the IdP's own headers instead)."""
+    2.9.0 to 2.11.1 keep a client-sent header that the auth proxy's answer omits, so without the
+    strip a client could name its own user or groups to the service.  The delete and
+    ``forward_auth`` sit in one ``route``, which runs its directives in the order written
+    (``forward_auth`` otherwise sorts before ``request_header``, and the strip would delete the
+    auth proxy's own headers instead)."""
+    identity = identity or IDENTITY_HEADERS
+    strip = identity.strip_lines("\t\t")
     return (
         "(hnx_forward_auth) {\n"
+        f"\thandle {AUTH_PROXY_PREFIX} {{\n"
+        f"\t\treverse_proxy {endpoint} {{\n"
+        "\t\t\theader_up X-Real-IP {remote_host}\n"
+        "\t\t\theader_up X-Forwarded-Uri {uri}\n"
+        "\t\t}\n"
+        "\t}\n"
         "\troute {\n"
-        "\t\t# client-sent identity headers never reach the service, whatever the IdP answers\n"
-        f"\t\trequest_header -*{IDENTITY_HEADER_MARK}*\n"
+        "\t\t# client-sent identity headers never reach the service, whatever the auth proxy answers\n"
+        f"{strip}"
         f"\t\tforward_auth {endpoint} {{\n"
-        "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
-        f"\t\t\tcopy_headers {' '.join(FORWARD_AUTH_HEADERS)}\n"
+        f"\t\t\turi {AUTH_PROXY_CHECK}\n"
+        "\t\t\theader_up X-Real-IP {remote_host}\n"
+        f"\t\t\tcopy_headers {' '.join(identity.headers)}\n"
+        "\t\t\t@hnx_sign_in status 401\n"
+        "\t\t\thandle_response @hnx_sign_in {\n"
+        f"\t\t\t\tredir * {AUTH_PROXY_SIGN_IN}?rd={{scheme}}://{{host}}{{uri}}\n"
+        "\t\t\t}\n"
         "\t\t}\n"
         "\t}\n"
         "}\n"
     )
 
 
+def _auth_proxy(reg: Registry) -> Service | None:
+    """The forward-auth proxy, required as soon as one public service has ``auth: idp``: without
+    it such a site would be published with no login at all, so generation fails instead."""
+    proxy = reg.by_capability(AUTH_PROXY_CAPABILITY)
+    if proxy is None:
+        gated = [s.name for s in reg.sorted_services() if s.auth == "idp" and s.public_hostname]
+        if gated:
+            raise ValueError(
+                f"caddy: {', '.join(gated)} need(s) auth: idp at the edge but no service provides "
+                f"capability {AUTH_PROXY_CAPABILITY!r} (the forward-auth proxy, ADR-0034)"
+            )
+    return proxy
+
+
 @register(
     "caddy", "Caddyfile site snippets for services with a public hostname", "reverse proxy (edge)"
 )
 def caddy(reg: Registry) -> dict[str, str]:
-    idp = reg.by_capability("idp")
+    proxy = _auth_proxy(reg)
     parts = [_hdr(reg)]
-    if idp:
+    if proxy:
         parts.append(
-            _forward_auth_snippet(checked(_endpoint_url(reg, idp), "idp endpoint", "caddy"))
+            _forward_auth_snippet(
+                checked(_endpoint_url(reg, proxy), "auth-proxy endpoint", "caddy")
+            )
         )
+    strip = IDENTITY_HEADERS.strip_lines("\t")
     for s in reg.sorted_services():
         if not s.public_hostname:
             continue
-        auth_block = ""
-        if s.auth == "idp" and idp:
-            # the site-level strip runs before every handle and route of the site (Caddy sorts
-            # request_header first), so a path that never reaches the snippet's route (a handle
-            # added beside it, a matcher on a route) still reaches the service without the
-            # client's identity headers; the route-level strip in the snippet stays as well
-            auth_block = f"\trequest_header -*{IDENTITY_HEADER_MARK}*\n\timport hnx_forward_auth\n"
+        # every site strips the client's identity headers at site level, before every handle
+        # and route of the site (Caddy sorts request_header first): a path that never reaches
+        # the snippet's route (a handle added beside it, a matcher on a route) and a site with
+        # no forward auth that reaches the same service under another name still reach it
+        # without them; the route-level strip in the snippet stays as well
+        auth_block = strip + ("\timport hnx_forward_auth\n" if s.auth == "idp" else "")
         proxy_block = ""
-        if s.front_door and auth_block:
+        if s.front_door and s.auth == "idp":
             # the shared secret that tells the service this request came through the edge (and
-            # so its identity headers are the IdP's): from the environment, never in the file
+            # so its identity headers are the auth proxy's): from the environment, never in the file
             header = checked(s.front_door["header"], "front_door.header", "caddy")
             env = checked(secret_env_name(s.front_door["secret"]), "front_door.secret", "caddy")
             proxy_block = f" {{\n\t\theader_up {header} {{env.{env}}}\n\t}}"
@@ -381,70 +415,211 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
     }
 
 
-# 9 ---------------------------------------------------------------- IdP blueprint
-class _Find(list):
-    """Authentik ``!Find [model, [field, value]]`` lookup."""
+# 9 ---------------------------------------------------------------- IdP realm
+#: the browser flow every sign-in goes through: a session cookie, or a password AND a second factor
+MFA_BROWSER_FLOW = "hnx-browser-mfa"
+#: the scopes a token carries without asking (everything else only when requested)
+DEFAULT_CLIENT_SCOPES = ("basic",)
+OPTIONAL_CLIENT_SCOPES = ("email", "profile")
+#: the claims the IdP's tokens carry the user's groups and this client's roles in
+GROUPS_CLAIM, ROLES_CLAIM = "groups", "roles"
 
 
-class _KeyOf(str):
-    """Authentik ``!KeyOf <entry id>`` reference."""
+def client_secret_ref(service: str) -> str:
+    """The secret-store reference of a service's OIDC client secret (never a value)."""
+    return f"secret:idp/clients/{service}"
 
 
-class _BlueprintDumper(yaml.SafeDumper):
-    """``SafeDumper`` that knows the two Authentik tags; every value is emitted as YAML data, so a
-    registry string can never add keys or entries."""
+def _execution(requirement: str, priority: int, *, authenticator: str = "", flow: str = "") -> dict:
+    out = {"authenticatorFlow": bool(flow), "priority": priority, "requirement": requirement}
+    out.update({"flowAlias": flow} if flow else {"authenticator": authenticator})
+    out["userSetupAllowed"] = False
+    return out
 
 
-_BlueprintDumper.add_representer(
-    _Find, lambda d, v: d.represent_sequence("!Find", list(v), flow_style=True)
-)
-_BlueprintDumper.add_representer(_KeyOf, lambda d, v: d.represent_scalar("!KeyOf", str(v)))
+def _mfa_flows() -> list[dict]:
+    """The browser flow: the session cookie, or the username/password form followed by a
+    required second factor (OTP, or a WebAuthn key once registered; a user with neither is made
+    to set up OTP, the first alternative, before the sign-in completes)."""
+
+    def flow(alias: str, top: bool, executions: list[dict], what: str) -> dict:
+        return {
+            "alias": alias,
+            "authenticationExecutions": executions,
+            "builtIn": False,
+            "description": what,
+            "providerId": "basic-flow",
+            "topLevel": top,
+        }
+
+    forms, second = f"{MFA_BROWSER_FLOW}-forms", f"{MFA_BROWSER_FLOW}-second-factor"
+    return [
+        flow(
+            MFA_BROWSER_FLOW,
+            True,
+            [
+                _execution("ALTERNATIVE", 10, authenticator="auth-cookie"),
+                _execution("ALTERNATIVE", 20, flow=forms),
+            ],
+            "browser sign-in: a session, or a password and a second factor (ADR-0034)",
+        ),
+        flow(
+            forms,
+            False,
+            [
+                _execution("REQUIRED", 10, authenticator="auth-username-password-form"),
+                _execution("REQUIRED", 20, flow=second),
+            ],
+            "username and password, then a second factor",
+        ),
+        flow(
+            second,
+            False,
+            [
+                _execution("ALTERNATIVE", 10, authenticator="auth-otp-form"),
+                _execution("ALTERNATIVE", 20, authenticator="webauthn-authenticator"),
+            ],
+            "OTP or a WebAuthn key",
+        ),
+    ]
+
+
+def _mappers(client: str) -> list[dict]:
+    """The claims every client's tokens carry beyond the trimmed scopes: the audience (the
+    client itself), the user's groups (names, not paths) and the user's roles of this client."""
+
+    def mapper(name: str, kind: str, config: dict[str, str]) -> dict:
+        tokens = {"access.token.claim": "true", "id.token.claim": "true"}
+        return {
+            "config": {**tokens, **config},
+            "consentRequired": False,
+            "name": name,
+            "protocol": "openid-connect",
+            "protocolMapper": kind,
+        }
+
+    return [
+        mapper("audience", "oidc-audience-mapper", {"included.client.audience": client}),
+        mapper(
+            "client roles",
+            "oidc-usermodel-client-role-mapper",
+            {
+                "claim.name": ROLES_CLAIM,
+                "jsonType.label": "String",
+                "multivalued": "true",
+                "usermodel.clientRoleMapping.clientId": client,
+                "userinfo.token.claim": "true",
+            },
+        ),
+        mapper(
+            "groups",
+            "oidc-group-membership-mapper",
+            {"claim.name": GROUPS_CLAIM, "full.path": "false", "userinfo.token.claim": "true"},
+        ),
+    ]
+
+
+def _client(name: str, owner: str, redirects: list[str], root: str | None) -> dict:
+    """One confidential OIDC client: authorization code with PKCE only, the trimmed scopes, and
+    the secret by reference (``$(env:...)``, substituted at import from the secret store)."""
+    env = secret_env_name(client_secret_ref(name))
+    out = {
+        "attributes": {"pkce.code.challenge.method": "S256"},
+        "clientAuthenticatorType": "client-secret",
+        "clientId": name,
+        "defaultClientScopes": list(DEFAULT_CLIENT_SCOPES),
+        "description": f"owner {owner}",
+        "directAccessGrantsEnabled": False,
+        "enabled": True,
+        "fullScopeAllowed": False,
+        "implicitFlowEnabled": False,
+        "name": name,
+        "optionalClientScopes": list(OPTIONAL_CLIENT_SCOPES),
+        "protocol": "openid-connect",
+        "protocolMappers": _mappers(name),
+        "publicClient": False,
+        "redirectUris": redirects,
+        "secret": f"$(env:{env})",
+        "serviceAccountsEnabled": False,
+        "standardFlowEnabled": bool(redirects),
+        "webOrigins": ["+"] if redirects else [],
+    }
+    if root:
+        out["attributes"]["post.logout.redirect.uris"] = f"{root}/*"
+        out["rootUrl"] = root
+    return out
+
+
+def realm_grants(realm: dict) -> dict[str, dict[str, set[str]]]:
+    """``{group: {client: {role, ...}}}`` as a rendered realm grants it (what the realm check and
+    the tests compare with the registry's roles)."""
+    return {
+        g["name"]: {c: set(r) for c, r in (g.get("clientRoles") or {}).items()}
+        for g in realm.get("groups", [])
+    }
+
+
+def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
+    """``{group: {service: {role, ...}}}`` from the registry's group-to-role table."""
+    out: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for s in reg.sorted_services():
+        for role, groups in s.roles.items():
+            for g in groups:
+                out[g][s.name].add(role)
+    return {g: dict(c) for g, c in out.items()}
 
 
 @register(
-    "idp_blueprint",
-    "Identity provider (Authentik-style) blueprint skeleton for services with auth=idp",
-    "identity provider",
+    "idp_realm",
+    "OIDC IdP realm (clients, groups and their roles, MFA browser flow) for services with auth=idp",
+    "identity provider (realm import)",
 )
-def idp_blueprint(reg: Registry) -> dict[str, str]:
-    entries: list[dict] = []
-    for s in reg.sorted_services():
-        if s.auth != "idp":
-            continue
-        external = f"https://{s.public_hostname}" if s.public_hostname else _endpoint_url(reg, s)
-        entries += [
-            {
-                "model": "authentik_providers_proxy.proxyprovider",
-                "id": f"{s.name}-provider",
-                "state": "present",
-                "identifiers": {"name": s.name},
-                "attrs": {
-                    "mode": "forward_single",
-                    "external_host": external,
-                    "authorization_flow": _Find(
-                        [
-                            "authentik_flows.flow",
-                            ["slug", "default-provider-authorization-implicit-consent"],
-                        ]
-                    ),
-                },
-            },
-            {
-                "model": "authentik_core.application",
-                "state": "present",
-                "identifiers": {"slug": s.name},
-                "attrs": {
-                    "name": s.name,
-                    "provider": _KeyOf(f"{s.name}-provider"),
-                    "meta_description": f"owner {s.owner}",
-                },
-            },
-        ]
-    body = {"version": 1, "metadata": {"name": f"{reg.lab_name}-services"}, "entries": entries}
-    text = yaml.dump(
-        body, Dumper=_BlueprintDumper, sort_keys=False, default_flow_style=False, width=100
-    )
-    return {"idp/blueprint.yaml": _hdr(reg) + text}
+def idp_realm(reg: Registry) -> dict[str, str]:
+    """The IdP's realm as an importable realm document (ADR-0034): one confidential OIDC client
+    per ``auth: idp`` service (redirects under its public hostname) and one for the auth proxy
+    (its callback on every site it guards), the client roles each service's ``roles`` names, a
+    group per group named there holding exactly those roles, and the MFA browser flow.  No
+    secret is in it: each client secret is a secret-store reference."""
+    gated = [s for s in reg.sorted_services() if s.auth == "idp"]
+    clients, roles = [], {}
+    for s in gated:
+        root = f"https://{s.public_hostname}" if s.public_hostname else None
+        clients.append(_client(s.name, s.owner, [f"{root}/*"] if root else [], root))
+        if s.roles:
+            roles[s.name] = [
+                {"clientRole": True, "description": f"{s.name} {r}", "name": r} for r in s.roles
+            ]
+    proxy = reg.by_capability(AUTH_PROXY_CAPABILITY)
+    if proxy is not None and proxy not in gated:
+        callbacks = sorted(
+            f"https://{s.public_hostname}{AUTH_PROXY_CALLBACK}" for s in gated if s.public_hostname
+        )
+        clients.append(_client(proxy.name, proxy.owner, callbacks, None))
+    clients.sort(key=lambda c: c["clientId"])
+    groups = [
+        {
+            "clientRoles": {c: sorted(r) for c, r in sorted(grants.items())},
+            "name": g,
+            "path": f"/{g}",
+        }
+        for g, grants in sorted(registry_grants(reg).items())
+    ]
+    body = {
+        "attributes": {"hnx.generated": _hdr(reg, "").strip()},
+        "authenticationFlows": _mfa_flows(),
+        "browserFlow": MFA_BROWSER_FLOW,
+        "bruteForceProtected": True,
+        "clients": clients,
+        "displayName": reg.lab_name,
+        "enabled": True,
+        "groups": groups,
+        "realm": reg.lab_name,
+        "registrationAllowed": False,
+        "resetPasswordAllowed": False,
+        "roles": {"client": roles},
+        "sslRequired": "all",
+    }
+    return {"idp/realm.json": json.dumps(body, indent=2, sort_keys=True) + "\n"}
 
 
 # 10 --------------------------------------------------------------- docs
