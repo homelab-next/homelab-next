@@ -162,11 +162,11 @@ def save_state(path, prev: dict[str, str], results_doc: dict) -> None:
     for i, r in results_doc["results"].items():
         if r["status"] != SKIP:
             merged[i] = r["status"]
+    from homelabnext.state import atomic_write_text
+
     p = pathlib.Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
-    tmp.replace(p)
+    atomic_write_text(p, json.dumps(merged, indent=2, sort_keys=True) + "\n")
 
 
 def page_changes(
