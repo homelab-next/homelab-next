@@ -83,6 +83,24 @@ def test_the_label(event, route, want):
     assert _label(enrich_tlp(event, route, TABLE)) == want
 
 
+@pytest.mark.parametrize(
+    "tag, want",
+    [
+        ("TLP : RED", "red"),  # a space before the colon, as in report headers
+        ("\uff34\uff2c\uff30:\uff32\uff25\uff24", "red"),  # fullwidth look-alikes
+        ("TLP-RED", "red"),
+        ("[TLP:AMBER]", "amber"),
+        ("tlp:clear, tlp:red", "red"),  # two markers in one tag: the strictest
+        ("tlp", "clear"),  # no label word: not a TLP tag
+    ],
+)
+def test_a_tag_is_read_with_the_same_marker_grammar_as_egress(tag, want):
+    # a tag the egress check reads as a marker is a claim on arrival too; it used to be read only
+    # when it started with exactly "tlp:", so these were not claims and the source's looser label
+    # stood
+    assert _label(enrich_tlp({"tags": [tag]}, "feeds/open", TABLE)) == want
+
+
 def test_a_str_subclass_route_is_not_a_route():
     class Route(str):
         def __eq__(self, other):

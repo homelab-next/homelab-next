@@ -222,7 +222,9 @@ enrich_tlp(event, route, table: SourceTable)     # labels.hnx_tlp, from the rout
 # homelabnext.lake: TLP (decisions 5 and 6) and the Trino REST adapter
 TrinoRestLake(trino: TrinoHTTP, catalog: RestCatalog, *, namespace, trino_catalog="iceberg", ...)
 lake.rows.row_from_event(event, schema) -> dict     # the row's tlp is labels.hnx_tlp, never the event's tlp
-lake.ceiling.CeilingReader(lake, ceiling, schemas)  # .select(table, ...) filtered; raw .query only at red
+lake.ceiling.reader_for(lake, reader, tlp_readers, schemas) -> CeilingReader  # the declared ceiling; none: refused
+lake.ceiling.CeilingReader(lake, ceiling, schemas, *, grant=None)  # .select(table, ...) filtered; raw .query only at red, which needs a RedGrant
+lake.ceiling.raw_query(lake, grant: RedGrant, sql, params=None)   # the one raw read outside homelabnext/lake/ (raw_named likewise)
 lake.backfill.plan(schema, *, table, sources: Mapping[str, Source], source_map, source_column=None)
     # Source(label, honour_item_labels=False, items_carried_no_labels=False): red unless recorded
 

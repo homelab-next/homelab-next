@@ -543,7 +543,7 @@
    "trino": 6
   },
   "homelabnext/lake/trino_http.py": {
-   "trino": 23
+   "trino": 19
   },
   "homelabnext/lake/trino_rest.py": {
    "iceberg": 1,
@@ -1509,7 +1509,7 @@
   },
   "tests/lake/fake_lab.py": {
    "iceberg": 1,
-   "trino": 15
+   "trino": 14
   },
   "tests/lake/golden/authentication.iceberg.txt": {
    "iceberg": 1
@@ -1554,7 +1554,7 @@
   },
   "tests/lake/test_trino_rest.py": {
    "iceberg": 1,
-   "trino": 23
+   "trino": 21
   },
   "tests/maps/fixtures/maps/directory/services.yml": {
    "authentik": 1,
