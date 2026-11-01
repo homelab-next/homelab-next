@@ -62,7 +62,10 @@ The standard for this already exists and the lab's threat-intel sources already 
    spellings: `clear`, `green`, `amber`, `amber+strict`, `red`, each with an optional `tlp:`
    prefix, in any case, surrounding whitespace ignored; TLP 1.0 `white` is `clear`. Anything else
    (including `amber-strict`, `amber strict` and an empty string), and a missing value, reads as
-   `red` wherever it is read.
+   `red` wherever it is read. The lenient spellings are for labels carried on incoming data and typed
+   by a person; a stored value (a lake row's `tlp`) and a value in a generated or authored table
+   (`tlp-sources.json`, an analyzer's maximum) are the five canonical spellings. A declaration that
+   is not a label is refused by validation, never read as `red`.
 2. **The default is red.** Any source or record without a label is `red`. Data the lab generates
    about itself (logs, alerts, telemetry, inventory, configuration, findings, agent activity) is
    `red` unless a source declaration says otherwise. Lowering this default is a declaration a

@@ -10,10 +10,11 @@ warning does not fail validation: an agent writing there is about to be refused
 ``lane-quota-exceeded``, and this is how the operator hears it first.
 
 ``serve --socket PATH`` runs the broker on a Unix socket whose callers are authenticated by their
-peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` (its access
-token given by secret reference, ``--notify-token``) it pages approval requests and lane-quota
-notices through ntfy (:func:`notifier_from_args`); ``mcp --socket PATH`` runs the agent-facing
-MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
+peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` and the channel's
+``--notify-ceiling LABEL`` (its access token given by secret reference, ``--notify-token``) it
+pages approval requests and lane-quota notices through ntfy (:func:`notifier_from_args`);
+``mcp --socket PATH`` runs the agent-facing MCP tool server (stdio) against it
+(:mod:`homelabnext.broker.mcp_tools`).
 
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
 directory's outbox to the event bus, at least once and in order (:mod:`homelabnext.broker.relay`);

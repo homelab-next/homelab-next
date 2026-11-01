@@ -26,6 +26,7 @@ def test_prints_the_plan(tmp_path, capsys):
             "--qualified", "lake.ocsf.authentication",
             "--route", "feeds/open",
             "--route", "feeds/shared",
+            "--items-carried-no-labels", "feeds/open",
             "--map", str(mapping),
             "--source-column", "metadata.log_source",
         ]
@@ -62,3 +63,16 @@ def test_a_map_and_a_source_column_go_together_and_bad_input_is_exit_2(tmp_path,
     assert main(["tlp-backfill", "--sources", str(broken), "--table", "authentication",
                  "--qualified", "t", "--route", "feeds/open"]) == 2  # fmt: skip
     assert "broken.json" in capsys.readouterr().err
+
+
+def test_without_the_human_record_a_route_is_backfilled_red(tmp_path, capsys):
+    mapping = tmp_path / "map.json"
+    mapping.write_text(json.dumps({"sensor-a": "feeds/open"}))
+    base = ["tlp-backfill", "--sources", str(_sources(tmp_path)), "--table", "authentication"]
+    base += ["--qualified", "t", "--route", "feeds/open", "--map", str(mapping)]
+    base += ["--source-column", "metadata.log_source"]
+    assert main(base) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "'red'" in out[2] and "'sensor-a'" in out[2]
+    assert main([*base, "--items-carried-no-labels", "feeds/nope"]) == 2
+    assert "not a --route" in capsys.readouterr().err

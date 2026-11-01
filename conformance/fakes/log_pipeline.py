@@ -182,6 +182,17 @@ class TlpIgnoresDeclarationPipeline(FakeLogPipeline):
         return super()._tlp(r, event)
 
 
+class TlpReadsOnlyTheTlpFieldPipeline(FakeLogPipeline):
+    """Defect: only the ``tlp`` field and ``labels.tlp`` are read, so a label carried as a tag, an
+    OCSF ``osint`` entry or a STIX marking is lost and the looser declaration wins."""
+
+    def _tlp(self, r, event):
+        narrow = {
+            k: v for k, v in r.event.items() if k not in ("tags", "osint", "object_marking_refs")
+        }
+        return self._set_tlp(event, tl.label_for(narrow, r.route, self.sources))
+
+
 class TlpNoRouteUnlabelledPipeline(FakeLogPipeline):
     """Defect: an event with no route leaves without a TLP label (an unknown source stays
     unlabelled, as the runtime label does, where the TLP label must be red)."""

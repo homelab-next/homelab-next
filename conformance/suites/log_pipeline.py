@@ -29,6 +29,7 @@ from conformance.fakes.log_pipeline import (
     TlpNeverHonoursPipeline,
     TlpNormalisesRoutePipeline,
     TlpNoRouteUnlabelledPipeline,
+    TlpReadsOnlyTheTlpFieldPipeline,
     TrustsSelfNonePipeline,
 )
 from conformance.protocols.log_pipeline import Observed
@@ -359,7 +360,8 @@ def _(t):
 
 @SUITE.check(
     "tlp-stricter-claim-kept",
-    "an item label stricter than the declaration is kept; one that is not a label is red",
+    "an item label stricter than the declaration, in any field that carries one, is kept; one "
+    "that is not a label is red",
 )
 def _(t):
     _tlp_is(_routed(t, _dns(tlp="amber"), FEED), "amber")
@@ -369,6 +371,16 @@ def _(t):
     _tlp_is(_routed(t, {**_dns(), "labels.tlp": "amber"}, FEED), "amber")
     _tlp_is(_routed(t, _dns(tlp=None), FEED), "red")
     _tlp_is(_routed(t, _dns(tlp="amber-strict"), FEED), "red")
+    # a label carried as a tlp: tag (a string or a tag object's name), an OCSF osint entry's tlp
+    # or a STIX TLP marking: on a clear route only reading the carrier gives amber
+    amber = "marking-definition--f88d31f6-486f-44da-b317-01333bde0b82"  # TLP 1.0 amber
+    for carried in (
+        {"tags": ["phishing", "tlp:amber"]},
+        {"tags": [{"name": "TLP:AMBER"}]},
+        {"osint": [{"value": "x", "tlp": "amber"}]},
+        {"object_marking_refs": [amber]},
+    ):
+        _tlp_is(_routed(t, _dns(**carried), FEED), "amber")
 
 
 @SUITE.check(
@@ -466,6 +478,11 @@ MUTANTS = {
         TlpDropsStricterClaimPipeline,
         "tlp-stricter-claim-kept",
         "an item label stricter than the declaration is dropped",
+    ),
+    "tlp-reads-only-the-tlp-field": Mutant(
+        TlpReadsOnlyTheTlpFieldPipeline,
+        "tlp-stricter-claim-kept",
+        "an item label carried as a tag, an osint entry or a STIX marking is ignored",
     ),
     "tlp-honours-every-source": Mutant(
         TlpHonoursEverySourcePipeline,

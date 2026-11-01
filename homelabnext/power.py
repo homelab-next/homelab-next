@@ -29,13 +29,16 @@ UPSTREAM = "internet"
 
 
 def ups_ids(ref: Mapping[str, Any] | None) -> list[str]:
-    """The UPS ids a power declaration names (``[]`` for ``none`` or no declaration)."""
+    """The UPS ids a power declaration names (``[]`` for ``none``, no declaration, or one that
+    is not a string or a list: :func:`ref_problems` reports that, and nothing here raises on it)."""
     if not isinstance(ref, Mapping):
         return []
     ups = ref.get("ups")
     if ups == NONE or ups is None:
         return []
-    return [str(u) for u in ([ups] if isinstance(ups, str) else ups)]
+    if isinstance(ups, str):
+        return [ups]
+    return [str(u) for u in ups] if isinstance(ups, list) else []
 
 
 def ref_problems(ref: Any, where: str, known: Iterable[str]) -> list[str]:
