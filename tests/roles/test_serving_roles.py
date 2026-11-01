@@ -33,9 +33,7 @@ from homelabnext.registry.resolver import Endpoint
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "model-serving"
-pytestmark = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 # the units refuse root: as root (a container), run them as nobody; otherwise as the test's user
 _ME = pwd.getpwnam("nobody") if getpass.getuser() == "root" else pwd.getpwuid(os.getuid())
 USER = _ME.pw_name

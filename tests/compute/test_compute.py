@@ -490,7 +490,7 @@ def test_libvirt_uses_the_per_vlan_bridge_and_quotes_expansions(libvirt_fleet):
                 assert line.split(" ", 3)[3 if line.startswith("  ") else 1].startswith('"'), line
 
 
-@pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
+@pytest.mark.requires_tool("shellcheck")
 def test_libvirt_scripts_pass_shellcheck(libvirt_fleet, tmp_path):
     import subprocess
 

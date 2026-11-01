@@ -330,7 +330,7 @@ def _run_verify(tmp_path, fw, cluster: str | None, drop: str | None = None):
     )
 
 
-@pytest.mark.skipif(shutil.which("sh") is None or shutil.which("awk") is None, reason="no sh/awk")
+@pytest.mark.requires_tool("sh", "awk")
 def test_verify_script_checks_the_datacenter_switch_and_installed_files(good, tmp_path):
     fw = render(good, "firewall-rules")
     ok = _run_verify(tmp_path / "a", fw, "[OPTIONS]\nenable: 1\npolicy_in: DROP\n\n[RULES]\n")

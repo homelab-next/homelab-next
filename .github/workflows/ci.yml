@@ -61,16 +61,22 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
-          # lookup-plugin tests (which import ansible) run; and Go, which the Go tools' tests
-          # then require (HNX_REQUIRE_GO), so they cannot skip with "go is not installed" here
+          # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK,
+          # lookup-plugin (which import ansible) and playbook tests run, and must: an
+          # importorskip of a module in require-modules (HNX_REQUIRE_MODULES) and a missing tool
+          # in require-tools (HNX_REQUIRE_TOOLS) fail here instead of skipping, so a broken extra
+          # cannot pass as a skip; and Go, which the Go tools' tests then require (HNX_REQUIRE_GO)
           - version: "3.12"
             extras: "test,lake,mcp,ansible"
             go: true
+            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible"
+            require-tools: "ansible-playbook"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - version: "3.11"
             extras: "test"
             go: false
+            require-modules: ""
+            require-tools: ""
         shard: [1, 2, 3, 4, 5, 6]  # --shard below names the 6: change both together
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -89,6 +95,8 @@ jobs:
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
+          HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
+          HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest -q -m "not live"
