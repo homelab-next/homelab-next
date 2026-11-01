@@ -409,6 +409,19 @@ if "-T" in args:
         print(k, v)
 """
 
+# A fake ssh-keygen -l -f FILE: fails unless every line is a public key line without "bogus" (a
+# stand-in for a key that does not parse).
+KEYGEN = r"""
+import sys
+open(LOG, "a").write("ssh-keygen " + " ".join(sys.argv[1:-1]) + "\n")
+lines = [line for line in open(sys.argv[-1]).read().splitlines() if line.strip()]
+ok = lines and all(line.startswith(("ssh-", "ecdsa-", "sk-")) and "bogus" not in line for line in lines)
+sys.exit(0 if ok else 1)
+"""
+CA_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIUserCA hnx-user-ca"
+# a private key's first line (joined here so the leak scan does not read a key block in this file)
+PEM_HEADER = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+
 
 def ssh_setup(tmp_path, groups="ansible hnx-ssh", **kw):
     home = tmp_path / "home"
@@ -432,6 +445,12 @@ def ssh_setup(tmp_path, groups="ansible hnx-ssh", **kw):
             tmp_path / "getent", f"print('ansible:x:1000:1000::{home}:/bin/sh')\n"
         ),
         "ssh_hardening_systemctl_cli": logging_fake(tmp_path, "systemctl"),
+        "ssh_hardening_keygen_cli": fake(
+            tmp_path / "ssh-keygen", KEYGEN.replace("LOG", repr(str(tmp_path / "calls.log")))
+        ),
+        "ssh_hardening_trusted_user_ca_file": str(tmp_path / "user_ca.pub"),
+        "ssh_hardening_principals_dir": str(tmp_path / "principals"),
+        "ssh_hardening_revoked_keys_file": str(tmp_path / "revoked"),
         "hnx_controls": [],
     }
     v.update(kw)
@@ -548,6 +567,180 @@ def _first(tmp_path):
 def test_ssh_hardening_refuses_bad_inputs(first):
     results, _ = first
     assert all(f and "ssh_hardening: the kept account" in m for f, m in results), results
+
+
+def _first(tmp_path):
+    v = ssh_setup(
+        tmp_path,
+        ssh_hardening_trusted_user_ca_keys=[CA_KEY],
+        ssh_hardening_authorized_principals={"ansible": ["hnx-deploy"], "alice": ["hnx-admin"]},
+    )
+    (tmp_path / "principals").mkdir()
+    (tmp_path / "principals" / "bob").write_text("hnx-admin\n")  # bob is no longer listed
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_ssh_hardening_trusts_the_user_ca_for_listed_principals_only(first):
+    """sshd accepts a certificate from the CA for an account only for the principals listed for
+    it; an account dropped from the list loses its principals file, and health fails once another
+    drop-in points sshd at a different CA."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").read_text()
+    assert f"TrustedUserCAKeys {tmp_path}/user_ca.pub\n" in text
+    assert f"AuthorizedPrincipalsFile {tmp_path}/principals/%u\n" in text
+    assert "RevokedKeys" not in text
+    assert (tmp_path / "user_ca.pub").read_text() == CA_KEY + "\n"
+    assert sorted(p.name for p in (tmp_path / "principals").iterdir()) == ["alice", "ansible"]
+    assert (tmp_path / "principals" / "ansible").read_text() == "hnx-deploy\n"
+    assert calls(tmp_path)[0] == "ssh-keygen -l -f"  # the CA file was parsed before it went live
+    assert run_role(tmp_path, "ssh_hardening", "health", v).returncode == 0
+    (tmp_path / "sshd_config.d" / "00-aaa-local.conf").write_text("TrustedUserCAKeys /etc/other\n")
+    r = run_role(tmp_path, "ssh_hardening", "health", v)
+    assert r.returncode != 0 and "does not read the role's user CA" in r.stdout
+
+
+def _first(tmp_path):
+    v = ssh_setup(
+        tmp_path,
+        ssh_hardening_trusted_user_ca_keys=[CA_KEY],
+        ssh_hardening_authorized_principals={"ansible": ["hnx-deploy"]},
+        ssh_hardening_keep_user_cert_only=True,
+    )
+    (tmp_path / "home" / ".ssh" / "authorized_keys").write_text("")
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_ssh_hardening_lets_the_kept_account_in_by_certificate_when_asked(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (
+        "TrustedUserCAKeys"
+        in (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").read_text()
+    )
+
+
+def _first(tmp_path):
+    v = ssh_setup(
+        tmp_path,
+        ssh_hardening_trusted_user_ca_keys=[CA_KEY],
+        ssh_hardening_authorized_principals={"ansible": ["hnx-deploy"]},
+        ssh_hardening_keep_user_cert_only=True,
+    )
+    (tmp_path / "home" / ".ssh" / "authorized_keys").write_text(
+        'from="203.0.113.0/24" ssh-ed25519 AAAAKeptKey ansible\n'
+    )
+    return {
+        "runner": run_cases,
+        "role": "ssh_hardening",
+        "tasks_from": "config",
+        "base_vars": v,
+        "overrides": [
+            # the kept account's only key is revoked, and no certificate path
+            {
+                "ssh_hardening_keep_user_cert_only": False,
+                "ssh_hardening_trusted_user_ca_keys": [],
+                "ssh_hardening_revoked_keys": ["ssh-ed25519 AAAAKeptKey"],
+            },
+            # a CA but no opt-in: a CA that parses may still be the wrong one
+            {
+                "ssh_hardening_keep_user_cert_only": False,
+                "ssh_hardening_revoked_keys": ["ssh-ed25519 AAAAKeptKey"],
+            },
+            # opted in, but no principal listed for the kept account
+            {
+                "ssh_hardening_revoked_keys": ["ssh-ed25519 AAAAKeptKey"],
+                "ssh_hardening_authorized_principals": {"alice": ["hnx-admin"]},
+            },
+            # opted in, but the CA itself is revoked
+            {"ssh_hardening_revoked_keys": ["ssh-ed25519 AAAAKeptKey", CA_KEY]},
+            # opted in, but no CA at all
+            {
+                "ssh_hardening_revoked_keys": ["ssh-ed25519 AAAAKeptKey"],
+                "ssh_hardening_trusted_user_ca_keys": [],
+            },
+        ],
+    }
+
+
+@first_run(_first)
+def test_ssh_hardening_refuses_when_neither_a_key_nor_a_certificate_path_is_left(first):
+    """A key behind an options prefix counts as the kept account's key, unless it is revoked; a CA
+    path counts only with the opt-in, an unrevoked CA and a principal for the kept account."""
+    results, tmp_path = first
+    assert all(f and "key-only SSH would lock it out" in m for f, m in results), results
+    assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
+    assert not (tmp_path / "revoked").exists()
+
+
+def _first(tmp_path):
+    v = ssh_setup(
+        tmp_path,
+        ssh_hardening_trusted_user_ca_keys=["ssh-ed25519 AAAAbogus not-a-key"],
+        ssh_hardening_authorized_principals={"ansible": ["hnx-deploy"]},
+    )
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_ssh_hardening_never_installs_a_user_ca_ssh_keygen_rejects(first):
+    r, tmp_path = first
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert not (tmp_path / "user_ca.pub").exists()
+    assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
+    assert "systemctl reload ssh" not in calls(tmp_path)
+
+
+def _first(tmp_path):
+    v = ssh_setup(
+        tmp_path,
+        ssh_hardening_revoked_keys=["ssh-ed25519 AAAAOldLeakedKey"],
+    )
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_ssh_hardening_writes_the_revoked_keys_before_naming_them(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").read_text()
+    assert f"RevokedKeys {tmp_path}/revoked\n" in text and "TrustedUserCAKeys" not in text
+    assert (tmp_path / "revoked").read_text() == "ssh-ed25519 AAAAOldLeakedKey\n"
+
+
+def _first(tmp_path):
+    return {
+        "runner": run_cases,
+        "role": "ssh_hardening",
+        "tasks_from": "config",
+        "base_vars": ssh_setup(tmp_path),
+        "overrides": [
+            {"ssh_hardening_trusted_user_ca_keys": [PEM_HEADER]},
+            {"ssh_hardening_trusted_user_ca_keys": [CA_KEY + "\nssh-ed25519 AAAAsecond"]},
+            {"ssh_hardening_trusted_user_ca_keys": ["cert-authority " + CA_KEY]},
+            {"ssh_hardening_trusted_user_ca_keys": CA_KEY},
+            {"ssh_hardening_revoked_keys": ["not a key"]},
+            {"ssh_hardening_authorized_principals": ["ansible"]},
+            {"ssh_hardening_authorized_principals": {"ansible": "hnx-deploy"}},
+            {"ssh_hardening_authorized_principals": {"ansible": []}},
+            {"ssh_hardening_authorized_principals": {"ansible": ["hnx deploy"]}},
+            {"ssh_hardening_authorized_principals": {"../etc": ["hnx-deploy"]}},
+            {"ssh_hardening_principals_dir": "principals"},
+            {"ssh_hardening_trusted_user_ca_file": "/etc/ssh/ca.pub\nPermitRootLogin yes"},
+        ],
+    }
+
+
+@first_run(_first)
+def test_ssh_hardening_refuses_bad_certificate_inputs(first):
+    results, _ = first
+    # a principals list where a map belongs is refused by the argument spec, before validate
+    assert results[5][0] and "Validation of arguments failed" in results[5][1], results[5]
+    rest = results[:5] + results[6:]
+    assert all(f and "ssh_hardening: each user CA" in m for f, m in rest), results
 
 
 # ---------------------------------------------------------------- nftables_host

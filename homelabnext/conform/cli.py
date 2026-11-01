@@ -7,8 +7,10 @@
     hnx conform report [--target NAME] [--json] [--out FILE] [--no-mutants]
 
 Exit codes: 0 ok, 1 a check failed, too few checks executed (or a capability has no passing
-test), 2 misconfiguration (including an unknown ``--check`` id), 100 the run could not be
-measured (a subject could not be built).
+test), 2 misconfiguration (including an unknown ``--check`` id, or an adapter missing an endpoint
+or credential), 100 the run could not be measured (a subject could not be built).  When several
+capabilities run, the code is decided by their verdicts in that order of precedence: one failure
+gives 1 however many others could not be measured.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .registry import CAPABILITIES, ConformError, load_suite, names
-from .report import build_report, render_human
+from .report import build_report, exit_code, render_human
 from .runner import CapabilityRun, mutation_runs, run_capability
 
 __all__ = ["main"]
@@ -59,7 +61,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 def _human_run(run: CapabilityRun, verbose: bool) -> str:
     # could-not-measure (exit 100) is neither a pass nor a failure (docs/conformance.md)
-    verdict = "COULD NOT MEASURE" if run.error else ("PASS" if run.ok else "FAIL")
+    verdict = {"unmeasured": "COULD NOT MEASURE", "misconfigured": "MISCONFIGURED"}.get(
+        run.verdict, run.verdict.upper()
+    )
     lines = [f"{verdict}  {run.capability}  target={run.target}  {len(run.executed)} executed"]
     if run.error:
         lines.append(f"  ERROR {run.error}")
@@ -95,7 +99,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.json or args.out:
         doc = {"target": args.target, "runs": [r.to_dict() for r in runs]}
         if args.out:
-            Path(args.out).write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+            _write_out(args.out, doc)
         if args.json:
             _print_json(doc)
     if not args.json:
@@ -104,7 +108,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     failed = any(not (r.ok_strict() if args.strict else r.ok) for r in runs if r.error is None)
     if failed:
         return 1
+    if any(r.verdict == "misconfigured" for r in runs):
+        return 2
     return 100 if any(r.error for r in runs) else 0
+
+
+def _write_out(path: str, doc: Any) -> None:
+    """Write ``doc`` to ``--out``, creating its directory (``build/`` is absent in a fresh clone);
+    a path that cannot be written is misconfiguration (exit 2), never a failed check."""
+    out = Path(path)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    except OSError as exc:
+        raise ConformError(f"cannot write --out {path}: {exc}") from exc
 
 
 def _cmd_mutants(args: argparse.Namespace) -> int:
@@ -139,18 +156,12 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
 def _cmd_report(args: argparse.Namespace) -> int:
     rep = build_report(args.root, args.target, mutants=False if args.no_mutants else None)
     if args.out:
-        Path(args.out).write_text(json.dumps(rep, indent=2, sort_keys=True) + "\n")
+        _write_out(args.out, rep)
     if args.json:
         _print_json(rep)
     else:
         print(render_human(rep))
-    if rep["capabilities_without_passing_test"]:
-        return 100 if rep["measurement_errors"] and not _any_fail(rep) else 1
-    return 0
-
-
-def _any_fail(rep: dict[str, Any]) -> bool:
-    return any(e.get("failed_must") for e in rep["capabilities"].values())
+    return exit_code(rep)
 
 
 def _parser() -> argparse.ArgumentParser:

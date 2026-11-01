@@ -255,6 +255,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
     ),
+    "ssh-ca": (
+        "SSH user certificates from the secrets store: check (the spec) | render (its configuration "
+        "writes: policies, SSH roles, OIDC login roles)",
+        lambda a: importlib.import_module("homelabnext.sshca").main(a),
+    ),
 }
 
 

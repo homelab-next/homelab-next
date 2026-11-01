@@ -18,8 +18,11 @@ forgotten consumers).
 ## Decision
 
 1. `conformance/<capability>/` holds the swap test for each capability (fourteen at first
-   drop). CI runs each against its fake; the nightly job runs them against real containers; an
-   exporter lists capabilities without a passing test.
+   drop, eighteen core suites now). CI runs each against its fake. The nightly job runs the
+   lab-in-a-box smoke, which runs a suite against a real container only for a capability with a
+   real-product target in `compose/lab-in-a-box/targets/`, and against the built-in fake for
+   the rest; its report labels each capability `real` or `fake`, so a fake pass is never read as
+   a real one. An exporter lists capabilities without a passing test.
 2. The swap procedure is fixed: the swap test passes on staging; shadow or dual-run in
    production with idempotency keys; parity for a declared window; cutover by changing the
    registry `impl:` (or the DNS alias) and regenerating; affected canaries and invariants green;

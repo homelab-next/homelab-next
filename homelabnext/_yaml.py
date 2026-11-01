@@ -8,17 +8,20 @@ that; they used to carry four private copies of the same constructor.
 * :class:`UniqueKeyLoader` is ``SafeLoader`` refusing duplicate keys.
 * :class:`UniqueKeyStrDateLoader` also leaves ISO dates and timestamps as strings (the schemas
   type them as strings).
+* :func:`load_unique` reads a file with :class:`UniqueKeyLoader`, turning an unreadable file or a
+  YAML error into the caller's own error type.
 
 Importing this module imports PyYAML; a reader that keeps PyYAML optional imports it lazily.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import yaml
 
-__all__ = ["UniqueKeyLoader", "UniqueKeyStrDateLoader"]
+__all__ = ["UniqueKeyLoader", "UniqueKeyStrDateLoader", "load_unique"]
 
 
 _MERGE = "tag:yaml.org,2002:merge"
@@ -75,3 +78,12 @@ UniqueKeyStrDateLoader.yaml_implicit_resolvers = {
     k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:timestamp"]
     for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
+
+
+def load_unique(path: Path, error: type[Exception]) -> Any:
+    """``path`` parsed with :class:`UniqueKeyLoader`; a read or parse failure raises
+    ``error("cannot read <path>: <reason>")``, chained to the original exception."""
+    try:
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+    except (OSError, yaml.YAMLError) as exc:
+        raise error(f"cannot read {path}: {exc}") from exc
