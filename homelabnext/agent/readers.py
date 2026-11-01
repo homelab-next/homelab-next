@@ -45,6 +45,12 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import tlp
+from homelabnext.registry.model_tlp import (
+    DATA_TIERS,
+    receive_ceiling,
+    tier_disagreement,
+    tier_label,
+)
 
 from .errors import SpecError
 
@@ -53,8 +59,6 @@ KINDS = ("mcp", "capabilities", "tiers")
 #: catalog statuses a profile may be granted (an allowlist; ``deprecated`` with a note): the same
 #: as :data:`homelabnext.mcp.servers.GRANTABLE`
 GRANTABLE = ("active", "deprecated")
-#: the data tiers a catalog server may declare (``schemas/platform/mcp_server.schema.json``)
-DATA_TIERS = ("local-only", "cloud-allowed")
 #: how a catalog server's acting tools reach the world (``acts_via``, mcp_server 1.1): through the
 #: broker, or directly (an exception: a reason, a human approve review and a policy listing)
 ACTS_VIA = ("broker", "direct")
@@ -357,26 +361,13 @@ def server_label(meta: Mapping[str, Any]) -> tlp.Label:
     reads from its ``data_tier`` the same way (``cloud-allowed``: clear; anything else: red)."""
     if meta.get("tlp") is not None:
         return tlp.read(meta["tlp"])
-    return tlp.Label.CLEAR if meta.get("data_tier") == "cloud-allowed" else tlp.Label.RED
-
-
-def receive_ceiling(tlp_ceiling: Any = None, data_tier: Any = None) -> tlp.Label:
-    """The TLP ceiling a profile receives data at (ADR-0033 decision 12): its declared
-    ``tlp_ceiling`` (read as data: a value that is not a label is ``red`` here, and refused by
-    :func:`tlp_ceiling_problems`), else what its ``data_tier`` already lets it receive:
-    ``local-only`` data (``red``) for a local-only profile, ``clear`` for any other, so a profile
-    that declares no ceiling is granted nothing it was not granted before."""
-    if tlp_ceiling is not None:
-        return tlp.read(tlp_ceiling)
-    return tlp.Label.RED if data_tier == "local-only" else tlp.Label.CLEAR
+    return tier_label(meta.get("data_tier"))
 
 
 def tlp_ceiling_problems(doc: Mapping[str, Any], who: str = "profile") -> list[str]:
     """A profile's declared ``tlp_ceiling`` is a canonical label that agrees with its
     ``data_tier`` (decision 12: ``local-only`` is above ``clear``, ``cloud-allowed`` is
     ``clear``)."""
-    from homelabnext.registry.model_tlp import tier_disagreement
-
     if doc.get("tlp_ceiling") is None:
         return []
     who = _shown(who)

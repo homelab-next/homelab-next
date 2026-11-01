@@ -49,7 +49,7 @@ import yaml
 
 from homelabnext import tlp
 from homelabnext.registry.model import secret_env_name
-from homelabnext.registry.model_tlp import tier_disagreement
+from homelabnext.registry.model_tlp import tier_disagreement, tier_label
 
 from . import credentials
 
@@ -774,7 +774,7 @@ def record_label(rec: Mapping[str, Any]) -> tlp.Label:
     and the default of unlabelled data (decision 2)."""
     if rec.get("tlp") is not None:
         return tlp.read(rec["tlp"])
-    return tlp.Label.CLEAR if rec.get("data_tier") == "cloud-allowed" else tlp.Label.RED
+    return tier_label(rec.get("data_tier"))
 
 
 def tlp_problems(rec: Mapping[str, Any], where: str) -> list[str]:
