@@ -1347,8 +1347,9 @@ written (UTC), the host's boot id, and the writer's pid and start time.
   `module=` yet**: until a module loader registers a module's pairs with it, a module's pair seen
   running is bound to no module, and the loader reports it as no module's or the core's.
 
-The census reads each owner's record at the fixed directory `/var/lib/homelabnext/notify-pairs`
-(`module_census_pairs_dir`; no glob) in one step, with the role's `notify_pairs_records` module, so
+The census reads each owner's record at `/var/lib/homelabnext/notify-pairs`
+(`module_census_pairs_dir`, a role default the overlay's deploy workflow pins on the command line,
+so its inventory cannot repoint it; no glob) in one step, with the role's `notify_pairs_records` module, so
 nothing can be swapped between a check and a read. No link is followed at any step; each directory
 on the way must be writable by no one but its owner; the record must be a regular file of at most
 256 KiB (a FIFO never blocks the read); otherwise the census fails. Beside each record the host
@@ -1400,7 +1401,8 @@ included. The answer is the agent keys whose profile the manifest both maps a tr
 and grants something, names only, and it is audited. An agent, a relay, the Code Mode runner and
 a sandbox are refused it (`not-the-operator`), and an unlisted root `unknown-caller`; `hnx`
 then names the `operators` key. Only that one task becomes root (`module_census_hnx_cli`, an
-absolute path, default `/opt/hnx/bin/hnx`); the systemctl queries stay unprivileged. A broker that
+absolute path, default `/opt/hnx/bin/hnx`, pinned on the deploy's command line like
+`module_census_systemctl_cli`); the systemctl queries stay unprivileged. A broker that
 refuses fails the census, never passes it. Each answered line must be one agent key, or the census is unreadable; `agents` is
 the union over every broker asked, and stays in `not_gathered` when no host's census asked one (a
 lab whose inventory sets no socket has not shown which agents run, which is never read as
