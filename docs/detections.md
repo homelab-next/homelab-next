@@ -16,11 +16,29 @@ covers the parts that are not already in ADR-0006; the layout and lint rules the
 detections/
   sigma/<tactic>/<slug>.yml        one rule, Sigma subset
   fixtures/<slug>/{must_fire,must_not_fire,evasion}/*.json
-  mappings/<backend>.yml           Sigma field name -> dotted path in the engine's event shape
+  mappings/generic.yml             Sigma field name -> dotted path in the fixtures' event shape
+  mappings/<backend>.yml           optional: the same for one engine's decoded event shape
   attack_snapshots/<backend>.yml   the engine's bundled ATT&CK ids (see below)
-  det_map.yml                      det:<slug> -> engine rule number
+  det_map.yml                      GENERATED: det:<slug> -> engine rule number
   attack_coverage.json             GENERATED: ATT&CK coverage from passing fixtures (golden)
 ```
+
+`compile <backend>` maps field names with `mappings/<backend>.yml` when that file exists, and
+otherwise with `mappings/generic.yml`, warning on stderr that the engine gets the generic field
+paths. The fixture runner (`run`, `coverage`) always uses `mappings/generic.yml`: fixtures are
+events in the generic shape. A rule a backend cannot express is named on stderr and left out of
+the bundle, and `compile` exits 1; the rest of the bundle is still written.
+
+`map --check` fails unless `det_map.yml` is exactly what `map` would write: every live rule has a
+number, no number is shared by two rules, no live rule reuses a retired number, and every entry
+is an integer. A hand edit that breaks any of these is caught in CI, not only on regeneration.
+
+Every `attack.*` tag is lower-case and one of: a technique (`attack.tNNNN[.NNN]`), a group
+(`attack.gNNNN`), software (`attack.sNNNN`), or an ATT&CK Enterprise tactic
+(`homelabnext.detections.sigma.ATTACK_TACTICS`; Sigma spells them with underscores,
+`attack.initial_access`). `lint` fails on any other `attack.*` tag, and only tactic names count
+as tactics in `attack_coverage.json`. `lint` also fails on a file under `sigma/` that is not
+`sigma/<tactic>/<slug>.yml`, which no gate would otherwise load.
 
 ## ATT&CK coverage counts only tested rules (D-04)
 
@@ -89,7 +107,9 @@ T1086
 
 ### The adapter hook
 
-An adapter advertises its known ids by implementing one or both of:
+An adapter advertises its known ids by implementing either: the `known_technique_ids()` method,
+or only the `known_ids_snapshot` attribute (relative to the detections root, or absolute), which
+`validate-techniques` then loads itself:
 
 ```python
 class KnownTechniques(Protocol):
@@ -115,14 +135,14 @@ python -m homelabnext.detections --root detections validate-techniques \
     --backend wazuh --snapshot path/to/known.yml
 ```
 
-Exit codes follow the fleet's invariants-runner convention (and this is wired through the
-detections test suite):
+It runs in `make detections` and CI. Exit codes follow the fleet's invariants-runner convention
+(and this is wired through the detections test suite):
 
 | rc  | meaning |
 |---  |---|
 | 0   | every id in every rule's `attack.*` tags is in the engine's known set |
 | 1   | one or more ids are not in the known set (fail) |
-| 100 | no snapshot could be loaded for this backend (could not measure) |
+| 100 | no snapshot could be loaded for this backend: none advertised, or the named or advertised file is missing or malformed (could not measure) |
 
 `--suggest-parent` turns an unknown sub-technique whose parent IS known into a suggestion:
 

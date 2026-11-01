@@ -324,6 +324,7 @@ jobs:
           python -m homelabnext.detections run
           python -m homelabnext.detections map --check
           python -m homelabnext.detections coverage --check detections/attack_coverage.json
+          python -m homelabnext.detections validate-techniques
       - name: every event type and shared table has passing publisher and consumer contract tests
         run: python tools/contract_coverage.py
       - name: registers build from the examples, record Links blocks current, summaries present, well-formed and fresh

@@ -276,45 +276,33 @@ def x04(ctx: Context) -> CheckResult:
 
 # ---- X-06 -----------------------------------------------------------------------------------
 
-SPEC_DIRS = ("charters", "profiles", "decisions", "schedules")
-SPEC_SUFFIXES = {".md", ".yml", ".yaml", ".json", ".txt", ".toml"}
-RAW_RULE = re.compile(r"(?i)\brule[\s_-]*(?:id|no\.?|number|#)?\s*[:=#]?\s*[\"']?(\d{4,8})\b")
-DET_REF = re.compile(r"\bdet:([a-z0-9_.\-]+[a-z0-9])")
 DET_MAPS = ("detections/det_map.yml", "det_map.yml")
 
 
-def _known_det_ids(root: pathlib.Path) -> tuple[str, set[str]] | None:
-    """(map path, logical ids without the ``det:`` prefix) from the first det map found."""
+def _det_map(root: pathlib.Path) -> tuple[str, dict] | None:
+    """(map path, map) from the first det map found."""
     for cand in DET_MAPS:
         mp = root / cand
         if mp.exists():
-            entries = (yaml.safe_load(mp.read_text()) or {}).get("entries") or {}
-            return cand, {str(k).removeprefix("det:") for k in entries}
+            return cand, yaml.safe_load(mp.read_text()) or {}
     return None
 
 
 def x06(ctx: Context) -> CheckResult:
-    files = [
-        f
-        for d in SPEC_DIRS
-        if (ctx.root / d).is_dir()
-        for f in sorted((ctx.root / d).rglob("*"))
-        if f.is_file() and f.suffix in SPEC_SUFFIXES
-    ]
+    # One rule, one implementation: the same file set and scanner as `detections lint-ids`.
+    from ...detections import lint as det_lint
+
+    files = det_lint.find_agent_files(ctx.root)
     if not files:
-        return CheckResult(SKIP, "no charters/profiles/decisions/schedules to lint")
-    found = _known_det_ids(ctx.root)
-    map_name, known = found if found else ("", None)
-    problems = []
-    for f in files:
-        rel = f.relative_to(ctx.root).as_posix()
-        text = f.read_text(errors="replace")
-        for m in RAW_RULE.finditer(text):
-            problems.append(f"{rel}: raw rule number {m.group(1)}; use a det: logical id")
-        if known is not None:
-            for m in DET_REF.finditer(text):
-                if m.group(1) not in known:
-                    problems.append(f"{rel}: det:{m.group(1)} is not in {map_name}")
+        return CheckResult(SKIP, "no charters/profiles/decision specs/schedules to lint")
+    found = _det_map(ctx.root)
+    map_name, det_map = found if found else ("", None)
+    if det_map is not None:
+        det_map = {"entries": det_map.get("entries") or {}, "retired": det_map.get("retired") or []}
+    problems = [
+        p.removeprefix(f"{ctx.root.as_posix()}/")
+        for p in det_lint.lint_agent_ids(files, det_map, map_name or "the det map")
+    ]
     if problems:
         return CheckResult(FAIL, "; ".join(problems[:20]))
     return CheckResult(PASS, f"{len(files)} spec files use logical detection ids only")
