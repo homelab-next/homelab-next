@@ -27,9 +27,9 @@ hnx registers summaries examples/registers docs [--json]   # summary lint (ADR-0
 hnx registers split lessons.yml lessons/ | join lessons/ lessons.yml     # convert either way
 hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review must carry
 hnx reviews digest lab/modules/<id>   # a fetched module's tree digest (docs/modules.md, "Supply chain")
-hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event
+hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event (also a strategy record)
 hnx registers events migrate examples/registers/lessons docs/systems   # inline state -> events
-hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--dry-run]
+hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--policy F | --no-policy] [--dry-run]
 hnx ids check-lost | check-dupes | check-uids                          # make ids-check
 hnx records uid | numbers examples/registers | assign-uids TREE...     # identity (ADR-0019)
 ```
@@ -73,7 +73,7 @@ all but in one file per event beside it (see "Events and derived state"), so an 
 review and a person editing the prose in Obsidian never touch the same file either.
 
 Invariants stay one file on purpose: they are short machine checks (statement, observable,
-expected, remediation) with no prose body, the runner reads them as one document, seventy of them
+expected, remediation) with no prose body, the runner reads them as one document, the `auto` ones
 run in CI and their ids are cited from the checklist, docs and code. Splitting them would buy
 nothing an editor needs and would move every citation. Their ids are the checklist's row ids
 (chosen to match a row, never allocated), so they keep them.
@@ -228,7 +228,10 @@ every event, the sibling register, the invariants and the review policy's identi
 write atomically (`homelabnext.state.atomic_write_text`). Invalid content is refused and nothing
 is written. The review-tier requirement is opt-in there (`require_reviews=True`): an edit or a
 recurrence legitimately creates review debt that a later review event pays, and the build still
-fails until it is paid. `hnx registers events add RECORD EVENT.yml` is the command form.
+fails until it is paid. `hnx registers events add RECORD EVENT.yml` is the command form; given a
+strategy record (`<tree>/<dir>/<uid>.md` beside a `strategy.md`) it validates the strategy tree
+instead ([strategy](strategy.md)). It refuses a `transition` (only the decider writes one) and a
+`rekey` (only the uid migration writes one).
 
 ### Status changes: intents and the decider
 
@@ -252,6 +255,10 @@ not `on`, which YAML 1.1 reads as `true`: a note with a non-string key is invali
 Two conflicting intents (both retiring one lesson with different `retired_by`): the first decided
 applies, the second is denied. A crash between the event and the moves (or between the two moves,
 leaving the note in `decided/approved/`) is finished, not re-decided, on the next run. It is a command, not a service: run it by hand, from CI or from a timer.
+It fails closed when it finds no `review-policy.yml` in or beside the register root (a misplaced
+private policy must not waive every tier): pass `--policy FILE`, or `--no-policy` to decide
+without tiers on purpose. `hnx registers build` warns in that case. A note whose name is already
+in a `decided/` lane is refused before anything applies (its event would cite the other note).
 
 ## Lessons are backlog: kinds and lifecycle
 
@@ -312,7 +319,7 @@ note: optional one line or a link to the evidence
 * a review counts only while its `digest` matches the record's current content (every field but
   `uid`, `order`, `reviews` and `last_verified`, with the events applied; the Links block is not
   content, and moving a record with `order` is not an edit), and only with `verdict: pass`. A
-  `rekey` event (written only by the uid migration, `by: hnx:migrate`) carries the reviews of the
+  `rekey` event (written only by the uid migration, `by: hnx:migrate`; the write path refuses one) carries the reviews of the
   digest before the identity rewrite to the digest after it. Editing a record
   after review makes its reviews stale; there is no date to forget to bump. `last_reviewed` is
   derived (the latest current passing review) and shown on the pages.
@@ -342,7 +349,8 @@ $ hnx registers review examples/registers --today 2027-05-01
 
 Actions, in this order: **review** (the status needs reviews it lacks, by tier), **retire** (a
 controlled pitfall whose `retired_by` already holds: every invariant it names passes in
-`invariants.results.json`), **incorporate** (a due practice, with the runbooks sharing its tags
+`invariants.results.json` and every path it names exists; a `make:` target or a path is not run,
+so the suggestion marks it `unverified`), **incorporate** (a due practice, with the runbooks sharing its tags
 as candidates), **supersede** (a due practice with a newer one for the same technology),
 **update** (a due practice with nowhere to go, or a due runbook), **keep** (a due pitfall that
 cannot graduate yet: work it or bump `review_by`). `make check` prints it as a warning and never
