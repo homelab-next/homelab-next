@@ -73,7 +73,11 @@ One writer per `(table, source)` is assumed.
   builds its own `SELECT` (validated columns, `where` values bound as parameters, a bounded
   `LIMIT`), adds the ceiling's row filter and checks each returned row's label, so a row above the
   ceiling, unlabelled or with a non-canonical label never comes back below `red`. Raw `query` and
-  `named` are refused below `red`; a table without a `tlp` column is `red` only. The query engine's
+  `named` are refused below `red`; a table without a `tlp` column is `red` only. A consumer gets
+  its reader from `ceiling.reader_for(lake, reader, tlp_readers, schemas)`, at its declared
+  ceiling (a reader with no declaration is refused); reading at `red` needs a `RedGrant` (who and
+  why), and code outside this package runs raw SQL only through `raw_query`/`raw_named` with one
+  (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it). The query engine's
   own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.

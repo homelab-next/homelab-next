@@ -44,13 +44,15 @@ def row_from_event(event: Mapping[str, Any], schema: TableSchema) -> dict[str, A
     if not schema.labelled:
         return row
     value = holder.get(PIPELINE_LABEL) if isinstance(holder, Mapping) else None
-    if type(value) is not str or value not in tlp.LABELS:
+    try:
+        tlp.parse_stored(value)
+    except ValueError:
         raise RowRejected(
             schema.name,
             [
                 f"{LABEL_COLUMN}: the row's label is the event's {HOLDER}.{PIPELINE_LABEL}, set by "
                 f"the log pipeline; got {value!r} (the event's own {LABEL_COLUMN} is never used)"
             ],
-        )
+        ) from None
     row[LABEL_COLUMN] = value
     return row
