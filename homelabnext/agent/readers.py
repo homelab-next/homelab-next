@@ -65,10 +65,13 @@ BROKER_CAPABILITY = "cap:broker"
 #: schema-checked first, so any other value (a token pasted into a grant list) is never quoted.
 _ID = re.compile(r"(?:[a-z]+:)?[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 #: the rules a lint applies (``hnx agent lint --rule``): readers-cannot-act (G-03, with the
-#: catalog's grant rules) and actors-act-via-broker (G-13)
+#: catalog's grant rules), actors-act-via-broker (G-13) and manifests-fit-their-profiles (every
+#: profile a context manifest names passes :func:`homelabnext.agent.access.session_problems`
+#: with it, the check ``start_session`` refuses a session on)
 READERS = "readers-cannot-act"
 BROKER = "actors-act-via-broker"
-RULES = (READERS, BROKER)
+SESSIONS = "manifests-fit-their-profiles"
+RULES = (READERS, BROKER, SESSIONS)
 
 
 class ToolClasses:
@@ -804,6 +807,11 @@ def lint_paths(
     ``direct_mcp`` (without one no ``acts_via: direct`` server is allowed); ``by_rule``, when
     given, receives each rule's problems (one walk of the tree serves every rule).
 
+    :data:`SESSIONS` pairs each manifest with the profiles its ``profiles`` names and reports what
+    ``start_session`` would refuse (:func:`homelabnext.agent.access.session_problems`) for every
+    linted profile of that id, and a named profile no linted file has; a manifest that names no
+    profile is a note (it is checked only when a session starts).
+
     Returns ``([(file, problem)], {"profile": n, "manifest": m})``; ``notes``, when given, receives
     ``(file, warning)`` for every deprecated grant (:func:`grant_notes`).  Schema negatives and frozen
     baselines are skipped; a named file that cannot be parsed is a problem, a discovered one is
@@ -816,6 +824,7 @@ def lint_paths(
     rules = tuple(rules)
     problems: list[tuple[str, str]] = []
     counts = {"profile": 0, "manifest": 0}
+    found: dict[str, list[tuple[Path, Mapping[str, Any]]]] = {"profile": [], "manifest": []}
     for raw in paths:
         root = Path(raw)
         if not root.exists():
@@ -836,12 +845,65 @@ def lint_paths(
                 if kind is None:
                     continue
                 counts[kind] += 1
+                found[kind].append((f, doc))
                 check = profile_problems if kind == "profile" else manifest_problems
-                for rule in rules:  # one walk of the tree, each problem under its rule
+                for rule in (r for r in rules if r != SESSIONS):  # one walk, each under its rule
                     got = [(str(f), p) for p in check(doc, classes, policy, (rule,))]
                     problems += got
                     if by_rule is not None:
                         by_rule.setdefault(rule, []).extend(got)
                 if notes is not None:
                     notes += [(str(f), n) for n in doc_notes(doc, classes)]
+    if SESSIONS in rules:
+        got, pair_notes = pair_problems(found["manifest"], found["profile"])
+        problems += got
+        if by_rule is not None:
+            by_rule.setdefault(SESSIONS, []).extend(got)
+        if notes is not None:
+            notes += pair_notes
     return problems, counts
+
+
+def session_view(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """What :func:`homelabnext.agent.access.session_problems` reads of any agent-profile shape (a
+    spec, a compiled ``agent/profile``, the lean ``platform/agent_profile``)."""
+    grants = doc.get("grants") if isinstance(doc.get("grants"), Mapping) else doc
+    view = {k: doc[k] for k in ("id", "persona", "reads_untrusted", "memory_scopes") if k in doc}
+    view["grants"] = {"mcp": list(grants.get("mcp") or [])}
+    return view
+
+
+def pair_problems(
+    manifests: Iterable[tuple[Path, Mapping[str, Any]]],
+    profiles: Iterable[tuple[Path, Mapping[str, Any]]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """``(problems, notes)`` of :data:`SESSIONS`: every manifest against every profile of each id
+    its ``profiles`` names (each problem is one ``start_session`` would refuse the pair on); a
+    named id no profile has is a problem, a manifest naming none a note."""
+    from .access import session_problems
+
+    by_id: dict[str, list[tuple[Path, Mapping[str, Any]]]] = {}
+    for f, doc in profiles:
+        by_id.setdefault(str(doc.get("id")), []).append((f, doc))
+    problems: list[tuple[str, str]] = []
+    notes: list[tuple[str, str]] = []
+    for f, man in manifests:
+        who = f"manifest {man.get('id', '?')}"
+        named = man.get("profiles")
+        if not isinstance(named, list) or not named:
+            why = f"{who} names no profiles, so it is paired with one only when a session starts"
+            notes.append((str(f), why + " (name them in its profiles)"))
+            continue
+        for pid in named:
+            pid = str(pid)
+            shown = pid if _ID.fullmatch(pid) else "a profile"
+            if pid not in by_id:
+                why = f"{who} names {shown}, which no linted profile has"
+                problems.append((str(f), why + " (lint the manifest with its profiles)"))
+                continue
+            for pf, doc in by_id[pid]:
+                problems += [
+                    (str(f), f"{who} with {shown} ({pf}): {p}")
+                    for p in session_problems(man, session_view(doc))
+                ]
+    return problems, notes

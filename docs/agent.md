@@ -41,7 +41,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
 All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
-`agent/context_manifest` (1.1), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+`agent/context_manifest` (1.2), `agent/golden_task` (1.1), `broker/manifest` (1.8),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
 frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
@@ -271,9 +271,10 @@ one of them only through the broker:
 
 `compile_profile` raises `BrokerViolation` (after the catalog check, whatever the ceiling allows);
 `verify_profile` judges a compiled profile with the policy's `direct_mcp`; `hnx agent lint` runs
-both rules (`--rule readers-cannot-act|actors-act-via-broker` runs one and prints its own count,
-`--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the tree
-serving both); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
+both rules and the pairing rule below (`--rule
+readers-cannot-act|actors-act-via-broker|manifests-fit-their-profiles` runs one and prints its own
+count, `--policy` supplies `direct_mcp` and notes an entry that excepts nothing, one walk of the
+tree serving all three); `hnx mcp catalog check`, the client render and the module rules ([[modules]]:
 a module contributes no acting record and gives its own agent no acting grant) refuse the same.
 Checklist G-13 runs the lint with `--rule actors-act-via-broker` and the ceiling policy,
 G-03 with `--rule readers-cannot-act`, and G-04's observable runs the broker rule before its tests.
@@ -386,8 +387,12 @@ manifest cannot replace or remove what the agent is told. The manifest's persona
 and `session_problems(manifest, profile)` must find nothing: a profile with
 `reads_untrusted: false` (an actor) is never given a `source: input` section (it receives a
 reader's validated output through a handoff, G-04), every manifest `tools` entry is an MCP server
-the profile is granted, and every manifest `memory_scopes` entry is one of the profile's. Stable content is
-never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
+the profile is granted, and every manifest `memory_scopes` entry is one of the profile's; a
+manifest that names its `profiles` (context manifest 1.2) feeds no other profile. `hnx agent lint`
+runs the same `session_problems` (rule `manifests-fit-their-profiles`) for every manifest against
+every linted profile of each id its `profiles` names, so a mismatched pair is found before a
+session starts; a named profile no linted file has is a problem, and a manifest that names none is
+a note. Stable content is never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
 `hnx agent pack MANIFEST --inputs F --profile P --policy POLICY --lock LOCK --registry R
 [--runs-on HOST] [--broker M]` (the profile is verified against the policy and the lock first).
 
@@ -677,7 +682,7 @@ hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
                 --registry services.yml [--runs-on HOST] [--broker M]]
                [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
-hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker] [--policy POLICY.yml]
+hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker|manifests-fit-their-profiles] [--policy POLICY.yml]
 hnx agent prompts lint [TEMPLATE|DIR ...]
 hnx agent prompts render TEMPLATE [--values VALUES.yml]
 hnx agent injection run [--fake fence|naive | --role ROLE --registry R --roles T] [--out F] [--check GOLDEN]

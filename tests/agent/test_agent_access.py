@@ -215,3 +215,94 @@ def test_cli_pack_with_profile_starts_a_session(profile, tmp_path, capsys):
     assert "is not the reviewed" in capsys.readouterr().err
     assert cli.main([*args, *pl]) == 1
     assert "go with --profile" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------ lint pairs manifests (G-03)
+
+
+def _pair_case(case):
+    """``(manifest, profile dict)`` for one mismatch ``start_session`` refuses."""
+    m, p = manifest(), compile_profile(spec(), library())
+    m["profiles"] = ["profile:reader"]
+    if case == "actor-fed-raw-input":
+        p = compile_profile({**spec(), "reads_untrusted": False}, library())
+    elif case == "tools-beyond-grants":
+        m["tools"] = ["lake", "records"]
+    elif case == "memory-beyond-scopes":
+        m["memory_scopes"] = ["analyst", "someone-else"]
+    elif case == "persona":
+        m["persona"] = "persona:someone-else"
+    elif case == "not-named":
+        m["profiles"] = ["profile:someone-else"]
+    return m, p
+
+
+PAIR_CASES = [
+    "actor-fed-raw-input",
+    "tools-beyond-grants",
+    "memory-beyond-scopes",
+    "persona",
+    "not-named",
+]
+
+
+@pytest.mark.parametrize("case", PAIR_CASES)
+def test_lint_finds_what_start_session_would_refuse(registry, tmp_path, case):
+    """Parity: every problem the lint reports for a manifest and a profile it names is one that
+    start_session refuses the session on, and the lint finds one for every refused pair."""
+    from homelabnext.agent.readers import SESSIONS, lint_paths
+
+    m, p = _pair_case(case)
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    (tmp_path / "profile.json").write_text(json.dumps(p))
+    with pytest.raises(SpecError) as refused:
+        start_session(m, inputs(), verified(p), registry)
+    by_rule: dict = {}
+    problems, counts = lint_paths(
+        [tmp_path / "manifest.json", tmp_path / "profile.json"], rules=[SESSIONS], by_rule=by_rule
+    )
+    if case == "not-named":  # no linted profile has the id the manifest names
+        assert len(problems) == 1 and "which no linted profile has" in problems[0][1]
+        assert "names profiles ['profile:someone-else'], not profile:reader" in str(refused.value)
+        return
+    assert counts == {"profile": 1, "manifest": 1} and problems == by_rule[SESSIONS]
+    assert problems, f"lint missed what start_session refused: {refused.value}"
+    for _, prob in problems:
+        assert prob.split("): ", 1)[1] in str(refused.value)
+
+
+def test_a_manifest_that_names_its_profile_lints_clean_and_one_that_names_none_is_a_note(
+    tmp_path,
+):
+    from homelabnext.agent.readers import SESSIONS, lint_paths
+
+    m, p = _pair_case("ok")
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    (tmp_path / "profile.json").write_text(json.dumps(p))
+    notes: list = []
+    assert lint_paths([tmp_path], notes=notes, rules=[SESSIONS])[0] == []
+    assert notes == []
+    del m["profiles"]
+    (tmp_path / "manifest.json").write_text(json.dumps(m))
+    assert lint_paths([tmp_path], notes=notes, rules=[SESSIONS])[0] == []
+    assert any("names no profiles" in n for _, n in notes)
+
+
+def test_the_example_manifests_name_their_profiles_and_fit_them():
+    from homelabnext.agent.readers import SESSIONS, lint_paths
+
+    notes: list = []
+    problems, counts = lint_paths(
+        [REPO / "schemas" / "agent" / "examples"], notes, rules=[SESSIONS]
+    )
+    assert problems == [] and counts["manifest"] >= 2
+    assert not [n for _, n in notes if "names no profiles" in n]
+
+
+def test_start_session_refuses_a_profile_the_manifest_does_not_name(profile, registry):
+    m = manifest()
+    m["profiles"] = ["profile:someone-else"]
+    with pytest.raises(SpecError, match=r"names profiles \['profile:someone-else'\]"):
+        start_session(m, inputs(), profile, registry)
+    m["profiles"] = ["profile:reader"]
+    assert start_session(m, inputs(), profile, registry)[0]["status"] == "ready"

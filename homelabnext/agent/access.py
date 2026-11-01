@@ -248,8 +248,10 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
     """Why ``manifest`` may not feed a session of ``profile`` (empty: it may).
 
     The manifest is bound to a persona and the profile declares what the agent may hold, so the
-    two are only both in hand here:
+    two are only both in hand here (and in ``hnx agent lint``, for the profiles a manifest names):
 
+    * the profile's persona is the manifest's, and a manifest that names its ``profiles`` names
+      this one;
     * an actor (``reads_untrusted: false``) is never given a ``source: input`` section, the raw
       content a reader exists to turn into validated structured output (G-03/G-04);
     * every manifest tool is an MCP server the profile is granted, so the pack never lists a tool
@@ -258,6 +260,14 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
     """
     pid = profile.get("id")
     problems: list[str] = []
+    if manifest.get("persona") != profile.get("persona"):
+        problems.append(
+            f"manifest persona {manifest.get('persona')!r} is not the profile's "
+            f"{profile.get('persona')!r}"
+        )
+    named = manifest.get("profiles")
+    if named is not None and pid not in named:
+        problems.append(f"the manifest names profiles {sorted(named)}, not {pid}")
     if profile.get("reads_untrusted", True) is False:
         raw = sorted(s["name"] for s in manifest.get("sections", []) if s.get("source") == "input")
         if raw:
@@ -299,8 +309,9 @@ def start_session(
 
     The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
     either is refused, so a manifest cannot replace or remove what the agent is told about its
-    access and about the project's terms and scope.  The profile's persona
-    must be the manifest's, and :func:`session_problems` must find nothing.  Stable content is never cut, so a block that does not fit
+    access and about the project's terms and scope.  :func:`session_problems` must find nothing
+    (the persona is the manifest's, the manifest names this profile if it names any, and the
+    tools and memory scopes fit).  Stable content is never cut, so a block that does not fit
     ``budget_chars`` defers the pack instead of being truncated.
     """
     require_verified(profile, "start_session")
@@ -309,11 +320,6 @@ def start_session(
             raise SpecError(f"section name {ACCESS_SECTION!r} is reserved for the access block")
         if s.get("name") == TERMS_SECTION:
             raise SpecError(f"section name {TERMS_SECTION!r} is reserved for the project's terms")
-    if manifest.get("persona") != profile.get("persona"):
-        raise SpecError(
-            f"manifest persona {manifest.get('persona')!r} is not the profile's "
-            f"{profile.get('persona')!r}"
-        )
     problems = session_problems(manifest, profile)
     if problems:
         raise SpecError("; ".join(problems))

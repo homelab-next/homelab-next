@@ -22,7 +22,9 @@
 ``lint [PATH ...]``                               readers cannot act (G-03) and actors act only
                                                   through the broker (G-13): every agent profile
                                                   and context manifest under PATH (default
-                                                  ``.``); ``--rule R`` runs one of the two,
+                                                  ``.``), and every manifest against the
+                                                  profiles it names (what ``start_session``
+                                                  refuses); ``--rule R`` runs one of the three,
                                                   ``--policy P`` supplies each profile's
                                                   ``direct_mcp`` (without it no direct server).
 ``prompts lint [PATH ...]``                         G-01 template lint (default: shipped templates).
@@ -37,7 +39,8 @@ data_tier, model_role}}}``, owned and reviewed separately from the specs (``data
 profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling, reader, broker or budget violation, an
 invalid spec, policy, lock, manifest or inputs document; for ``lint``, a reader holding an acting
-tool, a profile acting other than through the broker, or no profile found at all), 2 a usage
+tool, a profile acting other than through the broker, a manifest that does not fit a profile it
+names, or no profile found at all), 2 a usage
 error or a spec, library, policy, lock, manifest, inputs, profile or broker file that cannot be
 read or parsed, 3 (``pack`` only) the pack was assembled but is ``deferred``.  ``prompts lint``
 and ``injection`` exit 1 on any problem,
