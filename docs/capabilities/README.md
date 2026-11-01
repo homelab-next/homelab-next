@@ -52,6 +52,7 @@ Every service in `examples/services.yml`, and the capability page that holds its
 | [inference](../systems/inference.md) ([[systems/inference\|inference]]) | `inference` | `vllm` | [inference](inference.md) ([[capabilities/inference\|inference]]) |
 | [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog\|lake-catalog]]) | `lake-catalog` | `lakekeeper` | [lake-catalog](lake-catalog.md) ([[capabilities/lake-catalog\|lake-catalog]]) |
 | [lake-query](../systems/lake-query.md) ([[systems/lake-query\|lake-query]]) | `lake-query` | `trino` | [lake-query](lake-query.md) ([[capabilities/lake-query\|lake-query]]) |
+| [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway\|llm-gateway]]) | `llm-gateway` | `example-llm-gateway` | no conformance suite |
 | [metrics](../systems/metrics.md) ([[systems/metrics\|metrics]]) | `metrics` | `prometheus` | no conformance suite |
 | [notify](../systems/notify.md) ([[systems/notify\|notify]]) | `notify` | `ntfy` | [notify](notify.md) ([[capabilities/notify\|notify]]) |
 | [object-store](../systems/object-store.md) ([[systems/object-store\|object-store]]) | `object-store` | `minio` | [object-store](object-store.md) ([[capabilities/object-store\|object-store]]) |

@@ -157,3 +157,25 @@ def test_module_section_citations_name_a_section_that_exists():
                 dangling.append(f"{f.relative_to(ROOT)}: {m[1]!r}")
     assert seen > 20
     assert dangling == []
+
+
+def test_a_capability_the_docs_name_is_one_the_example_lab_provides():
+    """ "the `llm-gateway` capability" in a page is something a reader can look up: a service of
+    the example registry provides it, or it is a conformance capability.  The gateway every model
+    consumer calls (docs/llm-gateway.md) once had no service in examples/services.yml, and the
+    example agent runtime reached the serving engine directly."""
+    from homelabnext.conform.registry import CAPABILITIES, EXTENDED
+
+    services = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["services"]
+    provided = {s["capability"] for s in services.values()}
+    known = provided | set(CAPABILITIES) | set(EXTENDED)
+    named = {
+        f"{doc.relative_to(ROOT)}: {m[1]}"
+        for doc in _tracked_docs()
+        for m in re.finditer(r"the `([a-z][a-z-]*)` capability", doc.read_text())
+        if m[1] not in known
+    }
+    assert named == set()
+    assert "llm-gateway" in provided
+    assert "llm-gateway" in services["agent-runtime"]["upstreams"]
+    assert "inference" not in services["agent-runtime"]["upstreams"]
