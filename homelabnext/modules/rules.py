@@ -299,6 +299,43 @@ def role_ceiling_problems(roles: dict[str, Doc]) -> list[str]:
     return out
 
 
+#: the one directory a module's ``python/`` tree may hold: the PEP 420 namespace package
+CODE_NAMESPACE = "hnx_modules"
+
+
+def code_tree_problems(mod_dir: Path, mid: str) -> list[str]:
+    """A module's ``python/`` tree holds only its own package, ``hnx_modules/<id_>/``.
+
+    ``python/`` is what goes on the import path for the module's code, so anything else there
+    would shadow code that is not the module's: another module's package
+    (``hnx_modules/<other>/``), the core (``homelabnext/``), any other top-level module, or an
+    ``hnx_modules/__init__.py``, which turns the namespace package into a regular one and hides
+    every other module's ``hnx_modules/<id_>/``.  A symlink is refused anywhere in the tree (its
+    target, not its name, is what an import reads).  No ``python/`` at all is fine."""
+    root = mod_dir / "python"
+    if not root.exists() and not root.is_symlink():
+        return []
+    if root.is_symlink() or not root.is_dir():
+        return ["python: not a directory of the module's own code"]
+    own = us(mid)
+    out = []
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if p.is_symlink():
+            out.append(f"python/{rel.as_posix()}: a symlink in the module's code tree")
+        elif len(rel.parts) == 1 and (rel.parts[0] != CODE_NAMESPACE or not p.is_dir()):
+            out.append(
+                f"python/{rel.as_posix()}: the code tree holds only {CODE_NAMESPACE}/{own}/ "
+                "(nothing else may go on the import path)"
+            )
+        elif len(rel.parts) == 2 and rel.parts[0] == CODE_NAMESPACE and rel.parts[1] != own:
+            out.append(
+                f"python/{rel.as_posix()}: not the module's own package {CODE_NAMESPACE}/{own}/"
+                + (" (it would end the namespace package)" if rel.name == "__init__.py" else "")
+            )
+    return out
+
+
 def _rows(doc: Doc, mod_dir: Path, load) -> dict[str, Doc]:
     rows: dict[str, Doc] = {}
     for e in doc.get("contributes", {}).get("services", []):
@@ -348,7 +385,16 @@ def module_problems(
         if "timer" in job:
             refs.append("role:" + job["timer"].split(":", 1)[1].split("/", 1)[0])
     out += [f"{r}: names a role the module does not contribute" for r in sorted(set(refs) - roles)]
+    hosts = set(_hosts(doc))
+    for block in ("requires", "prefers"):
+        for c in doc.get(block, {}).get("capabilities", []):
+            for h in c.get("hosts", []):
+                if h not in hosts:
+                    out.append(
+                        f"{block} {c['cap']} hosts: {h} is not one of the module's host roles"
+                    )
     # code is the module's own (or a shared conformance adapter)
+    out += code_tree_problems(mod_dir, mid)
     own = f"hnx_modules.{us(mid)}."
     for slot, e in doc.get("provides", {}).get("slots", {}).items():
         if not (e["adapter"].startswith(own) or e["adapter"].startswith(SHARED_ADAPTERS)):
@@ -996,7 +1042,9 @@ def site_problems(
     #: registry services an egress svc: target can name: every selected slot, every instance, and
     #: the rows of the selected feature and core modules
     services = {cap[4:] for cap in ch} | {c["instance"] for cs in ch.values() for c in cs}
-    services |= {n for mid, rs in rows.items() if mid in sel for n in rs}
+    services |= {
+        n for mid, rs in rows.items() if mid in sel and sel[mid]["kind"] != "provider" for n in rs
+    }  # a provider's rows are reached by their slot or instance (the egress generator's rule)
     for slot, d in slots.items():
         if d.get("required_in_core") and "cap:" + slot not in ch:
             out.append(f"{slot}: a required core slot has no provider")
@@ -1123,8 +1171,8 @@ def site_problems(
 
 
 def _is_service(name: str, services: set[str]) -> bool:
-    """A registry service the site has: a selected slot or instance, or a selected module's row
-    (``svc:secret`` for ``svc:secrets`` is refused)."""
+    """A registry service the site has: a selected slot or instance, or a selected feature or
+    core module's row (``svc:secret`` for ``svc:secrets`` is refused)."""
     return name in services
 
 

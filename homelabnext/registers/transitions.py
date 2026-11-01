@@ -29,6 +29,11 @@ the record as it is *now* and the review policy:
 * the policy's tiers for the target status are not met by current reviews of the *prospective*
   content (the record as it will be once the transition applies; its digest is printed, so a
   reviewer can stamp it): **waiting**, the note stays in the inbox;
+* no review policy was given or found (``review-policy.yml`` in or beside the register root):
+  the run is **refused** before anything is decided -- :class:`RegisterError` with
+  :data:`homelabnext.reviews.NO_POLICY` (:func:`~homelabnext.reviews.require_policy`); it fails
+  closed, never applies with zero reviews (``policy=False``, ``--no-review-policy`` or
+  ``--no-policy``, is the explicit opt-out for a local experiment);
 * the note does not validate (a missing field, a boolean key): **invalid**, it stays in the
   inbox for its agent to fix or withdraw, and the other intents are decided as usual;
 * otherwise **applied**: a ``transition`` event (the only writer of those) in the record's
@@ -71,10 +76,6 @@ __all__ = ["INTENT_TYPE", "Outcome", "TransitionDecider", "prospective"]
 INTENT_TYPE = "register-transition"
 LOCK_NAME = ".register-transitions.lock"  # in the records root: serializes every apply
 _SET_FIELDS = ("retired_by", "incorporated_into", "superseded_by")
-NO_POLICY = (
-    "{root}: no review-policy.yml in or beside it, so every review tier would be waived; pass"
-    " the policy (--policy FILE), or --no-policy to decide without review tiers"
-)
 
 
 @dataclass
@@ -164,7 +165,7 @@ class TransitionDecider:
         self.clock = clock
         self.reader = RecordsReader(self.records_root)
         self.movers = Decider(self.records_root, decided_by=decided_by, clock=clock)
-        self._policy = policy
+        self._policy = policy  # None: look it up; False: the explicit opt-out
 
     @property
     def policy(self):
@@ -174,17 +175,16 @@ class TransitionDecider:
         must not let a human-approve transition apply unreviewed); ``policy=False`` is the
         explicit opt-out."""
         if self._policy is None:
-            from homelabnext.reviews import ReviewError, load_policy
+            from homelabnext.reviews import ReviewError, require_policy
 
             from .render import find_policy
 
             pp = find_policy(self.register_root)
-            if pp is None:
-                raise RegisterError("review policy", [NO_POLICY.format(root=self.register_root)])
-            try:
-                self._policy = load_policy(pp)
+            try:  # none found: reviews.NO_POLICY, the one rule and message
+                self._policy = require_policy(pp)
             except ReviewError as ex:
-                raise RegisterError("review policy", ex.problems) from None
+                where = "" if pp else f"{self.register_root}: "
+                raise RegisterError("review policy", [where + p for p in ex.problems]) from None
         return self._policy or None
 
     def _intents(self, lane: str) -> list[str]:

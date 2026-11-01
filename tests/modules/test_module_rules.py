@@ -150,3 +150,50 @@ def test_a_module_agent_holds_no_acting_grant(tmp_path):
     got = "\n".join(mr.broker_rule_problems(doc, mod, _load))
     for needle in ("acting MCP server 'hnx-broker'", "holds cap:broker", "an acting tier"):
         assert needle in got, needle
+
+
+def _code_problems(tmp_path, *files):
+    tmp_path.mkdir(exist_ok=True)
+    doc, mod = _collector(tmp_path)
+    for f in files:
+        (mod / f).parent.mkdir(parents=True, exist_ok=True)
+        (mod / f).write_text("")
+    return [p for p in mr.module_problems(doc, mod, {}, _load, (tmp_path,)) if "python/" in p]
+
+
+def test_a_module_code_tree_holding_only_its_own_package_passes(tmp_path):
+    assert _code_problems(tmp_path / "a") == []  # no python/ at all
+    assert _code_problems(tmp_path / "b", "python/hnx_modules/external_collector/probe.py") == []
+
+
+@pytest.mark.parametrize(
+    ("planted", "needle"),
+    [
+        ("python/hnx_modules/core_staff/__init__.py", "python/hnx_modules/core_staff"),
+        ("python/hnx_modules/__init__.py", "it would end the namespace package"),
+        ("python/homelabnext/__init__.py", "python/homelabnext: the code tree holds only"),
+        ("python/sitecustomize.py", "python/sitecustomize.py: the code tree holds only"),
+    ],
+)
+def test_a_module_shipping_code_that_is_not_its_own_is_refused(tmp_path, planted, needle):
+    """Another module's package, the core, a top-level module or a namespace-ending
+    ``__init__.py`` would shadow code that is not the module's once ``python/`` is importable."""
+    probs = _code_problems(tmp_path, "python/hnx_modules/external_collector/probe.py", planted)
+    assert any(needle in p for p in probs), probs
+
+
+def test_a_symlink_in_a_module_code_tree_is_refused(tmp_path):
+    doc, mod = _collector(tmp_path)
+    pkg = mod / "python/hnx_modules/external_collector"
+    pkg.mkdir(parents=True)
+    (pkg / "probe.py").symlink_to(ROOT / "homelabnext/__init__.py")
+    probs = mr.module_problems(doc, mod, {}, _load, (tmp_path,))
+    assert any("a symlink in the module's code tree" in p for p in probs), probs
+
+
+def test_a_requirement_names_only_the_module_s_own_host_roles(tmp_path):
+    doc, mod = _collector(tmp_path)
+    doc["requires"]["capabilities"][0]["hosts"] = ["receiver", "no-such-role"]
+    probs = mr.module_problems(doc, mod, {}, _load, (tmp_path,))
+    assert any("hosts: no-such-role is not one of the module's host roles" in p for p in probs)
+    assert not any("hosts: receiver" in p for p in probs)
