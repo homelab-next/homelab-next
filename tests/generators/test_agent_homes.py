@@ -369,23 +369,40 @@ def test_a_self_referential_anchor_is_scanned_once_not_recursed(tmp_path, capsys
     assert err.count(f"names the IP address {V4A}") == 1, err
 
 
-def test_outside_a_checkout_the_scan_still_finds_keyed_and_userinfo_addresses(monkeypatch, capsys):
-    monkeypatch.setattr(ah, "_gate_scanner", lambda: None)
+def test_the_scan_finds_keyed_and_userinfo_addresses_and_needs_no_checkout(monkeypatch, capsys):
+    from homelabnext import paths
+
+    def not_a_checkout(*a, **k):
+        raise paths.NotACheckout("not a checkout")
+
+    monkeypatch.setattr(paths, "checkout_tool", not_a_checkout)
+    monkeypatch.setattr(paths, "checkout_root", lambda *a, **k: None)
     assert ah.ip_literals(f"host={V4A}") == [V4A]
     assert ah.ip_literals(f"u@{V4B}") == [V4B]
     assert ah.ip_literals(f"ssh://u@{V4C}:22/x") == [V4C]
     assert (
         hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(EXAMPLE / "homes/vllm-a")]) == 0
     )
-    assert "not loaded; addresses are found by the word scan only" in capsys.readouterr().err
+    assert "word scan only" not in capsys.readouterr().err
 
 
-def test_the_endpoint_gate_is_loaded_once_and_shared():
-    from homelabnext import endpoint_gate
+def test_the_home_check_uses_the_gate_s_own_detection():
+    from homelabnext import endpoints_scan
 
-    mod = endpoint_gate.load("t")
-    assert mod is not None and mod is endpoint_gate.load("other")
-    assert mod.__name__ == endpoint_gate.MODULE and ah._gate_scanner() == mod.scan_text
+    assert ah.endpoints_scan is endpoints_scan
+    gate = _load_gate()
+    assert gate.scan_text is endpoints_scan.scan_text
+
+
+def _load_gate():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "no_raw_endpoints_cli", Path(__file__).resolve().parents[2] / "tools/no_raw_endpoints.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 @pytest.mark.parametrize("field", ["config", "home"])

@@ -74,6 +74,11 @@ def register(backend: Backend) -> Backend:
     return backend
 
 
+def registered() -> dict[str, Backend]:
+    """Every registered backend by name (built-ins once :func:`get_backend` has run)."""
+    return dict(_REGISTRY)
+
+
 def get_backend(name: str) -> Backend:
     from . import backends  # noqa: F401  (registers built-ins)
 

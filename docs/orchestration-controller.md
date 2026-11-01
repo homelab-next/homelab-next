@@ -256,11 +256,11 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
 
   A role alias is never one, even when it is spelled like one, because a home must name a role.
   A store entry's own key is not one either: no engine serves under that name. Addresses are found
-  with the repository gate's own detection (`tools/no_raw_endpoints.py`'s IPv4 rule and the hosts
-  of its URL rules, loaded once through `homelabnext/endpoint_gate.py`, the loader the
-  customization lint shares) together with `ipaddress` over the file's words (split at
-  whitespace, `=`, `@` and punctuation), which also catches IPv6. Outside a checkout the gate is
-  not there: the word scan still runs, and the command warns that the scan is reduced. That gate exempts
+  with the repository gate's own detection (`homelabnext/endpoints_scan.py`, which
+  `tools/no_raw_endpoints.py` runs and the customization lint shares: its IPv4 rule and the hosts
+  of its URL rules) together with `ipaddress` over the file's words (split at whitespace, `=`, `@`
+  and punctuation), which also catches IPv6. It is package code, so an installed package scans
+  exactly what CI does. That gate exempts
   `0.0.0.0` and version-like dotted numbers, but a home has no reason to name either, so here
   they count.
 

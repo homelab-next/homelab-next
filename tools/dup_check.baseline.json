@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 32,
-  "duplicated_lines": 401,
-  "total_lines": 159748,
-  "duplicated_percent": 0.25
+  "clones": 29,
+  "duplicated_lines": 366,
+  "total_lines": 160448,
+  "duplicated_percent": 0.23
  },
  "increases": [],
  "clones": {
@@ -90,29 +90,12 @@
     "1ac8308707"
    ]
   },
-  "5be3381282b794f8": {
-   "tokens": 105,
-   "lines": 9,
-   "count": 2,
-   "files": [
-    "tools/shared_helpers_lint.py",
-    "tools/tls_verify_lint.py",
-    "tools/workstation_refs.py"
-   ],
-   "fingerprints": [
-    "02b67c3cec",
-    "068393affc",
-    "11438f7ddf",
-    "136f681bdf",
-    "1eefefa2a7"
-   ]
-  },
   "6cd4cfc1eb62d158": {
    "tokens": 53,
    "lines": 9,
    "count": 1,
    "files": [
-    "tools/no_raw_endpoints.py",
+    "homelabnext/endpoints_scan.py",
     "tools/workstation_refs.py"
    ],
    "fingerprints": [
@@ -195,7 +178,7 @@
    "lines": 13,
    "count": 1,
    "files": [
-    "tools/no_raw_endpoints.py",
+    "homelabnext/endpoints_scan.py",
     "tools/workstation_refs.py"
    ],
    "fingerprints": [
@@ -214,18 +197,6 @@
    ],
    "fingerprints": [
     "010ff94c5f"
-   ]
-  },
-  "999becf4c3edad93": {
-   "tokens": 72,
-   "lines": 6,
-   "count": 1,
-   "files": [
-    "tools/no_raw_endpoints.py",
-    "tools/tls_verify_lint.py"
-   ],
-   "fingerprints": [
-    "0896e949a1"
    ]
   },
   "b30ee47e71aac6ae": {

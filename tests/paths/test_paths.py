@@ -215,7 +215,10 @@ def test_tool_runners_refuse_outside_a_checkout(not_a_checkout, capsys):
     with pytest.raises(core.ScaffoldError, match="source checkout"):
         core._role_lint()
     lint = importlib.import_module("homelabnext.customization.lint")
-    assert lint._tools_path() is None  # falls back to the built-in matcher
+    # the endpoint detection is the package's own, so it is the gate's outside a checkout too
+    # (it used to fall back to a smaller matcher that missed a host:port outside a URL)
+    hostport = "db.example.internal" + ":5432"  # built, so the gate does not read this file's text
+    assert lint.endpoint_hits(f"dsn: {hostport}") == [hostport]
 
 
 def test_conformance_suites_are_not_imported_outside_a_checkout(not_a_checkout, monkeypatch):

@@ -686,3 +686,31 @@ def test_a_real_table_checked_against_only_fake_canaries_fails(tmp_path, capsys)
         )
         is None
     )
+
+
+def _rule_suffixes():
+    import yaml
+
+    out = set()
+    for name in ("model-runtime-object-store-request", "model-runtime-object-store-lookup"):
+        rule = yaml.safe_load((ROOT / "detections/sigma/exfiltration" / f"{name}.yml").read_text())
+        for selection in rule["detection"].values():
+            for key, values in selection.items() if isinstance(selection, dict) else ():
+                if key.endswith("|endswith"):
+                    out |= {v.strip(".") for v in values}
+    return out
+
+
+def test_the_canary_and_the_object_store_rules_name_the_same_stores():
+    # one source of truth in practice: a store the detections flag is an object-store finding
+    # here, and every store the canary flags has a rule entry under it
+    rules = _rule_suffixes()
+    assert rules
+    flagged = {
+        h
+        for h in rules
+        if f"object-store: {h}" in findings("fetch", {"url": f"https://{h}/k"}, TASK)
+    }
+    assert flagged == rules, sorted(rules - flagged)
+    for store in canary.OBJECT_STORES:
+        assert any(r == store or r.endswith("." + store) for r in rules), store

@@ -29,6 +29,15 @@ paths. The fixture runner (`run`, `coverage`) always uses `mappings/generic.yml`
 events in the generic shape. A rule a backend cannot express is named on stderr and left out of
 the bundle, and `compile` exits 1; the rest of the bundle is still written.
 
+`run` also drives the fixtures through each backend that can evaluate its own artefact (an
+`evaluate(artifact, event)` method; today the `wazuh` stub, which reads a compiled rule as the
+engine does: every `field` present and matching, a `negate` field present and not matching). The
+rule is compiled with the generic field map for this, so the compiled form is tested and not the
+engine's field names. A must_fire or must_not_fire fixture whose compiled result is not the
+reference evaluator's is printed as `[DIVERGES]` and fails `run`; a rule the backend cannot
+express is printed as `[not expressible]`. The stub emits case-insensitivity as scoped
+`(?i:...)` groups, so an alternation of patterns is valid in Python's `re` as well as PCRE2.
+
 `map --check` fails unless `det_map.yml` is exactly what `map` would write: every live rule has a
 number, no number is shared by two rules, no live rule reuses a retired number, and every entry
 is an integer. A hand edit that breaks any of these is caught in CI, not only on regeneration.
@@ -46,7 +55,10 @@ as tactics in `attack_coverage.json`. `lint` also fails on a file under `sigma/`
 the fixture runner, not from the tags alone: a rule counts only when it has must_fire and
 must_not_fire fixtures and every one of them passes. A rule that misses a must_fire or fires on
 benign input is listed under `uncounted` with the reason; evasion misses are listed as
-`evasion_gaps` and never change coverage. The report is committed as the golden file
+`evasion_gaps` and never change coverage. Under `backends`, each backend `run` drives through its
+compiled artefact has its own count from the same fixtures (`rules_counted`, `techniques_covered`,
+`must_fire` fired of total, `uncounted` with the reason, a rule it cannot express included), so the
+top-level numbers are not read as an engine's coverage when its compiled rules would not fire. The report is committed as the golden file
 `detections/attack_coverage.json`; `coverage --check detections/attack_coverage.json` (in
 `make detections` and CI) fails when it is not the one the current rules and fixtures produce, naming
 each technique that appeared or lost its last passing rule. After changing a rule or a fixture,
