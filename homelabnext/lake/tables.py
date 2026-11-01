@@ -199,7 +199,4 @@ def row_label(row: Mapping[str, Any]) -> tlp.Label:
     one, or with anything else (a row stored before the column existed, an alternate spelling
     such as ``white`` or ``Green`` that a writer bypassing the lake stored, a damaged value), is
     ``red`` (ADR-0033 decision 5)."""
-    value = row.get(LABEL_COLUMN) if isinstance(row, Mapping) else None
-    if type(value) is str and value in tlp.LABELS:
-        return tlp.parse(value)
-    return tlp.Label.RED
+    return tlp.read_stored(row.get(LABEL_COLUMN) if isinstance(row, Mapping) else None)
