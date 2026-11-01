@@ -183,15 +183,26 @@ def _vacuous_projects_suite(monkeypatch):
 
 
 def test_a_frozen_capability_does_not_block_the_report_unless_named(monkeypatch, capsys):
-    # tools/experimental.yml froze the projects store and Code Mode: their suites still run when
-    # named (make experimental), but a failure there no longer fails the blocking report
+    # a capability listed as frozen in tools/experimental.yml still runs when named (make
+    # experimental), but a failure there no longer fails the blocking report; projects stands in
+    # for one here because its suite is quick to make vacuous
     _vacuous_projects_suite(monkeypatch)
+    monkeypatch.setattr("homelabnext.conform.report.EXPERIMENTAL", ("projects",))
     rep = build_report(capabilities=None, mutants=True)
     assert "projects" not in rep["capabilities"] and "projects" in rep["experimental_skipped"]
     assert main(["report", "--capability", "projects", "--json"]) == 1
     named = json.loads(capsys.readouterr().out)
     assert named["capabilities_without_passing_test"] == ["projects"]
     assert named["experimental_skipped"] == []
+
+
+def test_projects_stays_in_the_blocking_report(monkeypatch):
+    # the home-built projects store is frozen, but the projects suite also holds the OpenProject
+    # adapter (the lab's one backend) to the contract, so a vacuous projects suite still fails
+    _vacuous_projects_suite(monkeypatch)
+    rep = build_report(capabilities=None, mutants=True)
+    assert "projects" not in rep["experimental_skipped"]
+    assert "projects" in rep["capabilities_without_passing_test"]
 
 
 def test_report_flags_a_failing_must_check_on_a_real_target(tmp_path):

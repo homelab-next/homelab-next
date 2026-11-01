@@ -55,7 +55,9 @@ CAPABILITIES: tuple[str, ...] = (
 #: lists of tools/experimental.yml, held equal by tools/tests/test_experimental.py): still listed
 #: and still run, but out of the blocking set, so ``hnx conform report`` leaves them out unless
 #: named (``--capability``) and ``make experimental`` runs them
-EXPERIMENTAL: tuple[str, ...] = ("projects", "codemode-executor", "codemode-runner")
+#: (``projects`` stays blocking although the home-built store is frozen: the same suite holds the
+#: OpenProject adapter, the lab's one projects backend, to the contract)
+EXPERIMENTAL: tuple[str, ...] = ("codemode-executor", "codemode-runner")
 #: additional suites that ship with the harness but are not among the eighteen
 EXTENDED: tuple[str, ...] = (
     "backup",

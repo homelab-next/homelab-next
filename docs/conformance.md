@@ -325,7 +325,8 @@ falls back to the built-in eighteen).  `make conform-check` (`tools/conform_cove
 `hnx conform list` and `hnx conform report --json` and fails if any blocking capability lacks a
 passing test. The report leaves out the capabilities of frozen or experimental components
 (`homelabnext.conform.registry.EXPERIMENTAL`, the `conform` lists of `tools/experimental.yml`:
-`projects`, `codemode-executor`, `codemode-runner`) unless one is named with `--capability`, and
+`codemode-executor`, `codemode-runner`; `projects` stays blocking because it also checks the OpenProject
+adapter) unless one is named with `--capability`, and
 records them under `experimental_skipped`, so a frozen suite blocks neither the gate nor X-10;
 `make experimental` runs `hnx conform report --capability` for each; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
 extended suites run under pytest), and the nightly workflow runs

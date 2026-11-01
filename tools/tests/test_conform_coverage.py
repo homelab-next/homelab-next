@@ -55,7 +55,9 @@ def test_a_frozen_capability_is_not_required():
         del rep["capabilities"][c]
     assert gate.missing_passes(rep) == []
     assert set(gate.BLOCKING) == set(CAPABILITIES) - set(EXPERIMENTAL)
-    assert {"projects", "codemode-executor", "codemode-runner"} <= set(EXPERIMENTAL)
+    assert {"codemode-executor", "codemode-runner"} <= set(EXPERIMENTAL)
+    # the projects suite also checks the OpenProject adapter, so it stays blocking
+    assert "projects" in gate.BLOCKING
 
 
 def _fake_hnx(monkeypatch, rc, report=None, stdout=""):

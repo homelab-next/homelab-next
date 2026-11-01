@@ -79,7 +79,8 @@ components:
     why: >-
       Projects and tasks live in OpenProject only. The home-built Markdown store (hnx projects)
       is frozen rather than removed: it is the projects conformance suite's reference target and
-      the status hub's Projects page and the knowledge graph read it.
+      the status hub's Projects page and the knowledge graph read it. The projects suite itself
+      stays blocking, because it also holds the OpenProject adapter to the contract.
     until: the operator decides to remove the Markdown store or to bring it back
     docs: [docs/projects.md]
     tests:
@@ -87,6 +88,4 @@ components:
       - tests/projects/test_projects_cli.py
     gates:
       - python -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
-      - python -m homelabnext.cli conform report --capability projects
     invariants: [P-08]
-    conform: [projects]
