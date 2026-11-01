@@ -60,10 +60,12 @@ anyone else is ``deny`` / ``not-request-owner``.  The decision names the ``opera
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from typing import Any, Protocol
 
 from homelabnext.agent.digest import digest_of
@@ -108,6 +110,16 @@ class MemoryApprovalStore:
 
 
 _DEFAULT_STORE = MemoryApprovalStore()
+
+
+@cache
+def approval_note_max() -> int:
+    """The longest ``note`` an approval may carry: ``schemas/broker/approval``'s ``maxLength``,
+    the one source the service, the socket relay and the hub's form all read."""
+    from homelabnext import paths
+
+    schema = json.loads(paths.schema_file("broker", "approval.schema.json").read_text("utf-8"))
+    return int(schema["properties"]["note"]["maxLength"])
 
 
 def request_digest(request: Mapping[str, Any]) -> str:
@@ -246,16 +258,9 @@ def _evaluate(manifest, request, approval, actual, now):
         return "deny", "approval-digest-mismatch", aid
     if approval["decision"] != "approved":
         return "deny", "approval-denied", aid
-    who = approval["approver"]
-    folded = normalize_identity(who["subject"])
-    # folded: refusing a spelling variant of the actor is the cautious direction
-    if folded == _profile_name(request["actor"]):
-        return "deny", "approval-self-approved", aid
-    kind = approver_kind(manifest, who)
-    if kind is None:
-        return "deny", "approval-approver-not-allowed", aid
-    if kind == "agent" and manifest.get("allow_agent_approvers") is not True:
-        return "deny", "approval-agent-approver", aid
+    refused = approver_refusal(manifest, request, approval["approver"])
+    if refused:
+        return "deny", refused, aid
     t_now, t_appr = _ts(now), _ts(approval["approved_at"])
     if t_appr > t_now or ("created" in request and t_appr < _ts(request["created"])):
         return "deny", "approval-time-invalid", aid
@@ -266,6 +271,28 @@ def _evaluate(manifest, request, approval, actual, now):
     if t_now > expiry:
         return "deny", "approval-expired", aid
     return "allow", "approved", aid
+
+
+def approver_refusal(
+    manifest: Mapping[str, Any], request: Mapping[str, Any], who: Mapping[str, Any]
+) -> str | None:
+    """The reason ``who`` may not decide ``request`` (approve **or** deny it), else None.
+
+    The approver rules only, in :func:`decide`'s order: the actor itself (compared normalized)
+    -> ``approval-self-approved``; not on the allowlist (matched exactly) ->
+    ``approval-approver-not-allowed``; an agent while ``allow_agent_approvers`` is not true ->
+    ``approval-agent-approver``.  A denial is judged by these alone: whether the request could
+    still run (its grant, tier or handler) has no bearing on who may refuse it.
+    """
+    # folded: refusing a spelling variant of the actor is the cautious direction
+    if normalize_identity(str(who.get("subject", ""))) == _profile_name(request["actor"]):
+        return "approval-self-approved"
+    kind = approver_kind(manifest, who)
+    if kind is None:
+        return "approval-approver-not-allowed"
+    if kind == "agent" and manifest.get("allow_agent_approvers") is not True:
+        return "approval-agent-approver"
+    return None
 
 
 def approver_kind(manifest: Mapping[str, Any], who: Mapping[str, Any]) -> str | None:
@@ -290,8 +317,10 @@ def check_manifest_handlers(
 ) -> list[str]:
     """Consistency between a manifest and the ``handler.json`` documents it points at.
 
-    Every manifest action needs exactly one handler document with the same path and tier, and a
-    handler may not be *less* demanding about approval than the manifest.  Handlers nobody
+    Every manifest action needs exactly one handler document with the same path, tier and
+    ``requires_approval``: :func:`decide` reads the manifest's flag, so a handler that asks for
+    a person's approval the manifest does not would be silently ignored, and a manifest that
+    asks for one its handler does not names a handler document that misdescribes it.  Handlers nobody
     allowlists are reported too: a handler that exists but is not in the manifest is dead code
     or a mistake, and default deny keeps it unreachable either way.
     """
@@ -315,11 +344,55 @@ def check_manifest_handlers(
             problems.append(
                 f"{a['action']}: handler tier {h['tier']!r} != manifest tier {a['tier']!r}"
             )
-        if a["requires_approval"] and not h["requires_approval"]:
+        if bool(a["requires_approval"]) != bool(h["requires_approval"]):
             problems.append(
-                f"{a['action']}: handler does not require approval but the manifest does"
+                f"{a['action']}: handler requires_approval {h['requires_approval']} != "
+                f"manifest requires_approval {a['requires_approval']}"
             )
     listed = {a["action"] for a in manifest.get("actions", [])}
     for action in sorted(set(by_action) - listed):
         problems.append(f"{action}: handler present but not in the manifest")
+    return problems
+
+
+def decision_table_problems(
+    served: Mapping[str, Any], table: Mapping[str, Any], *, table_name: str = "the table"
+) -> list[str]:
+    """How ``served`` (the manifest a broker enforces) is *less strict* than ``table``.
+
+    A decision table is a manifest the repository checks other documents against (the workflow
+    packs' ``workflows/broker.manifest.json``) whose handlers are the site's, so it cannot be
+    served itself.  The served manifest may omit any of its actions (default deny) and add its
+    own, but for each action both declare it keeps the table's tier and approval, and it grants
+    a profile the table names no action the table does not grant it, nor at a higher tier.  It
+    may not admit agent approvers the table does not.  Empty: the served manifest enforces the
+    table.
+    """
+    problems: list[str] = []
+    mine = {a["action"]: a for a in table.get("actions", [])}
+    for a in served.get("actions", []):
+        t = mine.get(a["action"])
+        if t is None:
+            continue
+        if a["tier"] != t["tier"]:
+            problems.append(f"{a['action']}: tier {a['tier']} != {table_name}'s {t['tier']}")
+        if t["requires_approval"] and not a["requires_approval"]:
+            problems.append(f"{a['action']}: {table_name} requires approval; this does not")
+    grants: dict[str, tuple[set[str], int]] = {}
+    for g in table.get("grants", []):
+        acts, rank = grants.get(g["profile"], (set(), -1))
+        grants[g["profile"]] = (acts | set(g["actions"]), max(rank, TIER_RANK[g["max_tier"]]))
+    for g in served.get("grants", []):
+        if g["profile"] not in grants:
+            continue
+        acts, rank = grants[g["profile"]]
+        for extra in sorted(set(g["actions"]) - acts):
+            problems.append(f"{g['profile']}: granted {extra}, which {table_name} does not")
+        if TIER_RANK[g["max_tier"]] > rank:
+            problems.append(f"{g['profile']}: max_tier {g['max_tier']} above {table_name}'s")
+    if (
+        served.get("allow_agent_approvers") is True
+        and table.get("allow_agent_approvers") is not True
+    ):
+        problems.append(f"allow_agent_approvers: {table_name} does not admit agent approvers")
     return problems

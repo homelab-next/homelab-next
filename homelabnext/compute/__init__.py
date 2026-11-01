@@ -19,7 +19,7 @@ from .model import (
 from .plan import Plan, plan
 from .render import TARGETS, render
 from .validate import validate
-from .zones import MappingZones, SiteAdapter, load_zones_file, open_site, site_flows
+from .zones import MappingZones, SiteAdapter, open_site, site_flows
 
 __all__ = [
     "KNOWN_CAPABILITIES",
@@ -40,7 +40,6 @@ __all__ = [
     "load_keys",
     "load_nodes",
     "load_policies",
-    "load_zones_file",
     "open_site",
     "plan",
     "render",

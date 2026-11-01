@@ -2,7 +2,8 @@
 """``hnx broker``: validate a manifest, serve the broker, and talk to it from a shell.
 
 ``validate MANIFEST`` checks the manifest schema, every handler document and its pinned digest,
-the lane configuration and the transport peers.  With ``--data-root DIR`` (or
+the lane configuration and the transport peers; ``--decision-table TABLE`` also refuses it where
+it is less strict than ``TABLE`` (:func:`homelabnext.broker.decision_table_problems`).  With ``--data-root DIR`` (or
 ``$HNX_BROKER_DATA_ROOT``) it also prints what each lane directory holds against its quota and
 warns at 80% (:func:`homelabnext.broker.lanes.usage`); ``serve`` logs the same at start.  A
 warning does not fail validation: an agent writing there is about to be refused
@@ -109,6 +110,14 @@ def _parser() -> argparse.ArgumentParser:
     v.add_argument("path")
     v.add_argument("--json", action="store_true")
     v.add_argument(
+        "--decision-table",
+        action="append",
+        default=[],
+        metavar="MANIFEST",
+        help="also refuse the manifest where it is less strict than this decision table "
+        "(e.g. workflows/broker.manifest.json): a tier, approval or grant it widens; repeatable",
+    )
+    v.add_argument(
         "--data-root",
         default=os.environ.get("HNX_BROKER_DATA_ROOT"),
         help="also show each lane directory's usage against its quota (warn at 80%%)",
@@ -139,12 +148,13 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--notify-topic-file", help="read the ntfy topic from this file's first line")
     srv.add_argument(
         "--notify-ceiling",
-        default="red",
+        default=os.environ.get("HNX_BROKER_NOTIFY_CEILING"),
         type=ceiling_arg,
         metavar="LABEL",
-        help="the channel's TLP ceiling (ADR-0033): a message labelled above it (one claiming "
-        "no label is red) is replaced by a content-free withheld notice; default red, a channel "
-        "only the operators read",
+        help="the channel's TLP ceiling (ADR-0033), required with a notify topic (or "
+        "$HNX_BROKER_NOTIFY_CEILING): a message labelled above it (one claiming no label is "
+        "red) is replaced by a content-free withheld notice; red only for a channel only the "
+        "operators read",
     )
     srv.add_argument(
         "--notify-token",
@@ -159,7 +169,7 @@ def _parser() -> argparse.ArgumentParser:
         "--notify-pairs-dir",
         default=os.environ.get("HNX_NOTIFY_PAIRS_DIR"),
         metavar="DIR",
-        help="write the notify pairs this broker holds to DIR/broker.json for the module census "
+        help="write the notify pairs this broker holds to DIR/broker/pairs.json for the module census "
         "(an existing directory; the census reads /var/lib/homelabnext/notify-pairs)",
     )
     rel = sub.add_parser("relay", help="publish the outbox to the event bus (at least once)")
@@ -242,6 +252,31 @@ def _out(args, payload: Any, text: str) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True) if args.json else text)
 
 
+def _table_problems(manifest: dict, tables: list[str]) -> list[str]:
+    """:func:`homelabnext.broker.decision_table_problems` against each ``--decision-table``; a
+    table that does not read, or fails the manifest schema, is a problem too."""
+    from homelabnext.agent.schemas import schema_errors
+
+    from . import decision_table_problems
+    from .service import _parse_errors, _read_doc
+
+    if not tables or schema_errors("broker", "manifest", manifest):
+        return []
+    out = []
+    for rel in tables:
+        try:
+            table = _read_doc(Path(rel))
+        except _parse_errors() as exc:
+            out.append(f"decision table {rel}: cannot be read ({type(exc).__name__})")
+            continue
+        errs = schema_errors("broker", "manifest", table) if isinstance(table, dict) else ["$"]
+        if errs:
+            out.append(f"decision table {rel}: not a valid manifest ({errs[0]})")
+            continue
+        out += decision_table_problems(manifest, table, table_name=rel)
+    return out
+
+
 def _validate(args) -> int:
     path = Path(args.path)
     from .service import _parse_errors, _read_doc
@@ -255,6 +290,7 @@ def _validate(args) -> int:
         problems = [f"{path}: not a mapping"]
     else:
         _, problems = validate_manifest(manifest, path.parent)
+        problems += _table_problems(manifest, args.decision_table)
     rows = []
     if args.data_root and not problems:
         ledger = Path(args.state) / "lanes-ledger" if args.state else None
@@ -336,7 +372,9 @@ def notifier_from_args(args) -> Any:
     :data:`NOTIFY_ALL_AGENTS_PER_HOUR` over all of them.  The token is a ``secret:`` reference
     resolved at send time; a literal is refused, so no token ever sits in a unit file, a shell
     history or ``ps``.  The endpoint is resolved now, and a plaintext one refused when a token
-    would cross it, so a misconfigured notifier stops ``serve`` instead of failing every send."""
+    would cross it, so a misconfigured notifier stops ``serve`` instead of failing every send.  The
+    channel's TLP ceiling is a declaration (``--notify-ceiling``): a topic without one stops
+    ``serve`` too, never defaulting to the most permissive ceiling (ADR-0033 decision 6)."""
     topic = _notify_topic(args)
     if not topic:
         return None
@@ -365,7 +403,13 @@ def notifier_from_args(args) -> Any:
         from homelabnext.registry.resolver import Resolver
 
         resolver = Resolver(load(args.registry))
-    ceiling = ceiling_from_flag(getattr(args, "notify_ceiling", None))
+    declared = getattr(args, "notify_ceiling", None)
+    if declared is None:  # ADR-0033 decision 6: a reader with no declared ceiling is refused
+        raise ValueError(
+            "a notify channel needs a declared TLP ceiling: --notify-ceiling LABEL "
+            "(or HNX_BROKER_NOTIFY_CEILING); red only for a channel only the operators read"
+        )
+    ceiling = ceiling_from_flag(declared)
     sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
         raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")
@@ -387,7 +431,7 @@ def notifier_from_args(args) -> Any:
 
 
 def pairs_record(args, owner: str) -> Any:
-    """The notify pairs record ``--notify-pairs-dir`` names (``<dir>/<owner>.json``), or None."""
+    """The notify pairs record ``--notify-pairs-dir`` names (``<dir>/<owner>/pairs.json``), or None."""
     from homelabnext.notify.record import record_in
 
     return record_in(getattr(args, "notify_pairs_dir", None), owner)
@@ -624,7 +668,8 @@ def _import(args) -> int:
     mode = "applied" if args.apply else "dry run (use --apply to file)"
     lines.append(f"{len(rows)} files, {mode}")
     _out(args, {"apply": args.apply, "files": [r.as_dict() for r in rows]}, "\n".join(lines))
-    return 1 if any(r.outcome in ("unmappable", "refused", "conflict") for r in rows) else 0
+    bad = ("unmappable", "refused", "conflict", "not-attempted")
+    return 1 if any(r.outcome in bad for r in rows) else 0
 
 
 def _serve(args) -> int:

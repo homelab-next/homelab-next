@@ -20,7 +20,7 @@ from homelabnext.compute import (
     ZoneLookup,
     load_fleet,
     load_guests,
-    load_zones_file,
+    open_site,
     plan,
     render,
     validate,
@@ -128,7 +128,7 @@ def test_support_files_are_not_guests():
 
 
 def test_site_file_reader_matches_stub():
-    zones, domain = load_zones_file(SITE)
+    zones, domain = open_site(SITE)
     assert domain == "example.internal"
     assert zones.zone("data") == STUB.zone("data")
     assert zones.zone("nope") is None
@@ -536,3 +536,15 @@ def test_hcl_quote_escapes_template_sequences():
 def test_terraform_provider_constraint_is_bounded(good):
     tf = render(good, "terraform-proxmox")["providers.tf"]
     assert 'version = "~> 0.60"' in tf and ">=" not in tf
+
+
+def test_hnx_guests_reads_the_site_once(monkeypatch):
+    """Zones, flows, power, deploy access, addresses and prefixes all come from one read of the
+    site file (a SOPS-encrypted site is decrypted once, and every fact is of the same bytes)."""
+    import homelabnext.network.loader as loader
+
+    calls = []
+    real = loader.load_site
+    monkeypatch.setattr(loader, "load_site", lambda p: calls.append(p) or real(p))
+    assert hnx.main(["guests", "validate", str(FLEET), "--site", str(SITE)]) == 0
+    assert len(calls) == 1
