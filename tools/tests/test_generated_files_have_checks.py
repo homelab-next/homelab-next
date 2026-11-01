@@ -219,5 +219,8 @@ def test_the_adr_globs_are_exactly_what_the_schema_generators_write():
         f"generated but not named: {sorted(written - named)}"
     )
     adr = (ROOT / "docs" / "adr" / "0028-veritas-single-source-of-truth.md").read_text("utf-8")
-    assert "schemas/platform/{module,lake_table,module_selection}.schema.json" in adr
-    assert "schemas/platform/{examples,negative}/{module,module_selection,lake_table}.*" in adr
+    assert "schemas/platform/{module,lake_table,module_selection,interface}.schema.json" in adr
+    assert (
+        "schemas/platform/{examples,negative}/{module,module_selection,lake_table,interface}.*"
+        in adr
+    )
