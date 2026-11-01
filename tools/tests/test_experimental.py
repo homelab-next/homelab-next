@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,45 @@ def test_the_listed_tests_are_marked_and_others_are_not():
     assert not ex.is_experimental("tests/workflows/test_workflows_validate.py", paths)
     assert ex.is_experimental("tests/codemode/test_runner.py", paths)
     assert not ex.is_experimental("tests/mcp/test_mcp_launch.py", paths)
+
+
+def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
+    """A ``pytest`` run in a job that blocks must deselect the marker, or name only test paths
+    none of which is, or holds, an experimental one."""
+    out = []
+    for line in ci_lines(ci_doc):
+        words = shlex.split(line) if "pytest" in line else []
+        if words[:3] != ["python", "-m", "pytest"]:
+            continue
+        if "-m" in words and words[words.index("-m") + 1] == ex.BLOCKING_SELECT:
+            continue
+        named = [w for w in words[3:] if w.startswith(("tests/", "tools/tests/", "conformance/"))]
+        inside = [p for w in named for p in paths if p.startswith(w.rstrip("/") + "/")]
+        if not named or inside or any(ex.is_experimental(w, paths) for w in named):
+            out.append(f"a blocking job's pytest selects experimental tests: {line}")
+    return out
+
+
+def test_no_blocking_job_selects_an_experimental_test():
+    ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    paths = ex.marked_paths(ex.load())
+    assert blocking_selection_problems(ci, paths) == []
+    ci["jobs"]["schemas"]["steps"].append({"run": "python -m pytest -q tests/workflows"})
+    assert blocking_selection_problems(ci, paths)
+
+
+def test_the_coverage_gate_selects_its_tests_like_the_blocking_jobs(tmp_path, monkeypatch):
+    # the coverage job runs tools/coverage_floor.py, which starts a pytest of its own per unit
+    sys.path.insert(0, str(ROOT / "tools"))
+    import coverage_floor
+
+    cmds = []
+
+    def fake_run(cmd, **_):
+        cmds.append(cmd)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+    coverage_floor.run_tests(tmp_path / "g.json", ("tests/workflows",), ["homelabnext/workflows"])
+    (cmd,) = cmds
+    assert cmd[cmd.index("-m", 3) + 1] == ex.BLOCKING_SELECT

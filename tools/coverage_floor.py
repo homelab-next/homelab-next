@@ -21,8 +21,11 @@ they name, and each group runs in its own pytest with coverage of its own units 
 that name the same tests share a group: the four ``homelabnext/status`` units are all measured
 by ``tests/status``, the package's tests, so they can credit each other.  Each unit must reach
 ``FLOOR`` percent of its statements on its own; one aggregate number would let a well-covered
-package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's
-coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed change to this file.
+package hide a poorly covered one.  The floor is on lines, not branches.  The tests are selected
+as every blocking job selects them (``-m "not live and not experimental"``), and the code of a
+component ``tools/experimental.yml`` takes out of the blocking set (``EXPERIMENTAL_CODE``) is not
+counted.  Raising a unit's coverage is always fine; lowering ``FLOOR`` or dropping a unit is a
+reviewed change to this file.
 
 ``UNITS`` below is the one list of the units and the tests that measure each: the broker, the
 scope guard, the records lifecycle, the decide cascade, the agent's grant ceiling, reader rule,
@@ -48,6 +51,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+from experimental import BLOCKING_SELECT  # noqa: E402 (the one marker expression)
+
 FLOOR = 80.0
 REPORT_DIR = REPO_ROOT / "build" / "coverage-security"
 
@@ -83,6 +89,16 @@ UNITS: dict[str, tuple[str, ...]] = {
 }
 
 
+# The code of an experimental component (tools/experimental.yml) inside a unit: its tests are
+# deselected here as in every blocking job (BLOCKING_SELECT), so it is left out of its unit's count
+# rather than letting a component that blocks nothing fail this gate.  file -> component
+EXPERIMENTAL_CODE: dict[str, str] = {
+    "homelabnext/workflows/st2.py": "stackstorm",
+    "homelabnext/workflows/st2_bridge.py": "stackstorm",
+    "homelabnext/workflows/st2_runtime.py": "stackstorm",
+}
+
+
 def _cov_target(unit: str) -> str:
     """What ``--cov`` measures for a unit: its package or module, or (a tool, not importable as
     a package) the directory it lives in, which ``per_unit`` then narrows to the file."""
@@ -111,6 +127,8 @@ def per_unit(report: dict, units: dict[str, tuple[str, ...]] = UNITS) -> dict[st
             if path.is_absolute() and path.is_relative_to(REPO_ROOT):
                 path = path.relative_to(REPO_ROOT)
             path = path.as_posix()
+            if path in EXPERIMENTAL_CODE:
+                continue
             hit = path == unit if unit.endswith(".py") else path.startswith(unit.rstrip("/") + "/")
             if not hit:
                 continue
@@ -143,7 +161,8 @@ def run_tests(report: Path, tests: tuple[str, ...], units: list[str]) -> int:
     # `patch = subprocess` (coverage >= 7.10), which pytest-cov 7 leaves to coverage itself
     rc = report.with_suffix(".coveragerc")
     rc.write_text("[run]\npatch = subprocess\n")
-    cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not live"]
+    # the blocking selection: the tests of tools/experimental.yml's components never fail this gate
+    cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", BLOCKING_SELECT]
     cmd += [f"--cov={t}" for t in dict.fromkeys(_cov_target(u) for u in units)]
     cmd += [f"--cov-config={rc}", "--cov-report=", f"--cov-report=json:{report}", *tests]
     # the data file goes under build/ with the report, not into the working tree
