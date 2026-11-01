@@ -64,6 +64,22 @@ class UnknownRole(KeyError):
     pass
 
 
+def schema_problems(doc: Any) -> list[str]:
+    """Every defect of ``doc`` against ``schemas/platform/model_roles.json`` (empty = valid)."""
+    try:
+        from homelabnext.schema_registry import validator
+
+        v = validator("platform", "model_roles.json")
+    except ImportError as exc:  # pragma: no cover - only without the core extra
+        raise RoleTableError(
+            "validating a role table needs jsonschema: pip install 'homelabnext[core]'"
+        ) from exc
+    return [
+        f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}"
+        for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    ]
+
+
 def normalize_role(name: str) -> str:
     """``mdl:fast-classifier`` or ``fast-classifier`` -> ``fast-classifier``."""
     m = MDL_RE.match(name)
@@ -215,7 +231,12 @@ class RoleTable:
 
     @classmethod
     def load(cls, path: str | Path) -> RoleTable:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        """Read a role table file: it must satisfy ``schemas/platform/model_roles.json`` (so a key
+        the schema refuses is an error, not silently ignored), then :meth:`from_dict`."""
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        if problems := schema_problems(doc):
+            raise RoleTableError(f"{path}: role table does not match model_roles.json", problems)
+        return cls.from_dict(doc)
 
     def unpinned(self) -> list[str]:
         """Every binding without a version and a sha256 digest (G-11); empty = all pinned."""
