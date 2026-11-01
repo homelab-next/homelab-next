@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.events.envelope import event_problems, schema_for_type
+from homelabnext.grants import grant_for, tier_exceeds
 
 from .pack import (
     WorkflowError,
@@ -80,7 +81,6 @@ from .runner import (
 )
 
 DEFAULT_DEPLOY = Path("workflows") / "deploy.yml"
-_TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 
 
 @dataclass(frozen=True)
@@ -262,17 +262,10 @@ def _action(where, doc, step, manifest, tainted: set[str]) -> list[tuple[str, st
     if entry is None:
         return [("action", f"{where}: {step['action']!r} is not in {doc['broker_manifest']}")]
     out: list[tuple[str, str]] = []
-    grant = next(
-        (
-            g
-            for g in manifest.get("grants", [])
-            if g["profile"] == doc["actor"] and step["action"] in g["actions"]
-        ),
-        None,
-    )
+    grant = grant_for(manifest, doc["actor"], step["action"])
     if grant is None:
         out.append(("grant", f"{where}: {doc['actor']} holds no grant for {step['action']!r}"))
-    elif _TIER_RANK[entry["tier"]] > _TIER_RANK[grant["max_tier"]]:
+    elif tier_exceeds(entry["tier"], grant["max_tier"]):
         out.append(
             (
                 "grant",

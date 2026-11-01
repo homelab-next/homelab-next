@@ -27,7 +27,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .compiler import TIER_RANK, VerifiedProfile, require_verified
+from homelabnext.grants import TIER_RANK
+
+from .compiler import VerifiedProfile, require_verified
 from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack

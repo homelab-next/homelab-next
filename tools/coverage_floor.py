@@ -24,9 +24,9 @@ by ``tests/status``, the package's tests, so they can credit each other.  Each u
 package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's
 coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed change to this file.
 
-``UNITS`` below is the one list of the units and the tests that measure each: the broker, the
-scope guard, the records lifecycle, the decide cascade, the agent's grant ceiling, reader rule,
-handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
+``UNITS`` below is the one list of the units and the tests that measure each: the broker, its
+tiers and grant lookup, the scope guard, the records lifecycle, the decide cascade, the agent's
+grant ceiling, reader rule, handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
 MCP server, the status hub's front door, ingest and approval paths, the generators' backstop, the
 TLP label type, egress and reader ceilings, the SSH certificate authority, and the leak
 scan.  Nothing else lists them in full.
@@ -54,6 +54,8 @@ REPORT_DIR = REPO_ROOT / "build" / "coverage-security"
 # unit (a package directory or one module) -> the tests that exercise it
 UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/broker": ("tests/broker", "conformance/broker"),
+    # the broker tiers and the grant lookup the broker, the compiler and the handoff share
+    "homelabnext/grants.py": ("tests/grants",),
     "homelabnext/scope": ("tests/scope",),
     "homelabnext/records": ("tests/records", "conformance/records"),
     "homelabnext/decide": ("tests/decide",),

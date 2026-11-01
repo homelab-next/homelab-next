@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import tlp
+from homelabnext.grants import TIER_RANK
 from homelabnext.ids import IdError, Resolver, UnresolvedId, parse
 from homelabnext.registry.model_tlp import data_tier_of, tier_disagreement
 
@@ -80,7 +81,6 @@ from .readers import (
 )
 from .schemas import schema_errors
 
-TIER_RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}
 BUDGET_KEYS = ("max_input_tokens", "max_output_tokens", "max_runtime_s", "max_tool_calls")
 #: an MCP catalog id (``schemas/platform/mcp_server.schema.json`` ``slug``)
 _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
