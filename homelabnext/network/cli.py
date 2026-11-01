@@ -4,6 +4,11 @@
 Exit codes: 0 success, 1 invalid site or registry, 2 usage error / unknown or deferred adapter /
 a site or registry file that cannot be read or parsed, 3 ``plan --exit-code`` found changes.  Nothing here contacts a device.
 
+``hnx site query SITE FROM TO PROTO [PORT] [--json]`` answers "can FROM reach TO" with the
+policy's first-match verdict and the rule that decides it (:func:`homelabnext.network.ir.evaluate`;
+FROM and TO are addresses or hosts the site names); the same evaluation is checked against each
+adapter's rendered rules in ``tests/network/test_adapter_reach_parity.py``.
+
 ``hnx site review-tier --base REV | --ci-base [--root DIR] [--site REL] [--selection REL]``
 prints the review tier of each change to the lab's site and module selection since the base
 (:mod:`homelabnext.network.review_tier`); it exits 1 when a human-approve change has no valid
@@ -63,6 +68,14 @@ def _parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("ir", help="print the vendor-neutral intermediate representation as JSON")
     _common(p)
+
+    p = sub.add_parser("query", help="can FROM reach TO: the policy's first-match verdict")
+    _common(p)
+    p.add_argument("source", metavar="FROM", help="an address, or a host the site names")
+    p.add_argument("dest", metavar="TO", help="an address, or a host the site names")
+    p.add_argument("proto", metavar="PROTO", choices=("tcp", "udp", "icmp"))
+    p.add_argument("port", metavar="PORT", nargs="?", type=int, help="tcp and udp only")
+    p.add_argument("--json", action="store_true", help="machine-readable result")
 
     sub.add_parser("adapters", help="list adapters and their status")
 
@@ -160,6 +173,54 @@ def _review_tier(args, out, err) -> int:
     )
 
 
+def _address(ir, name: str) -> str:
+    """An address as given, or the address of a host the site names (a DHCP reservation or a
+    host a rule names, by name or FQDN)."""
+    import ipaddress
+
+    try:
+        return str(ipaddress.ip_address(name))
+    except ValueError:
+        pass
+    names = (name, name.removesuffix("." + ir.domain))
+    for r in ir.reservations:
+        if r.host in names:
+            return r.address
+    for rule in ir.policy.rules:  # a host a rule names (a service exception's target)
+        for sel in (rule.src, rule.dst):
+            if sel.kind == "host" and sel.name in names and sel.cidrs:
+                return sel.cidrs[0].split("/")[0]
+    raise ValueError(f"{name!r}: neither an address nor a host the site names")
+
+
+def _query(args, ir, out, err) -> int:
+    """The verdict for one forwarded packet (:func:`homelabnext.network.ir.evaluate`); exit 0
+    with the verdict either way, 2 when the query cannot be asked."""
+    from .ir import evaluate
+
+    try:
+        src, dst = _address(ir, args.source), _address(ir, args.dest)
+        v = evaluate(ir.policy, src, dst, args.proto, args.port)
+    except ValueError as exc:
+        print(f"hnx site query: {exc}", file=err)
+        return EXIT_USAGE
+    what = f"{src} -> {dst} {args.proto}" + (f"/{args.port}" if args.port is not None else "")
+    if args.json:
+        body = {
+            "from": src,
+            "to": dst,
+            "proto": args.proto,
+            "port": args.port,
+            "action": v.action,
+            "rule": v.rule.id if v.rule else None,
+            "reason": v.reason,
+        }
+        print(json.dumps(body, indent=2), file=out)
+    else:
+        print(f"{v.action}: {what} ({v.reason})", file=out)
+    return 0
+
+
 def _run(args, out, err) -> int:
     if args.cmd == "review-tier":
         return _review_tier(args, out, err)
@@ -198,6 +259,9 @@ def _run(args, out, err) -> int:
     if args.cmd == "ir":
         print(json.dumps(ir.to_dict(), indent=2, sort_keys=True), file=out)
         return 0
+
+    if args.cmd == "query":
+        return _query(args, ir, out, err)
 
     name = adapter_name or _pick(args, doc)
     adapter = adapters.get(name)

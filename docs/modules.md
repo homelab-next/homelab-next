@@ -209,6 +209,8 @@ something (non-empty `in` and `out`). The fields:
 | `required_in_core` | a site must select a provider | a selection cannot silently omit dns or backup |
 | `privileged` | secrets, idp, edge (the front door), broker, orchestration, records | never provisional; always a conformance run and the human review tier |
 | `pass_through` | the stage may be skipped | |
+| `authority` | broker, secrets, idp, edge, remote-admin, mcp-catalog (each that the registry holds) | never in an agent's `needs`; an authority for the site rules; must agree with `homelabnext.modules.authority`, the one list the schema generator and the rules read (the loader refuses a registry that disagrees, either way) |
+| `granted_upstream` | broker, idp, remote-admin (each also `authority`) | a service row names it as an upstream only with `grants.upstreams`; agrees with the same list |
 
 `implementations` is **derived** from provider manifests, never listed. `depends_on` (slot to slot)
 is subsumed by the providers' and core modules' `requires`.
@@ -385,7 +387,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | agents | an agent's profile | the overlay's `CeilingPolicy` (CODEOWNERS); compiled **only** with a policy | policy owner |
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
-| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config.<module>: [cap:edge\|cap:idp]` (a site rule) | overlay owner |
+| shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; idp, edge or remote-admin only with `grants.shared_config.<module>: [cap:idp\|cap:edge\|cap:remote-admin]` (a site rule) | overlay owner |
 | egress | traffic beyond required slots (a required or preferred slot is reached without a grant, by the roles its `hosts` names or every role; a privileged one is gated by the review tier, human) | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
@@ -913,7 +915,7 @@ core:       {<module>: {placement, config, agents: {...}}}   # core modules are 
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
 grants:     {publish: [...], egress: {<module>: {<host role>: [internet|external|svc:...]}},
              internet_facing: {<module>: [<host role>]}, secrets: {<reader>: [secret:...]},
-             public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:edge|cap:idp]},
+             public_routes: {<module>: [<row>]}, shared_config: {<module>: [cap:idp|cap:edge|cap:remote-admin]},
              units: {<module>: [<unit>]}, upstreams: {<module>: [cap:broker|cap:idp|cap:remote-admin]},
              cloud_models: {<module>: [mdl:<role>]}}
 scope:      {trusted: {wan, nets, tooling}, target, exclude: {unattended_mutation, offensive}}
@@ -973,9 +975,18 @@ field). A config value must be a key the module declares; a secret-typed value i
 own namespace or one granted to it in `grants.secrets`, the same rule as a manifest default.
 `capacity` stands in for the host's `platform/guest` `resources`, which a real selection references
 by guest id instead of re-declaring. A multi-slot provider is placed once per instance. At run time a
-consumer resolves a slot with **`provider_for(slot, instance)`** from the selection (today
-`homelabnext/broker/cli.py` reads a conformance target file instead). Model choice stays one line in
-the role table.
+consumer resolves a slot with **`provider_for(slot, instance)`** from the selection
+(`homelabnext.modules.providers.provider_for(site, mods, slot, instance)`: the serving module with
+its product and licence, `None` for `none` or `pass-through`, and a refusal, never a guess, for a
+slot the selection does not name, an instance it does not select, or several instances and none
+named). `hnx modules providers --site FILE [--examples] [--overlay DIR] [--json]` lists every
+selected instance that way. `hnx modules check` compares the core registry's `impl:` with it: a row
+whose capability is a selected slot names the product (or an alias) of a provider selected for that
+slot, and a row for a slot the site selects `none` or `pass-through` for is a problem; with the
+repository's example registry (another lab) the comparison is a note. Nothing consumes it at run
+time yet (`homelabnext/broker/cli.py` still reads a conformance target file), the baselines'
+`role` bindings are not compared, and the registry is not generated from the selection (an
+operator decision). Model choice stays one line in the role table.
 
 ### The network scope
 
