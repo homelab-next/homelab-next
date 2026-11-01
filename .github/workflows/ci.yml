@@ -218,8 +218,8 @@ jobs:
           python -m pytest -q -m "not live" -rs
           tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
 
-  # Broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling: each keeps
-  # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
+  # The security-critical units (tools/coverage_floor.py UNITS, the one list): each keeps >= 80%
+  # line coverage from its own tests (pytest-cov from the test extra).
   coverage:
     runs-on: ubuntu-latest
     # one pytest per group of units, Python subprocesses measured too: slower than the old single run
@@ -907,9 +907,11 @@ jobs:
           fi
           for c in $(git rev-list --no-merges "$BASE..$HEAD_SHA"); do
             author=$(git log -1 --format='%ae' "$c")
-            # Dependabot cannot certify the DCO; the maintainer who merges does.  Exempt only its
-            # own commits in its own pull request (GitHub's record of who opened it, not the
-            # commit metadata, which anyone can set)
+            # Dependabot cannot certify the DCO; the maintainer who merges does.  The exemption is
+            # narrowed to Dependabot's own pull requests by GitHub's record of who opened it, which
+            # no commit can set; within one, the author e-mail is commit metadata, so a commit a
+            # writer pushes to that branch under Dependabot's address is exempt too.  It narrows
+            # the hole, it does not close it: the merging maintainer's review is the control
             if [ "$from_dependabot" = 1 ] && [ "$author" = "$dependabot" ]; then
               continue
             fi

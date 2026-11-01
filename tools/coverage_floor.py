@@ -24,27 +24,11 @@ by ``tests/status``, the package's tests, so they can credit each other.  Each u
 package hide a poorly covered one.  The floor is on lines, not branches.  Raising a unit's
 coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed change to this file.
 
-* ``homelabnext/broker``  -- the broker decision evaluator (grants, tiers, approvals) and the
-  reference service (lanes, pinned handlers, durable single-use approvals)
-* ``homelabnext/scope``   -- the scope guard for writer tools
-* ``homelabnext/records`` -- the approval lifecycle (inbox, decided lanes, completion)
-* ``homelabnext/decide``  -- the decision cascade
-* ``homelabnext/agent/compiler.py`` -- the agent-profile grant ceiling (privilege decisions)
-* ``homelabnext/agent/readers.py``  -- the reader/actor split (who may see untrusted text)
-* ``homelabnext/agent/handoff.py``  -- the reader->actor handoff (validated structured input)
-* ``homelabnext/agent/memory.py``   -- the agent memory write path (untrusted text at rest)
-* ``homelabnext/agent/screen.py``   -- the injection screen in front of the model
-* ``homelabnext/workflows``         -- workflow runs: the broker executor and approval binding
-* ``homelabnext/registry/limits.py`` -- the model rate/token/cost budget (throttle + alert)
-* ``homelabnext/registry/model_tlp.py`` -- a model request's TLP label against its role's ceiling
-* ``homelabnext/context``          -- context retrieval: scope enforcement and inactive records
-* ``homelabnext/mcp``              -- the read-only MCP server: path refusal, scope intersection
-* ``homelabnext/status/agents/auth.py``   -- the status hub's private-tier front door + access log
-* ``homelabnext/status/agents/ingest.py`` -- the agent-activity push ingest (tokens, limits)
-* ``homelabnext/status/approvals.py`` -- the hub's approval write path (CSRF, origin, digests)
-* ``homelabnext/status/serve.py``     -- the hub's HTTP server (host and origin checks, tiers)
-* ``homelabnext/generators/safe.py``  -- the control-character and injection backstop of generators
-* ``tools/leak_scan.py``              -- the leak and secret scan (F-05, F-18)
+``UNITS`` below is the one list of the units and the tests that measure each: the broker, the
+scope guard, the records lifecycle, the decide cascade, the agent's grant ceiling, reader rule,
+handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
+MCP server, the status hub's front door, ingest and approval paths, the generators' backstop, the
+TLP label type, egress and reader ceilings, and the leak scan.  Nothing else lists them in full.
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
   --json FILE  evaluate one existing ``coverage json`` report for every unit instead of running
