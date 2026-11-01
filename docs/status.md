@@ -203,7 +203,10 @@ Schema: `schemas/status/views.schema.json`; `hnx status views check` also checks
 unique, `main` is a panel view, a `select` names registered sources and modules, an external
 entry names a registered service unless it is `optional` (then it is shown as unavailable), and
 every entry and export declares its TLP ceiling (views 1.10; see
-[TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)). An
+[TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)).
+`hnx status views check --preview public` also prints what the public tier is shown,
+`status.json` through its release transform, built from `--state` without a server
+(`--preview private`: the whole document). An
 external link is built from the registry: the service's public hostname, else its capability
 alias. Panels:
 
@@ -226,7 +229,11 @@ the `private` group ([TLP ceilings and release transforms](#tlp-ceilings-and-rel
 script, no CDN; the menu switches views with `#view-<id>` anchors and CSS `:target`) and
 `status.json`. The same input renders the same bytes. `hnx status serve` answers the same two
 documents live (`/`, `/index.html`, `/status.json`), **GET and HEAD only** (every other method is
-405), building each response from the state file only, so no source can stall it (O-07). It binds
+405), building each response from the state file only, so no source can stall it (O-07). One
+build is reused while its input files (the state file, the activity store and its `-wal`) are
+unchanged and for at most 15 seconds (`homelabnext.status.serve.DocumentMemo`), so a burst of
+requests does not load every activity event each time; a write or a retention purge rebuilds it,
+and every response still goes through its release transform. It binds
 loopback; another address needs `--allow-remote` plus `--allowed-host NAME` (repeatable) and
 belongs behind the forward-auth proxy.
 

@@ -78,6 +78,8 @@ from .views import ViewsError, ViewsUnreadable, build_status, load_views
 DEFAULT_REGISTRY = "examples/services.yml"
 DEFAULT_VIEWS = "examples/status/views.yml"
 DEFAULT_STATE = "build/status/state.json"
+#: the tiers ``views check --preview`` can show (ADR-0033 decision 8)
+PREVIEW_TIERS = ("public", "private")
 
 
 def _agents(args, reg, clock):
@@ -212,7 +214,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p = sub.add_parser("views", help="check a views.yml against its schema and the registry")
     p.add_argument("action", choices=["check"])
     p.add_argument("file", nargs="?", default=DEFAULT_VIEWS)
-    common(p)
+    p.add_argument(
+        "--preview",
+        choices=PREVIEW_TIERS,
+        help="also print the document a tier is shown, built from --state (no server): public "
+        "is status.json through its release transform, private the whole document",
+    )
+    common(p, state=True)
     p = sub.add_parser("collect", help="one collection pass over the due sources")
     common(p, state=True)
     p.add_argument("--root", default=".", help="what poll-file targets are relative to")
@@ -342,8 +350,12 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         except ViewsError as exc:
             print(f"hnx status views: {exc}", file=sys.stderr)
             return 2 if isinstance(exc, ViewsUnreadable) else 1
-        print(f"views: ok ({args.file}: {len(doc['menu'])} menu entries)")
-        return 0
+        ok = f"views: ok ({args.file}: {len(doc['menu'])} menu entries)"
+        if args.preview is None:
+            print(ok)
+            return 0
+        print(ok, file=sys.stderr)  # stdout is the preview alone
+        return _preview(args, reg, specs, doc, clock)
     from .agents.config import AgentsConfigError
 
     try:
@@ -401,13 +413,18 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             paths += maps.write(args.private_out, doc)
         print("wrote " + ", ".join(str(p) for p in paths))
         return 0
-    from .serve import LOOPBACK, make_server
+    from .serve import LOOPBACK, DocumentMemo, make_server
 
     approvals = _approvals_site(agents_cfg, clock)
     served = approvals is not None
+    document = DocumentMemo(
+        lambda: _document(args, reg, specs, views, clock, site, approvals=served, maps=maps),
+        lambda: _document_inputs(args, store),
+        clock,
+    )
     try:
         srv = make_server(
-            lambda: _document(args, reg, specs, views, clock, site, approvals=served, maps=maps),
+            document,
             host=args.bind or LOOPBACK,
             port=args.port,
             allow_remote=args.allow_remote,
@@ -428,6 +445,33 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     print(f"status hub (read-only) on http://{host}:{port}/  (Ctrl-C stops)")
     _serve(srv, store)
     return 0
+
+
+def _preview(args, reg, specs, views, clock) -> int:
+    """Print what ``args.preview``'s tier is shown of the document built from ``--state``: the
+    public tier gets ``status.json`` through its release transform (as ``hnx status serve``
+    answers it), the private tier the whole document.  A release that fails exits 1."""
+    from .release import ReleaseError
+    from .views import dumps, public_status
+
+    doc = _document(args, reg, specs, views, clock)
+    if args.preview == "public":
+        try:
+            doc = public_status(doc, contract=True)
+        except ReleaseError as exc:
+            print(f"hnx status views: the public release fails: {exc}", file=sys.stderr)
+            return 1
+    sys.stdout.write(dumps(doc))
+    return 0
+
+
+def _document_inputs(args, store) -> list[str]:
+    """The files a served document is built from: the hub's state file and, with ``--agents``,
+    the activity store and its write-ahead log (a write or a retention purge changes one)."""
+    paths = [str(args.state)]
+    if store is not None:
+        paths += [str(store.path), f"{store.path}-wal"]
+    return paths
 
 
 def _serve(srv, store) -> None:

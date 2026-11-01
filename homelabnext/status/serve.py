@@ -20,7 +20,11 @@ The one write is ``POST /approvals/decide``, and only when the Approvals page is
 the digest the person saw); every other ``POST`` is still ``405``.
 Each request builds the document from the state file only -- it never calls a source -- so a hung
 or blackholed source cannot stall the console (O-07); collection runs elsewhere
-(``hnx status collect``).
+(``hnx status collect``).  ``hnx status serve`` builds it through a :class:`DocumentMemo`: one
+build is reused while every input file (the state file, the activity store and its ``-wal``) is
+unchanged and the clock is in the same :data:`DOCUMENT_BUCKET_S` window, so a burst of cheap
+requests cannot each load every activity event; a write or a retention purge changes the store's
+files and so drops the reused build.
 
 It binds loopback by default.  Another address is refused unless ``allow_remote=True``, which
 also requires ``allowed_hosts``: the server has no authentication of its own, so exposing it is a
@@ -38,6 +42,8 @@ else (after the AOS-1 monitor's ``hostAllowed``, MIT).
 from __future__ import annotations
 
 import contextlib
+import copy
+import os
 import socket
 import threading
 import urllib.parse
@@ -210,6 +216,56 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             self.shutdown_request(request)
             self._give(self._client(client_address))
             self.slots.release()
+
+
+#: how long one built document may be reused while its inputs are unchanged (s)
+DOCUMENT_BUCKET_S = 15.0
+
+
+def _stat(path: str | os.PathLike[str]) -> tuple[int, int, int] | None:
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
+class DocumentMemo:
+    """``build()`` reused while nothing it reads has changed: the key is the clock's
+    ``bucket_s`` window and the identity, mtime and size of every path ``inputs()`` names (a
+    missing file is part of the key too).  Each caller gets its own copy, so a request that
+    changes its document cannot change the next one's.  Thread-safe; two requests racing on a
+    changed key may both build (the later stores its build)."""
+
+    def __init__(
+        self,
+        build: Callable[[], Mapping[str, Any]],
+        inputs: Callable[[], Iterable[str | os.PathLike[str]]],
+        clock: Callable[[], float],
+        *,
+        bucket_s: float = DOCUMENT_BUCKET_S,
+    ) -> None:
+        if bucket_s <= 0:
+            raise ValueError("bucket_s must be positive")
+        self._build, self._inputs, self._clock, self._bucket = build, inputs, clock, bucket_s
+        self._lock = threading.Lock()
+        self._key: tuple[Any, ...] | None = None
+        self._doc: Mapping[str, Any] | None = None
+        self.builds = 0  # how many times build() ran (observability, tests)
+
+    def _key_now(self) -> tuple[Any, ...]:
+        return (int(self._clock() // self._bucket), tuple(_stat(p) for p in self._inputs()))
+
+    def __call__(self) -> Mapping[str, Any]:
+        key = self._key_now()
+        with self._lock:
+            if self._key == key and self._doc is not None:
+                return copy.deepcopy(self._doc)
+        doc = self._build()
+        with self._lock:
+            self.builds += 1
+            self._key, self._doc = key, doc
+        return copy.deepcopy(doc)
 
 
 def make_server(
