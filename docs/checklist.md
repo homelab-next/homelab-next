@@ -60,11 +60,11 @@ Every asset sends logs; the sensors see what they should.
 
 ## T - Transport and processing
 
-Events move through one bus, in one schema, with nothing silently dropped.
+Reaction, record and decision events move through one bus, in one schema, with nothing silently dropped; telemetry stays direct and control stays typed RPC (ADR-0009).
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| T-01 | All events flow through the event bus | Every source appears on its subject; consumer lag < 5 min | SERVER |
+| T-01 | Every bus event type has a subject and a consumer | Every type in `docs/events.md` ("What goes on the bus") appears on its subject and has a durable consumer; consumer lag < 5 min (telemetry is not on the bus: ADR-0009) | SERVER |
 | T-02 | Events validate against the schema | Fixture events validate against the event schema in CI; >= 99.5% of live events validate, the rest reach the dead-letter queue | PUBLIC-NOW |
 | T-03 | Nothing is silently dropped | Dead-letter depth is alerted on; 0 unreviewed items older than 7 days | SERVER |
 | T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them (`homelabnext/events/enrich.py`; `hnx events enrich-coverage` measures live coverage) | PUBLIC-NOW |

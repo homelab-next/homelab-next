@@ -30,8 +30,9 @@ recorded in the [ADR log](adr/README.md); the Python interfaces are in
 
 - **The hypervisor is not a seam** (ADR-0012). Its exit is "restore from backup and rebuild from
   git", and the only test worth paying for is that rebuild.
-- **No bus under the data plane** (ADR-0009). A bus belongs at the reaction seam only; telemetry
-  stays a direct, buffered stream, and control stays typed request/response.
+- **No bus under the data plane** (ADR-0009). A bus carries reaction triggers, per-item records
+  and decision events only (`docs/events.md`, "What goes on the bus"); telemetry stays a direct,
+  buffered stream, and control stays typed request/response.
 - **No internal framework.** The spine is libraries and generators. If a proposed abstraction
   needs its own service, database and on-call, it is a product and needs its own exit.
 - **No lowest-common-denominator contracts.** Where an open standard is implemented well (S3,
