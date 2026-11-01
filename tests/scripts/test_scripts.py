@@ -342,6 +342,25 @@ def test_compose_service_resolves_through_the_dockerfile(tmp_path):
     assert probs == ["compose:lab/init: runs compose/lab/init.py, which has no script header"]
 
 
+def test_a_ci_job_running_a_script_from_a_worktree_of_another_commit_calls_it(tmp_path):
+    # trusted-gates runs the base commit's copy: "$RUNNER_TEMP/base/tools/x.py" is still tools/x.py
+    root = good_tree(tmp_path)
+    tree(
+        root,
+        {
+            "tools/gate.py": header(id="gate", trigger=["ci:ci/trusted-gates"]),
+            ".github/workflows/ci.yml": """\
+                on: [push]
+                jobs:
+                  trusted-gates:
+                    steps:
+                      - run: '"$PY" -I "$RUNNER_TEMP/base/tools/gate.py" --base "$BASE"'
+            """,
+        },
+    )
+    assert verdicts(root)[1] == []
+
+
 def test_script_to_script_calls_ignore_comments(tmp_path):
     root = good_tree(tmp_path)
     tree(
