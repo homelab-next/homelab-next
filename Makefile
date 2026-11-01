@@ -265,14 +265,16 @@ scripts-check:
 	$(PY) -m homelabnext.cli scripts reality
 	$(PY) -m homelabnext.cli scripts runner-lint
 
-# X-06: `lint-ids` fails on an engine rule number in an agent-facing file (charters, profiles,
-# decision specs, schedules); rule numbers live in detections/det_map.yml only
+# X-06: `lint-ids` fails on an engine rule number, or a det: id the map lacks, in an agent-facing
+# file (charters, profiles, decision specs, schedules); rule numbers live in detections/det_map.yml
+# only, and invariant X-06 runs the same scanner
 detections:
 	$(PY) -m homelabnext.detections lint
 	$(PY) -m homelabnext.detections lint-ids
 	$(PY) -m homelabnext.detections run
 	$(PY) -m homelabnext.detections map --check
 	$(PY) -m homelabnext.detections coverage --check detections/attack_coverage.json
+	$(PY) -m homelabnext.detections validate-techniques
 
 # T-07, Q-05: every event type and shared lake table has a passing publisher and consumer
 # contract test (generated from schemas/events and schemas/ocsf)

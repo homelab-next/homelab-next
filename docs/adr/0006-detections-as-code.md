@@ -23,8 +23,12 @@ decision specs. Changing the rule engine would then mean rewriting prose as well
    specs cite logical ids; a generated map resolves them to engine rule numbers. A raw rule
    number in prose or a spec is a lint failure.
 3. Alert severity at the automation seam is the OCSF `severity_id`, not an engine-specific level.
+   (Not implemented yet: rules carry Sigma's `level`, and only the engine stub maps it, to its
+   own levels.)
 4. A rule without fixtures fails the gate. Rules that cannot be expressed in Sigma stay native
-   with a stated reason.
+   with a stated reason. (The native-rule location and its lint are not implemented yet; until
+   then `compile` names each rule a backend cannot express, leaves it out of the bundle and
+   exits non-zero, never aborting the bundle.)
 
 ## Consequences
 

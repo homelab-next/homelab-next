@@ -108,13 +108,15 @@ def main(argv=None) -> int:
         print(f"[invariants] FATAL: cannot read previous results {out}: {ex}", file=sys.stderr)
         return 2
     skip = set(ns.skip.split(",")) if ns.skip else set()
+    only = set(ns.only.split(",")) if ns.only else None
     doc = run_criteria(
-        [c for c in reg["criteria"] if c["id"] not in skip],
+        reg["criteria"],
         Context(ns.root),
         registry,
-        only=set(ns.only.split(",")) if ns.only else None,
+        only=only,
         fast=ns.fast,
         previous=previous,
+        skip=skip,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
@@ -124,7 +126,8 @@ def main(argv=None) -> int:
         sender = _CommandSender(ns.notify_cmd) if ns.notify_cmd else _PrintSender()
         ceiling = ns.notify_ceiling if ns.notify_ceiling is not None else ceiling_arg("red")
         page_changes(doc, ns.state, pager(sender, ceiling), baseline=ns.baseline)
-    return overall_exit(doc)
+    # carried-over results of criteria not run this time do not decide the exit code
+    return overall_exit(doc, only - skip if only else None)
 
 
 if __name__ == "__main__":

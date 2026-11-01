@@ -9,7 +9,7 @@ be checked against the engine's bundled ATT&CK database before it ships. Adverti
 either (a) a ``known_technique_ids()`` method returning a set/frozenset of ids, OR (b) a
 ``known_ids_snapshot`` path on the backend pointing at a snapshot file for ``attack.load_snapshot``.
 The ``KnownTechniques`` protocol is informational: nothing enforces that a backend provides
-it, and the validator falls back to the loaded-file path when the method is absent.
+it, and ``validate-techniques`` loads ``known_ids_snapshot`` itself when the method is absent.
 """
 
 from __future__ import annotations

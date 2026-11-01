@@ -77,6 +77,16 @@ Defined in [`homelabnext.detections.sigma`](../../homelabnext/detections/sigma.p
 | `condition` | `tuple` | required | AST |
 | `raw` | `dict[str, Any]` | `dict()` |  |
 
+#### `Rule.attack_tag_problems`
+
+```python
+def attack_tag_problems() -> list[str]
+```
+
+**Returns:** `list[str]`
+
+Every `attack.*` tag must be a lower-case tactic, technique, group or software.
+
 ### Errors
 
 The contract exports no exception types; see the method docstrings.

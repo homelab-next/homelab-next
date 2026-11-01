@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--include-inactive",
         action="store_true",
-        help="related: also return retired and superseded records",
+        help="related: also return inactive records (retired, superseded, incorporated, closed)",
     )
     try:
         args = ap.parse_args(argv)
