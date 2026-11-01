@@ -128,9 +128,39 @@ WITHHELD_PANELS = (
 WITHHELD_ROUTES = (*sorted(PAGE_PANELS[p] for p in WITHHELD_PANELS), "/static/maps.js")
 
 
+def _under(route: str, roots: tuple[str, ...]) -> bool:
+    return any(route == r or route.startswith(r + "/") for r in roots)
+
+
 def withheld_route(route: str) -> bool:
     """Whether ``route`` belongs to a withheld page (:data:`WITHHELD_ROUTES`)."""
-    return any(route == r or route.startswith(r + "/") for r in WITHHELD_ROUTES)
+    return _under(route, WITHHELD_ROUTES)
+
+
+#: the agent summary pages and exports (:class:`homelabnext.status.agents.pages.SummaryPages`):
+#: released routes, every row through its release transform
+AGENT_ROUTES = ("/agents", "/agents/session", "/activity", "/activity.csv", "/activity.jsonl",
+                "/agent-analytics")  # fmt: skip
+#: the public view's routes: the status document through its release transform, and the agent
+#: pages.  Their ceiling is :data:`PUBLIC_CEILING`, for every viewer
+RELEASED_ROUTES = ("/", "/index.html", "/status.json", *AGENT_ROUTES)
+#: the private tier (the detail pages and the access log) and the broker Approvals page with its
+#: one ``POST``: served only through the trusted front door; this route or below it
+PRIVATE_ROUTES = ("/private", "/approvals")
+
+
+def route_ceiling(route: str) -> tlp.Label | None:
+    """The TLP ceiling of the reader that ``route`` is (ADR-0033 decision 6): the hub's readers
+    are its routes, and their ceilings are fixed per tier here, in code.  A released route is
+    :data:`PUBLIC_CEILING`; a private or withheld one (:data:`PRIVATE_ROUTES`,
+    :data:`WITHHELD_ROUTES`) is :data:`PRIVATE_CEILING`.  None: a route with no declared ceiling,
+    which ``hnx status serve`` refuses (``404``) whatever site offers it.  A menu entry's ``tlp``
+    is a declaration checked against its tier by :func:`ceiling_problems`."""
+    if route in RELEASED_ROUTES:
+        return PUBLIC_CEILING
+    if withheld_route(route) or _under(route, PRIVATE_ROUTES):
+        return PRIVATE_CEILING
+    return None
 
 
 #: at most this many sessions go into status.json (worst state first)
@@ -213,7 +243,9 @@ def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None =
     """ADR-0033 decision 6 for the hub: every menu entry and every export declares a TLP ceiling
     (``tlp``, a canonical label; the schema refuses any other spelling), a public one ``clear``
     and a private one ``red``, and every public export and every public view whose data the hub
-    releases is served by a release transform whose output its ceiling allows.  Where the hub is
+    releases is served by a release transform whose output its ceiling allows; and the shell's
+    and every menu entry's title passes the release's ``title`` value check, so a title is never
+    published as ``withheld`` unannounced.  Where the hub is
     reachable from never enters into it: a reachable name, address or front door raises no
     ceiling; only the private tier's grant does, and only for the private group."""
     if releases is None:
@@ -233,7 +265,17 @@ def ceiling_problems(doc: Mapping[str, Any], releases: release.Releases | None =
             if not tlp.allows(ceiling, t.output)
         )
 
+    def title_ok(where: str, title: Any) -> None:  # the release's value check, run up front
+        if not release.check_value("title", title):
+            out.append(
+                f"{where}: title {title!r} would be released as {release.PLACEHOLDER!r}: a "
+                "released title is a letter or digit, then letters, digits, spaces and , ' ( ) "
+                "+ - only, at most 80 characters"
+            )
+
+    title_ok("shell", doc["shell"].get("title"))
     for v in doc["menu"]:
+        title_ok(f"view {v['id']}", v.get("title"))
         private = v.get("group") == PRIVATE_GROUP
         want = PRIVATE_CEILING if private else PUBLIC_CEILING
         if "tlp" not in v:

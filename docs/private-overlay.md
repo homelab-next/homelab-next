@@ -255,7 +255,9 @@ How `seed` writes:
   `seed` again after adding a role, and only the new names are created.
 * **It asks first.** It says how many secrets it will write and asks (`--yes` off a terminal).
 * **Exit codes.** It exits 0 once every name has a value, 3 while some still need one (an external
-  not given, an unclassified name), 1 on an error, and 2 on a usage error.
+  not given, an unclassified name), 1 on an error (OpenBao or `bw` unreachable or refusing, a
+  mount that is not KV version 2), and 2 on a usage or configuration error (a bad argument or
+  spec, `BAO_ADDR` / `BAO_TOKEN` unset).
 * **Values stay out of sight.** They exist only in memory and in the HTTPS request; the output
   names secrets and outcomes, never a value.
 * **Seeding only stores the value.** Where a service must also know it (the SIEM's enrolment

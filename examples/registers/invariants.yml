@@ -31,10 +31,11 @@ pillars:
   title: Feedback and assurance
 - letter: X
   title: Modularity
-# Tombstones (homelabnext/registers/ids.py): ids this register once used with a meaning that
-# collided with the checklist's.  They stay here so `register_ids.py check-lost` still finds them
-# and nothing can reuse them by accident.
-retired:
+# Earlier uses (homelabnext/registers/ids.py): ids this register once used with a meaning that
+# collided with the checklist's.  They stay here so `register_ids.py check-lost` still finds them,
+# in `retired_legacy:` rather than `retired:` because each id is still a live checklist row: the
+# row's own criterion takes the id when it is automated (ADR-0019, "Scope").
+retired_legacy:
   F-01:
     replaced_by: Q-09
     reason: >-

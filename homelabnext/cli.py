@@ -268,6 +268,11 @@ def _usage() -> str:
     )
 
 
+#: top-level packages this project ships: a ModuleNotFoundError naming one is a bug to show
+#: with its traceback, not an optional dependency to install
+FIRST_PARTY = frozenset({"homelabnext", "conformance"})
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] in ("-h", "--help"):
@@ -288,6 +293,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         code = entry[1](rest)
     except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] in FIRST_PARTY or not exc.name:
+            raise  # a module of this project is missing: a packaging bug, never an extra
         print(
             f"hnx {cmd}: missing optional dependency {exc.name!r}; "
             "install the matching extra (see pyproject.toml)",

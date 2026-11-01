@@ -213,7 +213,8 @@ def nav_html(
 ) -> str:
     """The left menu.  ``live``: served by ``hnx status serve`` (page entries link to their live
     pages; in the static file they are marked live-only, except the maps ``hnx status render
-    --private-out`` writes as ``<panel>.html``, linked from the private pages beside them).  ``private``: the request passed the trusted front
+    --private-out`` writes as ``<panel>.html``, linked from the private pages beside them, the
+    private ``index.html`` included).  ``private``: the request passed the trusted front
     door -- only then is the private group rendered at all, and then only its pages that are
     served (the Approvals entry appears only when approvals are configured).  ``home``: the page
     the panel anchors live on, for a static page other than ``index.html``."""
@@ -232,7 +233,7 @@ def nav_html(
             if live and m["available"]:  # the public view withdraws href: the path is the code's
                 href = m.get("href") or PAGE_PANELS[m["panel"]]
                 nav.append(f'<a href="{_e(href)}">{_e(m["title"])}</a>')
-            elif m["available"] and m.get("panel") in GENERATED_PANELS:  # written beside index.html
+            elif m["available"] and m.get("panel") in GENERATED_PANELS:  # in --private-out
                 nav.append(f'<a href="{_e(m["panel"])}.html">{_e(m["title"])}</a>')
             else:
                 why = "served live by hnx status serve" if not live else "no activity store"
