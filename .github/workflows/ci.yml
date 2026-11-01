@@ -264,8 +264,11 @@ jobs:
         run: python tools/product_name_lint.py --ci-base .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
-      - name: no copy-paste beyond the shrinking baseline (M-03)
-        run: python tools/dup_check.py .
+      - name: no copy-paste beyond the shrinking baseline (M-03); the baseline never loosens against the base
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/dup_check.py --ci-base .
       - name: TLS certificate verification never disabled (F-07)
         run: python tools/tls_verify_lint.py .
       - name: install caddy (pinned release, checksum verified) for the F-23 semantic check

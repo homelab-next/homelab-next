@@ -129,7 +129,9 @@ and an entry that no longer excuses anything fails the lint.
   `schemas/_frozen/` and generated files out of scope). The baseline is keyed by content hash, so
   moving code does not touch it, and it only shrinks: a removed clone is a stale entry that fails
   until `make dup-baseline` drops it, and an update that would raise the duplicated-line total is
-  refused unless `--update-baseline --allow-increase "<reason>"` records why. The helpers lint
+  refused unless `--update-baseline --allow-increase "<reason>"` records why. CI runs it with
+  `--ci-base`, so a hand edit to the baseline (its parameters or its clones) that the base
+  commit's baseline does not allow fails unless it records such an increase. The helpers lint
   above is the semantic side (a re-implemented seam, copied or not); a copied seam helper trips
   both and the one fix clears both. `--mode normalised` (identifiers and literals abstracted)
   finds renamed copies too, as an audit.
