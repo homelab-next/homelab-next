@@ -506,3 +506,11 @@ def test_the_broker_matches_profiles_with_the_schemas_profile_id():
     want = json.loads(ids.read_text())["$defs"]["profile_id"]["pattern"]
     assert lanes.PROFILE_RE.pattern.replace("(", "", 1).replace(")$", "$") == want
     assert not hasattr(service, "_PROFILE_RE")
+
+
+def test_the_broker_profile_pattern_refuses_a_trailing_newline():
+    """Python's ``$`` also matches before a final newline; the schema's guard says it must not."""
+    from homelabnext.broker import lanes
+
+    assert lanes.PROFILE_RE.match("profile:analyst")
+    assert not lanes.PROFILE_RE.match("profile:analyst\n")

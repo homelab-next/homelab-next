@@ -122,7 +122,7 @@ USAGE_WARN = 0.8
 DEFAULT_LEDGER = ".hnx-lane-ledger"
 #: a ``profile:<slug>`` actor, the slug captured (``schemas/ids/logical-id`` ``profile_id``): the one copy
 #: the broker matches profiles with
-PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
+PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$(?!\n)")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 #: hex characters of a records-inbox file name's tag
 TAG_CHARS = 8
