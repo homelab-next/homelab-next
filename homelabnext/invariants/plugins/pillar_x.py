@@ -4,6 +4,8 @@
     X-01  no raw endpoints outside the registry          (runs tools/no_raw_endpoints.py)
     X-02  registry completeness vs live listeners        SERVER (needs the live platform)
     X-03  schemas version-pinned, examples valid, negatives rejected
+                                                         (runs tools/schema_check.py --strict
+                                                         where the tree has it)
     X-04  every capability has a conformance test
     X-05  role linter clean                              (runs tools/role_lint.py)
     X-06  detection ids are logical (``det:`` ids), no raw rule numbers in specs
@@ -91,8 +93,8 @@ _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\s*(?:\n|\Z)", re.S)
 def _load(path: pathlib.Path):
     """Load a schema instance from ``.json``, ``.yaml``/``.yml`` or ``.md`` (YAML frontmatter).
 
-    Instance formats match ``tools/schema_check.py`` so this check and that one agree on which
-    files count as examples/negatives.
+    Used only by :func:`_x03_generic`, for a tree without ``tools/schema_check.py``; a tree with
+    it is checked by it alone (its loader keeps timestamps as strings, this one does not).
     """
     text = path.read_text()
     if path.suffix == ".json":
@@ -133,6 +135,24 @@ def _build_registry(schemas: list[pathlib.Path]):
 
 
 def x03(ctx: Context) -> CheckResult:
+    """X-03.  A tree that carries ``tools/schema_check.py`` (this repository) is judged by it,
+    under ``--strict``: one implementation of which files are schemas (every ``*.json``, the
+    OCSF ``<class>.v1.json`` and ``service.json`` included), which files are a schema's examples
+    and negatives, and what a pinned ``$id`` is, so the invariant certifies exactly what CI
+    checks.  Any other tree gets the generic layout check (:func:`_x03_generic`)."""
+    if (ctx.root / "tools" / "schema_check.py").is_file():
+        return _tool_check(
+            ctx,
+            "tools/schema_check.py",
+            ["--strict", "--root", str(ctx.root)],
+            "schema_check --strict: schemas pinned, examples valid, negatives rejected",
+        )
+    return _x03_generic(ctx)
+
+
+def _x03_generic(ctx: Context) -> CheckResult:
+    """X-03 for an adopter's tree without the repository checker: the layout conventions in
+    this module's docstring (``NAME.schema.json``, ``x-version`` or a ``/vN`` ``$id``)."""
     sdir = ctx.root / "schemas"
     # ``_frozen/`` holds version-stamped snapshots that intentionally pre-date the current
     # ``$id``/``x-version`` pinning convention - the frozen tree is for baseline comparison,
