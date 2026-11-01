@@ -12,6 +12,7 @@ from homelabnext.cli import COMMANDS
 from homelabnext.decommission import (
     PLANES,
     Adapters,
+    DirTree,
     MemTree,
     Status,
     Target,
@@ -72,7 +73,8 @@ def test_unreachable_plane_is_skip_never_clean(files):
 
 def test_nothing_measured_is_not_a_pass():
     rep = run(RETIRED, Adapters())
-    assert rep.measured == 0 and rep.verdict() == "UNMEASURED" and rep.exit_code() == 1
+    # >= 100 is "could not measure" everywhere (docs/interfaces.md), never 1 ("remnants found")
+    assert rep.measured == 0 and rep.verdict() == "UNMEASURED" and rep.exit_code() == 100
 
 
 def test_probe_crash_becomes_skip(adapters, monkeypatch):
@@ -129,6 +131,41 @@ def test_secret_plane_sees_names_only(adapters):
     assert r.items == ["app_core_db_password"]
 
 
+def test_secret_plane_is_word_bounded_and_reads_aliases(files):
+    names = [
+        "app_core_db_password",
+        "APP_CORE",
+        "app_core_2_db_password",
+        "myapp_core_token",
+        "app_core2_key",
+        "legacy_app_token",
+        "x_legacy_app_token",
+    ]
+    snap = {"secrets": {"names": names}}
+    t = Target("app-core", aliases=("legacy-app",))
+    r = by_plane(run(t, Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
+    assert r["secret-names"].items == ["app_core_db_password", "APP_CORE", "legacy_app_token"]
+
+
+def test_a_section_without_its_key_is_skip_not_clean(files):
+    snap = {"dns": {"record": ["app-core.example.internal A 192.0.2.50"]}}  # mistyped key
+    r = by_plane(run(LIVE, Adapters.from_snapshot(snap, MemTree(files)), ["dns"]))["dns"]
+    assert r.status is Status.SKIP and "records" in r.detail
+
+
+def test_two_roots_with_the_same_relative_path_are_both_scanned(tmp_path):
+    for name, host in (("src", "app-core"), ("overlay", "web-core")):
+        (tmp_path / name / "playbooks").mkdir(parents=True)
+        (tmp_path / name / "playbooks" / "site.yml").write_text(f"- hosts: {host}\n  tasks: []\n")
+    tree = DirTree(tmp_path / "src", tmp_path / "overlay")
+    assert sorted(rel for rel, _ in tree.files()) == [
+        "overlay/playbooks/site.yml",
+        "src/playbooks/site.yml",
+    ]
+    r = by_plane(run(LIVE, Adapters(tree=tree), ["playbooks"]))["playbooks"]
+    assert r.status is Status.REMNANT and r.items[0].startswith("src/playbooks/site.yml")
+
+
 def test_claimed_paths_are_not_double_reported(adapters):
     rep = by_plane(run(LIVE, adapters))
     assert not any("terraform/app.tf" in i for i in rep["live-refs"].items)
@@ -174,6 +211,7 @@ def test_cli_exit_codes(lab, capsys):
     assert main(["bogus"]) == 2
     assert main(["check", "x", "--root", str(lab / "missing")]) == 2
     assert main(["planes"]) == 0
+    assert main(["check", "app-core"]) == 100  # no tree, no snapshot: nothing measured
     capsys.readouterr()
 
 

@@ -30,7 +30,6 @@ import json
 import os
 import re
 import secrets
-import ssl
 import string
 import subprocess
 import urllib.error
@@ -38,8 +37,11 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from homelabnext._http import credential_opener, is_loopback
 
 #: a reference as the roles' validators accept it (``secret:<seg>[/<seg>...]``)
 #: a reference as the roles' validators accept it, not inside a longer word (``x-secret:``) and
@@ -56,6 +58,11 @@ PASSWORD_ALPHABET = string.ascii_letters + string.digits + "-_"
 
 class SeedError(Exception):
     """A spec, a backend or a request that cannot be used; the message never carries a value."""
+
+
+class SeedConfigError(SeedError):
+    """The caller's settings are missing or unsafe (``BAO_ADDR``, ``BAO_TOKEN``,
+    ``BW_SESSION``): a usage error (exit 2), unlike a backend that fails (exit 1)."""
 
 
 # --------------------------------------------------------------------------------- scanning
@@ -210,30 +217,30 @@ class OpenBaoKV:
 
     def __init__(
         self, addr: str, token: str, *, cacert: str | None = None, mount: str = "secret",
-        field: str = "value",
+        field: str = "value", now: Callable[[], datetime] | None = None,
     ):  # fmt: skip
         u = urllib.parse.urlsplit(addr)
-        loopback = u.hostname == "localhost" or _is_loopback(u.hostname or "")
+        loopback = is_loopback(u.hostname)
         if u.scheme != "https" and not (u.scheme == "http" and loopback):
-            raise SeedError("BAO_ADDR must be https:// (plain http only on loopback)")
+            raise SeedConfigError("BAO_ADDR must be https:// (plain http only on loopback)")
         if not token:
-            raise SeedError("BAO_TOKEN is not set: seed as an operator token with write access")
+            raise SeedConfigError(
+                "BAO_TOKEN is not set: seed as an operator token with write access"
+            )
         if not NAME.match(mount) or "/" in mount:
-            raise SeedError(f"BAO_KV_MOUNT {mount!r} is not a mount name")
+            raise SeedConfigError(f"BAO_KV_MOUNT {mount!r} is not a mount name")
         self.base = addr.rstrip("/")
         self.mount, self.field, self._token = mount, field, token
-        handlers: list[Any] = [urllib.request.ProxyHandler({}), _NoRedirect()]
-        if u.scheme == "https":
-            ctx = ssl.create_default_context(cafile=cacert)
-            handlers.append(urllib.request.HTTPSHandler(context=ctx))
-        self._open = urllib.request.build_opener(*handlers).open
+        # verified https, no proxy, no redirect followed: the token reaches this origin only
+        self._open = credential_opener(cacert).open
         self._checked = False
+        self._now = now or (lambda: datetime.now(UTC))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> OpenBaoKV:
         e = os.environ if env is None else env
         if not e.get("BAO_ADDR"):
-            raise SeedError("BAO_ADDR is not set")
+            raise SeedConfigError("BAO_ADDR is not set")
         return cls(
             e["BAO_ADDR"],
             e.get("BAO_TOKEN", ""),
@@ -301,7 +308,7 @@ class OpenBaoKV:
             raise SeedError(f"secret:{name}: OpenBao answered {status} reading its metadata")
         data = doc.get("data") or {}
         current = (data.get("versions") or {}).get(str(data.get("current_version", ""))) or {}
-        if current.get("destroyed") or current.get("deletion_time"):
+        if current.get("destroyed") or _deleted_by(current.get("deletion_time"), self._now()):
             return "deleted"
         return "present"
 
@@ -328,18 +335,24 @@ class OpenBaoKV:
         return value
 
 
-def _is_loopback(host: str) -> bool:
-    import ipaddress
-
-    try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
-    except ValueError:
+def _deleted_by(deletion_time: object, now: datetime) -> bool:
+    """A KV v2 version is deleted once its ``deletion_time`` has passed.  With the mount's
+    ``delete_version_after`` set, every version carries a FUTURE deletion time from the moment
+    it is written; that secret is live until then.  Empty means never; a value that does not
+    parse is read as deleted (the safe side: seeding then reports it, it never overwrites)."""
+    if not deletion_time:
         return False
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+    text = str(deletion_time).strip()
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", text)
+    if not m:
+        return True
+    frac = (m[2] or "")[:7]  # OpenBao writes nanoseconds; datetime holds microseconds
+    tz = "+00:00" if m[3] == "Z" else m[3]
+    try:
+        when = datetime.fromisoformat(m[1] + frac + tz)
+    except ValueError:
+        return True
+    return when <= now
 
 
 # ------------------------------------------------------------------------------ Vaultwarden
@@ -363,7 +376,7 @@ class Vaultwarden:
         src = os.environ if env is None else env
         self.env = {k: src[k] for k in self.ENV_KEEP if k in src}
         if not self.env.get("BW_SESSION"):
-            raise SeedError(
+            raise SeedConfigError(
                 "BW_SESSION is not set: run `bw config server <url>`, `bw login`, then "
                 "`export BW_SESSION=$(bw unlock --raw)`"
             )

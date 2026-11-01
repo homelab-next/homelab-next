@@ -91,40 +91,44 @@
   "resolved": {
     "hooks": {},
     "profiles": {
-      "board-sensor-driver": {
-        "hosts": [
-          "edge-core"
-        ],
-        "tasks": [
-          {
-            "file": "tasks/persist-module.yml",
-            "id": "custom:board-sensor-driver",
-            "name": "Persist the sensor module when the board is on the allowlist"
-          }
-        ],
-        "vars": {
-          "board_sensor_driver_boards": [
-            "Example Board X1",
-            "Example Board X2 Pro"
+      "board-sensor-driver": [
+        {
+          "hosts": [
+            "edge-core"
           ],
-          "board_sensor_driver_module": "sensorchip_x"
-        }
-      },
-      "vlan-aware-bridge-verifier": {
-        "hosts": [
-          "edge-core"
-        ],
-        "tasks": [
-          {
-            "file": "tasks/verify-bridge.yml",
-            "id": "custom:vlan-aware-bridge-verifier",
-            "name": "Fail unless the named bridge has VLAN filtering enabled"
+          "id": "custom:board-sensor-driver",
+          "tasks": [
+            {
+              "file": "tasks/persist-module.yml",
+              "name": "Persist the sensor module when the board is on the allowlist"
+            }
+          ],
+          "vars": {
+            "board_sensor_driver_boards": [
+              "Example Board X1",
+              "Example Board X2 Pro"
+            ],
+            "board_sensor_driver_module": "sensorchip_x"
           }
-        ],
-        "vars": {
-          "vlan_aware_bridge_verifier_bridge": "vmbr0"
         }
-      }
+      ],
+      "vlan-aware-bridge-verifier": [
+        {
+          "hosts": [
+            "edge-core"
+          ],
+          "id": "custom:vlan-aware-bridge-verifier",
+          "tasks": [
+            {
+              "file": "tasks/verify-bridge.yml",
+              "name": "Fail unless the named bridge has VLAN filtering enabled"
+            }
+          ],
+          "vars": {
+            "vlan_aware_bridge_verifier_bridge": "vmbr0"
+          }
+        }
+      ]
     },
     "registry_changes": [],
     "role_vars": {},
@@ -132,6 +136,9 @@
       "example_service": {
         "config.yml.j2": [
           {
+            "hosts": [
+              "edge-core"
+            ],
             "id": "custom:reverse-proxy-tunnel-workaround",
             "mode": "append",
             "overlay": "overlay/tunnel-mss.j2",
@@ -141,5 +148,5 @@
       }
     }
   },
-  "schema": "hnx.customization.plan/1"
+  "schema": "hnx.customization.plan/2"
 }

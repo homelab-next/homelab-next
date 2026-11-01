@@ -30,6 +30,8 @@ from homelabnext.status.render import render_html
 from homelabnext.status.serve import LOOPBACK, make_server
 
 DOC_ADDR = ".".join(["192", "0", "2", "10"])  # a documentation address, built so no gate trips
+#: the groups header of the test front door
+GROUPS = next(k for k in AUTHORIZED if k.lower().endswith("-groups"))
 
 
 @pytest.fixture
@@ -84,6 +86,9 @@ def served(tmp_path, clock, store, registry):
         (LOOPBACK, {**AUTHORIZED, "X-Authentik-Groups": "staff"}, "viewer group"),
         (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Authentik-Groups"}, "viewer group"),
         (LOOPBACK, {**AUTHORIZED, "X-Authentik-Groups": "hub-private-viewers-not"}, "viewer group"),
+        # regression: the header was split on "," too, so one group whose name holds a comma
+        # read as membership of the viewer group; the separator is "|" only
+        (LOOPBACK, {**AUTHORIZED, GROUPS: "staff,hub-private-viewers"}, "viewer group"),
     ],
 )  # fmt: skip
 def test_front_door_refuses_each_missing_piece(tmp_path, client, headers, reason):

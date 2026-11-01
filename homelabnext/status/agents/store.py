@@ -31,7 +31,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,6 +86,10 @@ class ActivityError(ValueError):
     def __init__(self, message: str, problems: list[str] | None = None):
         self.problems = list(problems or [])
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
+
+
+class ActivityOwnershipError(ActivityError):
+    """A batch written with ``owner=`` names a session or event another writer holds."""
 
 
 @dataclass
@@ -234,9 +238,16 @@ class ActivityStore:
         details: Iterable[Mapping[str, Any]] = (),
         *,
         via: str,
+        owner: bool = False,
     ) -> AddResult:
         """Validate, redact, cap and store a batch (atomically); duplicates are counted, not
-        rewritten.  Raises :class:`ActivityError` if any record is invalid (nothing is stored)."""
+        rewritten.  Raises :class:`ActivityError` if any record is invalid (nothing is stored).
+
+        ``owner``: ``via`` must own every session and event the batch names, checked in the
+        write transaction itself (``BEGIN IMMEDIATE``), so two writers racing for one new session
+        cannot both pass a check made before it; :class:`ActivityOwnershipError` (nothing is
+        stored) when a session holds rows of another ``via`` or an event id is stored under
+        another session or ``via``."""
         now = self.clock()
         s_rows, d_rows, problems = [], [], []
         for i, s in enumerate(summaries):
@@ -262,6 +273,11 @@ class ActivityStore:
         if problems:
             raise ActivityError("invalid agent activity", problems)
         with self._db() as db:
+            if owner:
+                db.execute("BEGIN IMMEDIATE")  # the check and the writes: one transaction
+                taken = self._not_owned(db, s_rows, d_rows, via)
+                if taken:
+                    raise ActivityOwnershipError("not this writer's activity", taken)
             for s in s_rows:
                 cur = db.execute(
                     "INSERT OR IGNORE INTO summary VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -287,6 +303,38 @@ class ActivityStore:
                 result.details += cur.rowcount
             self._purge(db, now)  # in the same transaction: one connection, one commit
         return result
+
+    @staticmethod
+    def _not_owned(
+        db: sqlite3.Connection,
+        s_rows: Sequence[Mapping[str, Any]],
+        d_rows: Sequence[Mapping[str, Any]],
+        via: str,
+    ) -> list[str]:
+        """What a batch for ``via`` names that ``via`` does not own (inside the transaction)."""
+        sessions = sorted({r["session_id"] for r in (*s_rows, *d_rows)})
+        events = {r["event_id"]: r["session_id"] for r in (*s_rows, *d_rows)}
+        out = []
+        if sessions:
+            marks = ",".join("?" * len(sessions))
+            rows = db.execute(
+                f"SELECT DISTINCT session_id FROM summary WHERE session_id IN ({marks}) "
+                "AND via != ?",
+                [*sessions, via],
+            ).fetchall()
+            out += [f"session {sid!r} belongs to another sender or source" for (sid,) in rows]
+        if events:
+            ids = sorted(events)
+            marks = ",".join("?" * len(ids))
+            rows = db.execute(
+                f"SELECT event_id, session_id, via FROM summary WHERE event_id IN ({marks})", ids
+            ).fetchall()
+            out += [
+                f"event {eid!r} is stored for another session or sender"
+                for eid, sid, v in rows
+                if (sid, v) != (events[eid], via)
+            ]
+        return out
 
     def get_meta(self, key: str) -> str | None:
         with self._db() as db:

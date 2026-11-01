@@ -9,8 +9,10 @@
 ``BAO_TOKEN``, ``BAO_CACERT``) and, with ``--vaultwarden``, to the folder the spec names through
 an unlocked ``bw`` (``BW_SESSION``).  Both print names and outcomes, never a value.
 
-``seed`` exits 0 when every secret exists, 1 on any error, and 3 when some still need a value
-(an external one not given, or a name no rule classifies), so a bootstrap script cannot mistake an
+``seed`` exits 0 when every secret exists, 1 on any error (OpenBao or ``bw`` unreachable or
+refusing, a mount that is not KV v2), 2 on a usage or configuration error (a bad argument or
+spec, ``BAO_ADDR`` / ``BAO_TOKEN`` unset or unsafe), and 3 when some still need a value (an
+external one not given, or a name no rule classifies), so a bootstrap script cannot mistake an
 unfinished run for a finished one.
 """
 
@@ -28,6 +30,7 @@ from . import (
     UNCLASSIFIED,
     OpenBaoKV,
     Rule,
+    SeedConfigError,
     SeedError,
     Spec,
     Vaultwarden,
@@ -111,6 +114,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.ask = False
         bao = OpenBaoKV.from_env()
         names = list(found)
+    except SeedError as exc:  # the arguments, the spec or the settings: a usage error
+        print(f"hnx secrets: {exc}", file=sys.stderr)
+        return 2
+    try:  # from here a SeedError is a backend failing, not the caller
         if not args.dry_run:
             preview = seed(names, spec, bao, dry_run=True, given=given)
             pending = sum(1 for o in preview if o.openbao == "would-create")
@@ -124,9 +131,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             names, spec, bao, vault, dry_run=args.dry_run, ask=_ask if args.ask else None,
             given=given,
         )  # fmt: skip
-    except SeedError as exc:
+    except SeedConfigError as exc:  # BW_SESSION unset: still the caller's settings
         print(f"hnx secrets: {exc}", file=sys.stderr)
         return 2
+    except SeedError as exc:
+        print(f"hnx secrets: {exc}", file=sys.stderr)
+        return 1
     for o in out:
         line = f"{o.openbao:<12} {o.vaultwarden:<12} {o.kind:<12} secret:{o.name}"
         print(line + (f"  {o.detail}" if o.detail else ""))
