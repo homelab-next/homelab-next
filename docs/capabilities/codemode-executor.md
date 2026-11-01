@@ -249,7 +249,11 @@ Adapters raise these (never a bare product exception); a check that expects a re
 
 ### JSON Schemas
 
-None: no module of this contract, its suite or its fake loads a schema from `schemas/`.
+Schemas the contract's own code loads (found in the source, not curated):
+
+| Schema | Loaded by |
+|---|---|
+| [`schemas/broker/approval.schema.json`](../../schemas/broker/approval.schema.json) | `homelabnext.broker` |
 
 ## Behavioural contract
 

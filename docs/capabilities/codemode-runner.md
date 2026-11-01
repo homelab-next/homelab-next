@@ -144,6 +144,7 @@ Schemas the contract's own code loads (found in the source, not curated):
 
 | Schema | Loaded by |
 |---|---|
+| [`schemas/broker/approval.schema.json`](../../schemas/broker/approval.schema.json) | `homelabnext.broker` |
 | [`schemas/events/envelope.schema.json`](../../schemas/events/envelope.schema.json) | `homelabnext.events.envelope` |
 
 ## Behavioural contract

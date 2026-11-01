@@ -41,6 +41,9 @@
       "requires_approval": true
     }
   ],
+  "handler_docs": [
+    "handlers/agent-job-submit.handler.json"
+  ],
   "grants": [
     {
       "profile": "profile:workflow-soc",
@@ -65,6 +68,12 @@
       "issuer": "sso",
       "subject": "approver-one",
       "kind": "human"
+    }
+  ],
+  "callers": [
+    {
+      "user": "stanley",
+      "profile": "profile:workflow-agents"
     }
   ]
 }

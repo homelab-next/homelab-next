@@ -68,13 +68,18 @@ pattern's `$` match before a trailing newline, so a pattern alone does not keep 
   Registry zones must exist in the site with the same CIDR.
 * Switch ports are not assigned twice; VLANs named on ports are zones; the uplink is a trunk.
 * A mirror port has `mirror_from` and no VLAN of its own; its sources are assigned on the same
-  switch, listed once, are not mirror ports, and each is copied to one mirror port only. On a `unifi` switch a
-  mirror port has exactly one source ([mirror ports](#mirror-ports-13)).
+  switch, listed once, are not mirror ports, and each is copied to one mirror port only. On a switch
+  the `unifi` adapter renders (a `unifi` switch, or any switch when `unifi` renders the network) a
+  mirror port has exactly one source ([mirror ports](#mirror-ports-13)); the adapter itself refuses
+  a second source rather than render only the first.
 * No two `zone_to_zone` rules cover the same pair; deny rules apply to the whole pair; ports need
-  tcp or udp.
+  tcp or udp, and `icmp` is never listed beside ports (ICMP has no ports: give it its own rule).
 * A URL, or an IP literal outside the fields that define addressing, is rejected: use a reference.
 * DNS names stay inside the site domain and do not shadow a name generated from the registry.
-* The router and switch `model`, and `adapters.*`, must name a known adapter.
+* The router and switch `model`, and `adapters.*`, must name a known adapter of the right kind:
+  `router.model` and `adapters.network` a network adapter (`linux`, `unifi`, `opnsense`),
+  `adapters.dns` a DNS adapter (`dnsmasq`, `zonefile`), a switch's `model` a switch adapter
+  (`unifi`). A DNS adapter named as the router would render no firewall at all.
 
 ### Power (1.1)
 
@@ -126,9 +131,11 @@ The rules live in `homelabnext/tailnet.py` and run in `hnx site validate` and wh
 reads the site: zones by id only (`*`, `any` or a tag is refused, so there is no wildcard
 destination); a zone of the site, listed once; an exception names deploy zones, ports other than
 22 (or `"*"`, every port) and a reason of at least ten characters; the tag is not a zone tag; the
-owners are people, never a tag (a user login, a `group:`, or `autogroup:admin`, `owner`,
-`it-admin` or `network-admin`): a tag owner lets every node carrying that tag apply the deploy tag
-to itself, so a zone tag owner would make any node of the zone the deploy. `hnx guests render ... --target tailscale-acl` renders it
+owners are people, never a tag (a user login, or `autogroup:admin`, `owner`, `it-admin` or
+`network-admin`): a tag owner lets every node carrying that tag apply the deploy tag to itself, so
+a zone tag owner would make any node of the zone the deploy. A `group:` is refused too: the
+rendered policy defines no `groups` (the site cannot declare a group's members), and Tailscale
+refuses a policy naming a group it does not define. `hnx guests render ... --target tailscale-acl` renders it
 ([compute model](compute-model.md#bound-products)), with policy `tests` Tailscale runs on every
 change.
 
@@ -232,7 +239,14 @@ only send out through listed `service_exceptions`. The document must prove it:
 * `egress.internet` is `deny`;
 * exactly one `zone_to_zone` rule `{from: <zone>, to: any, action: deny, one_way_contract: true}`;
 * no `allow` into the zone, whether a zone rule or an exception to a service that lives in it;
+* no `allow` to `any` from any zone of the site: `any` covers every zone, the one-way ones
+  included, and the adapters render it with no destination match. Name the zones instead;
 * no `allow` rule out of it except through `service_exceptions`.
+
+The router answers no DNS to a one-way zone either: a resolver on the router would carry the
+zone's data out in queries, around `egress.internet: deny`. The `linux` adapter drops DNS (TCP and
+UDP 53) on the router's input from the zone's interface, ahead of the accept every other VLAN gets;
+the `unifi` adapter renders a `LAN_LOCAL` (and `LANv6_LOCAL`) drop of DNS from the zone's network.
 
 ## Intermediate representation and rule order
 
@@ -248,7 +262,8 @@ Firewall rules are evaluated first match wins, in this order:
 3. `zone_to_zone` rules whose `to` is `any` (the one-way contracts); `any` includes the internet,
    so validation refuses an allow to `any` from a zone whose `egress.internet` is `deny` (and a
    deny to `any` from one whose is `allow`): the allow would reach the internet before the
-   zone's deny, on the routers that render it as one rule;
+   zone's deny, on the routers that render it as one rule. `any` also covers every zone, so a
+   site with a one-way zone takes no allow to `any` at all;
 4. internet egress, one rule per zone from `egress.internet`;
 5. the default: deny.
 
@@ -282,12 +297,21 @@ so first match is the same in each family:
 
 `hnx site adapters` lists them.
 
+The `unifi` adapter reads the controller's legacy rule sets one way throughout: `LAN_IN` (and
+`LANv6_IN`) sees every packet a zone sends, routed LAN-to-WAN traffic included, and ends in a
+default-deny with no destination. So a zone's internet allow is rendered, never left to the
+controller's defaults: a `LAN_IN` drop of what the zone sends to any zone's network (the
+`hnx-zones` address group, `hnx-zones6` for the prefixes, under `groups` in `firewall-rules.json`), which only an
+earlier rule may allow, then an accept of the rest, both ahead of the default-deny. Its rules number
+from 2010 to 2998, the default-deny is 2999, and a site whose rules need more indexes is an error,
+never a rule placed behind the deny. These shapes are unverified offline and checked on the server.
+
 | Adapter | Status | Output |
 |---|---|---|
 | `linux` | ready | systemd-networkd VLAN files (or `/etc/network` with `flavor: ifupdown`), a forwarding sysctl, one nftables file with a set per zone, a default-drop forward chain and masquerade for zones with internet egress |
 | `dnsmasq` | ready | DHCP pools, DHCP reservations and local DNS records as `dnsmasq.d` drop-ins, including split-horizon answers |
 | `zonefile` | ready | RFC 1035 master files per authoritative domain, plus one per split-horizon override domain. The SOA serial is `adapters.options.zonefile.serial`, else derived from that zone's records |
-| `unifi` | ready, DRY-RUN | JSON payloads for networks and VLANs, firewall rules, port profiles and switch port overrides |
+| `unifi` | ready, DRY-RUN | JSON payloads for networks and VLANs, firewall rules (with the address groups they name), port profiles and switch port overrides |
 | `opnsense` | **deferred** | none: see below |
 
 All adapters are pure and deterministic: the same IR yields the same bytes, file order is sorted,
@@ -300,7 +324,7 @@ A zone with a `subnet6` gets, from the adapter that routes it:
 | Adapter | Addressing | Policy |
 |---|---|---|
 | `linux` | the router's `::1` on the zone's VLAN interface and router advertisements for the prefix (SLAAC): networkd's own sender, or `radvd` (`etc/radvd.conf`) with `flavor: ifupdown`. The router takes no advertisement on a zone (`accept_ra = 0`; on the WAN only with `router.wan6` `ra`), and IPv6 forwarding is on | an `ipv6_addr` set per zone and every rule's IPv6 form in the same default-drop forward chain; to the router itself only the ICMPv6 RFC 4890 says a router must take (errors, neighbour discovery and MLD, an MLD query only from a link-local source at hop limit 1, a router solicitation only from a zone, never the WAN, and a router advertisement only on the WAN with `router.wan6` `ra`; echo at 10 a second from the zones and, on its own budget so a flood from outside does not starve the zones', 5 a second from the WAN), and SSH from the management zone in IPv6 too; and a strict reverse-path check: IPv6 has no `rp_filter`, so a packet whose source does not route back out the interface it came in on is dropped. Only on-link control traffic skips the check: neighbour discovery (hop limit 255) and MLD reports (hop limit 1) from the unspecified or a link-local source, which duplicate-address detection needs and which is never forwarded. Without the check a host could claim another zone's source and match that zone's rules. No IPv6 translation. The WAN's own IPv6 is `router.wan6` (1.6) |
-| `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default. IPv6 rules number from the same base as IPv4 (2000 to 2999; they are separate rule sets) and name their protocol in `protocol_v6`. Traffic to the gateway itself (`LANv6_LOCAL`) and the controller's anti-spoofing for IPv6 sources are left to the controller's defaults, as `LAN_LOCAL` is for IPv4. The index range, `protocol_v6` and these defaults are unverified offline and checked on the server |
+| `unifi` | the network's static IPv6 settings (`ipv6_interface_type`, `ipv6_subnet`) and router advertisements | every rule's IPv6 form in the controller's IPv6 rule sets (`LANv6_IN`, `WANv6_OUT`, `NETv6`), inside the same allow-established, drop-invalid and default-deny frame as IPv4, so IPv6 between zones is closed by default and never left to the controller's own default. IPv6 rules number from the same base as IPv4 (2000 to 2999; they are separate rule sets) and name their protocol in `protocol_v6`. Traffic to the gateway itself (`LANv6_LOCAL`) and the controller's anti-spoofing for IPv6 sources are left to the controller's defaults, as `LAN_LOCAL` is for IPv4, but for a one-way zone's DNS drop. The index range, `protocol_v6` and these defaults are unverified offline and checked on the server |
 | `dnsmasq`, `zonefile` | unchanged: no DHCPv6 (addressing is SLAAC from the router) and no AAAA records (the registry's hosts have IPv4 addresses only) | none |
 | `opnsense` | deferred | deferred |
 

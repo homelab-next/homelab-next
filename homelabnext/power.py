@@ -3,7 +3,7 @@
 
 Pure functions over plain data, shared by the site model (:mod:`homelabnext.network.validate`),
 the guest model (:mod:`homelabnext.compute.validate`) and the Topology map, so the one rule set
-is written once and the compute model still never imports the site-model package.
+is written once, outside both packages.
 
 The site declares ``power.ups`` (each with a logical ``id``) and optionally ``power.default``;
 the router, every switch, every ``edge`` device but the internet, every hypervisor

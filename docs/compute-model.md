@@ -11,7 +11,7 @@ seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs 
 whole chain is tested with golden files from a synthetic fleet.
 
 * Contract: `schemas/platform/guest.schema.json` (version 1.6, additive over 1.0 to 1.5; frozen copies in `schemas/_frozen/`).
-* Baseline set: `schemas/platform/baseline_set.schema.json` (`_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
+* Baseline set: `schemas/platform/baseline_set.schema.json` (version 1.2; `_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
 
@@ -72,6 +72,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 |---|---|
 | `network.zone` exists in the site model | no guest on an undeclared network |
 | `ip` inside the zone subnet, outside the DHCP pool, not network/broadcast/gateway | no collisions with leases |
+| a guest that is a host of the service registry (`--registry`, default the `services.yml` next to the site file when there is one) has the registry's `address` as its `ip` and the registry's `zone` as its zone | the router's service exceptions, DNS and DHCP read the registry, the hypervisor, cloud-init and the guest firewall read the guest file: one fact in two files |
 | `vmid_scheme: freeform` is the default; `octet` pins `vmid` to the last octet of `ip` for a readable id | pick whichever reads better for your layout |
 | ids, `(node, vmid)` and ips are unique | |
 | each `network.extra_addresses` entry (guest 1.6) is canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, never an anycast address of its /64, and inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not the guest's own `ip` or an address (`ip` or extra) of any other guest, named once; a zone lookup that cannot list its zones (`ZoneLookup.all`) is itself a problem then | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); the network sensor counts each in `HOME_NET` and the topology map resolves each to its guest; nothing is configured from them |
@@ -155,21 +156,30 @@ bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would
 traffic onto the network. Interface names are checked (Linux names,
 at most 15 characters), and a mirroring node's name must be one a guest can name.
 
-The model does not import a site package. It reads zones through a small protocol:
+The guest model (`homelabnext.compute.model`, `validate`) reads zones through a small protocol:
 
 ```python
 class ZoneLookup(Protocol):
     def zone(self, zone_id: str) -> ZoneInfo | None: ...  # id, subnet, gateway, dhcp_range, vlan_id
+    def all(self) -> list[ZoneInfo]: ...  # every zone (extra addresses are held against all)
 ```
 
+The site is read through the network package, never a second reader:
 `open_site(path)` reads the site document with `homelabnext.network.load_site` (the same loader as
-`hnx site`) and takes its `zones:` list and `site.domain`. It does not validate the site; run
-`hnx site validate` for that. `load_zones_file` is the loader-free reader kept for tools that only
-have a zones file. Tests can also pass a stub.
+`hnx site`, so duplicate keys are refused the same way) and takes its `zones:` list and
+`site.domain`; the zone flows come from the network IR's own `firewall_rules`, and compute
+validation uses the network validator's IPv6 prefix rules. It does not validate the site; run
+`hnx site validate` for that. Tests can also pass a stub (`MappingZones`).
 
 ## Rendering
 
-`hnx guests render DIR --site SITE --target T [--out OUT] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+`hnx guests render DIR --site SITE --target T [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+
+`--out` writes only the files that differ, with the same writer as `hnx site render`. A file in
+`--out` that carries the generated-file header but is no longer rendered (a removed guest's
+`vm-*.tf`, the `<vmid>.fw` of a changed vmid) is named in a warning; `--prune` deletes it, and a
+hand-written file is never touched. Render each target into its own directory: `--prune` reads
+another target's files as stale.
 
 | Target | Output |
 |---|---|
@@ -775,7 +785,9 @@ writes it.
 `registry-hosts` produces the `zones:` and `hosts:` sections of a service registry.
 `homelabnext.compute.gen.registry_hosts.merge_into_registry(doc, fragment)` overlays them on a
 registry document (a conflicting entry is an error), and the existing registry generators (DNS,
-proxy, monitoring, firewall matrix) then see the guests.
+proxy, monitoring, firewall matrix) then see the guests. A registry kept by hand is held against
+the guests by `hnx guests validate` (`registry_hosts.registry_problems`): a host whose address or
+zone differs from its guest's is an error.
 
 ### Plan (swap kit)
 

@@ -22,7 +22,7 @@ hosts:
   dns-core:    {address: 192.0.2.5,       zone: mgmt,    role: resolver}
   idp-core:    {address: 192.0.2.6,       zone: mgmt,    role: identity}
   lake-core:   {address: 192.0.2.70,      zone: data,    role: lake}
-  bus-core:    {address: 192.0.2.71,      zone: data,    role: events}
+  bus-core:    {address: 192.0.2.80,      zone: data,    role: events}
   infer-core:  {address: 192.0.2.140,     zone: compute, role: inference}
   edge-core:   {address: 198.51.100.10,   zone: edge,    role: edge}
 

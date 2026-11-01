@@ -107,6 +107,7 @@ ICMPV6_INPUT = (
 
 class LinuxAdapter(Adapter):
     name = "linux"
+    roles = frozenset({"network"})
     summary = (
         "Linux router: VLAN interfaces (networkd or ifupdown), sysctl, nftables with zone sets"
     )
@@ -296,6 +297,14 @@ class LinuxAdapter(Adapter):
             )
             if ra:
                 out.append(f'        {wan_ra} comment "router.wan6.ra: the WAN only"\n')
+        iface = {i.zone: i.name for i in ir.interfaces}
+        for z in pol.one_way:
+            # a one-way zone reaches no resolver: a resolver on the router would carry its data
+            # out in queries, around egress.internet=deny
+            out.append(
+                f'        iifname "{iface[z]}" meta l4proto {{ tcp, udp }} th dport 53 drop'
+                f' comment "one-way zone {z}: no resolver"\n'
+            )
         out.append('        iifname "vlan*" udp dport { 53, 67 } accept\n')
         out.append('        iifname "vlan*" tcp dport 53 accept\n')
         for z in mgmt:

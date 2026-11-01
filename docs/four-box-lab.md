@@ -6,7 +6,9 @@ summary_of: outline:sha256:0727cbe8c10da361
 # A four-box lab, end to end
 
 `examples/four-box-lab/` is a fictional lab of four machines, the shape of a typical first real build.
-It is complete enough to validate and render every target, so a new site can start from it
+It is complete enough to validate and render every network adapter and every Proxmox target (the
+`libvirt` target refuses it by design: it wants per-VLAN bridges and host-filtered NICs, which this
+Proxmox lab does not have), so a new site can start from it
 instead of from empty files. `tests/integration/test_four_box_lab.py` keeps it working.
 
 | Machine | Role | Modelled as |
@@ -87,6 +89,10 @@ for t in terraform-proxmox cloudinit firewall-rules inventory backup-jobs node-m
 done
 ```
 
+The loop renders what the lab deploys from; `baseline-playbook`, `registry-hosts`,
+`runtime-labels` and `tailscale-acl` render the same way. Each target gets its own directory, so
+re-rendering with `--prune` removes what a removed guest left behind and nothing else.
+
 `hnx site validate` gives two warnings, and both are expected:
 
 - the console certificate pin is a placeholder;
@@ -103,7 +109,8 @@ replace, in this order:
 1. **Names and addresses.**
    - `site.id`, `site.domain` and every zone's `subnet`, `gateway` and `vlan_id`.
    - The `hosts` in `services.yml` and each guest's `network.ip`. They must agree:
-     `hnx site validate` refuses a registry zone whose CIDR differs from the site's.
+     `hnx site validate` refuses a registry zone whose CIDR differs from the site's, and
+     `hnx guests validate` a registry host whose address or zone differs from its guest's.
 2. **The switch.**
    - `device_mac`, and the port numbers you actually cabled.
    - Keep the uplink a trunk, and the mirror's source the uplink port. A UniFi switch mirrors one

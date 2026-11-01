@@ -39,6 +39,7 @@ def _in_zone(fqdn: str, zone: str) -> bool:
 
 class ZonefileAdapter(Adapter):
     name = "zonefile"
+    roles = frozenset({"dns"})
     summary = "RFC 1035 zone files for the authoritative domains and split-horizon overrides"
 
     def render(self, ir: NetworkIR) -> Rendered:

@@ -261,16 +261,83 @@
       "description": "data -> internet"
     },
     {
+      "name": "hnx-egress.internet-compute-zones",
+      "enabled": true,
+      "ruleset": "LAN_IN",
+      "rule_index": 2180,
+      "action": "drop",
+      "protocol": "all",
+      "src_networkconf_type": "NETv4",
+      "src_networkconf_id": "${network:hnx-compute}",
+      "dst_firewallgroup_ids": [
+        "${firewallgroup:hnx-zones}"
+      ],
+      "logging": false,
+      "description": "compute -> internet: no zone but the rules above allow"
+    },
+    {
+      "name": "hnx-egress.internet-compute",
+      "enabled": true,
+      "ruleset": "LAN_IN",
+      "rule_index": 2190,
+      "action": "accept",
+      "protocol": "all",
+      "src_networkconf_type": "NETv4",
+      "src_networkconf_id": "${network:hnx-compute}",
+      "logging": false,
+      "description": "compute -> internet"
+    },
+    {
+      "name": "hnx-egress.internet-edge-zones",
+      "enabled": true,
+      "ruleset": "LAN_IN",
+      "rule_index": 2200,
+      "action": "drop",
+      "protocol": "all",
+      "src_networkconf_type": "NETv4",
+      "src_networkconf_id": "${network:hnx-edge}",
+      "dst_firewallgroup_ids": [
+        "${firewallgroup:hnx-zones}"
+      ],
+      "logging": false,
+      "description": "edge -> internet: no zone but the rules above allow"
+    },
+    {
+      "name": "hnx-egress.internet-edge",
+      "enabled": true,
+      "ruleset": "LAN_IN",
+      "rule_index": 2210,
+      "action": "accept",
+      "protocol": "all",
+      "src_networkconf_type": "NETv4",
+      "src_networkconf_id": "${network:hnx-edge}",
+      "logging": false,
+      "description": "edge -> internet"
+    },
+    {
       "name": "hnx-egress.internet-sandbox",
       "enabled": true,
       "ruleset": "WAN_OUT",
-      "rule_index": 2180,
+      "rule_index": 2220,
       "action": "drop",
       "protocol": "all",
       "src_networkconf_type": "NETv4",
       "src_networkconf_id": "${network:hnx-sandbox}",
       "logging": false,
       "description": "sandbox -> internet"
+    },
+    {
+      "name": "hnx-one-way-sandbox-no-dns",
+      "enabled": true,
+      "ruleset": "LAN_LOCAL",
+      "rule_index": 2230,
+      "action": "drop",
+      "protocol": "tcp_udp",
+      "src_networkconf_type": "NETv4",
+      "src_networkconf_id": "${network:hnx-sandbox}",
+      "dst_port": "53",
+      "logging": false,
+      "description": "one-way zone sandbox: no resolver"
     },
     {
       "name": "hnx-default-deny",
@@ -281,6 +348,19 @@
       "protocol": "all",
       "logging": false,
       "description": "firewall.default_action: deny"
+    }
+  ],
+  "groups": [
+    {
+      "name": "hnx-zones",
+      "group_type": "address-group",
+      "group_members": [
+        "192.0.2.0/26",
+        "192.0.2.64/26",
+        "192.0.2.128/26",
+        "198.51.100.0/26",
+        "198.51.100.64/26"
+      ]
     }
   ]
 }
