@@ -90,7 +90,11 @@ def main(argv=None) -> int:
     dc.add_argument("register_root")
     dc.add_argument("records_root")
     dc.add_argument("--as", dest="decided_by", required=True, help="issuer:subject of the decider")
-    dc.add_argument("--policy", help="review policy (default review-policy.yml in or beside root)")
+    dcp = dc.add_mutually_exclusive_group()
+    dcp.add_argument("--policy", help="review policy (default review-policy.yml in or beside root)")
+    dcp.add_argument(
+        "--no-policy", action="store_true", help="decide without review tiers (no policy found)"
+    )
     dc.add_argument("--dry-run", action="store_true", help="report, write and move nothing")
     dc.add_argument("--json", action="store_true", help="machine-readable output")
     ns = ap.parse_args(argv)
@@ -102,6 +106,14 @@ def main(argv=None) -> int:
         if ns.cmd == "summaries":
             return _summaries(ns)
         if ns.cmd == "build":
+            from .render import find_policy
+
+            if not ns.policy and find_policy(Path(ns.src)) is None:
+                print(
+                    f"[registers] warning: no review-policy.yml in or beside {ns.src}: no review"
+                    " tier is checked (pass --policy FILE)",
+                    file=sys.stderr,
+                )
             for p in build_all(ns.src, ns.out, ns.results, ns.policy):
                 print(p)
         elif ns.cmd == "review":
@@ -219,7 +231,7 @@ def _decide(ns) -> int:
     from .transitions import TransitionDecider
 
     try:
-        policy = load_policy(ns.policy) if ns.policy else None
+        policy = False if ns.no_policy else load_policy(ns.policy) if ns.policy else None
     except ReviewError as ex:
         raise RegisterError("review policy", ex.problems) from None
     try:

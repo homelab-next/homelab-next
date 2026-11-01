@@ -274,14 +274,15 @@ def file_digest(path, text: str | None = None) -> str | None:
 # --- the write path ------------------------------------------------------------------------------
 
 
-def _check(root: pathlib.Path, **kw) -> Tree:
-    """The tree as it will be, validated with the build's rules (review tiers aside: an edit
-    or a closing transition may create review debt that a later review event pays; the check
-    still fails until it is paid, and the decider checks tiers before it applies anything)."""
+def _check(root: pathlib.Path, *, require_reviews: bool = False, **kw) -> Tree:
+    """The tree as it will be, validated with the build's rules (review tiers aside unless
+    ``require_reviews``: an edit or a closing transition may create review debt that a later
+    review event pays; the check still fails until it is paid, and the decider checks tiers
+    before it applies anything)."""
     from .rules import validate
 
     tree = load_tree(root, **kw)
-    report = validate(tree, require_reviews=False)
+    report = validate(tree, require_reviews=require_reviews)
     if report.errors:
         raise RegisterError("strategy", report.errors)
     return tree
@@ -295,22 +296,24 @@ def write_events(
     root,
     batch: Mapping[Any, Iterable[tuple[Mapping[str, Any], dt.datetime]]],
     *,
+    require_reviews: bool = False,
     _decider: bool = False,
 ) -> list[pathlib.Path]:
     """Validate the tree with every event of ``batch`` (record path -> [(event, time)])
     appended, then create the event files (exclusively; never an overwrite).  A ``transition``
-    is written only by a decider.  Nothing is written when anything is invalid."""
+    is written only by a decider, a ``rekey`` never (only the uid migration writes one).
+    ``require_reviews`` also demands the policy's review tiers.  Nothing is written when
+    anything is invalid."""
+    from homelabnext.registers.write import refused_kinds
+
     root = pathlib.Path(root)
     pairs = {_rel(root, p): [(dict(d), w) for d, w in evs] for p, evs in batch.items()}
-    problems = [p for evs in pairs.values() for d, _ in evs for p in ev.check_event(d)]
-    if not _decider and any(d.get("event") == "transition" for e in pairs.values() for d, _ in e):
-        problems.append(
-            "a transition event is written only by the decider (`hnx strategy decide`); file a"
-            " strategy-transition intent in the records inbox instead"
-        )
+    every = [x for evs in pairs.values() for x in evs]
+    problems = refused_kinds(every, _decider=_decider, decide="hnx strategy decide")
+    problems += [p for d, _ in every for p in ev.check_event(d)]
     if problems:
         raise RegisterError("strategy", problems)
-    _check(root, new_events=pairs)
+    _check(root, new_events=pairs, require_reviews=require_reviews)
     out = []
     for rel, evs in pairs.items():
         d = ev.events_dir(root / rel)

@@ -798,3 +798,32 @@ def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, inbox):
     assert n1 not in _lanes(inbox)["inbox"] and n1 in _lanes(inbox)["decided/denied"]
     rb = lab / "runbooks" / f("RB-001")
     assert [e for e in ev.read_events(ev.events_dir(rb), []) if e.kind == "transition"] == []
+
+
+def test_a_rekey_typed_as_the_migration_is_still_refused(lab):
+    """``by: hnx:migrate`` is a constant any writer can type: the write path refuses every rekey
+    (the migration creates its own), so a stale human approve is never carried onto an edit."""
+    rec = lab / "lessons" / f("LL-005")
+    old = record_digest_of(_ll5(lab))
+    rec.write_text(rec.read_text().replace("instead of trusting", "rather than trusting"))
+    new = record_digest_of(_ll5(lab))
+    rekey = {"event": "rekey", "by": "hnx:migrate", "date": dt.date(2026, 10, 21)}
+    rekey.update({"from": old, "to": new, "reason": "identity rewrite, content unchanged"})
+    before = _files(ev.events_dir(rec))
+    with pytest.raises(RegisterError, match="only by the uid migration"):
+        write_event(rec, rekey)
+    assert _files(ev.events_dir(rec)) == before
+
+
+def test_the_decider_fails_closed_without_a_review_policy(lab, inbox, capsys):
+    (lab.parent / "review-policy.yml").unlink()
+    _intent(inbox, "promote", record=U["LL-003"], **{"from": "open", "to": "partial"}, reason="x")
+    _give_ll_003_a_control(lab)
+    with pytest.raises(RegisterError, match=r"no review-policy\.yml in or beside"):
+        _decider(lab, inbox).decide_all()
+    argv = ["decide", str(lab), str(inbox), "--as", "human:example-operator"]
+    assert registers_main(argv) == 1
+    assert "--no-policy to decide without review tiers" in capsys.readouterr().err
+    assert _lanes(inbox)["decided/completed"] == []  # nothing decided
+    assert registers_main([*argv, "--no-policy"]) == 0  # the explicit opt-out
+    assert "applied" in capsys.readouterr().out
