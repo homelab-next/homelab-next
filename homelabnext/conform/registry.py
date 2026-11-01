@@ -21,6 +21,7 @@ __all__ = [
     "CAPABILITIES",
     "EXTENDED",
     "ConformError",
+    "declared_capabilities",
     "default_root",
     "find_root",
     "load_module",
@@ -62,6 +63,47 @@ EXTENDED: tuple[str, ...] = (
 
 class ConformError(Exception):
     """Misconfiguration: unknown capability, missing suites, bad target.  CLI exit code 2."""
+
+
+#: where a tree declares its capabilities, first match wins
+CAPABILITIES_FILES: tuple[str, ...] = ("capabilities.yml", "registry/capabilities.yml")
+
+
+def declared_capabilities(root: str | Path) -> list[str] | None:
+    """The capabilities ``root`` declares in ``capabilities.yml``, or None when it has no such file.
+
+    The one reader of the file (the exporter, invariant X-04 and the graph all use it).  A file
+    that exists but does not declare anything is misconfiguration, never "no capabilities": a
+    misspelled key or an emptied list would otherwise turn every coverage check green with
+    nothing tested.  The file must be a mapping whose ``capabilities`` key holds a non-empty list
+    of distinct, non-empty names; anything else raises :class:`ConformError`.
+    """
+    r = Path(root)
+    for cand in CAPABILITIES_FILES:
+        p = r / cand
+        if not p.is_file():
+            continue
+        import yaml
+
+        from homelabnext._yaml import UniqueKeyStrDateLoader
+
+        try:
+            data = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueKeyStrDateLoader)
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise ConformError(f"{cand}: cannot be read: {exc}") from exc
+        if not isinstance(data, dict) or "capabilities" not in data:
+            raise ConformError(f"{cand}: needs a top-level 'capabilities' list")
+        caps = data["capabilities"]
+        if not isinstance(caps, list) or not caps:
+            raise ConformError(f"{cand}: 'capabilities' must be a non-empty list of names")
+        bad = [c for c in caps if not isinstance(c, str) or not c.strip()]
+        if bad:
+            raise ConformError(f"{cand}: every capability must be a non-empty name, not {bad[0]!r}")
+        dupes = sorted({c for c in caps if caps.count(c) > 1})
+        if dupes:
+            raise ConformError(f"{cand}: capability listed twice: {', '.join(dupes)}")
+        return list(caps)
+    return None
 
 
 def default_root() -> Path:

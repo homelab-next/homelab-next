@@ -20,6 +20,36 @@ argument_specs:
         type: str
         description: AuthorizedKeysCommand (absolute path) for directory keys; empty = none. Defaults to sssd's helper when the guest has central-auth.
         default: "{{ '/usr/bin/sss_ssh_authorizedkeys' if 'central-auth' in (hnx_controls | default([])) else '' }}"
+      ssh_hardening_trusted_user_ca_keys: &cakeys
+        type: list
+        elements: str
+        description: Public keys of the user CAs whose certificates sshd accepts (TrustedUserCAKeys), one "<type> <base64> [comment]" line each; never a private key. Empty = none.
+        default: []
+      ssh_hardening_trusted_user_ca_file: &cafile
+        type: path
+        description: Where the CA public keys are written (checked with ssh-keygen -l before it is replaced).
+        default: /etc/ssh/hnx_trusted_user_ca_keys.pub
+      ssh_hardening_authorized_principals: &principals
+        type: dict
+        description: Local account -> list of certificate principals it accepts (AuthorizedPrincipalsFile). An account not listed accepts no certificate.
+        default: {}
+      ssh_hardening_principals_dir: &pdir
+        type: path
+        description: One principals file per listed account (files for accounts no longer listed are removed).
+        default: /etc/ssh/hnx_principals
+      ssh_hardening_keep_user_cert_only: &certonly
+        type: bool
+        description: Accept a CA and a principal as the kept account's only way in (no authorized key). Turn on only after a deploy succeeded with a certificate from this CA.
+        default: false
+      ssh_hardening_revoked_keys: &revoked
+        type: list
+        elements: str
+        description: Public keys or certificates sshd refuses (RevokedKeys). Empty = none.
+        default: []
+      ssh_hardening_revoked_keys_file: &revfile
+        type: path
+        description: Where the revoked keys are written (checked with ssh-keygen -l before it is replaced).
+        default: /etc/ssh/hnx_revoked_keys
       ssh_hardening_max_auth_tries: &tries
         type: int
         description: MaxAuthTries.
@@ -56,6 +86,10 @@ argument_specs:
         type: str
         description: The id command (lists the kept account's groups).
         default: id
+      ssh_hardening_keygen_cli: &keygen
+        type: str
+        description: The ssh-keygen command (-l -f checks a file of public keys parses).
+        default: ssh-keygen
       ssh_hardening_getent_cli: &getent
         type: str
         description: The getent command (looks up the kept account's home).
@@ -83,6 +117,13 @@ argument_specs:
       ssh_hardening_allow_groups: *groups
       ssh_hardening_manage_membership: *manage
       ssh_hardening_authorized_keys_command: *akc
+      ssh_hardening_trusted_user_ca_keys: *cakeys
+      ssh_hardening_trusted_user_ca_file: *cafile
+      ssh_hardening_authorized_principals: *principals
+      ssh_hardening_principals_dir: *pdir
+      ssh_hardening_keep_user_cert_only: *certonly
+      ssh_hardening_revoked_keys: *revoked
+      ssh_hardening_revoked_keys_file: *revfile
       ssh_hardening_max_auth_tries: *tries
       ssh_hardening_login_grace_time: *grace
       ssh_hardening_client_alive_interval: *alive
@@ -92,15 +133,21 @@ argument_specs:
       ssh_hardening_main_config: *main
       ssh_hardening_sshd_cli: *sshd
       ssh_hardening_id_cli: *id
+      ssh_hardening_keygen_cli: *keygen
       ssh_hardening_getent_cli: *getent
       ssh_hardening_systemctl_cli: *systemctl
       ssh_hardening_service: *service
       ssh_hardening_reload: *reload
       ssh_hardening_state_dir: *state
   health:
-    short_description: Fail unless the live effective configuration is key-only, refuses root and admits the kept account.
+    short_description: Fail unless the live effective configuration is key-only, refuses root, admits the kept account and uses the CA, principals and revocation files the role wrote.
     options:
       ssh_hardening_keep_user: *keep
+      ssh_hardening_trusted_user_ca_keys: *cakeys
+      ssh_hardening_trusted_user_ca_file: *cafile
+      ssh_hardening_principals_dir: *pdir
+      ssh_hardening_revoked_keys: *revoked
+      ssh_hardening_revoked_keys_file: *revfile
       ssh_hardening_main_config: *main
       ssh_hardening_sshd_cli: *sshd
       ssh_hardening_id_cli: *id

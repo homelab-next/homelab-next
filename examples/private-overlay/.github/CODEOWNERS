@@ -34,6 +34,8 @@
 /lab/model-serving/model_store.json  @lab-owner-fake
 /lab/model_roles.eval.json    @lab-owner-fake
 /lab/model-evals/             @lab-owner-fake
+# who may sign in over SSH: the certificate roles, their principals, TTLs and groups
+/lab/ssh-ca.yml               @lab-owner-fake
 # what must be sealed, and to whom
 /.sops.yaml                   @lab-owner-fake
 /.hnx-private-overlay.yml     @lab-owner-fake

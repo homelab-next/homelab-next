@@ -44,6 +44,7 @@ coverage is always fine; lowering ``FLOOR`` or dropping a unit is a reviewed cha
 * ``homelabnext/status/approvals.py`` -- the hub's approval write path (CSRF, origin, digests)
 * ``homelabnext/status/serve.py``     -- the hub's HTTP server (host and origin checks, tiers)
 * ``homelabnext/generators/safe.py``  -- the control-character and injection backstop of generators
+* ``homelabnext/sshca.py``           -- who may get an SSH certificate, with which principals, for how long
 * ``tools/leak_scan.py``              -- the leak and secret scan (F-05, F-18)
 
 Usage: python tools/coverage_floor.py [--floor N] [--json FILE]
@@ -91,6 +92,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/tlp_egress.py": ("tests/tlp",),
     "homelabnext/lake/ceiling.py": ("tests/lake",),
     "homelabnext/notify/ceiling.py": ("tests/notify",),
+    "homelabnext/sshca.py": ("tests/sshca",),
     "tools/leak_scan.py": ("tools/tests/test_leak_scan.py",),
 }
 

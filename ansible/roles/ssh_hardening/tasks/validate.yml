@@ -17,3 +17,29 @@
       ssh_hardening: the kept account is a plain user name (never root), the allow groups are
       plain group names (at least one), the key command is an absolute path or empty, and the
       limits are positive numbers
+
+# A CA or revoked entry is one public key line (a PEM private key, an option prefix or a second
+# line does not match); principals are plain names; the files are plain absolute paths.
+- name: Validate the user CA keys, principals and revoked keys
+  vars:
+    ssh_hardening_principal_lists: "{{ ssh_hardening_authorized_principals.values() | list if ssh_hardening_authorized_principals is mapping else [] }}"
+    ssh_hardening_principal_names: "{{ ssh_hardening_principal_lists | reject('string') | reject('mapping') | flatten }}"
+  ansible.builtin.assert:
+    that:
+      - ssh_hardening_trusted_user_ca_keys is sequence and ssh_hardening_trusted_user_ca_keys is not string
+      - ssh_hardening_trusted_user_ca_keys | select('string') | select('match', ssh_hardening_ca_key_pattern) | list | length == ssh_hardening_trusted_user_ca_keys | length
+      - ssh_hardening_revoked_keys is sequence and ssh_hardening_revoked_keys is not string
+      - ssh_hardening_revoked_keys | select('string') | select('match', ssh_hardening_revoked_key_pattern) | list | length == ssh_hardening_revoked_keys | length
+      - ssh_hardening_authorized_principals is mapping
+      - ssh_hardening_authorized_principals.keys() | select('string') | select('match', '^[a-z_][a-z0-9_-]{0,31}\Z') | list | length == ssh_hardening_authorized_principals | length
+      - ssh_hardening_principal_lists | select('string') | list | length == 0
+      - ssh_hardening_principal_lists | select('mapping') | list | length == 0
+      - ssh_hardening_principal_lists | map('length') | select('equalto', 0) | list | length == 0
+      - ssh_hardening_principal_names | select('string') | select('match', '^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}\Z') | list | length == ssh_hardening_principal_names | length
+      - ssh_hardening_trusted_user_ca_file is match('^/[A-Za-z0-9._/-]+\Z')
+      - ssh_hardening_principals_dir is match('^/[A-Za-z0-9._/-]*[A-Za-z0-9._-]\Z')
+      - ssh_hardening_revoked_keys_file is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      ssh_hardening: each user CA and revoked key is one public key line ("<type> <base64> [comment]",
+      never a private key), the principals map plain user names to non-empty lists of plain
+      principal names, and the CA, principals and revoked paths are plain absolute paths
