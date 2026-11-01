@@ -253,31 +253,90 @@ def _sign_in_paths(flows: dict, alias: str) -> set[frozenset[str]]:
     return alts | {frozenset()} if alts and all_skippable else alts
 
 
-def test_idp_realm_has_no_browser_sign_in_without_a_second_factor():
-    """Every way through the browser flow that is not an existing session runs the password
-    form AND the OTP form; the OTP form is REQUIRED with no ALTERNATIVE beside it (an
-    alternative the user has not configured is skipped, which could leave the password alone);
-    and a user with no OTP yet is made to enrol it (CONFIGURE_TOTP, enabled, a default action)."""
-    realm = _realm()
+#: the steps that check a password, and those that check a one-time code, in any sign-in flow
+PASSWORD_STEPS = {"auth-username-password-form", "direct-grant-validate-password"}
+OTP_STEPS = {"auth-otp-form", "direct-grant-validate-otp"}
+#: the realm's flow bindings that sign a user in, and those the realm must leave unreachable
+USER_FLOW_BINDINGS = ("browserFlow", "directGrantFlow")
+
+
+def _sign_in_problems(realm: dict) -> list[str]:
+    """Every way a rendered realm could sign a user in without a password and a one-time code.
+
+    Each user sign-in binding (browser, direct grant) must name a flow the realm renders (an
+    unbound one falls back to the IdP's built-in flow, which has no required OTP), and every
+    path through it that is not an existing session must run a password step and an OTP step.
+    Registration and credential reset, the other user-facing bindings, must be off; no identity
+    provider (a broker login flow) and no per-client flow override may exist; no client may
+    allow direct access grants."""
     flows = {f["alias"]: f for f in realm["authenticationFlows"]}
-    paths = _sign_in_paths(flows, realm["browserFlow"])
-    fresh = [p for p in paths if "auth-cookie" not in p]
-    assert fresh, "some path signs a user in without a session"
-    for p in fresh:
-        assert {"auth-username-password-form", "auth-otp-form"} <= p, sorted(p)
-    holders = [
-        f for f in flows.values()
-        if any(e.get("authenticator") == "auth-otp-form" for e in f["authenticationExecutions"])
-    ]  # fmt: skip
-    assert len(holders) == 1
-    siblings = holders[0]["authenticationExecutions"]
-    [otp] = [e for e in siblings if e.get("authenticator") == "auth-otp-form"]
-    assert otp["requirement"] == "REQUIRED"
-    assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
+    out = []
+    for binding in USER_FLOW_BINDINGS:
+        alias = realm.get(binding)
+        if alias not in flows:
+            out.append(f"{binding}: {alias!r} is not a rendered flow (the built-in one runs)")
+            continue
+        paths = [p for p in _sign_in_paths(flows, alias) if "auth-cookie" not in p]
+        if not paths:
+            out.append(f"{binding}: no path signs a user in")
+        for p in paths:
+            if not (p & PASSWORD_STEPS and p & OTP_STEPS):
+                out.append(f"{binding}: a path without a password and an OTP: {sorted(p)}")
+    for flag in ("registrationAllowed", "resetPasswordAllowed"):
+        if realm.get(flag) is not False:
+            out.append(f"{flag} is not false")
+    if realm.get("identityProviders"):
+        out.append("identity providers render a broker login flow")
+    for c in realm["clients"]:
+        if c.get("authenticationFlowBindingOverrides"):
+            out.append(f"client {c['clientId']} overrides a flow binding")
+        if c.get("directAccessGrantsEnabled") is not False:
+            out.append(f"client {c['clientId']} allows direct access grants")
+    return out
+
+
+def test_idp_realm_has_no_sign_in_without_a_second_factor():
+    """No flow the realm binds or leaves reachable signs a user in on a password alone: the
+    browser flow and the direct grant flow both run a password and an OTP step on every path
+    that is not an existing session; the OTP form is REQUIRED with no ALTERNATIVE beside it (an
+    alternative the user has not configured is skipped); and a user with no OTP yet is made to
+    enrol it in the browser (CONFIGURE_TOTP, enabled, a default action)."""
+    realm = _realm()
+    assert _sign_in_problems(realm) == []
+    flows = {f["alias"]: f for f in realm["authenticationFlows"]}
+    for step in OTP_STEPS:
+        holders = [
+            f for f in flows.values()
+            if any(e.get("authenticator") == step for e in f["authenticationExecutions"])
+        ]  # fmt: skip
+        assert len(holders) == 1, step
+        siblings = holders[0]["authenticationExecutions"]
+        [otp] = [e for e in siblings if e.get("authenticator") == step]
+        assert otp["requirement"] == "REQUIRED"
+        assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
     actions = {a["alias"]: a for a in realm["requiredActions"]}
     totp = actions["CONFIGURE_TOTP"]
     assert totp["enabled"] is True and totp["defaultAction"] is True
     assert totp["providerId"] == "CONFIGURE_TOTP"
+
+
+@pytest.mark.parametrize(
+    "mutate,binding",
+    [
+        # the direct grant flow loses its OTP step: a password alone gets a token
+        (lambda r: next(f for f in r["authenticationFlows"] if f["alias"] == r["directGrantFlow"])[
+            "authenticationExecutions"].pop(), "directGrantFlow"),
+        # the realm stops binding it: the IdP's built-in direct grant (OTP conditional) runs
+        (lambda r: r.pop("directGrantFlow"), "directGrantFlow"),
+        (lambda r: r.update(resetPasswordAllowed=True), "resetPasswordAllowed"),
+        (lambda r: r["clients"][0].update(directAccessGrantsEnabled=True), "direct access"),
+    ],
+)  # fmt: skip
+def test_sign_in_reader_catches_a_flow_without_a_second_factor(mutate, binding):
+    realm = _realm()
+    mutate(realm)
+    problems = _sign_in_problems(realm)
+    assert problems and any(binding in p for p in problems), problems
 
 
 def test_sign_in_path_reader_sees_a_skippable_second_factor():

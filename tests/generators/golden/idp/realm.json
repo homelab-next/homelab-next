@@ -48,6 +48,36 @@
       "description": "username and password, then a one-time code (set up at first sign-in)",
       "providerId": "basic-flow",
       "topLevel": false
+    },
+    {
+      "alias": "hnx-direct-grant-mfa",
+      "authenticationExecutions": [
+        {
+          "authenticator": "direct-grant-validate-username",
+          "authenticatorFlow": false,
+          "priority": 10,
+          "requirement": "REQUIRED",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-password",
+          "authenticatorFlow": false,
+          "priority": 20,
+          "requirement": "REQUIRED",
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-otp",
+          "authenticatorFlow": false,
+          "priority": 30,
+          "requirement": "REQUIRED",
+          "userSetupAllowed": false
+        }
+      ],
+      "builtIn": false,
+      "description": "direct grant: username, password and a one-time code; no OTP, no token (ADR-0034)",
+      "providerId": "basic-flow",
+      "topLevel": true
     }
   ],
   "browserFlow": "hnx-browser-mfa",
@@ -561,6 +591,7 @@
       ]
     }
   ],
+  "directGrantFlow": "hnx-direct-grant-mfa",
   "displayName": "northwind",
   "enabled": true,
   "groups": [

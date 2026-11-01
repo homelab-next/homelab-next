@@ -455,6 +455,10 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
 # 9 ---------------------------------------------------------------- IdP realm
 #: the browser flow every sign-in goes through: a session cookie, or a password AND a one-time code
 MFA_BROWSER_FLOW = "hnx-browser-mfa"
+#: the direct grant flow (``grant_type=password``, e.g. the IdP's own ``admin-cli``): a username,
+#: a password AND a one-time code, each REQUIRED; a user with no OTP is refused (a direct grant
+#: cannot run a required action, so there is no enrolment on this path)
+MFA_DIRECT_GRANT_FLOW = "hnx-direct-grant-mfa"
 #: the scopes a token carries without asking (everything else only when requested)
 DEFAULT_CLIENT_SCOPES = ("basic",)
 OPTIONAL_CLIENT_SCOPES = ("email", "profile")
@@ -476,6 +480,8 @@ def _execution(requirement: str, priority: int, *, authenticator: str = "", flow
 
 #: the second factor every browser sign-in requires, and the required action that enrols it
 SECOND_FACTOR, SECOND_FACTOR_SETUP = "auth-otp-form", "CONFIGURE_TOTP"
+#: the same factor in the direct grant flow (fails for a user with no OTP configured)
+DIRECT_GRANT_SECOND_FACTOR = "direct-grant-validate-otp"
 #: the realm's required actions: a new user enrols OTP at first sign-in (a default action), and
 #: an admin-set temporary password is changed then (listing them replaces Keycloak's defaults)
 REALM_REQUIRED_ACTIONS = (
@@ -501,7 +507,12 @@ REALM_REQUIRED_ACTIONS = (
 
 
 def _mfa_flows() -> list[dict]:
-    """The browser flow: the session cookie, or the username/password form AND the OTP form.
+    """The realm's user sign-in flows: the browser flow (the session cookie, or the
+    username/password form AND the OTP form) and the direct grant flow (username, password AND
+    ``direct-grant-validate-otp``, all REQUIRED: a user with no OTP gets no token, as a direct
+    grant cannot run the enrolment action).  The realm binds both (``browserFlow``,
+    ``directGrantFlow``); registration and credential reset are off, so their flows are
+    unreachable, and no identity provider is rendered, so no broker login flow runs.
 
     The second factor is one execution, ``auth-otp-form``, **REQUIRED** in the same subflow as
     the password, with no alternative beside it: the only way through the flow without a session
@@ -541,6 +552,16 @@ def _mfa_flows() -> list[dict]:
                 _execution("REQUIRED", 20, authenticator=SECOND_FACTOR),
             ],
             "username and password, then a one-time code (set up at first sign-in)",
+        ),
+        flow(
+            MFA_DIRECT_GRANT_FLOW,
+            True,
+            [
+                _execution("REQUIRED", 10, authenticator="direct-grant-validate-username"),
+                _execution("REQUIRED", 20, authenticator="direct-grant-validate-password"),
+                _execution("REQUIRED", 30, authenticator=DIRECT_GRANT_SECOND_FACTOR),
+            ],
+            "direct grant: username, password and a one-time code; no OTP, no token (ADR-0034)",
         ),
     ]
 
@@ -669,6 +690,7 @@ def idp_realm(reg: Registry) -> dict[str, str]:
         "attributes": {"hnx.generated": _hdr(reg, "").strip()},
         "authenticationFlows": _mfa_flows(),
         "browserFlow": MFA_BROWSER_FLOW,
+        "directGrantFlow": MFA_DIRECT_GRANT_FLOW,
         "bruteForceProtected": True,
         "clients": clients,
         "displayName": reg.lab_name,

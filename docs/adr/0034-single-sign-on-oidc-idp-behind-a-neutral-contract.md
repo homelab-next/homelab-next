@@ -38,18 +38,35 @@ one IdP product.
    group-to-role table, a groups claim and a roles claim, and a browser flow that requires a
    second factor. The realm never holds a secret: each client secret is a secret-store
    reference (`secret:idp/clients/<service>`), substituted at import.
-   **The second factor is OTP, required, with nothing beside it.** The browser flow is the
-   session cookie, or the username/password form and then the OTP form (`auth-otp-form`), both
-   `REQUIRED` in one subflow. A `REQUIRED` authenticator a user has not configured adds its
-   setup action, so a user with no OTP yet goes through `CONFIGURE_TOTP` (enabled in the realm's
-   `requiredActions` as a default action, so every new user has it) before the sign-in
-   completes; with the action disabled the sign-in fails, never passes on the password alone.
-   WebAuthn is **not** in the flow: as an `ALTERNATIVE` beside OTP it is skipped for a user
+   **The second factor is OTP, required, with nothing beside it, in every flow that signs a
+   user in.** The realm binds two user sign-in flows and covers both:
+   - **browser** (`browserFlow`): the session cookie, or the username/password form and then
+     the OTP form (`auth-otp-form`), both `REQUIRED` in one subflow. A `REQUIRED` authenticator
+     a user has not configured adds its setup action, so a user with no OTP yet goes through
+     `CONFIGURE_TOTP` (enabled in the realm's `requiredActions` as a default action, so every
+     new user has it) before the sign-in completes; with the action disabled the sign-in
+     fails, never passes on the password alone;
+   - **direct grant** (`directGrantFlow`, `grant_type=password`, which the IdP's own built-in
+     `admin-cli` client allows): `direct-grant-validate-username`, `-password` and `-otp`, all
+     `REQUIRED`. A direct grant cannot run a required action, so a user with no OTP gets no
+     token at all. Without this binding the IdP's built-in direct grant flow would run, whose
+     OTP step is conditional on the user having one: password alone for an un-enrolled user.
+   Every client the realm renders has `directAccessGrantsEnabled: false` and no flow-binding
+   override. The other user-facing flows are unreachable: `registrationAllowed` and
+   `resetPasswordAllowed` are false, and no identity provider is rendered, so no broker login
+   flow runs (the client-authentication flow authenticates clients, not people). Adding any of
+   these, or a new binding, is a change to this rule.
+   WebAuthn is **not** in the flows: as an `ALTERNATIVE` beside OTP it is skipped for a user
    with no key, and a subflow of alternatives none of which the user has configured is the
    ambiguous case this rule closes. Adding a key later is a change to this rule (for example a
-   conditional subflow on the user's configured credentials), with a test that no path signs a
-   user in without a factor (`tests/generators/test_gen_golden.py` reads every path through the
-   rendered flow).
+   conditional subflow on the user's configured credentials). A test reads every path through
+   each bound flow and fails on one without a password and an OTP step, and on any of the
+   conditions above (`tests/generators/test_gen_golden.py`).
+   **First-sign-in enrolment is trust on first use**: whoever first signs in with an
+   un-enrolled user's password enrols the authenticator, so an attacker holding that password
+   before the user signs in enrols their own. Create users with a temporary password
+   (`UPDATE_PASSWORD`) and enrol them in person, at a session the operator watches, or
+   pre-enrol their OTP credential at creation, and do not leave an account un-enrolled.
 3. **Forward auth goes through an auth proxy** (registry capability `auth-proxy`; the default is
    oauth2-proxy) next to the edge, for every app with no OIDC login of its own. The generated
    `hnx_forward_auth` Caddy snippet proxies the auth proxy's `/oauth2/*` paths under each site,
