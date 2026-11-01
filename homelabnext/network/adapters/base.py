@@ -39,6 +39,9 @@ class ServerOnly(AdapterError):
 class Adapter:
     name: ClassVar[str]
     status: ClassVar[str] = "ready"  # ready | deferred
+    #: what a site may select it for: ``network`` (router.model, adapters.network), ``dns``
+    #: (adapters.dns) and ``switch`` (a switch's model)
+    roles: ClassVar[frozenset[str]] = frozenset()
     summary: ClassVar[str] = ""
 
     def render(self, ir: NetworkIR) -> Rendered:  # pragma: no cover - interface

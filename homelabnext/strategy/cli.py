@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx strategy``: the strategy-to-task records (docs/strategy.md).
 
-    hnx strategy check [ROOT] [--invariants FILE] [--registry FILE]   validate (fatal) + warnings
+    hnx strategy check [ROOT] [--policy FILE]          validate (fatal) + warnings
     hnx strategy links [ROOT] [--check]           regenerate / check the records' Links blocks
     hnx strategy measure [ROOT] [--results FILE] [--state FILE] [--registry FILE]
                          [--records DIR] [--now TIME] [--by ID] [--dry-run] [--json]
@@ -9,7 +9,9 @@
     hnx strategy rfis [ROOT] [--today DATE] [--json]           open RFIs, expiring, gaps
     hnx strategy rfis [ROOT] --raise --records DIR --as profile:NAME [--today DATE]
     hnx strategy rfis [ROOT] --sweep --records DIR --as ISSUER:NAME [--today DATE]
-    hnx strategy decide [ROOT] RECORDS --as ISSUER:NAME [--dry-run] [--json]
+                         [--policy FILE | --no-policy]
+    hnx strategy decide [ROOT] RECORDS --as ISSUER:NAME [--policy FILE | --no-policy]
+                         [--dry-run] [--json]
     hnx strategy index [ROOT] [--out FILE] [--check]          the Markdown index (docs/strategy/)
 
 ROOT defaults to ``examples/strategy``; a lab keeps its real strategy in a private repository
@@ -18,6 +20,10 @@ display numbers (``OO 1.2``) and their uids; the JSON keys records by uid and ca
 one's ``label`` (ADR-0019).  ``--now`` / ``--today`` inject the clock
 (default: the real one).  Exit codes: 0 ok, 1 a check failed (invalid records, a stale Links
 block or index, a denied or invalid intent), 2 usage or input error.
+
+The review policy is ``review-policy.yml`` in or beside ROOT unless ``--policy`` names one.
+``decide`` and ``rfis --sweep`` fail closed without one (``--no-policy`` decides without review
+tiers); ``check`` warns that it checks no review tier.
 """
 
 from __future__ import annotations
@@ -81,8 +87,15 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], dt.datetime] | No
     def root(p):
         p.add_argument("root", nargs="?", default=DEFAULT_ROOT, help="the strategy directory")
 
+    def policy(p, *, opt_out: bool):
+        g = p.add_mutually_exclusive_group()
+        g.add_argument("--policy", help="review policy (default review-policy.yml in or beside)")
+        if opt_out:
+            g.add_argument("--no-policy", action="store_true", help="decide without review tiers")
+
     p = sub.add_parser("check", help="validate the tree (fatal) and print doctrine warnings")
     root(p)
+    policy(p, opt_out=False)
     p = sub.add_parser("links", help="regenerate the records' Links blocks")
     root(p)
     p.add_argument("--check", action="store_true", help="fail when one is stale")
@@ -107,11 +120,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], dt.datetime] | No
     p.add_argument("--sweep", action="store_true", help="expire what is past its LTIOV")
     p.add_argument("--records", help="records root (with --raise or --sweep)")
     p.add_argument("--as", dest="who", help="profile:NAME (--raise) or the decider (--sweep)")
+    policy(p, opt_out=True)
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("decide", help="decide strategy-transition and strategy-rfi intents")
     root(p)
     p.add_argument("records", help="the records root (inbox/, decided/)")
     p.add_argument("--as", dest="who", required=True, help="the decider (human:operator)")
+    policy(p, opt_out=True)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("index", help="write or check the Markdown index")
@@ -142,7 +157,13 @@ def _run(args, clock) -> int:
 
     if args.cmd == "check":
         tree = load_tree(args.root)
-        rep = validate(tree)
+        pol = _policy_arg(args)
+        if pol is None and _found_policy(args.root) is None:
+            print(
+                f"[strategy] warning: no review-policy.yml in or beside {args.root}: no review"
+                " tier is checked (pass --policy FILE)"
+            )
+        rep = validate(tree, policy=pol)
         for w in rep.warnings:
             print(f"[strategy] warning: {w}")
         for e in rep.errors:
@@ -184,6 +205,26 @@ def _run(args, clock) -> int:
     if args.cmd == "rfis":
         return _rfis(args, clock, doctrine)
     return _decide(args, clock)
+
+
+def _policy_arg(args):
+    """``--policy FILE`` loaded, ``False`` for ``--no-policy``, else None (find it)."""
+    from homelabnext.reviews import ReviewError, load_policy
+
+    if getattr(args, "no_policy", False):
+        return False
+    if not getattr(args, "policy", None):
+        return None
+    try:
+        return load_policy(args.policy)
+    except ReviewError as ex:
+        raise RegisterError("review policy", ex.problems) from None
+
+
+def _found_policy(root):
+    from homelabnext.registers.render import find_policy
+
+    return find_policy(pathlib.Path(root))
 
 
 def _measure(args, clock, doctrine) -> int:
@@ -262,7 +303,12 @@ def _rfis(args, clock, doctrine) -> int:
         return 2
     if args.sweep:
         filed, outcomes = sweep(
-            args.root, args.records, today=today, decided_by=args.who, clock=now_fn
+            args.root,
+            args.records,
+            today=today,
+            decided_by=args.who,
+            clock=now_fn,
+            policy=_policy_arg(args),
         )
         for o in outcomes:
             print(f"[strategy] {o.line()}")
@@ -304,7 +350,9 @@ def _rfis(args, clock, doctrine) -> int:
 def _decide(args, clock) -> int:
     from .rfis import StrategyDecider
 
-    decider = StrategyDecider(args.root, args.records, decided_by=args.who, clock=clock)
+    decider = StrategyDecider(
+        args.root, args.records, decided_by=args.who, clock=clock, policy=_policy_arg(args)
+    )
     outcomes = decider.decide_all(dry_run=args.dry_run)
     if args.json:
         print(json.dumps([o.as_json() for o in outcomes], indent=1, sort_keys=True))

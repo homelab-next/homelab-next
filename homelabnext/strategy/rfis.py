@@ -24,8 +24,10 @@ invalid) and the same crash recovery:
 
 :func:`sweep` is the LTIOV expiry: every open RFI (and active requirement) whose dated LTIOV is
 before ``today`` gets a ``strategy-transition`` intent to ``expired``, filed by the sweep's own
-identity and decided at once.  A no-find is a valid closed outcome (``to: no-find``, the search
-being the reason), not a failure.
+identity and decided at once.  The decider applies an expiry only when the record's dated LTIOV
+is before its own today, whoever filed it: the clock decides an expiry, never an agent.  A
+no-find is a valid closed outcome (``to: no-find``, the search being the reason), not a
+failure.
 
 Intents name records by uid (``record:``, ``raised_by:``).  One filed before the uid migration
 may still name a legacy code (``RFI-002``): it resolves through the tree's ``aliases.yml`` with
@@ -43,7 +45,7 @@ from typing import Any
 
 from homelabnext.identity.aliases import load_aliases, resolve
 from homelabnext.identity.uid import is_uid, uuid7
-from homelabnext.records import Records, RecordsReader, check_filename, slugify
+from homelabnext.records import Records, RecordsReader, slugify
 from homelabnext.records.decider import APPROVED
 from homelabnext.registers.records import render_record
 from homelabnext.registers.schema import RegisterError
@@ -237,9 +239,9 @@ class StrategyDecider(TransitionDecider):
 
     def _decide_note(self, name: str, note, dry_run: bool) -> Outcome:
         fm = note.frontmatter
-        bad = check_filename(name, fm)
-        if bad:
-            return self._deny(name, str(fm.get("record", "?")), "; ".join(bad), dry_run)
+        ident = str(fm.get("record") or fm.get("raised_by") or "?")
+        if refused := self._refuse_name(name, fm, ident, dry_run):  # the base's checks, first
+            return refused
         if note.type == RAISE_TYPE:
             return self._raise(name, note, dry_run)
         return self._transition(name, fm, dry_run)
@@ -341,6 +343,15 @@ class StrategyDecider(TransitionDecider):
                 name, ident, f"{ident} goes from {cur} to {what}, not {fm['to']}", dry_run
             )
         now = self.clock()
+        if fm["to"] == "expired":  # time decides an expiry (the policy has no tier for it)
+            lt, today = _date(entry.get("ltiov")), now.astimezone(dt.UTC).date()
+            if lt is None or lt >= today:
+                when = f"its LTIOV is {lt}" if lt else f"its LTIOV is {entry.get('ltiov')!r}"
+                why = (
+                    f"{ident} expires only once its dated LTIOV has passed ({when}, today is"
+                    f" {today}); answer or retire it instead"
+                )
+                return self._deny(name, ident, why, dry_run)
         event = {
             "event": "transition",
             "by": self.decided_by,
@@ -397,9 +408,12 @@ def sweep(
     today: dt.date,
     decided_by: str,
     clock: Callable[[], dt.datetime],
+    policy=None,
 ) -> tuple[list[pathlib.Path], list[Outcome]]:
     """The LTIOV sweep: an expiry intent for every open RFI and active requirement whose dated
-    LTIOV is before ``today`` (filed as :data:`SWEEP_AGENT`), then every pending intent decided.
+    LTIOV is before ``today`` (filed as :data:`SWEEP_AGENT`), then the sweep's own pending
+    expiry intents decided (those filed now, and any an interrupted earlier sweep left); other
+    intents wait for ``hnx strategy decide``.  ``policy`` as for :class:`StrategyDecider`.
     Returns (intents filed, outcomes)."""
     tree = load_tree(strategy_root)
     aliases = load_aliases(strategy_root)
@@ -424,5 +438,20 @@ def sweep(
                 "reason": f"LTIOV {lt} passed on {today} without an answer",
             }
             filed.append(rec.submit(note, body="Filed by the LTIOV sweep.\n"))
-    decider = StrategyDecider(strategy_root, records_root, decided_by=decided_by, clock=clock)
-    return filed, decider.decide_all()
+    decider = StrategyDecider(
+        strategy_root, records_root, decided_by=decided_by, clock=clock, policy=policy
+    )
+    reader = RecordsReader(records_root)
+    mine = []
+    for name in decider.pending():
+        try:
+            fm = reader.read(_lane_of(reader, name), name).frontmatter
+        except (OSError, ValueError):
+            continue  # malformed: the decider reports it on a full run
+        if fm.get("requesting_agent") == SWEEP_AGENT and fm.get("to") == "expired":
+            mine.append(name)
+    return filed, decider.decide_names(mine)
+
+
+def _lane_of(reader: RecordsReader, name: str) -> str:
+    return "inbox" if name in reader.list("inbox") else APPROVED

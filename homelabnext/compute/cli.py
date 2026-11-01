@@ -16,16 +16,9 @@ from .baselines import coverage, coverage_text
 from .loader import load_fleet
 from .model import ComputeError, ComputeUnreadable
 from .plan import plan as make_plan
-from .plan import read_tree, write_tree
+from .plan import read_tree
 from .render import TARGETS, render
-from .zones import (
-    open_site,
-    site_addresses,
-    site_delegated6,
-    site_deploy,
-    site_flows,
-    site_power,
-)
+from .zones import site_facts
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -50,22 +43,22 @@ def _common(p: argparse.ArgumentParser) -> None:
 
 
 def _fleet(args: argparse.Namespace):
-    zones, site_domain = open_site(args.site)
+    facts = site_facts(args.site)  # one read (and one SOPS decryption) of the site file
     return load_fleet(
         args.directory,
-        zones,
-        domain=args.domain or site_domain or "example.internal",
+        facts["zones"],
+        domain=args.domain or facts["domain"] or "example.internal",
         policies_path=args.policies,
         keys_path=args.keys,
         nodes_path=args.nodes,
         baselines_path=args.baselines,
         # the coverage report lists guests without a baseline instead of refusing to load
         require_baselines=args.cmd != "baselines",
-        flows=site_flows(args.site),
-        power=site_power(args.site),
-        deploy=site_deploy(args.site),
-        site_addresses=site_addresses(args.site),
-        delegated6=site_delegated6(args.site),
+        flows=facts["flows"],
+        power=facts["power"],
+        deploy=facts["deploy"],
+        site_addresses=facts["site_addresses"],
+        delegated6=facts["delegated6"],
     )
 
 
@@ -74,10 +67,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("validate", help="schema and semantic validation")
     _common(v)
+    v.add_argument(
+        "--registry",
+        help="service registry whose hosts must agree with the guests on address and zone "
+        "(default: services.yml next to the site file, when there is one)",
+    )
     r = sub.add_parser("render", help="render one target")
     _common(r)
     r.add_argument("--target", required=True, choices=sorted(TARGETS))
     r.add_argument("--out", help="write files here (default: print a file list)")
+    r.add_argument(
+        "--prune",
+        action="store_true",
+        help="delete files in --out that this command generated but no longer renders (a removed "
+        "guest's vm-*.tf, an old <vmid>.fw); hand-written files are never touched",
+    )
     pl = sub.add_parser("plan", help="diff a fresh render against a previous render directory")
     _common(pl)
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
@@ -138,10 +142,32 @@ def _baselines(args: argparse.Namespace, fleet) -> int:
     return 1 if bad else 0
 
 
+def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
+    """The registry's disagreements with the guests (none without a registry); an unreadable
+    registry is :class:`ComputeUnreadable`, an invalid one :class:`ComputeError`."""
+    from pathlib import Path
+
+    from homelabnext.network.loader import SiteError, SiteUnreadable, load_registry
+
+    from .gen.registry_hosts import registry_problems
+
+    path = Path(args.registry) if args.registry else Path(args.site).parent / "services.yml"
+    if not args.registry and not path.is_file():
+        return []
+    try:
+        reg = load_registry(path)
+    except SiteUnreadable as exc:
+        raise ComputeUnreadable(str(exc)) from exc
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+    return registry_problems(fleet, reg.hosts)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
         fleet = _fleet(args)
+        problems = _registry_problems(args, fleet) if args.cmd == "validate" else []
     except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 2
@@ -151,6 +177,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "baselines":
         return _baselines(args, fleet)
     if args.cmd == "validate":
+        if problems:
+            print("\n".join(f"error: {p}" for p in problems), file=sys.stderr)
+            print(f"hnx guests: the guests and the registry disagree ({len(problems)} errors)")
+            return 1
         iac = len(fleet.iac())
         print(f"ok: {len(fleet.guests)} guests ({iac} rendered, {len(fleet.manual())} manual)")
         from .validate import usage_lines
@@ -161,8 +191,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     files = render(fleet, args.target)
     if args.cmd == "render":
         if args.out:
-            write_tree(args.out, files)
+            from pathlib import Path
+
+            from homelabnext.network.plan import stale, write_rendered
+
+            from .gen._text import HEADER
+
+            out, markers = Path(args.out), (HEADER,)
+            left = [] if args.prune else stale(files, out, markers)
+            touched = write_rendered(files, out, prune=args.prune, markers=markers)
+            removed = sorted(set(touched) - set(files))
             print(f"wrote {len(files)} files to {args.out}")
+            if removed:
+                print(f"pruned {len(removed)} stale files: {', '.join(removed)}")
+            if left:
+                # a stale vm-*.tf keeps a removed guest under terraform, and an old <vmid>.fw
+                # applies to whatever guest takes the vmid next
+                print(
+                    f"hnx guests: warning: {len(left)} generated files in {args.out} are no "
+                    f"longer rendered ({', '.join(left)}); --prune deletes them",
+                    file=sys.stderr,
+                )
         else:
             for name in sorted(files):
                 print(f"==> {name} <==")
