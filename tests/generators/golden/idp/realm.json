@@ -22,7 +22,7 @@
         }
       ],
       "builtIn": false,
-      "description": "browser sign-in: a session, or a password and a second factor (ADR-0034)",
+      "description": "browser sign-in: a session, or a password and a one-time code (ADR-0034)",
       "providerId": "basic-flow",
       "topLevel": true
     },
@@ -37,38 +37,15 @@
           "userSetupAllowed": false
         },
         {
-          "authenticatorFlow": true,
-          "flowAlias": "hnx-browser-mfa-second-factor",
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
           "priority": 20,
           "requirement": "REQUIRED",
           "userSetupAllowed": false
         }
       ],
       "builtIn": false,
-      "description": "username and password, then a second factor",
-      "providerId": "basic-flow",
-      "topLevel": false
-    },
-    {
-      "alias": "hnx-browser-mfa-second-factor",
-      "authenticationExecutions": [
-        {
-          "authenticator": "auth-otp-form",
-          "authenticatorFlow": false,
-          "priority": 10,
-          "requirement": "ALTERNATIVE",
-          "userSetupAllowed": false
-        },
-        {
-          "authenticator": "webauthn-authenticator",
-          "authenticatorFlow": false,
-          "priority": 20,
-          "requirement": "ALTERNATIVE",
-          "userSetupAllowed": false
-        }
-      ],
-      "builtIn": false,
-      "description": "OTP or a WebAuthn key",
+      "description": "username and password, then a one-time code (set up at first sign-in)",
       "providerId": "basic-flow",
       "topLevel": false
     }
@@ -635,6 +612,26 @@
   ],
   "realm": "northwind",
   "registrationAllowed": false,
+  "requiredActions": [
+    {
+      "alias": "CONFIGURE_TOTP",
+      "config": {},
+      "defaultAction": true,
+      "enabled": true,
+      "name": "Configure OTP",
+      "priority": 10,
+      "providerId": "CONFIGURE_TOTP"
+    },
+    {
+      "alias": "UPDATE_PASSWORD",
+      "config": {},
+      "defaultAction": false,
+      "enabled": true,
+      "name": "Update Password",
+      "priority": 30,
+      "providerId": "UPDATE_PASSWORD"
+    }
+  ],
   "resetPasswordAllowed": false,
   "roles": {
     "client": {

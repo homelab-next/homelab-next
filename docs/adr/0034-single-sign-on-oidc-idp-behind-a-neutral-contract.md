@@ -36,9 +36,20 @@ one IdP product.
    client scopes trimmed to `basic` so a token carries only what the client asks for), one for
    the auth proxy (its callback on every site it guards), the groups and client roles of the
    group-to-role table, a groups claim and a roles claim, and a browser flow that requires a
-   second factor (OTP, or a WebAuthn key once registered). The realm never holds a secret: each
-   client secret is a secret-store reference (`secret:idp/clients/<service>`), substituted at
-   import.
+   second factor. The realm never holds a secret: each client secret is a secret-store
+   reference (`secret:idp/clients/<service>`), substituted at import.
+   **The second factor is OTP, required, with nothing beside it.** The browser flow is the
+   session cookie, or the username/password form and then the OTP form (`auth-otp-form`), both
+   `REQUIRED` in one subflow. A `REQUIRED` authenticator a user has not configured adds its
+   setup action, so a user with no OTP yet goes through `CONFIGURE_TOTP` (enabled in the realm's
+   `requiredActions` as a default action, so every new user has it) before the sign-in
+   completes; with the action disabled the sign-in fails, never passes on the password alone.
+   WebAuthn is **not** in the flow: as an `ALTERNATIVE` beside OTP it is skipped for a user
+   with no key, and a subflow of alternatives none of which the user has configured is the
+   ambiguous case this rule closes. Adding a key later is a change to this rule (for example a
+   conditional subflow on the user's configured credentials), with a test that no path signs a
+   user in without a factor (`tests/generators/test_gen_golden.py` reads every path through the
+   rendered flow).
 3. **Forward auth goes through an auth proxy** (registry capability `auth-proxy`; the default is
    oauth2-proxy) next to the edge, for every app with no OIDC login of its own. The generated
    `hnx_forward_auth` Caddy snippet proxies the auth proxy's `/oauth2/*` paths under each site,

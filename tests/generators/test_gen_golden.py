@@ -219,21 +219,86 @@ def test_idp_realm_has_a_confidential_client_per_idp_service_and_the_auth_proxy(
     )
 
 
-def test_idp_realm_requires_a_second_factor_in_the_browser_flow():
+def _sign_in_paths(flows: dict, alias: str) -> set[frozenset[str]]:
+    """Every set of authenticators a successful pass through ``alias`` can have run, read the
+    way the IdP runs a flow and assuming the worst of each step: REQUIRED children all run,
+    alternatives are ignored when a REQUIRED or CONDITIONAL child exists, a CONDITIONAL child
+    may be skipped, a DISABLED one never runs, and an ALTERNATIVE authenticator the user has
+    not configured counts for nothing: when every alternative of a flow could be such a one
+    (none is a subflow or the session cookie), the flow may pass having verified nothing."""
+    out_req: set[frozenset[str]] = {frozenset()}
+    alts: set[frozenset[str]] = set()
+    has_req, all_skippable = False, True
+    for e in sorted(flows[alias]["authenticationExecutions"], key=lambda e: e["priority"]):
+        req = e["requirement"]
+        if req == "DISABLED":
+            continue
+        own = (
+            _sign_in_paths(flows, e["flowAlias"])
+            if e.get("flowAlias")
+            else {frozenset({e["authenticator"]})}
+        )
+        if req in ("REQUIRED", "CONDITIONAL"):
+            has_req = True
+            if req == "CONDITIONAL":
+                own = own | {frozenset()}
+            out_req = {a | b for a in out_req for b in own}
+        elif req == "ALTERNATIVE":
+            alts |= own
+            all_skippable &= not e.get("flowAlias") and e.get("authenticator") != "auth-cookie"
+        else:
+            raise AssertionError(f"unknown requirement {req}")
+    if has_req:
+        return out_req
+    return alts | {frozenset()} if alts and all_skippable else alts
+
+
+def test_idp_realm_has_no_browser_sign_in_without_a_second_factor():
+    """Every way through the browser flow that is not an existing session runs the password
+    form AND the OTP form; the OTP form is REQUIRED with no ALTERNATIVE beside it (an
+    alternative the user has not configured is skipped, which could leave the password alone);
+    and a user with no OTP yet is made to enrol it (CONFIGURE_TOTP, enabled, a default action)."""
     realm = _realm()
     flows = {f["alias"]: f for f in realm["authenticationFlows"]}
-    top = flows[realm["browserFlow"]]
-    forms = flows[
-        next(e["flowAlias"] for e in top["authenticationExecutions"] if e.get("flowAlias"))
-    ]
-    req = {
-        e.get("authenticator") or e["flowAlias"]: e["requirement"]
-        for e in forms["authenticationExecutions"]
-    }
-    second = next(k for k, e in req.items() if k in flows)
-    assert req["auth-username-password-form"] == "REQUIRED" and req[second] == "REQUIRED"
-    factors = {e["authenticator"] for e in flows[second]["authenticationExecutions"]}
-    assert factors == {"auth-otp-form", "webauthn-authenticator"}
+    paths = _sign_in_paths(flows, realm["browserFlow"])
+    fresh = [p for p in paths if "auth-cookie" not in p]
+    assert fresh, "some path signs a user in without a session"
+    for p in fresh:
+        assert {"auth-username-password-form", "auth-otp-form"} <= p, sorted(p)
+    holders = [
+        f for f in flows.values()
+        if any(e.get("authenticator") == "auth-otp-form" for e in f["authenticationExecutions"])
+    ]  # fmt: skip
+    assert len(holders) == 1
+    siblings = holders[0]["authenticationExecutions"]
+    [otp] = [e for e in siblings if e.get("authenticator") == "auth-otp-form"]
+    assert otp["requirement"] == "REQUIRED"
+    assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
+    actions = {a["alias"]: a for a in realm["requiredActions"]}
+    totp = actions["CONFIGURE_TOTP"]
+    assert totp["enabled"] is True and totp["defaultAction"] is True
+    assert totp["providerId"] == "CONFIGURE_TOTP"
+
+
+def test_sign_in_path_reader_sees_a_skippable_second_factor():
+    """The reader above flags the shape it guards against: OTP and a key as ALTERNATIVEs."""
+    flows = {
+        "top": {"authenticationExecutions": [
+            {"authenticator": "auth-cookie", "priority": 10, "requirement": "ALTERNATIVE"},
+            {"flowAlias": "forms", "priority": 20, "requirement": "ALTERNATIVE"},
+        ]},
+        "forms": {"authenticationExecutions": [
+            {"authenticator": "auth-username-password-form", "priority": 10,
+             "requirement": "REQUIRED"},
+            {"flowAlias": "second", "priority": 20, "requirement": "REQUIRED"},
+        ]},
+        "second": {"authenticationExecutions": [
+            {"authenticator": "auth-otp-form", "priority": 10, "requirement": "ALTERNATIVE"},
+            {"authenticator": "webauthn-authenticator", "priority": 20,
+             "requirement": "ALTERNATIVE"},
+        ]},
+    }  # fmt: skip
+    assert frozenset({"auth-username-password-form"}) in _sign_in_paths(flows, "top")
 
 
 def test_idp_realm_grants_each_group_exactly_the_registry_roles():

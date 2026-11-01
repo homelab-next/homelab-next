@@ -416,7 +416,7 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
 
 
 # 9 ---------------------------------------------------------------- IdP realm
-#: the browser flow every sign-in goes through: a session cookie, or a password AND a second factor
+#: the browser flow every sign-in goes through: a session cookie, or a password AND a one-time code
 MFA_BROWSER_FLOW = "hnx-browser-mfa"
 #: the scopes a token carries without asking (everything else only when requested)
 DEFAULT_CLIENT_SCOPES = ("basic",)
@@ -437,10 +437,43 @@ def _execution(requirement: str, priority: int, *, authenticator: str = "", flow
     return out
 
 
+#: the second factor every browser sign-in requires, and the required action that enrols it
+SECOND_FACTOR, SECOND_FACTOR_SETUP = "auth-otp-form", "CONFIGURE_TOTP"
+#: the realm's required actions: a new user enrols OTP at first sign-in (a default action), and
+#: an admin-set temporary password is changed then (listing them replaces Keycloak's defaults)
+REALM_REQUIRED_ACTIONS = (
+    {
+        "alias": SECOND_FACTOR_SETUP,
+        "config": {},
+        "defaultAction": True,
+        "enabled": True,
+        "name": "Configure OTP",
+        "priority": 10,
+        "providerId": SECOND_FACTOR_SETUP,
+    },
+    {
+        "alias": "UPDATE_PASSWORD",
+        "config": {},
+        "defaultAction": False,
+        "enabled": True,
+        "name": "Update Password",
+        "priority": 30,
+        "providerId": "UPDATE_PASSWORD",
+    },
+)
+
+
 def _mfa_flows() -> list[dict]:
-    """The browser flow: the session cookie, or the username/password form followed by a
-    required second factor (OTP, or a WebAuthn key once registered; a user with neither is made
-    to set up OTP, the first alternative, before the sign-in completes)."""
+    """The browser flow: the session cookie, or the username/password form AND the OTP form.
+
+    The second factor is one execution, ``auth-otp-form``, **REQUIRED** in the same subflow as
+    the password, with no alternative beside it: the only way through the flow without a session
+    is a password and a valid one-time code.  A REQUIRED authenticator that is not configured for
+    the user (no OTP credential yet) adds its setup action, ``CONFIGURE_TOTP``, which the realm
+    enables as a default action (:data:`REALM_REQUIRED_ACTIONS`): a user with no factor is made
+    to enrol one before the sign-in completes, never let through on the password alone (and,
+    were the action disabled, refused).  WebAuthn is not in the flow: an ALTERNATIVE beside OTP
+    is skipped when the user has no key, which is exactly the ambiguity this flow avoids."""
 
     def flow(alias: str, top: bool, executions: list[dict], what: str) -> dict:
         return {
@@ -452,7 +485,7 @@ def _mfa_flows() -> list[dict]:
             "topLevel": top,
         }
 
-    forms, second = f"{MFA_BROWSER_FLOW}-forms", f"{MFA_BROWSER_FLOW}-second-factor"
+    forms = f"{MFA_BROWSER_FLOW}-forms"
     return [
         flow(
             MFA_BROWSER_FLOW,
@@ -461,25 +494,16 @@ def _mfa_flows() -> list[dict]:
                 _execution("ALTERNATIVE", 10, authenticator="auth-cookie"),
                 _execution("ALTERNATIVE", 20, flow=forms),
             ],
-            "browser sign-in: a session, or a password and a second factor (ADR-0034)",
+            "browser sign-in: a session, or a password and a one-time code (ADR-0034)",
         ),
         flow(
             forms,
             False,
             [
                 _execution("REQUIRED", 10, authenticator="auth-username-password-form"),
-                _execution("REQUIRED", 20, flow=second),
+                _execution("REQUIRED", 20, authenticator=SECOND_FACTOR),
             ],
-            "username and password, then a second factor",
-        ),
-        flow(
-            second,
-            False,
-            [
-                _execution("ALTERNATIVE", 10, authenticator="auth-otp-form"),
-                _execution("ALTERNATIVE", 20, authenticator="webauthn-authenticator"),
-            ],
-            "OTP or a WebAuthn key",
+            "username and password, then a one-time code (set up at first sign-in)",
         ),
     ]
 
@@ -615,6 +639,7 @@ def idp_realm(reg: Registry) -> dict[str, str]:
         "groups": groups,
         "realm": reg.lab_name,
         "registrationAllowed": False,
+        "requiredActions": [dict(a) for a in REALM_REQUIRED_ACTIONS],
         "resetPasswordAllowed": False,
         "roles": {"client": roles},
         "sslRequired": "all",
