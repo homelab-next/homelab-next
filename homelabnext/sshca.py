@@ -246,16 +246,10 @@ def parse(doc: Any, where: str = "spec") -> Spec:
 
 
 def load(path: str | Path) -> Spec:
-    import yaml
-
-    from homelabnext._yaml import UniqueKeyLoader
+    from homelabnext._yaml import load_unique
 
     p = Path(path)
-    try:
-        doc = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
-    except (OSError, yaml.YAMLError) as exc:
-        raise SpecError(f"cannot read {p}: {exc}") from exc
-    return parse(doc, str(p))
+    return parse(load_unique(p, SpecError), str(p))
 
 
 def writes(spec: Spec) -> list[dict[str, Any]]:

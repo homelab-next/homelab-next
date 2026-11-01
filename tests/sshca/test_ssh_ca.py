@@ -154,3 +154,14 @@ def test_the_cli(tmp_path, capsys):
     assert "roles is a non-empty list" in capsys.readouterr().err
     assert main(["check", str(tmp_path / "missing.yml")]) == 1
     assert main(["render"]) == 2
+
+
+def test_an_unreadable_or_duplicate_keyed_spec_is_a_spec_error(tmp_path):
+    with pytest.raises(SpecError, match=r"cannot read .*missing\.yml") as err:
+        load(tmp_path / "missing.yml")
+    assert isinstance(err.value.__cause__, OSError)
+    dup = tmp_path / "dup.yml"
+    dup.write_text("ssh_ca_version: 1\nssh_ca_version: 1\n")
+    with pytest.raises(SpecError, match="duplicate key 'ssh_ca_version'") as err:
+        load(dup)
+    assert isinstance(err.value.__cause__, yaml.YAMLError)
