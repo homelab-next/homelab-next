@@ -181,7 +181,7 @@ Catalogued scripts, controlled agent context, one map of access.
 |---|---|---|---|
 | M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current (`hnx scripts catalog --check`) | PUBLIC-NOW |
 | M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids (`hnx scripts reality`) | PUBLIC-NOW |
-| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`) | PUBLIC-NOW |
+| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`; CI's `--ci-base` holds the baseline to the base commit's, so a hand edit cannot loosen it) | PUBLIC-NOW |
 | M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`) | PUBLIC-NOW |
 | M-05 | Every agent job gets its context pack | Job log records pack hash and contents built from the charter manifest | SERVER |
 | M-06 | No agent runs blind | A job with a missing or stale pre-gate is deferred with a reason | PUBLIC-NOW |

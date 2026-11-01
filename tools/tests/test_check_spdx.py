@@ -41,6 +41,21 @@ def test_golden_outputs_are_exempt(tmp_path: Path):
     g.parent.mkdir(parents=True)
     g.write_text("generated: true\n")
     assert check_spdx.main([str(g)]) == 0
+    rendered = g.parent / "verify.sh"  # a rendered script is an expected output too
+    rendered.write_text("echo ok\n")
+    assert check_spdx.main([str(rendered)]) == 0
+
+
+@pytest.mark.parametrize(
+    "rel", ["homelabnext/golden/pins.py", "tests/golden/test_x.py", "a/golden/x.go"]
+)
+def test_code_under_a_golden_directory_needs_the_header(tmp_path: Path, rel):
+    """golden/ exempts expected outputs, not the code of a package or suite that is named golden
+    (homelabnext/golden/pins.py is governance code)."""
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True)
+    f.write_text("x = 1\n")
+    assert check_spdx.main([str(f)]) == 1
 
 
 def test_vendored_file_needs_its_own_spdx_identifier(tmp_path: Path, monkeypatch):

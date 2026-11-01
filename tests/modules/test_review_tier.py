@@ -656,7 +656,21 @@ def test_an_oversized_manifest_is_human_approve(repo, capsys, monkeypatch):
     assert m["tier"] == rt.HUMAN and "bytes" in m["changes"][0]["why"]
 
 
-@pytest.mark.parametrize("path", ["tools/schema_check.py", ".github/workflows/ci.yml"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools/schema_check.py",
+        ".github/workflows/ci.yml",
+        # what sets up CI's interpreter and packages: a change here steers every job that uses it
+        ".github/actions/python-deps/action.yml",
+        "constraints/bootstrap.txt",
+        "constraints/ci.txt",
+        "pyproject.toml",
+        # what may leave the lab (ADR-0033 decision 7)
+        "homelabnext/status/release_transforms.yml",
+        "homelabnext/status/release.py",
+    ],
+)
 def test_what_the_check_rests_on_is_governance(repo, capsys, path):
     f = repo / path
     f.parent.mkdir(parents=True, exist_ok=True)

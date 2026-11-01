@@ -152,7 +152,7 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 
 1. **Create the private repository** from the skeleton: copy `examples/private-overlay/`, delete
    `fictional: true` from `.hnx-private-overlay.yml`, protect `main` (pull requests, the
-   `checks` job required).
+   `checks` job required: the last job of `checks.yml`, which needs every other one).
 2. **Keys offline first.** Generate the operator's age identity on the workstation
    (`age-keygen`); store it in the password manager and print a paper copy. Put its public
    recipient in `.sops.yaml`. Choose the ansible-vault password the same way.
@@ -176,7 +176,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    ```
 
    Every lookup and the vault password client log in, read and revoke their own token, so a
-   token lives for one read; the `secret_id` is reusable within its TTL (a use count would run out
+   token lives for one lookup (every reference that lookup names; give the AppRole no
+   `token_num_uses`, or a lookup naming several would run out); the `secret_id` is reusable within its TTL (a use count would run out
    mid-deploy), so keep that TTL short and rotate it (below). Bound the CIDRs to the tailnet range
    the deploy node gets, or the runner VM's subnet. Generate a second age identity for the deploy
    and add its recipient to `.sops.yaml` (`sops updatekeys` on existing files).
@@ -209,9 +210,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
      audience).
    * **Branch protection on `main`** (a ruleset or classic protection; both exist for private
      repositories on Pro): pull requests required, the `checks` job required, **one approving
-     review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` names
-     `.github/`, `bin/`, `runner/`, `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`,
-     the marker and what the lab trusts under `lab/`), and no force pushes. See [writers and reviews](#writers-and-reviews).
+     review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` owns
+     every path: its first rule is `*`), and no force pushes. See [writers and reviews](#writers-and-reviews).
 7. **Host keys.** Record each host's public SSH key in `ansible/known_hosts` after checking its
    fingerprint out of band (or one `@cert-authority` line for an SSH host CA).
 8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
@@ -393,9 +393,10 @@ GitHub's write permission is broader than "may open a pull request": a writer ca
 itself**, so a pull request can rewrite `checks.yml` to pass. What actually gates a deploy is:
 
 * **Branch protection on `main`** with a required approving review and **"Require review from
-  Code Owners"** (the skeleton's `.github/CODEOWNERS` covers `.github/`, `bin/`, `runner/`,
-  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker, `lab/site.yml`,
-  `lab/modules.yml`, `lab/services.yml`, `lab/guests/`, `lab/modules/` and `lab/modules.lock`), so
+  Code Owners"** (the skeleton's `.github/CODEOWNERS` owns every path by default, its first rule
+  `*`, so a path added later is covered too; its other lines say why the paths that matter most
+  do: the workflows, the deploy's tools, the inventory and `ansible/known_hosts` that pick the
+  targets, `lab/customizations/`, whose hooks add tasks, and what the lab trusts under `lab/`), so
   nothing reaches `main`, and so nothing a dispatch runs, without the owner's approval.
   `lab/site.yml` is there because it carries claims the checks trust rather than prove: above
   all `delegated_prefixes6` (site 1.5), the global IPv6 prefixes a model runtime's lab-only rule
@@ -540,7 +541,8 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
    `locks/deploy.txt` with hashes; sops downloaded and checked against `SOPS_SHA256`.
 7. **Checks before anything is decrypted**: `python hnx/tools/private_leak_check.py private .`,
    then the OpenBao CA from `BAO_CACERT_PEM` is written to the runner's temporary directory.
-8. **Validation** of the lab data, with `SOPS_AGE_KEY` set for that step only, then the **module
+8. **Validation** of the lab data, with `SOPS_AGE_KEY` set for that step (and the deploy step,
+   which decrypts the sealed lab files again; no other step has it), then the **module
    loader** (`hnx modules check --root hnx --overlay . --deploy`, [modules](modules.md#the-loader-at-deploy-time)):
    a problem stops the run before anything reaches a host. It always runs: a lab with none of
    `lab/modules.yml`, `lab/modules/` and `lab/modules.lock` is checked as an empty selection,
@@ -551,13 +553,15 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
 10. **Deploy**: the SSH key goes into `ssh-agent` from the environment (never a file); the vault
     password reaches `bin/vault-pass-client.py` from OpenBao by `HNX_VAULT_PASSWORD_REF` (or as
     `HNX_VAULT_PASSWORD` from the optional secret); role credentials are read from OpenBao by the
-    `hnx_secret` lookup (`BAO_ADDR`, `BAO_ROLE_ID`, `BAO_SECRET_ID`, `BAO_CACERT`), each with a
-    token minted for that read and revoked after it; and `ansible-playbook
+    `hnx_secret` lookup (`BAO_ADDR`, `BAO_ROLE_ID`, `BAO_SECRET_ID`, `BAO_CACERT`), each lookup
+    with a token minted for it (every reference it names) and revoked after it; and `ansible-playbook
     ansible/playbooks/site.yml` runs with `host_key_checking` on and diffs off (a diff can print a
     templated secret). The census of what runs follows, always
     (`hnx/ansible/playbooks/module_census.yml`, read-only on every host, into a fresh directory of
-    the runner's, with `systemctl` pinned on the command line so the overlay's `group_vars` cannot
-    replace it). On the host that runs the broker, set `module_census_broker_socket` (its socket,
+    the runner's, with every input that names a command or a data source (`systemctl`, the `hnx`
+    command the broker host runs as root, the notify pairs directory) pinned on the command line so
+    the overlay's `group_vars` and `host_vars` cannot replace it; the overlay's own `site.yml`,
+    which runs first, can still change what the hosts answer). On the host that runs the broker, set `module_census_broker_socket` (its socket,
     under `/run/`) in the overlay's `host_vars` and list root (`{uid: 0}`) in that broker's
     manifest `operators` (broker manifest 1.8), and the census also asks the broker, as root, which
     agents it serves; without the socket `agents` is noted as not gathered, and without the
@@ -588,10 +592,13 @@ with 1.31.1) over them when those tools are installed (the tests skip otherwise)
 (`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
 push.
 
-`checks.yml` runs on every pull request with no secret and no Environment: it runs the private
-leak check and the module loader (`hnx modules check --root hnx --overlay . --deploy`, with the
-pinned `hnx`, the overlay read as data), so a pull request's code never sees a credential and a
-module problem shows on the pull request, not only at the deploy.
+`checks.yml` runs on every pull request with no secret and no Environment: its jobs are the
+private leak check (`private-leak-check`), the module loader (`module-loader`: `hnx modules check
+--root hnx --overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the site
+review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`, that
+needs all of them and fails unless each succeeded: it is the one check branch protection requires,
+so no job can be left out of it. A pull request's code never sees a credential, and a module
+problem shows on the pull request, not only at the deploy.
 
 ## The leak checks, both directions
 

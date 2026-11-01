@@ -191,11 +191,18 @@ jobs:
           ansible-playbook ansible/playbooks/site.yml
           # the census of what runs, read-only on every host, into a fresh directory of this
           # runner's (the next step gathers and checks it); always, even for a lab that selects
-          # no modules.  systemctl is pinned here: an extra variable wins over the overlay's own
-          # group_vars, so the overlay cannot point the census at a stand-in
+          # no modules.  Every census input that names a command or a data source is pinned here
+          # (systemctl, the hnx command the broker host runs as root, the notify pairs directory;
+          # the socket tables are a role var): an extra variable wins over the overlay's own
+          # group_vars and host_vars, so the inventory cannot point the census at a stand-in.  To
+          # change one, change this file (CODEOWNERS).  The overlay's own site.yml, which runs
+          # first with root on every host, can still change what the hosts answer: the census is
+          # an alarm against drift and mistakes, not a gate against a hostile overlay.
           census="$(mktemp -d "$RUNNER_TEMP/census.XXXXXX")"
           ansible-playbook hnx/ansible/playbooks/module_census.yml \
-            -e "module_census_dir=$census" -e module_census_systemctl_cli=/usr/bin/systemctl
+            -e "module_census_dir=$census" -e module_census_systemctl_cli=/usr/bin/systemctl \
+            -e module_census_hnx_cli=/opt/hnx/bin/hnx \
+            -e module_census_pairs_dir=/var/lib/homelabnext/notify-pairs
           echo "HNX_CENSUS_DIR=$census" >> "$GITHUB_ENV"
 
       # After the deploy, what runs must be what the lab declares (the loader's two-way check

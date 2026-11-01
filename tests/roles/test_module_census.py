@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 
 import pytest
 from rolerun import LOGGER, calls, fake, first_run, logging_fake, run_cases
@@ -18,9 +17,7 @@ from homelabnext.modules import census
 from homelabnext.notify import record as nr
 from homelabnext.notify.record import PairsRecord
 
-needs_ansible = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+needs_ansible = pytest.mark.requires_tool("ansible-playbook")
 
 ENABLED = (
     "hnx-external-collector-pull.service enabled enabled\n"

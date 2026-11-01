@@ -3,7 +3,6 @@
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,9 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "profiles"
-pytestmark = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 
 
 def run_tasks(tmp_path, tasks_file, extra_vars):

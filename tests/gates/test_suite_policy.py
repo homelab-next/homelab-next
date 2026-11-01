@@ -131,6 +131,102 @@ def test_a_required_tools_skip_is_a_failure_end_to_end(tmp_path):
     assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
 
 
+def test_the_requires_tool_marker_skips_or_fails_before_any_fixture(tmp_path):
+    """The marker calls require_tool before the module's fixtures: a required tool that is
+    missing fails the test, never a fixture that shells out to it first."""
+    _project(
+        tmp_path,
+        a__test_marked="""
+            import pytest
+
+            pytestmark = pytest.mark.requires_tool("hnx-fake-lint")
+
+            @pytest.fixture(scope="module")
+            def ran():
+                raise AssertionError("the fixture ran before the tool check")
+
+            def test_one(ran):
+                pass
+
+            @pytest.mark.requires_tool("sh", "hnx-fake-other")
+            def test_two():
+                pass
+        """,
+    )
+    proc = _pytest(tmp_path)
+    assert proc.returncode == 0, proc.stdout
+    assert "2 skipped" in proc.stdout and "hnx-fake-lint is not installed" in proc.stdout
+    proc = _pytest(tmp_path, env={"HNX_REQUIRE_TOOLS": "hnx-fake-lint"})
+    assert proc.returncode == 1, proc.stdout
+    assert "HNX_REQUIRE_TOOLS requires it" in proc.stdout
+    assert "the fixture ran before" not in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "reason, required, want",
+    [
+        ("could not import 'pyiceberg': No module named 'pyiceberg'", {"pyiceberg"}, "pyiceberg"),
+        ("could not import 'ansible.errors': no", {"ansible"}, "ansible"),
+        ("could not import 'ansible.errors': no", {"ansible.errors"}, "ansible.errors"),
+        ("could not import 'ansiblex': no", {"ansible"}, None),
+        ("could not import 'duckdb': no", set(), None),
+        ("shellcheck is not installed", {"shellcheck"}, None),
+    ],
+)
+def test_required_module_skipped(reason, required, want):
+    assert sp.required_module_skipped(reason, required) == want
+
+
+def test_a_required_modules_importorskip_is_a_failure_end_to_end(tmp_path):
+    _project(
+        tmp_path,
+        a__test_extras="""
+            import pytest
+
+            def test_needs_extra():
+                pytest.importorskip("hnx_fake_optional_extra.sub")
+
+            def test_needs_other():
+                pytest.importorskip("hnx_fake_other_extra")
+        """,
+    )
+    proc = _pytest(tmp_path, env={"HNX_REQUIRE_MODULES": "hnx_fake_optional_extra"})
+    assert proc.returncode == 1, proc.stdout
+    assert "HNX_REQUIRE_MODULES requires it" in proc.stdout
+    assert "1 failed, 1 skipped" in proc.stdout
+    assert _pytest(tmp_path).returncode == 0  # without the variable both are ordinary skips
+
+
+def test_no_test_skips_through_its_own_shutil_which():
+    """A ``skipif(shutil.which(...))`` decides the skip itself, so HNX_REQUIRE_TOOLS can never
+    turn it into a failure: every tool check goes through require_tool or the marker."""
+    own = re.compile(r"skipif\(\s*(?:not\s+)?shutil\.which\(")
+    offenders = []
+    for base in ("tests", "tools/tests", "conformance"):
+        for f in sorted((Path(ROOT) / base).rglob("*.py")):
+            if f.name in ("suite_policy.py", "test_suite_policy.py"):  # they name the form
+                continue
+            text = f.read_text(encoding="utf-8")
+            offenders += [f"{f.relative_to(ROOT)}: {m[0]}" for m in own.finditer(text)]
+    assert offenders == []
+
+
+def test_the_job_with_the_extras_requires_them():
+    """CI's test job on the Python that installs the lake, mcp and ansible extras makes their
+    imports and ansible-playbook required, so they fail there instead of skipping."""
+    import yaml
+
+    ci = yaml.safe_load((Path(ROOT) / ".github" / "workflows" / "ci.yml").read_text())
+    job = ci["jobs"]["test"]
+    (py312,) = [p for p in job["strategy"]["matrix"]["python"] if p["version"] == "3.12"]
+    assert {"lake", "mcp", "ansible"} <= set(py312["extras"].split(","))
+    assert set(py312["require-modules"].split(",")) >= {"duckdb", "pyiceberg", "mcp", "ansible"}
+    assert "ansible-playbook" in py312["require-tools"].split(",")
+    (run,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
+    assert run["env"]["HNX_REQUIRE_MODULES"] == "${{ matrix.python.require-modules }}"
+    assert run["env"]["HNX_REQUIRE_TOOLS"] == "${{ matrix.python.require-tools }}"
+
+
 CI_REQUIRED = ("actionlint", "zizmor", "nats-server", "docker", "go")
 
 

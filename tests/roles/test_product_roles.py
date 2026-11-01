@@ -10,7 +10,6 @@ on a good one."""
 
 import ipaddress
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -20,9 +19,7 @@ from rolerun import fake, first_run, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
-pytestmark = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 GUESTS = [
     {
         "id": "guest:bus-core",
@@ -214,7 +211,7 @@ def _first(tmp_path, role):
     }
 
 
-@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.requires_tool("gpg")
 @pytest.mark.parametrize("role", sorted(KEY_CASES))
 @first_run(_first)
 def test_the_signing_key_is_installed_only_when_it_is_the_pinned_one(first, role):
@@ -236,7 +233,7 @@ def _first(tmp_path, role):
     return {"role": role, "tasks_from": "signing_key", "extra_vars": v, "setup": {"ring": ring}}
 
 
-@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.requires_tool("gpg")
 @pytest.mark.parametrize("role", sorted(KEY_CASES))
 @first_run(_first)
 def test_a_signing_key_file_with_an_unpinned_key_beside_the_pinned_one_is_refused(first, role):
@@ -337,7 +334,7 @@ def _first(tmp_path):
     }
 
 
-@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg not installed")
+@pytest.mark.requires_tool("gpg")
 @first_run(_first)
 def test_tailscale_node_reads_the_ubuntu_repository_on_ubuntu(first):
     """The vendor's apt layout is <track>/ubuntu/<codename> on Ubuntu (its installer.sh), so the

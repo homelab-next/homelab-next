@@ -112,9 +112,11 @@ modules-check:
 # not part of gates, which has no base to compare with (CI runs it in job trusted-gates, with the
 # base's own code)
 .PHONY: modules-review-tier
-BASE ?= origin/main
+# BASE itself stays empty unless given (make variables are global, and schemas and ids-check treat
+# a set BASE as an opt-in comparison), so the targets that need a base default it here instead
+REVIEW_BASE = $(or $(BASE),origin/main)
 modules-review-tier:
-	$(PY) -m homelabnext.cli modules review-tier --base "$(BASE)"
+	$(PY) -m homelabnext.cli modules review-tier --base "$(REVIEW_BASE)"
 
 # a swap record 1.2 against BASE (default origin/main) and the working tree: the record, the
 # manifests and the site it starts from, with the model evidence read from the repository (the
@@ -124,14 +126,14 @@ modules-review-tier:
 .PHONY: swap-check
 swap-check:
 	@test -n "$(RECORD)" -a -n "$(SITE)" || { echo "usage: make swap-check RECORD=<swap record> SITE=<site> [BASE=<rev>]"; exit 2; }
-	$(PY) -m homelabnext.cli modules swap-check "$(RECORD)" --site "$(SITE)" --base "$(BASE)" --examples
+	$(PY) -m homelabnext.cli modules swap-check "$(RECORD)" --site "$(SITE)" --base "$(REVIEW_BASE)" --examples
 
 # the role table against BASE (default origin/main): a change must be covered by a swap record
 # under examples/swaps/ whose legs hold against BASE's evidence. Not part of gates, which has no
 # base to compare with (CI runs it in job trusted-gates, with the base's own code)
 .PHONY: swap-gate
 swap-gate:
-	$(PY) -m homelabnext.cli modules swap-gate --base "$(BASE)"
+	$(PY) -m homelabnext.cli modules swap-gate --base "$(REVIEW_BASE)"
 
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it

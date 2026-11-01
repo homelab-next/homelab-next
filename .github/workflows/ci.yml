@@ -61,16 +61,22 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK and
-          # lookup-plugin tests (which import ansible) run; and Go, which the Go tools' tests
-          # then require (HNX_REQUIRE_GO), so they cannot skip with "go is not installed" here
+          # the optional lake, mcp and ansible extras installed: the DuckDB/Iceberg, MCP SDK,
+          # lookup-plugin (which import ansible) and playbook tests run, and must: an
+          # importorskip of a module in require-modules (HNX_REQUIRE_MODULES) and a missing tool
+          # in require-tools (HNX_REQUIRE_TOOLS) fail here instead of skipping, so a broken extra
+          # cannot pass as a skip; and Go, which the Go tools' tests then require (HNX_REQUIRE_GO)
           - version: "3.12"
             extras: "test,lake,mcp,ansible"
             go: true
+            require-modules: "duckdb,pyarrow,pyiceberg,sqlalchemy,mcp,ansible"
+            require-tools: "ansible-playbook"
           # the extras absent: proves the lake and MCP SDK tests skip cleanly instead of failing
           - version: "3.11"
             extras: "test"
             go: false
+            require-modules: ""
+            require-tools: ""
         shard: [1, 2, 3, 4, 5, 6]  # --shard below names the 6: change both together
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -89,6 +95,8 @@ jobs:
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
+          HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
+          HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest -q -m "not live"
@@ -210,8 +218,8 @@ jobs:
           python -m pytest -q -m "not live" -rs
           tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
 
-  # Broker, scope guard, records lifecycle, decide cascade and the agent grant ceiling: each keeps
-  # >= 80% line coverage from its own tests (tools/coverage_floor.py; pytest-cov from the test extra).
+  # The security-critical units (tools/coverage_floor.py UNITS, the one list): each keeps >= 80%
+  # line coverage from its own tests (pytest-cov from the test extra).
   coverage:
     runs-on: ubuntu-latest
     # one pytest per group of units, Python subprocesses measured too: slower than the old single run
@@ -264,8 +272,11 @@ jobs:
         run: python tools/product_name_lint.py --ci-base .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
-      - name: no copy-paste beyond the shrinking baseline (M-03)
-        run: python tools/dup_check.py .
+      - name: no copy-paste beyond the shrinking baseline (M-03); the baseline never loosens against the base
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/dup_check.py --ci-base .
       - name: TLS certificate verification never disabled (F-07)
         run: python tools/tls_verify_lint.py .
       - name: install caddy (pinned release, checksum verified) for the F-23 semantic check
@@ -365,12 +376,16 @@ jobs:
   # The gates a change must not be able to argue its way past run the BASE's code, never the
   # change's: the checker is the base commit's homelabnext (a detached worktree of the same clone,
   # imported from there with python -P so the checkout's own package is never on the path), and it
-  # reads the change's working tree only as data (--root).  The base rule is the same as
-  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the
-  # thing being avoided.  A pull_request run still takes this workflow file (and the constraints
-  # its dependencies come from) from the change, so the guarantee rests on both being
-  # human-approve (CODEOWNERS, hnx modules review-tier); the privileged pull-request trigger is never
-  # used.  Bootstrap: a base whose code has no swap-gate yet runs the change's own and says so.
+  # reads the change's working tree only as data (--root).  Nothing of the change runs before the
+  # gates: no composite action from the checkout (./.github/actions/ is the change's), Python comes
+  # from actions/setup-python pinned here and is called by the absolute path it reports (so a
+  # $GITHUB_PATH shim cannot stand in for it), and pip and the checker's dependencies are installed
+  # from the BASE's constraints and pyproject.toml.  The base rule is the same as
+  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the thing
+  # being avoided.  A pull_request run still takes this workflow file from the change, so the
+  # guarantee rests on it being human-approve (CODEOWNERS, hnx modules review-tier) until a
+  # ruleset requires this job from the default branch; the privileged pull-request trigger is never
+  # used.  A base that cannot run a gate fails the job: the change's own code never stands in.
   trusted-gates:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -379,17 +394,17 @@ jobs:
         with:
           fetch-depth: 0  # the base commit
           persist-credentials: false
-      - uses: ./.github/actions/python-deps
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        id: python
         with:
           python-version: "3.12"
-          extras: core  # the checker's own imports (YAML, JSON Schema); the project itself is not installed
-          install-project: "false"
-      - name: the base commit, checked out apart as the checker
+      - name: the base commit, checked out apart as the checker, with its own pinned dependencies
         id: base
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
           set -euo pipefail
           commit() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
@@ -405,27 +420,29 @@ jobs:
           fi
           git worktree add --detach "$RUNNER_TEMP/base" "$base"
           cd "$RUNNER_TEMP/base"
-          got=$(PYTHONPATH="$PWD" python -P -c 'import homelabnext; print(homelabnext.__file__)')
+          "$PY" -m pip install --disable-pip-version-check --require-hashes --no-deps -r constraints/bootstrap.txt
+          req="$RUNNER_TEMP/checker-requirements.txt"
+          # the core dependencies (YAML, JSON Schema) the checker imports; the project is not installed
+          "$PY" -I -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))["project"]; print("\n".join([*p.get("dependencies", []), *p["optional-dependencies"]["core"]]))' > "$req"
+          "$PY" -m pip install --disable-pip-version-check -c constraints/ci.txt -r "$req"
+          got=$(PYTHONPATH="$PWD" "$PY" -P -c 'import homelabnext; print(homelabnext.__file__)')
           case "$got" in "$PWD"/*) ;; *) echo "the checker imports $got, not the base's"; exit 1;; esac
           echo "sha=$base" >> "$GITHUB_OUTPUT"
-          echo "checker: the base commit $base"
+          echo "checker: the base commit $base, interpreter $PY"
       - name: each changed module path's review tier, and a code owner (as of the base) for every human-approve one (ADR-0027 follow-up 4), by the base's code
         env:
           BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
           cd "$RUNNER_TEMP/base"
-          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules review-tier --root "$GITHUB_WORKSPACE" --base "$BASE"
+          PYTHONPATH="$PWD" "$PY" -P -m homelabnext.cli modules review-tier --root "$GITHUB_WORKSPACE" --base "$BASE"
       - name: a role-table change is covered by a swap record whose legs hold against the base's evidence (docs/modules.md, "Swap record 1.2"), by the base's code
         env:
           BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
-          checker="$RUNNER_TEMP/base"
-          if ! grep -q '"swap-gate"' "$checker/homelabnext/modules/cli.py"; then
-            echo "::notice::bootstrap: the base has no swap-gate yet; running this change's own"
-            checker="$GITHUB_WORKSPACE"
-          fi
-          cd "$checker"
-          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
+          cd "$RUNNER_TEMP/base"
+          PYTHONPATH="$PWD" "$PY" -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
 
   # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
   # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state
@@ -891,9 +908,11 @@ jobs:
           fi
           for c in $(git rev-list --no-merges "$BASE..$HEAD_SHA"); do
             author=$(git log -1 --format='%ae' "$c")
-            # Dependabot cannot certify the DCO; the maintainer who merges does.  Exempt only its
-            # own commits in its own pull request (GitHub's record of who opened it, not the
-            # commit metadata, which anyone can set)
+            # Dependabot cannot certify the DCO; the maintainer who merges does.  The exemption is
+            # narrowed to Dependabot's own pull requests by GitHub's record of who opened it, which
+            # no commit can set; within one, the author e-mail is commit metadata, so a commit a
+            # writer pushes to that branch under Dependabot's address is exempt too.  It narrows
+            # the hole, it does not close it: the merging maintainer's review is the control
             if [ "$from_dependabot" = 1 ] && [ "$author" = "$dependabot" ]; then
               continue
             fi

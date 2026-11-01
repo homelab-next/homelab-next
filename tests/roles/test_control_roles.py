@@ -18,9 +18,7 @@ from rolerun import calls, fake, first_run, last_run_vars, logging_fake, run_cas
 
 ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 
 # A fake checker that fails when the staged file contains the word "bogus" (a stand-in for a
 # directive the real daemon rejects) and logs the file it was given.
@@ -183,7 +181,7 @@ def _first(tmp_path):
     }
 
 
-@pytest.mark.skipif(shutil.which("apt-config") is None, reason="apt-config not installed")
+@pytest.mark.requires_tool("apt-config")
 @first_run(_first)
 def test_unattended_upgrades_allows_only_the_security_origin(first):
     """The real apt-config reads the file: #clear drops whatever the package's own file listed,
@@ -1475,7 +1473,7 @@ def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(first):
     assert r.returncode != 0 and "non-empty reason" in r.stdout
 
 
-@pytest.mark.skipif(shutil.which("lsblk") is None, reason="lsblk not installed")
+@pytest.mark.requires_tool("lsblk")
 def test_disk_encryption_check_reads_the_real_lsblk(tmp_path):
     v = disk_vars(tmp_path)
     del v["disk_encryption_check_lsblk_cli"]
@@ -1795,7 +1793,7 @@ def _first(tmp_path):
     }
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+@pytest.mark.requires_tool("git")
 @first_run(_first)
 def test_etckeeper_points_origin_at_the_git_service_commits_and_health_sees_the_push(first):
     r, tmp_path = first

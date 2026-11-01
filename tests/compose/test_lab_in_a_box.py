@@ -491,7 +491,7 @@ const opts = { username: "lab", password: "fake-kuma-password", slug: "lab",
 """
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+@pytest.mark.requires_tool("node")
 def test_uptime_kuma_provisioning_is_idempotent():
     """Regression: a re-run on a persisted volume added both monitors again and failed on the
     existing status-page slug.  Run twice against a fake Kuma, the second run creates nothing.
@@ -1090,7 +1090,7 @@ def test_smoke_script_keeps_the_environment_over_the_env_files(lab_copy, tmp_pat
     assert f"bind={LOOPBACK}" in r.stdout
 
 
-@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+@pytest.mark.requires_tool("make")
 def test_make_lab_up_runs_the_guard_first(tmp_path):
     path = stub_path(tmp_path, tools=("dirname", "mkdir", "bash", "sh"))
     r = subprocess.run(

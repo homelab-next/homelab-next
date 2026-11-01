@@ -281,7 +281,7 @@ def test_the_tree_digest_notices_a_renamed_file(tmp_path):
     assert len(before) == len(hashlib.sha256().hexdigest())
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+@pytest.mark.requires_tool("git")
 def test_dirty_says_whether_the_checkout_matches_its_sha(tmp_path):
     git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
     subprocess.run([*git, "init", "-q"], check=True)

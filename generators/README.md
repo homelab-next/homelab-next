@@ -19,7 +19,7 @@ validation: `homelabnext/generators/safe.py` refuses control characters in any r
 written with a YAML dumper, never by text substitution.
 
 See `manifest.yml` for the list (checked against the code by
-`tests/generators/test_manifest.py`).
+`tests/generators/test_gen_manifest.py`).
 
 Refresh goldens after an intentional change:
 

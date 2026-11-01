@@ -39,13 +39,13 @@ workstation was both a single point of failure (F-16) and the place where every 
    started by hand (`workflow_dispatch` is the approval step: required reviewers on a private
    repository need GitHub Enterprise) on `main` only, through an Environment whose
    deployment-branch policy admits `main` alone and which holds the deploy's AppRole `secret_id`,
-   age identity and SSH key; role credentials and the vault password are read from OpenBao by
-   name, one revoked token per read. It reaches the lab either by joining the tailnet as an
-   ephemeral `tag:ci-deploy` node through workload identity federation (no Tailscale secret; SSH
-   to the deploy zones and the declared OpenBao port only) or through an ephemeral, just-in-time
-   self-hosted runner inside the lab, registered to the private repository alone, whose
-   job-started hook refuses every job but `deploy.yml` dispatched on `main` (runner labels do not
-   restrict which workflow a runner accepts). CODEOWNERS plus a required approving review on
+   age identity and SSH key; role credentials and the vault password are read from OpenBao by name,
+   one revoked token per lookup (every reference that lookup names). It reaches the lab either by
+   joining the tailnet as an ephemeral `tag:ci-deploy` node through workload identity federation (no
+   Tailscale secret; SSH to the deploy zones and the declared OpenBao port only) or through an
+   ephemeral, just-in-time self-hosted runner inside the lab, registered to the private repository
+   alone, whose job-started hook refuses every job but `deploy.yml` dispatched on `main` (runner
+   labels do not restrict which workflow a runner accepts). CODEOWNERS plus a required approving review on
    `main` gate what a dispatch deploys, because a writer can dispatch and a pull request runs its
    own `checks.yml`. Action pins are full commit SHAs; no
    `pull_request_target`; no expression expands a secret inside a `run:` script.

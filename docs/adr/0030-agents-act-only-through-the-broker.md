@@ -54,7 +54,9 @@ observable ran one test file, so none of this could turn it red.
      server, like `internet_mcp`; a spec's own ceiling cannot (without a policy no direct server
      is allowed). A review line is text an author writes, so what makes the exception real is a
      human's review of the pull request that adds the record and the `direct_mcp` line
-     (CODEOWNERS names the catalog, the ceiling policies and the class table);
+     (CODEOWNERS names the catalog, the ceiling policies and the class table). Until `main`'s
+     ruleset requires that code-owner review, which it does not yet (ADR-0027), the exception
+     rests on convention: it is advisory, not enforced;
    - every capability is judged, failing closed: a capability the table does not class is
      refused ("unknown is never assumed not to act", as for a tier), and the table classes every
      capability the registry, the conformance contracts, `capabilities.yml` and the module slots

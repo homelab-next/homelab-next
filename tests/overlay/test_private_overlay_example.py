@@ -33,6 +33,7 @@ import yaml
 from fake_openbao import FakeOpenBao as FakeBao
 from fake_openbao import self_signed
 
+from homelabnext.modules import review_tier as rt
 from tests.suite_policy import require_tool
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -292,8 +293,14 @@ def test_the_loader_runs_before_the_deploy_and_checks_what_runs_after_it(deploy)
     script = run["run"]
     assert script.index("ansible/playbooks/site.yml") < script.index("module_census.yml")
     assert "if " not in script.split("ansible/playbooks/site.yml", 1)[1]  # the census always
-    # the overlay's group_vars cannot point the census at a stand-in: an extra variable wins
+    # the overlay's group_vars and host_vars cannot point the census at a stand-in: an extra
+    # variable wins, so every census input naming a command or a data source is pinned
     assert "-e module_census_systemctl_cli=/usr/bin/systemctl" in script
+    defaults = yaml.safe_load(
+        (ROOT / "ansible" / "roles" / "module_census" / "defaults" / "main.yml").read_text()
+    )
+    for var in ("module_census_hnx_cli", "module_census_pairs_dir"):
+        assert f"-e {var}={defaults[var]}" in script, var  # the role's own default, pinned
     assert "hnx modules gather" in after["run"]
     assert "--deploy --running" in after["run"]
 
@@ -491,8 +498,52 @@ def test_codeowners_guards_the_workflows_and_the_deploy_tools():
         "/lab/model-serving/model_store.json",
         "/lab/model_roles.eval.json",
         "/lab/model-evals/",
+        # which hosts the deploy reaches and how, the host keys it trusts, and tasks a hook adds
+        "/ansible/inventory/",
+        "/ansible/known_hosts",
+        "/lab/customizations/",
     ):
         assert rules.get(path), path
+
+
+def test_codeowners_owns_every_path_by_default():
+    """Deny by default: the first rule is ``*``, no later rule names no owner (GitHub applies the
+    last match, so an empty one would un-own a path), and every file the skeleton ships has a
+    valid owner as GitHub matches it, including the paths no line names on its own."""
+    text = (SKELETON / ".github" / "CODEOWNERS").read_text()
+    lines = [
+        ln.split() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    assert lines[0][0] == "*" and lines[0][1:], lines[0]
+    assert all(len(ln) > 1 for ln in lines), [ln for ln in lines if len(ln) == 1]
+    rules = rt.parse_codeowners(text)
+    files = [p.relative_to(SKELETON).as_posix() for p in SKELETON.rglob("*") if p.is_file()]
+    for rel in (*files, "ansible/known_hosts", "lab/customizations/x.yml", "a/new/path.yml"):
+        assert rt.codeowners_for(rules, rel), rel
+
+
+def test_one_checks_job_needs_every_other_job():
+    """Branch protection requires checks by job name: the one ``checks`` job needs every other
+    job, runs even when one failed or was skipped, and fails unless every one succeeded."""
+    checks = yaml.safe_load((SKELETON / ".github" / "workflows" / "checks.yml").read_text())
+    jobs = checks["jobs"]
+    job = jobs["checks"]
+    assert job["name"] == "checks"
+    assert set(job["needs"]) == set(jobs) - {"checks"}
+    assert job["if"] == "always()"
+    (step,) = job["steps"]
+    assert step["env"] == {"RESULTS": "${{ join(needs.*.result, ' ') }}"}
+    for results, rc in (
+        ("success success success success", 0),
+        ("success failure success success", 1),
+        ("success skipped success success", 1),
+        ("success cancelled success success", 1),
+        ("", 1),
+    ):
+        r = subprocess.run(
+            ["bash", "-c", step["run"]], env={**os.environ, "RESULTS": results}, capture_output=True
+        )
+        assert r.returncode == rc, (results, r.stdout)
 
 
 def test_the_swap_gate_runs_on_every_pull_request():

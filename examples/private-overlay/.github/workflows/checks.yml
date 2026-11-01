@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # TEMPLATE for the PRIVATE overlay repository (fictional; docs/private-overlay.md).  Copy it to
-# .github/workflows/checks.yml there and make it a required status check of main.
+# .github/workflows/checks.yml there and make its `checks` job (the last one, which needs every
+# other job) the required status check of main.
 #
 # Runs on every pull request and push with no secret and no Environment: it proves nothing was
 # committed in plain text that should have been sealed, and no credential value was committed at
@@ -226,3 +227,24 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: hnx modules swap-gate --overlay . --ci-base
+
+  # The one check main's branch protection requires: it passes only when every other job here
+  # succeeded, so a job added later blocks a merge once it is listed in needs (a test checks that
+  # every job is), and no single job can be left out of the protection by accident.  always():
+  # a failed or skipped job must fail this one, not skip it (a skipped required check passes).
+  checks:
+    name: checks
+    if: always()
+    needs: [private-leak-check, module-loader, site-review-tier, swap-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          [ -n "$RESULTS" ] || { echo "::error::no job results"; exit 1; }
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "::error::a required job ended $r: $RESULTS"; exit 1; }
+          done

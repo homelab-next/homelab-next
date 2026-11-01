@@ -10,7 +10,6 @@ import grp
 import json
 import os
 import shlex
-import shutil
 import stat
 import subprocess
 import sys
@@ -23,9 +22,7 @@ from homelabnext.status import apply_mapping
 from homelabnext.status.maps import schedule
 from homelabnext.status.model import parse_iso, schema_problems
 
-needs_ansible = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+needs_ansible = pytest.mark.requires_tool("ansible-playbook")
 GROUP = grp.getgrgid(os.getgid()).gr_name
 
 
