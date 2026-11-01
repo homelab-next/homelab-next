@@ -39,9 +39,9 @@ def _expand(line: str, variables: dict[str, str]) -> str:
     return line.replace("$(PY)", "python")
 
 
-def make_check_lines(text: str) -> list[str]:
-    """Every recipe line `make check` runs: the recipes of ``check`` and of its prerequisites,
-    transitively, ``$(MAKE) <target>`` calls included, with simple variables expanded."""
+def make_rules(text: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Each target's prerequisites and recipe lines (``check:`` may be given more than once; the
+    lists are merged, as make merges them), with simple variables expanded."""
     variables = {m[1]: m[2].strip() for m in re.finditer(r"^([A-Z_]+) [:?]?= (.*)$", text, re.M)}
     prereqs: dict[str, list[str]] = {}
     recipes: dict[str, list[str]] = {}
@@ -54,23 +54,33 @@ def make_check_lines(text: str) -> list[str]:
                 prereqs.setdefault(current, []).extend(m[2].split("#")[0].split())
             continue
         if line.startswith("\t") and current:
-            recipes.setdefault(current, []).append(line.strip())
+            recipes.setdefault(current, []).append(_expand(line.strip(), variables))
         elif not line.startswith("\t"):
             current = None
-    seen: set[str] = set()
-    todo = ["check"]
-    out: list[str] = []
+    return prereqs, recipes
+
+
+def make_target_lines(text: str, target: str) -> dict[str, list[str]]:
+    """The recipe lines `make <target>` runs, per target: ``target``'s and its prerequisites',
+    transitively, ``$(MAKE) <target>`` calls included."""
+    prereqs, recipes = make_rules(text)
+    seen: dict[str, list[str]] = {}
+    todo = [target]
     while todo:
-        target = todo.pop()
-        if target in seen:
+        t = todo.pop()
+        if t in seen:
             continue
-        seen.add(target)
-        todo += prereqs.get(target, [])
-        for line in recipes.get(target, []):
-            line = _expand(line, variables)
-            out.append(line)
+        seen[t] = recipes.get(t, [])
+        todo += prereqs.get(t, [])
+        for line in seen[t]:
             todo += re.findall(r"\$\(MAKE\)\s+([A-Za-z0-9_.-]+)", line)
-    return out
+    return seen
+
+
+def make_check_lines(text: str) -> list[str]:
+    """Every recipe line `make check` runs: the recipes of ``check`` and of its prerequisites,
+    transitively, ``$(MAKE) <target>`` calls included, with simple variables expanded."""
+    return [line for lines in make_target_lines(text, "check").values() for line in lines]
 
 
 def ci_lines(doc: dict, *, skip: tuple[str, ...] = (JOB,)) -> list[str]:

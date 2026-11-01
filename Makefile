@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # `make check` is the one command contributors and CI run.  Gates whose tool does not exist
-# yet (they arrive with later tasks) are skipped with a visible note, never silently.
+# yet (they arrive with later tasks) are skipped with a visible note, never silently.  Every
+# command `check` runs also runs in a required CI job (tools/tests/test_make_matches_ci.py).
 
 PY ?= python3
 RUFF ?= $(PY) -m ruff
