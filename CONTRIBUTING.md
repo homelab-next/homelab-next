@@ -49,12 +49,16 @@ tests on a laptop with no network and no private context.
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
    must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
-   such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR.
+   such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR. Each
+   package `constraints/` pins and each image a compose stack runs has a reviewed licence entry
+   in `tools/licences.yml` (`make licence-check`).
    CI installs every package from the hash-pinned `constraints/ci.txt`; regenerate it with
    `make constraints` (needs `uv`) in the same PR.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real
    server is marked `@pytest.mark.live` and never runs in default CI. Enforced: an unmarked test
-   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
+   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), CI
+   runs the suite in a network namespace with only loopback (so a subprocess a test starts cannot
+   reach out either), and
    `make hermetic-lint` rejects direct clock and unseeded-random calls in test code, and any
    clock read in `homelabnext/` that is not the default or fallback of an injectable clock/`now`.
    Every component ships tests (`make component-tests`), and the security-critical units (the
@@ -226,8 +230,8 @@ and an entry that no longer excuses anything fails the lint.
 A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `fix(scope): ...`) or
 whose message has a `Fixes: <issue or description>` trailer. Use one of them for every fix, and in
 the same commit add or change a test that **fails without the fix and passes with it** (write the
-test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`) checks
-both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
+test first and watch it fail). CI's `regression-tests` job (`tools/fix_has_test.py --prove`, the base
+commit's copy, so a change cannot loosen the rule that judges it) checks both halves for every commit of a pull request: a fix must touch a test file, and its test modules,
 run on the fix's parent commit, must have at least one failing test. One rule covers Python and Go:
 a test that fails on the parent only because it does not build, collect or import counts as failing
 only if every such error names a symbol (or module, or Go package) that the fix's own diff adds;
