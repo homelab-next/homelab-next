@@ -22,7 +22,7 @@ and its checks), `homelabnext.workflows.st2_runtime` (what a run executes) and
 |---|---|---|
 | When a pack runs: events, schedules, burst control, shadow or live | **StackStorm** | rules and CronTimers rendered from the binding |
 | What a run does: the steps, in order, with the offline runner's semantics | **workflow pack** | `workflows/packs/`, pinned by digest in `workflows/deploy.yml` |
-| Every effect, every approval, every audit record | **broker** | the actions in `workflows/broker.manifest.json`, called over its Unix socket |
+| Every effect, every approval, every audit record | **broker** | the actions in `workflows/broker.manifest.json` (a decision table: the served manifest adds the site's handlers and is checked against it with `hnx broker validate --decision-table`, [workflows](workflows.md)), called over its Unix socket |
 | Agent sessions: queue, admission against live load, leases, failover, in-run retries (`max_attempts`) | **orchestration controller** | reached only through the broker action `agent.job.submit` |
 
 StackStorm never runs an agent and never calls the controller. To run agent work it asks the broker

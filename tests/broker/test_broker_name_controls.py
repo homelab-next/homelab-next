@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A manifest name holding a control character is refused by ``validate_manifest``.
 
-The schemas' patterns end in ``$``, which ``re.search`` also matches before a trailing newline,
-so ``profile:reader\\n`` passes the manifest schema; the broker refuses it after the schema, and
-never repeats the value in the problem.
+Python's ``$`` also matches before a trailing newline; the shared ``ids/`` patterns now end in
+``$(?!\\n)``, so the manifest schema refuses ``profile:reader\\n`` too.  The broker's own refusal
+after the schema stays (a pattern in another schema may still lack the guard), and it never
+repeats the value in the problem.
 """
 
 from __future__ import annotations
@@ -21,13 +22,20 @@ EXAMPLE = ROOT / "examples" / "broker"
 
 def test_the_broker_refuses_a_name_with_a_control_character(tmp_path):
     manifest, _ = load_manifest(EXAMPLE / "manifest.yml")
-    manifest["grants"][1]["profile"] = "profile:reader\n"
-    manifest["manifest_id"] = "example-lab-broker\n"
-    assert schema_errors("broker", "manifest", manifest) == []  # the schema lets both through
+    named = dict(manifest, grants=[dict(g) for g in manifest["grants"]])
+    named["grants"][1]["profile"] = "profile:reader\n"
+    named["manifest_id"] = "example-lab-broker\n"
+    # an id or slug from ids/ carries the newline guard: the schema itself refuses both
+    refused = schema_errors("broker", "manifest", named)
+    assert [e.split(":", 1)[0] for e in refused] == ["grants/1/profile", "manifest_id"]
+    assert not any("reader\n" in p for p in validate_manifest(named, EXAMPLE)[1])
+    # a name whose pattern has no guard yet (a grant's action) passes the schema: the broker
+    # refuses it after the schema
+    manifest["grants"][1]["actions"] = [manifest["grants"][1]["actions"][0] + "\n"]
+    assert schema_errors("broker", "manifest", manifest) == []
     _, problems = validate_manifest(manifest, EXAMPLE)
-    assert "manifest: grants[1].profile holds a control character" in problems
-    assert "manifest: manifest_id holds a control character" in problems
-    assert not any("reader\n" in p for p in problems)  # the value is never repeated
+    assert "manifest: grants[1].actions holds a control character" in problems
+    assert not any("status\n" in p for p in problems)  # the value is never repeated
     # and a handler document's action
     shutil.copytree(EXAMPLE, tmp_path / "broker")
     path = tmp_path / "broker" / "handlers" / "service-status.handler.json"
