@@ -273,7 +273,7 @@ one of them only through the broker:
   a human's review of the pull request that adds the record and the `direct_mcp` line (CODEOWNERS
   on the catalog, the ceiling policies and the class table), which `main`'s ruleset does not yet
   require, so today that control is advisory
-  ([modules](modules.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
+  ([modules](modules/contributes.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
   servers (`ssh`, `shell`, `ansible`, `kubernetes`, `vault`, `filesystem`, `git`, `github`,
   `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are unreviewed drafts that no profile can
   hold.

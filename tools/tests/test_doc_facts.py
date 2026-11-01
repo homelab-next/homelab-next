@@ -92,3 +92,68 @@ def test_the_server_phases_carry_the_tlp_exit_criteria():
     for phase, row in (("S3", "S-09"), ("S6", "O-12")):
         assert f"| {row} |" in checklist
         assert row in phases[phase][1] and row in phases[phase][-1], (phase, row)
+
+
+#: the module manifest's overview and its reference pages (docs/modules.md, "Reference pages")
+MODULE_PAGES = [ROOT / "docs" / "modules.md", *sorted((ROOT / "docs" / "modules").glob("*.md"))]
+#: a page of the module specification is read whole, by people and in agent context packs
+MODULE_PAGE_LINES = 250
+_MODULE_CITE = re.compile(r"""docs/modules\.md(?:'s)?,? "([A-Za-z`][^"]{1,100})\"""")
+
+
+def test_module_pages_stay_short():
+    assert len(MODULE_PAGES) > 10
+    long = {
+        p.relative_to(ROOT).as_posix(): n
+        for p in MODULE_PAGES
+        if (n := len(p.read_text().splitlines())) > MODULE_PAGE_LINES
+    }
+    assert long == {}, f"split a page over {MODULE_PAGE_LINES} lines: {long}"
+
+
+def _module_targets() -> list[str]:
+    out = []
+    for p in MODULE_PAGES:
+        for line in p.read_text().splitlines():
+            if m := re.match(r"#{1,6} (.+)", line):
+                out.append(m[1])
+            out += [m[1] for m in re.finditer(r"\*\*([^*]{2,100}?)\.?\*\*", line)]
+    return [t.replace("`", "").lower() for t in out]
+
+
+def _citing_files() -> list[Path]:
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=False)
+    if out.returncode == 0 and out.stdout:
+        names = [n for n in out.stdout.decode().split("\0") if n]
+    else:  # an export without .git
+        names = [
+            p.relative_to(ROOT).as_posix()
+            for d in ("docs", "homelabnext", "tools", "tests", "examples", "schemas")
+            for p in (ROOT / d).rglob("*")
+            if p.is_file()
+        ]
+    return [ROOT / n for n in names if n != "CHANGELOG.md" and (ROOT / n).is_file()]
+
+
+def test_module_section_citations_name_a_section_that_exists():
+    """``docs/modules.md, "What the loader checks"`` in code, tests and pages resolves to a heading
+    (or a paragraph's bold lead) on the overview or one of its reference pages; the citation is a
+    second copy of the heading, so a renamed or moved section cannot leave it dangling."""
+    targets = _module_targets()
+    dangling, seen = [], 0
+    for f in _citing_files():
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "docs/modules.md" not in text:
+            continue
+        # citations wrap across lines, inside comments, docstrings and quotes
+        flat = re.sub(r"\n[ \t]*(?:#+|//|\*|>)?[ \t]*", " ", text)
+        for m in _MODULE_CITE.finditer(flat):
+            seen += 1
+            cited = m[1].replace("`", "").rstrip(".,;").lower()
+            if not any(t.startswith(cited) for t in targets):
+                dangling.append(f"{f.relative_to(ROOT)}: {m[1]!r}")
+    assert seen > 20
+    assert dangling == []

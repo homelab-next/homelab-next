@@ -122,7 +122,7 @@ contract tests (`homelabnext/modules/rules.py`), each shown refusing a planted d
 (follow-up 9 below) runs them, and the private overlay's deploy workflow runs the loader at deploy
 time; it has not run at a real lab's deploy yet.
 
-**The follow-ups** (described in [modules](../modules.md#the-follow-ups-each-ones-status); most are
+**The follow-ups** (described in [modules](../modules/follow-ups.md#the-follow-ups-each-ones-status); most are
 implemented in whole or as a draft, as each item says, and what remains is marked "not done" or
 "waits for acceptance"; item 11 is the one with no schema, generator or check in any form):
 

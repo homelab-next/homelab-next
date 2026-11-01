@@ -153,10 +153,10 @@ not started again (no thread pile-up). `--notify-topic T` pages transitions thro
 registry's `notify` service, at the channel's TLP ceiling (`--notify-ceiling LABEL`, required with
 `--notify-topic` and `red` for a channel only the operators read; a
 message labelled above it, or claiming no label while the ceiling is below `red`, is replaced by a
-content-free "withheld" notice: [modules](modules.md#egress-points-adr-0033-decision-13)); with
+content-free "withheld" notice: [modules](modules/egress.md#egress-points-adr-0033-decision-13)); with
 `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
 also writes the pairs it holds to `DIR/status/pairs.json` for the module census
-([modules](modules.md#the-loader-at-deploy-time), "Notify pairs"; the census reads
+([modules](modules/loader-deploy.md#the-loader-at-deploy-time), "Notify pairs"; the census reads
 `/var/lib/homelabnext/notify-pairs`, and counts a status record for 900 s after the pass that
 wrote it).
 
@@ -392,7 +392,7 @@ decision: ADR-0013 "Stage 1b".
 
 | Tier | Schema | Holds | Where it goes |
 |---|---|---|---|
-| summary | `schemas/status/agent_activity.schema.json` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface` (local, cloud), `host`, `project`, `model`, `agent`, `time`, `kind`, `tool` (name only), `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | stored at `red`; the hub pages, `status.json` (`agents`) and CSV/JSONL export show only what their release transforms keep (`host`, `project` and `model` are withdrawn: [TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)); the bus (`homelabnext.agent.activity`) carries all of it, unreleased, so the bus is a `red` reader until its egress check exists ([modules](modules.md#egress-points-adr-0033-decision-13)) |
+| summary | `schemas/status/agent_activity.schema.json` | `event_id`, `session_id`, `parent_session_id`, `runtime`, `surface` (local, cloud), `host`, `project`, `model`, `agent`, `time`, `kind`, `tool` (name only), `outcome`, `tokens_in`, `tokens_out`, `cost_usd`, `has_detail` | stored at `red`; the hub pages, `status.json` (`agents`) and CSV/JSONL export show only what their release transforms keep (`host`, `project` and `model` are withdrawn: [TLP ceilings and release transforms](#tlp-ceilings-and-release-transforms)); the bus (`homelabnext.agent.activity`) carries all of it, unreleased, so the bus is a `red` reader until its egress check exists ([modules](modules/egress.md#egress-points-adr-0033-decision-13)) |
 | detail | `schemas/status/agent_activity_detail.schema.json` | `prompt`, `command`, `tool_input`, `tool_output`, `error`, `approval` (`decision`, `payload`), plus `truncated` and `redactions` set by the hub | the activity store and the private pages; never the bus, never `status.json` |
 
 Both schemas are closed: a summary event that carries a detail field is refused everywhere
