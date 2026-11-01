@@ -58,7 +58,9 @@ What was missing was a service that runs actions, keeps durable state and can be
    directory otherwise) and an optional state-diffed notification. An approver from the
    manifest's `approvers` approves or denies it; the approval names the request digest, so a
    request edited after approval no longer matches. Self-approval and unlisted or agent approvers
-   are refused by the same `decide()` rules, for a denial as well as an approval. Running
+   are refused by the same `decide()` approver rules, for a denial as well as an approval; a
+   denial is judged by those rules alone, so a request whose grant, tier or handler was withdrawn
+   after it was filed can still be denied. Running
    consumes the approval through a durable store (an exclusive-create marker per approval id),
    so it is single use across processes and restarts; it is consumed only after the run has
    taken the request's claim, so a run refused on the way never burns it. A secret argument
@@ -67,8 +69,12 @@ What was missing was a service that runs actions, keeps durable state and can be
 5. **State is files, one per fact, created exclusively** (ADR-0014): requests, the single claim
    that moves a request out of `pending` (run, cancel or deny: of any racing pair exactly one
    wins), results, approvals, consumed-approval markers and the audit trail, one record per file,
-   each validating against `schemas/broker/audit`. No lock and no database: any number of broker
-   processes can share one state directory.
+   each validating against `schemas/broker/audit`. No database, and no lock on those facts: the
+   exactly-once guarantees (claims, approvals, consumed approvals) hold across any number of
+   processes. That is not a licence to run several brokers over one state directory: the pending
+   quota and the open-page state are per process, and the lane quotas, `tokens.lock` and the
+   outbox sequence are `flock`s, which are per host (on NFS or CIFS they are not shared). Deploy
+   one broker process, on one host, per data root and state directory (`docs/broker.md`).
 6. **Every outcome is audited**: ok, denied, invalid, error and shadow, with the machine reason,
    the request id and digest, and the arguments with secret ones redacted and large ones reduced
    to a size and digest. In `shadow` mode the broker decides and audits but runs nothing.
@@ -92,7 +98,8 @@ guard hook to compare decisions, then cut over.
    connecting process's uid from the kernel (`SO_PEERCRED`). Manifest 1.3 maps it: `callers`
    (`uid` or `user` -> the one `profile` it acts as) and `approval_relays` (`uid` or `user` ->
    the `issuer` whose humans it vouches for). A peer is listed once, as a caller or a relay, never
-   both. An unmapped peer is refused (`unknown-caller`) before a byte of its request is read; a
+   both (since manifest 1.8: once across `callers`, `approval_relays`, `operators`,
+   `codemode.runners` and `codemode.sandboxes`). An unmapped peer is refused (`unknown-caller`) before a byte of its request is read; a
    body that names an actor (`actor`, `caller`, `as`, `profile`, `uid`, ...) is refused
    (`actor-in-body`). Every audit record written while serving a socket request carries the peer
    as `via` (audit 1.1); refusals made by the transport itself are audited as operation `connect`.
@@ -182,7 +189,8 @@ who still use an SSH-forwarded socket.
   identity is refused unless the manifest opts into `dev_identity`. An embedding program that
   calls the service in-process still names its caller and is trusted to.
 - Identity is per uid: two agents sharing a system user are one caller. Unknown local peers can
-  write audit records (each refusal is one); the socket's mode and group bound who can reach it.
+  write audit records, bounded by `refusal_limit`: past it a peer's refusals are rate-limited and
+  audited once per peer and window; the socket's mode and group bound who can reach it.
 - Exec handlers are single self-contained files run from the state directory, which must not be
   mounted `noexec`. Lane writes and handler runs leave files the operator owns; retention of the
   state directory (audit, runs) is an operator decision.

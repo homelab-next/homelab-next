@@ -10,7 +10,7 @@ render everything else from those files: infrastructure-as-code, hypervisor comm
 seeds, an Ansible inventory, registry hosts and backup jobs. Nothing here needs hardware: the
 whole chain is tested with golden files from a synthetic fleet.
 
-* Contract: `schemas/platform/guest.schema.json` (version 1.4, additive over 1.0 to 1.3; frozen copies in `schemas/_frozen/`).
+* Contract: `schemas/platform/guest.schema.json` (version 1.6, additive over 1.0 to 1.5; frozen copies in `schemas/_frozen/`).
 * Baseline set: `schemas/platform/baseline_set.schema.json` (`_baselines.yml` beside the guest files; [Baselines and defense layers](#baselines-and-defense-layers), ADR-0016).
 * Code: `homelabnext/compute/`. CLI: `hnx guests`.
 * Example fleet and goldens: `tests/compute/fleet/`, `tests/compute/golden/`.
