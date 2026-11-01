@@ -258,6 +258,24 @@ PASSWORD_STEPS = {"auth-username-password-form", "direct-grant-validate-password
 OTP_STEPS = {"auth-otp-form", "direct-grant-validate-otp"}
 #: the realm's flow bindings that sign a user in, and those the realm must leave unreachable
 USER_FLOW_BINDINGS = ("browserFlow", "directGrantFlow")
+#: the user-facing flows a realm flag gates: the flag must be off, and a flow the render binds
+#: there anyway is held to the same password-and-OTP rule, so turning the flag back on cannot open
+#: a way in that skips the second factor
+GATED_FLOW_BINDINGS = {
+    "registrationAllowed": "registrationFlow",
+    "resetPasswordAllowed": "resetCredentialsFlow",
+}
+
+
+def _flow_problems(flows: dict, binding: str, alias) -> list[str]:
+    if alias not in flows:
+        return [f"{binding}: {alias!r} is not a rendered flow (the built-in one runs)"]
+    paths = [p for p in _sign_in_paths(flows, alias) if "auth-cookie" not in p]
+    out = [] if paths else [f"{binding}: no path signs a user in"]
+    for p in paths:
+        if not (p & PASSWORD_STEPS and p & OTP_STEPS):
+            out.append(f"{binding}: a path without a password and an OTP: {sorted(p)}")
+    return out
 
 
 def _sign_in_problems(realm: dict) -> list[str]:
@@ -266,25 +284,23 @@ def _sign_in_problems(realm: dict) -> list[str]:
     Each user sign-in binding (browser, direct grant) must name a flow the realm renders (an
     unbound one falls back to the IdP's built-in flow, which has no required OTP), and every
     path through it that is not an existing session must run a password step and an OTP step.
-    Registration and credential reset, the other user-facing bindings, must be off; no identity
-    provider (a broker login flow) and no per-client flow override may exist; no client may
-    allow direct access grants."""
+    Registration and credential reset, the other user-facing bindings, must be off, and a flow
+    bound to either (``registrationFlow``, ``resetCredentialsFlow``) must be a rendered one that
+    meets the same rule; no identity provider (a broker login flow) and no per-client flow
+    override may exist; no client may allow direct access grants.
+
+    Only the rendered document is read: the clients the IdP creates on import (its own account
+    and admin consoles) are not in it, so this says nothing about them; they sign in through the
+    realm's bound flows, which are checked here."""
     flows = {f["alias"]: f for f in realm["authenticationFlows"]}
     out = []
     for binding in USER_FLOW_BINDINGS:
-        alias = realm.get(binding)
-        if alias not in flows:
-            out.append(f"{binding}: {alias!r} is not a rendered flow (the built-in one runs)")
-            continue
-        paths = [p for p in _sign_in_paths(flows, alias) if "auth-cookie" not in p]
-        if not paths:
-            out.append(f"{binding}: no path signs a user in")
-        for p in paths:
-            if not (p & PASSWORD_STEPS and p & OTP_STEPS):
-                out.append(f"{binding}: a path without a password and an OTP: {sorted(p)}")
-    for flag in ("registrationAllowed", "resetPasswordAllowed"):
+        out += _flow_problems(flows, binding, realm.get(binding))
+    for flag, binding in GATED_FLOW_BINDINGS.items():
         if realm.get(flag) is not False:
             out.append(f"{flag} is not false")
+        if binding in realm:
+            out += _flow_problems(flows, binding, realm[binding])
     if realm.get("identityProviders"):
         out.append("identity providers render a broker login flow")
     for c in realm["clients"]:
@@ -293,6 +309,23 @@ def _sign_in_problems(realm: dict) -> list[str]:
         if c.get("directAccessGrantsEnabled") is not False:
             out.append(f"client {c['clientId']} allows direct access grants")
     return out
+
+
+def _bind_open_registration(realm: dict) -> None:
+    """Render a registration flow with no second factor and bind it (the flag stays off)."""
+    realm["authenticationFlows"].append(
+        {
+            "alias": "open registration",
+            "authenticationExecutions": [
+                {
+                    "authenticator": "registration-page-form",
+                    "priority": 10,
+                    "requirement": "REQUIRED",
+                }
+            ],
+        }
+    )
+    realm["registrationFlow"] = "open registration"
 
 
 def test_idp_realm_has_no_sign_in_without_a_second_factor():
@@ -329,6 +362,11 @@ def test_idp_realm_has_no_sign_in_without_a_second_factor():
         # the realm stops binding it: the IdP's built-in direct grant (OTP conditional) runs
         (lambda r: r.pop("directGrantFlow"), "directGrantFlow"),
         (lambda r: r.update(resetPasswordAllowed=True), "resetPasswordAllowed"),
+        (lambda r: r.update(registrationAllowed=True), "registrationAllowed"),
+        (lambda r: r.pop("registrationAllowed"), "registrationAllowed"),
+        # a flag-gated binding names the IdP's built-in flow, or a rendered one with no OTP
+        (lambda r: r.update(resetCredentialsFlow="reset credentials"), "resetCredentialsFlow"),
+        (_bind_open_registration, "registrationFlow"),
         (lambda r: r["clients"][0].update(directAccessGrantsEnabled=True), "direct access"),
     ],
 )  # fmt: skip
