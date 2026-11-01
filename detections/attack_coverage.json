@@ -152,5 +152,17 @@
       "rule": "det:web-shell-write",
       "evasion": "double-extension.json"
     }
-  ]
+  ],
+  "backends": {
+    "wazuh": {
+      "counted_from": "the same fixtures, run through the backend's compiled rules",
+      "rules_counted": 11,
+      "techniques_covered": 8,
+      "must_fire": {
+        "fired": 28,
+        "total": 28
+      },
+      "uncounted": []
+    }
+  }
 }
