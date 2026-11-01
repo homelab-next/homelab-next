@@ -165,25 +165,39 @@ def check_link(
         if target not in records:
             raise InvalidReference(f"{relation}: no external record with uid {target}")
         return
-    other = items.get(target)
-    if other is None or other.kind not in ITEM_KINDS or item.kind not in ITEM_KINDS:
-        raise InvalidReference(f"{relation}: both ends must be existing steps or tasks")
+    if why := _dependency_problem(item, items.get(target)):
+        raise InvalidReference(f"{relation}: {why}")
     edges = dependency_edges(items.values(), relation)
     edges.setdefault(item.uid, []).append(target)
     if find_cycle(edges, item.uid):
         raise InvalidReference(f"{relation}: linking would make a cycle")
 
 
+def _dependency_problem(item: WorkItem, other: WorkItem | None) -> str | None:
+    """Why ``item -blocks/precedes-> other`` may not exist (the write path and
+    :func:`board_problems` share it), else None."""
+    if other is None or other.kind not in ITEM_KINDS or item.kind not in ITEM_KINDS:
+        return "both ends must be existing steps or tasks"
+    return None
+
+
+def _parent_problem(item: WorkItem, parent: str, p: WorkItem | None) -> str | None:
+    """Why ``parent`` (the item ``p``, or None) may not be ``item``'s parent, else None."""
+    if p is None or p.kind not in ITEM_KINDS:
+        return "parent must be an existing step or task"
+    if parent == item.uid:
+        return "an item cannot be its own parent"
+    if p.project != item.project:
+        return "parent must be in the same project"
+    return None
+
+
 def check_parent(item: WorkItem, parent: str | None, items: Mapping[str, WorkItem]) -> None:
     if parent is None:
         return
     p = items.get(parent) if isinstance(parent, str) else None
-    if p is None or p.kind not in ITEM_KINDS:
-        raise InvalidReference("parent must be an existing step or task")
-    if parent == item.uid:
-        raise InvalidReference("an item cannot be its own parent")
-    if p.project != item.project:
-        raise InvalidReference("parent must be in the same project")
+    if why := _parent_problem(item, parent, p):
+        raise InvalidReference(why)
     edges = parent_edges(items.values())
     edges[item.uid] = [parent]
     if find_cycle(edges, item.uid):
@@ -238,10 +252,14 @@ def board_problems(items: Iterable[WorkItem], records: Iterable[str] | None = No
             elif lk.relation in DEPENDENCY_RELATIONS:
                 if lk.target not in by_uid:
                     out.append(f"{i.uid}: {lk.relation} {lk.target} resolves to no item")
+                elif why := _dependency_problem(i, by_uid[lk.target]):
+                    out.append(f"{i.uid}: {lk.relation} {lk.target}: {why}")
             else:
                 out.append(f"{i.uid}: unknown relation {lk.relation!r}")
         if i.parent and i.parent not in by_uid:
             out.append(f"{i.uid}: parent {i.parent} resolves to no item")
+        elif i.parent and (why := _parent_problem(i, i.parent, by_uid[i.parent])):
+            out.append(f"{i.uid}: parent {i.parent}: {why}")
     for rel in DEPENDENCY_RELATIONS:
         edges = dependency_edges(items, rel)
         for uid in sorted(edges):
