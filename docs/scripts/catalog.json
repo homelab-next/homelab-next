@@ -681,6 +681,26 @@
     },
     {
       "exit": {
+        "0": "every pin and image listed, none refused",
+        "1": "an unlisted pin or image, a stale or malformed entry, or a copyleft linked package",
+        "2": "the register cannot be read"
+      },
+      "id": "licence-check",
+      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml and tools/licences.yml",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per problem; a summary line",
+      "owner": "maintainers",
+      "path": "tools/licence_check.py",
+      "purpose": "Fail when a pinned Python package or a compose image has no reviewed licence entry, or a linked one is copyleft.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:licence-check"
+      ]
+    },
+    {
+      "exit": {
         "0": "the socket tables were read (an absent IPv6 table is IPv6 being off, not a failure)",
         "1": "the IPv4 TCP table cannot be read, a table is over the size read, or the host holds more sockets than the census takes; the census stops"
       },
