@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import registry
-from .registry import CAPABILITIES, EXTENDED, ConformError, find_root, load_suite
+from .registry import CAPABILITIES, EXPERIMENTAL, EXTENDED, ConformError, find_root, load_suite
 from .runner import MIN_CHECKS, VERDICTS, CapabilityRun, git_sha, mutation_runs, run_capability
 
 __all__ = ["SCHEMA", "build_report", "declared_capabilities", "exit_code", "render_human"]
@@ -65,7 +65,13 @@ def build_report(
         raise ConformError(
             f"no conformance/suites/ under {r}: hnx conform report needs a source checkout"
         )
-    caps = list(capabilities) if capabilities is not None else declared_capabilities(r)
+    skipped: list[str] = []
+    if capabilities is not None:
+        caps = list(capabilities)
+    else:  # the blocking set: a frozen or experimental capability only when named
+        declared = declared_capabilities(r)
+        caps = [c for c in declared if c not in EXPERIMENTAL]
+        skipped = [c for c in declared if c in EXPERIMENTAL]
     if not caps:
         raise ConformError("no capabilities to report on: a report of nothing proves nothing")
     with_mutants = (target == "fake") if mutants is None else mutants
@@ -154,6 +160,7 @@ def build_report(
         "verdicts": {v: sum(e["verdict"] == v for e in entries.values()) for v in VERDICTS},
         "capabilities": entries,
         "capabilities_without_passing_test": without,
+        "experimental_skipped": skipped,
     }
 
 

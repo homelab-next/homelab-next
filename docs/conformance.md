@@ -127,6 +127,10 @@ capabilities:
     waive: {list-unicode-keys: "backend normalises keys"}   # SHOULD checks only
 ```
 
+A target file is validated against `schemas/conform/target.schema.json` before it is used, and
+`capabilities.yml` against `schemas/conform/capabilities.schema.json`: a key either schema does not
+name (`confg:`, `capabilites:`) is refused with exit `2`, not ignored.
+
 The adapter module must be importable (`pip install` it or put its directory on `PYTHONPATH`).
 It resolves its own endpoint through the registry resolver (ADR-0002), reads credentials at call
 time, and never holds a secret in a `repr`.  The same suite then runs unchanged:
@@ -318,8 +322,13 @@ an error, never a pass with nothing tested.  The exporter, the graph and invaria
 deployment that adds a capability adds it there and must then ship its suite, or the report and the
 invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
 falls back to the built-in eighteen).  `make conform-check` (`tools/conform_coverage.py`) runs
-`hnx conform list` and `hnx conform report --json` and fails if any of the eighteen lacks a passing
-test; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
+`hnx conform list` and `hnx conform report --json` and fails if any blocking capability lacks a
+passing test. The report leaves out the capabilities of frozen or experimental components
+(`homelabnext.conform.registry.EXPERIMENTAL`, the `conform` lists of `tools/experimental.yml`:
+`codemode-executor`, `codemode-runner`; `projects` stays blocking because it also checks the OpenProject
+adapter) unless one is named with `--capability`, and
+records them under `experimental_skipped`, so a frozen suite blocks neither the gate nor X-10;
+`make experimental` runs `hnx conform report --capability` for each; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
 extended suites run under pytest), and the nightly workflow runs
 `hnx conform run all` after the lab-in-a-box smoke.
 

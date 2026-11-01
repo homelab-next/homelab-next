@@ -9,6 +9,9 @@
     "findings"
   ],
   "persona": "persona:analyst",
+  "profiles": [
+    "profile:reader"
+  ],
   "pregates": [
     {
       "id": "pipeline-health",

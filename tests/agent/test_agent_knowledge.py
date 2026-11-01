@@ -11,13 +11,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from agent_support import PARTS, inputs, library, manifest, spec
+from agent_support import PARTS, inputs, library, manifest, spec, verified, write_policy_lock
 
 from homelabnext import cli
 from homelabnext.agent import (
     IncludeViolation,
     ReaderViolation,
     SpecError,
+    UnverifiedProfile,
     assemble_pack,
     compile_profile,
     profile_digest,
@@ -104,11 +105,17 @@ def root(tmp_path):
     return tmp_path
 
 
-def profile_with(*rules, **changes):
+def compiled_with(*rules, **changes):
+    """The compiled profile dict of the canonical spec with ``include`` rules and changes."""
     s = spec()
     s["include"] = list(rules)
     s.update(changes)
     return compile_profile(s, library())
+
+
+def profile_with(*rules, **changes):
+    """:func:`compiled_with`, verified (what the consumers take)."""
+    return verified(compiled_with(*rules, **changes))
 
 
 RULE = {"from": "capabilities", "kinds": ["check", "doc", "lesson", "runbook"]}
@@ -126,7 +133,7 @@ def reasons(sel):
 
 
 def test_no_include_means_no_include_key_and_no_knowledge():
-    prof = compile_profile(spec(), library())
+    prof = verified(compile_profile(spec(), library()))
     assert "include" not in prof
     sel = select_knowledge(prof, fake_graph(), ".")
     assert sel.included == () and sel.excluded == ()
@@ -183,22 +190,24 @@ def test_compiler_refuses_a_malformed_rule(rule):
 
 
 def test_an_edited_profile_cannot_seed_from_an_ungranted_thing():
-    prof = profile_with(RULE)
+    prof = compiled_with(RULE)
     bad = copy.deepcopy(prof)
     bad["include"][0]["only"] = ["cap:secrets"]
     bad["digest"] = profile_digest(bad)  # recomputed: the digest proves nothing here
     assert any("cap:secrets" in p for p in verify_profile(bad))
-    with pytest.raises(IncludeViolation):
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         select_knowledge(bad, fake_graph(), ".")
+    with pytest.raises(UnverifiedProfile, match="cap:secrets"):
+        verified(bad)  # and it cannot be made one: the include rule is re-checked
     stale = copy.deepcopy(prof)
     stale["include"][0]["depth"] = 3  # not recomputed
-    with pytest.raises(SpecError, match="digest"):
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         select_knowledge(stale, fake_graph(), ".")
 
 
 def test_a_reader_gains_no_grant_through_include():
     """include adds knowledge, never a grant: a reader stays a reader."""
-    plain = compile_profile(spec(), library())
+    plain = verified(compile_profile(spec(), library()))
     assert plain["reads_untrusted"] is True
     prof = profile_with(RULE, {"from": "task", "kinds": ["runbook"]})
     for key in ("grants", "parts", "ceiling", "reads_untrusted"):
@@ -376,13 +385,15 @@ def test_the_deprecated_tier_challenge_compiles_to_audit_with_a_warning(root):
         prof = profile_with({**RULE, "require_reviews": ["challenge", "agent_check"]})
     assert prof["include"][0]["require_reviews"] == ["agent_check", "audit"]
     assert verify_profile(prof) == []
-    # a profile written before the rename still selects as if it said audit
-    old = copy.deepcopy(profile_with({**RULE, "require_reviews": ["audit"]}))
+    sel = select_knowledge(prof, fake_graph(), root)
+    assert reasons(sel)["lesson:LL-011"] == "reviews: no current audit (has: agent_check)"
+    # a profile written before the rename is not in normalised form: it is recompiled before it
+    # verifies, so no session runs on the old spelling
+    old = compiled_with({**RULE, "require_reviews": ["audit"]})
     old["include"][0]["require_reviews"] = ["challenge"]
     old["digest"] = profile_digest(old)
-    with pytest.warns(DeprecatedReviewRole):  # the pack build re-checks the rules
-        sel = select_knowledge(old, fake_graph(), root)
-    assert reasons(sel)["lesson:LL-011"] == "reviews: no current audit (has: agent_check)"
+    with pytest.warns(DeprecatedReviewRole):
+        assert any("normalised form" in p for p in verify_profile(old))
 
 
 def _ll010(author: str, edit_after_review: bool = False) -> Graph:
@@ -537,7 +548,7 @@ def test_explain_lists_included_and_excluded_with_reasons(root):
 # ------------------------------------------------------------------ the CLI on the real graph
 
 
-def test_cli_explain_on_the_repository_graph(tmp_path, capsys):
+def test_cli_explain_on_the_repository_graph(tmp_path, capsys, monkeypatch):
     lib = {"persona:analyst": "Analyse.", "skill:triage": "Rank.", "cap:backup": "Backup."}
     for lid, text in lib.items():
         (tmp_path / (lid.replace(":", "-") + ".md")).write_text(text)
@@ -578,9 +589,17 @@ def test_cli_explain_on_the_repository_graph(tmp_path, capsys):
     parts = {lid: (tmp_path / (lid.replace(":", "-") + ".md")).read_text() for lid in lib}
     compiled = compile_profile(s, library({**PARTS, **parts}), classes=classes)
     prof.write_text(json.dumps(compiled, indent=2, sort_keys=True) + "\n")
+    policy, lock = write_policy_lock(tmp_path, compiled)
+    # the CLI verifies the profile with the packaged table, which (rightly) refuses cap:backup:
+    # the in-process table above stands in for it
+    from homelabnext.agent import access, compiler, readers
+
+    for module in (access, compiler, readers):
+        monkeypatch.setattr(module, "default_classes", lambda: classes)
     argv = [
         "agent", "pack", str(tmp_path / "manifest.json"), "--inputs", str(tmp_path / "inputs.json"),
-        "--profile", str(prof), "--registry", str(REPO / "examples" / "services.yml"),
+        "--profile", str(prof), "--policy", str(policy), "--lock", str(lock),
+        "--registry", str(REPO / "examples" / "services.yml"),
         "--runs-on", "runtime-core", "--root", str(REPO),
         "--task-text", "the backup job skipped a guest; also check the secrets service",
     ]  # fmt: skip

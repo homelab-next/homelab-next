@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import conform_coverage as gate
 
-from homelabnext.conform import CAPABILITIES
+from homelabnext.conform import CAPABILITIES, EXPERIMENTAL
 
 
 def _ok_report():
@@ -44,7 +44,20 @@ def test_failing_and_suiteless_capabilities_are_reported():
 
 def test_this_tree_passes(capsys):
     assert gate.main([]) == 0
-    assert "all 18 capabilities" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"all {len(CAPABILITIES) - len(EXPERIMENTAL)} blocking capabilities" in out
+    assert f"({len(EXPERIMENTAL)} frozen or experimental, in make experimental)" in out
+
+
+def test_a_frozen_capability_is_not_required():
+    rep = _ok_report()
+    for c in EXPERIMENTAL:
+        del rep["capabilities"][c]
+    assert gate.missing_passes(rep) == []
+    assert set(gate.BLOCKING) == set(CAPABILITIES) - set(EXPERIMENTAL)
+    assert {"codemode-executor", "codemode-runner"} <= set(EXPERIMENTAL)
+    # the projects suite also checks the OpenProject adapter, so it stays blocking
+    assert "projects" in gate.BLOCKING
 
 
 def _fake_hnx(monkeypatch, rc, report=None, stdout=""):

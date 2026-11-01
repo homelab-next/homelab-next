@@ -3,7 +3,7 @@
 {% set addr = r.source if side == 'saddr' else r.dest -%}
 {% set fam = 'ip6' if ':' in addr else 'ip' -%}
 {{ (fam ~ ' ' ~ side ~ ' ' ~ addr ~ ' ') if addr != 'any' else '' -}}
-{% if r.proto == 'icmp' %}{{ 'meta l4proto ipv6-icmp' if fam == 'ip6' else 'ip protocol icmp' }}{% else %}{{ r.proto }} dport {{ r.ports | replace(':', '-') }}{% endif %} accept comment "{{ r.name }}"
+{% if r.proto == 'icmp' %}{{ 'meta l4proto { icmp, ipv6-icmp }' if addr == 'any' else 'meta l4proto ipv6-icmp' if fam == 'ip6' else 'ip protocol icmp' }}{% else %}{{ r.proto }} dport {{ r.ports | replace(':', '-') }}{% endif %} accept comment "{{ r.name }}"
 {%- endmacro -%}
 #!/usr/sbin/nft -f
 # Managed by homelabnext (role nftables_host, controls host-firewall and egress-filter); local

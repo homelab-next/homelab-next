@@ -23,7 +23,8 @@ named target::
         waive: {list-unicode-keys: "backend rewrites keys"}   # SHOULD checks only, with a reason
 
 Endpoints come from the registry resolver inside the adapter, never from this file
-(``docs/conformance.md``).
+(``docs/conformance.md``).  A file is validated against ``schemas/conform/target.schema.json``
+before it is used, so a misspelt key (``confg:``, ``capabilites:``) is refused, not ignored.
 
 Trust: the adapter is imported and run in this process.  Conformance assumes an *honest*
 adapter - it proves that an implementation meets the contract, it is not a sandbox and cannot
@@ -42,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import Suite
-from .registry import ConformError, find_root, load_module
+from .registry import ConformError, find_root, load_module, schema_problems
 
 __all__ = [
     "Binding",
@@ -158,6 +159,9 @@ def load_target(spec: str, root: str | Path | None = None) -> Target:
             f"{r / 'conformance' / 'targets'}, or a path (use ./{spec}.yml for a local file)"
         )
     doc = _read(path)
+    problems = schema_problems(doc, "target")
+    if problems:
+        raise ConformError(f"{path}: not a valid target file: " + "; ".join(problems))
     caps = doc.get("capabilities")
     if not isinstance(caps, Mapping) or not caps:
         raise ConformError(f"{path}: needs a non-empty 'capabilities' mapping")

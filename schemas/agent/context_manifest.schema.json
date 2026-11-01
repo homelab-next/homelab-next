@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/agent/context_manifest/1.1",
+  "$id": "https://schemas.example.internal/homelabnext/agent/context_manifest/1.2",
   "title": "Context manifest",
-  "description": "Declares exactly what goes into one agent's context pack and in what tier order (stable before session before volatile). Sections are filled from named inputs; pre-gates are mandatory checks whose output is itself a section. The assembler never truncates silently: every cut is reported with the tier it came from. 1.1 adds screen (additive, optional): untrusted (source: input) sections are redacted for secrets and PII before they enter the pack unless screen.redact is false, which needs a reason and is recorded in the pack.",
+  "description": "Declares exactly what goes into one agent's context pack and in what tier order (stable before session before volatile). Sections are filled from named inputs; pre-gates are mandatory checks whose output is itself a section. The assembler never truncates silently: every cut is reported with the tier it came from. 1.1 adds screen (additive, optional): untrusted (source: input) sections are redacted for secrets and PII before they enter the pack unless screen.redact is false, which needs a reason and is recorded in the pack. 1.2 adds profiles (additive, optional): the agent profiles the manifest feeds; start_session refuses any other, and hnx agent lint checks the manifest against each named profile (homelabnext.agent.access.session_problems).",
   "type": "object",
   "properties": {
     "id": {
@@ -10,6 +10,15 @@
     },
     "persona": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/persona_id"
+    },
+    "profiles": {
+      "type": "array",
+      "description": "The agent profiles (profile ids) this manifest feeds. A session of any other profile is refused, and hnx agent lint pairs the manifest with each named one, so a mismatch is found before a session starts.",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+      },
+      "minItems": 1,
+      "uniqueItems": true
     },
     "skills": {
       "type": "array",

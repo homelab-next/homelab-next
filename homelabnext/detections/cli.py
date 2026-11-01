@@ -11,7 +11,7 @@ import yaml
 
 from . import attack, coverage, detmap, lint
 from .adapters import Target, UnsupportedConstruct, get_backend
-from .runner import run_all
+from .runner import compiled_backends, run_all, run_compiled
 from .sigma import load_mapping, load_rules
 
 
@@ -96,7 +96,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "run":
         rep = run_all(root)
         print(rep.render())
-        return 0 if rep.ok else 1
+        # the same fixtures through every backend that can evaluate what it compiled
+        compiled = [run_compiled(root, name, rep) for name in compiled_backends()]
+        for b in compiled:
+            print(b.render())
+        return 0 if rep.ok and all(b.ok for b in compiled) else 1
     if a.cmd == "map":
         rules = load_rules(root)
         existing = detmap.load(mapfile) if mapfile.exists() else None
@@ -108,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {mapfile}")
         return 0
     if a.cmd == "coverage":
-        rep = coverage.coverage_report(load_rules(root), run_all(root))
+        rep = coverage.report_for(root)
         if a.check:
             golden = a.check.read_text(encoding="utf-8") if a.check.exists() else "{}"
             probs = coverage.check_golden(rep, golden)

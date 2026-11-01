@@ -5,7 +5,7 @@ Contracts for the agent layer (library: `homelabnext.agent`, guide: `docs/agent.
 | Schema | What it is |
 |---|---|
 | `profile` | a **compiled** profile: parts by logical id, grants, the permission ceiling they were checked against, hard budgets, `reads_untrusted` (1.1), `include` (1.2: rules for linked knowledge in the pack, seeded only from grants; 1.4: an optional `detail`, `summary` or `outline`, absent meaning the whole content), digest, provenance |
-| `context_manifest` | what goes into one agent's context pack and in which tier order (stable, session, volatile); pre-gates; memory scopes; `screen` (1.1: redaction of untrusted sections, on by default) |
+| `context_manifest` | what goes into one agent's context pack and in which tier order (stable, session, volatile); pre-gates; memory scopes; `screen` (1.1: redaction of untrusted sections, on by default); `profiles` (1.2: the profiles it feeds, checked by `start_session` and `hnx agent lint`) |
 | `pregate_output` | the verdict of a mandatory pre-run check (`ok`, `degraded`, `stale`, `failed`) |
 | `report_result` | what an agent hands back: `pack_id`, cites, unknowns, memory updates; `output` (1.1: the structured result an actor may act on) |
 | `handoff` | a reader -> actor handoff: the reader, the actor, the schema the reader's `output` must satisfy, and the broker actions the actor may take with params bound to constrained output fields (G-04) |

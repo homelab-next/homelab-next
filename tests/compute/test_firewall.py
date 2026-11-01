@@ -971,6 +971,22 @@ def test_a_zone_rule_reaches_the_zones_ipv6_prefix(tmp_path):
     ] == ["198.51.100.0/25"]
 
 
+def test_icmp_from_any_allows_both_families(tmp_path):
+    """``any`` has no address match, so an ICMP allow from anywhere is a line per ICMP protocol:
+    a ``-p icmp`` line alone left ICMPv6 echo dropped on a dual-stack guest."""
+
+    def ping_any(doc):
+        doc["firewall_rules"].setdefault("inbound_allow", []).append(
+            {"name": "ping-any", "proto": "icmp", "source": "any"}
+        )
+
+    fleet = load_fleet(fleet_dir(tmp_path, "infer-core", ping_any), STUB)
+    fw = render(fleet, "firewall-rules")["firewall/230.fw"].splitlines()
+    i = fw.index("IN ACCEPT -p icmp -log nolog # ping-any")
+    assert fw[i + 1] == "IN ACCEPT -p ipv6-icmp -log nolog # ping-any"
+    assert sum("# ping-any" in ln for ln in fw) == 2
+
+
 def test_without_a_prefix_a_zone_rule_is_ipv4_only(good):
     for text in render(good, "firewall-rules").values():
         assert "ipv6-icmp" not in text

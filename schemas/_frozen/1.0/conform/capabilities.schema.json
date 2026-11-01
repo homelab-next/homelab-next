@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/conform/capabilities/1.0",
+  "title": "Declared capabilities",
+  "description": "capabilities.yml (or registry/capabilities.yml) at a tree's root: the capabilities the tree declares, read by homelabnext.conform.registry.declared_capabilities for the conformance report, invariants X-04 and X-10 and the graph. A misspelled key or an emptied list is refused, never read as 'no capabilities'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capabilities"],
+  "properties": {
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$(?!\\n)", "maxLength": 64}
+    }
+  }
+}

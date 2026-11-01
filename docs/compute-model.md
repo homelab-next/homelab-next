@@ -265,7 +265,9 @@ implicit allow. A `zone:` source or destination is the zone's IPv4 `subnet` and,
 has one (site 1.4), its IPv6 `subnet6`: the rule is then two lines, the IPv6 one right after the
 IPv4 one (an ICMP allow as `ipv6-icmp` there), and the inventory's `hnx_firewall` two rows of the
 same name, which the guest's own nftables ruleset writes as `ip` and `ip6` matches. A CIDR is one
-line as written, and `any` names no address in either family, prefix or not. A rule naming a zone
+line as written, and `any` names no address in either family, prefix or not, so an ICMP allow
+to or from `any` is ICMP of both families: two `.fw` lines (`-p icmp`, then `-p ipv6-icmp`) and
+`meta l4proto { icmp, ipv6-icmp }` in the guest's ruleset. A rule naming a zone
 whose `subnet6` does not read (`hnx site validate`'s rule) is refused, never rendered without it.
 
 Egress is `policy_out: ACCEPT` unless the guest asks for default-deny (1.2):

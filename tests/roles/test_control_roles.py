@@ -784,6 +784,8 @@ FIREWALL = {
         {"name": "https-public", "proto": "tcp", "ports": "443", "source": "any"},
         # a zone with a subnet6 (site 1.4): the inventory carries the rule once per family
         {"name": "ping", "proto": "icmp", "source": "2001:db8:0:10::/64"},
+        # from any: no address match, so ICMP of both families (ICMPv6 echo included)
+        {"name": "ping-any", "proto": "icmp", "source": "any"},
     ],
     "outbound_allow": [
         {"name": "dns", "proto": "udp", "ports": "53", "dest": "192.0.2.0/26"},
@@ -833,6 +835,7 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(first):
     assert 'ip daddr 192.0.2.0/26 udp dport 53 accept comment "dns"' in text
     # the zone's IPv6 prefix: ip6, and ICMP as ICMPv6, never an IPv4 match on an IPv6 address
     assert 'ip6 saddr 2001:db8:0:10::/64 meta l4proto ipv6-icmp accept comment "ping"' in text
+    assert '\t\tmeta l4proto { icmp, ipv6-icmp } accept comment "ping-any"' in text
     out = text.split("chain output {", 1)[1]
     assert 'ip6 daddr 2001:db8:0:10::/64 udp dport 53 accept comment "dns"' in out
     # the metadata refusal still comes first, IPv6 included, ahead of the IPv6 allow

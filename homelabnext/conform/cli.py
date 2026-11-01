@@ -4,7 +4,7 @@
     hnx conform list [--all] [--json]      (also: hnx conform --list)
     hnx conform run CAPABILITY|all [--target NAME] [--check ID ...] [--strict] [--json] [--out FILE]
     hnx conform mutants [CAPABILITY|all] [--all] [--json]   (--all: the extended suites too)
-    hnx conform report [--target NAME] [--json] [--out FILE] [--no-mutants]
+    hnx conform report [--target NAME] [--capability CAP ...] [--json] [--out FILE] [--no-mutants]
 
 Exit codes: 0 ok, 1 a check failed, too few checks executed (or a capability has no passing
 test), 2 misconfiguration (including an unknown ``--check`` id, or an adapter missing an endpoint
@@ -154,7 +154,12 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    rep = build_report(args.root, args.target, mutants=False if args.no_mutants else None)
+    rep = build_report(
+        args.root,
+        args.target,
+        mutants=False if args.no_mutants else None,
+        capabilities=args.capability,
+    )
     if args.out:
         _write_out(args.out, rep)
     if args.json:
@@ -190,6 +195,12 @@ def _parser() -> argparse.ArgumentParser:
     rp.add_argument("--json", action="store_true")
     rp.add_argument("--out", help="also write the JSON report to this file")
     rp.add_argument("--no-mutants", action="store_true", help="skip the mutation requirement")
+    rp.add_argument(
+        "--capability",
+        action="append",
+        help="report on exactly this capability (repeatable); default: the declared ones less "
+        "the frozen and experimental (registry.EXPERIMENTAL)",
+    )
     return p
 
 

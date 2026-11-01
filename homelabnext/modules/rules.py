@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths, tlp
+from homelabnext.modules.authority import (
+    AUTHORITY_SLOTS,
+    GRANTED_UPSTREAMS,
+    SHARED_CONFIG_GRANTS,
+)
 from homelabnext.modules.scope import (
     ScopeMissing,
     address_literals,
@@ -43,15 +48,11 @@ def public_module_roots() -> tuple[Path, ...]:
     return (root / "modules",)
 
 
-#: slots whose service a module reaches only with an overlay grant (besides privileged slots)
-AUTHORITY_SLOTS = ("broker", "secrets", "idp", "edge", "remote-admin", "mcp-catalog")
 #: the site section that binds a module's agents and config, by kind
 SECTION = {"feature": "features", "core": "core", "provider": "providers"}
 SHARED_ADAPTERS = "homelabnext.conform.adapters."
-PRIVILEGED_SHARED_CONFIG = {"cap:edge", "cap:idp"}
-#: slots a service row may name as an upstream only with grants.upstreams (an authority behind a
-#: route: the broker, the identity provider, remote administration)
-GRANTED_UPSTREAMS = ("broker", "idp", "remote-admin")
+#: shared components a module configures only with grants.shared_config (homelabnext.modules.authority)
+PRIVILEGED_SHARED_CONFIG = frozenset("cap:" + s for s in SHARED_CONFIG_GRANTS)
 STATIC_HOSTING = "cap:static-hosting"
 #: the slots through which data leaves its store, as docs/modules.md "Egress points" lists them
 #: (ADR-0033 decision 13): a slot the registry flags ``egress`` must be one of these, each applying
@@ -653,7 +654,7 @@ def module_problems(
             desc.get("export_formats", [])
         ):
             out.append(f"provides.slots.{slot}: migration formats are the slot's export formats")
-    # edge or idp shared_config, root or opt-out units and broker, idp or remote-admin upstreams
+    # edge, idp or remote-admin shared_config, root or opt-out units and broker, idp or remote-admin upstreams
     # are site rules: each needs the overlay's grant (site_problems), never a manifest's word
     return out
 

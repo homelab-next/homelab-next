@@ -300,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             print(p)
         print(f"hnx mcp catalog render: refused ({len(exc.problems)} problem(s))", file=sys.stderr)
         return 1
-    except (servers.CatalogError, ValueError, OSError, RegistryError, yaml.YAMLError) as exc:
+    except (servers.ServerCatalogError, ValueError, OSError, RegistryError, yaml.YAMLError) as exc:
         why = credentials.reason(exc) if isinstance(exc, yaml.YAMLError) else exc
         print(f"hnx mcp catalog: {why}", file=sys.stderr)
         return 2

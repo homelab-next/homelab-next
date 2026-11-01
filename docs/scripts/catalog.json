@@ -248,7 +248,7 @@
       "outputs": "build/conform-report.json and a summary on stdout",
       "owner": "maintainers",
       "path": "tools/conform_coverage.py",
-      "purpose": "Fail unless each of the eighteen capabilities has a passing conformance suite.",
+      "purpose": "Fail unless each blocking capability has a passing conformance suite.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
@@ -872,7 +872,6 @@
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
-        "code:homelabnext/endpoint_gate.py",
         "make:gates"
       ]
     },
@@ -1130,7 +1129,7 @@
       "outputs": "one line per private helper or stale allowlist entry",
       "owner": "maintainers",
       "path": "tools/shared_helpers_lint.py",
-      "purpose": "Fail when a private notify, state, lake-query, schema-registry or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).",
+      "purpose": "Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",

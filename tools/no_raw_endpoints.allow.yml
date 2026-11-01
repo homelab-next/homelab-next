@@ -75,6 +75,10 @@ allow:
     reason: central product roles enroll guests by address; the synthetic guests use documentation addresses (the data under test)
   - path: "tests/roles/test_hnx_address_filter.py"
     reason: the role address checks are tested on addresses as data (documentation literals; anything else is built from integers)
+  - path: "tests/network/test_site_query.py"
+    reason: the addresses are the packets the policy is asked about, in hnx site query's own form (documentation literals only)
+  - path: "tests/network/test_adapter_reach_parity.py"
+    reason: the probe address outside every example zone, the internet in each family (documentation literals only)
   - path: "tests/network/test_site_review_tier.py"
     reason: scope entries (trusted, target, exclude) are the data the review tier compares (documentation literals only)
   - path: "tests/roles/test_hnx_address_parity.py"

@@ -53,8 +53,14 @@ from pathlib import Path
 
 import yaml
 
+REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
+
+from homelabnext.allowlist import entries  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import leak_scan  # the scanner's workstation-path shape is reused, not copied
+import leak_scan  # noqa: E402  (the scanner's workstation-path shape is reused, not copied)
 
 DEFAULT_ALLOWLIST = "tools/workstation_refs.allow.yml"
 INLINE_ALLOW = re.compile(r"workstation-ref:\s*allow\s+\S")
@@ -142,18 +148,8 @@ def scan_text(rel: str, text: str) -> list[Finding]:
 
 
 def load_allowlist(path: Path | None) -> list[tuple[str, re.Pattern[str] | None, str]]:
-    if path is None or not path.is_file():
-        return []
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    entries = doc.get("allow", [])
-    if not isinstance(entries, list):
-        raise AllowlistError(f"{path}: 'allow' must be a list")
     out = []
-    for i, e in enumerate(entries):
-        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
-        if not str(e.get("reason", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} ({e['path']}) has no 'reason'")
+    for i, e in enumerate(entries(path, AllowlistError)):
         try:
             match = re.compile(str(e["match"])) if e.get("match") else None
         except re.error as exc:

@@ -1786,6 +1786,22 @@ def test_edge_or_idp_shared_config_needs_grants_shared_config():
     assert errors == []
 
 
+def test_remote_admin_shared_config_needs_grants_shared_config():
+    """Negative: remote-admin is an authority slot (homelabnext.modules.authority) that is not
+    closed to shared configuration, so merging into it needs the overlay's grant like edge and
+    idp; before the authority lists had one source it was treated as an ordinary component."""
+    site, mods = copy.deepcopy(SITES["full"]), copy.deepcopy(MODULES)
+    mods["publishing"]["contributes"]["shared_config"] = [
+        {"target": "cap:remote-admin", "file": "ra.yml", "reason": "a connection profile"},
+    ]
+    probs, _ = _granted(site, mods)
+    assert "publishing: shared_config cap:remote-admin without grants.shared_config" in probs
+    site["grants"]["shared_config"] = {"publishing": ["cap:remote-admin"]}
+    probs, errors = _granted(site, mods)
+    assert not [p for p in probs if "shared_config" in p], probs
+    assert errors == []
+
+
 def test_a_broker_idp_or_remote_admin_upstream_needs_grants_upstreams():
     """An upstream naming an authority slot, or an instance that fills one, needs the grant; a
     grant no row uses is stale."""

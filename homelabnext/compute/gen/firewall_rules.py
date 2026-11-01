@@ -55,17 +55,26 @@ def _rule_lines(fleet: Fleet, rule: dict, direction: str) -> list[str]:
     side, ref = ("-source", rule["source"]) if direction == "IN" else ("-dest", rule["dest"])
     out = []
     for addr in resolve_addresses(fleet, ref):
-        v6 = addr is not None and ":" in addr
-        proto = "ipv6-icmp" if v6 and rule["proto"] == "icmp" else rule["proto"]
-        parts = [f"{direction} ACCEPT", f"-p {proto}"]
-        if rule.get("ports"):
-            parts.append(f"-dport {rule['ports']}")
-        if addr:
-            parts.append(f"{side} {addr}")
-        parts.append("-log nolog")
-        line = " ".join(parts) + f" # {rule['name']}"
-        out.append(checked(line, f"firewall rule {rule['name']}"))
+        for proto in _protocols(rule["proto"], addr):
+            parts = [f"{direction} ACCEPT", f"-p {proto}"]
+            if rule.get("ports"):
+                parts.append(f"-dport {rule['ports']}")
+            if addr:
+                parts.append(f"{side} {addr}")
+            parts.append("-log nolog")
+            line = " ".join(parts) + f" # {rule['name']}"
+            out.append(checked(line, f"firewall rule {rule['name']}"))
     return out
+
+
+def _protocols(proto: str, addr: str | None) -> tuple[str, ...]:
+    """The ``-p`` values one rule renders as: ICMP is ICMPv6 for an IPv6 address, and both for
+    ``any`` (no address match, either family), so a ping allowed from anywhere is not IPv4 only."""
+    if proto != "icmp":
+        return (proto,)
+    if addr is None:
+        return ("icmp", "ipv6-icmp")
+    return ("ipv6-icmp",) if ":" in addr else ("icmp",)
 
 
 def fw_name(g: Guest) -> str:

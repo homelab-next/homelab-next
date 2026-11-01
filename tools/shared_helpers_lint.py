@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: shared-helpers-lint
 #   kind: check
-#   purpose: Fail when a private notify, state, lake-query, schema-registry or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).
+#   purpose: Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:helpers-lint]
 #   invariant: [M-03]
@@ -15,7 +15,7 @@
 #     "2": usage error or a missing dependency
 """Gate (checklist M-03): helpers are shared, not copied.
 
-Four seams have one shared library each, with a fake (ADR-0003). Code outside the library that
+Each of these seams has one shared library, with a fake (ADR-0003). Code outside the library that
 re-implements the seam is a private helper: it drifts, it has no fake, and its failure modes are
 not the ones the library was tested for. This lint walks the AST of every runtime Python file and
 reports:
@@ -33,6 +33,9 @@ reports:
   lake    a raw lake-query client: importing ``trino``, ``duckdb``, ``pyiceberg`` or ``sqlite3``,
           or a string naming the Trino REST endpoint ``/v1/statement``
           -> use ``homelabnext.lake`` (``LakeClient`` and its adapters)
+  tiers   a private ranking of the broker tiers: a dict literal whose keys are exactly ``read``,
+          ``write``, ``execute`` and ``privileged``
+          -> use ``homelabnext.grants`` (``TIER_RANK``, ``grant_for``, ``tier_exceeds``)
   schema  a private JSON-schema registry: a call to ``referencing.Registry()``,
           ``referencing.Resource.from_contents`` or ``<specification>.create_resource``
           -> use ``homelabnext.schema_registry`` (``schema_registry``, ``registry_of``,
@@ -45,7 +48,7 @@ reports:
           -> use ``homelabnext.records.inbox`` (``stamp`` + ``write_inbox``)
 
 The shared libraries own their seam (``homelabnext/notify``, ``homelabnext/state``,
-``homelabnext/lake``, ``homelabnext/schema_registry.py``, ``homelabnext/records``). Test code is out of scope (tests exercise the seams on purpose). Every other
+``homelabnext/lake``, ``homelabnext/grants.py``, ``homelabnext/schema_registry.py``, ``homelabnext/records``). Test code is out of scope (tests exercise the seams on purpose). Every other
 exemption is an entry in ``tools/shared_helpers.allow.yml`` naming the path, the rule and the
 reason, so the list is reviewed in one place; an entry that no longer matches anything is
 reported as stale.
@@ -67,12 +70,19 @@ from pathlib import Path
 
 import yaml
 
+REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
+
+from homelabnext.allowlist import entries  # noqa: E402
+
 DEFAULT_ALLOWLIST = "tools/shared_helpers.allow.yml"
 RULES = {
     "notify": "private notification sender; use homelabnext.notify (Notifier + Sender)",
     "state": "ad-hoc JSON state file; use homelabnext.state (StateStore / KeyedState)",
     "lake": "raw lake-query client; use homelabnext.lake (LakeClient and its adapters)",
     "records": "private records-inbox writer; use homelabnext.records.inbox (stamp + write_inbox)",
+    "tiers": "private broker tier ranking; use homelabnext.grants (TIER_RANK, grant_for)",
     "schema": "private schema registry; use homelabnext.schema_registry",
 }
 OWNERS = {
@@ -80,6 +90,7 @@ OWNERS = {
     "state": ("homelabnext/state/",),
     "lake": ("homelabnext/lake/",),
     "records": ("homelabnext/records/",),
+    "tiers": ("homelabnext/grants.py",),
     "schema": ("homelabnext/schema_registry.py",),
 }
 SKIP_DIRS = {
@@ -123,6 +134,7 @@ FILE_WRITES = {
 }
 WRITER_HELPERS = ("write_exclusive", "write_temp")
 INBOX_SEGMENT = re.compile(r"(?:^|/)inbox(?:/|$)")
+BROKER_TIERS = frozenset({"read", "write", "execute", "privileged"})
 SCHEMA_BUILD = {"referencing.Registry", "referencing.Resource.from_contents"}
 STATE_WORD = re.compile(r"(?i)(?:^|[^a-z])state(?:s|_file|_path|_dir)?(?:[^a-z]|$)")
 
@@ -295,6 +307,13 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
             and "/v1/statement" in node.value
         ):
             found.append(Finding(rel, node.lineno, "lake", "names the Trino REST endpoint"))
+        if (
+            isinstance(node, ast.Dict)
+            and len(node.keys) == len(BROKER_TIERS)
+            and all(isinstance(k, ast.Constant) for k in node.keys)
+            and {k.value for k in node.keys} == BROKER_TIERS  # type: ignore[union-attr]
+        ):
+            found.append(Finding(rel, node.lineno, "tiers", "ranks the broker tiers itself"))
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -369,20 +388,10 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
 
 def load_allowlist(path: Path | None) -> list[tuple[str, str, str]]:
     """``[(path glob, rule, reason)]``; every entry needs all three."""
-    if path is None or not path.is_file():
-        return []
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    entries = doc.get("allow", [])
-    if not isinstance(entries, list):
-        raise AllowlistError(f"{path}: 'allow' must be a list")
     out = []
-    for i, e in enumerate(entries):
-        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
+    for i, e in enumerate(entries(path, AllowlistError)):
         if e.get("rule") not in RULES:
             raise AllowlistError(f"{path}: entry {i} ({e['path']}) needs a rule from {list(RULES)}")
-        if not str(e.get("reason", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} ({e['path']}) has no 'reason'")
         out.append((str(e["path"]), e["rule"], str(e["reason"]).strip()))
     return out
 

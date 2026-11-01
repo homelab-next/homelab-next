@@ -44,7 +44,7 @@ OLD_TABLE = {
 }  # fmt: skip
 
 
-def _check(cat: servers.Catalog) -> list[str]:
+def _check(cat: servers.ServerCatalog) -> list[str]:
     return servers.check(cat, registry=REGISTRY, policy=POLICY, source_root=ROOT)
 
 
@@ -85,7 +85,7 @@ def tmp_catalog(tmp_path):
     return d
 
 
-def _edit(d: Path, sid: str, fn) -> servers.Catalog:
+def _edit(d: Path, sid: str, fn) -> servers.ServerCatalog:
     f = d / f"{sid}.yml"
     rec = yaml.safe_load(f.read_text())
     fn(rec)
@@ -96,7 +96,7 @@ def _edit(d: Path, sid: str, fn) -> servers.Catalog:
 _BASE = servers.load(CATALOG)
 
 
-def _edited(sid: str, fn) -> servers.Catalog:
+def _edited(sid: str, fn) -> servers.ServerCatalog:
     """The repository catalog with one record edited in memory (as :func:`servers.load` would
     have read the edited file: keyed by its in-file id)."""
     cat = copy.deepcopy(_BASE)

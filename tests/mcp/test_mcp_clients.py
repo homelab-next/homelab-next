@@ -417,7 +417,7 @@ def test_a_compiled_profile_is_judged_against_the_policy_and_the_lock(tmp_path):
         clients.render_spec(spec)
 
 
-def _open_param_catalog(tmp_path: Path) -> servers.Catalog:
+def _open_param_catalog(tmp_path: Path) -> servers.ServerCatalog:
     d = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", d, ignore=shutil.ignore_patterns("clients"))
     _lax_review_policy(d.parent)
