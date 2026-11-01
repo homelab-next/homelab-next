@@ -377,9 +377,10 @@ def test_the_export_schemas_inlined_id_patterns_are_the_ids_patterns_plus_the_ne
     stamp = load("ids", "common.schema.json")["$defs"]["timestamp"]
     guard = "(?!\\n)"
     sources = export["$defs"]["header"]["properties"]["sources"]["items"]
-    assert sources["pattern"] == svc["pattern"] + guard
+    # ids/ carries the guard itself now; the copy is its pattern with the guard, exactly once
+    assert sources["pattern"] == svc["pattern"].removesuffix(guard) + guard
     assert sources["maxLength"] == svc["maxLength"]
-    assert export["$defs"]["time"]["pattern"] == stamp["pattern"] + guard
+    assert export["$defs"]["time"]["pattern"] == stamp["pattern"].removesuffix(guard) + guard
     # turn.started_at is a third inlined timestamp pattern, left out on purpose: it is narrower
     # than ids/common's (Z only) and has no ids/ source to follow, so it must not be "fixed" here
 
