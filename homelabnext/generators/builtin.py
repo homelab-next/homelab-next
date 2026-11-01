@@ -466,9 +466,13 @@ OPTIONAL_CLIENT_SCOPES = ("email", "profile")
 GROUPS_CLAIM, ROLES_CLAIM = "groups", "roles"
 
 
+#: the secret-store area holding each OIDC client's secret, one name per service
+IDP_CLIENT_STORE_AREA = "idp/clients"
+
+
 def client_secret_ref(service: str) -> str:
     """The secret-store reference of a service's OIDC client secret (never a value)."""
-    return f"secret:idp/clients/{service}"
+    return f"secret:{IDP_CLIENT_STORE_AREA}/{service}"
 
 
 def _execution(requirement: str, priority: int, *, authenticator: str = "", flow: str = "") -> dict:

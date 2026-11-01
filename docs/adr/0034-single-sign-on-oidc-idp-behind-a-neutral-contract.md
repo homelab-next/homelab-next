@@ -37,7 +37,7 @@ one IdP product.
    the auth proxy (its callback on every site it guards), the groups and client roles of the
    group-to-role table, a groups claim and a roles claim, and a browser flow that requires a
    second factor. The realm never holds a secret: each client secret is a secret-store
-   reference (`secret:idp/clients/<service>`), substituted at import.
+   reference, one per service (for example `secret:idp/clients/metrics`), substituted at import.
    **The second factor is OTP, required, with nothing beside it, in every flow that signs a
    user in.** The realm binds two user sign-in flows and covers both:
    - **browser** (`browserFlow`): the session cookie, or the username/password form and then
