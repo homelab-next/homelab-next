@@ -10,7 +10,11 @@ One server answers both APIs the adapter speaks:
   '<sql>' USING <literals>``; the literals are *parsed* (:func:`parse_using`), never spliced, so a
   value the adapter failed to encode as one literal breaks the parse instead of slipping through.
   SQL runs on a per-namespace SQLite database (``FakeLake``); INSERTs add an Iceberg-style
-  snapshot whose summary carries ``trino_query_id`` and ``total-records``.
+  snapshot whose summary carries ``trino_query_id`` and ``total-records``.  A plain ``INSERT ...
+  VALUES`` appends every row, as the engine does (a duplicate content key included); the guarded form
+  (``INSERT ... SELECT * FROM (VALUES ...) AS "v" (...) WHERE NOT EXISTS (...)`` matching the
+  content key) appends only the rows whose key is not yet in the table.  Each statement's
+  client tags header is kept in ``client_tags``.
 * the Iceberg REST catalog under ``/catalog/v1``: config (prefix), namespace and table listing
   with paging, table metadata (schema in Iceberg JSON with Trino's nullability: nested fields optional) and
   ``set-properties``/``remove-properties`` commits guarded by ``assert-table-uuid``.
@@ -36,7 +40,9 @@ from typing import Any
 from homelabnext.lake import FakeLake
 from homelabnext.lake.fake import _ts_text
 from homelabnext.lake.tables import Column, load_schemas
+from homelabnext.lake.validate import normalize_rows
 
+HEADER = "X-Trino-"  # the engine's request headers
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow fake server binds loopback only
 
 
@@ -217,6 +223,7 @@ class FakeLab:
         self.lakes: dict[str, FakeLake] = {}
         self.tables: dict[tuple[str, str], dict[str, Any]] = {}
         self.statements: list[str] = []
+        self.client_tags: list[str | None] = []  # each statement's client tags header
         self.conflicts = 0  # answer the next N commits with 409
         # A proxy in front of the coordinator: the next statements holding a key followed by a
         # space (``INSERT``, ``SELECT``) or the next page reads (``GET``) are answered with these HTTP
@@ -293,8 +300,9 @@ class FakeLab:
     def _statement(self, h, text, proxy_error=None):
         qid = f"20260301_000000_{next(self._ids):05d}_fake"
         self.statements.append(text)
-        ns = h.headers.get("X-Trino-Schema", "")
-        assert h.headers.get("X-Trino-Time-Zone") == "UTC"
+        self.client_tags.append(h.headers.get(f"{HEADER}Client-Tags"))
+        ns = h.headers.get(f"{HEADER}Schema", "")
+        assert h.headers.get(f"{HEADER}Time-Zone") == "UTC"
         try:
             if len(text) > self.max_query_length:
                 raise _TrinoFail(
@@ -363,15 +371,17 @@ class FakeLab:
             return [], [], {"updateType": "CREATE TABLE"}
         if sql.count("?") != len(args):
             raise _TrinoFail("Incorrect number of parameters", "INVALID_PARAMETER_USAGE")
-        ins = _parse_insert(sql)
+        ins = _parse_insert(sql) or _parse_guarded_insert(sql)
         if ins:
             return self._insert(*ins, args, qid)
         return self._select(ns, sql, args)
 
-    def _insert(self, ns, t, cols, args, qid):
+    def _insert(self, ns, t, cols, guarded, args, qid):
         schema = self.schemas[t]
         names = [c.strip().strip('"') for c in cols.split(",")]
         assert names == list(schema.column_names)
+        if guarded is not None:  # the NOT EXISTS must match on exactly the content key
+            assert guarded == list(schema.key), guarded
 
         def unrow(c, v):
             if v is None:
@@ -385,12 +395,25 @@ class FakeLab:
             rows.append(
                 {c.name: unrow(c, v) for c, v in zip(schema.columns, args[i:], strict=False)}
             )
-        res = self._lake(ns).write_batch(t, rows, idempotency_key=qid)
+        lake = self._lake(ns)
+        if guarded is not None:
+            rows = [r for r in rows if not lake._exists(schema, tuple(r[k] for k in schema.key))]
+        lake._db.execute("BEGIN IMMEDIATE")
+        try:  # straight into the table: an engine's INSERT checks no key
+            for r in normalize_rows(schema, rows):
+                lake._db.execute(
+                    f'INSERT INTO "{t}" ({cols}) VALUES ({", ".join("?" for _ in names)})',
+                    lake._encode(schema, r),
+                )
+            lake._db.execute("COMMIT")
+        except BaseException:
+            lake._db.execute("ROLLBACK")
+            raise
         meta = self.tables[(ns, t)]
-        total = self._lake(ns).describe(t).row_count
+        total = lake.describe(t).row_count
         summary = {
             "operation": "append",
-            "added-records": str(res.rows_written),
+            "added-records": str(len(rows)),
             "total-records": str(total),
         }
         if self.trino_query_id:
@@ -534,13 +557,9 @@ class _TrinoFail(Exception):
     pass
 
 
-def _parse_insert(sql):
-    """(namespace, table, column list) of `INSERT INTO "c"."ns"."t" (cols) VALUES ...`, else None.
-
-    Plain string splitting rather than a regex, so the stand-in's parse is linear on any input.
-    """
-    head, sep, _ = sql.partition(") VALUES ")
-    if not sep or not head.startswith('INSERT INTO "'):
+def _target(head):
+    """(namespace, table, column list) of `INSERT INTO "c"."ns"."t" (cols`, else None."""
+    if not head.startswith('INSERT INTO "'):
         return None
     target, sep, cols = head[len("INSERT INTO ") :].partition(" (")
     parts = target.split(".")
@@ -550,3 +569,37 @@ def _parse_insert(sql):
     if len(names) != 3 or not all(n.replace("_", "").isalnum() for n in names):
         return None
     return names[1], names[2], cols
+
+
+def _parse_insert(sql):
+    """(namespace, table, column list, None) of `INSERT INTO "c"."ns"."t" (cols) VALUES ...`,
+    else None.
+
+    Plain string splitting rather than a regex, so the stand-in's parse is linear on any input.
+    """
+    head, sep, _ = sql.partition(") VALUES ")
+    found = _target(head) if sep else None
+    return None if found is None else (*found, None)
+
+
+def _parse_guarded_insert(sql):
+    """(namespace, table, column list, key columns) of `INSERT INTO "c"."ns"."t" (cols) SELECT *
+    FROM (VALUES ...) AS "v" (cols) WHERE NOT EXISTS (SELECT 1 FROM "c"."ns"."t" AS "t" WHERE
+    "t"."k" = "v"."k" AND ...)`, else None."""
+    head, sep, rest = sql.partition(") SELECT * FROM (VALUES ")
+    found = _target(head) if sep else None
+    if found is None:
+        return None
+    _, sep, guard = rest.rpartition(" WHERE NOT EXISTS (SELECT 1 FROM ")
+    if not sep or not guard.endswith(")"):
+        return None
+    target, sep, match = guard[:-1].partition(' AS "t" WHERE ')
+    if not sep or target != head[len("INSERT INTO ") :].partition(" (")[0]:
+        return None
+    keys = []
+    for cond in match.split(" AND "):
+        left, sep, right = cond.partition(" = ")
+        if not sep or not left.startswith('"t".') or left[len('"t".') :] != right[len('"v".') :]:
+            return None
+        keys.append(left[len('"t".') :].strip('"'))
+    return (*found, keys)
