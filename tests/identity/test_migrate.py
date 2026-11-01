@@ -435,15 +435,14 @@ def test_the_cli_rewrites_the_customizations_hnx_custom_loads(registers, tmp_pat
     )
 
 
-def test_a_customization_whose_rewrite_would_change_more_stops_the_migration(registers, tmp_path):
+def test_a_link_shaped_quotation_in_prose_is_not_rewritten(registers, tmp_path):
     custom = tmp_path / "custom" / "a"
     custom.mkdir(parents=True)
     f = custom / "customization.yml"
-    f.write_text("id: custom:a\nreason: 'lesson: LL-001'\n")  # a link-shaped quotation in prose
-    before = snapshot(registers)
-    with pytest.raises(MigrationError, match="would change more than links"):
-        migrate(registers, customizations=[tmp_path / "custom"])
-    assert snapshot(registers) == before and "LL-001" in f.read_text()
+    text = "id: custom:a\nreason: 'lesson: LL-001'\n"  # a link-shaped quotation in prose
+    f.write_text(text)
+    migrate(registers, customizations=[tmp_path / "custom"])
+    assert f.read_text() == text  # only the links mapping is rewritten, never the reason
 
 
 def test_two_records_claiming_one_code_stop_the_migration(registers):

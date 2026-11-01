@@ -26,7 +26,7 @@ Exit codes: `0` clean, `1` remnants (or nothing could be measured), `2` usage er
 | `REMNANT` | measured; something is still there (fails the audit) |
 | `INFO` | worth knowing, not a failure (for example the vmid is now another live resource's) |
 | `REVIEW` | a human decides (a code comment or narrative doc still mentions the guest) |
-| `SKIP` | could not be measured. **Never counted as clean**; a run where nothing could be measured is `UNMEASURED` and exits 1 |
+| `SKIP` | could not be measured. **Never counted as clean**; a run where nothing could be measured is `UNMEASURED` and exits 100 (could not measure, as everywhere in the repository), not 1 |
 
 ## Planes
 
@@ -44,7 +44,10 @@ A plane is a function `(Target, Adapters) -> Result` registered with `@plane("na
 | `secret-names` | secret-store variable **names** only; values are never requested | adapter |
 | `dns`, `proxy`, `dhcp` | records and aliases, edge routes, reservations | adapters |
 
-Word-bounded matching: `app-core` does not match `app-core-2` or `x.app-core`. A path already
+Word-bounded matching: `app-core` does not match `app-core-2` or `x.app-core`. `secret-names`
+compares names with `-` and `.` folded to `_`: `app-core` (or an `--alias`) matches `app_core`
+and `app_core_db_password`, never `myapp_core_token` or a numbered sibling's
+`app_core_2_db_password`, because its action is to delete the entries. A path already
 reported by `inventory`, `playbooks` or `iac` is not repeated by `live-refs`.
 
 ## Adapters and fakes
@@ -62,8 +65,11 @@ sections for the hypervisor and the rosters. A snapshot is a JSON file your own 
  "dns_note": "a section may be {\"unreachable\": \"why\"} to model an outage"}
 ```
 
-A missing section means "no adapter configured" and a section of `{"unreachable": "..."}` means the
-source could not be reached; both give `SKIP`. A live adapter implements the same few methods.
+A missing section means "no adapter configured", a section of `{"unreachable": "..."}` means the
+source could not be reached, and a section without the key its plane reads (a mistyped
+`"record"` for `"records"`) was not measured; all three give `SKIP`, never `CLEAN`. Several
+`--root` trees are read side by side, each path prefixed with its root's name, so two trees'
+`playbooks/site.yml` are both scanned. A live adapter implements the same few methods.
 
 ## Positive control
 
@@ -75,5 +81,8 @@ and a retired guest that is clean on every measured plane.
 ## Relation to `tools/decommission_check.py`
 
 That tool is the service-swap scanner (step 8 of the swap procedure: does anything still point at
-the retired *product*). It is unchanged and still gates `hnx swap`. Use this audit when a whole
-guest is retired.
+the retired *product*). It still gates `hnx swap`. Use this audit when a whole guest is retired.
+Both match names with one function (`homelabnext.swap.decommission.word_pattern`), so a name
+is a hit for both or for neither. They differ, deliberately, in what a hit means: the swap gate
+counts a documentation mention as a finding (the swap is not done until every reference is
+touched or allow-listed), while this audit marks a narrative mention `REVIEW`.

@@ -43,9 +43,11 @@ def hook_doc(**kw):
 
 def test_override_plan_and_resolved_view(tmp_path, uni):
     plan = plan_for(tmp_path, uni, [(make_doc(), None)])
-    assert plan["ok"] and plan["schema"] == "hnx.customization.plan/1"
+    assert plan["ok"] and plan["schema"] == "hnx.customization.plan/2"
     assert plan["resolved"]["role_vars"] == {
-        "example_service": {"example_service_listen_port": 9090}
+        "example_service": {
+            "example_service_listen_port": [{"id": "custom:test-port", "hosts": [], "value": 9090}]
+        }
     }
     (item,) = plan["items"]
     assert item["extension_points"] == ["var:example_service.example_service_listen_port"]
@@ -81,10 +83,19 @@ def test_hook_overlay_and_profile_resolution(tmp_path, uni):
     )
     assert plan["ok"], plan["findings"]
     r = plan["resolved"]
-    assert r["hooks"]["example_service"]["health"]["post"] == ["custom:hook-one:t.yml"]
+    (hook,) = r["hooks"]["example_service"]["health"]["post"]
+    assert hook["id"] == "custom:hook-one" and hook["tasks"] == "t.yml"
+    assert hook["hosts"] == []  # a capability scope the test universe does not expand
     (o,) = r["template_overlays"]["example_service"]["config.yml.j2"]
     assert o["sha256"] == hashlib.sha256(b"x: 1\n").hexdigest()
-    assert r["profiles"]["extra"]["hosts"] == ["mon-core"]
+    assert r["profiles"]["extra"] == [
+        {
+            "hosts": ["mon-core"],
+            "id": "custom:profile-one",
+            "tasks": [{"file": "p.yml", "name": "Do extra"}],
+            "vars": {"extra_flag": True},
+        }
+    ]
     assert [i["kind"] for i in plan["items"]] == ["patch-overlay", "hook", "profile"]
 
 
@@ -191,6 +202,60 @@ def test_invalid_schema_never_reaches_resolved_view(tmp_path, uni):
     assert list(plan["resolved"]["role_vars"]["example_service"]) == ["example_service_version"]
 
 
+def test_disjoint_host_overrides_keep_their_own_hosts(tmp_path, uni):
+    # The lint accepts one variable claimed on disjoint hosts; the resolved view must not
+    # collapse the two into one role-wide value applied to every host.
+    one = {"role": "example_service", "vars": {"example_service_listen_port": 1}}
+    two = {"role": "example_service", "vars": {"example_service_listen_port": 2}}
+    a = make_doc(id="custom:one", scope={"hosts": ["dns-core"]}, action=one)
+    b = make_doc(id="custom:two", scope={"hosts": ["mon-core"]}, action=two)
+    plan = plan_for(tmp_path, uni, [(a, None), (b, None)])
+    assert plan["ok"], plan["findings"]
+    assert plan["resolved"]["role_vars"]["example_service"]["example_service_listen_port"] == [
+        {"id": "custom:one", "hosts": ["dns-core"], "value": 1},
+        {"id": "custom:two", "hosts": ["mon-core"], "value": 2},
+    ]
+
+
+def test_disjoint_host_profiles_are_not_merged(tmp_path, uni):
+    def prof(cid, host, task, var):
+        return make_doc(
+            id=cid,
+            kind="profile",
+            scope={"hosts": [host]},
+            action={
+                "profile": "extra",
+                "tasks": [{"name": task, "file": "p.yml"}],
+                "vars": {"extra_flag": var},
+            },
+        ), {"p.yml": "- name: x\n"}
+
+    plan = plan_for(
+        tmp_path,
+        uni,
+        [prof("custom:p-one", "dns-core", "One", 1), prof("custom:p-two", "mon-core", "Two", 2)],
+    )
+    assert plan["ok"], plan["findings"]
+    got = {p["id"]: (p["hosts"], p["vars"]) for p in plan["resolved"]["profiles"]["extra"]}
+    assert got == {
+        "custom:p-one": (["dns-core"], {"extra_flag": 1}),
+        "custom:p-two": (["mon-core"], {"extra_flag": 2}),
+    }
+
+
+def test_an_unrelated_invalid_file_does_not_switch_off_conflict_exclusion(tmp_path, uni):
+    a = make_doc(id="custom:one")
+    b = make_doc(
+        id="custom:two",
+        action={"role": "example_service", "vars": {"example_service_listen_port": 7}},
+    )
+    broken = make_doc(id="custom:broken", owner=None)
+    plan = plan_for(tmp_path, uni, [(a, None), (b, None), (broken, None)])
+    assert not plan["ok"]
+    assert {f["code"] for f in plan["findings"]} >= {"CU001", "CU011"}
+    assert plan["resolved"]["role_vars"] == {} and plan["items"] == []
+
+
 def test_optional_needs_enabling_and_narrows_hosts(tmp_path, uni):
     pr = make_doc(
         id="custom:opt",
@@ -203,7 +268,7 @@ def test_optional_needs_enabling_and_narrows_hosts(tmp_path, uni):
     off = plan_for(tmp_path / "off", uni, [(pr, files)])
     assert off["items"] == [] and off["inactive_optional"] == ["custom:opt"]
     on = plan_for(tmp_path / "on", uni, [(pr, files)], enabled={"custom:opt": ["mon-core"]})
-    assert on["ok"] and on["resolved"]["profiles"]["opt"]["hosts"] == ["mon-core"]
+    assert on["ok"] and on["resolved"]["profiles"]["opt"][0]["hosts"] == ["mon-core"]
 
 
 def test_applier_never_modifies_core(tmp_path, uni, repo_root):

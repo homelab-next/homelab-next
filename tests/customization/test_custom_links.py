@@ -102,3 +102,13 @@ def test_rewrite_touches_only_link_values():
     js = '{"links": {"lesson": "LL-003", "runbook": "LL-003"}}'
     assert rewrite_links(js, codes) == f'{{"links": {{"lesson": "{LL3}", "runbook": "LL-003"}}}}'
     assert rewrite_links(rewrite_links(yml, codes), codes) == rewrite_links(yml, codes)
+
+
+def test_rewrite_leaves_a_link_shaped_phrase_in_prose_alone():
+    codes = {"LL-003": LL3}
+    yml = "reason: 'The fix follows lesson: LL-003 closely'\nlinks:\n  lesson: LL-003\n"
+    assert rewrite_links(yml, codes) == (
+        f"reason: 'The fix follows lesson: LL-003 closely'\nlinks:\n  lesson: {LL3}\n"
+    )
+    js = '{"reason": "see \\"lesson\\": \\"LL-003\\"", "links": {"lesson": "LL-003"}}'
+    assert rewrite_links(js, codes) == js.replace('{"lesson": "LL-003"}', f'{{"lesson": "{LL3}"}}')

@@ -43,7 +43,7 @@ def test_board_sensor_driver_plan(shipped, uni):
     cid = IDS["board-sensor-driver"]
     plan = build_plan(list(shipped.values()), uni, TODAY, {cid: ["mon-core"]})
     assert plan["ok"], plan["findings"]
-    prof = plan["resolved"]["profiles"]["board-sensor-driver"]
+    (prof,) = plan["resolved"]["profiles"]["board-sensor-driver"]
     assert prof["hosts"] == ["mon-core"]
     assert prof["vars"]["board_sensor_driver_module"] == "sensorchip_x"
     assert prof["tasks"][0]["file"] == "tasks/persist-module.yml"
@@ -56,9 +56,9 @@ def test_vlan_bridge_verifier_is_read_only(shipped, uni):
     assert modules <= {"ansible.builtin.command", "ansible.builtin.assert"}
     assert all(t.get("changed_when") is False for t in tasks if "ansible.builtin.command" in t)
     plan = build_plan([c], uni, TODAY, {c.id: ["edge-core"]})
-    assert plan["ok"] and plan["resolved"]["profiles"]["vlan-aware-bridge-verifier"]["hosts"] == [
-        "edge-core"
-    ]
+    assert plan["ok"] and plan["resolved"]["profiles"]["vlan-aware-bridge-verifier"][0][
+        "hosts"
+    ] == ["edge-core"]
 
 
 def test_tunnel_workaround_overlay_does_not_touch_core_template(shipped, uni, repo_root):

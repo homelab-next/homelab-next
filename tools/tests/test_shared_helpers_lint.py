@@ -66,6 +66,26 @@ def _rules(src: str) -> list[str]:
             """,
             "state",
         ),
+        (
+            """
+            import json
+            def save(p, doc):
+                tmp = p.with_suffix(".tmp")
+                tmp.write_text(json.dumps(doc))
+                tmp.replace(p)
+            """,
+            "state",
+        ),
+        (
+            """
+            import json
+            def save(p, doc):
+                tmp = p.with_name("x.tmp")
+                tmp.write_text(json.dumps(doc))
+                tmp.rename(p)
+            """,
+            "state",
+        ),
         ("import trino.dbapi\n", "lake"),
         ("from duckdb import connect\n", "lake"),
         ("import sqlite3\n", "lake"),
@@ -83,6 +103,8 @@ def test_flags_private_helpers(src, rule):
         '"""Pages through ntfy via the shared notifier."""\nfrom homelabnext.notify import Notifier\n',
         "import urllib.request\ndef fetch(u):\n    return urllib.request.urlopen(u).read()\n",
         "import json\ndef report(out, doc):\n    out.write_text(json.dumps(doc))\n",
+        # str.replace (two arguments) is not a rename
+        "import json\ndef report(out, doc):\n    out.write_text(json.dumps(doc).replace('a', 'b'))\n",
         "from homelabnext.state import StateStore\nStateStore('x.json').set('k', 1)\n",
         "from homelabnext.lake import FakeLake\nFakeLake().query('SELECT 1')\n",
     ],

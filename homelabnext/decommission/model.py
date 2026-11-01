@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from homelabnext.swap.decommission import word_pattern
+
 
 class Status(StrEnum):
     CLEAN = "CLEAN"  # measured, nothing left behind
@@ -50,8 +52,9 @@ class Target:
 
 
 def term_pattern(term: str) -> re.Pattern[str]:
-    """Word-bounded, case-insensitive: ``app-core`` must not match ``app-core-2`` or ``x.app-core``."""
-    return re.compile(r"(?<![\w.-])" + re.escape(term) + r"(?![\w-]|\.\d)", re.IGNORECASE)
+    """Word-bounded, case-insensitive: ``app-core`` must not match ``app-core-2`` or ``x.app-core``.
+    The same rule as the swap's decommission-check (one function, so the two cannot drift)."""
+    return word_pattern(term)
 
 
 @dataclass
@@ -93,7 +96,12 @@ class Report:
         return "CLEAN"
 
     def exit_code(self, strict: bool = False) -> int:
-        return 0 if self.verdict(strict) == "CLEAN" else 1
+        """The repository-wide contract (docs/interfaces.md): 0 clean, 1 the check failed
+        (REMNANTS, or UNRESOLVED under ``strict``), 100 the audit could not measure anything."""
+        v = self.verdict(strict)
+        if v == "UNMEASURED":
+            return 100
+        return 0 if v == "CLEAN" else 1
 
     def to_dict(self, strict: bool = False) -> dict:
         return {

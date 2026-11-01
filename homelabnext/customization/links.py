@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import yaml
+
 from homelabnext.identity.aliases import AliasMap, LegacyRecordCode
 from homelabnext.identity.uid import is_uid
 
@@ -113,21 +115,45 @@ def warn_legacy(link: Link, where: str = "") -> None:
         )
 
 
-_LINK_VALUE = re.compile(
-    r"""(?P<lead>(?<![\w-])["']?(?P<key>lesson|runbook)["']?[ \t]*:[ \t]*(?P<q>["']?))"""
-    r"""(?P<code>(?:LL|RB)-\d{3,})(?![\w-])"""
-)
+def _link_value_spans(text: str) -> list[tuple[int, int, str, str]]:
+    """``(start, end, key, code)`` for each ``links.lesson``/``links.runbook`` scalar of the
+    document's top-level ``links`` mapping, from the YAML node marks (JSON parses as YAML).
+    Structural, so the same words in the ``reason`` or any other field are never touched."""
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    out = []
+    for k, v in root.value:
+        if not (isinstance(k, yaml.ScalarNode) and k.value == "links"):
+            continue
+        if not isinstance(v, yaml.MappingNode):
+            continue
+        for lk, lv in v.value:
+            if (
+                isinstance(lk, yaml.ScalarNode)
+                and lk.value in LINK_KEYS
+                and isinstance(lv, yaml.ScalarNode)
+                and _CODE.fullmatch(lv.value)
+            ):
+                out.append((lv.start_mark.index, lv.end_mark.index, lk.value, lv.value))
+    return out
+
+
+_CODE = re.compile(r"(?:LL|RB)-\d{3,}")
 
 
 def rewrite_links(text: str, codes: Mapping[str, str]) -> str:
-    """``text`` (a customization file, YAML or JSON) with each ``lesson:``/``runbook:`` value
-    that is a code in ``codes`` replaced by its uid; nothing else changes (a code in the
-    ``reason`` is prose and stays).  Idempotent: a uid is not a code."""
-
-    def one(m: re.Match) -> str:
-        uid = codes.get(m["code"])
-        if uid is None or not m["code"].startswith(LINK_KEYS[m["key"]] + "-"):
-            return m[0]
-        return m["lead"] + uid
-
-    return _LINK_VALUE.sub(one, text)
+    """``text`` (a customization file, YAML or JSON) with each ``links.lesson`` /
+    ``links.runbook`` value that is a code in ``codes`` replaced by its uid; nothing else
+    changes (a code in the ``reason``, even written ``lesson: LL-003``, is prose and stays).
+    Idempotent: a uid is not a code.  A file that does not parse is returned unchanged."""
+    out = text
+    for start, end, key, code in sorted(_link_value_spans(text), reverse=True):
+        uid = codes.get(code)
+        if uid is None or not code.startswith(LINK_KEYS[key] + "-"):
+            continue
+        out = out[:start] + text[start:end].replace(code, uid, 1) + out[end:]
+    return out
