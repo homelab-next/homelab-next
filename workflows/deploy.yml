@@ -2,10 +2,11 @@
 # What the orchestrator may run, pinned by pack digest (`hnx workflows digest workflows/packs`).
 # `hnx workflows validate` fails when a pin does not match its pack or names a pack that does
 # not validate; the deployer loads only these digests from a commit CI passed (docs/workflows.md).
+# A pin also needs a pack that can run: its handlers in the tree, pinned, and its producer pinned.
+# case-opened-notify, new-critical-alert and phishing-report are reference packs: their handlers
+# (case-open, notify-page, notify-post, dns-block-domains) are site code and their triggers pin
+# no producer, so they are not pinned here (docs/workflows.md, Deploying).
 deploy_id: lab-workflows
 pins:
   - {pack: agent-job-retry, digest: "sha256:1e096a19756e73ec1fdf28401641fe5a6d3d26acdbc1d5222b52509820eb229d"}
-  - {pack: case-opened-notify, digest: "sha256:bc1e7964dc4563f4b9e6207ee8c07b3c03a5db4b7bf48abba731272a3605f246"}
-  - {pack: new-critical-alert, digest: "sha256:c4b395a871a318eaa882c9411933f6ae8039ca8746ebd170faca037ae491cf3d"}
-  - {pack: phishing-report, digest: "sha256:6fba6e2ae69f2182326504d2fb03b710636b463917f278c1c42922da714b185b"}
   - {pack: proposal-validate, digest: "sha256:38f5f7f2c0b32fefeaa6d94531c626351680151e31528cf9291b72a9d8e93dab"}

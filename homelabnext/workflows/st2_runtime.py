@@ -76,9 +76,16 @@ from homelabnext.broker import request_digest
 from homelabnext.broker.state import is_id
 from homelabnext.events.envelope import build_event, event_problems
 
-from .runner import _enrich, action_request, holds, resolve, triggered
+from .runner import (
+    SCHEDULE_EVENT,
+    _enrich,
+    action_request,
+    holds,
+    pinned_sources,
+    resolve,
+    triggered,
+)
 
-SCHEDULE_EVENT = "homelabnext.schedule.fired"
 SCHEDULE_SOURCE = "svc:automation"
 ST2_ENRICH_OPS = ("pick", "extract-iocs")
 ST2_STEP_KINDS = ("enrich", "action")
@@ -419,15 +426,6 @@ def run_step(
 
 
 # ---------------------------------------------------------------- the approved-run rule
-def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
-    """The producers a trigger pins (``$event.source`` ``equals``)."""
-    return [
-        c["equals"]
-        for c in trigger.get("where", [])
-        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
-    ]
-
-
 def approved_run_pack(actor: str, source: str = BROKER_SOURCE) -> dict[str, Any]:
     """The built-in pack of the approved-run rule: on ``decision.returned`` from the broker with
     an ``accept`` by a person, one ``broker-run`` step for ``$event.data.decision_id``."""

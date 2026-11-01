@@ -14,6 +14,12 @@ Tiers run in spec order (floor, small, large, llm) and a human is always the las
 answers only at or above its threshold; a fault, a timeout, an abstention or an invalid answer
 escalates. Impact can be raised, never lowered. Rules: `homelabnext/decide/cascade.py`.
 
+One vocabulary, defined on the spec (`homelabnext/decide/spec.py`): `DecisionSpec.answer_labels`
+are the labels a tier may answer with - the decision table's targets (plus `escalate`, which is
+never an answer), or `raise`/`hold` in a safety spec - and any other label is invalid and
+escalates. `DecisionSpec.verdicts` are the verdicts the cascade can return: an answer label other
+than `escalate`, or `human`. `ModelTier` and a workflow's decide fixtures use the same two.
+
 | Guarantee | Mechanism | Checklist |
 |---|---|---|
 | Model output is validated | `ModelTier` checks every reply against `output_schema(labels)` (JSON Schema 2020-12); an invalid reply is retried once with the problems fed back, a second one is `invalid` and escalates | A-04 |
