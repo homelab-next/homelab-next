@@ -269,11 +269,14 @@ def policy_from(data) -> Policy:
 
 #: why a missing review policy is refused.  Absence fails closed everywhere a policy gates
 #: something (the modules loader, the MCP catalog, the registers' build, review and decider, the
-#: strategy tree, the system pages): without one nothing is reviewed enough.  Each caller takes an
-#: explicit opt-out for a local experiment (``--no-review-policy``, or ``policy=False``)
+#: strategy tree's check, decider and sweep, the system pages): without one nothing is reviewed
+#: enough.  Each caller takes an explicit opt-out for a local experiment (``--no-review-policy``,
+#: also spelled ``--no-policy``; ``policy=False`` in the library).  The one message every caller
+#: prints, so a test or an operator greps one string
 NO_POLICY = (
-    "no review policy (review-policy.yml) found, so nothing is reviewed enough; give one, or opt "
-    "out explicitly (--no-review-policy) for a local experiment"
+    "no review policy (review-policy.yml) found, so nothing is reviewed enough; give one "
+    "(--policy FILE), or opt out explicitly (--no-review-policy or --no-policy) for a local "
+    "experiment"
 )
 
 

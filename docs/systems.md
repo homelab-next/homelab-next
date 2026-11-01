@@ -64,8 +64,11 @@ none` is the explicit opt-out.
 * A review is current while its `digest` matches the page's: `hnx reviews digest
   docs/systems/<service>.md`. The digest covers only what people wrote, the `hnx:todo` blocks and
   any human front-matter field, never the `hnx:gen` blocks, so `generate` (machine facts) keeps a
-  review current and editing the prose drops it.
+  review current and editing the prose drops it. Because the digest sees nothing else, `check`
+  fails a page with text outside the blocks, an unknown, missing or duplicated `hnx:gen` or
+  `hnx:todo` block, or a changed heading (anything that differs from a fresh render once every
+  block is emptied): write prose inside the section's `hnx:todo` block.
 * Draft pages are listed as `info:` with the tiers `reviewed` would still need; they never fail.
 
-The fourteen example pages are drafts with no reviews; `tests/sop/fixtures/dns.reviewed.md` is a
+The example pages are drafts with no reviews; `tests/sop/fixtures/dns.reviewed.md` is a
 fully reviewed page (inline form) that proves the pass path, in both forms in the tests.

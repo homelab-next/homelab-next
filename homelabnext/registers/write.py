@@ -21,7 +21,9 @@ Writes are atomic: a record replaces its file through a temp file and ``os.repla
 is created exclusively under a fresh name (:func:`homelabnext.registers.events.create_event`).
 A batch writes its events first and the record last, so a crash in between leaves duplicates a
 re-run detects (the migration skips events that already exist), never a lost review.
-``transition`` events are written only through the decider.
+``transition`` events are written only through the decider, and ``rekey`` events only by the uid
+migration (refused here).  A strategy record (``<tree>/<dir>/<uid>.md`` beside a ``strategy.md``)
+is dispatched to :func:`homelabnext.strategy.records.write_events`, which validates the whole tree.
 """
 
 from __future__ import annotations
@@ -248,6 +250,38 @@ def _is_register_record(p: pathlib.Path) -> bool:
     return p.parent.name in RECORD_KINDS
 
 
+def _strategy_root(p: pathlib.Path) -> pathlib.Path | None:
+    """The strategy tree ``p`` is a record of (``strategy.md`` or ``<dir>/<uid>.md`` beside a
+    ``strategy.md``), else None."""
+    from homelabnext.strategy.records import DIRS, STRATEGY_FILE
+
+    if p.name == STRATEGY_FILE and p.is_file():
+        return p.parent
+    if p.parent.name in DIRS and (p.parent.parent / STRATEGY_FILE).is_file():
+        return p.parent.parent
+    return None
+
+
+def refused_kinds(pairs, *, _decider: bool, decide: str) -> list[str]:
+    """What the write path never writes: a ``transition`` (only the decider, ``decide``) and a
+    ``rekey`` (only the uid migration, which creates its events itself: a rekey carries earlier
+    reviews, a human approve included, onto a new digest, so one typed by any other writer
+    would make a stale review count for content its reviewer never saw)."""
+    out = []
+    kinds = {str(d.get("event")) for d, _ in pairs}
+    if "transition" in kinds and not _decider:
+        out.append(
+            f"a transition event is written only by the decider (`{decide}`); file a"
+            " transition intent in the records inbox instead"
+        )
+    if "rekey" in kinds:
+        out.append(
+            "a rekey event is written only by the uid migration (`hnx records assign-uids`),"
+            " never through the write path; review the new content instead"
+        )
+    return out
+
+
 def write_events(
     record_path,
     events: Iterable[Mapping[str, Any] | tuple[Mapping[str, Any], dt.datetime]],
@@ -264,14 +298,17 @@ def write_events(
     p = pathlib.Path(record_path)
     at = when or _now()
     pairs = [(dict(x[0]), x[1]) if isinstance(x, tuple) else (dict(x), at) for x in events]
-    problems = []
+    if (root := _strategy_root(p)) is not None:
+        if record_text is not None:
+            raise RegisterError("strategy", [f"{p.name}: a strategy record is edited as a file"])
+        from homelabnext.strategy.records import write_events as write_strategy_events
+
+        return write_strategy_events(
+            root, {p: pairs}, require_reviews=require_reviews, _decider=_decider
+        )
+    problems = refused_kinds(pairs, _decider=_decider, decide="hnx registers decide")
     for data, _ in pairs:
         problems += ev.check_event(data)
-        if data.get("event") == "transition" and not _decider:
-            problems.append(
-                "a transition event is written only by the decider (`hnx registers decide`);"
-                " file a register-transition intent in the records inbox instead"
-            )
     if problems:
         raise RegisterError(p.parent.name or "events", problems)
     if _is_register_record(p):

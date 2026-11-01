@@ -30,8 +30,10 @@ the record as it is *now* and the review policy:
   content (the record as it will be once the transition applies; its digest is printed, so a
   reviewer can stamp it): **waiting**, the note stays in the inbox;
 * no review policy was given or found (``review-policy.yml`` in or beside the register root):
-  **waiting**, naming the absence -- it fails closed, never applies with zero reviews
-  (``policy=False``, ``--no-review-policy``, is the explicit opt-out for a local experiment);
+  the run is **refused** before anything is decided -- :class:`RegisterError` with
+  :data:`homelabnext.reviews.NO_POLICY` (:func:`~homelabnext.reviews.require_policy`); it fails
+  closed, never applies with zero reviews (``policy=False``, ``--no-review-policy`` or
+  ``--no-policy``, is the explicit opt-out for a local experiment);
 * the note does not validate (a missing field, a boolean key): **invalid**, it stays in the
   inbox for its agent to fix or withdraw, and the other intents are decided as usual;
 * otherwise **applied**: a ``transition`` event (the only writer of those) in the record's
@@ -164,29 +166,26 @@ class TransitionDecider:
         self.reader = RecordsReader(self.records_root)
         self.movers = Decider(self.records_root, decided_by=decided_by, clock=clock)
         self._policy = policy  # None: look it up; False: the explicit opt-out
-        self._absent = False
 
     @property
     def policy(self):
+        """The review policy (None: explicitly none).  Fail closed: with no ``policy`` given and
+        no ``review-policy.yml`` in or beside the register root, deciding raises
+        :class:`RegisterError` rather than waive every review tier (a misplaced private policy
+        must not let a human-approve transition apply unreviewed); ``policy=False`` is the
+        explicit opt-out."""
         if self._policy is None:
-            from homelabnext.reviews import load_policy
+            from homelabnext.reviews import ReviewError, require_policy
 
             from .render import find_policy
 
             pp = find_policy(self.register_root)
-            self._absent = pp is None
-            self._policy = load_policy(pp) if pp else False
+            try:  # none found: reviews.NO_POLICY, the one rule and message
+                self._policy = require_policy(pp)
+            except ReviewError as ex:
+                where = "" if pp else f"{self.register_root}: "
+                raise RegisterError("review policy", [where + p for p in ex.problems]) from None
         return self._policy or None
-
-    def no_policy(self, name: str, ident: str, digest: str) -> Outcome | None:
-        """An intent waits, naming the absence, when no policy was given or found: a missing
-        policy fails closed (:data:`homelabnext.reviews.NO_POLICY`), never applies a transition
-        with zero reviews.  None when a policy is loaded or the caller opted out."""
-        from homelabnext.reviews import NO_POLICY
-
-        if self.policy is None and self._absent:
-            return Outcome(name, ident, "waiting", NO_POLICY, digest)
-        return None
 
     def _intents(self, lane: str) -> list[str]:
         """The ``register-transition`` notes of ``lane``, by a lenient read of their ``type``
@@ -209,9 +208,17 @@ class TransitionDecider:
 
     def decide_all(self, *, dry_run: bool = False) -> list[Outcome]:
         """Every pending intent; one that fails to decide is its own ``error`` outcome, never
-        the end of the run (a broken register is: :class:`RegisterError` propagates)."""
+        the end of the run (a broken register is: :class:`RegisterError` propagates, as does a
+        missing review policy, before anything is decided)."""
+        return self.decide_names(self.pending(), dry_run=dry_run)
+
+    def decide_names(self, names, *, dry_run: bool = False) -> list[Outcome]:
+        """The intents ``names`` (see :meth:`decide_all`)."""
+        names = list(names)
+        if names:
+            self.policy  # noqa: B018 -- fail closed up front when there is none
         out = []
-        for n in self.pending():
+        for n in names:
             try:
                 out.append(self.decide(n, dry_run=dry_run))
             except RegisterError:
@@ -268,17 +275,8 @@ class TransitionDecider:
         """An inbox intent of :attr:`INTENT_TYPES`, its file read and its type checked."""
         fm = note.frontmatter
         ident = self._resolve(str(fm.get("record", "?")))
-        bad = check_filename(name, fm)
-        if bad:
-            return self._deny(name, ident, "; ".join(bad), dry_run)
-        taken = [lane for lane in DECIDED_LANES if (self.records_root / lane / name).exists()]
-        if taken:  # a reused name: its event would cite the other note and its move would fail
-            why = (
-                f"a note named {name} is already in {', '.join(taken)}; file it under another slug"
-            )
-            if DENIED in taken:  # cannot be moved anywhere: leave it for its agent to withdraw
-                return Outcome(name, ident, "invalid", why)
-            return self._deny(name, ident, why, dry_run)
+        if refused := self._refuse_name(name, fm, ident, dry_run):
+            return refused
         path = self._record_path(ident)
         register = path.parent.name
         if not path.is_file():
@@ -329,8 +327,6 @@ class TransitionDecider:
             check_register(path, new_events=[(event, now)], policy=self.policy or False)
         except RegisterError as ex:
             return self._deny(name, ident, "; ".join(ex.problems), dry_run, digest)
-        if waiting := self.no_policy(name, ident, digest):
-            return waiting
         missing = self._missing(after, register, fm["to"], digest)
         if missing:
             why = f"needs {', '.join(missing)} review(s) of the prospective content {digest}"
@@ -343,6 +339,23 @@ class TransitionDecider:
             return self._deny(name, ident, "; ".join(ex.problems), dry_run, digest)
         self.movers.fulfil(name, reason=f"applied: {written[0].name}")
         return Outcome(name, ident, "applied", f"{cur} -> {fm['to']}", digest, written[0].name)
+
+    def _refuse_name(self, name: str, fm: Mapping[str, Any], ident: str, dry_run: bool):
+        """The outcome for an inbox intent whose file name is wrong for its front-matter, or
+        already taken in a ``decided/`` lane (a reused name: its event would cite the other
+        note and its move would fail), else None.  Every subclass runs this before deciding."""
+        bad = check_filename(name, fm)
+        if bad:
+            return self._deny(name, ident, "; ".join(bad), dry_run)
+        taken = [lane for lane in DECIDED_LANES if (self.records_root / lane / name).exists()]
+        if taken:
+            why = (
+                f"a note named {name} is already in {', '.join(taken)}; file it under another slug"
+            )
+            if DENIED in taken:  # cannot be moved anywhere: leave it for its agent to withdraw
+                return Outcome(name, ident, "invalid", why)
+            return self._deny(name, ident, why, dry_run)
+        return None
 
     def _applied_before(self, name: str, ident: str, path: pathlib.Path, dry_run: bool):
         """The outcome for an intent whose transition event ``path`` already has (applied

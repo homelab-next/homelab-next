@@ -324,3 +324,34 @@ def test_summary_of_is_machine_owned_and_never_changes_a_page_digest():
     restamped = stamped.replace("0123456789abcdef", "fedcba9876543210")
     assert page_digest(stamped) == page_digest(restamped) == page_digest(base)
     assert page_digest(base.replace("notes: a", "notes: b")) != page_digest(base)  # human key
+
+
+@pytest.mark.parametrize(
+    ("edit", "want", "hidden"),
+    [
+        (  # prose under a heading, outside any block: the digest cannot see it
+            lambda t: t.replace("## How to use it\n", "## How to use it\n\nThe password is x.\n"),
+            "outside the blocks: 'The password is x.'",
+            True,
+        ),
+        (  # an unknown gen block: regeneration keeps it and nothing checks it
+            lambda t: t + "\n<!-- hnx:gen:notes -->\nfake machine fact\n<!-- /hnx:gen -->\n",
+            "outside the blocks: '<!-- hnx:gen:notes --><!-- /hnx:gen -->'",
+            True,
+        ),
+        (  # a second todo block of one name: the digest keeps only one of them
+            lambda t: t + "\n<!-- hnx:todo:use -->\nmore text\n<!-- /hnx:todo -->\n",
+            "duplicate block: <!-- hnx:todo:use --><!-- /hnx:todo -->",
+            False,
+        ),
+    ],
+)
+def test_text_the_review_digest_cannot_see_fails_the_check(reg, pages, edit, want, hidden):
+    p = pages / "dns.md"
+    before = page_digest(p.read_text())
+    p.write_text(edit(p.read_text()))
+    assert (page_digest(p.read_text()) == before) is hidden  # "reviewed" by its digest ...
+    rep = check_pages(reg, pages, POLICY, CATALOG)
+    assert not rep.ok()  # ... so the structure check is what refuses it
+    (line,) = [ln for ln in rep.lines() if "outside the hnx:gen/hnx:todo blocks" in ln]
+    assert line.startswith("text outside") and "dns.md: " in line and want in line, line
