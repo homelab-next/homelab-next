@@ -742,6 +742,15 @@ none of them, so only viewers and approvers reach the hub at all) and sends a si
 to `/oauth2/sign_in`. To let other signed-in people see the hub's non-private pages, give their
 group a role of its own on the hub's row (say `reader`); the hub ignores roles it does not read.
 
+**Provisioning the people.** The realm requires a one-time code on every sign-in (browser and
+direct grant) and makes a user with none enrol one at their first browser sign-in. That
+enrolment is **trust on first use**: whoever first signs in with an un-enrolled account's
+password enrols the authenticator, so someone who learns that password before its owner signs
+in enrols their own and holds the account. Create each viewer and approver with a temporary
+password (the realm's `UPDATE_PASSWORD` action makes them change it) and have them enrol in
+person, at a session you watch, or pre-enrol their OTP credential when you create the account;
+do not leave an account with a password and no enrolled factor (ADR-0034 decision 2).
+
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
 examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
 **Check your edge** once: a request to the site with a forged `X-Auth-Request-User` and no

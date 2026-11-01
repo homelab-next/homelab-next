@@ -528,6 +528,29 @@ def test_only_a_signed_out_answer_goes_to_sign_in():
     assert "{uri}" not in redir
 
 
+def test_a_return_target_with_an_ampersand_in_its_query_survives():
+    """The sign-in redirect's ``rd`` is the request URI query-escaped (Caddy's
+    ``{http.request.uri_escaped}`` is Go's ``url.QueryEscape`` of the request URI), so the
+    auth proxy reads back the whole target; the raw ``{uri}`` would split it at the ``&``."""
+    from urllib.parse import parse_qs, quote_plus, urlsplit
+
+    snippet = _sites()[_sites().index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    [redir] = [ln.strip() for ln in snippet.splitlines() if ln.strip().startswith("redir ")]
+    target = redir.split()[2]
+    uri = "/reports/view?id=7&tab=a b&next=/x?y=1"
+
+    def run(t: str) -> dict[str, list[str]]:
+        t = t.replace("{scheme}", "https").replace("{host}", "app.lab.example")
+        t = t.replace("{http.request.uri_escaped}", quote_plus(uri)).replace("{uri}", uri)
+        return parse_qs(urlsplit(t).query)
+
+    assert run(target) == {"rd": [f"https://app.lab.example{uri}"]}
+    # the old target loses everything after the first & to other parameters
+    assert run(target.replace("{http.request.uri_escaped}", "{uri}"))["rd"] != [
+        f"https://app.lab.example{uri}"
+    ]
+
+
 def test_docs_page_lists_dependants():
     md = generate(REG, ["service_docs"])["service_docs"]["docs/services.md"]
     assert "- Used by: `agent-runtime`" in md  # lake-query is used by agent-runtime
