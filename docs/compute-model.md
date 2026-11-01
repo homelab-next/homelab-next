@@ -794,8 +794,9 @@ zone differs from its guest's is an error.
 `hnx guests plan DIR --site SITE --target T --against PREVIOUS_RENDER [--exit-code]` renders
 fresh and prints a unified diff against a directory holding the previous render, with a
 `N to add, N to change, N to remove` summary. With `--exit-code` it exits 3 when something would
-change, as `hnx site plan --exit-code` does (2 is an input that cannot be read). Swapping the
-hypervisor stack is: render a second target from the same files and compare.
+change, as `hnx site plan --exit-code` does (2 is an input that cannot be read). The hypervisor
+is not a swap seam (ADR-0012): another hypervisor's target, rendered from the same files, is what
+a rebuild on new hardware applies, compared with this plan before the move.
 
 ## SERVER (not implemented)
 
