@@ -969,9 +969,18 @@ field). A config value must be a key the module declares; a secret-typed value i
 own namespace or one granted to it in `grants.secrets`, the same rule as a manifest default.
 `capacity` stands in for the host's `platform/guest` `resources`, which a real selection references
 by guest id instead of re-declaring. A multi-slot provider is placed once per instance. At run time a
-consumer resolves a slot with **`provider_for(slot, instance)`** from the selection (today
-`homelabnext/broker/cli.py` reads a conformance target file instead). Model choice stays one line in
-the role table.
+consumer resolves a slot with **`provider_for(slot, instance)`** from the selection
+(`homelabnext.modules.providers.provider_for(site, mods, slot, instance)`: the serving module with
+its product and licence, `None` for `none` or `pass-through`, and a refusal, never a guess, for a
+slot the selection does not name, an instance it does not select, or several instances and none
+named). `hnx modules providers --site FILE [--examples] [--overlay DIR] [--json]` lists every
+selected instance that way. `hnx modules check` compares the core registry's `impl:` with it: a row
+whose capability is a selected slot names the product (or an alias) of a provider selected for that
+slot, and a row for a slot the site selects `none` or `pass-through` for is a problem; with the
+repository's example registry (another lab) the comparison is a note. Nothing consumes it at run
+time yet (`homelabnext/broker/cli.py` still reads a conformance target file), the baselines'
+`role` bindings are not compared, and the registry is not generated from the selection (an
+operator decision). Model choice stays one line in the role table.
 
 ### The network scope
 

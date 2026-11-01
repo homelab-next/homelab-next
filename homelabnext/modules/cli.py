@@ -18,6 +18,11 @@ checks").
     running name bound to a module is one the site does not select.  With modules selected and
     no review policy, every fetched module is refused (the supply chain fails closed), so a lab
     of in-tree modules needs none.
+``hnx modules providers --site FILE [--examples] [--overlay DIR] [--json]``
+    every selected slot instance with the module that serves it, its product and version and its
+    licence (kind and SPDX id), and each slot the site selects ``none`` or ``pass-through`` for
+    (:func:`homelabnext.modules.providers.provider_for`, ADR-0027 decision 9).  ``check`` compares
+    the core registry's ``impl:`` with the same answer when the registry is the lab's own.
 ``hnx modules gather DIR --out FILE``
     the inventory of what runs (``platform/module_inventory``), built from the census the
     ``module_census`` role wrote under ``DIR`` (:mod:`homelabnext.modules.census`): the fleet
@@ -238,6 +243,20 @@ def _core(
     return core, [*problems, *found]
 
 
+def _impl_problems(site: Any, mods: dict[str, Any], registry: Any) -> list[ld.Problem]:
+    """The core registry's ``impl:`` against the selection (:mod:`homelabnext.modules.providers`):
+    the selection is the one answer to which product serves a slot."""
+    from homelabnext.modules.providers import ProviderLookupError, registry_impl_problems
+
+    if not isinstance(registry, dict):
+        return []  # the core's own names check reports an unreadable registry
+    try:
+        found = registry_impl_problems(site, mods, registry)
+    except ProviderLookupError as exc:
+        found = [str(exc)]
+    return [ld.Problem("registry", p) for p in found]
+
+
 def _slot_entries(registry: dict[str, Any]) -> tuple[dict[str, Any], list[ld.Problem]]:
     """The slot registry's entries that validate against ``platform/slot``, and a problem for
     each one that does not (the rules read only the valid ones, so a bad entry is reported, never
@@ -299,6 +318,16 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument(
         "--out", type=Path, required=True, help="the inventory to write (must not exist)"
     )
+    v = sub.add_parser(
+        "providers", help="which module serves each selected slot instance (provider_for)"
+    )
+    v.add_argument("--root", type=Path, help="the repository root (default: this checkout)")
+    v.add_argument("--overlay", type=Path, help="a private overlay checkout (lab/modules/)")
+    v.add_argument(
+        "--examples", action="store_true", help="also load the fictional examples/modules/"
+    )
+    v.add_argument("--site", type=Path, help="the site selection (lab/modules.yml)")
+    v.add_argument("--json", action="store_true")
     k = sub.add_parser("catalog-tables", help="the lake tables a loopback catalog lists (JSON)")
     k.add_argument("--url", required=True, help="the catalog, http on a loopback IP literal")
     k.add_argument("--warehouse", required=True, help="the warehouse whose tables are listed")
@@ -424,6 +453,82 @@ def _review_tier(args: argparse.Namespace) -> int:
     )
 
 
+def _providers(args: argparse.Namespace) -> int:
+    """Each selected slot instance, its provider module, product and licence; a slot the site
+    selects ``none`` or ``pass-through`` for, as such.  Exit 2 when the site cannot be read or
+    names a provider with no valid manifest."""
+    from homelabnext.modules.providers import ProviderLookupError, providers
+
+    root = _root(args.root)
+    if args.overlay is not None and not args.overlay.is_dir():
+        raise ld.LoaderError(f"--overlay {args.overlay}: not a directory")
+    lab = args.overlay / "lab" if args.overlay else None
+    site_path = _given(args.site, "--site") or _existing(lab and lab / "modules.yml")
+    if site_path is None:
+        raise ld.LoaderError("providers needs a site selection (--site, or --overlay)")
+    budget = ld.Budget()
+    tree, found = ld.discover(
+        root / "modules",
+        root / "examples" / "modules" if args.examples else None,
+        args.overlay,
+        budget,
+    )
+    site = _read(site_path, "site selection", budget)
+    errs = ld._errors(ld._schema("platform", "module_selection.schema.json"), site)
+    if errs:
+        raise ld.LoaderError(f"site selection {site_path}: schema: {errs[0]}")
+    try:
+        rows = providers(site, tree.mods)
+    except ProviderLookupError as exc:
+        bad = [str(p) for p in found]
+        raise ld.LoaderError(f"{exc}" + (f" ({'; '.join(bad)})" if bad else "")) from None
+    unserved = {s: v for s, v in sorted(site["slots"].items()) if not isinstance(v, list)}
+    if args.json:
+        doc = {
+            "providers": [
+                {
+                    "slot": p.slot,
+                    "instance": p.instance,
+                    "module": p.module,
+                    "product": p.product,
+                    "version": p.version,
+                    "licence": {"kind": p.licence_kind, "spdx": p.licence_spdx},
+                }
+                for p in rows
+            ],
+            "unserved": unserved,
+        }
+        print(json.dumps(doc, indent=2))
+        return 0
+    for p in rows:
+        print(f"{p.slot}/{p.instance}: {p.module} ({p.product} {p.version}; licence {p.licence})")
+    for slot, v in unserved.items():
+        print(f"{slot}: {v}")
+    return 0
+
+
+def _swap_licences(record: Any, mods: dict[str, Any]) -> dict[str, Any] | None:
+    """The outgoing and incoming providers' licences (ADR-0011: a provider records its product's
+    licence), so the swap's evidence shows a licence change; None when either has no manifest."""
+    from homelabnext.modules.providers import licence_text
+
+    if not isinstance(record, dict):
+        return None
+    out = {}
+    for end, key in (("from", "from_module"), ("to", "to_module")):
+        m = mods.get(record.get(key))
+        if not isinstance(m, dict):
+            return None
+        lic = m.get("licence", {})
+        out[end] = {
+            "module": m["id"],
+            "kind": lic.get("kind"),
+            "spdx": lic.get("spdx"),
+            "text": licence_text(lic.get("kind", "none recorded"), lic.get("spdx")),
+        }
+    return out
+
+
 def _swap_check(args: argparse.Namespace) -> int:
     """The record's problems with the repository's evidence: 1 when it does not hold, 2 when an
     input (the record, the role table at either end, the store, a report) cannot be read."""
@@ -471,15 +576,21 @@ def _swap_check(args: argparse.Namespace) -> int:
             )
         if not problems:
             problems = ms.module_swap_problems(record, tree.mods, site, models=models)
+    licence = _swap_licences(record, tree.mods)
     if args.json:
-        print(
-            json.dumps(
-                {"problems": problems, "base": base, "evidence": models is not None}, indent=2
-            )
-        )
+        doc = {"problems": problems, "base": base, "evidence": models is not None}
+        if licence:
+            doc["licence"] = licence
+        print(json.dumps(doc, indent=2))
     else:
         for p in problems:
             print(p)
+        if licence:
+            frm, to = licence["from"], licence["to"]
+            print(
+                f"licence: {frm['module']} {frm['text']} -> {to['module']} {to['text']}"
+                + ("" if frm["text"] == to["text"] else " (the licence changes)")
+            )
         what = "with model evidence from the base" if models else "no model evidence needed"
         print(f"hnx modules swap-check: {len(problems)} problem(s) ({what}, base {base})")
     return 1 if problems else 0
@@ -561,6 +672,8 @@ def _run(args: argparse.Namespace) -> int:
         return _gather(args)
     if args.cmd == "catalog-tables":
         return _catalog_tables(args)
+    if args.cmd == "providers":
+        return _providers(args)
     if args.cmd == "review-tier":
         return _review_tier(args)
     if args.cmd == "swap-check":
@@ -647,6 +760,7 @@ def _run(args: argparse.Namespace) -> int:
         )
     roles = _read(roles_path, "role table", budget)
     services = args.services or _existing(lab and lab / "services.yml")
+    example_registry = services is None
     if services is None:
         if lab:
             fallback("the core registry", lab / "services.yml")
@@ -711,7 +825,27 @@ def _run(args: argparse.Namespace) -> int:
         budget=budget,
         empty_selection=empty,
     )
-    found = sorted({*problems, *registry_problems, *slot_problems, *report.problems, *fallbacks})
+    impl_problems: list[ld.Problem] = []
+    if site is not None and not any(
+        p.where == "site" and p.message.startswith("schema:") for p in report.problems
+    ):
+        if example_registry:
+            notes.append(
+                "the core registry's impl: was not compared with the site selection (the "
+                "registry is the repository's example, which describes another lab)"
+            )
+        else:
+            impl_problems = _impl_problems(site, tree.mods, _read(services, "registry", budget))
+    found = sorted(
+        {
+            *problems,
+            *registry_problems,
+            *slot_problems,
+            *report.problems,
+            *fallbacks,
+            *impl_problems,
+        }
+    )
     notes += report.notes
     written: dict[str, int] = {}
     error = None
