@@ -147,6 +147,32 @@ def _any_allow_vs_internet_deny(d):
     d["firewall"]["zone_to_zone"].append({"from": "data", "to": "any", "action": "allow"})
 
 
+def _any_allow_reaches_one_way(d):
+    # edge may reach the internet, so only the one-way contract stands in the way: 'any' covers
+    # sandbox, and the adapters render it with no destination match
+    d["firewall"]["zone_to_zone"].append({"from": "edge", "to": "any", "action": "allow"})
+
+
+def _icmp_beside_ports(d):
+    d["firewall"]["zone_to_zone"][1]["protocols"] = ["tcp", "icmp"]
+
+
+def _router_is_a_dns_adapter(d):
+    d["router"]["model"] = "zonefile"
+
+
+def _network_adapter_is_a_dns_adapter(d):
+    d["adapters"]["network"] = "dnsmasq"
+
+
+def _dns_adapter_is_a_network_adapter(d):
+    d["adapters"]["dns"] = "linux"
+
+
+def _switch_is_a_router_adapter(d):
+    d["switches"][0]["model"] = "linux"
+
+
 def _switch_unknown_vlan(d):
     d["switches"][0]["port_assignments"][1]["vlan"] = 99
 
@@ -248,6 +274,12 @@ CASES = [
     (_one_way_internet, "one_way requires egress.internet=deny"),
     (_any_deny_vs_internet_allow, "contradicts egress.internet=allow"),
     (_any_allow_vs_internet_deny, "allow to 'any' contradicts egress.internet=deny"),
+    (_any_allow_reaches_one_way, "allow to 'any' reaches one-way zone(s) sandbox"),
+    (_icmp_beside_ports, "icmp has no ports"),
+    (_router_is_a_dns_adapter, "router.model: 'zonefile' is not a network adapter"),
+    (_network_adapter_is_a_dns_adapter, "adapters.network: 'dnsmasq' is not a network adapter"),
+    (_dns_adapter_is_a_network_adapter, "adapters.dns: 'linux' is not a dns adapter"),
+    (_switch_is_a_router_adapter, "model: 'linux' is not a switch adapter"),
     (_switch_unknown_vlan, "vlan 99 is not a zone"),
     (_switch_port_twice, "port 3 already assigned"),
     (_switch_reversed_range, "bad port range"),
