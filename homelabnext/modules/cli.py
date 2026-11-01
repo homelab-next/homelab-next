@@ -333,6 +333,14 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="a <module>/<dataset> route that feeds the table (repeat for each)",
     )
+    b.add_argument(
+        "--items-carried-no-labels",
+        action="append",
+        default=[],
+        metavar="ROUTE",
+        help="a --route whose items a human has checked never carried a label of their own, so "
+        "its old rows take its declared label (repeat for each; every other route's rows are red)",
+    )
     b.add_argument("--map", type=Path, help="JSON object: a recorded source value -> its route")
     b.add_argument("--source-column", help="the column the source is recorded in (a.b for a field)")
     g = sub.add_parser(
@@ -726,7 +734,11 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
         missing = [r for r, entry in found.items() if entry is None]
         if missing:
             raise BackfillError(f"--route: routes the source table does not hold: {missing}")
-        sources = {r: Source(*entry) for r, entry in found.items()}
+        unknown = sorted(set(args.items_carried_no_labels) - set(found))
+        if unknown:
+            raise BackfillError(f"--items-carried-no-labels: not a --route: {unknown}")
+        recorded = set(args.items_carried_no_labels)
+        sources = {r: Source(*entry, r in recorded) for r, entry in found.items()}
         if (args.map is None) != (args.source_column is None):
             raise BackfillError("--map and --source-column go together")
         mapping = json.loads(args.map.read_text(encoding="utf-8")) if args.map else {}

@@ -7,9 +7,11 @@ the lab's engine, in order.  The rule:
 * the column is added where the table lacks it;
 * a row whose source is recorded (``source_column`` names it, a top-level column or one struct
   field, ``metadata.log_source`` say) takes that source's declared label, mapped from the source
-  value to its ``<module>/<dataset>`` route; a source whose items carried labels of their own that
-  were never stored (it honours item labels) is backfilled ``red``, as the lost labels may have
-  been stricter;
+  value to its ``<module>/<dataset>`` route, but only where a human has recorded that the source's
+  items carried no labels of their own (:attr:`Source.items_carried_no_labels`).  Every other
+  source is backfilled ``red``: the rows predate the column, so no item label was ever stored, and
+  a lost one may have been stricter than the declaration (decision 3 lets it be, whether or not the
+  source honours item labels);
 * a row whose source is not recorded, or is a value the mapping does not know, takes the
   strictest label of any source that feeds the table;
 * only rows whose ``tlp`` is still null are touched, so running the plan twice changes nothing,
@@ -22,9 +24,8 @@ bound by a client.  The table name is checked to be a plain or dotted identifier
 value may hold no control character, so nothing in the plan can hide a second statement.  The
 plan ends with two checks for the operator: no row is left unlabelled, and the rows holding a
 non-canonical label (``white``, ``Green``, a damaged value) are listed for a human decision; they
-read as ``red`` until then and are never relabelled by a guess.  It assumes a source that does not
-honour item labels never stored stricter ones its items carried (the writer kept the stricter
-label, decision 3); where that is not so, map its values to a source declared ``red``.
+read as ``red`` until then and are never relabelled by a guess.  Nothing here lowers a row below
+``red`` on an assumption: the declared label is used only on the human record above.
 """
 
 from __future__ import annotations
@@ -46,15 +47,21 @@ class BackfillError(ValueError):
 
 @dataclass(frozen=True)
 class Source:
-    """One source that feeds the table: its declared label and whether it honours item labels."""
+    """One source that feeds the table.
+
+    ``label`` and ``honour_item_labels`` are its declaration.  ``items_carried_no_labels`` is the
+    human record decision 5 asks for: that the source's items never carried a label of their own,
+    so none was lost when its old rows were stored without one.  It defaults to ``False``.
+    """
 
     label: tlp.Label
     honour_item_labels: bool = False
+    items_carried_no_labels: bool = False
 
     @property
     def backfill(self) -> tlp.Label:
-        """The label its old rows get: red when its items' own labels were never stored."""
-        return tlp.Label.RED if self.honour_item_labels else self.label
+        """The label its old rows get: the declaration on the human record, otherwise red."""
+        return self.label if self.items_carried_no_labels else tlp.Label.RED
 
 
 _TABLE = re.compile(

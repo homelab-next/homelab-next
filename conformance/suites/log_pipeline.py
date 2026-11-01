@@ -29,6 +29,7 @@ from conformance.fakes.log_pipeline import (
     TlpNeverHonoursPipeline,
     TlpNormalisesRoutePipeline,
     TlpNoRouteUnlabelledPipeline,
+    TlpReadsOnlyTheTlpFieldPipeline,
     TrustsSelfNonePipeline,
 )
 from conformance.protocols.log_pipeline import Observed
@@ -372,6 +373,23 @@ def _(t):
 
 
 @SUITE.check(
+    "tlp-carried-labels-read",
+    "an item label carried as a tlp: tag, an OCSF osint entry's tlp or a STIX TLP marking counts",
+)
+def _(t):
+    # On a source that honours item labels, a looser tlp field beside a carried label equal to the
+    # declaration: only reading the carrier gives the declaration (so no other TLP rule decides it).
+    green = "marking-definition--34098fce-860f-48ae-8e50-ebd3cc5e41da"  # TLP 1.0 green
+    for carried in (
+        {"tags": ["phishing", "tlp:green"]},
+        {"tags": [{"name": "TLP:GREEN"}]},
+        {"osint": [{"value": "x", "tlp": "green"}]},
+        {"object_marking_refs": [green]},
+    ):
+        _tlp_is(_routed(t, _dns(tlp="clear", **carried), HONOURED), "green")
+
+
+@SUITE.check(
     "tlp-looser-claim-needs-honour",
     "a looser item label is raised to the declaration, unless the dataset honours item labels",
 )
@@ -466,6 +484,11 @@ MUTANTS = {
         TlpDropsStricterClaimPipeline,
         "tlp-stricter-claim-kept",
         "an item label stricter than the declaration is dropped",
+    ),
+    "tlp-reads-only-the-tlp-field": Mutant(
+        TlpReadsOnlyTheTlpFieldPipeline,
+        "tlp-carried-labels-read",
+        "an item label carried as a tag, an osint entry or a STIX marking is ignored",
     ),
     "tlp-honours-every-source": Mutant(
         TlpHonoursEverySourcePipeline,

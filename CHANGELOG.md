@@ -7,6 +7,9 @@ has no section below.
 ## [Unreleased]
 
 ### Changed
+- `--notify-ceiling` has no default: `hnx broker serve` and `hnx status collect` refuse `--notify-topic` without it (`red` for a channel only the operators read), as ADR-0033 decision 6 refuses a reader without a declared TLP ceiling (docs/broker.md, docs/status.md). `notify.ceiling_from_flag(None)` now raises instead of returning `red`. Add `--notify-ceiling red` to existing units to keep their behaviour.
+- The TLP backfill plan labels a source's old rows `red` unless a human records that its items never carried labels of their own (`backfill.Source(..., items_carried_no_labels=True)`, `hnx modules tlp-backfill --items-carried-no-labels ROUTE`; ADR-0033 decision 5; homelabnext/lake/README.md). It used to give a source that does not honour item labels its declared label, though an item's own stricter label was never stored for those rows.
+- `tlp_egress.analyzers_for` refuses (`ValueError`, naming the analyzer) a declared maximum that is not a canonical label, instead of silently sending that analyzer nothing; ADR-0033 decision 1 now says stored values and authored tables are canonical and the lenient spellings are for carried labels.
 - ADR-0033 (TLP labels on data, a TLP ceiling on every reader) is accepted.
 
 ### Added
@@ -168,6 +171,11 @@ has no section below.
 - OpenFGA (`authz`) from the lab-in-a-box: it backed no capability or conformance suite, and authorisation in this design is the identity provider plus the broker's allowlists and bound approvals.
 
 ### Fixed
+- `TrinoHTTP` retries the statement `POST` on `503` only, as its docstring says: a `502` or `504` from a proxy may come after the coordinator took the query, and re-sending it could run an `INSERT` twice past the content-key lookup. Reading `nextUri` still retries `502`/`503`/`504`.
+- `events.schema_for_type` builds a schema path only from a type the envelope's pattern allows, so a crafted type (`homelabnext.../ids/common`) can no longer pick another schema and skip the envelope's required fields.
+- `events.enrich_event` fills owner and criticality from the asset a publisher-set `assetid` names (or leaves them unset when the inventory does not know it), never from a different resolved asset (docs/events.md).
+- `power.fleet_problems` no longer raises `TypeError` on a `power.ups` that is neither a string nor a list; the problem `ref_problems` reports stands.
+- The `HttpForwarder` docstring no longer claims a plain `200` after a prior accept is reported as a duplicate; only a `{"duplicate": true}` body is. docs/interfaces.md lists the TLP surfaces (`tlp`, `tlp_egress`, `logpipeline`, `lake.rows`, `lake.ceiling`, `lake.backfill`, `TrinoRestLake`, `CeilingSender`) and `Message.tlp`.
 - The baseline playbook's central-role rows carry the guest's zone `gateway` and `dhcp_range` (`[first, last]`) after `subnet`/`subnet6`, and `hnx_enroll_address_problems` refuses a row's IPv4 extra address that is the gateway or inside the DHCP pool, as guest validation does; a hand-written row without them is judged as before, and an IPv6 extra inside another zone's prefix stays the generator's refusal alone (a row names no other zone).
 
 - `tools/schema_check.py` holds every change below `not`, `if`, a non-discriminated `oneOf` or a capped `contains` (and in a local definition such a position uses) to an unchanged subschema: a wider subschema there can make the schema accept less, which the additive check accepted (`{"not": {"enum": ["a"]}}` widened to `["a", "b"]` read as additive). A `oneOf` whose branches each require a property pinned to a distinct `const` stays monotone.
@@ -227,6 +235,9 @@ has no section below.
 - The OpenBao secrets adapter passed `version=0` to KV v2, which reads it as "latest": `get(path, version=0)` returned the newest secret. Versions below 1 are now refused as absent, and so is any version that is not an int (`int()` read `True` as 1, `1.9` as 1 and `"2"` as 2, and raised a raw `ValueError`/`OverflowError` for `nan`/`inf`), before any request. `lease(path, inf)` raised a raw `OverflowError` after the lease ACL policy was written; a ttl that is not finite is now a `LeaseError` before anything is written.
 
 ### Security
+- The egress marker scan reads `TLP` followed by a label word after up to three separators that are not letters or digits, or none (`TLP-AMBER`, `TLP_RED`, `TLP/AMBER`, `[TLP=RED]`, `TLPRED`), so a body quoting such a header can no longer leave at a looser claimed label (ADR-0033 decision 13; docs/modules.md, "Egress points").
+- The log pipeline reads item TLP labels carried as a `tlp:` tag in `tags` (a string or a tag object's `name`), the `tlp` of an OCSF `osint` entry and a STIX TLP marking in `object_marking_refs`, besides `tlp`/`labels.tlp`, so a stricter carried label is no longer lost to the looser declaration (docs/log-pipeline.md; conformance check `tlp-carried-labels-read` with its mutant).
+- `homelabnext.lake.rows.row_from_event(event, schema)` is the event-to-row mapping: the row's `tlp` is the event's `labels.hnx_tlp`, never the event's own `tlp` field (which a by-name mapping would store, bypassing the relabelling), and an event without a canonical `hnx_tlp` is refused for a labelled table (docs/log-pipeline.md, homelabnext/lake/README.md).
 
 - `hnx site review-tier` rates a change to a zone's `purpose` human-approve; it was owner ("a description"), but `purpose: management` opens SSH to the router from that zone (the `linux` adapter) and makes its mirrored traffic sensitive, so an owner-tier edit could open the router's SSH to the internet-ingress zone. `site.domain` is human-approve too (it was owner with the id and timezone): the lab's DNS answers that domain locally for every client and DHCP pushes it as the search domain, so renaming it to a public domain would resolve that domain inside the lab.
 - `hnx modules review-tier` rates a change to a module's `requires.hosts` or `requires.scope` human-approve; both were owner, though `requires.hosts` decides which host roles the module's roles run on as root (and their exposure: moving a role onto the internet-facing host role) and `requires.scope` the scope parts it may act on.

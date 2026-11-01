@@ -42,6 +42,32 @@ def _label(event):
         ({"tlp": "clear"}, "feeds/partner", "amber"),
         ({"tlp": "clear"}, "sensor/sightings", "red"),
         ({"tlp": "clear"}, "feeds/community", "clear"),
+        # labels carried as a tag, an OCSF osint entry's tlp or a STIX marking are claims too
+        ({"tags": ["phishing", "tlp:amber"]}, "feeds/open", "amber"),
+        ({"Tags": "TLP:RED"}, "feeds/open", "red"),
+        ({"tags": [{"name": "tlp:amber"}, {"name": "osint"}]}, "feeds/open", "amber"),
+        ({"tags": ["tlp:amber-strict"]}, "feeds/open", "red"),  # a TLP tag that is no label
+        ({"tags": ["phishing", 3, None]}, "feeds/open", "clear"),  # no TLP tag
+        ({"tags": ["tlp:clear"]}, "feeds/partner", "amber"),  # looser: raised
+        ({"tags": ["tlp:clear"]}, "feeds/community", "clear"),  # unless honoured
+        ({"osint": [{"value": "x", "tlp": "amber"}, {"value": "y"}]}, "feeds/open", "amber"),
+        ({"osint": {"tlp": "TLP:RED"}}, "feeds/open", "red"),
+        ({"osint": [{"value": "y"}]}, "feeds/open", "clear"),
+        (
+            {"object_marking_refs": ["marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421"]},
+            "feeds/open",
+            "amber",
+        ),
+        (
+            {"object_marking_refs": ["marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"]},
+            "feeds/open",
+            "red",
+        ),
+        (  # a marking that is not a TLP one (a statement) is not a label
+            {"object_marking_refs": ["marking-definition--00000000-0000-4000-8000-000000000000"]},
+            "feeds/open",
+            "clear",
+        ),
         # two spellings of the claim: the strictest of them
         ({"tlp": "clear", "Tlp": "amber"}, "feeds/community", "amber"),
         # an unknown, missing or malformed route is red

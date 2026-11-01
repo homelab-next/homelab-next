@@ -35,6 +35,19 @@ from homelabnext.tlp_egress import (
         ("TLP green", [Label.GREEN]),
         ("TLP AMBERSTRICT", [Label.RED]),  # glued: not a label
         ("TLP REDACTED", [Label.RED]),  # a word that starts like a label is read whole: red
+        # the other separators real report headers, file names and exports use
+        ("TLP-AMBER", [Label.AMBER]),
+        ("TLP_RED", [Label.RED]),
+        ("TLP/AMBER", [Label.AMBER]),
+        ("[TLP=RED]", [Label.RED]),
+        ("report_TLP-GREEN.pdf", [Label.GREEN]),
+        ("TLP--CLEAR", [Label.CLEAR]),
+        ("TLP - AMBER", [Label.AMBER]),
+        ("TLP_AMBER+STRICT", [Label.AMBER_STRICT]),
+        ("TLP_AMBER_STRICT", [Label.RED]),
+        ("TLPRED", [Label.RED]),
+        ("TLP.WHITE", [Label.CLEAR]),
+        ("TLP-protocol", []),  # no label word: prose
         # every other spelling of amber+strict is not a label: red (decision 1)
         ("TLP:AMBER STRICT", [Label.RED]),
         ("TLP:AMBER-STRICT", [Label.RED]),
@@ -69,6 +82,7 @@ def test_markers(text, want):
         ("clear", "clear", "", Label.CLEAR),
         ("clear", "amber", "", Label.AMBER),  # a claim never loosens the record
         ("clear", "clear", "see TLP:RED", Label.RED),  # a stricter marker wins
+        ("clear", "clear", {"x": "TLP-AMBER"}, Label.AMBER),  # in any common spelling
         ("amber", "clear", "TLP:GREEN", Label.AMBER),
         (None, "clear", "", Label.RED),  # no claim is red
         ("clear", None, "", Label.RED),  # a recorded label that is missing is red
@@ -120,7 +134,6 @@ def test_analyzers_for():
         "c-partner": "amber",
         "d-local": "red",
         "e-undeclared": None,
-        "f-odd": "TLP:AMBER",
         7: "red",  # an analyzer named by anything but a string is skipped
     }
     assert analyzers_for(Label.CLEAR, maxima) == ["a-open", "b-community", "c-partner", "d-local"]
@@ -129,3 +142,7 @@ def test_analyzers_for():
     assert analyzers_for(Label.AMBER, {}) == []
     with pytest.raises(TypeError):
         analyzers_for("clear", maxima)
+    # a declared maximum that is not canonical is an authored mistake: refused, never dropped
+    for odd in ("TLP:AMBER", "AMBER", "white", 3):
+        with pytest.raises(ValueError, match="f-odd"):
+            analyzers_for(Label.GREEN, {**maxima, "f-odd": odd})

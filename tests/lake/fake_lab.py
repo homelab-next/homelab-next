@@ -218,6 +218,11 @@ class FakeLab:
         self.tables: dict[tuple[str, str], dict[str, Any]] = {}
         self.statements: list[str] = []
         self.conflicts = 0  # answer the next N commits with 409
+        # A proxy in front of the coordinator: the next statements holding a key followed by a
+        # space (``INSERT``, ``SELECT``) or the next page reads (``GET``) are answered with these HTTP
+        # codes.  A statement answered 503 is not run (the coordinator is busy); one answered 502
+        # or 504 was run first (the coordinator took it, the proxy lost the reply).
+        self.proxy_errors: dict[str, list[int]] = {}
         self.schema_override: dict[str, list[dict[str, Any]]] = {}
         self._ids = itertools.count(1)
         self._pending: dict[str, list[dict[str, Any]]] = {}
@@ -263,15 +268,29 @@ class FakeLab:
         with self._lock:
             path = urllib.parse.urlsplit(h.path)
             if path.path == "/v1/statement" and body is not None:
-                return self._statement(h, body.decode("utf-8"))
+                text = body.decode("utf-8")
+                hit = [k for k in self.proxy_errors if k != "GET" and f"{k} " in text]
+                codes = self.proxy_errors[hit[0]] if hit else []
+                if codes and codes[0] == 503:
+                    return self._proxy_error(h, codes.pop(0))
+                return self._statement(h, text, codes.pop(0) if codes else None)
             if path.path.startswith("/v1/statement/"):
+                if codes := self.proxy_errors.get("GET"):
+                    return self._proxy_error(h, codes.pop(0))
                 return self._page(h, path.path.rsplit("/", 1)[-1])
             if path.path.startswith("/catalog/v1/"):
                 return self._rest(h, path, body)
             return self._json(h, 404, {"error": {"message": "no route", "code": 404}})
 
     # ---------------------------------------------------------------- Trino
-    def _statement(self, h, text):
+    def _proxy_error(self, h, code):
+        body = b"proxy error"
+        h.send_response(code)
+        h.send_header("Content-Length", str(len(body)))
+        h.end_headers()
+        h.wfile.write(body)
+
+    def _statement(self, h, text, proxy_error=None):
         qid = f"20260301_000000_{next(self._ids):05d}_fake"
         self.statements.append(text)
         ns = h.headers.get("X-Trino-Schema", "")
@@ -299,6 +318,8 @@ class FakeLab:
                 pg["nextUri"] = f"{self.url}/v1/statement/executing/{qid}.{i + 1}"
             chain.append(pg)
         self._pending[qid] = chain
+        if proxy_error is not None:
+            return self._proxy_error(h, proxy_error)
         return self._json(
             h, 200, {"id": qid, "nextUri": f"{self.url}/v1/statement/queued/{qid}.0", "stats": {}}
         )

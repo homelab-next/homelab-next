@@ -13,9 +13,9 @@ from homelabnext.tlp import Label
 SCHEMAS = load_schemas()
 S = SCHEMAS["authentication"]
 SOURCES = {
-    "feeds/open": Source(Label.CLEAR),
+    "feeds/open": Source(Label.CLEAR, items_carried_no_labels=True),
     "feeds/community": Source(Label.GREEN, honour_item_labels=True),
-    "sensor/sightings": Source(Label.AMBER),
+    "sensor/sightings": Source(Label.AMBER, items_carried_no_labels=True),
 }
 MAP = {"sensor-a": "feeds/open", "sensor-b": "feeds/community", "o'brien": "sensor/sightings"}
 
@@ -31,7 +31,7 @@ def test_the_plan():
     assert steps[0] == 'ALTER TABLE "authentication" ADD COLUMN IF NOT EXISTS "tlp" VARCHAR'
     by_value = {s.rsplit(" = ", 1)[1]: s for s in steps[1:-3]}
     assert "SET \"tlp\" = 'clear'" in by_value["'sensor-a'"]
-    # a source whose items' own labels were never stored is backfilled red
+    # a source with no human record that its items carried no labels is backfilled red
     assert "SET \"tlp\" = 'red'" in by_value["'sensor-b'"]
     assert "'o''brien'" in by_value  # a literal is quoted
     assert all('WHERE "tlp" IS NULL' in s for s in steps[1:-2])
@@ -43,8 +43,20 @@ def test_the_plan():
 
 
 def test_without_a_source_column_every_row_takes_the_strictest():
-    steps = plan(S, table="t", sources={"feeds/open": Source(Label.CLEAR)}, source_map={})
+    open_ = Source(Label.CLEAR, items_carried_no_labels=True)
+    steps = plan(S, table="t", sources={"feeds/open": open_}, source_map={})
     assert steps[1:-2] == ['UPDATE t SET "tlp" = \'clear\' WHERE "tlp" IS NULL']
+
+
+@pytest.mark.parametrize("honour", [False, True])
+def test_without_a_human_record_old_rows_are_red_whatever_the_source_honours(honour):
+    # The rows predate the column, so an item's own (possibly stricter) label was never stored:
+    # a green source that does not honour item labels may still have carried an amber item.
+    assert Source(Label.GREEN, honour_item_labels=honour).backfill is Label.RED
+    steps = plan(S, table="t", sources={"feeds/x": Source(Label.GREEN, honour)}, source_map={})
+    assert steps[1:-2] == ['UPDATE t SET "tlp" = \'red\' WHERE "tlp" IS NULL']
+    recorded = Source(Label.GREEN, honour, items_carried_no_labels=True)
+    assert recorded.backfill is Label.GREEN
 
 
 def test_the_plan_runs_and_keeps_labelled_rows():
@@ -57,7 +69,7 @@ def test_the_plan_runs_and_keeps_labelled_rows():
     steps = plan(
         S,
         table='"authentication"',
-        sources={"feeds/open": Source(Label.GREEN)},
+        sources={"feeds/open": Source(Label.GREEN, items_carried_no_labels=True)},
         source_map={"sensor-a": "feeds/open"},
         source_column="metadata.log_source",
         add_column=False,
