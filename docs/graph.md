@@ -65,12 +65,15 @@ for every rule, over a fresh `build(root)` with the access-bearing nodes the pro
 granted removed; it reads review summaries to apply `require_reviews` and lists inactive records
 as exclusions. `hnx graph related` is the same query on the command line.
 
-**Inactive records.** A lesson or runbook whose `status` is `retired` (a pitfall fixed for good,
-`retired_by` naming an invariant or test) or `superseded` (a practice replaced, `superseded_by`
-naming the lesson that replaces it) or `incorporated` (a practice absorbed into a runbook or
-system page, `incorporated_into` naming it; runbook steps cite it with `from_lessons`) is left out
-of all three functions and of `hnx graph related` unless `include_inactive=True` /
-`--include-inactive`: a retired lesson is history and must stop costing context tokens, and a
+**Inactive records.** A node whose `status` is one of `INACTIVE_STATUSES`
+(`homelabnext/graph/query.py`), whatever its kind, is left out of all three functions and of
+`hnx graph related` unless `include_inactive=True` / `--include-inactive`. For a lesson or runbook
+that is `retired` (a pitfall fixed for good, `retired_by` naming an invariant or test),
+`superseded` (a practice replaced, `superseded_by` naming the lesson that replaces it) or
+`incorporated` (a practice absorbed into a runbook or system page, `incorporated_into` naming it;
+runbook steps cite it with `from_lessons`); for a strategy record that is closed (`achieved`,
+`answered`, `expired`, `no-find`: `homelabnext.strategy.rules.CLOSED`); and for any other node
+carrying one of these, such as an MCP catalog entry that is `retired`: a retired lesson is history and must stop costing context tokens, and a
 question about a system gets the runbook that now carries the knowledge, not the absorbed
 lesson. The index pages list such records under **Archive**.
 
