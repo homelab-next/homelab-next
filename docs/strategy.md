@@ -147,6 +147,11 @@ append-only events (ADR-0014):
   makes a review stale.
 * `transition` events, written only by the decider: the status of a record changes by intent.
 
+`hnx registers events add <tree>/<dir>/<uid>.md EVENT.yml` is the write path for a review or a
+manual `value` event on a strategy record: it validates the whole tree as it will be before the
+file is created, and refuses a `transition` (file an intent) and a `rekey` (only the uid migration
+writes one).
+
 A new record takes a new uid (`hnx records uid`), named `<uid>.md`; nothing is allocated at merge
 time. The four directories are registers of `homelabnext.registers.ids`, so `check-dupes`,
 `check-lost` and `check-uids` guard them like lessons. `hnx reviews digest FILE` prints the digest a
@@ -162,7 +167,7 @@ requirement `active` -> `answered` | `expired` | `retired`; an RFI `open` -> `an
 `doctrine.yml` (`schemas/strategy/doctrine.schema.json`) lists the rules a program can decide,
 each with `enforce: error | warn | 'off'` (quote `'off'`: YAML 1.1 reads a bare `off` as false).
 A rule the file omits takes its default; another discipline writes only what it changes. The
-defaults follow a nine-rule MOE/MOP doctrine:
+defaults are a nine-rule MOE/MOP doctrine plus two cascade rules (`baseline_so`, `so_supported`):
 
 | rule | default | what it does |
 |---|---|---|
@@ -192,7 +197,7 @@ rather than a re-labelled baseline; a MOE that is really an effect and not a dis
 | `invariant:<id>` | the invariants results (`hnx invariants run --out`) | 1 pass, 0 fail (error, skip or missing: a finding) | `checked_at` |
 | `status:<source>[/<item>]` | the status hub's state (`hnx status collect`) | the item's value (else 1 ok, 0 not); without an item the share of the source's items that are ok | `observed_at` |
 | `records:<lane>[?type=<t>]` | a records tree (`homelabnext.records`) | the number of notes in the lane | now |
-| `manual` | nothing: a person writes the `value` event, with `evidence` | | |
+| `manual` | nothing: a person writes the `value` event, with `evidence` (`hnx registers events add <tree>/measures/<uid>.md value.yml`) | | |
 | `none` | not measurable: the `## Not measurable` section is the finding | | |
 
 `hnx strategy measure` reads every bound measure and appends one `value` event per new reading
@@ -226,8 +231,17 @@ open RFI or a pending intent is not raised twice. `strategy-rfi` and `strategy-t
 decider over the strategy tree: `from` must be current, `to` reachable in the lifecycle, the
 review tiers of the target met by current reviews of the prospective content (else the note waits
 in the inbox), and an applied transition writes its event before the note moves, so a crash is
-finished on the next run, never decided twice. The sweep's own identity is `profile:ltiov-sweep`;
-the RFI default LTIOV is `rfi_default_ltiov_days` (30) after the intent.
+finished on the next run, never decided twice. An expiry has no review tier because time decides
+it, so the decider applies `to: expired` only when the record's dated LTIOV is before the
+decider's today, whoever filed the intent (a standing requirement never expires: answer or retire
+it, which a human approves). The sweep's own identity is `profile:ltiov-sweep`; `--sweep` decides
+only the sweep's own expiry intents (other pending intents wait for `hnx strategy decide`); the RFI
+default LTIOV is `rfi_default_ltiov_days` (30) after the intent.
+
+The review policy is `review-policy.yml` in or beside the tree unless `--policy FILE` names one.
+`hnx strategy decide` and `rfis --sweep` fail closed without one: a misplaced private policy would
+otherwise waive every tier and let a human-approve transition apply unreviewed (`--no-policy`
+decides without tiers, on purpose). `hnx strategy check` warns that it checks no review tier.
 
 ## The graph and the hub
 
