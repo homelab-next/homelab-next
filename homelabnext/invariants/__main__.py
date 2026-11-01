@@ -69,7 +69,9 @@ def main(argv=None) -> int:
     r.add_argument("--only")
     r.add_argument(
         "--skip",
-        help="criteria not to run this time (e.g. a main-only property on a pull request)",
+        action="append",
+        help="criteria not to run this time (e.g. a main-only property on a pull request); "
+        "comma-separated, and repeatable: every --skip adds to the set",
     )
     r.add_argument("--fast", action="store_true")
     r.add_argument("--plugins-dir")
@@ -107,7 +109,7 @@ def main(argv=None) -> int:
     except (OSError, UnicodeDecodeError, ValueError) as ex:
         print(f"[invariants] FATAL: cannot read previous results {out}: {ex}", file=sys.stderr)
         return 2
-    skip = set(ns.skip.split(",")) if ns.skip else set()
+    skip = {i for arg in ns.skip or () for i in arg.split(",") if i}
     only = set(ns.only.split(",")) if ns.only else None
     doc = run_criteria(
         reg["criteria"],

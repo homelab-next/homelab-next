@@ -1,6 +1,6 @@
 ---
-summary: 'The build order: public phases P0-P9 provable in CI with fakes, server phases S1-S10 needing a real deployment, and how to read status.'
-summary_of: outline:sha256:1fe171f1ec54f338
+summary: 'The build order: public phases P0-P9 provable in CI with fakes, server phases S1-S10, the v0 slice, experimental and frozen components, reading status.'
+summary_of: outline:sha256:24b0f4a8e75d9901
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Build order
@@ -65,6 +65,54 @@ phases, so the public work is a prerequisite and not a duplicate.
 | S8 | Cutover: capability flips in order, each through the swap procedure | P8 | E, X |
 | S9 | Decommission and consolidation (operator-gated), each through the decommission check | P8 | - |
 | S10 | Assurance loop and publish-back: restore drills, every surprise becomes a lesson plus a checklist step plus (where generic) a fix in this repository | P7 | L |
+
+## The v0 slice
+
+The first lab the platform runs is a deliberately small slice (operator decision, 2026-10-31).
+Effort goes to these, in roughly this order, before anything outside them is built further:
+
+- **registry and aliases**: `services.yml`, `<capability>.svc.<domain>` names, the generators and
+  the no-raw-endpoint gate (P2; ADR-0002);
+- **OpenBao**, the secrets slot (lab-in-a-box `secrets`; the overlay's SSH certificates use it);
+- **the lake**: Garage (object store), Lakekeeper (Iceberg REST catalog) and Trino (query), with
+  the pinned OCSF tables (P3, S3);
+- **Sigma detections** as code, with fixtures and `det:` ids ([detections.md](detections.md);
+  P6, ADR-0006);
+- **the broker**, the one way agents and workflows act ([broker.md](broker.md); ADR-0017,
+  ADR-0030);
+- **notify**, state-diffed paging (the `notify` capability and its suite);
+- **the status hub** ([status.md](status.md); ADR-0013);
+- **SSO** through Keycloak (ADR-0034, in flight).
+
+The LLM gateway stays LiteLLM alone (ADR-0022, amended 2026-10-31: the Bifrost adapter is
+removed). The lessons, runbooks and invariants registers stay. Projects and tasks live in
+OpenProject only.
+
+## Experimental and frozen components
+
+`tools/experimental.yml` is the one reviewed list of the components taken out of the blocking set
+without being deleted. A listed component keeps its code and its tests, and they still run, in
+`make experimental` and CI's `experimental` job (allowed to fail, needed by no other job); what it
+loses is the power to block a merge: `make check`, `make test` and CI's required jobs run none of
+its gates and deselect its tests (`-m "not live and not experimental"`; the marker comes from the
+list, `tests/experimental_marker.py`), and `make invariants` (CI's invariants job) skips the
+criteria it owns.
+`tools/tests/test_experimental.py` holds the Makefile, CI and the invariants register to the list.
+Today it lists:
+
+- **StackStorm**, *experimental* until a lab host runs it ([stackstorm.md](stackstorm.md)). The
+  workflow packs stay a product-neutral spec and `hnx workflows validate` stays blocking; the
+  orchestration controller stays the agent-session scheduler (the two do different jobs:
+  [workflows.md](workflows.md)).
+- **Code Mode**, *frozen* at its current step until the core lab runs (CM-7 and CM-8 not built;
+  [codemode.md](codemode.md), ADR-0031).
+- **The strategy stack** (objectives, requirements, RFIs, measures), *frozen*
+  ([strategy.md](strategy.md)).
+- **The home-built projects store**, *frozen*, not removed: it is the `projects` suite's reference
+  target and the hub and the graph read it ([projects.md](projects.md)).
+
+To bring a component back, delete its entry, put its gates back into `make check` and CI, and
+take its criteria out of the Makefile's `EXPERIMENTAL_INVARIANTS`, in one change.
 
 ## Reading the status
 

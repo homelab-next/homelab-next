@@ -4,8 +4,7 @@
    "caddy": 16
   },
   "Makefile": {
-   "caddy": 5,
-   "stackstorm": 1
+   "caddy": 5
   },
   "ansible/inventory/example/hosts.yml": {
    "nifi": 3

@@ -49,5 +49,7 @@ allow:
     reason: frozen baselines are append-only byte copies of reviewed live schemas (schema_check.py --freeze), counted where the live schema lives; a copy of a schema that names a product in an enum or a description would otherwise double its debt
   - path: "NOTICE"
     reason: the attribution notice is prose
+  - path: "tools/experimental.yml"
+    reason: the reviewed list of experimental and frozen components names each component it takes out of the blocking set, and the paths of its tests and docs; the code those name is counted where it lives
   - path: "tools/tests/test_product_name_lint.py"
     reason: the lint's own tests plant product names on purpose
