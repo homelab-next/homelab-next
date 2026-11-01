@@ -8,10 +8,24 @@ import synthetic
 
 from homelabnext import tlp
 from homelabnext.lake import FakeLake, load_schemas
-from homelabnext.lake.ceiling import MAX_LIMIT, CeilingError, CeilingReader
+from homelabnext.lake.ceiling import (
+    MAX_LIMIT,
+    CeilingError,
+    CeilingReader,
+    RedGrant,
+    raw_named,
+    raw_query,
+    reader_for,
+)
 from homelabnext.tlp import Label
 
 SCHEMAS = load_schemas()
+GRANT = RedGrant("tests", "the reader tests read every row")
+
+
+def _reader(lake, ceiling, schemas=SCHEMAS):
+    """A reader at ``ceiling``, under the tests' grant when it is red."""
+    return CeilingReader(lake, ceiling, schemas, grant=GRANT if ceiling is Label.RED else None)
 
 
 @pytest.fixture
@@ -36,13 +50,13 @@ def _labels(rows):
     ],
 )
 def test_select_returns_rows_at_or_below_the_ceiling(lake, ceiling, want):
-    rows = CeilingReader(lake, ceiling, SCHEMAS).select("authentication", ["uid", "user_name"])
+    rows = _reader(lake, ceiling, SCHEMAS).select("authentication", ["uid", "user_name"])
     assert _labels(rows) == want
     assert all(set(r) == {"uid", "user_name", "tlp"} for r in rows)  # tlp always comes back
 
 
 def test_where_filters_by_equality_with_bound_values(lake):
-    reader = CeilingReader(lake, Label.RED, SCHEMAS)
+    reader = _reader(lake, Label.RED, SCHEMAS)
     rows = reader.select("authentication", ["uid"], {"user_name": "alice"})
     assert rows and all(r["uid"] for r in rows)
     # a value is a parameter, never SQL
@@ -53,15 +67,15 @@ def test_a_row_with_no_label_reads_red(lake):
     s = SCHEMAS["authentication"]
     lake._db.execute(f'UPDATE "{s.name}" SET tlp = NULL WHERE uid = ?', ("auth-000000",))
     lake._db.execute(f'UPDATE "{s.name}" SET tlp = ? WHERE uid = ?', ("Green", "auth-000001"))
-    green = CeilingReader(lake, Label.GREEN, SCHEMAS).select("authentication", ["uid"])
+    green = _reader(lake, Label.GREEN, SCHEMAS).select("authentication", ["uid"])
     assert {"auth-000000", "auth-000001"}.isdisjoint(r["uid"] for r in green)
-    red = CeilingReader(lake, Label.RED, SCHEMAS).select("authentication", ["uid"])
+    red = _reader(lake, Label.RED, SCHEMAS).select("authentication", ["uid"])
     assert {"auth-000000", "auth-000001"} <= {r["uid"] for r in red}
 
 
 @pytest.mark.parametrize("ceiling", [Label.CLEAR, Label.AMBER])
 def test_raw_sql_is_refused_below_red(lake, ceiling):
-    reader = CeilingReader(lake, ceiling, SCHEMAS)
+    reader = _reader(lake, ceiling, SCHEMAS)
     with pytest.raises(CeilingError, match="refused below red"):
         reader.query("SELECT 'clear' AS tlp, user_name FROM authentication")
     with pytest.raises(CeilingError, match="refused below red"):
@@ -69,7 +83,7 @@ def test_raw_sql_is_refused_below_red(lake, ceiling):
 
 
 def test_raw_sql_is_allowed_at_red(lake):
-    rows = CeilingReader(lake, Label.RED, SCHEMAS).query("SELECT count(*) AS n FROM authentication")
+    rows = _reader(lake, Label.RED, SCHEMAS).query("SELECT count(*) AS n FROM authentication")
     assert rows == [{"n": 10}]
 
 
@@ -87,7 +101,7 @@ def test_raw_sql_is_allowed_at_red(lake):
 )
 def test_select_refuses_what_it_cannot_check(lake, call, needle):
     with pytest.raises(CeilingError, match=needle):
-        call(CeilingReader(lake, Label.CLEAR, SCHEMAS))
+        call(_reader(lake, Label.CLEAR, SCHEMAS))
 
 
 def test_a_table_without_a_label_column_is_red_only(lake):
@@ -95,14 +109,14 @@ def test_a_table_without_a_label_column_is_red_only(lake):
     unlabelled = dataclasses.replace(s, columns=tuple(c for c in s.columns if c.name != "tlp"))
     schemas = {**SCHEMAS, "authentication": unlabelled}
     with pytest.raises(CeilingError, match="only red reads it"):
-        CeilingReader(lake, Label.AMBER, schemas).select("authentication", ["uid"])
-    assert CeilingReader(lake, Label.RED, schemas).select("authentication", ["uid"])
+        _reader(lake, Label.AMBER, schemas).select("authentication", ["uid"])
+    assert _reader(lake, Label.RED, schemas).select("authentication", ["uid"])
 
 
 @pytest.mark.parametrize("ceiling", ["green", None, 1])
 def test_the_ceiling_must_be_parsed(lake, ceiling):
     with pytest.raises(TypeError, match="ceiling must be a Label"):
-        CeilingReader(lake, ceiling, SCHEMAS)
+        _reader(lake, ceiling, SCHEMAS)
 
 
 def test_row_filter_sql():
@@ -118,10 +132,71 @@ def test_row_filter_sql():
 
 
 def test_the_ceiling_is_fixed_and_odd_arguments_are_refused(lake):
-    reader = CeilingReader(lake, Label.CLEAR, SCHEMAS)
+    reader = _reader(lake, Label.CLEAR, SCHEMAS)
     with pytest.raises(AttributeError):
         reader.ceiling = Label.RED
     with pytest.raises(CeilingError, match="unknown table"):
         reader.select(["authentication"])
     with pytest.raises(CeilingError, match="at least one column"):
         reader.select("authentication", [])
+
+
+# ---------------------------------------------------------------- red is never a default
+@pytest.mark.parametrize("grant", [None, "tests", object()])
+def test_a_red_reader_needs_a_red_grant(lake, grant):
+    with pytest.raises(CeilingError, match="needs a RedGrant"):
+        CeilingReader(lake, Label.RED, SCHEMAS, grant=grant)
+
+
+def test_a_reader_below_red_takes_no_grant(lake):
+    with pytest.raises(CeilingError, match="takes no red grant"):
+        CeilingReader(lake, Label.GREEN, SCHEMAS, grant=GRANT)
+
+
+@pytest.mark.parametrize("holder, why", [("", "x"), ("x", " "), (None, "x"), ("x", 3)])
+def test_a_red_grant_names_who_and_why(holder, why):
+    with pytest.raises(CeilingError, match="non-empty"):
+        RedGrant(holder, why)
+
+
+def test_raw_reads_run_only_under_a_grant(lake):
+    named = FakeLake(SCHEMAS, named_queries={"n": "SELECT count(*) AS n FROM authentication"})
+    assert raw_query(lake, GRANT, "SELECT count(*) AS n FROM authentication") == [{"n": 10}]
+    assert raw_named(named, GRANT, "n") == [{"n": 0}]
+    for call in (lambda: raw_query(lake, None, "SELECT 1"), lambda: raw_named(named, "x", "n")):
+        with pytest.raises(CeilingError, match="needs a RedGrant"):
+            call()
+
+
+READERS = [
+    {"reader": "module:report", "ceiling": "green", "why": "publishes a weekly summary"},
+    {"reader": "profile:hunter", "ceiling": "red", "why": "hunts across every source"},
+    {"reader": "module:shared", "ceiling": "TLP:GREEN", "why": "a lenient spelling"},
+    {"reader": "module:twice", "ceiling": "clear", "why": "a"},
+    {"reader": "module:twice", "ceiling": "clear", "why": "b"},
+    {"reader": "profile:nowhy", "ceiling": "red"},
+]
+
+
+def test_reader_for_reads_the_declared_ceiling(lake):
+    green = reader_for(lake, "module:report", READERS, SCHEMAS)
+    assert green.ceiling is Label.GREEN
+    assert _labels(green.select("authentication", ["uid"])) == ["clear", "green"]
+    red = reader_for(lake, "profile:hunter", READERS, SCHEMAS)
+    assert red.ceiling is Label.RED
+    assert red.query("SELECT count(*) AS n FROM authentication") == [{"n": 10}]
+
+
+@pytest.mark.parametrize(
+    "reader, needle",
+    [
+        ("module:unlisted", "no declared TLP ceiling"),  # ADR-0033 decision 6: refused
+        ("module:shared", "not a canonical TLP label"),
+        ("module:twice", "declared 2 times"),
+        ("profile:nowhy", "needs a why"),
+        ("", "not a reader id"),
+    ],
+)
+def test_reader_for_refuses_a_reader_without_one_valid_declaration(lake, reader, needle):
+    with pytest.raises(CeilingError, match=needle):
+        reader_for(lake, reader, READERS, SCHEMAS)

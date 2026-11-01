@@ -34,6 +34,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from homelabnext.lake.ceiling import RedGrant, raw_query
 from homelabnext.lake.errors import LakeError
 from homelabnext.lake.sqlparams import quote_table
 from homelabnext.parity import ParityQuery, ParityReport, Sample, compare_queries, compare_tables
@@ -44,6 +45,9 @@ from .decommission import Retired, scan
 from .dualwrite import DualWriter, _Pending
 from .flip import flip_text, load_doc, plan_flip
 from .journal import ParkedJournal, json_value
+
+#: a swap copies every row of the old lake into the new one, so it reads at red (ADR-0033 decision 6)
+RED_GRANT = RedGrant("swap", "copies every row of the old lake into the new one, and compares them")
 
 
 class SwitchableClient:
@@ -189,7 +193,7 @@ class LakeBackend(Backend):
         counts: dict[str, int] = {}
         try:
             for t in self.tables:
-                rows = self.old.query(f"SELECT * FROM {quote_table(t)}")
+                rows = raw_query(self.old, RED_GRANT, f"SELECT * FROM {quote_table(t)}")
                 res = self.new.write_batch(t, rows, idempotency_key=f"backfill-{t}")
                 counts[t] = len(rows)
                 if res.rows_written + res.rows_skipped != len(rows):

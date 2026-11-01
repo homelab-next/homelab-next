@@ -10,7 +10,9 @@ What it does, and what the tests pin without a server:
   in front of a coordinator that may already have taken the query, and sending it again could run
   an ``INSERT`` twice.  A ``GET`` of ``nextUri`` (reading a query already running) is retried on
   ``502``, ``503`` and ``504``;
-* the session is pinned to UTC (``X-Trino-Time-Zone``); catalog, schema and user are headers;
+* the session is pinned to UTC (``X-Trino-Time-Zone``); catalog, schema and user are headers, and
+  so are a statement's client tags (:data:`CLIENT_TAGS`, which the engine's query history keeps;
+  the REST lake adapter tags every INSERT of a write with its batch);
 * values are decoded from the column ``typeSignature``: ``row`` -> ``dict`` keyed by field name,
   ``array`` -> ``list``, ``timestamp(p) with time zone`` -> aware UTC ``datetime``, ``timestamp``
   -> naive ``datetime`` (UTC wall time), ``decimal`` -> ``Decimal``, ``date``, ``double``
@@ -50,6 +52,10 @@ from .errors import LakeError, UnknownTable
 __all__ = ["QueryResult", "Row", "TrinoError", "TrinoHTTP", "decode_value", "literal"]
 
 INT64 = (-(2**63), 2**63 - 1)
+#: the prefix of the engine's request headers, and the one a statement's client tags travel in
+HEADER = "X-Trino-"
+CLIENT_TAGS = f"{HEADER}Client-Tags"
+_TAG = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _NOT_FOUND = {"TABLE_NOT_FOUND", "SCHEMA_NOT_FOUND", "CATALOG_NOT_FOUND", "COLUMN_NOT_FOUND"}
 
 
@@ -224,28 +230,32 @@ class TrinoHTTP:
     def __repr__(self) -> str:
         return f"TrinoHTTP(<endpoint>, user={self.user!r})"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, client_tags: Sequence[str] = ()) -> dict[str, str]:
         h = {
-            "X-Trino-User": self.user,
-            "X-Trino-Source": self.source,
-            "X-Trino-Time-Zone": "UTC",
+            f"{HEADER}User": self.user,
+            f"{HEADER}Source": self.source,
+            f"{HEADER}Time-Zone": "UTC",
             "Accept": "application/json",
         }
         if self.catalog:
-            h["X-Trino-Catalog"] = self.catalog
+            h[f"{HEADER}Catalog"] = self.catalog
         if self.schema:
-            h["X-Trino-Schema"] = self.schema
+            h[f"{HEADER}Schema"] = self.schema
+        if client_tags:
+            h[CLIENT_TAGS] = ",".join(client_tags)
         if self._auth is not None:
             tok = self._auth()
             if tok:
                 h["Authorization"] = tok
         return h
 
-    def _request(self, url: str, body: bytes | None) -> dict[str, Any]:
+    def _request(
+        self, url: str, body: bytes | None, *, client_tags: Sequence[str] = ()
+    ) -> dict[str, Any]:
         p = urllib.parse.urlsplit(url)
         if (p.scheme, p.netloc.lower()) != self._origin:
             raise LakeError("Trino returned a nextUri on another origin; refusing to follow it")
-        headers = self._headers()
+        headers = self._headers(client_tags)
         if body is not None:
             headers["Content-Type"] = "text/plain; charset=utf-8"
         for attempt in range(self._retries + 1):
@@ -275,9 +285,21 @@ class TrinoHTTP:
             raise LakeError("Trino reply is not an object")
         return doc
 
-    def execute(self, sql: str, args: Sequence[Any] = ()) -> QueryResult:
-        """Run one statement (``?`` placeholders bound to ``args``) to completion."""
-        doc = self._request(self._base + "/v1/statement", execute_immediate(sql, args).encode())
+    def execute(
+        self, sql: str, args: Sequence[Any] = (), *, client_tags: Sequence[str] = ()
+    ) -> QueryResult:
+        """Run one statement (``?`` placeholders bound to ``args``) to completion.
+
+        ``client_tags`` are sent in the :data:`CLIENT_TAGS` header; a tag holding a comma, white
+        space or a control character is refused (the header is a comma-separated list)."""
+        for tag in client_tags:
+            if type(tag) is not str or not _TAG.fullmatch(tag):
+                raise LakeError(f"not a client tag: {tag!r}")
+        doc = self._request(
+            self._base + "/v1/statement",
+            execute_immediate(sql, args).encode(),
+            client_tags=tuple(client_tags),
+        )
         res = QueryResult(str(doc.get("id", "")))
         while True:
             err = doc.get("error")

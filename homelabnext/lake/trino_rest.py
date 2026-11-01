@@ -12,7 +12,12 @@ Who does what:
   (an Iceberg commit each, done by Trino through the same catalog), as few as fit under
   ``max_query_length`` characters (Trino refuses a longer query text: ``query.max-length``,
   1,000,000 by default), then record the batch id and the source's high-water mark as table
-  properties through the REST catalog;
+  properties through the REST catalog.  Each ``INSERT`` is guarded on the server too: it is
+  ``INSERT INTO t SELECT * FROM (VALUES ...) AS v WHERE NOT EXISTS (SELECT 1 FROM t WHERE`` the
+  content key matches ``)``, so the same statement run twice (a coordinator that took a query
+  whose reply was lost, a client that sent it again) appends its rows once.  Every INSERT of a
+  write carries the client tag ``hnx-batch:<digest of the batch id>``
+  (:data:`.trino_http.CLIENT_TAGS`), so the engine's query history ties it to its batch;
 * **setup** (``ensure_tables``) creates the namespace and the pinned tables with the generated
   Trino DDL and refuses an existing table whose schema differs (``SchemaMismatch``).
 
@@ -21,9 +26,11 @@ snapshot it commits, so the rows and the ledger entry are **two** commits, not o
 ``IcebergLake`` (snapshot summary) or ``FakeLake`` (one transaction).  A crash between them leaves
 the rows without their ledger entry; a retry of the same batch then writes nothing (every row is
 skipped by its content key) but is reported as ``replayed=False`` and the source mark stays at the
-previous batch.  No duplicate is ever written; only the replay flag and the mark lag.  The same
-holds for a crash between the INSERTs of a batch split in several: the retry writes only the rows
-not yet present.  The snapshot recorded is the one whose summary carries the last INSERT's
+previous batch.  No duplicate is written by a retry; only the replay flag and the mark lag.  The
+same holds for a crash between the INSERTs of a batch split in several: the retry writes only the
+rows not yet present.  The guard is a read of the table's current snapshot, not a lock: two
+writers of one table at the same moment could still both append a row (two appends do not
+conflict in the table format), which is why one writer per ``(table, source)`` is assumed.  The snapshot recorded is the one whose summary carries the last INSERT's
 ``trino_query_id``.
 
 The batch ledger is bounded: each table keeps the newest ``ledger_size`` batch entries (each
@@ -58,6 +65,8 @@ __all__ = ["TrinoRestLake", "rest_schema_diffs"]
 
 PROP_BATCH = "hnx.batch."
 PROP_MARK = "hnx.mark."
+#: the client tag every INSERT of a write carries, followed by the batch id's digest
+BATCH_TAG = "hnx-batch:"
 KEY_CHUNK = 500
 #: the longest query text sent (key lookups and INSERTs): safely below Trino's default
 #: ``query.max-length`` (1,000,000)
@@ -339,20 +348,33 @@ class TrinoRestLake(AdapterBase):
                 fresh.append(r)
         if not fresh:  # nothing new: no commit (same as the other adapters)
             return WriteResult(len(norm), 0, len(norm), False, None)
-        query_id = ""
+        query_id, written = "", 0
+        tags = (BATCH_TAG + _digest(idempotency_key, 32),)
         for sql, args in self._inserts(s, fresh):  # the ledger is written once, after the last
-            query_id = self._trino.execute(sql, args).query_id
+            res = self._trino.execute(sql, args, client_tags=tags)
+            query_id = res.query_id
+            # the server's own count: a row the NOT EXISTS guard skipped was not written
+            written += (
+                res.update_count if res.update_count is not None else len(args) // len(s.columns)
+            )
         snap_id = self._record(s, query_id, idempotency_key, source, high_water)
-        return WriteResult(len(norm), len(fresh), len(norm) - len(fresh), False, snap_id)
+        return WriteResult(len(norm), written, len(norm) - written, False, snap_id)
 
     def _inserts(self, s: TableSchema, rows: list[dict[str, Any]]) -> list[tuple[str, list[Any]]]:
-        """``rows`` as INSERT statements whose query text (as sent: ``EXECUTE IMMEDIATE '<sql>'
-        USING <literals>``) stays within ``max_query_length``; refuses a row that alone exceeds it
-        before anything is sent."""
+        """``rows`` as guarded INSERT statements (``INSERT INTO t (cols) SELECT * FROM (VALUES
+        ...) AS v (cols) WHERE NOT EXISTS`` a row of ``t`` with ``v``'s content key) whose query
+        text (as sent: ``EXECUTE IMMEDIATE '<sql>' USING <literals>``) stays within
+        ``max_query_length``; refuses a row that alone exceeds it before anything is sent."""
         cols = ", ".join(_qi(c.name) for c in s.columns)
         one = "(" + ", ".join(f"CAST(? AS {_trino_type(c)})" for c in s.columns) + ")"
-        head = f"INSERT INTO {self._fq(s.name)} ({cols}) VALUES "
-        base = len(execute_immediate(head, [None]))  # the frame, the head and one ", " spare
+        fq = self._fq(s.name)
+        match = " AND ".join(f"{_qi('t')}.{_qi(k)} = {_qi('v')}.{_qi(k)}" for k in s.key)
+        head = f"INSERT INTO {fq} ({cols}) SELECT * FROM (VALUES "
+        tail = (
+            f") AS {_qi('v')} ({cols}) WHERE NOT EXISTS"
+            f" (SELECT 1 FROM {fq} AS {_qi('t')} WHERE {match})"
+        )
+        base = len(execute_immediate(head + tail, [None]))  # the frame, head, tail, one ", " spare
         out: list[tuple[str, list[Any]]] = []
         n, args, size = 0, [], base
         for r in rows:
@@ -365,12 +387,12 @@ class TrinoRestLake(AdapterBase):
                     f" than max_query_length ({self.max_query_length})"
                 )
             if n and size + cost > self.max_query_length:
-                out.append((head + ", ".join(one for _ in range(n)), args))
+                out.append((head + ", ".join(one for _ in range(n)) + tail, args))
                 n, args, size = 0, [], base
             n, size = n + 1, size + cost
             args.extend(vals)
         if n:
-            out.append((head + ", ".join(one for _ in range(n)), args))
+            out.append((head + ", ".join(one for _ in range(n)) + tail, args))
         return out
 
     def _record(

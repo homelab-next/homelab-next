@@ -780,7 +780,13 @@ operator's steps on a real lab. Readers read at their ceiling: the query
 engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
 and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
 filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
-refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`). The status hub's views and
+refuses raw SQL below `red` (raw SQL could alias a constant as `tlp`). `reader_for(lake, reader,
+tlp_readers, schemas)` gives a consumer its reader at the ceiling its `tlp_readers` entry declares
+and refuses a reader with none; a read at `red` always names a `RedGrant` (a `red` reader's comes
+from its declaration's `why`; the swap and parity tools, which copy and compare every row, hold
+their own and read through `raw_query`), and `tests/lake/test_lake_read_boundary.py` fails on a
+module outside `homelabnext/lake/` that imports the lake library and calls a client's `query` or
+`named` itself. The status hub's views and
 exports declare their TLP ceilings, and its public view and exports serve only what its release
 transforms keep ([status](status.md#tlp-ceilings-and-release-transforms)). Model roles, model
 requests, agent profiles and MCP servers carry their ceilings and labels (below).

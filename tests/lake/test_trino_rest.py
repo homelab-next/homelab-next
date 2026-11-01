@@ -17,7 +17,7 @@ from homelabnext.conform.target import load_target
 from homelabnext.lake import LakeError, SchemaMismatch, UnknownTable
 from homelabnext.lake.rest_catalog import RestCatalog
 from homelabnext.lake.trino_http import Row, TrinoHTTP, decode_value, execute_immediate, literal
-from homelabnext.lake.trino_rest import _ENSURED, TrinoRestLake
+from homelabnext.lake.trino_rest import _ENSURED, BATCH_TAG, TrinoRestLake, _digest
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC_URL = "http://192.0.2.8:8080"  # no-raw-endpoint: allow RFC 5737 documentation address
@@ -34,9 +34,11 @@ HOSTILE = (
 )
 
 
-def _lake(lab, ns="t_ns", **kw):
-    _ENSURED.clear()
-    return TrinoRestLake(
+def _lake(lab, ns="t_ns", *, cls=TrinoRestLake, fresh=True, **kw):
+    """An adapter on ``lab``; ``fresh`` forgets this process's setups first (so it runs again)."""
+    if fresh:
+        _ENSURED.clear()
+    return cls(
         TrinoHTTP(lab.url, user="tester", sleep=lambda s: None),
         RestCatalog(lab.url, warehouse="lab"),
         namespace=ns,
@@ -55,15 +57,9 @@ def lab():
 def test_the_lake_suites_pass_through_the_adapter(lab, cap):
     suite = load_suite(cap, ROOT)
     _lake(lab)  # creates the namespace and tables once, as the first subject of a run does
-    res = run_checks(suite, lambda: _lake2(lab))
+    res = run_checks(suite, lambda: _lake(lab, fresh=False))
     bad = [(r.check, r.evidence) for r in res if r.status != "pass"]
     assert not bad, bad
-
-
-def _lake2(lab):
-    return TrinoRestLake(
-        TrinoHTTP(lab.url, user="tester"), RestCatalog(lab.url, warehouse="lab"), namespace="t_ns"
-    )
 
 
 class _SplicingLake(TrinoRestLake):
@@ -81,12 +77,7 @@ class _SplicingLake(TrinoRestLake):
 def test_the_query_suite_fails_an_adapter_that_splices_values(lab):
     suite = load_suite("lake-query", ROOT)
     _lake(lab)
-    res = run_checks(
-        suite,
-        lambda: _SplicingLake(
-            TrinoHTTP(lab.url, user="t"), RestCatalog(lab.url, warehouse="lab"), namespace="t_ns"
-        ),
-    )
+    res = run_checks(suite, lambda: _lake(lab, cls=_SplicingLake, fresh=False))
     failed = {r.check for r in res if not r.ok}
     assert "hostile-values-roundtrip-verbatim" in failed
 
@@ -190,8 +181,8 @@ def test_a_next_uri_to_another_origin_is_not_followed(lab):
 
 
 def _redirecting(real):
-    def call(url, body):
-        doc = real(url, body)
+    def call(url, body, **kw):
+        doc = real(url, body, **kw)
         if body is not None:
             doc["nextUri"] = (
                 "http://198.51.100.9:8080/v1/statement/x"  # no-raw-endpoint: allow RFC 5737 documentation address
@@ -288,6 +279,48 @@ def test_a_busy_coordinator_and_a_proxy_error_on_a_page_read_are_retried(lab):
     assert not lab.proxy_errors["INSERT"] and not lab.proxy_errors["GET"], "every error was met"
     assert len([t for t in lab.statements if "INSERT INTO" in t]) == 1  # the 503 was not run
     assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 1}]
+
+
+def _post(lake, sql, args=(), **kw):
+    """One statement sent straight to the engine, past the adapter's own key lookup."""
+    return lake._trino.execute(sql, args, **kw)
+
+
+def test_an_insert_run_twice_appends_its_rows_once(lab):
+    # a coordinator that took the INSERT and lost the reply, and a client that sent it again: the
+    # statement itself skips the rows whose content key is already there
+    from homelabnext.lake import load_schemas
+
+    lake = _lake(lab)
+    (stmt,) = lake._inserts(load_schemas()["authentication"], _example_rows(3))
+    assert [_post(lake, *stmt).update_count for _ in range(2)] == [3, 0]
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 3}]
+
+
+def test_a_plain_insert_appends_a_duplicate_key_in_the_stand_in(lab):
+    # the stand-in is faithful to the engine: only the guard keeps a duplicate out
+    from homelabnext.lake import load_schemas
+
+    lake = _lake(lab)
+    (stmt,) = lake._inserts(load_schemas()["authentication"], _example_rows(1))
+    head, _, rest = stmt[0].partition(" SELECT * FROM (VALUES ")
+    plain = head + " VALUES " + rest.partition(') AS "v" ')[0]
+    for _ in range(2):
+        _post(lake, plain, stmt[1])
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 2}]
+
+
+def test_every_insert_of_a_write_carries_its_batch_tag(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab)
+    lab.statements.clear()
+    lab.client_tags.clear()
+    lake.write_batch("authentication", [auth_row("g-1")], idempotency_key="b-tag")
+    tags = [t for t, sql in zip(lab.client_tags, lab.statements, strict=True) if "INSERT" in sql]
+    assert tags == [BATCH_TAG + _digest("b-tag", 32)]
+    with pytest.raises(LakeError, match="client tag"):
+        _post(lake, "SELECT 1", client_tags=["a,b"])
 
 
 def _example_rows(n):
