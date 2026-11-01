@@ -62,7 +62,10 @@ The standard for this already exists and the lab's threat-intel sources already 
    spellings: `clear`, `green`, `amber`, `amber+strict`, `red`, each with an optional `tlp:`
    prefix, in any case, surrounding whitespace ignored; TLP 1.0 `white` is `clear`. Anything else
    (including `amber-strict`, `amber strict` and an empty string), and a missing value, reads as
-   `red` wherever it is read.
+   `red` wherever it is read. The lenient spellings are for labels carried on incoming data and typed
+   by a person; a stored value (a lake row's `tlp`) and a value in a generated or authored table
+   (`tlp-sources.json`, an analyzer's maximum) are the five canonical spellings. A declaration that
+   is not a label is refused by validation, never read as `red`.
 2. **The default is red.** Any source or record without a label is `red`. Data the lab generates
    about itself (logs, alerts, telemetry, inventory, configuration, findings, agent activity) is
    `red` unless a source declaration says otherwise. Lowering this default is a declaration a
@@ -222,6 +225,13 @@ The standard for this already exists and the lab's threat-intel sources already 
 - The lake, the SIEM's event schema and the log pipeline each gain a `tlp` field and a one-off
   backfill. Until a table is backfilled its rows read `red` and are hidden from looser readers:
   the intended failure direction.
+- So far labels live on lake rows and source declarations, and are checked at the lake, the
+  status hub and the model gateway. The event envelope, records and tickets, broker action
+  results and the context store's documents carry none (decisions 4 and 11 name labels there
+  that no schema has yet), so everything assembled from them reads `red`, and a caller labelling
+  a model request from them can only label it `red`. Adding an optional label (absent reads
+  `red`) and `derived_from` to each is follow-up work; until then the bus, records and memory
+  stores stay "not yet" egress points (`docs/modules.md`).
 - Rollups for wider audiences come from the same data through release transforms, not a separate
   pipeline.
 - Cloud models see only `clear` by default, and never `amber` or above. Work that needs labelled

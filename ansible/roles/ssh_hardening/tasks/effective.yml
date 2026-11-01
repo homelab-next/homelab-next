@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Read the effective configuration of ssh_hardening_test_config for the kept account and fail
-# unless it is key-only, refuses root, and its AllowGroups admits one of the account's groups.
+# unless it is key-only, refuses root, and its AllowGroups admits one of the account's groups, and,
+# where the role trusts a user CA or revokes keys, the files it wrote are the ones sshd reads (an
+# earlier drop-in naming another CA or principals file would win).
 - name: Print the effective configuration for the kept account
   ansible.builtin.command:
     argv:
@@ -28,8 +30,14 @@
     that:
       - ssh_hardening_held == ssh_hardening_required
       - ssh_hardening_allowed | length == 0 or ssh_hardening_allowed | intersect(ssh_hardening_user_groups.stdout.split()) | length > 0
+      - ssh_hardening_trusted_user_ca_keys | length == 0 or ssh_hardening_settings.trustedusercakeys | default('') == ssh_hardening_trusted_user_ca_file
+      - ssh_hardening_trusted_user_ca_keys | length == 0 or ssh_hardening_settings.authorizedprincipalsfile | default('') == ssh_hardening_principals_dir ~ '/%u'
+      - ssh_hardening_revoked_keys | length == 0 or ssh_hardening_settings.revokedkeys | default('') == ssh_hardening_revoked_keys_file
     fail_msg: >-
       ssh_hardening: refusing {{ ssh_hardening_test_config }}: it would lock out
       {{ ssh_hardening_keep_user }} (groups {{ ssh_hardening_user_groups.stdout | trim }}, AllowGroups
       {{ ssh_hardening_allowed | join(' ') or 'any' }}), or it is not key-only without root login
-      ({{ ssh_hardening_held | to_json }})
+      ({{ ssh_hardening_held | to_json }}), or it does not read the role's user CA, principals or
+      revoked keys (TrustedUserCAKeys {{ ssh_hardening_settings.trustedusercakeys | default('none') }},
+      AuthorizedPrincipalsFile {{ ssh_hardening_settings.authorizedprincipalsfile | default('none') }},
+      RevokedKeys {{ ssh_hardening_settings.revokedkeys | default('none') }})

@@ -61,8 +61,9 @@ one IdP product.
    front them at the edge. Every app keeps a **break-glass local admin** whose secret lives in
    the secret store, never in the IdP.
 7. **SSH does not go through the IdP's directory**: people get short-lived SSH certificates
-   signed by the secret store after an OIDC login (a separate change). No LDAP outpost is needed;
-   the `sssd_ldap` role is superseded by that path and kept until it lands.
+   signed by the secret store after an OIDC login ([private overlay](../private-overlay.md),
+   "SSH certificates"). No LDAP outpost is needed; the `sssd_ldap` role is superseded for SSH
+   sign-on and kept for a lab whose IdP has an LDAP outpost.
 8. **Agents never use a human SSO session.** They keep their broker and secret-store scoped
    credentials (ADR-0030); a human's IdP session is never handed to an agent.
 9. **Active Directory, if built, is an attack-range target only**, never the lab's identity.

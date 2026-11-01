@@ -87,7 +87,9 @@ DEFAULT_WEIGHT = 0.5
 
 
 def is_active(node: Node | None) -> bool:
-    """False for a retired or superseded record (and for an id the graph does not have)."""
+    """False for a node of any kind whose ``status`` is in ``INACTIVE_STATUSES`` (retired,
+    superseded, incorporated, or a closed strategy record), and for an id the graph does not
+    have."""
     return node is not None and node.attrs.get("status") not in INACTIVE_STATUSES
 
 

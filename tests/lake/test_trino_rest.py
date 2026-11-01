@@ -263,6 +263,33 @@ def test_marks_and_ledger_survive_a_commit_conflict(lab):
     assert again.replayed and again.snapshot_id == res.snapshot_id
 
 
+@pytest.mark.parametrize("code", [502, 504])
+def test_a_proxy_error_on_an_insert_is_not_sent_again(lab, code):
+    # the coordinator behind the proxy took the INSERT: posting it again would append the rows a
+    # second time, past the content-key lookup made before the first post
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab)
+    lab.statements.clear()
+    lab.proxy_errors["INSERT"] = [code]
+    with pytest.raises(LakeError, match=f"HTTP {code}"):
+        lake.write_batch("authentication", [auth_row("p-1")], idempotency_key="b1", source="s")
+    assert len([t for t in lab.statements if "INSERT INTO" in t]) == 1
+
+
+def test_a_busy_coordinator_and_a_proxy_error_on_a_page_read_are_retried(lab):
+    from conformance.suites._lake import auth_row
+
+    lake = _lake(lab)
+    lab.statements.clear()
+    lab.proxy_errors.update({"INSERT": [503], "GET": [502, 504]})
+    res = lake.write_batch("authentication", [auth_row("p-2")], idempotency_key="b2", source="s")
+    assert res.rows_written == 1
+    assert not lab.proxy_errors["INSERT"] and not lab.proxy_errors["GET"], "every error was met"
+    assert len([t for t in lab.statements if "INSERT INTO" in t]) == 1  # the 503 was not run
+    assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 1}]
+
+
 def _example_rows(n):
     import json
 

@@ -5,6 +5,9 @@ repos:
     rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
     hooks:
       - id: check-yaml
+        # CI's YAML hygiene accepts any tag (Ansible's !vault, the golden blueprints' !Find): parse
+        # the syntax only, as it does
+        args: ["--unsafe"]
       - id: check-json
       - id: check-merge-conflict
       - id: end-of-file-fixer
@@ -40,7 +43,8 @@ repos:
         entry: python3 tools/check_spdx.py
         language: system
         files: '\.(py|sh|ya?ml|toml|go|j2)$'
-        exclude: '(^|/)golden/'
+        # expected outputs under golden/ (the tool exempts them too); code there is checked
+        exclude: '(^|/)golden/.*\.(sh|ya?ml|toml|j2)$'
       # Register keys: every record is identified by a uid (a UUIDv7 created with it, ADR-0019),
       # so nothing is allocated and two authors never collide.  `check-lost` refuses any commit in
       # which a record that the parent commit had has vanished (a merge that kept one side's

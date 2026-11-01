@@ -22,9 +22,7 @@ from tests.suite_policy import require_tool
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 GOLDEN = Path(__file__).parent / "golden"
-pytestmark = pytest.mark.skipif(
-    shutil.which("ansible-playbook") is None, reason="ansible-playbook not installed"
-)
+pytestmark = pytest.mark.requires_tool("ansible-playbook")
 
 DIGEST = "sha256:" + "ab" * 32
 ZERO = "sha256:" + "0" * 64

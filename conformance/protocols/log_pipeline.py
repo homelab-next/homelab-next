@@ -41,15 +41,18 @@ The TLP label (:func:`homelabnext.logpipeline.enrich_tlp`):
   supplied by the collector beside the event and never read out of it.  Every returned object
   event carries ``labels.hnx_tlp``: the route's declaration through
   :func:`homelabnext.tlp.item_label` (an item label in the event's ``tlp`` field, the flat
-  ``"labels.tlp"`` key or ``labels.tlp``, any spelling, the strictest of several, is kept when
-  stricter, and when looser only if the dataset honours item labels; one that is not a label,
+  ``"labels.tlp"`` key or ``labels.tlp``, a ``tlp:`` tag in ``tags``, an OCSF ``osint`` entry's
+  ``tlp`` or a STIX TLP marking in ``object_marking_refs``
+  (:func:`homelabnext.logpipeline.tlp_labels.claims`), any spelling, the strictest of several, is
+  kept when stricter, and when looser only if the dataset honours item labels; one that is not a
+  label,
   ``null`` included, is ``red``), or ``red`` for a route the table does not hold, no route, or
   one that is not a plain string.  The label is decided by the event **as it arrived**: an item
   label another stage drops or rewrites still counts.  Every spelling of ``hnx_tlp`` the event
   arrived with is replaced, as for the runtime label; the event's own ``tlp`` field is left as it
   came.
 * The lake writer stores ``labels.hnx_tlp`` as the row's ``tlp`` column, never the event's
-  ``tlp`` field.
+  ``tlp`` field (:func:`homelabnext.lake.rows.row_from_event`).
 
 :func:`homelabnext.logpipeline.enrich` is the rule for one event; a provider may implement it in
 its own engine (a lookup table processor), and this suite proves the result.

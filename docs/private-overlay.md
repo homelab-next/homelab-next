@@ -1,6 +1,6 @@
 ---
-summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, review tiers and deploys.'
-summary_of: outline:sha256:abc61770a4181b65
+summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, deploys and SSH certificates.'
+summary_of: outline:sha256:29a71d429b78fa98
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
@@ -152,7 +152,7 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 
 1. **Create the private repository** from the skeleton: copy `examples/private-overlay/`, delete
    `fictional: true` from `.hnx-private-overlay.yml`, protect `main` (pull requests, the
-   `checks` job required).
+   `checks` job required: the last job of `checks.yml`, which needs every other one).
 2. **Keys offline first.** Generate the operator's age identity on the workstation
    (`age-keygen`); store it in the password manager and print a paper copy. Put its public
    recipient in `.sops.yaml`. Choose the ansible-vault password the same way.
@@ -176,7 +176,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    ```
 
    Every lookup and the vault password client log in, read and revoke their own token, so a
-   token lives for one read; the `secret_id` is reusable within its TTL (a use count would run out
+   token lives for one lookup (every reference that lookup names; give the AppRole no
+   `token_num_uses`, or a lookup naming several would run out); the `secret_id` is reusable within its TTL (a use count would run out
    mid-deploy), so keep that TTL short and rotate it (below). Bound the CIDRs to the tailnet range
    the deploy node gets, or the runner VM's subnet. Generate a second age identity for the deploy
    and add its recipient to `.sops.yaml` (`sops updatekeys` on existing files).
@@ -196,7 +197,9 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    `production`: deployment branches `main` only (plus required reviewers where your plan has
    them, see [GitHub plans](#github-plans)).
    * **Secrets:** `BAO_SECRET_ID` (the AppRole's), `SOPS_AGE_KEY` (the deploy identity),
-     `DEPLOY_SSH_KEY`; `ANSIBLE_VAULT_PASSWORD` only if the vault password is not in OpenBao. No
+     `DEPLOY_SSH_KEY` (until the deploy signs its own certificate,
+     [SSH certificates](#ssh-certificates-one-login-through-the-identity-provider));
+     `ANSIBLE_VAULT_PASSWORD` only if the vault password is not in OpenBao. No
      role credential is an Actions secret (they are read from OpenBao by name) and Tailscale
      needs no secret.
    * **Variables** (Environment variables, so only the deploy job sees them): `HNX_REF` (a full
@@ -207,9 +210,8 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
      audience).
    * **Branch protection on `main`** (a ruleset or classic protection; both exist for private
      repositories on Pro): pull requests required, the `checks` job required, **one approving
-     review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` names
-     `.github/`, `bin/`, `runner/`, `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`,
-     the marker and what the lab trusts under `lab/`), and no force pushes. See [writers and reviews](#writers-and-reviews).
+     review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` owns
+     every path: its first rule is `*`), and no force pushes. See [writers and reviews](#writers-and-reviews).
 7. **Host keys.** Record each host's public SSH key in `ansible/known_hosts` after checking its
    fingerprint out of band (or one `@cert-authority` line for an SSH host CA).
 8. **First deploy.** Merge to `main` (that runs `checks.yml` only), then start the deploy by hand:
@@ -391,9 +393,10 @@ GitHub's write permission is broader than "may open a pull request": a writer ca
 itself**, so a pull request can rewrite `checks.yml` to pass. What actually gates a deploy is:
 
 * **Branch protection on `main`** with a required approving review and **"Require review from
-  Code Owners"** (the skeleton's `.github/CODEOWNERS` covers `.github/`, `bin/`, `runner/`,
-  `ansible.cfg`, `ansible/playbooks/`, `locks/`, `.sops.yaml`, the marker, `lab/site.yml`,
-  `lab/modules.yml`, `lab/services.yml`, `lab/guests/`, `lab/modules/` and `lab/modules.lock`), so
+  Code Owners"** (the skeleton's `.github/CODEOWNERS` owns every path by default, its first rule
+  `*`, so a path added later is covered too; its other lines say why the paths that matter most
+  do: the workflows, the deploy's tools, the inventory and `ansible/known_hosts` that pick the
+  targets, `lab/customizations/`, whose hooks add tasks, and what the lab trusts under `lab/`), so
   nothing reaches `main`, and so nothing a dispatch runs, without the owner's approval.
   `lab/site.yml` is there because it carries claims the checks trust rather than prove: above
   all `delegated_prefixes6` (site 1.5), the global IPv6 prefixes a model runtime's lab-only rule
@@ -538,7 +541,8 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
    `locks/deploy.txt` with hashes; sops downloaded and checked against `SOPS_SHA256`.
 7. **Checks before anything is decrypted**: `python hnx/tools/private_leak_check.py private .`,
    then the OpenBao CA from `BAO_CACERT_PEM` is written to the runner's temporary directory.
-8. **Validation** of the lab data, with `SOPS_AGE_KEY` set for that step only, then the **module
+8. **Validation** of the lab data, with `SOPS_AGE_KEY` set for that step (and the deploy step,
+   which decrypts the sealed lab files again; no other step has it), then the **module
    loader** (`hnx modules check --root hnx --overlay . --deploy`, [modules](modules.md#the-loader-at-deploy-time)):
    a problem stops the run before anything reaches a host. It always runs: a lab with none of
    `lab/modules.yml`, `lab/modules/` and `lab/modules.lock` is checked as an empty selection,
@@ -549,13 +553,15 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
 10. **Deploy**: the SSH key goes into `ssh-agent` from the environment (never a file); the vault
     password reaches `bin/vault-pass-client.py` from OpenBao by `HNX_VAULT_PASSWORD_REF` (or as
     `HNX_VAULT_PASSWORD` from the optional secret); role credentials are read from OpenBao by the
-    `hnx_secret` lookup (`BAO_ADDR`, `BAO_ROLE_ID`, `BAO_SECRET_ID`, `BAO_CACERT`), each with a
-    token minted for that read and revoked after it; and `ansible-playbook
+    `hnx_secret` lookup (`BAO_ADDR`, `BAO_ROLE_ID`, `BAO_SECRET_ID`, `BAO_CACERT`), each lookup
+    with a token minted for it (every reference it names) and revoked after it; and `ansible-playbook
     ansible/playbooks/site.yml` runs with `host_key_checking` on and diffs off (a diff can print a
     templated secret). The census of what runs follows, always
     (`hnx/ansible/playbooks/module_census.yml`, read-only on every host, into a fresh directory of
-    the runner's, with `systemctl` pinned on the command line so the overlay's `group_vars` cannot
-    replace it). On the host that runs the broker, set `module_census_broker_socket` (its socket,
+    the runner's, with every input that names a command or a data source (`systemctl`, the `hnx`
+    command the broker host runs as root, the notify pairs directory) pinned on the command line so
+    the overlay's `group_vars` and `host_vars` cannot replace it; the overlay's own `site.yml`,
+    which runs first, can still change what the hosts answer). On the host that runs the broker, set `module_census_broker_socket` (its socket,
     under `/run/`) in the overlay's `host_vars` and list root (`{uid: 0}`) in that broker's
     manifest `operators` (broker manifest 1.8), and the census also asks the broker, as root, which
     agents it serves; without the socket `agents` is noted as not gathered, and without the
@@ -586,10 +592,13 @@ with 1.31.1) over them when those tools are installed (the tests skip otherwise)
 (`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
 push.
 
-`checks.yml` runs on every pull request with no secret and no Environment: it runs the private
-leak check and the module loader (`hnx modules check --root hnx --overlay . --deploy`, with the
-pinned `hnx`, the overlay read as data), so a pull request's code never sees a credential and a
-module problem shows on the pull request, not only at the deploy.
+`checks.yml` runs on every pull request with no secret and no Environment: its jobs are the
+private leak check (`private-leak-check`), the module loader (`module-loader`: `hnx modules check
+--root hnx --overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the site
+review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`, that
+needs all of them and fails unless each succeeded: it is the one check branch protection requires,
+so no job can be left out of it. A pull request's code never sees a credential, and a module
+problem shows on the pull request, not only at the deploy.
 
 ## The leak checks, both directions
 
@@ -603,6 +612,91 @@ Real addresses and host names are allowed in the private check (that is what the
 two of the public scanner's `secret` patterns flag *names* (`vault`-prefixed variable names, the
 vault envelope) and are left out there, because a vaulted variable and its name are the normal
 shape of a private inventory.
+
+## SSH certificates (one login through the identity provider)
+
+The identity provider (Keycloak) has no LDAP outpost, so SSH sign-on does not go through sssd
+(`sssd_ldap` and the `central-auth` control are superseded for SSH). Instead OpenBao is the SSH
+user CA: a person logs in to OpenBao with OIDC against the identity provider and gets a
+certificate for their own public key valid for hours; the deploy job gets one for a key it
+generates per job, valid for minutes. Hosts trust the CA's public key and map each local account
+to the principals it accepts. Nothing a host trusts is a standing private key.
+
+**The OpenBao side** is `lab/ssh-ca.yml` (start from `examples/private-overlay/lab/ssh-ca.yml`):
+one entry per signing role, `for: deploy` or `for: human`, its principals, TTLs (capped: deploy 1 h,
+person 24 h), certificate extensions (a deploy role carries no forwarding and no user rc; the
+template gives it none at all, add `permit-pty` only if a play needs a terminal), optional
+`source_addresses` (the certificate's `source-address` critical option) and, for a person's
+role, the identity provider's groups that may use it. `hnx ssh-ca check lab/ssh-ca.yml` validates
+it; `hnx ssh-ca render lab/ssh-ca.yml --format sh` prints the writes: an ACL policy per role that
+may only `update` `ssh/sign/<role>`, the SSH role (user certificates only, no host certificates,
+no client-chosen key ids, key id `<role>-<token display name>` so the audit log names the
+holder), and an OIDC login role bound to the groups claim whose token lives 10 minutes (it only
+signs a key). Once, as an admin:
+
+```sh
+bao secrets enable ssh
+bao write ssh/config/ca generate_signing_key=true key_type=ssh-ed25519
+bao read -field=public_key ssh/config/ca      # -> ssh_hardening_trusted_user_ca_keys
+bao auth enable oidc
+bao write auth/oidc/config oidc_discovery_url=https://<idp>/realms/<realm> \
+  oidc_client_id=hnx-secrets default_role=hnx-admin   # and the client's secret, see below
+hnx ssh-ca render lab/ssh-ca.yml --format sh > ssh-ca.sh && BAO_CLI=bao sh ssh-ca.sh
+```
+
+The OIDC configuration also needs the identity provider client's secret (`oidc_client_secret`):
+type it from the password manager, never from a file in either repository. Then add the policy
+`hnx-ssh-hnx-deploy` to the deploy AppRole's `token_policies`. The identity
+provider's client must put the groups in the ID token under the `groups_claim` (a group-membership
+mapper) and allow the redirect URIs of `oidc.redirect_uris`. Re-rendering and running the writes
+again converges (they overwrite the roles; the CA key is never rewritten).
+
+**The host side** is the `ssh_hardening` role: `ssh_hardening_trusted_user_ca_keys` (the CA's
+public key line; never a private key, every line parsed by `ssh-keygen -l` before it replaces the
+live file) and `ssh_hardening_authorized_principals` (local account to principals, for example
+`{ansible: [hnx-deploy], admin: [hnx-admin]}`; an account not listed accepts no certificate, and
+its principals file is removed when it leaves the list). `ssh_hardening_revoked_keys` revokes a
+key or certificate outright. The role checks through `sshd -T` that the effective configuration
+reads its CA, principals and revocation files, so an earlier drop-in cannot quietly point sshd
+elsewhere. The lockout guard still requires an unrevoked authorized key for the account ansible
+connects as: a CA that parses may still be the wrong CA, which no host can tell. Set
+`ssh_hardening_keep_user_cert_only: true` (the account then needs only an unrevoked CA and a
+principal listed for it) only after a deploy has succeeded with a certificate.
+
+**A person signing in:**
+
+```sh
+export BAO_ADDR=https://<openbao>:8200 BAO_CACERT=ca.pem
+bao login -method=oidc role=hnx-admin          # opens the identity provider's login page
+bao write -field=signed_key ssh/sign/hnx-admin \
+  public_key=@"$KEY.pub" valid_principals=hnx-admin > "$KEY-cert.pub"   # KEY: your private key's path
+ssh admin@<host>                                # ssh offers the certificate beside the key
+```
+
+`ssh-keygen -L -f "$KEY-cert.pub"` shows its principals and expiry; sign again when it
+expires.
+
+**The deploy job** keeps its AppRole read and drops the static key. In `deploy.yml`'s deploy step
+(with the `bao` CLI installed pinned by digest, as sops is), instead of loading `DEPLOY_SSH_KEY`:
+
+```sh
+ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/deploy"        # a key pair for this job only
+token="$(printf '%s' "$BAO_SECRET_ID" |
+  bao write -field=token auth/approle/login role_id="$BAO_ROLE_ID" secret_id=-)"
+BAO_TOKEN="$token" bao write -field=signed_key ssh/sign/hnx-deploy \
+  public_key=@"$RUNNER_TEMP/deploy.pub" valid_principals=hnx-deploy > "$RUNNER_TEMP/deploy-cert.pub"
+BAO_TOKEN="$token" bao token revoke -self
+ssh-add "$RUNNER_TEMP/deploy"                                   # loads deploy-cert.pub with it
+```
+
+The private key never leaves the runner and the certificate is dead within the role's `ttl`
+(size it to the longest deploy run: a new SSH connection after it expires fails; with
+`source_addresses`, the range the deploy connects from, the tailnet range or the runner subnet). The
+order to switch: certificates live on every host (CA and principals deployed, the deploy user
+still holding its key), one deploy run with the certificate path, then
+`ssh_hardening_keep_user_cert_only: true`, then remove the deploy user's `authorized_keys` entry
+and the `DEPLOY_SSH_KEY` secret. The skeleton's `deploy.yml` still loads `DEPLOY_SSH_KEY` until
+your lab has made that switch.
 
 ## Rotation
 
@@ -634,6 +728,12 @@ Rotate on a schedule, and at once when a holder leaves or a key may have leaked.
   password-manager and paper copies; destroy the old paper.
 * **The deploy SSH key.** Add the new public key to the deploy user first, swap
   `DEPLOY_SSH_KEY`, run a deploy, then remove the old public key.
+  With [SSH certificates](#ssh-certificates-one-login-through-the-identity-provider) there is no
+  key to rotate: each job signs its own.
+* **The SSH user CA.** Generate a second CA key (a second SSH mount), list both public keys in
+  `ssh_hardening_trusted_user_ca_keys` and deploy, switch the signing roles to the new mount, then
+  drop the old key from the list. A leaked certificate goes into `ssh_hardening_revoked_keys`;
+  short TTLs are the rest of the answer.
 
 ## Threat model
 
@@ -649,19 +749,19 @@ where that is true.
 | a leaked clone of the private repository | the lab's layout, addresses, inventory, procedures; secret *names* | credential values (OpenBao), sealed values (no age identity in git), vaulted values (no password in git), a deploy (needs a GitHub account with write access) |
 | a collaborator account with write access | everything a clone gives, **and the deploy**: a writer can dispatch `deploy.yml` on `main`, and a pull request runs its own `checks.yml`, so a required check alone proves nothing | a change to what `main` deploys without the owner's approval, **only while** branch protection requires an approving Code Owners review ([writers and reviews](#writers-and-reviews)); today the operator is the sole writer, so this row is about the next writer |
 | an Actions log | what the workflow printed: step names, check results | secrets (masked, never echoed, never expanded in a command line, no debug logging, diffs off, schema errors that never quote a value) |
-| the GitHub-hosted runner during a deploy | for the job's lifetime: an ephemeral tailnet node limited to SSH on the deploy zones (and the OpenBao port); the OpenBao tokens of the reads in flight (each revoked after its read, else gone at its TTL). **Standing, until rotated:** `DEPLOY_SSH_KEY` (a static key: SSH to every deploy host from anywhere that reaches them), `SOPS_AGE_KEY` (every sealed file, including old commits), `BAO_SECRET_ID` (new tokens from the deploy's source range, within its TTL; bound it with `secret_id_bound_cidrs`), `ANSIBLE_VAULT_PASSWORD` if kept as a secret | a Tailscale credential (workload identity federation stores none; the OIDC token is valid for minutes and only for this repository's `production` Environment); the unseal keys and the operator's age identity (offline) |
+| the GitHub-hosted runner during a deploy | for the job's lifetime: an ephemeral tailnet node limited to SSH on the deploy zones (and the OpenBao port); the OpenBao tokens of the reads in flight (each revoked after its read, else gone at its TTL). **Standing, until rotated:** `DEPLOY_SSH_KEY` (a static key: SSH to every deploy host from anywhere that reaches them; retirable once [SSH certificates](#ssh-certificates-one-login-through-the-identity-provider) are live, after which the job holds only a certificate valid for minutes), `SOPS_AGE_KEY` (every sealed file, including old commits), `BAO_SECRET_ID` (new tokens from the deploy's source range, within its TTL; bound it with `secret_id_bound_cidrs`), `ANSIBLE_VAULT_PASSWORD` if kept as a secret | a Tailscale credential (workload identity federation stores none; the OIDC token is valid for minutes and only for this repository's `production` Environment); the unseal keys and the operator's age identity (offline) |
 | the self-hosted runner VM | the same as the hosted runner, plus a host inside the management zone while the job runs | anything that outlives the job: the runner is JIT and the VM is destroyed after one job; jobs other than the manual `deploy.yml` from `main` (the job-started hook refuses them) |
 | the workstation | the operator's sessions | nothing a deploy needs: deploys run from Actions, and the offline keys are not files on it |
 
 **What would shrink the standing set** (the target; the template is the interim):
 
-* **SSH certificates instead of `DEPLOY_SSH_KEY`.** An OpenBao SSH secrets engine as the host CA
-  for the deploy user: the deploy asks it, with its AppRole token, for a certificate valid for
-  minutes (`bao write ssh/sign/hnx-deploy public_key=@<ephemeral key> ttl=15m`) for a key pair it
-  generates in the job; hosts trust the CA through `TrustedUserCAKeys`. Nothing usable outlives
-  the job, and the static key and its Environment secret go away. Until then, keep the deploy
-  user's `authorized_keys` entry restricted (`from=` the deploy's source range) and rotate the key
-  on a schedule.
+* **SSH certificates instead of `DEPLOY_SSH_KEY`.** OpenBao's SSH secrets engine as the user CA:
+  the deploy asks it, with its AppRole token, for a certificate valid for minutes for a key pair
+  it generates in the job; hosts trust the CA through `TrustedUserCAKeys` and accept the
+  `hnx-deploy` principal for the deploy user only. The role definitions (`hnx ssh-ca`) and the
+  host side (`ssh_hardening`) exist; [SSH certificates](#ssh-certificates-one-login-through-the-identity-provider)
+  has the switch-over order. Until a lab has switched, keep the deploy user's `authorized_keys`
+  entry restricted (`from=` the deploy's source range) and rotate the key on a schedule.
 * **The vault password in OpenBao** (`HNX_VAULT_PASSWORD_REF`) rather than as a secret, so it is
   read once per deploy through a revoked token instead of sitting in the Environment.
 * **A short `secret_id` TTL**, bound to the deploy's source range, re-issued as part of the

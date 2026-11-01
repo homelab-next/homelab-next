@@ -40,6 +40,7 @@ def _report(**overrides):
         "homelabnext/lake/ceiling.py": _file(10, 9),
         "homelabnext/notify/ceiling.py": _file(10, 9),
         "homelabnext/registry/model_tlp.py": _file(10, 9),
+        "homelabnext/sshca.py": _file(10, 9),
         "tools/leak_scan.py": _file(10, 9),
         "homelabnext/agent/pack.py": _file(10, 0),  # not a unit: never counted
     }

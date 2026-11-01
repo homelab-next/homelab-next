@@ -60,11 +60,11 @@ Every asset sends logs; the sensors see what they should.
 
 ## T - Transport and processing
 
-Events move through one bus, in one schema, with nothing silently dropped.
+Reaction, record and decision events move through one bus, in one schema, with nothing silently dropped; telemetry stays direct and control stays typed RPC (ADR-0009).
 
 | ID | Must be true | Observable / pass criterion | Tag |
 |---|---|---|---|
-| T-01 | All events flow through the event bus | Every source appears on its subject; consumer lag < 5 min | SERVER |
+| T-01 | Every bus event type has a subject and a consumer | Every type in `docs/events.md` ("What goes on the bus") appears on its subject and has a durable consumer; consumer lag < 5 min (telemetry is not on the bus: ADR-0009) | SERVER |
 | T-02 | Events validate against the schema | Fixture events validate against the event schema in CI; >= 99.5% of live events validate, the rest reach the dead-letter queue | PUBLIC-NOW |
 | T-03 | Nothing is silently dropped | Dead-letter depth is alerted on; 0 unreviewed items older than 7 days | SERVER |
 | T-04 | Events are enriched | Enrichment fixture adds asset owner and criticality; >= 95% of live events carry them (`homelabnext/events/enrich.py`; `hnx events enrich-coverage` measures live coverage) | PUBLIC-NOW |
@@ -181,7 +181,7 @@ Catalogued scripts, controlled agent context, one map of access.
 |---|---|---|---|
 | M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current (`hnx scripts catalog --check`) | PUBLIC-NOW |
 | M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids (`hnx scripts reality`) | PUBLIC-NOW |
-| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`) | PUBLIC-NOW |
+| M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`; CI's `--ci-base` holds the baseline to the base commit's, so a hand edit cannot loosen it) | PUBLIC-NOW |
 | M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`) | PUBLIC-NOW |
 | M-05 | Every agent job gets its context pack | Job log records pack hash and contents built from the charter manifest | SERVER |
 | M-06 | No agent runs blind | A job with a missing or stale pre-gate is deferred with a reason | PUBLIC-NOW |
@@ -304,7 +304,7 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 | X-03 | Schemas version-pinned, examples valid | `tools/schema_check.py --strict` passes: every schema (each `*.json` under `schemas/<dir>/`) has $schema and a versioned $id; examples validate; negatives are rejected; no example or negative is owned by no schema | PUBLIC-NOW |
 | X-04 | Every capability has a conformance test | Each capability has a `conformance/<cap>/test_*.py` | PUBLIC-NOW |
 | X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 (a directory of roles is expanded), including RL011-RL014: `no_log` on secret use, no `shell` or templated free-form `command`, no `validate_certs: false`, no privileged container or docker socket | PUBLIC-NOW |
-| X-06 | Detection ids are logical | No raw rule number in charters, profiles, decisions or schedules; every `det:` id resolves in `det_map.yml` | PUBLIC-NOW |
+| X-06 | Detection ids are logical | No raw rule number in charters, profiles, decision specs or schedules (the files `detections lint-ids` scans); every `det:` id resolves in `det_map.yml` | PUBLIC-NOW |
 | X-07 | Export hooks are exercised | Every stateful product's export restored once in a drill | SERVER |
 | X-08 | Cutover commits are audited | Each cutover has a swap record with parity, rollback and flip commits | SERVER |
 | X-09 | Customizations are owned and not expired | Every customization has reason, owner and `review_by`, none is past its date, none conflicts (`hnx custom check`; plugin `homelabnext.customization.plugins.x09_customizations`, loaded through the `homelabnext.invariants.checks` entry point) | PUBLIC-NOW |

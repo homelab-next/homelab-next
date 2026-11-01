@@ -154,8 +154,8 @@ class FakeForwarderServer:
 class HttpForwarder:
     """POST the envelope (structured mode) to a forwarder URL.
 
-    Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` or a 200 after a
-    prior accept is reported as duplicate), 409 -> :class:`PermanentError` (id collision),
+    Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` is reported as
+    duplicate), 409 -> :class:`PermanentError` (id collision),
     408/425/429 and 5xx -> :class:`TransientError`, any other 4xx -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
 

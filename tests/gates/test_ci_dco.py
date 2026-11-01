@@ -17,9 +17,7 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT = "49699333+dependabot[bot]@users.noreply.github.com"
 HUMAN = "dev@example.org"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or shutil.which("bash") is None, reason="git or bash not installed"
-)
+pytestmark = pytest.mark.requires_tool("git", "bash")
 
 
 def dco_step() -> dict:

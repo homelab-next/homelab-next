@@ -93,6 +93,27 @@ def test_publisher_values_are_kept(inventory):
     assert out["assetcriticality"] == "medium"
 
 
+def test_a_publisher_set_assetid_names_the_asset_the_rest_comes_from(inventory):
+    # the event's source resolves to another asset: the owner and criticality must not be its
+    ev = build_event(
+        "homelabnext.task.queued",
+        "svc:inference",
+        {"task_id": "T-1", "profile": "profile:reader", "priority": 1, "idempotency_key": "k"},
+        id="evt-z",
+        time=T,
+    )
+    bus = inventory.lookup("bus-core")
+    assert resolve_asset(ev, inventory) != bus
+    out = enrich_event({**ev, "assetid": bus.id}, inventory)
+    assert (out["assetid"], out["assetowner"], out["assetcriticality"]) == (
+        bus.id,
+        bus.owner,
+        bus.criticality,
+    )
+    unknown = enrich_event({**ev, "assetid": "host:not-in-inventory"}, inventory)
+    assert "assetowner" not in unknown and "assetcriticality" not in unknown
+
+
 def test_overrides_and_tag_table():
     assert criticality_for(["ops", "ui"]) == "low"
     assert criticality_for(["data", "secrets"]) == "critical"

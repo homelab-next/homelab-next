@@ -4,7 +4,8 @@
 Every egress point (the publishing gate, the public exports, the bus, notification channels,
 webhooks, backups and off-site copies, model requests, enrichment lookups, memory and embedding
 stores, generated pages committed to a repository, records and tickets, and logs and error text
-that reach a notification) applies the same rule before anything leaves:
+that reach a notification) is to apply the same rule before anything leaves; docs/modules.md,
+"Egress points", lists where it is applied today and which points do not apply it yet:
 
 * the item's label is the **strictest** of the label it claims, the label recorded for it (the
   lake row's, the derived record's) and every TLP marker in its body: a claim never loosens what
@@ -13,10 +14,10 @@ that reach a notification) applies the same rule before anything leaves:
 
 :func:`egress_label` and :func:`egress_check` are that rule.  Enrichment lookups are egress too:
 :func:`job_label` labels a lookup by the records that cause it, raised to the submitter's ceiling,
-and :func:`analyzers_for` names the analyzers whose declared maximum admits it (a maximum must
-be a canonical label; an analyzer named by anything but a string is skipped).  The notification
-channels call it (:class:`homelabnext.notify.CeilingSender`); docs/modules.md, "Egress points",
-says which other points do and which do not yet.
+and :func:`analyzers_for` names the analyzers whose declared maximum admits it (a maximum is a
+declaration, so it must be a canonical label: any other value is refused, never skipped; an
+analyzer named by anything but a string is skipped).  The notification channels call it
+(:class:`homelabnext.notify.CeilingSender`).
 
 Standard library only.
 """
@@ -41,9 +42,16 @@ __all__ = [
 ]
 
 #: a marker: ``TLP`` then a colon (``TLP:RED``, ``tlp : amber``), the word read by
-#: :func:`_marker_label`; or ``TLP`` then a label word with no colon (``TLP RED``)
+#: :func:`_marker_label`; or ``TLP`` then a label word with no colon, after any run of white space
+#: and up to three other characters that are neither a letter nor a digit, or none (``TLP RED``,
+#: ``TLP    RED``, ``TLP-AMBER``, ``TLP_RED``, ``TLP/AMBER``, ``[TLP=RED]``, ``TLP--GREEN``,
+#: ``TLP  -  RED``, ``TLPRED``): the spellings report headers, column-padded tables, file names
+#: and exports use.  White space is never counted against the three, so padding cannot hide one.
 _COLON = re.compile(r"TLP\s*:\s*", re.IGNORECASE | re.ASCII)
-_BARE = re.compile(r"TLP\s+(?=(?:CLEAR|WHITE|GREEN|AMBER|RED))", re.IGNORECASE | re.ASCII)
+_BARE = re.compile(
+    r"TLP(?!\s*:)\s*(?:[^A-Za-z0-9\s]{1,3}\s*)?(?=(?:CLEAR|WHITE|GREEN|AMBER|RED))",
+    re.IGNORECASE | re.ASCII,
+)
 _WORD = re.compile(r"[A-Za-z]+", re.ASCII)
 _PLUS_WORD = re.compile(r"\s*\+\s*([A-Za-z]+)", re.ASCII)
 _PLUS = re.compile(r"\s*\+", re.ASCII)
@@ -161,15 +169,22 @@ def job_label(records: Iterable[object], submitter_ceiling: tlp.Label) -> tlp.La
 
 def analyzers_for(job: tlp.Label, maxima: Mapping[str, object]) -> list[str]:
     """The analyzers a lookup labelled ``job`` may be sent to: those whose declared maximum is at
-    or above it.  An analyzer with no declared maximum, or one that is not a canonical label, is
-    sent nothing."""
+    or above it.  An analyzer with no declared maximum (``None``) is sent nothing; a maximum that
+    is declared but is not a canonical label (``AMBER``, ``tlp:green``, a typo) is an authored
+    mistake, refused with :class:`ValueError` naming the analyzer instead of silently dropping it
+    (stored and declared labels are canonical; the lenient spellings are for labels carried on
+    incoming data)."""
     if type(job) is not tlp.Label:
         raise TypeError(f"job must be a Label, not {type(job).__name__}")
     out = []
     named = [(k, v) for k, v in maxima.items() if type(k) is str]
     for name, maximum in sorted(named, key=lambda kv: kv[0]):
-        if type(maximum) is not str or maximum not in tlp.LABELS:
+        if maximum is None:
             continue
+        if type(maximum) is not str or maximum not in tlp.LABELS:
+            raise ValueError(
+                f"analyzer {name!r}: its maximum {maximum!r} is not one of {', '.join(tlp.LABELS)}"
+            )
         if tlp.allows(tlp.parse(maximum), job):
             out.append(name)
     return out

@@ -50,6 +50,7 @@ __all__ = [
     "Skip",
     "Suite",
     "run_checks",
+    "validate_selection",
 ]
 
 SEVERITIES = ("must", "should")
@@ -265,6 +266,31 @@ class Mutant:
         object.__setattr__(self, "features", frozenset(self.features))
 
 
+def validate_selection(
+    suite: Suite,
+    *,
+    waive: Mapping[str, str] | None = None,
+    only: Iterable[str] | None = None,
+) -> None:
+    """Refuse a waiver or a ``--check`` selection ``suite`` cannot honour (``ValueError``).
+
+    Run before any subject is built, so a caller can tell a bad selection (misconfiguration)
+    from a factory that raises (the run could not be measured).
+    """
+    for cid, reason in dict(waive or {}).items():
+        spec = suite._specs.get(cid)
+        if spec is None:
+            raise ValueError(f"waive: {suite.name} has no check {cid!r}")
+        if spec.severity == "must":
+            raise ValueError(f"waive: {cid} is a MUST check and cannot be waived")
+        if not str(reason).strip():
+            raise ValueError(f"waive: {cid} needs a reason")
+    if only is not None:
+        unknown = sorted(set(only) - set(suite._specs))
+        if unknown:
+            raise ValueError(f"{suite.name} has no check(s) {', '.join(unknown)}")
+
+
 def run_checks(
     suite: Suite,
     make_subject: Callable[[], Any],
@@ -281,19 +307,8 @@ def run_checks(
     check failure: the exception propagates (the run could not be measured).
     """
     waive = dict(waive or {})
-    for cid, reason in waive.items():
-        spec = suite._specs.get(cid)
-        if spec is None:
-            raise ValueError(f"waive: {suite.name} has no check {cid!r}")
-        if spec.severity == "must":
-            raise ValueError(f"waive: {cid} is a MUST check and cannot be waived")
-        if not str(reason).strip():
-            raise ValueError(f"waive: {cid} needs a reason")
     wanted = set(only) if only is not None else None
-    if wanted is not None:
-        unknown = sorted(wanted - set(suite._specs))
-        if unknown:
-            raise ValueError(f"{suite.name} has no check(s) {', '.join(unknown)}")
+    validate_selection(suite, waive=waive, only=wanted)
     results: list[CheckResult] = []
     for spec in suite.specs:
         if wanted is not None and spec.id not in wanted:

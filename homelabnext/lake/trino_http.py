@@ -4,8 +4,12 @@
 What it does, and what the tests pin without a server:
 
 * a statement is POSTed as text; the client follows ``nextUri`` until it is absent, collecting
-  ``columns`` and every page of ``data``; a ``nextUri`` to another origin is refused, ``503``
-  (the coordinator is busy) is retried a few times;
+  ``columns`` and every page of ``data``; a ``nextUri`` to another origin is refused.  The
+  statement ``POST`` is retried a few times on ``503`` only (the coordinator is busy and has not
+  taken the query); a ``502`` or ``504`` there is an error, because it usually comes from a proxy
+  in front of a coordinator that may already have taken the query, and sending it again could run
+  an ``INSERT`` twice.  A ``GET`` of ``nextUri`` (reading a query already running) is retried on
+  ``502``, ``503`` and ``504``;
 * the session is pinned to UTC (``X-Trino-Time-Zone``); catalog, schema and user are headers;
 * values are decoded from the column ``typeSignature``: ``row`` -> ``dict`` keyed by field name,
   ``array`` -> ``list``, ``timestamp(p) with time zone`` -> aware UTC ``datetime``, ``timestamp``
@@ -253,7 +257,8 @@ class TrinoHTTP:
                     raw = read_bounded(resp, self.max_bytes)
                 break
             except urllib.error.HTTPError as exc:
-                if exc.code in (502, 503, 504) and attempt < self._retries:
+                retry = (503,) if body is not None else (502, 503, 504)
+                if exc.code in retry and attempt < self._retries:
                     self._sleep(0.2 * (attempt + 1))
                     continue
                 detail = exc.read(2000).decode("utf-8", "replace").strip()

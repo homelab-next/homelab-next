@@ -106,7 +106,8 @@ def test_a_red_ceiling_admits_everything():
 def test_the_ceiling_is_a_parsed_label_and_the_flag_refuses_a_misspelling():
     with pytest.raises(TypeError):
         CeilingSender(FakeSender(), "green")  # type: ignore[arg-type]
-    assert ceiling_from_flag(None) is tlp.Label.RED
+    with pytest.raises(ValueError, match="must declare its TLP ceiling"):
+        ceiling_from_flag(None)  # a channel without a declared ceiling is refused, never red
     assert ceiling_from_flag("tlp:green") is tlp.Label.GREEN
     assert ceiling_from_flag(tlp.Label.AMBER) is tlp.Label.AMBER
     for bad in ("", "gren", "black"):

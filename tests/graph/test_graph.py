@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -185,8 +186,11 @@ def test_every_emitted_kind_and_type_is_in_the_vocabulary(graph):
     assert set(graph.kinds()) <= set(NODE_KINDS)
     assert set(graph.edge_types()) <= set(EDGE_TYPES)
     guide = (ROOT / "docs" / "graph.md").read_text(encoding="utf-8")
-    for t in EDGE_TYPES:
-        assert f"    {t} " in (hg.__doc__ or ""), f"{t} missing from the package docstring"
+    doc = hg.__doc__ or ""
+    for t, (src, dst, note) in EDGE_TYPES.items():
+        # the whole row, not only the type name: a drifted source, target or note fails too
+        row = rf"^    {re.escape(t)}\s+{re.escape(src)} -> {re.escape(dst)}: {re.escape(note)}$"
+        assert re.search(row, doc, re.M), f"{t}: package docstring row differs from vocab"
         assert f"| `{t}` |" in guide, f"{t} missing from docs/graph.md"
 
 

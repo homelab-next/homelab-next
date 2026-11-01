@@ -21,7 +21,7 @@ is a secret-store reference, `$(env:HNX_SECRET_IDP_CLIENTS_<SERVICE>)`, substitu
 import).
 
 See `manifest.yml` for the list (checked against the code by
-`tests/generators/test_manifest.py`).
+`tests/generators/test_gen_manifest.py`).
 
 Refresh goldens after an intentional change:
 

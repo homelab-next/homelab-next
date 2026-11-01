@@ -19,6 +19,11 @@ from homelabnext.golden import SCORERS, ScoreError, TaskError, parse_suite, scor
         ('```json\n{"label": "accept"}\n```', {"scorer": "json_fields", "fields": {"label": "accept"}}, 1.0),
         ('{"label": "reject", "confidence": 0.9}', {"scorer": "json_fields", "fields": {"label": "accept", "confidence": {"min": 0.8}}}, 0.5),
         ('{"label": "x"}', {"scorer": "json_fields", "fields": {"label": {"one_of": ["a", "b"]}}}, 0.0),
+        # a field failing two constraints counts once: 2 of 3 fields match
+        ('{"a": 1, "b": 2, "c": 99}', {"scorer": "json_fields", "fields": {"a": 1, "b": 2, "c": {"one_of": [1, 2], "max": 5}}}, 2 / 3),
+        # an expected {} is a value to equal, not an empty constraint that accepts anything
+        ('{"c": 99}', {"scorer": "json_fields", "fields": {"c": {}}}, 0.0),
+        ('{"c": {}}', {"scorer": "json_fields", "fields": {"c": {}}}, 1.0),
         ("not json", {"scorer": "json_fields", "fields": {"label": "a"}}, 0.0),
         ("[1]", {"scorer": "json_fields"}, 0.0),
         ("short", {"scorer": "max_length", "max_chars": 10}, 1.0),

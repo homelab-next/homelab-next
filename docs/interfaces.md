@@ -120,6 +120,7 @@ example_file(*parts) / data_root() / source_root() / clear_cache()    # kind in 
 # homelabnext.notify
 @dataclass(frozen=True)
 class Message: key: str; title: str; body: str; level: str = "info"   # level: info|warn|crit
+    # also priority, tags, topic, email, click; tlp: str | None = None, the label it claims (ADR-0033)
 class Sender(Protocol):
     def send(self, message: Message) -> None: ...
 class Notifier:
@@ -166,7 +167,8 @@ imports its package lazily). Current names, in that order: `registry`, `new`, `g
 `registers`, `invariants`, `strategy`, `projects`, `records`, `orchestration`, `reviews`, `ids`, `decide`, `models`,
 `golden`,
 `site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
-`scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`.
+`scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
+`ssh-ca`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -195,6 +197,34 @@ Notifier(sender, store, clock=time.time, rate_limit=None, namespace="notify")
     .register_pair(problem_title, recovery_title); .report(key, state, message) -> bool; .state_of(key)
 NtfySender(endpoint=None, *, default_topic=None, auth=None, opener=None, ...) ; FakeSender()
 # a problem with no registered recovery pair raises UnregisteredProblem; SendError on delivery failure
+
+CeilingSender(inner, ceiling)      # ADR-0033: a message above the channel's ceiling becomes a withheld notice
+record_in(directory, owner) -> PairsRecord | None   # the census record of the pairs a notifier holds
+
+# homelabnext.tlp   (ADR-0033 decision 1; standard library only)
+class Label(enum.Enum): CLEAR; GREEN; AMBER; AMBER_STRICT; RED     # ordered; str() is the canonical spelling
+parse(value) -> Label           # a declaration: raises on anything but an accepted spelling
+read(value) -> Label            # a carried label: anything else is RED
+allows(ceiling, label) -> bool; strictest(labels) -> Label; at_or_below(ceiling) -> tuple[str, ...]
+item_label(declared, item, *, honour_item_labels=False) -> Label   # decision 3
+row_filter_sql(ceiling, column="tlp") -> str | None
+
+# homelabnext.tlp_egress   (decision 13; where each egress point applies it: docs/modules.md)
+egress_label(claimed, *, recorded, body=None) -> Label   # strictest of claim, record and body markers
+egress_check(ceiling, claimed, *, recorded, body=None) -> EgressDecision
+markers(body) -> list[Label]; job_label(records, submitter_ceiling) -> Label
+analyzers_for(job, maxima) -> list[str]   # a declared maximum that is not canonical raises ValueError
+
+# homelabnext.logpipeline   (docs/log-pipeline.md)
+enrich(event, observed, table: RuntimeTable)     # labels.hnx_runtime
+enrich_tlp(event, route, table: SourceTable)     # labels.hnx_tlp, from the route's declaration
+
+# homelabnext.lake: TLP (decisions 5 and 6) and the Trino REST adapter
+TrinoRestLake(trino: TrinoHTTP, catalog: RestCatalog, *, namespace, trino_catalog="iceberg", ...)
+lake.rows.row_from_event(event, schema) -> dict     # the row's tlp is labels.hnx_tlp, never the event's tlp
+lake.ceiling.CeilingReader(lake, ceiling, schemas)  # .select(table, ...) filtered; raw .query only at red
+lake.backfill.plan(schema, *, table, sources: Mapping[str, Source], source_map, source_column=None)
+    # Source(label, honour_item_labels=False, items_carried_no_labels=False): red unless recorded
 
 # homelabnext.state
 StateStore(path, *, schema_version=1, migrations=None, clock=time.time)   # atomic, versioned, quarantines corrupt files

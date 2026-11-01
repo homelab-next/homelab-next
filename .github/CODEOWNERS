@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Review is required from the owners below for changes to CI, the scanners and gates, packaging
-# and the conformance suites (enable "Require review from Code Owners" in the branch ruleset).
+# The owners below are who reviews changes to CI, the scanners and gates, packaging and the
+# conformance suites.  Today that review is ADVISORY: main's ruleset requires the CI checks but no
+# pull-request review, and with one owner GitHub would not let that owner approve their own pull
+# request, so "Require review from Code Owners" cannot be turned on until agents author pull
+# requests from an identity of their own (docs/modules.md, "Trust tiers").  Every "human-approve"
+# below and in the ADRs is given by convention until then, not enforced.
 # Later lines take precedence over earlier ones.
 *                         @PeteSampras
 

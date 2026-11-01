@@ -43,8 +43,11 @@ HEADER = "SPDX-License-Identifier: Apache-2.0"
 ANY_HEADER = re.compile(r"SPDX-License-Identifier:\s*\S")
 SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".go", ".j2"}
 SKIP_DIRS = {".git", ".venv", "venv", "build", "dist", "__pycache__", "node_modules"}
+#: expected outputs compared byte for byte; code under a golden/ directory (the homelabnext.golden
+#: package, the tests/golden suite: Python or Go) is not one, and needs its header like any code
+GOLDEN = ("*/golden/*",)
+CODE = {".py", ".go"}  # a rendered .sh under golden/ is an expected output
 GENERATED = (
-    "*/golden/*",
     # client configurations rendered from the MCP catalog (hnx mcp catalog render, compared byte
     # for byte by its --check): the formats are other programs', so the render adds no licence line
     "examples/mcp/clients/hermes/*",
@@ -66,6 +69,8 @@ def missing_header(path: Path) -> bool:
     if path.stat().st_size == 0:
         return False  # empty __init__.py is allowed
     if _matches(path, GENERATED):
+        return False
+    if path.suffix not in CODE and _matches(path, GOLDEN):
         return False
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     if path.suffix == ".go" and _go_generated(lines):

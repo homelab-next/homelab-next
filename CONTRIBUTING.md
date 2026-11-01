@@ -11,7 +11,8 @@ tests on a laptop with no network and no private context.
    (Settings -> Emails); CI rejects any other author or committer e-mail. Dependabot's own
    commits, in a pull request GitHub records as opened by Dependabot, are exempt; the maintainer
    who merges them takes the sign-off. A bot's address in a commit's author field exempts
-   nothing on its own: anyone can set it.
+   nothing on its own: anyone can set it. Inside a Dependabot pull request it does (the author
+   e-mail is the only per-commit test), so review what such a pull request carries before merging.
 2. **Every schema change ships an example and a negative** (an input that must be rejected).
    Evolution is additive within a major version (ADR-0001). A schema whose ADR is still proposed
    may be a **draft** (`"x-draft": "<why, naming the ADR>"`): it has no frozen baseline and may
@@ -55,11 +56,10 @@ tests on a laptop with no network and no private context.
    that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
    `make hermetic-lint` rejects direct clock and unseeded-random calls in test code, and any
    clock read in `homelabnext/` that is not the default or fallback of an injectable clock/`now`.
-   Every component ships tests (`make component-tests`), and the security-critical units (broker,
-   scope guard, records lifecycle, decide cascade, agent grant ceiling, reader rule and handoff,
-   memory, screen, workflows, model budgets, MCP, context retrieval, the status hub's front door,
-   ingest, approval page and server, the generators' safety backstop and the leak scan) keep >= 80%
-   line coverage, each from its own tests (`make coverage`; `tools/coverage_floor.py` lists them).
+   Every component ships tests (`make component-tests`), and the security-critical units (the
+   broker, the scope guard, the agent's grant ceiling and the TLP ceilings among them; `UNITS` in
+   `tools/coverage_floor.py` is the one list) keep >= 80% line coverage, each from its own tests
+   (`make coverage`).
    Suites stay trustworthy (`tests/suite_policy.py`, see "Skips, quarantine and time budgets").
 10. Every Python, shell, YAML, TOML, Go and Jinja template file starts with
     `# SPDX-License-Identifier: Apache-2.0` (in Go: `// SPDX-License-Identifier: Apache-2.0` on line 1;
@@ -71,7 +71,7 @@ tests on a laptop with no network and no private context.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pre-commit install          # optional; installs the same checks as CI
+pre-commit install          # optional; a fast subset of CI's checks (plus whitespace fixers)
 make check                  # lint, tests, schema/registry gates, leak scan, changelog
 ```
 
@@ -129,7 +129,9 @@ and an entry that no longer excuses anything fails the lint.
   `schemas/_frozen/` and generated files out of scope). The baseline is keyed by content hash, so
   moving code does not touch it, and it only shrinks: a removed clone is a stale entry that fails
   until `make dup-baseline` drops it, and an update that would raise the duplicated-line total is
-  refused unless `--update-baseline --allow-increase "<reason>"` records why. The helpers lint
+  refused unless `--update-baseline --allow-increase "<reason>"` records why. CI runs it with
+  `--ci-base`, so a hand edit to the baseline (its parameters or its clones) that the base
+  commit's baseline does not allow fails unless it records such an increase. The helpers lint
   above is the semantic side (a re-implemented seam, copied or not); a copied seam helper trips
   both and the one fix clears both. `--mode normalised` (identifiers and literals abstracted)
   finds renamed copies too, as an audit.
@@ -137,7 +139,8 @@ and an entry that no longer excuses anything fails the lint.
   `check_hostname=False` or silenced urllib3 warnings in Python, and no
   `validate_certs`/`verify_ssl`/`insecure_skip_verify`-style key turning verification off in YAML
   or JSON (role tasks are also covered by role-lint RL013). Allowlist:
-  `tools/tls_verify.allow.yml`, or `tls-verify: allow <reason>` on the line.
+  `tools/tls_verify.allow.yml` (no such file today: create it on first need; a missing one is
+  read as empty), or `tls-verify: allow <reason>` on the line.
 - `tools/caddy_lint.py` (F-23): over every Caddy config in the tree (`git ls-files`: Caddyfiles
   and their templates and imports, markdown fences, Caddyfiles in YAML, Caddy JSON/YAML, the
   `caddy` generator's output for each registry), in a config with a `forward_auth` anywhere

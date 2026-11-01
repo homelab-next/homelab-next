@@ -127,6 +127,17 @@ def test_unknown_type_checked_against_envelope_only():
     assert schema_for_type(ev["type"]) is None
 
 
+@pytest.mark.parametrize(
+    "crafted", ["homelabnext.../ids/common", "homelabnext.../events/envelope", "homelabnext.A.b"]
+)
+def test_a_type_outside_the_envelope_pattern_picks_no_schema(crafted):
+    # a path built from the type would pick another schema and skip the envelope's checks
+    assert schema_for_type(crafted) is None
+    problems = event_problems({"type": crafted, "id": "x", "data": {}})
+    assert any("specversion" in p for p in problems)
+    assert any(p.startswith("type:") for p in problems)
+
+
 def test_non_object_is_a_problem():
     assert event_problems(["not", "an", "object"]) == ["event must be a JSON object"]
 

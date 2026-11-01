@@ -650,7 +650,9 @@ The broker never talks to the bus while it decides. Every event it emits (`decis
 `homelabnext.broker.relay`) is written to `<state>/outbox/<event id>.json` with its place in emit
 order, and `hnx broker relay`, a second process under **its own user**, publishes it
 (`homelabnext.broker.relay`). A bus outage therefore delays events and never blocks or fails a
-decision, and `hnx broker serve` keeps needing no network at all.
+decision, and `hnx broker serve` keeps needing no network at all. This relay is the second publish path
+ADR-0009 sanctions (the first is the forwarder, [docs/events.md](events.md)): it publishes through
+the `EventBus` protocol, whose repeated-id answer it relies on after a crash.
 
 * **In order, at least once.** Each pass publishes the oldest undelivered events (at most
   `--batch`, default 100) one after another, as `<prefix>.<event type>` with the event id as the
