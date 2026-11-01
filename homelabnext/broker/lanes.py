@@ -120,7 +120,9 @@ RATE_WINDOW_S = 3600.0
 USAGE_WARN = 0.8
 #: where a write's bookkeeping lives when the caller names no ledger directory
 DEFAULT_LEDGER = ".hnx-lane-ledger"
-_PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
+#: a ``profile:<slug>`` actor, the slug captured (``schemas/ids/logical-id`` ``profile_id``): the one copy
+#: the broker matches profiles with
+PROFILE_RE = re.compile(r"^profile:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$(?!\n)")
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 #: hex characters of a records-inbox file name's tag
 TAG_CHARS = 8
@@ -239,7 +241,7 @@ class Lane:
 
 # ---------------------------------------------------------------- admission (no filesystem)
 def _actor_slug(actor: str) -> str:
-    m = _PROFILE_RE.match(actor) if isinstance(actor, str) else None
+    m = PROFILE_RE.match(actor) if isinstance(actor, str) else None
     if not m:
         raise LaneError("lane-actor-invalid", f"actor {actor!r} is not a profile:<slug> id")
     return m.group(1)
@@ -513,7 +515,7 @@ def _shared_by_actor(
                         out[actor] = mine
             return out
         slugs = sorted(
-            ((m.group(1), a) for a in actors if (m := _PROFILE_RE.match(a))),
+            ((m.group(1), a) for a in actors if (m := PROFILE_RE.match(a))),
             key=lambda sa: -len(sa[0]),
         )
         for name, size in held.items():
