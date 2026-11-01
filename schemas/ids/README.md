@@ -23,7 +23,12 @@ Product locators cannot be spelled: no `scheme://`, no dots or colons in slugs (
 literals), and no run of four or more digits and no `rule`/`sid` followed by a digit (so no vendor
 rule numbers). The engine rule number for `det:auth-failure-burst` lives in a generated adapter map,
 never in a charter, profile, spec or schedule. The Python grammar (`homelabnext.ids`) and the schema
-are generated from the same patterns and a property test checks they agree.
+use the same patterns (`grammar.schema_pattern` and `grammar.union_pattern`, which a test compares
+with the schema), and a property test over random strings, trailing newlines included, checks they
+agree. Every anchored pattern here, in `logical-id` and in `common`, ends in `$(?!\n)`: Python's
+`re` lets `$` match before a trailing newline and ECMA-262 does not, so without the guard
+`cap:dns\n` passed the schema while `homelabnext.ids.parse` refused it. The guard is the same
+language under JSON Schema's semantics, so it changed no version.
 
 Reference another schema's definition with
 `{"$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"}`.

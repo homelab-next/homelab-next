@@ -22,6 +22,17 @@ def test_note_filename_rejects():
     assert sc.check_note_filename("2026-01-01-triage-x.txt", FM)  # wrong extension
 
 
+def test_note_filename_is_the_records_lanes_own_rule():
+    """One rule: the helper is ``homelabnext.records.notes.check_filename``, which requires a
+    ``profile:`` requester; the copy that lived here accepted any kind before the colon."""
+    from homelabnext.records.notes import check_filename
+
+    other_kind = {**FM, "requesting_agent": "persona:triage"}
+    assert sc.check_note_filename("2026-01-01-triage-x.md", other_kind)
+    for name in ("2026-01-01-triage-x.md", "2026-01-01-triage.md", "raise-threshold.md"):
+        assert sc.check_note_filename(name, FM) == check_filename(name, FM)
+
+
 def test_markdown_frontmatter_round_trip_keeps_timestamps_as_strings():
     fm, body = sc.split_markdown((ROOT / "schemas/records/examples/note.proposal.md").read_text())
     assert fm["created"] == "2026-01-01T00:00:00Z"
