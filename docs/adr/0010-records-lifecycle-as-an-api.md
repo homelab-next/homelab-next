@@ -1,5 +1,5 @@
 ---
-summary: The records lifecycle (propose, find, complete) is written only through the records library, not by moving files; broker handlers come later.
+summary: The records lifecycle (propose, find, complete) is written through the records library and the broker's records-inbox lane, never by moving files.
 summary_of: outline:sha256:5cbd1fe67bd124f3
 ---
 # ADR-0010: The records lifecycle and register edits are an API, not file moves
@@ -17,14 +17,21 @@ proposed as prose. The governance layer's only contract is a frontmatter convent
 
 ## Decision
 
-1. The `records` library (ADR-0003) is the only way code writes a proposal, finding or
-   completion request. Notes are validated against `schemas/records/note.schema.json`.
+1. Code writes a proposal, finding or completion request through the `records` library
+   (ADR-0003) or, for an agent, through the broker's `records-inbox` lane
+   (`homelabnext/broker/lanes.py`), which validates, renders and names the note with the
+   library's own functions (`validate_note`, `render_note`, `build_filename`) and writes it with
+   the broker's lane rules (no-follow path walk, exclusive create, a keyed name tag). Notes are
+   validated against `schemas/records/note.schema.json`. *Status note (2026-11):* the two write
+   paths still differ in one rule: `Records` refuses a name that is already in `decided/*`, and
+   the lane does not yet; one shared write function is the follow-up.
 2. Lanes are `inbox/` (the only agent-writable lane) and `decided/{approved,denied,completed}`
    (operator-only). A `completion-request` note with a `related:` list moves its targets to
    `completed/` on approval.
-3. The lifecycle can later be exposed as broker handlers (`records.propose`, `records.complete`,
-   `register.update`) with digest-bound approvals; the file store, a forge or a project tracker
-   is the adapter behind them.
+3. The lifecycle is exposed through the broker: the `records-inbox` lane files notes today
+   (`examples/broker/manifest.yml`, `proposal.file`); `records.complete` and `register.update`
+   handlers with digest-bound approvals may follow. The file store, a forge or a project
+   tracker is the adapter behind them.
 4. Any guard hook remains defence in depth, not the mechanism.
 
 ## Consequences

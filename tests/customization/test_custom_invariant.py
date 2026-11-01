@@ -65,6 +65,33 @@ def test_env_dir_is_included(tmp_path, monkeypatch):
     assert run(tmp_path / "empty-root").status == "fail"
 
 
+def test_config_file_dir_is_included_like_hnx_custom_check(tmp_path, monkeypatch):
+    # `hnx custom check` reads a config file's customizations_dir; X-09 must see the same set.
+    overlay = tmp_path / "overlay"
+    write_custom(overlay, "a", make_doc(review_by="2026-01-10", created="2025-12-01"))
+    cfg = tmp_path / "custom.yml"
+    cfg.write_text(f"customizations_dir: {overlay}\n")
+    monkeypatch.delenv("HNX_CUSTOMIZATIONS_DIR", raising=False)
+    monkeypatch.setenv("HNX_CUSTOMIZATIONS_CONFIG", str(cfg))
+    r = run(tmp_path / "empty-root")
+    assert r.status == "fail" and "CU008" in r.evidence
+
+
+def test_enabled_optional_profiles_are_conflict_checked(tmp_path, monkeypatch):
+    act = {"role": "example_service", "vars": {"example_service_listen_port": 1}}
+    root = tmp_path / "root"
+    write_custom(root / "customizations", "a", make_doc(id="custom:one", action=act))
+    write_custom(root / "customizations", "b", make_doc(id="custom:two", optional=True, action=act))
+    monkeypatch.delenv("HNX_CUSTOMIZATIONS_DIR", raising=False)
+    monkeypatch.delenv("HNX_CUSTOMIZATIONS_CONFIG", raising=False)
+    assert run(root).status == "pass"  # inert until enabled
+    cfg = tmp_path / "custom.yml"
+    cfg.write_text("enable:\n  - id: custom:two\n")
+    monkeypatch.setenv("HNX_CUSTOMIZATIONS_CONFIG", str(cfg))
+    r = run(root)
+    assert r.status == "fail" and "CU011" in r.evidence
+
+
 def test_shipped_profiles_pass_at_repo_root():
     assert run(REPO_ROOT).status == "pass"
 

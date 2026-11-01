@@ -6,7 +6,9 @@ summary_of: outline:sha256:307e554cc253d6af
 
 - **Status:** proposed
 - **Date:** 2026-10-20
-- **Related:** ADR-0002, ADR-0003, ADR-0009, ADR-0010, `schemas/status/`, `schemas/platform/service.json` (2.1), [status hub guide](../status.md)
+- **Amended:** 2026-10-20 by ADR-0017 stage 2b (the Approvals page, decision 1's one exception);
+  by ADR-0033 (the hub's readers have TLP ceilings, stage 1b decision 1)
+- **Related:** ADR-0017, ADR-0033, ADR-0002, ADR-0003, ADR-0009, ADR-0010, `schemas/status/`, `schemas/platform/service.json` (2.1), [status hub guide](../status.md)
 
 ## Context
 
@@ -23,7 +25,12 @@ work.
 
 1. **There is one status hub**, the primary UI: a main page plus a left-side menu of views. It is
    **read-only**: it observes. Anything that changes something is a link out to the broker or the
-   approval path (`shell.act_via`), never a button in the hub.
+   approval path (`shell.act_via`), never a button in the hub. *One exception (ADR-0017 stage 2b,
+   decisions 13-15):* the Approvals page is the broker's approval relay. Its approve and deny
+   buttons post to `POST /approvals/decide`, the hub's only write, behind the front door, the
+   approver group, a same-origin check, a CSRF token and the digest the person saw. The hub holds
+   no broker state and decides nothing: it relays the person's decision, and the broker judges it
+   again.
 2. **Every status source is registered**, as `status_sources:` of the service that offers it in
    the registry (additive, `service.json` 2.1): `id`, `kind` (`poll-http-json`, `poll-file`,
    `push-event`; `poll-prometheus` reserved for stage 2), the target **by registry name**
@@ -63,8 +70,13 @@ own agent fleet, anything that can POST JSON).
 
 1. **Two tiers, kept apart.** The *summary* tier (`schemas/status/agent_activity.schema.json`:
    ids, runtime, surface, host, project, model, agent, parent session, kind, tool *name*,
-   outcome, tokens, cost) is public: hub pages, `status.json` (`agents`) and the bus event
-   `homelabnext.agent.activity`. The *detail* tier (`agent_activity_detail.schema.json`: prompt,
+   outcome, tokens, cost) is stored at `red` (amended by ADR-0033). What the public readers show
+   is only what their release transforms keep (`homelabnext/status/release_transforms.yml`):
+   `status.json` (`agents`) through `status-public`, the hub pages and exports through
+   `agent-sessions-public` and `agent-events-public`. Those withdraw `host`, `project` and
+   `model`, among others. The bus event `homelabnext.agent.activity` still carries the whole
+   summary tier, unreleased: the bus is a `red` reader until its egress check exists
+   (`docs/modules.md`, egress points). The *detail* tier (`agent_activity_detail.schema.json`: prompt,
    command, tool input and output, error, approval with its gated payload) is private: never on
    the bus, never in `status.json`, served only behind the trusted front door. Both schemas are
    closed (`additionalProperties: false`), so a detail field in a summary event is refused.
@@ -92,7 +104,8 @@ own agent fleet, anything that can POST JSON).
    `poll-prometheus` (no longer reserved: an instant query, or `builtin: prometheus-alerts`),
    `poll-uptime-kuma` (the public status page and its heartbeats), `poll-stackstorm` (executions
    in a window, the running ones) and `poll-nifi` (controller status, bulletin board) are
-   entries of `COLLECTORS` (`homelabnext.status.products`, registry 2.3); the LLM orchestrator
+   entries of `homelabnext.status.collectors.COLLECTORS`, registered from
+   `homelabnext.status.products.PRODUCT_COLLECTORS` (registry 2.3); the LLM orchestrator
    (`orchestrator-queue`) and Agentmetry (`agentmetry-audit`) are built-ins over
    `poll-http-json`. Each kind validates its own target path and mapping keys in the registry.
 2. **Credentials by name.** Every HTTP kind takes `auth: {secret, header?}`: a secret-store
@@ -128,6 +141,8 @@ dashboard framework (rejected: CSP and the no-dependency page).
   scattered state this decision replaces.
 - **A console that can act** (restart, approve, re-run from the status page): it would need
   credentials and a second approval path beside the broker, and a status page that can change
-  things becomes a target. Rejected: the hub links to the broker/approval path instead.
+  things becomes a target. Rejected: the hub links to the broker/approval path instead. The
+  Approvals page (ADR-0017 stage 2b) is not this console: it holds no credentials and no broker
+  state, it acts on nothing itself, and the broker re-judges every decision it relays.
 - **Scraping each tool from the console at render time**: one slow tool stalls the page. Rejected
   for collection into a state file that the page reads.

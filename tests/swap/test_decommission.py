@@ -69,6 +69,17 @@ def test_word_boundaries_avoid_false_positives(tmp_path):
     assert scan([tmp_path], RET) == []
 
 
+def test_one_word_rule_shared_with_the_teardown_audit(tmp_path):
+    from homelabnext.decommission.model import term_pattern
+    from homelabnext.swap.decommission import word_pattern
+
+    for text, hit in [("oldlake-core.2", False), ("oldlake-core.example", True)]:
+        assert bool(word_pattern("oldlake-core").search(text)) is hit
+        assert bool(term_pattern("oldlake-core").search(text)) is hit
+    build(tmp_path, {"a.md": "the numbered sibling oldlake-core.2 stays\n"})
+    assert scan([tmp_path], RET) == []
+
+
 def test_env_var_match_is_case_sensitive_names_are_not(tmp_path):
     build(tmp_path, {"a.env": "oldlake_url=1\n", "b.md": "see OLDLAKE-CORE\n"})
     found = scan([tmp_path], RET)

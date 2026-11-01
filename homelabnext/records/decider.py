@@ -69,7 +69,9 @@ class Decider:
     def complete(self, name: str, reason: str | None = None) -> list[Path]:
         """Close a completion-request: move every ``related:`` item approved -> completed.
 
-        All-or-nothing preflight: if any related item is missing the call changes nothing.
+        All-or-nothing preflight: if any related item is missing, does not load and validate,
+        is named twice, or would collide with a name already in ``decided/completed/`` (as would
+        the request itself), the call raises before the first move and changes nothing.
         The request itself is filed under ``decided/completed/`` as well.
         """
         req = self._load(AGENT_LANE, name)
@@ -79,9 +81,16 @@ class Decider:
         missing = [r for r in related if not (self.root / r).is_file()]
         if missing:
             raise NoteError(f"related: not in the approved lane: {', '.join(missing)}")
+        notes = [self._load(APPROVED, Path(rel).name, validate_filename=False) for rel in related]
+        names = [n.name for n in notes] + [req.name]
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:
+            raise NoteError(f"related: named more than once: {', '.join(twice)}")
+        taken = [n for n in names if (self.root / COMPLETED / n).exists()]
+        if taken:
+            raise FileExistsError(f"{COMPLETED}/ already holds: {', '.join(taken)}")
         moved = []
-        for rel in related:
-            note = self._load(APPROVED, Path(rel).name, validate_filename=False)
+        for note in notes:
             moved.append(self._move(note, COMPLETED, "completed", reason, via=name))
         moved.append(self._move(req, COMPLETED, "completed", reason))
         return moved

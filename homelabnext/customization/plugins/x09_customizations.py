@@ -13,19 +13,20 @@ Customizations marked ``maintained_upstream: true`` that are loaded from the shi
 ``profiles/`` directory are exempt from expiry (they never expire); the same flag in any other
 directory fails with CU015, and those customizations still expire.
 
-Where it looks, relative to ``ctx.root``: ``profiles/`` (shipped), ``customizations/`` (the
-deployment's own), plus anything named by ``HNX_CUSTOMIZATIONS_DIR``.
+Where it looks: exactly where ``hnx custom check --root <ctx.root>`` looks, through the same
+:func:`~homelabnext.customization.loader.resolve_settings`: ``profiles/`` (shipped) and
+``customizations/`` under ``ctx.root``, the ``HNX_CUSTOMIZATIONS_CONFIG`` file's
+``customizations_dir`` and ``enable`` list, and ``HNX_CUSTOMIZATIONS_DIR``. Enabled optional
+profiles are linted as enabled, conflicts included.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from datetime import date
-from pathlib import Path
 
 from homelabnext.customization.lint import lint
-from homelabnext.customization.loader import load_tree
+from homelabnext.customization.loader import load_all, resolve_settings
 from homelabnext.customization.universe import discover
 from homelabnext.invariants.api import ERROR, FAIL, PASS, SKIP, Check, CheckResult, Context
 
@@ -38,17 +39,14 @@ GATING = {"CU001", "CU002", "CU007", "CU008", "CU011", "CU012", "CU015"}
 def make_check(today_fn: Callable[[], date] = date.today) -> Check:
     def x09(ctx: Context) -> CheckResult:
         try:
-            items, problems = load_tree(ctx.root / "profiles", "public")
-            i2, p2 = load_tree(ctx.root / "customizations", "local")
-            items += i2
-            problems += p2
-            for d in filter(None, os.environ.get("HNX_CUSTOMIZATIONS_DIR", "").split(os.pathsep)):
-                i3, p3 = load_tree(Path(d), "local")
-                items += i3
-                problems += p3
+            settings = resolve_settings(public_dir=ctx.root / "profiles", root=ctx.root)
+            items, problems = load_all(settings)
             if not items and not problems:
                 return CheckResult(SKIP, "no customizations in this tree")
-            findings = [*problems, *lint(items, discover(ctx.root), today_fn())]
+            findings = [
+                *problems,
+                *lint(items, discover(ctx.root), today_fn(), settings.enabled),
+            ]
         except Exception as exc:  # could not measure is its own verdict
             return CheckResult(ERROR, f"customization loader failed: {exc}")
         bad = [f for f in findings if f.severity == "error" and f.code in GATING]

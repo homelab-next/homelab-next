@@ -710,7 +710,7 @@ spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 | the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown | the hub's view ceilings and release transforms |
 | model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling |
 | enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) | none in this repository yet (`job_label`, `analyzers_for` are for the client) |
-| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's and the status hub's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
+| notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's, the status hub's and the invariants runner's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
 | webhooks | the receiver's ceiling | `grants.egress` | not yet |
 | backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) | not yet |
 | the bus | its subscribers' ceilings | `cap:events` | not yet |
