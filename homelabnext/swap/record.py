@@ -350,6 +350,11 @@ def _chain_problems(doc: Mapping[str, Any], key: bytes | str | None) -> list[str
             out.append(f"transition {i}: state digest missing after earlier transitions had one")
         seen_state = seen_state or "state" in t
         prev = t["hash"]
+        if i > 1 and _at(t) < _at(doc["transitions"][i - 2]):
+            out.append(
+                f"transition {i}: at {t['at']} is earlier than transition {i - 1} "
+                f"({doc['transitions'][i - 2]['at']}): transition times may not go backwards"
+            )
     if doc["transitions"] and doc["transitions"][0]["event"] != "declared":
         out.append("first transition must be 'declared'")
     if doc["updated_at"] != doc["transitions"][-1]["at"]:
@@ -361,6 +366,10 @@ def _chain_problems(doc: Mapping[str, Any], key: bytes | str | None) -> list[str
             "(edited after the fact, or transitions removed)"
         )
     return out
+
+
+def _at(t: Mapping[str, Any]) -> Any:
+    return parse_stamp(t["at"])
 
 
 def _log_problems(doc: Mapping[str, Any]) -> list[str]:

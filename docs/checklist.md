@@ -85,6 +85,8 @@ The lake is authenticated, write-once where it matters, and queryable.
 | S-05 | Lake writers are scoped | Production catalog; each writer has its own table-scoped credential; 0 shared storage keys | SERVER |
 | S-06 | Replaying a batch creates no duplicates | Crash between commit and checkpoint, then replay: 0 duplicate rows (fake catalog test) | PUBLIC-NOW |
 | S-07 | Query results are engine-independent | The fixed query set returns identical result hashes on two engines (fake vs recorded cassette) | PUBLIC-NOW |
+| S-08 | Lake rows carry a TLP label and lake readers read at their ceiling | A row is stored with the label its route or dataset declares, `red` when none is declared (ADR-0033 decisions 2, 3 and 5); a reader below `red` reads only through the ceiling reader or the query engine's row filter and sees no row above its ceiling (`tests/lake/test_ceiling.py`, `tests/lake/test_row_from_event.py`, `tests/logpipeline/test_tlp_labels.py`, `tests/modules/test_lake_access.py`, `tests/modules/test_module_rules_tlp.py`) | PUBLIC-NOW |
+| S-09 | Rows stored before the label are backfilled before data is copied | Every lake table holding rows from before its `tlp` column has run its recorded label backfill (`hnx modules tlp-backfill` plans the statements; ADR-0033 decision 5) before a copy of production data is taken; until then those rows read `red` | SERVER |
 
 ## D - Detection as code
 
@@ -117,6 +119,7 @@ Cases, status, notifications and reports reach people.
 | O-09 | The hub lists every service link, scheduled job and agent from repository data | The Links, Schedule and Agent roster pages are generated from the registry, role timers / fleet units / CI schedules / workflow packs / status sources, and the roster with compiled profiles and broker manifests; every catalogued `timer:` trigger, scheduled workflow and status source is a Schedule row with a computed next run, every profile named anywhere has a roster owner and runtime, and no page writes an address (`tests/maps/test_directory.py`) | PUBLIC-NOW |
 | O-10 | Every role timer reports its runs | Each role or profile `.timer` has its service run the shared last-run writer (role `last_run`) on start and on stop with its own job id, calendar and delay, and its role installs it; the `job-last-run` mapping turns the records into one item per job and host, fail on a failed run and warn once the next run is overdue (next calendar time + randomized delay + run duration), and the Schedule page dates each timer's last run from them; a record shipped under `<dir>/<host>/` speaks only for that host and one dated more than 300 s ahead is unknown, and record file names are injective in the job id (`tests/roles/test_last_run.py`, `tests/status/test_status_last_run.py`, `tests/maps/test_directory.py`) | PUBLIC-NOW |
 | O-11 | Every orchestration job's usage is recorded and shown, names and numbers only | The controller's `homelabnext.agent.job.finished` 1.0 (closed schema: no prompt, task, tool or model text) is consumed idempotently by event and run id, only from the configured controller service id (default `svc:llm-orchestrator`), into the hub's store; per-turn records come through a turn-source adapter (the `inference` capability's `turn-records` feature; the first adapter reads LiteLLM's `/spend/logs/v2` with a viewer key by secret name), reduced to the neutral turn record and joined by `gateway_tag`; the store exports and imports as JSON lines; the Orchestration page shows per profile, backend and lane outcomes, p50/p95 wall and queue wait, tokens, cache-read share, cost, retries, fallbacks, sizes, a daily trend and one job's turns, "no gateway data" rather than zeros (`tests/orchestration/`, the generated event contract tests) | PUBLIC-NOW |
+| O-12 | Data leaves the lab only at or below the receiver's TLP ceiling | Every egress point (notification channels, the status hub's views and exports, model requests, enrichment analyzers) sends an item only when its label is at or below the receiver's ceiling, and an egress slot not on the egress list is refused (ADR-0033 decisions 6 to 13; `tests/tlp/`, `tests/notify/test_notify_ceiling.py`, `tests/status/test_status_tlp.py`, `tests/models/test_model_tlp.py`, `tests/schemas/test_module_1_0.py`) | PUBLIC-NOW |
 
 ## P - Control plane
 
@@ -182,7 +185,7 @@ Catalogued scripts, controlled agent context, one map of access.
 | M-01 | Every script is catalogued | Each script has a valid header; generated catalog is current (`hnx scripts catalog --check`) | PUBLIC-NOW |
 | M-02 | The catalog matches reality | 0 scheduled-but-uncatalogued scripts, 0 uncalled active scripts, 0 duplicate ids (`hnx scripts reality`) | PUBLIC-NOW |
 | M-03 | Helpers are shared, not copied | 0 private notify/state/lake-query helpers outside the shared libraries (allowlist with reason) (`tools/shared_helpers_lint.py`), and 0 copy-pasted clones beyond `tools/dup_check.baseline.json`, which only shrinks (`tools/dup_check.py`; CI's `--ci-base` holds the baseline to the base commit's, so a hand edit cannot loosen it) | PUBLIC-NOW |
-| M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`) | PUBLIC-NOW |
+| M-04 | Checks run in one place | Every check script runs through the invariants runner; no standalone check timers (`hnx scripts runner-lint`); a role's host scan that alerts on its own host's state is a `kind: job` listed in docs/scripts.md, "Declared exception" (`tests/scripts/test_host_scan_alerts_declared.py`) | PUBLIC-NOW |
 | M-05 | Every agent job gets its context pack | Job log records pack hash and contents built from the charter manifest | SERVER |
 | M-06 | No agent runs blind | A job with a missing or stale pre-gate is deferred with a reason | PUBLIC-NOW |
 | M-07 | Agents prove they used the pack | Result citing no must_cite pre-gate is rejected (test) | PUBLIC-NOW |
@@ -313,4 +316,4 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 
 ---
 
-**Totals:** 186 criteria across 16 pillars; 102 PUBLIC-NOW, 84 SERVER.
+**Totals:** 189 criteria across 16 pillars; 104 PUBLIC-NOW, 85 SERVER.

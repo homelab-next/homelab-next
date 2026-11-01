@@ -159,6 +159,21 @@ def test_start_old_fails_and_says_so_while_a_batch_stays_parked(tmp_path):
     assert not out.ok and "1 still parked" in out.detail and out.data["pending"] == 1
 
 
+def test_no_write_parks_for_the_old_component_after_the_mirror_stops(tmp_path):
+    """After the rollback window stops the mirror (forward-only), a production write goes to
+    the candidate alone; it used to park a batch for the stopped old component, forever."""
+    sc = Scenario(tmp_path)
+    sc.run_to_cutover()
+    sc.clock.advance(hours=73)
+    sc.runner.advance()  # rollback-window: stops the mirror
+    b = sc.backend
+    owed = b.writer.owed_to(b.old)
+    row = dict(lakes.rows_for("dns_activity")[0], uid="after-window")
+    b.writer.write_batch("dns_activity", [row], idempotency_key="after-window")
+    assert b.writer.owed_to(b.old) == owed
+    assert not any(p.idempotency_key == "after-window" for p in b.writer.pending)
+
+
 def test_full_swap_to_decommission_and_close(tmp_path):
     sc = Scenario(tmp_path)
     sc.run_to_cutover()

@@ -53,7 +53,9 @@ file.
      aimed) is site configuration of the harness, not Veritas; the fakes in `conformance/fakes/`
      are code.
    - **Prose is not Veritas** (ADRs, guides, this page), except where a generator reads it as data:
-     the tables of `docs/build-order.md` and `docs/checklist.md` feed the roadmap map (ADR-0018).
+     the tables of `docs/build-order.md` and `docs/checklist.md` feed the roadmap map (ADR-0018),
+     and the front-matter `summary:` of each docs page and ADR is copied into the indexes
+     (ADR-0032).
    - **`schemas/_frozen/` is written once** by `tools/schema_check.py --freeze` and is then
      authoritative history: append-only, checked against the base by `--base`.
    - **Append-only events count as authored**, whoever appends them. A record's `<uid>.events/`
@@ -136,6 +138,7 @@ file.
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |
    | Script catalog, `docs/scripts/catalog.md` and `catalog.json` | script headers | `hnx scripts catalog --check` (CI) |
+   | The one-line columns of `docs/README.md` and `docs/adr/README.md` (generated blocks) | each page's and ADR's front-matter `summary:` | `hnx docs index check docs/README.md docs/adr/README.md` (`make gates`, CI) |
    | Detections logical-id map `detections/det_map.yml` and ATT&CK coverage report `detections/attack_coverage.json` | the map: the Sigma rules and the stored map (stable and retired numbers); the report: the Sigma rules and their fixture results (D-04). The ATT&CK snapshots feed only `validate-techniques` | `hnx detections map --check`, `coverage --check` (CI) |
    | Golden reports: injection `homelabnext/agent/prompts/injection/report.json`, model evaluation `examples/model_roles.eval.json` | templates and corpus; model pins and golden suites | `agent injection run --check`, `golden pins check` (CI) |
    | StackStorm pack, `workflows/stackstorm/` | workflow packs and the binding | `hnx workflows st2 check`; pytest `tests/workflows/` (CI) |

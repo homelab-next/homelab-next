@@ -6,7 +6,12 @@ summary_of: outline:sha256:094d6d265d082d7d
 
 - **Status:** proposed
 - **Date:** 2026-10-15
-- **Related:** ADR-0002, ADR-0004, ADR-0005
+- **Related:** ADR-0002, ADR-0004, ADR-0005, ADR-0027; `docs/compute-model.md`
+- **Amended (2026-11-01):** decision 4 said no hypervisor-specific code lives in `homelabnext/`,
+  while `homelabnext/compute/gen/` renders hypervisor text (bpg/proxmox Terraform, `<vmid>.fw`
+  firewall files, the node mirror, `virt-install` scripts). Decision 4 now says what is built:
+  those are render targets of the guest model, confined to `homelabnext/compute/`, not a swap
+  seam; `tests/compute/test_render_targets_confined.py` checks the confinement.
 
 ## Context
 
@@ -24,13 +29,21 @@ modes exceed the flexibility it buys.
    sequence of DNS flips (ADR-0002), not a rewrite.
 3. Substrate changes are recorded as ordinary ADRs with a revisit trigger, not run through
    `hnx swap`.
-4. No hypervisor-specific code lives in `homelabnext/`; provisioning examples live under
-   `examples/` and `ansible/` only.
+4. Hypervisor-specific code lives only in the render targets of the guest model
+   (`homelabnext/compute/gen/`, reached through `hnx guests render`): generators that write text
+   (Terraform, firewall files, install scripts) and never apply it. No contract, library or other
+   generator depends on them: outside `homelabnext/compute/` nothing imports a target, apart from
+   the module loader reading the node mirror's unit name. A second target for another hypervisor
+   is a rebuild aid for a hardware move (decision 2), not a swap seam: there is no hypervisor
+   capability, conformance suite or `hnx swap` leg. The guest contract carries only the placement
+   facts a substrate needs (`placement.node`, `vmid`, `kind`). Applying the output (provisioning)
+   lives under `examples/` and `ansible/` only.
 
 ## Consequences
 
 - Scope stays bounded; effort goes where swaps actually happen (products above the substrate).
-- Users on a different substrate adapt provisioning, not the contracts.
+- Users on a different substrate adapt provisioning, not the contracts; a new hypervisor is a new
+  render target beside the others, which a rebuild then applies.
 
 ## Alternatives
 

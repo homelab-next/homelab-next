@@ -153,8 +153,9 @@ session's context pack carries it.
 
 ## How it is meant to be adopted
 
-Registry (names, not addresses) -> model-role aliases -> shared libraries -> conformance harness ->
-role interface. Each step is useful alone; each makes the next swap cheaper. The swap procedure is
+Registry (names, not addresses) -> aliases (capability DNS names and model roles) -> shared
+libraries -> conformance harness -> role interface (the same order as
+[architecture](docs/architecture.md#how-the-pieces-are-meant-to-be-adopted)). Each step is useful alone; each makes the next swap cheaper. The swap procedure is
 fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions

@@ -314,6 +314,14 @@ def test_the_cli_validates_lists_and_resolves(tmp_path, capsys):
     assert hnx(["models", "store", "validate", store, "--roles", str(rp)]) == 1
     assert "example-4b-unknown" in capsys.readouterr().err
     assert hnx(["models", "store", "check", str(tmp_path / "absent.json")]) == 2
+    # a readable but invalid role table is invalid input (1, as `models serving` reports it);
+    # one that is not JSON is unreadable (2)
+    r = roles()
+    r["roles"]["triage"]["bindings"] = ["svc:inference-triage"]
+    rp.write_text(json.dumps(r))
+    assert hnx(["models", "store", "validate", store, "--roles", str(rp)]) == 1
+    rp.write_text("{not json")
+    assert hnx(["models", "store", "validate", store, "--roles", str(rp)]) == 2
 
 
 def test_the_store_library_is_standard_library_only():

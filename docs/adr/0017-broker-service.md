@@ -57,8 +57,14 @@ What was missing was a service that runs actions, keeps durable state and can be
    `decision.requested` event (through the events bus when one is configured, an outbox
    directory otherwise) and an optional state-diffed notification. An approver from the
    manifest's `approvers` approves or denies it; the approval names the request digest, so a
-   request edited after approval no longer matches. Self-approval and unlisted or agent approvers
-   are refused by the same `decide()` approver rules, for a denial as well as an approval; a
+   request edited after approval no longer matches. Self-approval and unlisted approvers are
+   refused by the same `decide()` approver rules, for a denial as well as an approval, and so is
+   an agent approver (one of kind agent, or naming a granted profile) unless the manifest sets
+   `allow_agent_approvers: true` (manifest 1.1). That flag is part of the manifest, reviewed like
+   every other change to it; a served manifest may not set it where the decision table it is
+   checked against does not (`hnx broker validate --decision-table`), and the decision records
+   `tier_used: agent` for such an approval so a consumer that acts only on a person's approval can
+   refuse it; a
    denial is judged by those rules alone, so a request whose grant, tier or handler was withdrawn
    after it was filed can still be denied. Running
    consumes the approval through a durable store (an exclusive-create marker per approval id),

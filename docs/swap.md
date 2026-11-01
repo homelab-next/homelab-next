@@ -182,7 +182,9 @@ inventory entries and mentions in docs, with word-bounded matching (`lake-core` 
 `--from-record swap.json` derives the retired implementation from the record. Hosts are never
 derived (a host usually carries other services); name them with `--host`. History that must keep
 the old name goes in an allow file, never silently. Swap records and their evidence are excluded
-by default.
+by default. Nothing is skipped silently: a file that is not UTF-8 is searched with undecodable
+bytes replaced, and a file the scan cannot read, one over 1 MB, or a symbolic link (never
+followed) is an `unscanned` finding that fails the check until it is fixed or allow-listed.
 
 ## Worked example: swap a lake-query implementation between two fake lakes
 
@@ -267,6 +269,12 @@ Attestation names: `conformance-old`, `conformance-new`, `shadow`, `mirror` (may
 `unresolved`), `parity` (may carry `rows_compared`), `canary`, `old-stopped`. The registry flip and
 the decommission scan are real, not attested. For a swap you run often, write a `Backend`
 subclass instead; the interface is a dozen small methods returning `Outcome(ok, detail, data)`.
+
+The soak and the rollback window are measured from transition times, so the clock is guarded.
+`--now TIME` (advance, rollback) overrides it only together with `--rehearsal`, and every
+transition it writes carries the actor `<actor>@rehearsal-clock`, so a rehearsed record says so.
+No clock may read earlier than the record's last transition (the runner refuses, exit 1), and
+`hnx swap record` reports a record whose transition times go backwards as invalid.
 
 ## Limits
 

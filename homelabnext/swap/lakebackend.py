@@ -37,6 +37,7 @@ from typing import Any
 from homelabnext.lake.errors import LakeError
 from homelabnext.lake.sqlparams import quote_table
 from homelabnext.parity import ParityQuery, ParityReport, Sample, compare_queries, compare_tables
+from homelabnext.state import atomic_write_text
 
 from .backend import Backend, Outcome
 from .decommission import Retired, scan
@@ -199,6 +200,7 @@ class LakeBackend(Backend):
 
     def start_mirror(self) -> Outcome:
         self.mirroring = True
+        self.writer.forward_only = False
         return Outcome(True, "dual-write active", {"direction": "old->new"})
 
     def mirror_status(self) -> Outcome:
@@ -208,7 +210,10 @@ class LakeBackend(Backend):
         return Outcome(self.mirroring, f"{s['unresolved']} unresolved", {**s})
 
     def stop_mirror(self) -> Outcome:
+        # forward-only: production writes stop going to (or parking for) the secondary, which
+        # is the stopped old component after the rollback window; batches already parked stay
         self.mirroring = False
+        self.writer.forward_only = True
         return Outcome(True, "dual-write stopped (forward-only)", self.writer.status())
 
     # ------------------------------------------------------------ parity
@@ -258,7 +263,7 @@ class LakeBackend(Backend):
                 return Outcome(False, why, {"pending": left})
         if not plan.empty:
             text = self.registry_path.read_text(encoding="utf-8")
-            self.registry_path.write_text(flip_text(text, plan), encoding="utf-8")
+            atomic_write_text(self.registry_path, flip_text(text, plan))  # never torn
         # one writer state across flips: batches parked for a stopped component survive the
         # flip and a rollback, and are replayed into that component when it starts again
         if target.get("host") == self.new_host:

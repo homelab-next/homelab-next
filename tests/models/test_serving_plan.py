@@ -118,6 +118,16 @@ def test_the_roles_on_a_vllm_backend_must_agree_on_the_context_length(tmp_path):
     assert any("found none" in p for p in problems_of(tmp_path, roles=r))
 
 
+def test_every_role_on_a_context_checked_backend_must_declare_its_context_length(tmp_path):
+    """One role declaring a context length does not cover another that declares none on the same
+    backend: the K-14 probe could not check the second against what is loaded."""
+    r = roles()
+    (binding,) = r["roles"]["triage"]["bindings"]  # the same backend and model, no context
+    r["roles"]["triage-alias"] = {"tier": "fast", "bindings": [dict(binding)]}
+    (p,) = [p for p in problems_of(tmp_path, roles=r) if "max_context_tokens" in p]
+    assert "undeclared on mdl:triage-alias" in p
+
+
 @pytest.mark.parametrize(
     ("edit", "needle"),
     [

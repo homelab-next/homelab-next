@@ -56,8 +56,8 @@ homelabnext/
   lake/         query, catalog, write, fakes        (W3)   extras: lake, trino
   notify/       state-diffed, dedup-keyed send      (W5)   core
   state/        cursors and history, atomic writes  (W5)   core
-  records/      propose/finding/completion          (W5)   core (+ records for pydantic)
-  decide/       decision specs, replay, eval        (W7)   extra: decide
+  records/      propose/finding/completion          (W5)   core (the records extra is unused)
+  decide/       decision specs, replay, eval        (W7)   core (the decide extra is unused)
   golden/       golden-task format and runner       (W7)   core
   models/       model store manifest, serving plan  (ADR-0023)  core (+ yaml for the serving spec)
   paths.py      locates schemas/, profiles/, examples/  (W16)  core
@@ -432,8 +432,10 @@ that humans edit are YAML validated by the JSON Schema of the same name.
   additive although a document could have carried that key undeclared: an undeclared key of an
   open object carries no contract. Removing, renaming or tightening (a new `required`,
   `multipleOf`, pattern property, `then`/`else` beside an `if`, or schema for
-  `additionalProperties`) is a new major with a dual-write window (ADR-0001).
-  `tools/schema_check.py` enforces it.
+  `additionalProperties`) is a new major, bumped in place (ADR-0001 decision 3): the earlier
+  major's frozen copies stay under `schemas/_frozen/` and stored documents are migrated; there is
+  no dual-write window. `tools/schema_check.py` enforces additivity within a major; a major bump
+  is not checked against the earlier major.
 - Python API: a name listed in section 2.1 follows SemVer once `1.0` ships; before that, a change
   to a listed signature needs a note in `CHANGELOG.md` under "Changed".
 - Capability contracts: a conformance check is never removed; it may be added. A new check ships

@@ -13,12 +13,17 @@ The one-line column is each ADR's front-matter `summary:`, written by
 `hnx docs index generate docs/adr/README.md` and checked in CI; edit the summary, not the row.
 An ADR's status is the **Status** line in its own file.
 
+A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
+component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
+`RESERVED` in `tools/tests/test_adr_log.py` lists the reserved numbers, and the test refuses an
+index that does not name each one.
+
 | ADR | Slug | One line (the ADR's `summary:`, generated) |
 |---|---|---|
 | [0001](0001-schemas-in-git-additive-evolution.md) | schemas-in-git-additive-evolution | <!-- hnx:gen:summary:0001-schemas-in-git-additive-evolution.md -->Contracts are JSON Schema files in git, vendor schemas are pinned, and schemas evolve additively only.<!-- /hnx:gen --> |
 | [0002](0002-registry-and-dns-aliases.md) | registry-and-dns-aliases | <!-- hnx:gen:summary:0002-registry-and-dns-aliases.md -->A service registry plus DNS capability aliases are the only source of addresses; nothing hard-codes a host.<!-- /hnx:gen --> |
 | [0003](0003-shared-client-libraries.md) | shared-client-libraries | <!-- hnx:gen:summary:0003-shared-client-libraries.md -->One shared client library per data seam; a private copy of a client fails CI.<!-- /hnx:gen --> |
-| [0004](0004-role-interface-and-capability-groups.md) | role-interface-and-capability-groups | <!-- hnx:gen:summary:0004-role-interface-and-capability-groups.md -->Service roles ship argument specs and five tagged task sets; inventory capability groups are what playbooks target, never host names.<!-- /hnx:gen --> |
+| [0004](0004-role-interface-and-capability-groups.md) | role-interface-and-capability-groups | <!-- hnx:gen:summary:0004-role-interface-and-capability-groups.md -->Service roles ship argument specs and six tagged task sets; inventory capability groups are what playbooks target, never host names.<!-- /hnx:gen --> |
 | [0005](0005-swap-procedure-and-conformance.md) | swap-procedure-and-conformance | <!-- hnx:gen:summary:0005-swap-procedure-and-conformance.md -->Every swap of a product follows one procedure, and every capability has a passing swap conformance test.<!-- /hnx:gen --> |
 | [0006](0006-detections-as-code.md) | detections-as-code | <!-- hnx:gen:summary:0006-detections-as-code.md -->Detections are authored once in Sigma and cited by logical id, not copied per product.<!-- /hnx:gen --> |
 | [0007](0007-model-role-aliases.md) | model-role-aliases | <!-- hnx:gen:summary:0007-model-role-aliases.md -->Consumers name model roles; only the LLM gateway maps a role to a backend model.<!-- /hnx:gen --> |

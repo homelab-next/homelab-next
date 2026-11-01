@@ -8,6 +8,8 @@ summary_of: outline:sha256:91c8e47d3eaaa755
   (the backfill run, loading `lake-access.json`, re-recording the parity cassette) are operator
   follow-ups)
 - **Date:** 2026-10-30
+- **Amended:** 2026-11-01 (decision 11: where the request rule is enforced; see the amendment
+  under it)
 - **Related:** ADR-0001 (additive schemas); ADR-0011 and ADR-0021, which classify repositories
   and files and are unchanged by this ADR (a file in the public repository is `clear` by
   ADR-0011); ADR-0022 (LLM gateway, role locality); ADR-0024 and ADR-0030 (the ceiling policy,
@@ -169,6 +171,18 @@ The standard for this already exists and the lab's threat-intel sources already 
     (read as `red`), and records the refusal. The content checks of decision 13 apply to gateway
     requests as to any egress. A profile reaching a cloud model other than through the gateway is a
     defect the actors-act-via-broker check reports, not an exemption.
+
+    *Amendment (2026-11-01):* "the gateway" above names where the rule holds, not code inside the
+    proxy, which has no admission logic (ADR-0022) and cannot read a request's label. The rule is
+    enforced in three places ([LLM gateway](../llm-gateway.md), "TLP labels on requests"): at
+    render time by key scope (no key is scoped to a role whose ceiling is below the key's sending
+    ceiling, and the role table's `leaves_lab` must agree with the backends the gateway spec
+    deploys), in `--check` by audit of the rendered keys, and per request by
+    `homelabnext.registry.model_tlp.admit`, which the component that assembles the request's
+    context applies and logs. No component calls `admit` yet: until the agent runtime does, key
+    scope and the audit are the only enforcement, refusals of a labelled request are not
+    recorded, and a role raised to `green` is reached only by `clear`-ceiling keys. The text
+    above is kept as it was decided.
 12. **`data_tier` is derived, not a second axis.** For an agent profile, the ceiling policy
     attests a TLP ceiling (`tlp_ceiling`, distinct from the compiled profile's existing ceiling)
     where it attests `data_tier` today: `local-only` is a ceiling above the cloud-role ceiling,
@@ -201,8 +215,9 @@ The standard for this already exists and the lab's threat-intel sources already 
     ceiling, and a job with no label is `red`.
 
     Each external analyzer or connector declares the highest label it may receive, and runs only
-    for a job whose label is at or below that maximum; an analyzer with no declared maximum reads
-    as `red` (decision 1) and is not sent anything. Where the enrichment platform has a
+    for a job whose label is at or below that maximum; an analyzer with no declared maximum is
+    sent nothing (fail closed: it is not read as a `red` maximum, which would admit every job),
+    and a declared maximum that is not a canonical label is refused (decision 1). Where the enrichment platform has a
     per-analyzer maximum TLP, that setting carries the declaration; where it has none, the lab
     enforces the rule in the submission path before the job leaves. The content checks above apply
     to the observable and to any context sent with the job. Analyzers that stay inside the lab keep
