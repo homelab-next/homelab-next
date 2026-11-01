@@ -187,7 +187,7 @@ class Records:
             raise FileExistsError(f"{clash} already exists; choose another slug for this note")
         dir_fd = os.open(lane_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            _inbox.write_inbox(dir_fd, name, text.encode("utf-8"), mode=0o666)  # less the umask
+            _inbox.write_inbox(dir_fd, name, text.encode("utf-8"))  # owner-only, as the lane
         except FileExistsError:
             raise FileExistsError(
                 f"{AGENT_LANE}/{name} already exists; refusing to overwrite"
