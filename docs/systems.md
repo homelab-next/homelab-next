@@ -66,5 +66,5 @@ when it exists (`--policy FILE`, or `--policy none`).
   review current and editing the prose drops it.
 * Draft pages are listed as `info:` with the tiers `reviewed` would still need; they never fail.
 
-The fourteen example pages are drafts with no reviews; `tests/sop/fixtures/dns.reviewed.md` is a
+The example pages are drafts with no reviews; `tests/sop/fixtures/dns.reviewed.md` is a
 fully reviewed page (inline form) that proves the pass path, in both forms in the tests.
