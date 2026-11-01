@@ -319,3 +319,30 @@ def test_x06_and_lint_ids_agree_on_the_same_tree(tmp_path, monkeypatch, capsys):
         write(tmp_path / rel, "Watches det:web-shell-write. Revised on 2026-10-15.\n")
     assert pillar_x.x06(ctx(tmp_path)).status == "pass"
     assert det_main(["--root", "detections", "lint-ids"]) == 0
+
+
+# ---- X-03 in a tree with the repository checker: one implementation, the checker's ----------
+
+
+def test_x03_runs_the_repository_schema_checker_where_the_tree_has_it(tmp_path):
+    """With ``tools/schema_check.py`` present, X-03 is that checker under ``--strict`` (the one
+    CI runs: every ``*.json`` schema, its instance rule, its ``$id`` rule), not a second copy
+    that covered fewer schemas and matched instances differently."""
+    good_schema_tree(tmp_path)
+    write(tmp_path / "tools" / "schema_check.py", "raise SystemExit(0)\n")
+    seen = []
+
+    def run(argv, timeout=120):
+        seen.append(argv)
+        return 1, "ERROR schemas/ocsf/thing.v1.json: example invalid"
+
+    r = pillar_x.x03(ctx(tmp_path, run))
+    assert r.status == "fail" and "thing.v1.json" in r.evidence
+    assert seen and seen[0][1].endswith("tools/schema_check.py") and "--strict" in seen[0]
+
+
+def test_x03_on_this_repository_checks_every_schema_the_checker_does():
+    root = pathlib.Path(__file__).resolve().parents[2]
+    r = pillar_x.x03(ctx(root))
+    assert r.status == "pass", r.evidence
+    assert "schema_check --strict" in r.evidence

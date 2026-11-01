@@ -12,6 +12,18 @@ digest from a passing commit. Contract: `schemas/workflows/` (`pack`, `deploy`).
 `workflows/packs/`; the broker manifest they act through: `workflows/broker.manifest.json`; the
 deploy pins: `workflows/deploy.yml`.
 
+`workflows/broker.manifest.json` is a **decision table**: the actions, tiers, approvals and grants
+the packs are checked against. Only `agent.job.submit`'s handler is in the tree (pinned by its
+handler document); `case.open`, `notify.page`, `notify.post`, `dns.block-domains` and
+`host.isolate` act on the site's own systems, so their handlers are the site's and the table
+cannot be served as it is (`hnx broker validate` names exactly those five). The manifest the
+broker serves is the site's: it adds the handler documents (and the `callers` its peers need) and
+may leave out any action it does not serve, and
+`hnx broker validate SERVED --decision-table workflows/broker.manifest.json` refuses it where it is
+less strict than the table (a different tier, an approval dropped, a grant widened, agent
+approvers admitted). `tests/broker/test_broker_manifests_in_tree.py` loads every broker manifest
+the tree names and holds the table to failing for its site handlers only.
+
 StackStorm runs the pinned packs on events and schedules: [stackstorm.md](stackstorm.md)
 ([[stackstorm]]), `hnx workflows st2 render | check`.
 

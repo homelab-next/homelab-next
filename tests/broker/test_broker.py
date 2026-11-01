@@ -212,6 +212,25 @@ def test_manifest_handler_mismatches_reported():
     assert any("not in the manifest" in p for p in check_manifest_handlers(m, extra))
 
 
+def test_manifest_and_handler_must_agree_on_approval_in_both_directions():
+    """Only a manifest stricter than its handler was flagged, and that direction is harmless at
+    run time; a handler saying requires_approval: true under a manifest saying false (the one
+    decide() would silently ignore) passed."""
+    m = copy.deepcopy(TABLE["manifests"]["enforce"])
+    entry = next(a for a in m["actions"] if a["tier"] in ("read", "write"))
+    entry["requires_approval"] = False
+    hs = _handlers(m)
+    assert check_manifest_handlers(m, hs) == []
+    stricter = next(h for h in hs if h["action"] == entry["action"])
+    stricter["requires_approval"] = True
+    [problem] = check_manifest_handlers(m, hs)
+    assert entry["action"] in problem and "requires_approval" in problem
+    stricter["requires_approval"] = False
+    entry["requires_approval"] = True
+    [problem] = check_manifest_handlers(m, hs)
+    assert entry["action"] in problem
+
+
 def test_table_manifests_validate_except_the_deliberate_no_handler_one():
     assert schema_errors("broker", "manifest", TABLE["manifests"]["enforce"]) == []
     assert schema_errors("broker", "manifest", TABLE["manifests"]["shadow"]) == []

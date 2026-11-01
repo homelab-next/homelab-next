@@ -66,8 +66,8 @@ file.
    - the JSON Schemas under `schemas/` with `schemas/_frozen/` (ADR-0001), their authored examples
      and negatives, and `capabilities.yml`. Excluded: every file `python -m homelabnext.schemas`
      writes, which is exactly
-     `schemas/platform/{module,lake_table,module_selection}.schema.json` and
-     `schemas/platform/{examples,negative}/{module,module_selection,lake_table}.*`
+     `schemas/platform/{module,lake_table,module_selection,interface}.schema.json` and
+     `schemas/platform/{examples,negative}/{module,module_selection,lake_table,interface}.*`
      (`tools/tests/test_generated_files_have_checks.py` compares these globs with the generator's
      own output list);
    - the shipped `profiles/`;
