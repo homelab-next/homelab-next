@@ -27,10 +27,12 @@ their error handling.
 4. Migration is per script family with byte-stable output tests; a library change may not merge
    without deleting the copies it replaces. CI fails on a private re-implementation outside the
    package (allow-list with a written reason only): `tools/shared_helpers_lint.py` (checklist
-   M-03) covers `notify`, `state` and `lake`. `records` is enforced differently: the agent lane
-   `inbox/` is the only place an agent can write a note, by filesystem ownership and the
-   broker's `records-inbox` lane (ADR-0010), and both writers share the library's validation,
-   rendering and naming; no AST rule can tell a note write from any other file write.
+   M-03) covers `notify`, `state`, `lake` and `records`. For `records` the rule is narrower:
+   the agent lane `inbox/` is the only place an agent can write a note, by filesystem ownership
+   and the broker's `records-inbox` lane (ADR-0010); both writers share the library's
+   validation, rendering, naming and its one inbox writer (`homelabnext/records/inbox.py`), and
+   the lint flags a function that names an inbox and writes a file outside `homelabnext/records/`
+   (a heuristic: it cannot follow a path built elsewhere).
 
 ## Consequences
 

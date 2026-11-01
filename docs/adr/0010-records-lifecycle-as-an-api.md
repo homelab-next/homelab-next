@@ -21,10 +21,12 @@ proposed as prose. The governance layer's only contract is a frontmatter convent
    (ADR-0003) or, for an agent, through the broker's `records-inbox` lane
    (`homelabnext/broker/lanes.py`), which validates, renders and names the note with the
    library's own functions (`validate_note`, `render_note`, `build_filename`) and writes it with
-   the broker's lane rules (no-follow path walk, exclusive create, a keyed name tag). Notes are
-   validated against `schemas/records/note.schema.json`. *Status note (2026-11):* the two write
-   paths still differ in one rule: `Records` refuses a name that is already in `decided/*`, and
-   the lane does not yet; one shared write function is the follow-up.
+   the broker's lane rules (no-follow path walk, quotas, a keyed name tag). Notes are
+   validated against `schemas/records/note.schema.json`. Both paths stamp a note and put it on
+   disk through one writer, `homelabnext/records/inbox.py` (`stamp`: `requesting_agent`,
+   `created`, a proposal's `status`; `decided_clash`: a name already in `decided/*` is refused;
+   `write_inbox`: exclusive, no-follow, fsynced create), and `tools/shared_helpers_lint.py` (rule
+   `records`) refuses a file write into an inbox anywhere else.
 2. Lanes are `inbox/` (the only agent-writable lane) and `decided/{approved,denied,completed}`
    (operator-only). A `completion-request` note with a `related:` list moves its targets to
    `completed/` on approval.

@@ -91,6 +91,30 @@ def _rules(src: str) -> list[str]:
         ("import sqlite3\n", "lake"),
         ("from pyiceberg.catalog import load_catalog\n", "lake"),
         ('URL = "/v1/statement"\n', "lake"),
+        (
+            """
+            def file_note(root, name, text):
+                (root / "inbox" / name).write_text(text)
+            """,
+            "records",
+        ),
+        (
+            """
+            import os
+            def file_note(root, name, tmp):
+                os.link(tmp, os.path.join(root, "records/inbox", name))
+            """,
+            "records",
+        ),
+        (
+            """
+            from homelabnext.records.notes import AGENT_LANE
+            def file_note(root, name, text):
+                with open(root / AGENT_LANE / name, "x") as fh:
+                    fh.write(text)
+            """,
+            "records",
+        ),
     ],
 )
 def test_flags_private_helpers(src, rule):
@@ -107,6 +131,10 @@ def test_flags_private_helpers(src, rule):
         "import json\ndef report(out, doc):\n    out.write_text(json.dumps(doc).replace('a', 'b'))\n",
         "from homelabnext.state import StateStore\nStateStore('x.json').set('k', 1)\n",
         "from homelabnext.lake import FakeLake\nFakeLake().query('SELECT 1')\n",
+        # reading an inbox, or naming a records-inbox lane kind, is not writing one
+        "def notes(root):\n    return (root / 'inbox').read_text()\n",
+        "def kind(lane, out):\n    out.write_text(lane.kind == 'records-inbox')\n",
+        "from homelabnext.records.inbox import write_inbox\nwrite_inbox(3, 'n.md', b'x')\n",
     ],
 )
 def test_allows_shared_library_use(src):

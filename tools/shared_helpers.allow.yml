@@ -30,3 +30,6 @@ allow:
   - path: hooks/claude_code_activity.py
     rule: state
     reason: the hook is a standalone stdlib script copied to workstations and cloud sessions, so it cannot import homelabnext.state; each spool file is one immutable record handed to the hub, not checker state
+  - path: conformance/fakes/records_target.py
+    rule: records
+    reason: the records conformance mutants move or copy a note out of the inbox by hand on purpose (a non-atomic or lane-skipping decision), so the suite can prove it catches each defect; the honest fake uses the library

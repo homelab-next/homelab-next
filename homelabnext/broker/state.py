@@ -76,6 +76,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from homelabnext._tempfile import write_temp  # the broker writes file bytes only through it
+
 __all__ = [
     "FileApprovalStore",
     "StateDir",
@@ -131,22 +133,6 @@ def is_id(value: Any) -> bool:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}-{secrets.token_hex(8)}"
-
-
-def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o600) -> str:
-    """Write ``data`` to a new temporary file beside ``name`` in the directory ``dir_fd`` and
-    fsync it; returns the temporary name.  The one place the broker writes file bytes: callers
-    then link (exclusive) or rename (replace) it into place and unlink the temp name."""
-    tmp = f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=dir_fd)
-    try:
-        view = memoryview(data)
-        while view:
-            view = view[os.write(fd, view) :]
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return tmp
 
 
 def write_exclusive(path: Path, data: bytes, *, mode: int = 0o600) -> bool:
