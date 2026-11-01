@@ -364,12 +364,16 @@ jobs:
   # The gates a change must not be able to argue its way past run the BASE's code, never the
   # change's: the checker is the base commit's homelabnext (a detached worktree of the same clone,
   # imported from there with python -P so the checkout's own package is never on the path), and it
-  # reads the change's working tree only as data (--root).  The base rule is the same as
-  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the
-  # thing being avoided.  A pull_request run still takes this workflow file (and the constraints
-  # its dependencies come from) from the change, so the guarantee rests on both being
-  # human-approve (CODEOWNERS, hnx modules review-tier); the privileged pull-request trigger is never
-  # used.  Bootstrap: a base whose code has no swap-gate yet runs the change's own and says so.
+  # reads the change's working tree only as data (--root).  Nothing of the change runs before the
+  # gates: no composite action from the checkout (./.github/actions/ is the change's), Python comes
+  # from actions/setup-python pinned here and is called by the absolute path it reports (so a
+  # $GITHUB_PATH shim cannot stand in for it), and pip and the checker's dependencies are installed
+  # from the BASE's constraints and pyproject.toml.  The base rule is the same as
+  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the thing
+  # being avoided.  A pull_request run still takes this workflow file from the change, so the
+  # guarantee rests on it being human-approve (CODEOWNERS, hnx modules review-tier) until a
+  # ruleset requires this job from the default branch; the privileged pull-request trigger is never
+  # used.  A base that cannot run a gate fails the job: the change's own code never stands in.
   trusted-gates:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -378,17 +382,17 @@ jobs:
         with:
           fetch-depth: 0  # the base commit
           persist-credentials: false
-      - uses: ./.github/actions/python-deps
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        id: python
         with:
           python-version: "3.12"
-          extras: core  # the checker's own imports (YAML, JSON Schema); the project itself is not installed
-          install-project: "false"
-      - name: the base commit, checked out apart as the checker
+      - name: the base commit, checked out apart as the checker, with its own pinned dependencies
         id: base
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
           set -euo pipefail
           commit() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
@@ -404,27 +408,29 @@ jobs:
           fi
           git worktree add --detach "$RUNNER_TEMP/base" "$base"
           cd "$RUNNER_TEMP/base"
-          got=$(PYTHONPATH="$PWD" python -P -c 'import homelabnext; print(homelabnext.__file__)')
+          "$PY" -m pip install --disable-pip-version-check --require-hashes --no-deps -r constraints/bootstrap.txt
+          req="$RUNNER_TEMP/checker-requirements.txt"
+          # the core dependencies (YAML, JSON Schema) the checker imports; the project is not installed
+          "$PY" -I -c 'import tomllib; p = tomllib.load(open("pyproject.toml", "rb"))["project"]; print("\n".join([*p.get("dependencies", []), *p["optional-dependencies"]["core"]]))' > "$req"
+          "$PY" -m pip install --disable-pip-version-check -c constraints/ci.txt -r "$req"
+          got=$(PYTHONPATH="$PWD" "$PY" -P -c 'import homelabnext; print(homelabnext.__file__)')
           case "$got" in "$PWD"/*) ;; *) echo "the checker imports $got, not the base's"; exit 1;; esac
           echo "sha=$base" >> "$GITHUB_OUTPUT"
-          echo "checker: the base commit $base"
+          echo "checker: the base commit $base, interpreter $PY"
       - name: each changed module path's review tier, and a code owner (as of the base) for every human-approve one (ADR-0027 follow-up 4), by the base's code
         env:
           BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
           cd "$RUNNER_TEMP/base"
-          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules review-tier --root "$GITHUB_WORKSPACE" --base "$BASE"
+          PYTHONPATH="$PWD" "$PY" -P -m homelabnext.cli modules review-tier --root "$GITHUB_WORKSPACE" --base "$BASE"
       - name: a role-table change is covered by a swap record whose legs hold against the base's evidence (docs/modules.md, "Swap record 1.2"), by the base's code
         env:
           BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
         run: |
-          checker="$RUNNER_TEMP/base"
-          if ! grep -q '"swap-gate"' "$checker/homelabnext/modules/cli.py"; then
-            echo "::notice::bootstrap: the base has no swap-gate yet; running this change's own"
-            checker="$GITHUB_WORKSPACE"
-          fi
-          cd "$checker"
-          PYTHONPATH="$PWD" python -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
+          cd "$RUNNER_TEMP/base"
+          PYTHONPATH="$PWD" "$PY" -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
 
   # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
   # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state

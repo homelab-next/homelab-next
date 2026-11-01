@@ -423,7 +423,11 @@ through (`homelabnext/_yaml.py`, `homelabnext/modules/scope.py`). `GOVERNANCE` i
 lists them all, and a test derives the direct imports of the two tiers, `swap_evidence.py` and
 `swap.py`, so a new import that is not listed fails the suite. Their wider import tree is not
 listed: CI runs the gates with the base commit's code (the `trusted-gates` job), so a pull request
-cannot weaken its own gate. So is a change to what vouches for a model a swap rebinds to (the model store, the
+cannot weaken its own gate through them, though it can still edit the workflow that runs the job
+(below, "What runs the gate"). A change to what sets up CI's interpreter and packages
+(`.github/actions/python-deps/action.yml`, `constraints/bootstrap.txt`, `constraints/ci.txt`,
+`pyproject.toml`) and to the release transforms (`homelabnext/status/release_transforms.yml`,
+`homelabnext/status/release.py`; ADR-0033 decision 7) is human-approve too. So is a change to what vouches for a model a swap rebinds to (the model store, the
 evaluation reports, `examples/model-evals/` (the path the code reads; the directory does not exist
 until a first vetting change adds a report) and the golden suites; see "Swap record 1.2"), and so
 is a change to the model role table (`examples/model_roles.json`) or to a swap record
@@ -1715,11 +1719,14 @@ and `meaning_changes` is recorded, never checked.
   the pull request's; so CI's `trusted-gates` job runs `review-tier` and `swap-gate` with **the
   base commit's own code**: a detached worktree of the base, imported with `python -P` (the
   checkout's own package never on the path, which the job asserts), reading the change only as data
-  (`--root`). A pull request run still takes the workflow file and the dependency constraints from
-  the change, so this rests on both being human-approve (`.github/workflows/ci.yml` is governance,
-  `constraints/` is in CODEOWNERS), a review `main`'s ruleset does not yet require;
-  `pull_request_target` is never used. Until a base carries
-  `swap-gate` (the change that adds it), the job runs the change's own and says so.
+  (`--root`). Nothing of the change runs before the gates: the job calls `actions/setup-python`
+  directly rather than the checkout's `python-deps` action, calls the interpreter by the absolute
+  path it reports, and installs pip and the checker's dependencies from the base's constraints and
+  `pyproject.toml`. A base that cannot run a gate fails the job; the change's own code never stands
+  in. A pull request run still takes the workflow file from the change, so this rests on
+  `.github/workflows/ci.yml` being human-approve (it is governance), a review `main`'s ruleset does
+  not yet require, until a ruleset requires the job from the default branch; the privileged
+  pull-request trigger is never used.
 
   What none of this proves: a report's `live` is the claim of whoever ran it, now one a code owner
   reviewed, not one checked for provenance; and a library caller that assembles its own
