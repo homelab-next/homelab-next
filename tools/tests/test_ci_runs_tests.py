@@ -48,7 +48,7 @@ SHARD = re.compile(r"^\$SHARD/([1-9][0-9]*)$")
 #: what the test job's full run starts with: the suite runs as the runner user in a network
 #: namespace with only loopback, so no subprocess a test starts can reach the network either
 NO_NETWORK = (
-    'sudo -E env "PATH=$PATH" "HOME=$HOME" unshare --net -- '
+    'sudo -E env "PATH=$PATH" "HOME=$HOME" "USER=$(id -un)" "LOGNAME=$(id -un)" unshare --net -- '
     "sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 && "
     'exec setpriv --no-new-privs --reuid="$u" --regid="$g" --init-groups -- "$@"\' '
     'sh "$(id -u)" "$(id -g)" '

@@ -103,7 +103,7 @@ jobs:
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
         run: >-
-          sudo -E env "PATH=$PATH" "HOME=$HOME" unshare --net --
+          sudo -E env "PATH=$PATH" "HOME=$HOME" "USER=$(id -un)" "LOGNAME=$(id -un)" unshare --net --
           sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 &&
           exec setpriv --no-new-privs --reuid="$u" --regid="$g" --init-groups -- "$@"'
           sh "$(id -u)" "$(id -g)"
