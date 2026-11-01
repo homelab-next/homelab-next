@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Dependency updates.  Actions are pinned by commit SHA and dependabot keeps SHA and version
 # comment together.  The cooldown leaves a new release alone for two weeks before proposing it.
-# After a pip update, regenerate the hashed constraints with `make constraints` in the same PR.
+# A pip update edits the hashed constraints in place, hashes included, and that is enough; only
+# a bump of pip itself must land in both constraints/ci.txt and constraints/bootstrap.txt (the
+# pip block `make constraints` cuts from ci.txt), which tools/tests/test_constraints_bootstrap.py
+# checks.
 version: 2
 updates:
   - package-ecosystem: github-actions
