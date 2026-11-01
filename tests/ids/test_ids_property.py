@@ -85,16 +85,36 @@ def test_mutated_ids_are_rejected_by_grammar_schema_and_lint_alike():
 
 def test_python_grammar_and_json_schema_agree_on_random_strings():
     r = random.Random(7)
-    alphabet = "abcxyz0189:-_./ ABC"
+    alphabet = "abcxyz0189:-_./ ABC\n"
     for _ in range(3000):
         s = "".join(r.choice(alphabet) for _ in range(r.randint(0, 14)))
         if r.random() < 0.6:
             s = r.choice(KINDS) + ":" + s
-        # JSON `$` accepts a trailing newline; our alphabet has none.
-        assert is_valid(s) == VALIDATOR.is_valid(s), s
+        if r.random() < 0.2:
+            s += "\n"  # Python's `$` matches before a trailing newline: the schema's guard
+        assert is_valid(s) == VALIDATOR.is_valid(s), repr(s)
+
+
+def test_a_trailing_newline_is_refused_by_every_id_and_common_pattern():
+    """The schema agrees with :func:`parse` on ``cap:dns\\n`` (refused), and so does every
+    per-kind definition and every anchored ``ids/common`` definition other contracts ``$ref``."""
+    common = json.loads(
+        (Path(__file__).resolve().parents[2] / "schemas/ids/common.schema.json").read_text()
+    )
+    good = {"timestamp": "2026-10-31T00:00:00Z", "date": "2026-10-31", "slug": "dns",
+            "sha256": "sha256:" + "0" * 64, "rel_path": "a/b.txt"}  # fmt: skip
+    for name, value in good.items():
+        v = Draft202012Validator(common["$defs"][name])
+        assert v.is_valid(value) and not v.is_valid(value + "\n"), name
+    assert not is_valid("cap:dns\n") and not VALIDATOR.is_valid("cap:dns\n")
+    for kind in KINDS:
+        v = Draft202012Validator(SCHEMA["$defs"][f"{kind}_id"])
+        sample = {"memory": "memory:a/b", "table": "table:a.b"}.get(kind, f"{kind}:dns")
+        assert v.is_valid(sample) and not v.is_valid(sample + "\n"), kind
 
 
 def test_per_kind_defs_match_python_patterns():
     for kind in KINDS:
         rx = re.compile(SCHEMA["$defs"][f"{kind}_id"]["pattern"])
         assert rx.pattern == grammar.schema_pattern(kind)
+    assert SCHEMA["pattern"] == grammar.union_pattern()
