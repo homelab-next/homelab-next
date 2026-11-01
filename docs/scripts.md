@@ -117,6 +117,20 @@ such a check pages on its own terms, and the one page that says whether every in
 longer knows about it. CI and make targets may still run a check directly; they gate a change,
 they do not watch the fleet.
 
+**Declared exception: host scans that alert on a change.** M-04 is about checks of the repository
+or the platform. A role may ship a `kind: job` scan of its own host on a role timer that alerts,
+state-diffed, when the host's own set changes (what needs a restart, which package files fail
+their digest): the alert names one host's state, which no invariant criterion reads, and the
+health of the scan itself is the freshness of its state file (docs/compute-model.md, the
+control's health column). Each such scan is listed here; `tests/scripts/test_host_scan_alerts_declared.py`
+fails when a timer-run script whose `outputs` name an alert is missing from the list, or a listed
+one no longer alerts:
+
+<!-- host-scan-alerts -->
+- `needrestart-check` (control `restart-required`)
+- `lynis-dpkg-verify` (control `host-assessment`, the package integrity sweep)
+<!-- /host-scan-alerts -->
+
 ## The reviewed allowlist
 
 [`tools/scripts.allow.yml`](../tools/scripts.allow.yml) holds the settings (which invariants

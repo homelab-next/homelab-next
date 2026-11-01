@@ -48,7 +48,8 @@ tests on a laptop with no network and no private context.
    (`make run-output-lint`).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
 8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
-   must be permissively licensed (LGPL only as an unmodified dependency), and are justified in the PR.
+   must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
+   such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR.
    CI installs every package from the hash-pinned `constraints/ci.txt`; regenerate it with
    `make constraints` (needs `uv`) in the same PR.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real

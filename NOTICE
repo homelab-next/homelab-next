@@ -18,3 +18,14 @@ Third-party material
   decoding and the tool-failure test), Copyright 2026 blitzcrieg1, licensed under the Apache
   License, Version 2.0; modified. Agentmetry itself remains an optional external application
   the status hub can read from; it is not part of this product.
+
+Separately run software (ADR-0011 decision 4)
+---------------------------------------------
+Nothing below is distributed with this product; each runs as its own process or service.
+- ansible-core (GPL-3.0-or-later), installed by the optional `ansible` extra to run the role
+  tests and deploys as `ansible-playbook`. No module under homelabnext/ imports it. The Ansible
+  plugins under ansible/plugins/ subclass its classes and run only inside it; they are
+  Apache-2.0, which GPL-3.0 can combine with.
+- Container images and services that roles, compose files and provider modules deploy keep
+  their own licences, some of them copyleft (the lab-in-a-box object store image is
+  AGPL-3.0). A provider module records its product's licence in `licence.spdx`.

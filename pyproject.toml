@@ -44,7 +44,9 @@ lake = [
 swap = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
 # the agent profile compiler and context-pack assembler
 agent = ["PyYAML>=6", "jsonschema>=4.18", "referencing>=0.30"]
-# planned families (declared so names are stable; their packages arrive in later waves)
+# trino and nats are imported (homelabnext/lake/trino.py, homelabnext/conform/adapters/
+# nats_jetstream.py); records and decide declare pydantic, which no module imports yet (kept so
+# the extra names stay stable until the records and decide validation choice is made)
 trino = ["trino>=0.328"]
 records = ["pydantic>=2"]
 decide = ["pydantic>=2"]

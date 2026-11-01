@@ -215,8 +215,9 @@ class TransitionDecider:
     def decide_names(self, names, *, dry_run: bool = False) -> list[Outcome]:
         """The intents ``names`` (see :meth:`decide_all`)."""
         names = list(names)
-        if names:
-            self.policy  # noqa: B018 -- fail closed up front when there is none
+        # fail closed up front when there is none, even with nothing to decide: a run with no
+        # policy is refused the same way whether or not the inbox is empty
+        self.policy  # noqa: B018
         out = []
         for n in names:
             try:

@@ -215,8 +215,9 @@ The standard for this already exists and the lab's threat-intel sources already 
     ceiling, and a job with no label is `red`.
 
     Each external analyzer or connector declares the highest label it may receive, and runs only
-    for a job whose label is at or below that maximum; an analyzer with no declared maximum reads
-    as `red` (decision 1) and is not sent anything. Where the enrichment platform has a
+    for a job whose label is at or below that maximum; an analyzer with no declared maximum is
+    sent nothing (fail closed: it is not read as a `red` maximum, which would admit every job),
+    and a declared maximum that is not a canonical label is refused (decision 1). Where the enrichment platform has a
     per-analyzer maximum TLP, that setting carries the declaration; where it has none, the lab
     enforces the rule in the submission path before the job leaves. The content checks above apply
     to the observable and to any context sent with the job. Analyzers that stay inside the lab keep

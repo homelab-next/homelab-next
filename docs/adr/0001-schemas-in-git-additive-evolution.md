@@ -6,7 +6,16 @@ summary_of: outline:sha256:45d346fa6c32983a
 
 - **Status:** proposed
 - **Date:** 2026-10-15
-- **Related:** ADR-0003, ADR-0005, `docs/interfaces.md`
+- **Related:** ADR-0003, ADR-0005, `docs/interfaces.md`, `CONTRIBUTING.md` (ground rule 2),
+  `tools/schema_check.py`
+- **Amended (2026-11-01):** decision 3 asked for a new schema file and a dual-write window on a
+  breaking change, which nothing implements or checks: majors have been bumped in place (the
+  platform service, the strategy records, the lesson and runbook registers), and the runtime
+  registry reads only the live major. Decision 3 now says what is done; decision 1 no longer
+  lists a fixed set of directories; decision 4 names the draft and defs-only markers and the
+  append-only baselines.
+- **Status note (2026-11-01):** decision 2's lint for a hand-written table name outside
+  `schemas/` is specified, not built.
 
 ## Context
 
@@ -18,16 +27,25 @@ protects a product swap.
 
 ## Decision
 
-1. `schemas/` holds one JSON Schema per seam, grouped by directory: `ids`, `events`, `ocsf`,
-   `agent`, `broker`, `records`, `registers`, `platform`. Vendor schemas (OCSF) are vendored as
-   a pinned subset with the version recorded.
+1. `schemas/` holds one JSON Schema per seam, one directory per family (`schemas/<family>/`,
+   for example `ids`, `events`, `ocsf`, `platform`; a new family is a new directory, not an
+   amendment). Vendor schemas (OCSF) are vendored as a pinned subset with the version recorded.
 2. Writers, DDL, table scopes and named-query definitions are generated from these files. A
    hand-written table name outside `schemas/` is a lint failure.
-3. Evolution is additive within a major version. A breaking change is a new versioned schema
-   with a declared dual-write window and a backfill tool; consumers declare the version they
-   read.
-4. Every schema ships at least one valid example and at least one negative example; CI
-   (`tools/schema_check.py`) enforces this and the additive-evolution rule.
+3. Evolution is additive within a major version. A breaking change is the next major of the
+   same schema, bumped in place: its `$id` major goes up, the earlier major's frozen copies stay
+   under `schemas/_frozen/` as history, and the change carries a `CHANGELOG.md` note and, where
+   stored documents exist at the old major, a migration that rewrites them (for example
+   `hnx records assign-uids`). There is no dual-write window: the runtime registry
+   (`homelabnext/schema_registry.py`) loads only the live major, so a consumer reads the live
+   major and an old document is migrated, not read beside the new form.
+4. Every schema ships at least one valid example and at least one negative example (a schema
+   marked `x-defs-only` holds only `$defs` and is exempt); CI (`tools/schema_check.py`) enforces
+   this and additivity within a major: a schema equals its frozen copy of the same version
+   outside documentation, is additive to its frozen baseline of the same major, and the frozen
+   copies are append-only (`--base`). A schema whose ADR is proposed may be a draft (`x-draft`),
+   which has no baseline; only a schema never frozen, or a new major, can be one. A major bump
+   is not checked against the earlier major.
 5. Both-side contract tests: every publisher's sample validates, every consumer accepts the
    schema's examples.
 
@@ -37,7 +55,8 @@ protects a product swap.
   coupling inventory and is worked before any product swap.
 - Schema authors carry the burden of writing negatives, which is the point: a contract that
   rejects nothing is not a contract.
-- Breaking changes are slow by design.
+- Breaking changes are slow by design: a new major needs a migration of every stored document,
+  and an overlay that stores documents pins the core commit until it has run it.
 
 ## Alternatives
 

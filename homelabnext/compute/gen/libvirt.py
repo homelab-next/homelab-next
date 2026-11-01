@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``virt-install`` commands for the same guests: the model is not tied to one hypervisor.
+"""``virt-install`` commands for the same guests: a second hypervisor render target (ADR-0012).
 
 One shell script per VM.  Directories come from environment variables the operator sets, never
 from literals: ``HNX_IMAGE_DIR`` (base images), ``HNX_POOL_<POOL>`` (one per logical pool) and

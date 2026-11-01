@@ -415,6 +415,10 @@ def sweep(
     expiry intents decided (those filed now, and any an interrupted earlier sweep left); other
     intents wait for ``hnx strategy decide``.  ``policy`` as for :class:`StrategyDecider`.
     Returns (intents filed, outcomes)."""
+    decider = StrategyDecider(
+        strategy_root, records_root, decided_by=decided_by, clock=clock, policy=policy
+    )
+    decider.policy  # noqa: B018 -- fail closed before any intent is filed (none left behind)
     tree = load_tree(strategy_root)
     aliases = load_aliases(strategy_root)
     rec = Records(records_root, clock, agent=SWEEP_AGENT)
@@ -438,9 +442,6 @@ def sweep(
                 "reason": f"LTIOV {lt} passed on {today} without an answer",
             }
             filed.append(rec.submit(note, body="Filed by the LTIOV sweep.\n"))
-    decider = StrategyDecider(
-        strategy_root, records_root, decided_by=decided_by, clock=clock, policy=policy
-    )
     reader = RecordsReader(records_root)
     mine = []
     for name in decider.pending():

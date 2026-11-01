@@ -846,6 +846,21 @@ def test_with_no_review_policy_build_and_review_refuse(lab, tmp_path, capsys):
     assert registers_main(["review", str(lab), "--today", "2026-10-20", "--no-policy"]) == 0
 
 
+def test_decide_fails_closed_on_an_empty_inbox_and_a_missing_policy_file(lab, inbox, capsys):
+    """No policy found exits 1 even with nothing to decide, and ``--policy`` naming a file that
+    is not there is the shared :data:`homelabnext.reviews.NO_POLICY` refusal (``require_policy``),
+    not a read error."""
+    from homelabnext.reviews import NO_POLICY
+
+    (lab.parent / "review-policy.yml").unlink()
+    argv = ["decide", str(lab), str(inbox), "--as", "human:example-operator"]
+    assert registers_main(argv) == 1
+    assert NO_POLICY in capsys.readouterr().err
+    assert registers_main([*argv, "--policy", str(lab.parent / "absent.yml")]) == 1
+    assert NO_POLICY in capsys.readouterr().err
+    assert registers_main([*argv, "--no-policy"]) == 0
+
+
 def test_a_rekey_typed_as_the_migration_is_still_refused(lab):
     """``by: hnx:migrate`` is a constant any writer can type: the write path refuses every rekey
     (the migration creates its own), so a stale human approve is never carried onto an edit."""
