@@ -10,8 +10,7 @@ MCP servers is generated from it: the capability classes the agent compiler and 
 judge, the knowledge graph's `mcp:` nodes, the MCP line of the system pages, the status hub's
 **MCP servers** page, and every client configuration an agent runtime reads. The decision is
 [ADR-0024](adr/0024-mcp-catalog-single-source.md); the schema is
-`schemas/platform/mcp_server.schema.json` (1.3; 1.1, 1.2 and 1.3 are additive revisions of 1.0,
-the current one is the last segment of its `$id`); the code is `homelabnext/mcp/servers.py` (records
+`schemas/platform/mcp_server.schema.json` (1.3); the code is `homelabnext/mcp/servers.py` (records
 and checks), `clients.py` (rendering), `importer.py` (import) and `catalog_cli.py`.
 
 ## What lives where now

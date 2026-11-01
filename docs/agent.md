@@ -40,7 +40,11 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-Each schema's current version is the last segment of its `$id` (`schemas/<family>/<name>.schema.json`); several have additive revisions past 1.0 (`agent/profile`, `broker/manifest`, `broker/handler`, `broker/decision`, `broker/audit` among them), so read the `$id` rather than a list here. Every version is frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
+`agent/context_manifest` (1.1), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+`broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
+additive, and each schema's `description` says what each minor added. Every version is
+frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 
