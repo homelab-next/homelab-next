@@ -4,8 +4,7 @@
    "caddy": 16
   },
   "Makefile": {
-   "caddy": 5,
-   "stackstorm": 1
+   "caddy": 5
   },
   "ansible/inventory/example/hosts.yml": {
    "nifi": 3
@@ -213,10 +212,6 @@
    "caddy": 1,
    "stackstorm": 3
   },
-  "compose/lab-in-a-box/config/llm-gateway/bifrost/config.json": {
-   "example-27b": 1,
-   "example-4b": 1
-  },
   "compose/lab-in-a-box/config/llm-gateway/litellm/": {
    "litellm": 1
   },
@@ -351,10 +346,6 @@
   "examples/llm-orchestrator-gateway/gateway.yml": {
    "vllm": 10
   },
-  "examples/llm-orchestrator-gateway/gateway/bifrost/config.json": {
-   "example-27b": 2,
-   "vllm": 18
-  },
   "examples/llm-orchestrator-gateway/gateway/litellm/": {
    "litellm": 1
   },
@@ -395,10 +386,6 @@
   "examples/minimal/site.yml": {
    "technitium": 1,
    "unifi": 3
-  },
-  "examples/model-serving/gateway/bifrost/config.json": {
-   "example-27b": 1,
-   "example-4b": 2
   },
   "examples/model-serving/gateway/litellm/": {
    "litellm": 1
@@ -1487,8 +1474,8 @@
    "caddy": 11
   },
   "tests/generators/test_llm_gateway.py": {
-   "example-27b": 3,
-   "example-4b": 2,
+   "example-27b": 2,
+   "example-4b": 1,
    "litellm": 49,
    "vllm": 1
   },

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Render LLM gateway configuration (LiteLLM proxy and Bifrost) from the model-role table.
+"""Render LLM gateway configuration (the LiteLLM proxy) from the model-role table.
 
 One source of truth (ADR-0007): the role table (``schemas/platform/model_roles.json``) names every
 role, its bindings and limits; the agent profiles name which role each agent calls and whether its
@@ -13,11 +13,10 @@ which secret holds each key, and any extra non-agent keys.  From those three thi
 * ``litellm/keys.json``    - the virtual keys to create (``/key/generate`` bodies; LiteLLM keeps
   keys in Postgres, not in the config file), each naming the environment variable holding the
   key, never the key, and each tagged ``metadata["hnx-managed"]`` so provisioning can delete the
-  keys of profiles later removed from the spec;
-* ``bifrost/config.json``  - providers (one per backend, role -> model id as key aliases), virtual
-  keys, per-role rate limits and budgets, routing rules for ordered bindings and fallbacks;
-* ``bifrost/pricing.json``, ``bifrost/model-parameters.json`` - empty local datasheets: Bifrost
-  will not start when it cannot download its datasheets, and a lab gateway must not need egress.
+  keys of profiles later removed from the spec.
+
+LiteLLM is the only gateway (ADR-0022).  Bifrost was evaluated and its renderer removed on
+2026-10-31; a spec with a ``bifrost:`` block is refused like any other unknown key.
 
 Rules enforced at render time (a violation raises :class:`GatewaySpecError`, nothing is written):
 
@@ -108,7 +107,7 @@ READER_ALIAS = "telemetry-reader"
 READER_ROUTES = ("/spend/logs/v2",)
 READER_ROLE = "proxy_admin_viewer"
 NO_MODELS = "no-default-models"
-#: cloud providers the renderers know how to name (LiteLLM prefix == Bifrost provider name)
+#: cloud providers the renderer knows how to name (the LiteLLM model prefix)
 CLOUD_PROVIDERS = ("anthropic", "openai", "gemini", "mistral")
 #: API domains of hosted model providers: no service domain or local host may sit under one, so a
 #: spec that names one as the lab's ``domain`` cannot make a cloud API look internal
@@ -130,7 +129,6 @@ CLOUD_API_DOMAINS = (
     "fireworks.ai",
     "perplexity.ai",
 )
-PROVIDER_PREFIX = "hnx-"  # Bifrost provider name of a local backend: hnx-<svc name>
 HEADER = f"# {MARKER} llm_gateway from {{spec}} - do not edit; sha256:{{digest}}\n"
 
 
@@ -151,10 +149,6 @@ class Backend:
     @property
     def base_url(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}"
-
-    @property
-    def bifrost_provider(self) -> str:
-        return self.provider if self.locality == "cloud" else PROVIDER_PREFIX + self.name
 
 
 @dataclass(frozen=True)
@@ -182,10 +176,6 @@ class Spec:
     database_url: str
     local_only: dict[str, str] = field(default_factory=dict)  # role -> why
     agent_roles: dict[str, str] = field(default_factory=dict)  # role -> first profile using it
-    bifrost_data_dir: str = "/app/data"
-    #: Bifrost's admin API and UI login (governance.auth_config); the password is a secret
-    bifrost_admin_user: str = "admin"
-    bifrost_admin_password: str = "secret:llm-gateway/bifrost-admin-password"
     #: the lab's internal service domain (``<svc_label>.<domain>``): a local host must be under it
     service_domain: str = "svc.example.internal"
     #: hosts that resolved through a registry service in a non-cloud zone
@@ -368,7 +358,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     _one_line("spec", dict(doc), problems)
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
-        "backends", "local_only", "keys", "bifrost", "serving", "name", "controller",
+        "backends", "local_only", "keys", "serving", "name", "controller",
         "telemetry_reader",
     }  # fmt: skip
     spec_name = doc.get("name", "")
@@ -498,7 +488,6 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
                     f"mdl:{rname}: binds svc:{b.backend}, which backends does not declare"
                 )
 
-    problems += _provider_collisions(table, backends)
     problems += leaves_lab_problems(raw_roles, backends, roles_path)
 
     local_only: dict[str, str] = {}
@@ -584,22 +573,6 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         if rn not in table.roles:
             problems.append(f"mdl:{rn} is used but not in the role table")
 
-    bif = doc.get("bifrost") or {}
-    if not isinstance(bif, Mapping) or set(bif) - {"data_dir", "admin_user", "admin_password"}:
-        problems.append("bifrost takes data_dir, admin_user, admin_password")
-        bif = {}
-    data_dir = str(bif.get("data_dir", "/app/data"))
-    if not data_dir.startswith("/"):
-        problems.append("bifrost.data_dir must be an absolute path")
-    admin_user = str(bif.get("admin_user", "admin"))
-    if not SLUG_RE.match(admin_user):
-        problems.append("bifrost.admin_user must be a slug (the admin password is the secret)")
-    admin_password = _secret(
-        "bifrost.admin_password",
-        bif.get("admin_password", "secret:llm-gateway/bifrost-admin-password"),
-        problems,
-    )
-
     master_key = _secret("master_key", doc.get("master_key"), problems)
     database_url = _secret("database_url", doc.get("database_url"), problems)
     reader = None
@@ -616,7 +589,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     controller = None
     if doc.get("controller") is not None:
         controller = parse_controller(doc["controller"], base, problems)
-    others = {"bifrost.admin_password": admin_password}
+    others: dict[str, str] = {}
     if reader is not None:
         others["telemetry_reader.key"] = reader
     problems += _secret_collisions(keys, master_key, database_url, backends, others)
@@ -631,9 +604,6 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         database_url=database_url,
         local_only=local_only,
         agent_roles=agent_roles,
-        bifrost_data_dir=data_dir,
-        bifrost_admin_user=admin_user,
-        bifrost_admin_password=admin_password,
         service_domain=service_domain,
         registry_hosts=frozenset(registry_hosts),
         controller=controller,
@@ -693,37 +663,6 @@ def _served_backends(
                 f"({b.engine}); drop the declaration or match it"
             )
     return merged
-
-
-def _provider_collisions(table: RoleTable, backends: Mapping[str, Backend]) -> list[str]:
-    """Bifrost has one provider per name and one alias per role on it: two cloud backends of the
-    same provider would collapse into one provider (serving one backend's key for both), and two
-    bindings of a role on one provider would keep only one model id.  Refused, not rendered."""
-    problems: list[str] = []
-    used = {b.backend for role in table.roles.values() for b in role.bindings}
-    by_prov: dict[str, list[str]] = {}
-    for name in sorted(used & set(backends)):
-        by_prov.setdefault(backends[name].bifrost_provider, []).append(name)
-    for prov, names in sorted(by_prov.items()):
-        if len(names) > 1:
-            problems.append(
-                f"backends {', '.join('svc:' + n for n in names)} are all provider {prov}: Bifrost "
-                "has one provider per name, so one key would serve them all; bind one per provider"
-            )
-    for rname, role in sorted(table.roles.items()):
-        seen: dict[str, str] = {}
-        for b in role.bindings:
-            be = backends.get(b.backend)
-            if be is None:
-                continue
-            if be.bifrost_provider in seen:
-                problems.append(
-                    f"mdl:{rname}: two bindings on provider {be.bifrost_provider} "
-                    f"({seen[be.bifrost_provider]}, {b.model_id}): Bifrost keeps one model per role "
-                    "and provider"
-                )
-            seen.setdefault(be.bifrost_provider, b.model_id)
-    return problems
 
 
 def _secret_collisions(
@@ -902,10 +841,6 @@ def _env_ref_litellm(secret: str) -> str:
     return f"os.environ/{secret_env_name(secret)}"
 
 
-def _env_ref_bifrost(secret: str) -> str:
-    return f"env.{secret_env_name(secret)}"
-
-
 def _per_minute(count: float, window_s: float, deployments: int = 1) -> int:
     """The validated per-minute form of a limit (:func:`per_minute`; the loader refused the rest),
     split evenly over ``deployments`` and rounded down."""
@@ -918,7 +853,7 @@ def _per_minute(count: float, window_s: float, deployments: int = 1) -> int:
 
 
 def _duration(window_s: float) -> str:
-    """A whole-second window as Bifrost's/LiteLLM's duration string (``60`` -> ``1m``)."""
+    """A whole-second window as LiteLLM's duration string (``60`` -> ``1m``)."""
     s = int(window_s)
     if s != window_s or s < 1:
         raise GatewaySpecError(f"window {window_s!r} is not a whole number of seconds")
@@ -1052,198 +987,12 @@ def _allowed(spec: Spec, key: Key) -> set[str]:
     return {r for role in key.roles for r in chain(spec.table, role)}
 
 
-def render_bifrost(spec: Spec) -> str:
-    data = spec.bifrost_data_dir.rstrip("/")
-    providers: dict[str, Any] = {}
-    served: dict[str, list[str]] = {}  # bifrost provider -> roles it serves
-    for rname, role in sorted(spec.table.roles.items()):
-        for b in role.bindings:
-            served.setdefault(spec.backends[b.backend].bifrost_provider, []).append(rname)
-    for be in sorted(spec.backends.values(), key=lambda b: b.bifrost_provider):
-        prov = be.bifrost_provider
-        roles = sorted(set(served.get(prov, [])))
-        if not roles:
-            continue
-        aliases = {
-            rname: b.model_id
-            for rname in roles
-            for b in spec.table.roles[rname].bindings
-            if spec.backends[b.backend].bifrost_provider == prov
-        }
-        key = {
-            "id": f"{prov}-key",
-            "name": f"{prov}-key",
-            "value": _env_ref_bifrost(be.api_key) if be.api_key else "no-key",
-            "models": roles,
-            "aliases": aliases,
-            "weight": 1.0,
-        }
-        entry: dict[str, Any] = {"keys": [key]}
-        if be.locality == "local":
-            entry["network_config"] = {
-                "base_url": be.base_url,
-                "default_request_timeout_in_seconds": 120,
-            }
-            entry["custom_provider_config"] = {"base_provider_type": "openai"}
-        providers[prov] = entry
-
-    rate_limits: list[dict[str, Any]] = []
-    budgets: list[dict[str, Any]] = []
-    model_configs: list[dict[str, Any]] = []
-    for rname, role in sorted(spec.table.roles.items()):
-        lim = role.limits
-        if not lim:
-            continue
-        mc: dict[str, Any] = {"id": f"mc-{rname}", "model_name": rname, "scope": "global"}
-        if lim.get("max_requests") or lim.get("max_tokens"):
-            rl: dict[str, Any] = {"id": f"rl-role-{rname}"}
-            if lim.get("max_requests"):
-                rl["request_max_limit"] = int(lim["max_requests"])
-                rl["request_reset_duration"] = _duration(lim["window_s"])
-            if lim.get("max_tokens"):
-                rl["token_max_limit"] = int(lim["max_tokens"])
-                rl["token_reset_duration"] = _duration(lim["window_s"])
-            rate_limits.append(rl)
-            mc["rate_limit_id"] = rl["id"]
-        if lim.get("max_cost"):
-            budgets.append(
-                {
-                    "id": f"budget-role-{rname}",
-                    "max_limit": lim["max_cost"],
-                    "reset_duration": _duration(lim["window_s"]),
-                }
-            )
-            mc["budget_id"] = f"budget-role-{rname}"
-        model_configs.append(mc)
-
-    def provider_configs(roles: Iterable[str], rl_id: str | None = None) -> list[dict[str, Any]]:
-        by_prov: dict[str, set[str]] = {}
-        for r in roles:
-            for b in spec.table.roles[r].bindings:
-                by_prov.setdefault(spec.backends[b.backend].bifrost_provider, set()).add(r)
-        return [
-            {
-                "provider": p,
-                "allowed_models": sorted(rs),
-                "key_ids": ["*"],
-                "weight": 1.0,
-                **({"rate_limit_id": rl_id} if rl_id else {}),
-            }
-            for p, rs in sorted(by_prov.items())
-        ]
-
-    vks: list[dict[str, Any]] = [
-        {
-            "id": "vk-gateway-admin",
-            "name": "gateway-admin",
-            "value": _env_ref_bifrost(spec.master_key),
-            "is_active": True,
-            "provider_configs": provider_configs(sorted(spec.table.roles)),
-        }
-    ]
-    for k in sorted(spec.keys, key=lambda k: k.name):
-        vk: dict[str, Any] = {
-            "id": f"vk-{k.name}",
-            "name": k.name,
-            "value": _env_ref_bifrost(k.secret),
-            "is_active": True,
-        }
-        if k.window_s and (k.max_requests or k.max_tokens):
-            rl = {"id": f"rl-key-{k.name}"}
-            if k.max_requests:
-                rl |= {
-                    "request_max_limit": k.max_requests,
-                    "request_reset_duration": _duration(k.window_s),
-                }
-            if k.max_tokens:
-                rl |= {
-                    "token_max_limit": k.max_tokens,
-                    "token_reset_duration": _duration(k.window_s),
-                }
-            rate_limits.append(rl)
-            vk["rate_limit_id"] = rl["id"]
-        vk["provider_configs"] = provider_configs(sorted(_allowed(spec, k)))
-        vks.append(vk)
-
-    rules: list[dict[str, Any]] = []
-    for rname, role in sorted(spec.table.roles.items()):
-        first = spec.backends[role.bindings[0].backend].bifrost_provider
-        rest = [f"{spec.backends[b.backend].bifrost_provider}/{rname}" for b in role.bindings[1:]]
-        for fb in _fallback_targets(spec, rname):
-            rest += [
-                f"{spec.backends[b.backend].bifrost_provider}/{fb}"
-                for b in spec.table.roles[fb].bindings
-            ]
-        if not rest:
-            continue
-        rules.append(
-            {
-                "id": f"route-{rname}",
-                "name": f"mdl:{rname} bindings in priority order, then its fallback chain",
-                "cel_expression": f"model == '{rname}'",
-                "targets": [{"provider": first, "model": rname, "weight": 1.0}],
-                "fallbacks": rest,
-            }
-        )
-
-    governance: dict[str, Any] = {}
-    if rate_limits:
-        governance["rate_limits"] = rate_limits
-    if budgets:
-        governance["budgets"] = budgets
-    if model_configs:
-        governance["model_configs"] = model_configs
-    governance["virtual_keys"] = vks
-    if rules:
-        governance["routing_rules"] = rules
-    # The admin API and UI need a login (without one, v2.2.6 locks /api behind a setup token and
-    # an operator would be tempted to open it); the password is an env reference, hashed by
-    # Bifrost on first start.
-    governance["auth_config"] = {
-        "admin_username": spec.bifrost_admin_user,
-        "admin_password": _env_ref_bifrost(spec.bifrost_admin_password),
-        "is_enabled": True,
-    }
-    doc = {
-        "$schema": "https://www.getbifrost.ai/schema",
-        # the file is authoritative: every present section overwrites config.db at startup and
-        # prunes rows the file does not declare, so state edited through the API or UI cannot
-        # outlive a restart (the default "split" mode keeps such edits until the file changes)
-        "source_of_truth": "config.json",
-        "client": {
-            "enforce_auth_on_inference": True,
-            "drop_excess_requests": False,
-            "disable_content_logging": True,
-        },
-        "config_store": {
-            "enabled": True,
-            "type": "sqlite",
-            "config": {"path": f"{data}/config.db"},
-        },
-        "logs_store": {"enabled": False},
-        "framework": {
-            "pricing": {
-                # local, empty datasheets: no egress at startup (the default URL is fatal offline)
-                "pricing_url": f"file://{data}/pricing.json",
-                "model_parameters_url": f"file://{data}/model-parameters.json",
-                "mcp_library_sync_interval": 0,
-            }
-        },
-        "providers": providers,
-        "governance": governance,
-    }
-    return json.dumps(doc, indent=2) + "\n"
-
-
 def render(spec: Spec) -> dict[str, str]:
-    """``{relative path: text}`` for both gateways; deterministic for a given spec."""
+    """``{relative path: text}`` for the gateway; deterministic for a given spec."""
     config, keys = render_litellm(spec)
     files = {
         "litellm/config.yaml": config,
         "litellm/keys.json": keys,
-        "bifrost/config.json": render_bifrost(spec),
-        "bifrost/pricing.json": "{}\n",
-        "bifrost/model-parameters.json": "{}\n",
     }
     digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()[:16]
     files["litellm/config.yaml"] = (
@@ -1274,9 +1023,8 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
 
     Locality is read from the files themselves, not from the spec: a LiteLLM deployment is local
     only when it is ``openai/`` on an ``api_base`` whose host is a declared local backend that is
-    really internal (:func:`internal_host`); a Bifrost provider only when it is a custom provider
-    whose ``base_url`` host is one.  Anything else - a cloud prefix, an unknown host, a provider
-    without a base URL, a backend that only calls itself local - counts as cloud.
+    really internal (:func:`internal_host`).  Anything else - a cloud prefix, an unknown host, a
+    deployment without an ``api_base``, a backend that only calls itself local - counts as cloud.
     """
     problems: list[str] = [
         f"backend svc:{b.name} is declared local but {b.host} is neither a registry service nor "
@@ -1291,9 +1039,6 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
     lt = files.get("litellm/config.yaml")
     if lt is not None:
         problems += [f"litellm/config.yaml: {p}" for p in _audit_litellm(lt, hosts, strict)]
-    bf = files.get("bifrost/config.json")
-    if bf is not None:
-        problems += [f"bifrost/config.json: {p}" for p in _audit_bifrost(bf, hosts, strict, spec)]
     kj = files.get("litellm/keys.json")
     if kj is not None:
         found = _audit_keys(kj, spec.name)
@@ -1503,71 +1248,6 @@ def _fallbacks(doc: Any) -> list[tuple[str, str | None, str]]:
                     out += [(key, str(src), str(t)) for t in targets or []]
         out += [("default_fallbacks", None, str(t)) for t in sec.get("default_fallbacks") or []]
     return out
-
-
-def _audit_bifrost(text: str, hosts: set[str], strict: Mapping[str, str], spec: Spec) -> list[str]:
-    try:
-        doc = json.loads(text)
-    except ValueError as exc:
-        return [f"not JSON ({exc})"]
-    local_prov = {
-        name
-        for name, p in (doc.get("providers") or {}).items()
-        if (p.get("custom_provider_config") or {}).get("base_provider_type") == "openai"
-        and _host((p.get("network_config") or {}).get("base_url")) in hosts
-    }
-    problems: list[str] = []
-    for name, p in sorted((doc.get("providers") or {}).items()):
-        if name in local_prov:
-            continue
-        for k in p.get("keys") or []:
-            served = set(k.get("models") or []) | set((k.get("aliases") or {}).keys())
-            for r in sorted(served & set(strict)):
-                problems.append(
-                    f"local-only/agent role {r} ({strict[r]}) is served by non-local {name}"
-                )
-            if "*" in served and strict:
-                problems.append(f"non-local provider {name} serves every model ('*')")
-    for rule in (doc.get("governance") or {}).get("routing_rules") or []:
-        cel = str(rule.get("cel_expression", "true")).strip()
-        hit = [r for r in strict if cel == "true" or f"'{r}'" in cel or f'"{r}"' in cel]
-        if not hit:
-            continue
-        targets = [t.get("provider", "") for t in rule.get("targets") or []]
-        for fb in rule.get("fallbacks") or []:
-            targets.append(
-                fb.get("provider", "") if isinstance(fb, Mapping) else str(fb).split("/")[0]
-            )
-        for t in targets:
-            if t and t not in local_prov:
-                problems.append(
-                    f"routing rule {rule.get('id')} sends {', '.join(sorted(hit))} to non-local {t}"
-                )
-    auth = (doc.get("governance") or {}).get("auth_config") or doc.get("auth_config") or {}
-    if auth.get("is_enabled") is not True or not str(auth.get("admin_password", "")).startswith(
-        "env."
-    ):
-        problems.append(
-            "the admin API has no login: governance.auth_config must be enabled with an env. "
-            "password reference"
-        )
-    if doc.get("source_of_truth") != "config.json":
-        problems.append(
-            'source_of_truth is not "config.json": state edited through the admin API would '
-            "survive a restart"
-        )
-    strict_keys = {k.name for k in spec.keys if k.data_tier == "local-only"}
-    for vk in (doc.get("governance") or {}).get("virtual_keys") or []:
-        if vk.get("name") not in strict_keys:
-            continue
-        if vk.get("allow_all_providers"):
-            problems.append(f"local-only key {vk['name']} allows every provider")
-        for pc in vk.get("provider_configs") or []:
-            if pc.get("provider") not in local_prov:
-                problems.append(
-                    f"local-only key {vk['name']} may call non-local {pc.get('provider')}"
-                )
-    return problems
 
 
 # ---------------------------------------------------------------------------- provisioning
@@ -1784,7 +1464,7 @@ def _listed_keys(call: Any, ok: Any, identity: str) -> tuple[dict[str, set[str]]
 def main(argv: Iterable[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="hnx gen gateway",
-        description="Render LiteLLM and Bifrost gateway config from the model-role table",
+        description="Render LiteLLM gateway config from the model-role table",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
     rd = sub.add_parser("render", help="render SPEC into OUT_DIR (or --check for drift + audit)")

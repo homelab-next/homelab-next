@@ -58,10 +58,12 @@ def make_pytest_args():
 
 def ci_pytest_args():
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    # the full run: a `python -m pytest` step selecting "not live" (one that only installs a
+    # the full run: a `python -m pytest` step selecting "not live ..." (one that only installs a
     # plugin, or runs a subset beside it, is not what make test mirrors)
     runs = [shlex.split(s.get("run", "")) for s in ci["jobs"]["test"]["steps"]]
-    runs = [w for w in runs if w[:3] == ["python", "-m", "pytest"] and "not live" in w]
+    runs = [
+        w for w in runs if w[:3] == ["python", "-m", "pytest"] and any("not live" in x for x in w)
+    ]
     assert len(runs) == 1, runs
     # less the shard flags: each CI job runs a shard of what make test runs whole
     words = runs[0][3:]
@@ -78,7 +80,8 @@ def test_make_test_selects_what_the_ci_test_job_selects():
 def test_make_test_leaves_the_floor_to_the_coverage_target():
     args = make_pytest_args()
     assert "tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor" in args
-    assert args[args.index("-m") + 1] == "not live"
+    # the tests of tools/experimental.yml run in `make experimental`, never here
+    assert args[args.index("-m") + 1] == "not live and not experimental"
 
 
 def test_make_check_runs_the_coverage_floor_like_ci():

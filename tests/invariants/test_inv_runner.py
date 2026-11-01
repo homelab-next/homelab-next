@@ -313,6 +313,18 @@ def test_cli_skip_leaves_a_criterion_out_and_out_dir_is_created(tmp_path, capsys
     assert "F-01" not in json.loads(out.read_text())["results"]
 
 
+def test_cli_skips_add_up(tmp_path):
+    # `make invariants` passes the experimental components' criteria (tools/experimental.yml) and
+    # INVARIANTS_ARGS may pass its own: a second --skip must add to the first, not replace it
+    reg = tmp_path / "invariants.yml"
+    out = tmp_path / "res.json"
+    reg.write_text(REGISTER.replace("{cmd}", "exit 1"))
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(out), "--no-notify"]
+    assert inv_main([*argv, "--skip", "F-01", "--skip", "X-99"]) == 0
+    assert inv_main([*argv, "--skip", "X-99", "--skip", "F-01"]) == 0
+    assert "F-01" not in json.loads(out.read_text())["results"]
+
+
 def test_only_exit_ignores_carried_results_and_drops_criteria_gone_from_the_register(tmp_path):
     previous = {
         "results": {

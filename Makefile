@@ -15,10 +15,11 @@ REGISTERS_OUT := build/registers
 
 help:
 	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check clean"
-	@echo "Code Mode golden suites (CM-6; checked in gates): codemode-golden-report"
+	@echo "experimental and frozen components (tools/experimental.yml; never in check): experimental"
+	@echo "Code Mode golden suites (CM-6; frozen, run by experimental): codemode-golden-report"
 	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
 	@echo "knowledge graph (local docs/graph/, integrity checked in gates): graph"
-	@echo "strategy to task (examples/strategy, docs/strategy.md; in check): strategy"
+	@echo "strategy to task (examples/strategy, docs/strategy.md; frozen, run by experimental): strategy"
 	@echo "script catalog (M-01, M-02, M-04): scripts-check"
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke lab-broker"
@@ -36,11 +37,12 @@ fmt:
 	$(RUFF) check --fix .
 	$(RUFF) format .
 
-# The same selection as CI's test job (tools/tests/test_make_matches_ci.py holds them equal):
+# The same selection as CI's test job (tools/tests/test_make_matches_ci.py holds them equal).  The
+# tests of the components in tools/experimental.yml are deselected here and run by `experimental`.
 # test_this_repo_meets_the_floor runs tools/coverage_floor.py, the whole suite again under
 # coverage, which no suite time budget allows for; `coverage` below runs it on its own, as CI's
 # coverage job does.
-PYTEST_ARGS := -q -m "not live" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
+PYTEST_ARGS := -q -m "not live and not experimental" --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
 test:
 	$(PY) -m pytest $(PYTEST_ARGS)
 
@@ -70,11 +72,7 @@ schemas:
 # `custom check` fails on an unowned or expired customization; the system and capability pages
 # (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
 # source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
-# has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md; the Code
-# Mode stubs and search index (examples/codemode/) match the example broker manifest (ADR-0031); the
-# Code Mode golden suites (CM-6) run every task in classic MCP mode and in Code Mode, the G-02
-# corpus inside tool results, against the scripted fake model behind the fake inference server,
-# and the committed report is current (it proves the harness, not a model: docs/codemode.md); the
+# has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md; the
 # module loader loads the example lab (modules-check); the example log pipeline's runtime table
 # (examples/log-pipeline/, docs/log-pipeline.md) matches the example guests
 CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
@@ -91,8 +89,6 @@ gates:
 	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check
 	$(PY) -m homelabnext.cli agent terms --check docs/terms.md
-	$(PY) -m homelabnext.cli codemode gen --check
-	$(PY) -m homelabnext.cli golden codemode --check $(CODEMODE_GOLDEN)
 	$(PY) -m homelabnext.cli guests plan examples/minimal/guests --site examples/minimal/site.yml \
 	  --target runtime-labels --against examples/log-pipeline --exit-code
 	$(MAKE) modules-check
@@ -135,6 +131,13 @@ swap-check:
 swap-gate:
 	$(PY) -m homelabnext.cli modules swap-gate --base "$(REVIEW_BASE)"
 
+# The experimental and frozen components (tools/experimental.yml, the one list): their gates and
+# their tests (`-m "experimental and not live"`), outside `check`, which none of them blocks.  CI
+# runs the same as its `experimental` job, allowed to fail and needed by no other job
+.PHONY: experimental
+experimental:
+	$(PY) tools/experimental.py run
+
 # after changing a Code Mode golden suite or script, the tool-result template, the corpus or the
 # harness: regenerate the report and commit it
 .PHONY: codemode-golden-report
@@ -168,7 +171,7 @@ models-check:
 	$(PY) -m homelabnext.cli models serving check $(SERVING)/serving.yml $(SERVING)
 	$(PY) -m homelabnext.cli gen gateway render $(SERVING)/gateway.yml $(SERVING)/gateway --check
 
-# the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
+# the LLM gateway config (LiteLLM) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
 GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
 # the gateway in front of the orchestration controller's engines: --check also holds the
@@ -252,11 +255,10 @@ injection-eval:
 
 # R-01/R-03/R-04/R-07: every workflow pack in git validates offline (references resolve,
 # deterministic steps before any model, fixtures round-trip to the exact action calls, risky
-# actions bound to an approval of their payload digest) and the deploy pins match; the StackStorm
-# pack rendered from the bound packs (workflows/stackstorm/) is current (docs/stackstorm.md)
+# actions bound to an approval of their payload digest) and the deploy pins match.  The StackStorm
+# render's check (`workflows st2 check`) is experimental: `make experimental` runs it
 workflows:
 	$(PY) -m homelabnext.cli workflows validate
-	$(PY) -m homelabnext.cli workflows st2 check
 
 # M-01 every script has a valid header and docs/scripts/catalog.* is current (`hnx scripts catalog`
 # regenerates it); M-02 the headers' triggers are exactly what runs each script, nothing called is
@@ -299,19 +301,19 @@ registers:
 
 # the strategy-to-task records (docs/strategy.md): the example tree validates (schemas, link
 # rules, lifecycle, review tiers, the doctrine in examples/strategy/doctrine.yml), every record's
-# Links block and the generated index (docs/strategy/README.md) are current
+# Links block and the generated index (docs/strategy/README.md) are current.  Frozen
+# (tools/experimental.yml): not a prerequisite of `check`; `make experimental` runs it
 STRATEGY_DIR := examples/strategy
 .PHONY: strategy
-check: strategy
 strategy:
 	$(PY) -m homelabnext.strategy check $(STRATEGY_DIR)
 	$(PY) -m homelabnext.strategy links --check $(STRATEGY_DIR)
 	$(PY) -m homelabnext.strategy index --check $(STRATEGY_DIR)
 
-# the example projects (docs/projects.md) keep the board rules and link to existing strategy records
+# the example projects (docs/projects.md) keep the board rules and link to existing strategy
+# records.  The Markdown store is frozen (tools/experimental.yml): not a prerequisite of `check`
 PROJECTS_DIR := examples/projects
 .PHONY: projects
-check: projects
 projects:
 	$(PY) -m homelabnext.cli projects check --dir $(PROJECTS_DIR) --strategy $(STRATEGY_DIR)
 
@@ -320,10 +322,13 @@ projects:
 # check, coverage floor, pytest selections) are gates of their own.  Not a prerequisite of `check`:
 # its CLI gates are gates of `check` already and the rest would repeat ~60 s of what `check` has
 # just run; CI runs it as its own job (INVARIANTS_ARGS="--skip X-NN" skips one).
+# The criteria of the components in tools/experimental.yml (its `invariants:`, held equal by
+# tools/tests/test_experimental.py) are skipped: `make experimental` runs their gates instead.
 INVARIANTS_OUT := build/invariants/results.json
+EXPERIMENTAL_INVARIANTS := R-09,P-08
 .PHONY: invariants
 invariants:
-	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) $(INVARIANTS_ARGS)
+	$(PY) -m homelabnext.invariants run examples/registers/invariants.yml --fast --no-notify --out $(INVARIANTS_OUT) --skip $(EXPERIMENTAL_INVARIANTS) $(INVARIANTS_ARGS)
 
 # M-16, M-17: every record carries its uid and is named <uid>.md, no key occurs twice; with
 # BASE=<rev> also no record that BASE had may vanish (CI: PR base).  Without paths the tool checks

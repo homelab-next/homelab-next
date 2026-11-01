@@ -155,9 +155,8 @@ endpoints="$report_dir/endpoints.env"
   echo "HNX_ENDPOINT_NOTIFY=http://${LAB_BIND}:${LAB_PORT_NOTIFY}"
   echo "HNX_ENDPOINT_INFERENCE=http://${LAB_BIND}:${LAB_PORT_INFERENCE}"
   echo "HNX_ENDPOINT_CASES=http://${LAB_BIND}:${LAB_PORT_CASES}"
-  # the optional gateway profiles (not started here; targets/inference-gateway*.yml read these)
+  # the optional gateway profile (not started here; targets/inference-gateway.yml reads it)
   echo "HNX_ENDPOINT_LLM_GATEWAY=http://${LAB_BIND}:${LAB_PORT_GATEWAY}"
-  echo "HNX_ENDPOINT_LLM_GATEWAY_BIFROST=http://${LAB_BIND}:${LAB_PORT_GATEWAY_BIFROST}"
 } >"$endpoints"
 
 conform_caps="${HNX_CONFORM_CAPS:-lake-query lake-catalog object-store events secrets notify inference cases}"

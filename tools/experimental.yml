@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: Apache-2.0
+# The one list of experimental and frozen components (v0 cuts, operator decision of 2026-10-31;
+# docs/build-order.md, "Experimental and frozen components").  Owned in CODEOWNERS with the rest
+# of tools/: a change here moves gates in or out of what blocks a merge, so it is reviewed.
+#
+# A component listed here keeps its code and its tests, and they still run: `make experimental`
+# and CI's `experimental` job (allowed to fail, needed by no other job) run its gates and every
+# test under its `tests:` paths, which tests/experimental_marker.py marks `experimental`.  What it
+# loses is the power to block: `make check`, `make test` and CI's required jobs run none of its
+# gates and deselect its tests (`-m "not live and not experimental"`), and `make invariants` (CI's
+# invariants job) skips the criteria it owns (the Makefile's EXPERIMENTAL_INVARIANTS; the register
+# is unchanged, its rows stay PUBLIC-NOW with a runnable criterion).  tools/tests/test_experimental.py
+# holds all of
+# that to this file, so "experimental" is decided here and nowhere else.
+#
+#   status     experimental: kept and built on, out of the blocking set until its condition holds;
+#              frozen: kept as is, not built on, until its condition holds
+#   decided    the date of the decision
+#   why        the reason, one paragraph
+#   until      what brings it back into the blocking set (then delete the entry, put its gates
+#              back into `make check` and CI, and its invariants out of EXPERIMENTAL_INVARIANTS, in one change)
+#   docs       the pages that say it is experimental or frozen (each must mention this file)
+#   tests      test files or directories; every test under them is marked `experimental`
+#   gates      the commands that were blocking, run by `make experimental` (`python` is the
+#              interpreter that runs tools/experimental.py)
+#   invariants criteria of examples/registers/invariants.yml it owns, skipped by `make invariants`
+components:
+  stackstorm:
+    status: experimental
+    decided: 2026-10-31
+    why: >-
+      No lab host runs StackStorm yet. The playbook packs stay a product-neutral spec
+      (workflows/, hnx workflows validate, which stays blocking); the StackStorm render, bridge
+      and runtime are one engine for them and leave the blocking gates until they run somewhere.
+    until: a lab host runs StackStorm against the rendered pack
+    docs: [docs/stackstorm.md, docs/workflows.md]
+    tests:
+      - tests/workflows/test_workflows_st2.py
+      - tests/workflows/test_st2_bridge.py
+    gates:
+      - python -m homelabnext.cli workflows st2 check
+    invariants: [R-09]
+  code-mode:
+    status: frozen
+    decided: 2026-10-31
+    why: >-
+      Frozen at CM-6 (CM-7 and CM-8 are not built). Agents use normal broker actions meanwhile;
+      the code stays and is not deleted.
+    until: the core lab runs (docs/build-order.md, "The v0 slice")
+    docs: [docs/codemode.md, docs/adr/0031-code-mode-through-the-broker.md]
+    tests:
+      - tests/codemode
+      - tests/golden/test_golden_codemode.py
+    gates:
+      - python -m homelabnext.cli codemode gen --check
+      - python -m homelabnext.cli golden codemode --check homelabnext/golden/examples/codemode/report.json
+  strategy:
+    status: frozen
+    decided: 2026-10-31
+    why: >-
+      The strategy stack (objectives, requirements, RFIs, measures, doctrine) is frozen for v0.
+      The lessons, runbooks and invariants registers stay in the blocking set.
+    until: the core lab runs (docs/build-order.md, "The v0 slice")
+    docs: [docs/strategy.md]
+    tests:
+      - tests/strategy
+    gates:
+      - python -m homelabnext.strategy check examples/strategy
+      - python -m homelabnext.strategy links --check examples/strategy
+      - python -m homelabnext.strategy index --check examples/strategy
+  projects-store:
+    status: frozen
+    decided: 2026-10-31
+    why: >-
+      Projects and tasks live in OpenProject only. The home-built Markdown store (hnx projects)
+      is frozen rather than removed: it is the projects conformance suite's reference target and
+      the status hub's Projects page and the knowledge graph read it.
+    until: the operator decides to remove the Markdown store or to bring it back
+    docs: [docs/projects.md]
+    tests:
+      - tests/projects/test_projects_store.py
+      - tests/projects/test_projects_cli.py
+    gates:
+      - python -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
+    invariants: [P-08]

@@ -1,6 +1,6 @@
 ---
-summary: Thirteen capability layers, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.
-summary_of: outline:sha256:8ffe7a69d79cad46
+summary: Thirteen capability layers, the v0 slice, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.
+summary_of: outline:sha256:c158f9e6d12767fb
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Architecture: layers, seams and the spine
@@ -68,6 +68,24 @@ Extended suites (`backup`, `dns`, `edge` and others, [conformance.md](conformanc
 them and run in CI too, outside the eighteen that `make conform-check` counts. The platform names
 more capabilities than either list (`hypervisor`, `metrics`, the module slots): every one is
 classed in `homelabnext/agent/tool_classes.yml`, and a guest may declare any of them.
+
+## The v0 slice
+
+Not every layer is built at once. The first lab runs a small slice (operator decision,
+2026-10-31; [build order](build-order.md), "The v0 slice"): the **registry and aliases**,
+**OpenBao** (secrets), the **lake** (Garage, Lakekeeper, Trino), **Sigma detections**, the
+**broker**, **notify**, the **status hub**, and **SSO** through Keycloak (ADR-0034, in flight).
+The LLM gateway is LiteLLM alone (ADR-0022, amended). Projects and tasks live in OpenProject
+only; the lessons, runbooks and invariants registers stay.
+
+The rest keeps its contracts and code but not all of it blocks a merge: StackStorm is
+*experimental*, and Code Mode (layer 11), the strategy stack and the home-built projects store
+(layer 13) are *frozen*. `tools/experimental.yml` is the one list of them; their gates and tests
+run in `make experimental` and CI's non-blocking `experimental` job instead of `make check`. The
+playbook engine (StackStorm) and the orchestration controller (the operator's Go controller) are
+not competing engines: the first decides when a workflow pack runs, the second schedules agent
+sessions, and a pack reaches the controller only through the broker
+([workflows](workflows.md)).
 
 ## The spine
 

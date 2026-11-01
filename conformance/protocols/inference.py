@@ -8,7 +8,7 @@ Subject = :class:`homelabnext.conform.adapters.openai_compat.OpenAICompat`-shape
     chat_stream(model, messages, *, max_tokens) -> Iterator[str]     feature ``streaming``
     embed(model, texts) -> list[list[float]]                         feature ``embeddings``
 
-A model *gateway* in front of the backends (LiteLLM, Bifrost; docs/llm-gateway.md) declares the
+A model *gateway* in front of the backends (LiteLLM; docs/llm-gateway.md) declares the
 feature ``gateway`` and adds :class:`GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and ``/v1/models`` is
 exactly the declared role aliases.

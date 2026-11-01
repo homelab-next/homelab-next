@@ -29,7 +29,7 @@ Subject = `homelabnext.conform.adapters.openai_compat.OpenAICompat`-shaped clien
     chat_stream(model, messages, *, max_tokens) -> Iterator[str]     feature `streaming`
     embed(model, texts) -> list[list[float]]                         feature `embeddings`
 
-A model *gateway* in front of the backends (LiteLLM, Bifrost; docs/llm-gateway.md) declares the
+A model *gateway* in front of the backends (LiteLLM; docs/llm-gateway.md) declares the
 feature `gateway` and adds `GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and `/v1/models` is
 exactly the declared role aliases.
@@ -494,42 +494,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 
 #### [`homelabnext.conform.adapters.llm_gateway:make`](../../homelabnext/conform/adapters/llm_gateway.py)
 
-The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
-
-- Target file: [`compose/lab-in-a-box/targets/inference-gateway-bifrost.yml`](../../compose/lab-in-a-box/targets/inference-gateway-bifrost.yml) (target `lab-inference-gateway-bifrost`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
-- Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway-bifrost, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
-- Features declared: `streaming`, `embeddings`, `gateway`
-
-<details><summary>Full adapter notes</summary>
-
-The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
-
-`make(**config)` returns a `GatewayTarget`: the library's own
-`~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
-(`HNX_ENDPOINT_<CAPABILITY>`, default `HNX_ENDPOINT_LLM_GATEWAY`), calling with the gateway's
-admin key, plus the three methods of feature `gateway`
-(`conformance.protocols.inference.GatewayClient`):
-
-* `declared_models()` - the role aliases of the role table the gateway config was generated from
-  (`roles`, a path relative to the checkout), so `/v1/models` is compared with the source of
-  truth rather than with itself;
-* `with_key(token)` - the same endpoint with another bearer key, or none;
-* `throttled()` - a client on the key that the generated config limits (`throttle_key`,
-  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key);
-* `over_ceiling()` (feature `tlp-ceiling`) - a client on a key whose sending TLP ceiling is
-  above a cloud role's (`over_ceiling_key`), the role it must be refused
-  (`over_ceiling_model`) and one it may call (`over_ceiling_served`).
-
-Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
-Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
-gateway swap is a target file plus this suite (docs/llm-gateway.md).
-
-</details>
-
-#### [`homelabnext.conform.adapters.llm_gateway:make`](../../homelabnext/conform/adapters/llm_gateway.py)
-
-The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-gateway.yml`](../../compose/lab-in-a-box/targets/inference-gateway.yml) (target `lab-inference-gateway`)
 - Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
@@ -538,7 +503,7 @@ The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdl
 
 <details><summary>Full adapter notes</summary>
 
-The `inference` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 `make(**config)` returns a `GatewayTarget`: the library's own
 `~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
@@ -557,8 +522,8 @@ admin key, plus the three methods of feature `gateway`
   (`over_ceiling_model`) and one it may call (`over_ceiling_served`).
 
 Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
-Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
-gateway swap is a target file plus this suite (docs/llm-gateway.md).
+Nothing here is product specific: the target file shape is the gateway contract, so a gateway
+swap (ADR-0022 names the documented exit) is a target file plus this suite (docs/llm-gateway.md).
 
 </details>
 

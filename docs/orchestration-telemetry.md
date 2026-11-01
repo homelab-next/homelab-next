@@ -260,8 +260,7 @@ reader key with any other field), so a hand-edited or stale file cannot create a
 creates the user before its key, with `auto_create_key: false` so no undeclared key appears, puts
 a hand-widened role or model list back on the next run, and prunes the key like any other when
 the spec drops the reader; the user, which holds nothing once its key is gone, stays. The audit of
-`keys.json` (`--check`) applies the same rules. Bifrost gets no reader: the spend-log adapter is
-LiteLLM's. The operator only stores the key's value under the secret name. A reader created by hand
+`keys.json` (`--check`) applies the same rules. The operator only stores the key's value under the secret name. A reader created by hand
 under the earlier instructions is not found by alias: delete that key and user on the gateway.
 
 #### Enabling tagging on LiteLLM

@@ -174,7 +174,7 @@ def test_the_documented_memory_total_is_the_real_one(compose):
     assert mem_total(broken) != int(stated[1])
 
 
-GATEWAY_PROFILES = {"gateway", "gateway-bifrost"}
+GATEWAY_PROFILES = {"gateway"}
 
 
 def test_only_the_gateway_services_are_optional(compose):
@@ -813,7 +813,6 @@ CREDENTIALS = (
     "LAB_GATEWAY_KEY_READER",
     "LAB_GATEWAY_KEY_RESPONDER",
     "LAB_GATEWAY_KEY_THROTTLE",
-    "LAB_GATEWAY_BIFROST_ADMIN_PASSWORD",
     "LAB_EVENTS_BROKER_PASSWORD",
     "LAB_EVENTS_ST2_BRIDGE_PASSWORD",
     "LAB_EVENTS_ADMIN_PASSWORD",

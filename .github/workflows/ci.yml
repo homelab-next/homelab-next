@@ -99,7 +99,7 @@ jobs:
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
         run: >-
-          python -m pytest -q -m "not live"
+          python -m pytest -q -m "not live and not experimental"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
           --shard "$SHARD/6" --shard-report "$RUNNER_TEMP/shard.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
@@ -315,8 +315,6 @@ jobs:
         run: python -m homelabnext.cli agent prompts lint
       - name: injection corpus against the fence-respecting fake (G-02, golden report current)
         run: python -m homelabnext.cli agent injection run --fake fence --check homelabnext/agent/prompts/injection/report.json
-      - name: Code Mode golden suites, MCP mode and Code Mode against the fake inference server (CM-6, report current)
-        run: python -m homelabnext.cli golden codemode --check homelabnext/golden/examples/codemode/report.json
       - name: the MCP catalog is valid, grants resolve, rendered client configs have 0 drift (ADR-0024)
         run: make mcp-check PY=python
       - name: the keyring has 0 drift from its sources (M-12)
@@ -354,8 +352,6 @@ jobs:
         run: python -m homelabnext.cli docs index check docs/README.md docs/adr/README.md
       - name: knowledge graph current, no dangling edge or duplicate id (L-05)
         run: python -m homelabnext.cli graph check
-      - name: Code Mode stubs and search index match the example broker manifest (ADR-0031, CM-3)
-        run: python -m homelabnext.cli codemode gen --check
       - name: the example log pipeline's runtime table matches the example guests (docs/log-pipeline.md)
         run: |
           python -m homelabnext.cli guests plan examples/minimal/guests --site examples/minimal/site.yml \
@@ -461,6 +457,25 @@ jobs:
           extras: test
       - name: invariants register, fast criteria
         run: make invariants PY=python
+
+  # The experimental and frozen components of tools/experimental.yml (the one list; v0 cuts,
+  # 2026-10-31): their gates and their tests, which the jobs above leave out (`-m "not live and not
+  # experimental"`).  Allowed to fail and needed by no other job, so it blocks no merge; it runs so
+  # that they do not rot unseen.  Do not make it a required check (tools/tests/test_experimental.py).
+  experimental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: "test,lake,mcp,ansible"
+      - name: experimental and frozen components, gates and tests (non-blocking)
+        run: make experimental PY=python
 
   # Go: every tracked go.mod is a module (tools/go_modules.py; <module>/tools/go.mod is that
   # module's linters, not a module of its own), and the go job runs once per module, so a second or

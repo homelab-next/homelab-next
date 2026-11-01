@@ -5,6 +5,14 @@ summary_of: outline:sha256:19af4f63b3bd8190
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Strategy to task
 
+**Frozen (operator decision, 2026-10-31; `tools/experimental.yml`, component `strategy`).** The
+strategy stack described here (strategy, objectives, requirements, RFIs, measures, doctrine) is
+kept as it is and not built on until the core lab runs ([build order](build-order.md), "The v0
+slice"). `make strategy` and the tests under `tests/strategy/` are out of `make check` and CI's
+required jobs; they still run in `make experimental` and CI's non-blocking `experimental` job.
+The lessons, runbooks and invariants registers ([registers](registers.md)) are not frozen and stay
+blocking. No generic record-family layer is to be built over them.
+
 A lab that runs itself needs to say what it is for, how it knows it is getting there, and what it
 needs to know to decide. This layer writes that down as records, measures it from what the lab
 already observes, and turns gaps into questions. It grew out of intelligence practice (the
@@ -37,8 +45,8 @@ hnx strategy index [ROOT] [--out docs/strategy/README.md] [--check]
 hnx status serve --strategy examples/strategy                        the hub pages
 ```
 
-`make strategy` (part of `make check`) runs `check`, `links --check` and `index --check` on the
-example tree.
+`make strategy` (frozen: run by `make experimental`, no longer part of `make check`) runs `check`,
+`links --check` and `index --check` on the example tree.
 
 ## The model
 

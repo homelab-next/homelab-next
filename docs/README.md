@@ -27,8 +27,8 @@ generated and checked the same way.
 ## Running the systems
 
 - [Per-system SOP pages](systems.md) ([[systems]]): <!-- hnx:gen:summary:systems.md -->Per-system SOP pages: one operator page per registry service, how a page is built and generated, the check that keeps them current, and reviews.<!-- /hnx:gen -->
-- [Architecture](architecture.md) ([[architecture]]): <!-- hnx:gen:summary:architecture.md -->Thirteen capability layers, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.<!-- /hnx:gen -->
-- [Build order](build-order.md) ([[build-order]]): <!-- hnx:gen:summary:build-order.md -->The build order: public phases P0-P9 provable in CI with fakes, server phases S1-S10 needing a real deployment, and how to read status.<!-- /hnx:gen -->
+- [Architecture](architecture.md) ([[architecture]]): <!-- hnx:gen:summary:architecture.md -->Thirteen capability layers, the v0 slice, the spine, the swap procedure, the reference environment, Ansible host trust, and what is built versus needs a server.<!-- /hnx:gen -->
+- [Build order](build-order.md) ([[build-order]]): <!-- hnx:gen:summary:build-order.md -->The build order: public phases P0-P9 provable in CI with fakes, server phases S1-S10, the v0 slice, experimental and frozen components, reading status.<!-- /hnx:gen -->
 - [Network model](network-model.md) ([[network-model]]): <!-- hnx:gen:summary:network-model.md -->The vendor-neutral site model (site.yml): zones, router, switches, firewall intent and DNS policy, validation, rule order and adapters, with the UniFi dry run.<!-- /hnx:gen -->
 - [Compute model](compute-model.md) ([[compute-model]]): <!-- hnx:gen:summary:compute-model.md -->The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.<!-- /hnx:gen -->
 - [Role interface](role-interface.md) ([[role-interface]]): <!-- hnx:gen:summary:role-interface.md -->Role interface version 1: argument specs, entry-point hooks, defaults, registry service names, inventory groups, compose_app, linter rules, timers, scaffolds.<!-- /hnx:gen -->
