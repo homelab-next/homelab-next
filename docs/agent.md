@@ -230,16 +230,18 @@ one of them only through the broker:
   front: its record says `acts_via: broker` and is structurally that front, fixed in code (id
   `hnx-broker`, first-party `homelabnext/broker/mcp_tools.py`, exactly the tools that module
   registers, [[mcp]]), with the reviews its status needs for its current content. No other
-  record can claim `broker`. The one exception
-  is a **direct** server: its record says `acts_via: direct` with a `direct_reason` and carries a
-  current human `approve` review, and the ceiling policy's entry for the profile lists it in
-  `direct_mcp` (the policy owner's exception per profile and server, like `internet_mcp`; a spec's
-  own ceiling cannot make it, and without a policy no direct server passes). A review line is
-  text an author can write: the real control is a human's review of the pull request that adds
-  the record and the `direct_mcp` line (CODEOWNERS on the catalog, the ceiling policies and the
-  class table). The shipped catalog's direct servers (`ssh`, `shell`, `ansible`, `kubernetes`,
-  `vault`, `filesystem`, `git`, `github`, `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are
-  unreviewed drafts that no profile can hold.
+  record can claim `broker`. The one exception is a **direct** server: its record says `acts_via:
+  direct` with a `direct_reason` and carries a current human `approve` review, and the ceiling
+  policy's entry for the profile lists it in `direct_mcp` (the policy owner's exception per
+  profile and server, like `internet_mcp`; a spec's own ceiling cannot make it, and without a
+  policy no direct server passes). A review line is text an author can write: the real control is
+  a human's review of the pull request that adds the record and the `direct_mcp` line (CODEOWNERS
+  on the catalog, the ceiling policies and the class table), which `main`'s ruleset does not yet
+  require, so today that control is advisory
+  ([modules](modules.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
+  servers (`ssh`, `shell`, `ansible`, `kubernetes`, `vault`, `filesystem`, `git`, `github`,
+  `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are unreviewed drafts that no profile can
+  hold.
 - **Capabilities.** Judged failing closed: a capability the table does not class is refused, and
   the table classes every capability the registry, the conformance contracts, `capabilities.yml`
   and the module slots name. No acting capability but `cap:broker`: `cap:hypervisor`,
