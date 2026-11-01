@@ -3,7 +3,7 @@
 handlers, every outcome audited to disk.
 
 It implements the ``broker`` capability contract (``conformance.protocols.broker``) on top of
-:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.4).  An action is
+:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.8).  An action is
 one of three kinds:
 
 * a **lane** write (``handler: builtin/lane``, ``lane: <name>``): ``memory.write``,
@@ -23,8 +23,10 @@ listed in the manifest approves or denies it (:meth:`BrokerService.approve` /
 emitted (carrying a ``link`` to the hub's Approvals page when ``approvals_url`` is set), and ``run`` then executes it once, consuming the approval durably.
 
 State lives in one directory (:class:`homelabnext.broker.state.StateDir`): one file per request,
-claim, result, approval, consumed approval and audit record, each created exclusively, so any
-number of processes share it without locks and an approval is single use across all of them.
+claim, result, approval, consumed approval and audit record, each created exclusively, so claims
+and approvals are exactly-once across any number of processes without a lock.  Deploy one broker
+process, on one host, per state directory all the same (:class:`BrokerService`): the pending quota
+and page state are per process, and the lane, token and outbox ``flock`` locks are per host.
 Every outcome - ok, denied, invalid, error, shadow - leaves one audit record that validates
 against ``schemas/broker/audit``.  An action that executes (a ``call``, or an approved ``run``)
 first writes a ``started`` record (audit 1.2), and the broker refuses to execute it
@@ -136,7 +138,9 @@ from homelabnext.notify.core_pairs import BROKER_APPROVAL, BROKER_LANE_QUOTA
 
 from . import (
     DEFAULT_APPROVAL_TTL_S,
+    approval_note_max,
     approver_kind,
+    approver_refusal,
     check_manifest_handlers,
     decide,
     decide_access,
@@ -232,7 +236,6 @@ REQUEST_DENIED = "request-denied"
 RUNNER_HANDLER = "builtin/codemode-runner"
 #: the caller of a token-authenticated call whose secret names no token
 UNKNOWN_TOKEN_CALLER = "token:unknown"
-_PROFILE_RE = re.compile(r"^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 #: the token a call is being made with: every audit record written meanwhile names it
 _TOKEN: ContextVar[Mapping[str, Any] | None] = ContextVar("hnx_broker_token", default=None)
 #: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
@@ -439,9 +442,9 @@ def _manifest_names(manifest: Mapping[str, Any]) -> list[tuple[str, Any]]:
 
 
 def _control_problems(what: str, names: Sequence[tuple[str, Any]]) -> list[str]:
-    """A name holding a control character: a schema pattern's ``$`` matches before a trailing
-    newline, so ``profile:triage\\n`` passes the schema; it is refused here (the value is not
-    repeated)."""
+    """A name holding a control character: a schema pattern without the ``(?!\\n)`` guard (an
+    action name; the ``ids/`` ids and slugs carry it) matches before a trailing newline, so
+    ``service.status\\n`` passes the schema; it is refused here (the value is not repeated)."""
     return [
         f"{what}: {where} holds a control character"
         for where, value in names
@@ -656,10 +659,20 @@ class BrokerService:
 
     # ---------------------------------------------------------------- decisions
     def _view(self) -> dict[str, Any]:
-        """The manifest plus the in-process commands and their grants, as decide() sees them."""
+        """The manifest plus the in-process commands and their grants, as decide() sees them.
+
+        An exec action needs approval when its manifest entry *or* its handler document says so
+        (:func:`~homelabnext.broker.check_manifest_handlers` refuses the two disagreeing; this
+        keeps a service built from unvalidated documents fail closed too)."""
         view = dict(self.manifest)
         view["actions"] = [
-            *self.manifest["actions"],
+            *(
+                dict(a, requires_approval=True)
+                if not a["requires_approval"]
+                and (self._docs.get(a["action"]) or {}).get("requires_approval") is True
+                else a
+                for a in self.manifest["actions"]
+            ),
             *(
                 {
                     "action": c,
@@ -1547,9 +1560,8 @@ class BrokerService:
         names = sorted({a for g in view["grants"] if g["profile"] == caller for a in g["actions"]})
         out = []
         for name in names:
-            probe = {"request_id": "req-probe", "action": name, "actor": caller, "params": {}}
-            verdict = decide(dict(view, mode="shadow"), probe, None, store=self.approvals)
-            if verdict["verdict"] not in ("allow", "needs-approval"):
+            verdict = self._probe(view, caller, name)
+            if verdict not in ("allow", "needs-approval"):
                 continue
             entry = next(a for a in view["actions"] if a["action"] == name)
             act = self._action(name)
@@ -1557,7 +1569,7 @@ class BrokerService:
                 "action": name,
                 "tier": entry["tier"],
                 "kind": act.kind,
-                "needs_approval": verdict["verdict"] == "needs-approval",
+                "needs_approval": verdict == "needs-approval",
             }
             if act.kind == "lane" and act.handler is not None:
                 row["lane"] = act.handler.name
@@ -1663,12 +1675,15 @@ class BrokerService:
             raise err
         raise Denied(message, reason=reason)
 
-    def _admits(self, view: Mapping[str, Any], actor: str, action: str) -> bool:
-        """Whether :func:`decide` admits ``action`` for ``actor`` (allow or needs-approval), by
-        the same shadow probe as :meth:`actions_for`: nothing is consumed."""
+    def _probe(self, view: Mapping[str, Any], actor: str, action: str) -> str:
+        """:func:`decide`'s verdict on ``actor`` asking for ``action`` with no approval (shadow
+        mode: nothing is consumed): the one probe :meth:`actions_for` and :meth:`_admits` share."""
         probe = {"request_id": "req-probe", "action": action, "actor": actor, "params": {}}
-        verdict = decide(dict(view, mode="shadow"), probe, None, store=self.approvals)
-        return verdict["verdict"] in ("allow", "needs-approval")
+        return decide(dict(view, mode="shadow"), probe, None, store=self.approvals)["verdict"]
+
+    def _admits(self, view: Mapping[str, Any], actor: str, action: str) -> bool:
+        """Whether :func:`decide` admits ``action`` for ``actor`` (allow or needs-approval)."""
+        return self._probe(view, actor, action) in ("allow", "needs-approval")
 
     def issue_token(self, runner, request_id, *, sandbox_id, actions, max_calls=None, ttl_s=None):
         """A capability token for the in-flight ``codemode.execute`` request ``request_id``, for
@@ -1725,7 +1740,7 @@ class BrokerService:
         def refuse(reason: str, message: str) -> None:
             self._issue_refused(runner, rid, reason, message, eid=eid, args=shown)
 
-        if not _PROFILE_RE.match(actor):  # a token is an agent's: claims name a profile
+        if not _lanes.PROFILE_RE.match(actor):  # a token is an agent's: claims name a profile
             refuse("token-actor-invalid", "only an agent profile's run is issued a token")
         if self.tokens.token_of_request(rid) is not None:
             refuse("request-has-token", "this run already has its token")
@@ -2162,24 +2177,34 @@ class BrokerService:
         }
         if note:
             doc["note"] = note
-        problems = (
-            schema_errors("broker", "approval", doc) if sep else ["approver is issuer:subject"]
-        )
+        limit = approval_note_max()
+        if not sep:
+            problems = ["approver is issuer:subject"]
+        elif isinstance(note, str) and len(note) > limit:
+            problems = [f"note is at most {limit} characters"]  # never echoed back
+        else:
+            problems = schema_errors("broker", "approval", doc)
         if problems:
             self._audit(who, req["action"], op, "invalid", reason="approval-invalid", **extra)
-            raise InvalidArguments(f"approval: {problems[0]}")
-        # the approver's identity is judged by decide() itself (allowlist, self, agent): the same
-        # rules for a denial as for an approval, so a stranger cannot deny someone's request either
-        probe = decide(
-            dict(self._view(), mode="shadow"),
-            req,
-            {**doc, "decision": "approved"},
-            now=doc["approved_at"],
-            store=self.approvals,
-        )
-        if probe["reason"] != "approved":
-            self._audit(who, req["action"], op, "denied", reason=probe["reason"], **extra)
-            raise Denied(f"{who!r} may not {op} {request_id!r}", reason=probe["reason"])
+            raise _reasoned_invalid(f"approval: {problems[0]}", "approval-invalid")
+        # an approval is judged by decide() itself: the approver rules (allowlist, self, agent)
+        # and whether the request could run now.  A denial by the approver rules alone, the same
+        # ones, so a stranger cannot deny someone's request either; but a request whose grant,
+        # tier or handler was withdrawn can still be denied (that is when one most wants to)
+        if decision == "approved":
+            refused = decide(
+                dict(self._view(), mode="shadow"),
+                req,
+                doc,
+                now=doc["approved_at"],
+                store=self.approvals,
+            )["reason"]
+            refused = None if refused == "approved" else refused
+        else:
+            refused = approver_refusal(self._view(), req, doc["approver"])
+        if refused:
+            self._audit(who, req["action"], op, "denied", reason=refused, **extra)
+            raise Denied(f"{who!r} may not {op} {request_id!r}", reason=refused)
         if decision == "denied" and not self.state.claim(
             request_id, {"op": "deny", "by": who, "at": doc["approved_at"]}
         ):

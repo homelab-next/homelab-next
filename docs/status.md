@@ -789,7 +789,8 @@ console's DNS-rebinding guard), an `Origin` (else `Referer`) that is not `public
 host and port; without it, not the `Host`'s host and port), or a `Sec-Fetch-Site` other than
 `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over
 8 KiB; `400` a field other than `request_id`, `digest`, `decision` (approve, deny), `token` and
-`note` (at most 2000 characters), a repeated or malformed one; `403` a CSRF token that is not the
+`note` (over the approval schema's 500 characters), a repeated or malformed one; `403` a CSRF
+token that is not the
 HMAC (under the `csrf_key` above, else a key drawn when the hub starts) of its issue time, the
 request id, the digest shown and this approver, or older than 30 minutes; `409` the broker's current digest for the request is
 not the one in the form (**the person approves exactly what they saw**) or the request no longer

@@ -94,6 +94,7 @@ class Mapped:
     unmapped: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     outcome: str = "mapped"  # mapped | skipped | unmappable | conflict | filed | exists | refused
+    # | not-attempted (after a refusal every later file would get, :data:`STOP_REASONS`)
     result: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -305,11 +306,26 @@ def mark_conflicts(rows: list[Mapped]) -> list[Mapped]:
     return rows
 
 
+#: refusals that every later file would get too: the import stops at the first one
+STOP_REASONS = frozenset({"lane-rate-exceeded", "lane-quota-exceeded", "rate-limited"})
+
+
 def apply(rows: list[Mapped], call: Callable[[dict[str, Any]], Any], source: str) -> list[Mapped]:
     """File every mapped row with ``call(params)`` (the broker's ``proposal.file``), setting
-    ``provenance.source`` to ``source`` (the importing caller).  A ``conflict`` is not filed."""
+    ``provenance.source`` to ``source`` (the importing caller).  A ``conflict`` is not filed.
+
+    A refusal in :data:`STOP_REASONS` (the lane's write rate or quota, the socket's refusal
+    limit) stops the import: every row after it is ``not-attempted``, never sent to be refused
+    in turn (each refusal over the socket also counts against the importer's refusal limit).
+    Re-running ``--apply`` later the same day files the rest; what was filed reports
+    ``exists``."""
+    stopped: str | None = None
     for row in mark_conflicts(rows):
         if row.params is None or row.outcome != "mapped":
+            continue
+        if stopped:
+            row.outcome = "not-attempted"
+            row.problem = f"the import stopped at {stopped}; re-run --apply once it clears"
             continue
         row.params["note"]["provenance"]["source"] = source
         try:
@@ -318,6 +334,8 @@ def apply(rows: list[Mapped], call: Callable[[dict[str, Any]], Any], source: str
             reason = str(getattr(exc, "reason", "") or type(exc).__name__)
             row.outcome = "exists" if reason == "lane-exists" else "refused"
             row.result = reason
+            if reason in STOP_REASONS:
+                stopped = reason
             continue
         row.outcome = "filed"
         row.result = str((result or {}).get("path", "")) if isinstance(result, Mapping) else ""

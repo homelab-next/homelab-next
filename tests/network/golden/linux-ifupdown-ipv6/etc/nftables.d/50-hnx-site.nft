@@ -75,6 +75,7 @@ table inet hnx_site {
         iifname != "wan0" icmpv6 type nd-router-solicit accept
         iifname != "wan0" icmpv6 type echo-request limit rate 10/second accept
         iifname "wan0" icmpv6 type echo-request limit rate 5/second accept
+        iifname "vlan50" meta l4proto { tcp, udp } th dport 53 drop comment "one-way zone sandbox: no resolver"
         iifname "vlan*" udp dport { 53, 67 } accept
         iifname "vlan*" tcp dport 53 accept
         ip saddr @z_mgmt tcp dport 22 accept comment "ssh from management zone mgmt"

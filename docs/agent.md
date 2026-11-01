@@ -40,13 +40,11 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.1, additive: `reads_untrusted`; 1.2, additive: `include`; 1.3, additive: the review tier `audit` in `include.require_reviews`; 1.4, additive: `include.detail`),
-`agent/report_result` (1.1, additive: `output`),
-`agent/context_manifest` (1.1, additive: `screen`), `broker/manifest` (1.1, additive: approvers;
-1.2, additive: `lanes`, an action's `lane`, `handler_docs`), `broker/handler` (1.1, additive: `argv`,
-`secrets`, `max_output_bytes`)
-and `broker/decision` (1.1 adds the approval reasons; 1.2 adds `not-request-owner` and the optional
-`operation` and `caller`), frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
+All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
+`agent/context_manifest` (1.1), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+`broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
+additive, and each schema's `description` says what each minor added. Every version is
+frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
 (each has an example and several negatives). `agent/profile` is the compiler's output;
 `platform/agent_profile` stays as the lean runtime view.
 

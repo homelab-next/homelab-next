@@ -8,7 +8,9 @@ summary_of: outline:sha256:add66f9275cddb72
 > **Draft for operator review** ([ADR-0027](adr/0027-feature-and-provider-modules.md), proposed).
 > This page, the **draft** schema `platform/module` 1.0
 > ([`schemas/platform/module.schema.json`](../schemas/platform/module.schema.json), `x-draft`: not
-> frozen, it may change until a loader and the pilot exist), the draft `platform/lake_table` 1.0,
+> frozen, it may change until ADR-0027 is accepted after the pilot, although the loader below
+> already reads it, so an overlay pins the core commit it is validated against), the draft
+> `platform/lake_table` 1.0,
 > the fictional examples in `examples/modules/` and their contract tests
 > (`tests/schemas/test_module_1_0.py`) exist, and so does the loader
 > (`homelabnext/modules/loader.py`, `hnx modules check`), which discovers the manifests and runs
