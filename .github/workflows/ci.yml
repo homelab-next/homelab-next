@@ -448,6 +448,33 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/base"
           PYTHONPATH="$PWD" "$PY" -P -m homelabnext.cli modules swap-gate --root "$GITHUB_WORKSPACE" --base "$BASE"
+      # The ratchets: each holds the change to the base and is a tools/ script that puts its own
+      # repository (the base's worktree) first on sys.path, run with "$PY" -I so nothing of the
+      # environment adds a path; the schemas and register-ids jobs run the change's own copies too,
+      # as quick feedback (tests/gates/test_ci_trusted_gates.py, RATCHETS, lists them)
+      - name: schema contracts against the base (additive evolution, frozen baselines, append-only _frozen/), by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
+        run: '"$PY" -I "$RUNNER_TEMP/base/tools/schema_check.py" --strict --root "$GITHUB_WORKSPACE" --base "$BASE"'
+      - name: product names only in provider modules (X-11), the baseline and vocabulary never grow against the base, by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
+        run: '"$PY" -I "$RUNNER_TEMP/base/tools/product_name_lint.py" --base "$BASE" "$GITHUB_WORKSPACE"'
+      - name: no copy-paste beyond the baseline, which never loosens against the base (M-03), by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
+        run: '"$PY" -I "$RUNNER_TEMP/base/tools/dup_check.py" --base "$BASE" "$GITHUB_WORKSPACE"'
+      - name: no register record that the base has vanished (M-16), by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
+        # register_ids finds the repository from the working directory; -I keeps it off sys.path
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          "$PY" -I "$RUNNER_TEMP/base/tools/register_ids.py" check-lost --base "$BASE"
 
   # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
   # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state
@@ -838,7 +865,11 @@ jobs:
           base=$(python -m homelabnext.gitbase --allow-root)
           echo "regression tests: base ${base:-none (a root commit)}"
           if [ -n "$base" ]; then
-            python tools/fix_has_test.py --range "$base..$HEAD_SHA" --prove
+            # the judge is the base's fix_has_test.py, so a change cannot loosen the rule that
+            # judges it; the tests it proves, and this job's environment, are the change's
+            git worktree add --detach "$RUNNER_TEMP/judge" "$base"
+            python -I "$RUNNER_TEMP/judge/tools/fix_has_test.py" --repo "$GITHUB_WORKSPACE" \
+              --range "$base..$HEAD_SHA" --prove
           fi
 
   # Developer Certificate of Origin: every non-merge commit of a pull request carries a
