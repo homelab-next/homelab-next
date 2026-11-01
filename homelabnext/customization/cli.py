@@ -40,6 +40,7 @@ def _setup(ns: argparse.Namespace):
         ns.config,
         ns.enable,
         public_dir=Path(ns.profiles) if ns.profiles else root / "profiles",
+        root=root,
     )
     items, load_problems = load_all(settings)
     uni = discover(

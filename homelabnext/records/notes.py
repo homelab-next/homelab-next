@@ -114,8 +114,6 @@ def schema_dir() -> Path:
 def _validator(sdir: str):
     try:
         from jsonschema import Draft202012Validator
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT202012
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise ModuleNotFoundError(
             "homelabnext.records needs jsonschema (pip install 'homelabnext[core]')", name=exc.name
@@ -127,17 +125,10 @@ def _validator(sdir: str):
             f"{note_path} not found; set HNX_SCHEMAS_DIR to a schemas directory "
             "(installed wheels and source checkouts need no setting)"
         )
-    reg = Registry()
-    for p in sorted(root.glob("*/*.json")):
-        if p.parent.name.startswith("_"):
-            continue
-        doc = json.loads(p.read_text(encoding="utf-8"))
-        if "$id" in doc:
-            reg = reg.with_resource(
-                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-            )
+    from homelabnext.schema_registry import schema_registry
+
     schema = json.loads(note_path.read_text(encoding="utf-8"))
-    return Draft202012Validator(schema, registry=reg)
+    return Draft202012Validator(schema, registry=schema_registry(root))
 
 
 def _non_string_key(value: Any) -> Any:

@@ -66,7 +66,7 @@ def test_plan_enable_shipped_profile(capsys):
         capsys, "plan", "--enable", "custom:board-sensor-driver=mon-core", "--today", "2026-10-15"
     )
     plan = json.loads(out)
-    assert code == 0 and plan["resolved"]["profiles"]["board-sensor-driver"]["hosts"] == [
+    assert code == 0 and plan["resolved"]["profiles"]["board-sensor-driver"][0]["hosts"] == [
         "mon-core"
     ]
 

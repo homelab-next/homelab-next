@@ -205,10 +205,21 @@ def test_cli_exit_codes(examples, tmp_path, capsys):
 def test_example_tombstones_render_with_their_replacement(examples, tmp_path):
     build_all(examples, tmp_path)
     doc = json.loads((tmp_path / "invariants.json").read_text())
-    assert doc["retired"]["F-02"]["replaced_by"] == "L-07"
+    assert doc["retired_legacy"]["F-02"]["replaced_by"] == "L-07"
     assert {c["id"] for c in doc["criteria"]}.isdisjoint(doc["retired"])
     html = (tmp_path / "invariants.html").read_text()
-    assert '<article id="F-02">' in html and '<a href="#L-07">L-07</a>' in html
+    # an earlier use is anchored apart, so the checklist row's own criterion can take #F-02
+    assert '<article id="legacy-F-02">' in html and '<a href="#L-07">L-07</a>' in html
+
+
+def test_a_legacy_id_may_also_be_live_but_not_both_tombstones(examples):
+    inv = yaml.safe_load((examples / "invariants.yml").read_text())
+    crit = dict(inv["criteria"][0], id="F-01")
+    inv["criteria"].append(crit)
+    assert render_invariants(dict(inv))  # live F-01 beside its earlier use: fine
+    inv["retired"] = {"F-01": {"reason": "tombstoned twice over, which is ambiguous"}}
+    with pytest.raises(RegisterError, match="both"):
+        render_invariants(inv)
 
 
 @pytest.mark.parametrize(

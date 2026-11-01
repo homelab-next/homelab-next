@@ -1,9 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx status serve``: the same page and ``status.json``, live from the hub's state.
 
-Read-only by construction: the handler answers ``GET`` and ``HEAD`` for ``/``, ``/index.html``
-and ``/status.json`` and nothing else (every other method is ``405``, every other path ``404``).
-The one exception is ``POST /approvals/decide``, and only when the Approvals page is configured
+Read-only by construction: the handler answers ``GET`` and ``HEAD`` (every other method is
+``405``) for the routes :func:`homelabnext.status.views.route_ceiling` declares, by tier, and
+``404`` for every other path, whatever site would offer it:
+
+- **released** (:data:`~homelabnext.status.views.RELEASED_ROUTES`, ceiling ``clear``): ``/``,
+  ``/index.html``, ``/status.json`` and the agent summary pages and exports, for every viewer,
+  each through its release transform (a release that fails is ``500``);
+- **withheld** (:data:`~homelabnext.status.views.WITHHELD_ROUTES`, ``red``): the strategy,
+  projects, orchestration, baselines, map and directory pages and the maps' script, ``403``
+  unless the request passes the trusted front door, judged before any site does any work, and
+  access-logged;
+- **private** (:data:`~homelabnext.status.views.PRIVATE_ROUTES`, ``red``): ``/private/*``, front
+  door plus the access log; ``/approvals``, front door plus the approver group.
+
+The one write is ``POST /approvals/decide``, and only when the Approvals page is configured
 (:mod:`homelabnext.status.approvals`: front door, approver group, same-origin, a CSRF token and
 the digest the person saw); every other ``POST`` is still ``405``.
 Each request builds the document from the state file only -- it never calls a source -- so a hung
@@ -37,7 +49,7 @@ from homelabnext._http import is_loopback
 
 from .release import ReleaseError
 from .render import render_html, style_hash
-from .views import dumps, public_status, withheld_route
+from .views import dumps, public_status, route_ceiling, withheld_route
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
 LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
@@ -249,6 +261,14 @@ def make_server(
         )
     allowed = LOOPBACK_NAMES | extra
 
+    def _public(doc: Mapping[str, Any], *, contract: bool = False) -> dict[str, Any] | None:
+        """The one producer of the public document here: ``doc`` through its release transform,
+        None when the release fails (fail closed: the caller answers ``500``)."""
+        try:
+            return public_status(doc, releases, contract=contract)
+        except ReleaseError:
+            return None
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status"
         sys_version = ""
@@ -277,9 +297,8 @@ def make_server(
             route, _, query = self.path.partition("?")
             client = self.client_address[0] if self.client_address else None
             if route in ("/", "/index.html", "/status.json"):
-                try:  # the public view: only what its release transform keeps (fail closed)
-                    doc = public_status(document(), releases, contract=route == "/status.json")
-                except ReleaseError:
+                doc = _public(document(), contract=route == "/status.json")
+                if doc is None:
                     self._reply(500, "text/plain; charset=utf-8", b"withdrawn: release failed\n")
                     return
                 if route == "/status.json":  # the public contract: no private group either
@@ -306,7 +325,11 @@ def make_server(
             ``403`` whether or not that site is configured (always, without an activity store's
             front door).  One that passes reaches only the withheld sites and is access-logged
             like every private view.  The agent pages, which are public, get the released
-            document only; the Approvals page, private, judges the caller itself."""
+            document only; the Approvals page, private, judges the caller itself.  A route with
+            no declared ceiling (:func:`homelabnext.status.views.route_ceiling`) is ``404``
+            before any site sees it, so a page a site adds without declaring it is never served."""
+            if route_ceiling(route) is None:
+                return None
             if withheld_route(route):
                 decision = agents.authorize(client, self.headers) if agents else None
                 if decision is None or not decision.allowed:
@@ -327,10 +350,9 @@ def make_server(
             doc = document()
             for site in sites:
                 view = doc
-                if site is agents:
-                    try:  # the agent pages' shell: the released document, never the full one
-                        view = public_status(doc, releases)
-                    except ReleaseError:
+                if site is agents:  # the agent pages' shell: the released document only
+                    view = _public(doc)
+                    if view is None:
                         return 500, "text/plain; charset=utf-8", b"withdrawn: release failed\n"
                 if hit := site.handle(route, query, view, client, self.headers):
                     return hit

@@ -74,9 +74,11 @@ def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, records
 
 
 def test_no_review_policy_fails_closed_unless_waived(lab, records):
+    """The refusal carries the shared :data:`homelabnext.reviews.NO_POLICY` (one source for the
+    rule and its message), prefixed with the strategy root."""
     (lab.parent / "review-policy.yml").unlink()
     transition(records, U["PIR-001"], "active", "retired")  # a human approve, with a policy
-    with pytest.raises(RegisterError, match=r"no review-policy\.yml in or beside"):
+    with pytest.raises(RegisterError, match=rf"{lab}: no review policy \(review-policy\.yml\)"):
         decider(lab, records).decide_all()
     assert RecordsReader(records).list("inbox")  # nothing decided
     (o,) = decider(lab, records, policy=False).decide_all()  # the explicit opt-out
@@ -84,6 +86,12 @@ def test_no_review_policy_fails_closed_unless_waived(lab, records):
 
 
 def test_the_cli_decide_fails_closed_and_takes_a_policy(lab, records, capsys):
+    """``decide`` and ``check`` both fail closed with no policy found and take ``--policy
+    FILE``.  ``check`` used to only warn ("no review tier is checked") and exit 0; merged with the
+    branch that makes every reviewed artefact fail closed, finding none is now an error (exit 1,
+    :data:`homelabnext.reviews.NO_POLICY`), and either opt-out spelling (``--no-policy``,
+    ``--no-review-policy``) is what checks no review tier."""
+    from homelabnext.reviews import NO_POLICY
     from homelabnext.strategy.cli import main
 
     policy = lab.parent / "elsewhere.yml"
@@ -91,11 +99,18 @@ def test_the_cli_decide_fails_closed_and_takes_a_policy(lab, records, capsys):
     transition(records, U["PIR-001"], "active", "retired")
     argv = ["decide", str(lab), str(records), "--as", DECIDER]
     assert main(argv, clock=clock()) == 1
-    assert "no review-policy.yml" in capsys.readouterr().err
+    assert NO_POLICY in capsys.readouterr().err
     assert main([*argv, "--policy", str(policy)], clock=clock()) == 0
     assert "waiting" in capsys.readouterr().out  # the human approve the policy names
-    assert main(["check", str(lab)], clock=clock()) == 0
-    assert "no review tier is checked" in capsys.readouterr().out
+    assert main(["check", str(lab)], clock=clock()) == 1  # fail closed, no longer a warning
+    assert NO_POLICY in capsys.readouterr().out
+    assert main(["check", str(lab), "--policy", str(policy)], clock=clock()) == 0
+    capsys.readouterr()
+    for opt_out in ("--no-policy", "--no-review-policy"):
+        assert main(["check", str(lab), opt_out], clock=clock()) == 0
+        assert NO_POLICY not in capsys.readouterr().out
+    assert main([*argv, "--dry-run", "--no-review-policy"], clock=clock()) == 0  # either spelling
+    assert "applied" in capsys.readouterr().out
 
 
 # --- the sweep decides only its own expiries ---------------------------------------------------

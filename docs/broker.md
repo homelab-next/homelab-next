@@ -36,7 +36,7 @@ is present when required (always for `execute` and `privileged`). Anything else 
 
 ```yaml
 lanes:
-  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name>
+  - name: memory                 # memory.write -> <data-root>/memory/<profile>/<name> (free-form notes, not agent.memory.MemoryStore)
     kind: files
     root: memory
     per_actor: true              # the caller's own profile slug; default for files
@@ -918,7 +918,7 @@ it authenticates a person, then speaks to the socket with `BrokerClient`
 | op | fields | result |
 |---|---|---|
 | `pending` | - | `{"requests": [{request_id, action, actor, target, params, created, digest, approved, approval_state}]}` |
-| `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most the approval schema's `maxLength`, 500 chars) | the approval document (`schemas/broker/approval`) |
+| `approve` | `request_id`, `approver: {issuer, subject}`, `note` (optional, at most 500 chars, the approval schema's `note.maxLength`) | the approval document (`schemas/broker/approval`) |
 | `deny` | as `approve` | the denial document |
 | `audit` | optional filters `action`, `caller`, `outcome`, `operation`, `request_id`; `tail` (default 50, 0-500) | `{"records": [...]}` (`schemas/broker/audit`) |
 
