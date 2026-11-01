@@ -17,6 +17,8 @@ JOB = CI["jobs"]["trusted-gates"]
 STEPS = JOB["steps"]
 PY = "${{ steps.python.outputs.python-path }}"
 #: an interpreter or pip named as a command, found through PATH
+#: the forms in which the change's checkout may appear: an argument the base's code reads as data
+DATA_ARGS = ('--root "$GITHUB_WORKSPACE"', '"$RUNNER_TEMP/gitbase.py" "$GITHUB_WORKSPACE"')
 BARE = re.compile(r"(?:^|[\s;|&(])(?:python3?|pip3?)(?:\s|$)")
 
 
@@ -51,9 +53,10 @@ def test_the_checker_installs_from_the_bases_constraints():
 
 def test_a_base_that_cannot_run_a_gate_fails_rather_than_running_the_change():
     for step in _runs():
-        assert "GITHUB_WORKSPACE" not in step["run"].replace('--root "$GITHUB_WORKSPACE"', ""), (
-            step["name"]
-        )
+        run = step["run"]
+        for data in DATA_ARGS:  # the change's tree passed as data, never run
+            run = run.replace(data, "")
+        assert "GITHUB_WORKSPACE" not in run, step["name"]
         assert "::notice::" not in step["run"]
     gates = [s for s in _runs() if "homelabnext.cli modules" in s["run"]]
     assert len(gates) == 2

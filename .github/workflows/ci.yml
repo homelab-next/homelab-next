@@ -376,9 +376,10 @@ jobs:
   # gates: no composite action from the checkout (./.github/actions/ is the change's), Python comes
   # from actions/setup-python pinned here and is called by the absolute path it reports (so a
   # $GITHUB_PATH shim cannot stand in for it), and pip and the checker's dependencies are installed
-  # from the BASE's constraints and pyproject.toml.  The base rule is the same as
-  # homelabnext.gitbase.ci_base, in shell, since running the change's code to find it is the thing
-  # being avoided.  A pull_request run still takes this workflow file from the change, so the
+  # from the BASE's constraints and pyproject.toml.  The base rule is homelabnext/gitbase.py, read
+  # from the commit the event names (the pull request's base, or the pushed tip of main) rather
+  # than from the checkout, since running the change's code to find it is the thing being
+  # avoided.  A pull_request run still takes this workflow file from the change, so the
   # guarantee rests on it being human-approve (CODEOWNERS, hnx modules review-tier) until a
   # ruleset requires this job from the default branch; the privileged pull-request trigger is never
   # used.  A base that cannot run a gate fails the job: the change's own code never stands in.
@@ -397,23 +398,31 @@ jobs:
       - name: the base commit, checked out apart as the checker, with its own pinned dependencies
         id: base
         env:
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          # whose code picks the base: the pull request's base, or (a push to main) the pushed tip
+          TRUSTED: ${{ github.event.pull_request.base.sha || github.sha }}
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
           PY: ${{ steps.python.outputs.python-path }}
         run: |
           set -euo pipefail
-          commit() { git rev-parse --verify --quiet --end-of-options "$1^{commit}"; }
-          if [ "$EVENT" = pull_request ]; then
-            base=$(commit "$PR_BASE") || { echo "the pull request's base $PR_BASE is not readable"; exit 1; }
-          elif [ "$EVENT" = push ]; then
-            if [ -z "$PUSH_BEFORE" ] || [ "$PUSH_BEFORE" = 0000000000000000000000000000000000000000 ] \
-              || ! base=$(commit "$PUSH_BEFORE"); then
-              base=$(commit HEAD^) || { echo "no base: a root commit or a shallow checkout"; exit 1; }
-            fi
-          else
-            echo "event $EVENT: only push and pull_request have a base rule"; exit 1
-          fi
+          # the base rule is homelabnext/gitbase.py (the one copy, which register-ids and
+          # regression-tests run too), read from TRUSTED and never from the checkout; a root
+          # commit has no base, and is refused here
+          git cat-file -e "$TRUSTED^{commit}" || { echo "the commit $TRUSTED is not readable"; exit 1; }
+          git show "$TRUSTED:homelabnext/gitbase.py" > "$RUNNER_TEMP/gitbase.py"
+          base=$("$PY" -I - "$RUNNER_TEMP/gitbase.py" "$GITHUB_WORKSPACE" <<'RULE'
+          import runpy, sys
+          from pathlib import Path
+          try:
+              sha, why = runpy.run_path(sys.argv[1])["ci_base_from_env"](Path(sys.argv[2]))
+          except ValueError as exc:
+              sys.exit(f"no base: {exc}")
+          if sha is None:
+              sys.exit(f"no base: {why}")
+          print(f"base rule: {sha} ({why})", file=sys.stderr)
+          print(sha)
+          RULE
+          )
           git worktree add --detach "$RUNNER_TEMP/base" "$base"
           cd "$RUNNER_TEMP/base"
           "$PY" -m pip install --disable-pip-version-check --require-hashes --no-deps -r constraints/bootstrap.txt
@@ -776,45 +785,14 @@ jobs:
           extras: yaml  # the register tooling parses YAML
           install-project: "false"
       - name: no record vanished relative to the base, no key twice, every record has its uid
-        # the same base rule as the schemas job: a pull request's base must be readable; a push
-        # falls back to HEAD^ when its previous tip is zero or gone; other events and a shallow
-        # checkout are errors; the base used is printed
+        # the base rule is homelabnext.gitbase's, the one copy (a root commit has no base: the
+        # check runs without one); the base used is printed
         env:
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          base=""
-          zero=0000000000000000000000000000000000000000
-          case "$EVENT" in
-            pull_request)
-              if ! base=$(git rev-parse --verify --quiet "${PR_BASE:-0}^{commit}"); then
-                echo "::error::the pull request's base ${PR_BASE:-(unset)} is not readable"
-                exit 1
-              fi ;;
-            push)
-              if [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] \
-                 && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
-                :
-              elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
-                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
-                # checkout of depth > 1 would also land here (latent: every job fetches in full)
-                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
-                  echo "a new branch (the push's previous tip is zero): HEAD^"
-                else
-                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
-                fi
-              elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-                echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
-                exit 1
-              else
-                base=""
-              fi ;;
-            *)
-              echo "::error::event ${EVENT:-(unset)}: only push and pull_request have a base rule"
-              exit 1 ;;
-          esac
+          base=$(python -m homelabnext.gitbase --allow-root)
           echo "register ids: base ${base:-none (a root commit)}"
           if [ -n "$base" ]; then
             make ids-check PY=python BASE="$base"
@@ -849,46 +827,15 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: "**/go.sum"
       - name: every fix ships a regression test that fails without the fix
-        # the same base rule as the schemas and register-ids jobs: a pull request's base must be
-        # readable; a push falls back to HEAD^ when its previous tip is zero or gone; other events
-        # and a shallow checkout are errors; the base used is printed
+        # the base rule is homelabnext.gitbase's, the one copy (a root commit has no base and
+        # nothing to prove); the base used is printed
         env:
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          base=""
-          zero=0000000000000000000000000000000000000000
-          case "$EVENT" in
-            pull_request)
-              if ! base=$(git rev-parse --verify --quiet "${PR_BASE:-0}^{commit}"); then
-                echo "::error::the pull request's base ${PR_BASE:-(unset)} is not readable"
-                exit 1
-              fi ;;
-            push)
-              if [ -n "$BEFORE" ] && [ "$BEFORE" != "$zero" ] \
-                 && base=$(git rev-parse --verify --quiet "$BEFORE^{commit}"); then
-                :
-              elif base=$(git rev-parse --verify --quiet "HEAD^^{commit}"); then
-                # with fetch-depth: 0 an unreadable non-zero tip is a force-push; a shallow
-                # checkout of depth > 1 would also land here (latent: every job fetches in full)
-                if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
-                  echo "a new branch (the push's previous tip is zero): HEAD^"
-                else
-                  echo "a force-push (the push's previous tip $BEFORE is not fetchable): HEAD^"
-                fi
-              elif [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-                echo "::error::no base and the checkout is shallow (fetch-depth: 0)"
-                exit 1
-              else
-                base=""
-              fi ;;
-            *)
-              echo "::error::event ${EVENT:-(unset)}: only push and pull_request have a base rule"
-              exit 1 ;;
-          esac
+          base=$(python -m homelabnext.gitbase --allow-root)
           echo "regression tests: base ${base:-none (a root commit)}"
           if [ -n "$base" ]; then
             python tools/fix_has_test.py --range "$base..$HEAD_SHA" --prove
