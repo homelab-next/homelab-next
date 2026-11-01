@@ -851,7 +851,6 @@
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
-        "code:homelabnext/endpoint_gate.py",
         "make:gates"
       ]
     },

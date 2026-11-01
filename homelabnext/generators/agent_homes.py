@@ -24,7 +24,8 @@ role table, where that role is bound to the backend's ``svc:``.  Two checks:
   entry's ``served_model_name`` and its hub repository (``source.repo``, which an engine loads
   directly).  A role alias is not one, even where it happens to be spelled like one: the home is
   exactly where a role must be named.  An address is found with the repository gate's own
-  detection (``tools/no_raw_endpoints.py``) and :mod:`ipaddress`, documentation ranges
+  detection (:mod:`homelabnext.endpoints_scan`, which ``tools/no_raw_endpoints.py`` runs) and
+  :mod:`ipaddress`, documentation ranges
   included: a home names the gateway by its name, never by an address.
 """
 
@@ -43,6 +44,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from homelabnext import endpoints_scan
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.registry.models import RoleTable, RoleTableError
 
@@ -317,15 +319,6 @@ class CouldNotMeasure(Exception):
     nor a finding)."""
 
 
-def _gate_scanner() -> Any:
-    """``scan_text`` of the repository gate (:mod:`homelabnext.endpoint_gate`), or None outside
-    a checkout, where :func:`ip_literals` uses only its own word scan."""
-    from homelabnext import endpoint_gate
-
-    mod = endpoint_gate.load("the agent home check")
-    return mod.scan_text if mod is not None else None
-
-
 #: what separates the words :func:`ip_literals` reads on its own: whitespace, ``key=value``,
 #: ``user@host``, list and quote punctuation
 _WORD_SEPARATORS = "\t\n\r =@,;'\"()<>"
@@ -367,18 +360,16 @@ def _address(token: str) -> str | None:
 
 
 def ip_literals(text: str) -> list[str]:
-    """Every IP address ``text`` names: the gate's IPv4 rule and the hosts of its URL rules, and
-    each word or URL that :mod:`ipaddress` reads as an address (IPv6 included; words split at
-    whitespace, ``=``, ``@`` and punctuation, so ``host=<addr>`` and ``user@<addr>`` are found
-    with or without the gate).  Documentation and
+    """Every IP address ``text`` names: the endpoint gate's IPv4 rule and the hosts of its URL
+    rules (:mod:`homelabnext.endpoints_scan`), and each word or URL that :mod:`ipaddress` reads
+    as an address (IPv6 included; words split at whitespace, ``=``, ``@`` and punctuation, so
+    ``host=<addr>`` and ``user@<addr>`` are found).  Documentation and
     loopback addresses count: a home should name no address at all."""
     found: list[str] = []
-    scan = _gate_scanner()
-    if scan is not None:
-        for f in scan("home", text):
-            addr = f.text if f.rule == "ipv4" else _address(f.text)
-            if addr and addr not in found:
-                found.append(addr)
+    for f in endpoints_scan.scan_text("home", text):
+        addr = f.text if f.rule == "ipv4" else _address(f.text)
+        if addr and addr not in found:
+            found.append(addr)
     for word in _words(text):
         addr = _address(word)
         if addr and addr not in found:
@@ -503,12 +494,6 @@ def run(args: argparse.Namespace) -> int:
         print(f"homes: cannot read the role table or store: {exc}", file=sys.stderr)
         return 2
     ids = engine_model_ids(table, store)
-    if _gate_scanner() is None:
-        print(
-            "homes: warning: not a homelabnext checkout, so tools/no_raw_endpoints.py is not "
-            "loaded; addresses are found by the word scan only",
-            file=sys.stderr,
-        )
     findings: list[str] = []
     try:
         for h in args.homes:

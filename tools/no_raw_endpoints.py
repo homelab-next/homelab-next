@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when code or config writes an endpoint literal instead of a registry lookup.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, code:homelabnext/endpoint_gate.py, make:gates]
+#   trigger: [ci:ci/schemas, make:gates]
 #   invariant: [X-01]
 #   inputs: the tree; tools/no_raw_endpoints.allow.yml
 #   outputs: one line per violation (or a census)
@@ -16,7 +16,8 @@
 """CI gate: no raw endpoints in code or config.
 
 Endpoints are looked up through the service registry (capability alias), never
-written as literals. This scans a tree for:
+written as literals. The detection is ``homelabnext.endpoints_scan`` (this is its command
+line; the package's own checks call the module). It scans a tree for:
 
   ipv4        any IPv4 address literal (0.0.0.0 bind-all, a version and a record's display
               number such as ``TT 1.1.1.1`` are exempt; see RECORD_NUMBER for what counts)
@@ -36,169 +37,27 @@ Exit: 0 clean (or census), 1 violations, 2 usage / bad allowlist.
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
-import re
 import sys
 from collections import Counter
-from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-DEFAULT_ALLOWLIST = "tools/no_raw_endpoints.allow.yml"
-SKIP_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    "build",  # generated output (make registers, wheels); never source
-    "dist",
-}
-MAX_BYTES = 2_000_000
-INLINE_ALLOW = re.compile(r"no-raw-endpoint:\s*allow\s+\S")
+import yaml  # noqa: E402
 
-_OCT = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
-IPV4 = re.compile(rf"(?<![\w.]){_OCT}(?:\.{_OCT}){{3}}(?![\w]|\.\d)")
-# a version-ish context: "==1.2.3.4", "version 1.2.3.4", "v1.2.3.4"
-VERSIONISH = re.compile(r"(?:==|>=|<=|~=|!=|\bversion\b\W{0,3}|\bv)\s*$", re.IGNORECASE)
-# A record's computed display number (ADR-0019) looks like an address only with four components:
-# "TT 1.1.1.1".  It is exempt only when (a) the word before it is the display prefix of a record
-# type whose number can have four components -- TT (SO > OO > TO > TT), a MOE or MOP under a TO,
-# a PIR three sub-PIRs deep and its SIRs; SO, OO, TO, CCIR, FFIR and RFI numbers have at most
-# three, a lesson's (LL) and a runbook's (RB) one, so a dotted quad after RB, or after the word
-# TO ("FORWARD TO <address>"), is an address -- and (b) every component is a sibling position,
-# 1..50 (a number starts at 1; an address's 0 or 192 is no position).  tests/gates keeps FOUR_PART_TYPES equal to what the
-# strategy doctrine's hierarchy allows.
-FOUR_PART_TYPES = ("TT", "MOE", "MOP", "PIR", "SIR")
-RECORD_NUMBER = re.compile(rf"(?<![\w-])(?:{'|'.join(FOUR_PART_TYPES)}) $")
-_POSITION = re.compile(r"(?:[1-9]|[1-4]\d|50)")
-
-
-def _record_number(line: str, m: re.Match) -> bool:
-    """The IPv4-shaped match ``m`` is a record's display number (see RECORD_NUMBER)."""
-    return bool(RECORD_NUMBER.search(line[: m.start()])) and all(
-        _POSITION.fullmatch(p) for p in m.group(0).split(".")
-    )
-
-
-URL_PORT = re.compile(
-    r"\b[a-z][a-z0-9+.-]*://(?:[^\s/@:'\"<>]+@)?(\[[0-9a-f:]+\]|[A-Za-z0-9_.-]+):(\d{1,5})\b"
+from homelabnext.endpoints_scan import (  # noqa: E402,F401  (re-exported for callers and tests)
+    DEFAULT_ALLOWLIST,
+    FOUR_PART_TYPES,
+    AllowlistError,
+    Finding,
+    iter_files,
+    load_allowlist,
+    scan_text,
+    scan_tree,
 )
-LOCALHOST = re.compile(r"\blocalhost:(\d{1,5})\b", re.IGNORECASE)
-HOST_PORT = re.compile(
-    r"(?<![\w./@-])([A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|home|corp|lab|svc|intranet)):(\d{1,5})\b"
-)
-
-
-@dataclass(frozen=True)
-class Finding:
-    path: str
-    line: int
-    rule: str
-    text: str
-
-    def as_dict(self) -> dict:
-        return {"path": self.path, "line": self.line, "rule": self.rule, "text": self.text}
-
-
-class AllowlistError(ValueError):
-    pass
-
-
-def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
-    """Return [(glob, reason)]. Every entry must carry a non-empty reason."""
-    if path is None or not path.is_file():
-        return []
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    entries = doc.get("allow", [])
-    out = []
-    if not isinstance(entries, list):
-        raise AllowlistError(f"{path}: 'allow' must be a list")
-    for i, e in enumerate(entries):
-        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
-        if not str(e.get("reason", "")).strip():
-            raise AllowlistError(
-                f"{path}: entry {i} ({e['path']}) has no 'reason'; every exemption must say why"
-            )
-        out.append((str(e["path"]), str(e["reason"]).strip()))
-    return out
-
-
-def _allowed(rel: str, allow: list[tuple[str, str]]) -> bool:
-    for glob, _ in allow:
-        if fnmatch.fnmatchcase(rel, glob) or (glob.endswith("/**") and rel.startswith(glob[:-2])):
-            return True
-        if "**" in glob and fnmatch.fnmatchcase(rel, glob.replace("**/", "").replace("**", "*")):
-            return True
-    return False
-
-
-def scan_text(rel: str, text: str) -> list[Finding]:
-    found: list[Finding] = []
-    for n, line in enumerate(text.splitlines(), 1):
-        if INLINE_ALLOW.search(line):
-            continue
-        spans: list[tuple[int, int]] = []
-
-        def add(rule: str, m: re.Match, spans=spans, n=n) -> None:
-            spans.append(m.span())
-            found.append(Finding(rel, n, rule, m.group(0)))
-
-        for m in URL_PORT.finditer(line):
-            add("url-port", m)
-        for m in LOCALHOST.finditer(line):
-            if not any(s <= m.start() < e for s, e in spans):
-                add("localhost", m)
-        for m in HOST_PORT.finditer(line):
-            if not any(s <= m.start() < e for s, e in spans):
-                add("host-port", m)
-        for m in IPV4.finditer(line):
-            if m.group(0) == "0.0.0.0":
-                continue
-            if VERSIONISH.search(line[: m.start()]) or _record_number(line, m):
-                continue
-            if any(s <= m.start() < e for s, e in spans):
-                # already reported as part of a URL; still an ipv4 literal, report once under url-port
-                continue
-            add("ipv4", m)
-    return found
-
-
-def iter_files(root: Path):
-    for p in sorted(root.rglob("*")):
-        if any(
-            part in SKIP_DIRS or part.endswith(".egg-info") for part in p.relative_to(root).parts
-        ):
-            continue
-        if p.is_file() and not p.is_symlink():
-            yield p
-
-
-def scan_tree(root: Path, allow: list[tuple[str, str]]) -> tuple[list[Finding], int]:
-    findings: list[Finding] = []
-    scanned = 0
-    for p in iter_files(root):
-        rel = p.relative_to(root).as_posix()
-        if _allowed(rel, allow):
-            continue
-        try:
-            if p.stat().st_size > MAX_BYTES:
-                continue
-            data = p.read_bytes()
-        except OSError:
-            continue
-        if b"\0" in data[:4096]:
-            continue
-        text = data.decode("utf-8", errors="replace")
-        scanned += 1
-        findings.extend(scan_text(rel, text))
-    return findings, scanned
 
 
 def main(argv: list[str] | None = None, out=None, err=None) -> int:

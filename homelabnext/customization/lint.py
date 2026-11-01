@@ -26,12 +26,10 @@ CU017  warning  a link names a legacy code (LL-003): write the record's uid inst
 
 from __future__ import annotations
 
-import re
 from datetime import date
-from pathlib import Path
 from typing import Any
 
-from homelabnext import endpoint_gate
+from homelabnext import endpoints_scan
 
 from .links import resolve_links
 from .model import (
@@ -66,33 +64,11 @@ RULES = {
     "CU017": "legacy link code",
 }
 
-_scan_text = None
-
-
-def _tools_path() -> Path | None:
-    """tools/no_raw_endpoints.py of a verified checkout, else None (see homelabnext.paths)."""
-    return endpoint_gate.gate_path("custom lint")
-
-
-def _load_scanner():
-    """Reuse the repository gate's own detection (tools/no_raw_endpoints.py, through
-    :mod:`homelabnext.endpoint_gate`) so a customization can never pass lint and then fail CI.
-    Falls back to a smaller built-in matcher when the tools directory is not shipped (installed
-    wheel)."""
-    global _scan_text
-    if _scan_text is not None:
-        return _scan_text
-    mod = endpoint_gate.load("custom lint") if _tools_path() is not None else None
-    if mod is not None:
-        _scan_text = lambda text: [f.text for f in mod.scan_text("x", text)]  # noqa: E731
-    else:
-        rx = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|://[^\s/:]+:\d+|\blocalhost:\d+")
-        _scan_text = lambda text: [m.group(0) for m in rx.finditer(text)]  # noqa: E731
-    return _scan_text
-
 
 def endpoint_hits(text: str) -> list[str]:
-    return _load_scanner()(text)
+    """The raw endpoints in ``text``, by the repository gate's own detection
+    (:mod:`homelabnext.endpoints_scan`), so a customization can never pass lint and then fail CI."""
+    return [f.text for f in endpoints_scan.scan_text("x", text)]
 
 
 def _strings(obj: Any):
