@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .compiler import TIER_RANK, profile_digest
+from .compiler import TIER_RANK, VerifiedProfile, require_verified
 from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack
@@ -163,13 +163,6 @@ def principal_access(
     return {"principal": principal, "kind": "agent", "grants": grants, "denials": denials}
 
 
-def _check_profile(profile: Mapping[str, Any]) -> None:
-    if not isinstance(profile, Mapping) or not profile.get("id") or not profile.get("digest"):
-        raise SpecError("access needs a compiled agent profile (id and digest)")
-    if profile_digest(profile) != profile["digest"]:
-        raise SpecError(f"{profile['id']}: profile digest does not match its content")
-
-
 def _runs_on(registry: Any, runs_on: str | None) -> Any:
     if runs_on is None:
         svc = registry.by_capability("agent-runtime")
@@ -183,16 +176,17 @@ def _runs_on(registry: Any, runs_on: str | None) -> Any:
 
 
 def access_block(
-    profile: Mapping[str, Any],
+    profile: VerifiedProfile,
     registry: Any,
     *,
     runs_on: str | None = None,
     broker: Mapping[str, Any] | None = None,
     classes: ToolClasses | None = None,
 ) -> dict:
-    """The structured access block for ``profile`` running on registry host ``runs_on``
+    """The structured access block for ``profile`` (a
+    :class:`~homelabnext.agent.compiler.VerifiedProfile`) running on registry host ``runs_on``
     (default: the host of the registry's ``agent-runtime`` service)."""
-    _check_profile(profile)
+    require_verified(profile, "access_block")
     host = _runs_on(registry, runs_on)
     access = principal_access(
         profile["id"], registry, profile=profile, broker=broker, classes=classes
@@ -285,7 +279,7 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
 def start_session(
     manifest: Mapping[str, Any],
     inputs: Mapping[str, Any],
-    profile: Mapping[str, Any],
+    profile: VerifiedProfile,
     registry: Any,
     *,
     runs_on: str | None = None,
@@ -297,6 +291,9 @@ def start_session(
     """Assemble a session's context pack with the profile's access block and the project's terms
     (:mod:`homelabnext.agent.terms`) as stable sections.
 
+    ``profile`` is a :class:`~homelabnext.agent.compiler.VerifiedProfile` (verified against the
+    ceiling policy and the lock of reviewed digests); a dict is refused, digested or not.
+
     ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
     been selected for this very profile (id and digest), and goes into the volatile tier.
 
@@ -306,7 +303,7 @@ def start_session(
     must be the manifest's, and :func:`session_problems` must find nothing.  Stable content is never cut, so a block that does not fit
     ``budget_chars`` defers the pack instead of being truncated.
     """
-    _check_profile(profile)
+    require_verified(profile, "start_session")
     for s in manifest.get("sections", []):
         if s.get("name") == ACCESS_SECTION:
             raise SpecError(f"section name {ACCESS_SECTION!r} is reserved for the access block")

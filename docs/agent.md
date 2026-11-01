@@ -136,6 +136,14 @@ next to the policy, `{profiles: {<profile id>: <digest>}}`, and pass it as `lock
 digest is not the pinned one is refused. Without `policy`, `verify_profile` checks the profile
 against its own stored ceiling, which proves internal consistency only.
 
+The consumers that act on a profile (`start_session` and `access_block`, `MemoryStore`,
+`select_knowledge`, `build_keyring`) take only a `VerifiedProfile`, never a dict: one made by
+`verified_profile(profile, policy=, lock=)` or `load_verified_profile(path, policy, lock)`, which
+run `verify_profile` with both and raise `UnverifiedProfile` on any problem. It cannot be
+constructed directly, it is read-only (every value read from it is a copy), and a dict, digested
+or not, is refused with `UnverifiedProfile`: whoever can edit a profile can recompute its digest,
+but not the lock.
+
 Raising a ceiling is a reviewed change to the policy file, never a compiler option.
 
 ### Readers cannot act (G-03)
@@ -353,10 +361,10 @@ manifest's `must_cite` sources are cited by an `ok` report.
 
 `start_session(manifest, inputs, profile, registry, runs_on=None, broker=None)` is how a session
 gets its pack: it renders the profile's **access block** and adds it as a required `stable`
-section named `access`, then calls `assemble_pack`. The block is derived from the compiled
-profile (digest-checked for internal consistency; `verify_profile` with a lock pins the
-reviewed one) and the registry, for the host the agent runs on (default: the host of
-the registry's `agent-runtime` service):
+section named `access`, then calls `assemble_pack`. The block is derived from the profile, a
+`VerifiedProfile` (verified against the policy and the lock; a dict is refused), and the
+registry, for the host the agent runs on (default: the host of the registry's `agent-runtime`
+service):
 
 - who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
   content, broker tier, its own memory scopes and budgets;
@@ -380,7 +388,8 @@ and `session_problems(manifest, profile)` must find nothing: a profile with
 reader's validated output through a handoff, G-04), every manifest `tools` entry is an MCP server
 the profile is granted, and every manifest `memory_scopes` entry is one of the profile's. Stable content is
 never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
-`hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
+`hnx agent pack MANIFEST --inputs F --profile P --policy POLICY --lock LOCK --registry R
+[--runs-on HOST] [--broker M]` (the profile is verified against the policy and the lock first).
 
 ## Linked knowledge: `include:` rules
 
@@ -471,7 +480,7 @@ include:
   (`content unreadable`) whatever other rules say.
 
 ```
-hnx agent pack MANIFEST --inputs F --profile P --registry R [--root .] \
+hnx agent pack MANIFEST --inputs F --profile P --policy POLICY --lock LOCK --registry R [--root .] \
     [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 ```
 
@@ -484,7 +493,9 @@ Tests: `tests/agent/test_agent_knowledge.py`.
 ADR-0002 lists keyring rows among the outputs generated from the registry; checklist M-11 asks
 for every principal with grants by level and denials. The keyring is therefore a **generated**
 document (`homelabnext/agent/keyring.py`) whose only inputs are the sources that already decide
-access: the registry, the compiled agent profiles and, optionally, the broker manifest. It uses
+access: the registry, the compiled agent profiles (each verified against the ceiling `policy`
+and the `lock` of reviewed digests the sources file names; `examples/keyring/policy.yml` and
+`lock.yml` for the example) and, optionally, the broker manifest. It uses
 the same derivation as the access block, so the two cannot disagree. Principals: every profile,
 every profile the broker grants actions to without a compiled profile in the set
 (`profile: null`), every broker approver, and every registry zone (`kind: network`, which
@@ -513,12 +524,11 @@ profile's memory.
 
 Reads are scoped to the owner: `read(profile, scope)` returns that profile's own entries in one
 of its `memory_scopes`; `owner=` naming another profile is a cross-agent read and is refused
-(`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call
-checks the profile's digest, which catches a profile edited without recomputing it; it is not
-tamper protection, since anyone holding the dict can re-digest it (a changed `id` or wider
-`memory_scopes` then passes). The caller is platform code, not the model: load the profile with
-`verify_profile(..., policy=, lock=)` first, as `hnx mcp serve --scope-from-profile` does, to
-know it is the reviewed one.
+(`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call takes
+a `VerifiedProfile` (verified against the policy and the lock) and refuses a dict with
+`UnverifiedProfile`, so a profile re-digested with a changed `id` or wider `memory_scopes` gets no
+access. The caller is platform code, not the model: it loads the profile with
+`load_verified_profile(path, policy, lock)`.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
 
@@ -663,7 +673,8 @@ for any broker implementation: run the same rows against it.
 hnx agent compile SPEC --library LIBRARY.yml --policy POLICY.yml [--out profile.json]
 hnx agent verify PROFILE --policy POLICY.yml [--lock profiles.lock]
 hnx agent pack MANIFEST --inputs INPUTS.json [--out pack.json] [--denylist FILE]
-               [--profile PROFILE.json --registry services.yml [--runs-on HOST] [--broker M]]
+               [--profile PROFILE.json --policy POLICY.yml --lock profiles.lock
+                --registry services.yml [--runs-on HOST] [--broker M]]
                [--root DIR] [--task-path FILE ...] [--task-text T | --task-file F] [--explain]
 hnx agent keyring build|check SOURCES.yml
 hnx agent lint [PATH ...] [--classes FILE] [--rule readers-cannot-act|actors-act-via-broker] [--policy POLICY.yml]

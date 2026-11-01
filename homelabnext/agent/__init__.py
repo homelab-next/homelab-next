@@ -21,10 +21,13 @@ from .compiler import (
     CeilingPolicy,
     Part,
     PartsLibrary,
+    VerifiedProfile,
     check_budgets,
     check_ceiling,
     compile_profile,
+    load_verified_profile,
     profile_digest,
+    verified_profile,
     verify_profile,
 )
 from .digest import canonical_json, digest_of, sha256_text
@@ -38,6 +41,7 @@ from .errors import (
     MissingPartError,
     ReaderViolation,
     SpecError,
+    UnverifiedProfile,
 )
 from .handoff import Accepted, Handoff, HandoffError, HandoffRefused
 from .keyring import build_keyring
@@ -75,6 +79,8 @@ __all__ = [
     "Screener",
     "SpecError",
     "ToolClasses",
+    "UnverifiedProfile",
+    "VerifiedProfile",
     "access_block",
     "assemble_pack",
     "broker_problems",
@@ -86,6 +92,7 @@ __all__ = [
     "digest_of",
     "grant_problems",
     "lint_paths",
+    "load_verified_profile",
     "profile_digest",
     "reader_problems",
     "render_access_block",
@@ -95,5 +102,6 @@ __all__ = [
     "start_session",
     "terms_text",
     "validate_report",
+    "verified_profile",
     "verify_profile",
 ]

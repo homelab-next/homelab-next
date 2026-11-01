@@ -114,3 +114,47 @@ def inputs() -> dict:
         "sections": {"findings": "f1: 3 failed logins", "memory": "no known scanners"},
         "pregates": {"pipeline-health": copy.deepcopy(GATE_OK)},
     }
+
+
+def _ceilings(profiles) -> dict:
+    """Policy entries attesting each compiled profile as it stands (its stored ceiling, data
+    tier, model role and TLP ceiling): the policy owner's review, faked for the tests."""
+    entries = {}
+    for p in profiles:
+        entry = {**p["ceiling"], "data_tier": p["data_tier"], "model_role": p["model_role"]}
+        if p.get("tlp_ceiling"):
+            entry["tlp_ceiling"] = p["tlp_ceiling"]
+        entries[p["id"]] = entry
+    return entries
+
+
+def policy_for(*profiles):
+    """A ceiling policy attesting ``profiles`` (:func:`_ceilings`)."""
+    from homelabnext.agent import CeilingPolicy
+
+    return CeilingPolicy(_ceilings(profiles), source="test-policy")
+
+
+def lock_for(*profiles) -> dict:
+    """The lock of reviewed digests pinning each compiled profile."""
+    return {p["id"]: p["digest"] for p in profiles}
+
+
+def verified(profile, classes=None):
+    """``profile`` verified against :func:`policy_for` and :func:`lock_for` of itself."""
+    from homelabnext.agent import verified_profile
+
+    return verified_profile(
+        profile, policy=policy_for(profile), lock=lock_for(profile), classes=classes
+    )
+
+
+def write_policy_lock(directory, *profiles) -> tuple:
+    """``(policy path, lock path)`` files for the CLI, attesting and pinning ``profiles``."""
+    import json
+    from pathlib import Path
+
+    policy, lock = Path(directory) / "policy.json", Path(directory) / "lock.json"
+    policy.write_text(json.dumps({"ceilings": _ceilings(profiles)}), encoding="utf-8")
+    lock.write_text(json.dumps({"profiles": lock_for(*profiles)}), encoding="utf-8")
+    return policy, lock

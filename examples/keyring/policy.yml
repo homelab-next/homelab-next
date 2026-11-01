@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# The ceiling policy the example keyring's profiles are verified against (`policy:` in
+# sources.yml, the shape `hnx agent verify --policy` reads). Owned and reviewed apart from the
+# profiles: a compiled profile's stored ceiling and digest are whatever last edited the file, so
+# the keyring is built only from profiles that verify against this policy and lock.yml.
+ceilings:
+  profile:reader:
+    mcp: [lake, records]
+    capabilities: [cap:lake-query, cap:records-propose]
+    tier: write
+    data_tier: local-only
+    tlp_ceiling: red
+    model_role: mdl:fast-classifier
+    reads_untrusted: true
+    budgets: {max_input_tokens: 64000, max_output_tokens: 4000, max_runtime_s: 900, max_tool_calls: 40}
+  profile:responder:
+    mcp: [hnx-broker, records]
+    capabilities: [cap:broker, cap:records-propose]
+    tier: execute
+    data_tier: local-only
+    model_role: mdl:main-reasoner
+    budgets: {max_input_tokens: 16000, max_output_tokens: 2000, max_runtime_s: 600, max_tool_calls: 20}

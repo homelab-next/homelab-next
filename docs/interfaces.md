@@ -289,7 +289,9 @@ resource_dir(kind) / resource_file(kind, *parts) / data_root() / source_root() /
 
 # homelabnext.agent   (extra: agent = PyYAML + jsonschema; hnx agent; docs/agent.md)
 compile_profile(spec, library: PartsLibrary) -> dict     # MissingPartError / CeilingViolation / BudgetError / SpecError
-check_ceiling(grants, ceiling) -> list[str]; check_budgets(budgets, cap=None) -> list[str]; verify_profile(profile) -> list[str]
+check_ceiling(grants, ceiling) -> list[str]; check_budgets(budgets, cap=None) -> list[str]; verify_profile(profile, *, policy=None, lock=None) -> list[str]
+verified_profile(profile, *, policy, lock) -> VerifiedProfile; load_verified_profile(path, policy, lock)  # UnverifiedProfile
+# start_session / access_block / MemoryStore / select_knowledge / build_keyring take only a VerifiedProfile
 assemble_pack(manifest, inputs) -> (pack, "sha256:...")  # pure; stable -> session -> volatile; status ready|deferred
 validate_report(report, pack, pack_hash, manifest=None) -> list[str]
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
