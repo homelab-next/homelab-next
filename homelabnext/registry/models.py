@@ -405,10 +405,13 @@ def urllib_transport(
     headers: Mapping[str, str] | None = None,
 ):
     data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Content-Type", "application/json")
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
+    # the caller's headers go after Content-Type, so a caller may override it
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json", **(headers or {})},
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw, status = resp.read(), resp.status
