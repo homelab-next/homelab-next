@@ -7,6 +7,8 @@ emit order (:meth:`homelabnext.broker.state.StateDir.put_outbox`), and this rela
 process, publishes it.  So a bus outage costs latency, never a decision, and ``hnx broker serve``
 keeps no network listener and needs no network at all.  The relay only *reads* ``outbox/``; what
 it writes lives in ``<state>/relay/`` (:class:`RelayStore`), so it can run as its own user.
+This is ADR-0009's second sanctioned publish path (the first is the forwarder,
+:mod:`homelabnext.events.publisher`): it speaks the ``EventBus`` protocol, never a bus product.
 
 * **Ordered.**  Each pass takes the oldest undelivered events (at most ``batch``) and publishes
   them one after another; a failure that can pass (the bus is down, no PubAck in time) ends the

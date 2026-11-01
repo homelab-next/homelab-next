@@ -48,7 +48,8 @@ work.
 4. **One observation shape** (`schemas/status/observation.schema.json`): `source`, `module`,
    `item`, `state` (`ok|warn|fail|unknown|stale`), `summary`, optional `link` (a logical id or a
    relative path, never an address), `observed_at`, `expires_at`. Collectors may also publish each
-   one as a `homelabnext.status.observed` event, so the bus is one place to read everything.
+   one as a `homelabnext.status.observed` event (a per-item record under ADR-0009), so a reaction
+   can subscribe to a state change; the hub's state file stays the place to read status.
 5. **Isolation and staleness are structural.** Each source runs in its own thread under its own
    timeout; a hung or raising source becomes an error for that source only (O-07). Staleness is
    computed from `expires_at` at read time, never stored, so a source that stops reporting reads
