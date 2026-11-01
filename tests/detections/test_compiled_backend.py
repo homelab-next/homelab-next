@@ -21,6 +21,8 @@ from homelabnext.detections.runner import compiled_backends, run_all, run_compil
 from homelabnext.detections.sigma import load_mapping, load_rules
 
 DET = Path(__file__).resolve().parents[2] / "detections"
+#: the backend that evaluates its own artefact (the XML stub); named by the registry, not here
+(STUB,) = compiled_backends()
 
 
 @pytest.fixture
@@ -49,21 +51,24 @@ def plant(root: Path, slug: str, detection: str, fixtures: dict[str, dict]) -> N
         (d / f"{stem}.json").write_text(json.dumps(doc), encoding="utf-8")
 
 
-def test_the_wazuh_stub_is_a_compiled_backend():
-    assert "wazuh" in compiled_backends()
+def test_the_xml_stub_is_the_compiled_backend():
+    from homelabnext.detections.backends import generic
+
+    assert generic.GenericBackend.name != STUB
+    assert get_backend(STUB).bundle  # the stub's own bundle writer
 
 
 @pytest.mark.parametrize("rule", load_rules(DET), ids=lambda r: r.slug)
 def test_every_compiled_pattern_is_a_valid_regular_expression(rule):
     mapping = load_mapping(DET / "mappings" / "generic.yml")
-    tgt = Target("wazuh", mapping, detmap.load(DET / "det_map.yml")["entries"])
-    art = get_backend("wazuh").compile(rule, tgt)
+    tgt = Target(STUB, mapping, detmap.load(DET / "det_map.yml")["entries"])
+    art = get_backend(STUB).compile(rule, tgt)
     for f in ET.fromstring(art.content).findall("field"):
         re.compile(f.text or "")  # a bare (?i) inside an alternation is refused here
 
 
 def test_every_shipped_rule_fires_compiled_where_it_fires_in_the_evaluator():
-    b = run_compiled(DET, "wazuh", run_all(DET))
+    b = run_compiled(DET, STUB, run_all(DET))
     assert b.ok, b.divergent
     assert b.not_expressible == {}
     assert b.report.ok
@@ -72,8 +77,8 @@ def test_every_shipped_rule_fires_compiled_where_it_fires_in_the_evaluator():
 
 def test_case_is_ignored_inside_each_alternative():
     rule = next(r for r in load_rules(DET) if r.slug == "cloud-api-key-new-asn")
-    engine_art = get_backend("wazuh").compile(
-        rule, Target("wazuh", load_mapping(DET / "mappings/generic.yml"), {rule.det_id: 0})
+    engine_art = get_backend(STUB).compile(
+        rule, Target(STUB, load_mapping(DET / "mappings/generic.yml"), {rule.det_id: 0})
     )
     event = {
         "cloud": {
@@ -81,9 +86,9 @@ def test_case_is_ignored_inside_each_alternative():
             "api": {"action": "getObject"},
         }
     }
-    assert get_backend("wazuh").evaluate(engine_art, event) is False  # filtered, any case
+    assert get_backend(STUB).evaluate(engine_art, event) is False  # filtered, any case
     event["cloud"]["api"]["action"] = "PutObject"
-    assert get_backend("wazuh").evaluate(engine_art, event) is True
+    assert get_backend(STUB).evaluate(engine_art, event) is True
 
 
 def test_a_compiled_form_that_does_not_fire_fails_run_and_is_uncounted(det, capsys):
@@ -101,7 +106,7 @@ def test_a_compiled_form_that_does_not_fire_fails_run_and_is_uncounted(det, caps
     )
     ref = run_all(det)
     assert ref.ok
-    b = run_compiled(det, "wazuh", ref)
+    b = run_compiled(det, STUB, ref)
     assert not b.ok
     assert b.divergent == [
         "det:planted-negation must_fire/no-command-line.json: fires in the reference "
@@ -112,9 +117,9 @@ def test_a_compiled_form_that_does_not_fire_fails_run_and_is_uncounted(det, caps
     rep = report_for(det)
     assert "det:planted-negation" not in [u["rule"] for u in rep["uncounted"]]
     assert {"rule": "det:planted-negation", "reason": "must_fire missed: no-command-line.json"} in (
-        rep["backends"]["wazuh"]["uncounted"]
+        rep["backends"][STUB]["uncounted"]
     )
-    assert rep["backends"]["wazuh"]["rules_counted"] == rep["summary"]["rules_counted"] - 1
+    assert rep["backends"][STUB]["rules_counted"] == rep["summary"]["rules_counted"] - 1
 
 
 def test_a_rule_the_backend_cannot_express_is_uncounted_for_it_only(det, capsys):
@@ -127,18 +132,18 @@ def test_a_rule_the_backend_cannot_express_is_uncounted_for_it_only(det, capsys)
             "must_not_fire/z": {"process": {"executable": "/bin/z"}},
         },
     )
-    b = run_compiled(det, "wazuh", run_all(det))
+    b = run_compiled(det, STUB, run_all(det))
     assert b.ok and "det:planted-or" in b.not_expressible
     assert main(["--root", str(det), "run"]) == 0
     assert "[not expressible] det:planted-or" in capsys.readouterr().out
     rep = report_for(det)
-    uncounted = {u["rule"]: u["reason"] for u in rep["backends"]["wazuh"]["uncounted"]}
-    assert uncounted["det:planted-or"].startswith("not expressible in wazuh: ")
+    uncounted = {u["rule"]: u["reason"] for u in rep["backends"][STUB]["uncounted"]}
+    assert uncounted["det:planted-or"].startswith(f"not expressible in {STUB}: ")
     assert "det:planted-or" not in [u["rule"] for u in rep["uncounted"]]
 
 
 def test_the_committed_coverage_report_counts_the_compiled_backend():
     rep = json.loads((DET / "attack_coverage.json").read_text(encoding="utf-8"))
-    wazuh = rep["backends"]["wazuh"]
-    assert wazuh["must_fire"]["fired"] == wazuh["must_fire"]["total"] > 0
-    assert wazuh["rules_counted"] == rep["summary"]["rules_counted"]
+    compiled = rep["backends"][STUB]
+    assert compiled["must_fire"]["fired"] == compiled["must_fire"]["total"] > 0
+    assert compiled["rules_counted"] == rep["summary"]["rules_counted"]
