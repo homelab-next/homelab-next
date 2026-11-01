@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when a product name appears in the core outside its provider module, beyond the shrinking baseline.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:gates, make:product-names-baseline]
+#   trigger: [ci:ci/schemas, ci:ci/trusted-gates, make:gates, make:product-names-baseline]
 #   invariant: [X-11]
 #   inputs: the tracked tree; tools/product_names.yml; tools/product_names.baseline.json; the role table; the base commit's baseline (--base, --ci-base)
 #   outputs: one line per violation; --update rewrites the baseline when no product's total rises

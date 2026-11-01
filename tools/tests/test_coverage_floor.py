@@ -208,3 +208,31 @@ def test_the_test_and_dev_extras_pin_a_coverage_that_patches_subprocesses():
         pins = [re.fullmatch(r"coverage>=(\d+)\.(\d+)", d) for d in extras[name]]
         (m,) = [m for m in pins if m]
         assert (int(m[1]), int(m[2])) >= (7, 10), name
+
+
+def test_the_coverage_run_selects_the_tests_every_blocking_job_selects(tmp_path, monkeypatch):
+    """An experimental component's tests (tools/experimental.yml) never fail this blocking gate."""
+    cmds = []
+
+    def fake_run(cmd, cwd, check, env):
+        cmds.append(cmd)
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(coverage_floor.subprocess, "run", fake_run)
+    coverage_floor.run_tests(tmp_path / "g.json", ("tests/workflows",), ["homelabnext/workflows"])
+    (cmd,) = cmds
+    assert cmd[cmd.index("-m", 3) + 1] == "not live and not experimental"
+
+
+def test_an_experimental_component_s_code_is_not_counted_in_its_unit(tmp_path, capsys):
+    (code,) = [p for p in coverage_floor.EXPERIMENTAL_CODE if p.endswith("_bridge.py")]
+    report = _write(tmp_path, _report(**{code: _file(1000, 0)}))
+    assert coverage_floor.main(["--json", str(report)]) == 0, capsys.readouterr().err
+    report = _write(tmp_path, _report(**{"homelabnext/workflows/other.py": _file(1000, 0)}))
+    assert coverage_floor.main(["--json", str(report)]) == 1
+
+
+def test_the_experimental_code_is_inside_a_unit():
+    assert len(coverage_floor.EXPERIMENTAL_CODE) == 3
+    for path in coverage_floor.EXPERIMENTAL_CODE:
+        assert any(path.startswith(u.rstrip("/") + "/") for u in coverage_floor.UNITS), path

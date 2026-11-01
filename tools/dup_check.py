@@ -5,7 +5,7 @@
 #   kind: check
 #   purpose: Fail when copy-pasted Python appears that the committed duplication baseline does not hold; the baseline only shrinks.
 #   owner: maintainers
-#   trigger: [ci:ci/schemas, make:dup-baseline, make:dup-check]
+#   trigger: [ci:ci/schemas, ci:ci/trusted-gates, make:dup-baseline, make:dup-check]
 #   invariant: [M-03]
 #   inputs: the tracked Python files and tools/dup_check.baseline.json; the base commit's baseline (--base, --ci-base)
 #   outputs: one line per new clone (both copies) or stale baseline entry; the rewritten baseline with --update-baseline
