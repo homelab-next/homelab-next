@@ -128,15 +128,18 @@ class SourceTable:
                 raise SourceTableError(
                     f"{key}: an entry holds tlp, honour_item_labels, module and dataset only"
                 )
-            label = entry.get("tlp")
-            if type(label) is not str or label not in tlp.LABELS:
-                raise SourceTableError(f"{key}: tlp {label!r} is not a canonical TLP label")
+            try:
+                label = tlp.parse_stored(entry.get("tlp"))
+            except ValueError:
+                raise SourceTableError(
+                    f"{key}: tlp {entry.get('tlp')!r} is not a canonical TLP label"
+                ) from None
             honour = entry.get("honour_item_labels")
             if type(honour) is not bool:
                 raise SourceTableError(f"{key}: honour_item_labels {honour!r} is not a bool")
             if [entry.get("module"), entry.get("dataset")] != route.split("/"):
                 raise SourceTableError(f"{key}: module and dataset do not spell the route")
-            out[route] = (tlp.parse(label), honour)
+            out[route] = (label, honour)
         return cls(out)
 
     @classmethod
@@ -152,21 +155,6 @@ class SourceTable:
         return None if key is None else self.sources.get(key)
 
 
-#: the STIX 2.1 marking definitions of TLP: the TLP 2.0 ones (the TLP 2.0 marking extension) and
-#: the TLP 1.0 ones the STIX 2.1 specification predefines (``white`` is ``clear``)
-STIX_TLP_MARKINGS = {
-    "marking-definition--94868c89-83c2-464b-929b-a1a8aa3c8487": "clear",
-    "marking-definition--bab4a63c-aed9-4cf5-a766-dfca5abac2bb": "green",
-    "marking-definition--55d920b0-5e8b-4f79-9ee9-91f868d9b421": "amber",
-    "marking-definition--939a9414-2ddd-4d32-a0cd-375ea402b003": "amber+strict",
-    "marking-definition--e828b379-4e03-4974-9ac4-e53a884c97c1": "red",
-    "marking-definition--613f2e26-407d-48c7-9eca-b8e91df99dc9": "clear",
-    "marking-definition--34098fce-860f-48ae-8e50-ebd3cc5e41da": "green",
-    "marking-definition--f88d31f6-486f-44da-b317-01333bde0b82": "amber",
-    "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed": "red",
-}
-
-
 def _items(value: Any) -> list[Any]:
     """``value`` as a list: a list as itself, anything else as its one item."""
     return list(value) if isinstance(value, list) else [value]
@@ -174,13 +162,12 @@ def _items(value: Any) -> list[Any]:
 
 def _tag_claim(tag: Any) -> Any:
     """The label a tag carries, or ``None`` for a tag that is not a TLP one.  A tag is a string
-    or an object with a ``name`` (a MISP tag); a TLP tag starts ``tlp:`` and is read whole, so
-    ``tlp:amber-strict`` or ``tlp:unknown`` is a claim that is not a label (``red``)."""
+    or an object with a ``name`` (a MISP tag), read by :func:`homelabnext.tlp.tag_label` (the
+    marker grammar), so ``tlp:amber-strict`` or ``tlp:unknown`` is a claim that is not a label
+    (``red``) and ``TLP : RED`` is ``red`` as it is at egress."""
     if isinstance(tag, Mapping):
         tag = next((v for k, v in tag.items() if _is(k, "name")), None)
-    if isinstance(tag, str) and str.casefold(str.strip(tag)).startswith("tlp:"):
-        return tag
-    return None
+    return tlp.tag_label(tag)
 
 
 def claims(event: Mapping[str, Any]) -> list[Any]:
@@ -191,7 +178,7 @@ def claims(event: Mapping[str, Any]) -> list[Any]:
     * every ``tlp:`` tag in ``tags`` (a string or a MISP tag object; other tags are not labels);
     * the ``tlp`` of each OCSF ``osint`` entry that has one (the label a source gave the
       indicator);
-    * each STIX TLP marking in ``object_marking_refs`` (:data:`STIX_TLP_MARKINGS`; a marking that
+    * each STIX TLP marking in ``object_marking_refs`` (:data:`homelabnext.tlp.STIX_TLP_MARKINGS`; a marking that
       is not a TLP one, a statement say, is not a label).
     """
     out = [v for k, v in event.items() if _is(k, CLAIM) or _is(k, f"labels.{CLAIM}")]
@@ -204,9 +191,7 @@ def claims(event: Mapping[str, Any]) -> list[Any]:
             if isinstance(entry, Mapping):
                 out += [v for k, v in entry.items() if _is(k, CLAIM)]
     for refs in [v for k, v in event.items() if _is(k, "object_marking_refs")]:
-        for ref in _items(refs):
-            if isinstance(ref, str) and str.casefold(str.strip(ref)) in STIX_TLP_MARKINGS:
-                out.append(STIX_TLP_MARKINGS[str.casefold(str.strip(ref))])
+        out += [m for m in map(tlp.stix_marking_label, _items(refs)) if m is not None]
     return out
 
 

@@ -8,11 +8,27 @@ label again (:func:`tables.row_label`) before returning it.  SQL written elsewhe
 constant as ``tlp`` and launder a row, so ``query`` and ``named`` are refused below ``red``.  The
 query engine's own row filter (``hnx modules render``: ``lake-access.json``) is the control for a
 reader that composes its own SQL; this one is for code in this repository.
+
+A reader with no declared ceiling is refused (decision 6), and reading at ``red`` is never a
+default:
+
+* :func:`reader_for` is the factory for a consumer: it takes the reader's ceiling from its
+  declaration (the site's ``tlp_readers``) and refuses a reader that has none;
+* every read at ``red`` names a :class:`RedGrant` (who reads everything and why): a red
+  :class:`CeilingReader` needs one, and :func:`raw_query` / :func:`raw_named`, the only way code
+  outside this package runs SQL against a lake client, take one.  :func:`reader_for` makes the
+  grant of a reader declared ``red`` from its declaration's ``why``; the swap and parity tools,
+  which copy and compare every row, hold their own.
+
+``tests/lake/test_lake_read_boundary.py`` refuses a ``.query(`` or ``.named(`` call in any module
+outside ``homelabnext/lake/`` (and the conformance harness, whose subject is that method) that
+imports the lake library.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from homelabnext import tlp
@@ -20,7 +36,7 @@ from homelabnext import tlp
 from .errors import LakeError
 from .tables import LABEL_COLUMN, TableSchema, row_label
 
-__all__ = ["CeilingError", "CeilingReader"]
+__all__ = ["CeilingError", "CeilingReader", "RedGrant", "raw_named", "raw_query", "reader_for"]
 
 #: the most rows one select returns
 MAX_LIMIT = 10_000
@@ -30,6 +46,45 @@ class CeilingError(LakeError):
     """A read the reader's ceiling does not allow (raw SQL below red, an unlabelled table)."""
 
 
+@dataclass(frozen=True)
+class RedGrant:
+    """Leave to read the lake at ``red`` (every row, raw SQL): ``holder`` is who reads, ``why``
+    the reviewed reason.  It is passed explicitly wherever a red read happens, so a red read is
+    always visible at its call site."""
+
+    holder: str
+    why: str
+
+    def __post_init__(self) -> None:
+        for name in ("holder", "why"):
+            value = getattr(self, name)
+            if type(value) is not str or not value.strip():
+                raise CeilingError(f"a red grant needs a non-empty {name}")
+
+
+def _grant(grant: object, what: str) -> RedGrant:
+    if type(grant) is not RedGrant:
+        raise CeilingError(f"{what}: reading at red needs a RedGrant, not {type(grant).__name__}")
+    return grant
+
+
+def raw_query(
+    lake: Any, grant: RedGrant, sql: str, params: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """``lake.query(sql, params)`` at ``red``, under ``grant``: the one raw read path for code
+    outside this package."""
+    _grant(grant, "raw_query")
+    return lake.query(sql, params)
+
+
+def raw_named(
+    lake: Any, grant: RedGrant, name: str, params: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """``lake.named(name, params)`` at ``red``, under ``grant`` (as :func:`raw_query`)."""
+    _grant(grant, "raw_named")
+    return lake.named(name, params)
+
+
 def _ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -37,12 +92,25 @@ def _ident(name: str) -> str:
 class CeilingReader:
     """``lake`` read as a reader with ``ceiling`` (a parsed :class:`~homelabnext.tlp.Label`).
 
-    ``schemas`` maps a table name to its :class:`TableSchema` (``load_schemas()``).
+    ``schemas`` maps a table name to its :class:`TableSchema` (``load_schemas()``).  A ``red``
+    reader needs ``grant``, a :class:`RedGrant`; below ``red`` it is not taken.  A consumer gets
+    its reader from :func:`reader_for`, which reads the ceiling from its declaration.
     """
 
-    def __init__(self, lake: Any, ceiling: tlp.Label, schemas: Mapping[str, TableSchema]):
+    def __init__(
+        self,
+        lake: Any,
+        ceiling: tlp.Label,
+        schemas: Mapping[str, TableSchema],
+        *,
+        grant: RedGrant | None = None,
+    ):
         if type(ceiling) is not tlp.Label:
             raise TypeError(f"ceiling must be a Label, not {type(ceiling).__name__}")
+        if ceiling is tlp.Label.RED:
+            _grant(grant, "a red reader")
+        elif grant is not None:
+            raise CeilingError(f"a {ceiling} reader takes no red grant")
         self._lake = lake
         self._ceiling = ceiling
         self._schemas = dict(schemas)
@@ -110,3 +178,38 @@ class CeilingReader:
             raise CeilingError(
                 f"{what}: raw SQL is refused below red (ceiling {self.ceiling}); use select()"
             )
+
+
+def reader_for(
+    lake: Any,
+    reader: str,
+    readers: Iterable[Mapping[str, Any]],
+    schemas: Mapping[str, TableSchema],
+) -> CeilingReader:
+    """``lake`` read as ``reader`` (``profile:<id>``, ``module:<id>``, ...) at the ceiling its
+    declaration in ``readers`` (the site's ``tlp_readers``) states.
+
+    A reader with no declaration, one declared twice, or a ceiling that is not a canonical label
+    is refused (:class:`CeilingError`): there is no default ceiling.  A reader declared ``red``
+    reads under a :class:`RedGrant` made from its declaration (``why``, required)."""
+    if type(reader) is not str or not reader:
+        raise CeilingError(f"not a reader id: {reader!r}")
+    found = [e for e in readers if isinstance(e, Mapping) and e.get("reader") == reader]
+    if not found:
+        raise CeilingError(f"{reader}: no declared TLP ceiling (tlp_readers), so it reads nothing")
+    if len(found) > 1:
+        raise CeilingError(f"{reader}: declared {len(found)} times in tlp_readers")
+    (entry,) = found
+    try:
+        ceiling = tlp.parse_stored(entry.get("ceiling"))
+    except ValueError:
+        raise CeilingError(
+            f"{reader}: ceiling {entry.get('ceiling')!r} is not a canonical TLP label"
+        ) from None
+    grant = None
+    if ceiling is tlp.Label.RED:
+        why = entry.get("why")
+        if type(why) is not str or not why.strip():
+            raise CeilingError(f"{reader}: a red reader's declaration needs a why")
+        grant = RedGrant(reader, why)
+    return CeilingReader(lake, ceiling, schemas, grant=grant)

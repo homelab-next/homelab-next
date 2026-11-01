@@ -39,11 +39,12 @@ from typing import Any
 
 from homelabnext import paths, tlp
 from homelabnext.lake.base import normalize_rows
+from homelabnext.lake.ceiling import raw_query
 from homelabnext.parity import ParityQuery, RowRules, compare_queries
 
 from . import record as rec
 from .flip import flip_text, load_doc, plan_flip
-from .lakebackend import LakeBackend
+from .lakebackend import RED_GRANT, LakeBackend
 from .machine import GateFailed, SwapError, SwapRunner
 
 __all__ = ["PARITY_QUERIES", "TABLES", "Router", "rehearsal_registry", "run", "seed_rows"]
@@ -179,7 +180,7 @@ class Router:
 def _answers(client: Any) -> dict[str, list[dict[str, Any]]]:
     out = {}
     for q in PARITY_QUERIES:
-        rows = normalize_rows(client.query(q.sql, q.params or None))
+        rows = normalize_rows(raw_query(client, RED_GRANT, q.sql, q.params or None))
         out[q.name] = sorted(rows, key=lambda r: json.dumps(r, sort_keys=True, default=str))
     return out
 
