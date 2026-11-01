@@ -22,6 +22,29 @@ import yaml
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 ATTACK_TECH_RE = re.compile(r"^attack\.t\d{4}(\.\d{3})?$")
+#: ``attack.gNNNN`` (a group) and ``attack.sNNNN`` (software): valid ATT&CK tags, never tactics
+ATTACK_GROUP_SOFTWARE_RE = re.compile(r"^attack\.[gs]\d{4}$")
+#: The ATT&CK Enterprise tactics, in the hyphenated form ``attack_tactics`` returns (a Sigma tag
+#: spells them with underscores: ``attack.initial_access``). Refresh with each ATT&CK release
+#: that adds or renames a tactic; ``lint`` rejects any other ``attack.*`` tag.
+ATTACK_TACTICS = frozenset(
+    {
+        "reconnaissance",
+        "resource-development",
+        "initial-access",
+        "execution",
+        "persistence",
+        "privilege-escalation",
+        "defense-evasion",
+        "credential-access",
+        "discovery",
+        "lateral-movement",
+        "collection",
+        "command-and-control",
+        "exfiltration",
+        "impact",
+    }
+)
 LEVELS = ("informational", "low", "medium", "high", "critical")
 #: Sigma's rule statuses; ``unsupported`` is a rule that cannot work as shipped (here: a field no
 #: shipped enrichment sets), so it is tested but neither counted as coverage nor deployed
@@ -77,11 +100,35 @@ class Rule:
 
     @property
     def attack_tactics(self) -> list[str]:
+        """The tactic tags, hyphenated. Only names in ``ATTACK_TACTICS`` count: a group,
+        software, misspelt or upper-case tag is not a tactic (``lint`` reports it)."""
         return sorted(
-            t.split(".", 1)[1].replace("_", "-")
-            for t in self.tags
-            if t.startswith("attack.") and not ATTACK_TECH_RE.match(t)
+            {
+                t.split(".", 1)[1].replace("_", "-")
+                for t in self.tags
+                if t.startswith("attack.")
+                and t.split(".", 1)[1].replace("_", "-") in ATTACK_TACTICS
+            }
         )
+
+    def attack_tag_problems(self) -> list[str]:
+        """Every ``attack.*`` tag must be a lower-case tactic, technique, group or software."""
+        out = []
+        for t in self.tags:
+            if not str(t).lower().startswith("attack."):
+                continue
+            if t != t.lower():
+                out.append(f"ATT&CK tag {t!r} must be lower-case ({t.lower()!r})")
+            elif not (
+                ATTACK_TECH_RE.match(t)
+                or ATTACK_GROUP_SOFTWARE_RE.match(t)
+                or t.split(".", 1)[1].replace("_", "-") in ATTACK_TACTICS
+            ):
+                out.append(
+                    f"ATT&CK tag {t!r} is not a tactic, technique (attack.tNNNN[.NNN]), "
+                    "group (attack.gNNNN) or software (attack.sNNNN)"
+                )
+        return out
 
 
 # ---------------------------------------------------------------- loading

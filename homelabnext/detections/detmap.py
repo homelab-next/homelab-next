@@ -66,11 +66,37 @@ def reverse(m: dict) -> dict[int, str]:
 
 
 def check_current(rules: list[Rule], m: dict) -> list[str]:
-    """Problems if the stored map is not exactly what the generator would keep."""
+    """Problems if the stored map is not exactly what the generator would keep.
+
+    Besides the key sets, the numbers themselves: every entry is an int, no two entries share
+    one, no live entry reuses a retired one, and regenerating from the stored map changes
+    nothing. A hand edit that duplicates or reuses a number fails here, not only on ``map``.
+    """
     problems = []
+    entries = m.get("entries") or {}
+    retired = list(m.get("retired") or [])
     live = {r.det_id for r in rules}
-    for det in sorted(live - set(m["entries"])):
+    for det in sorted(live - set(entries)):
         problems.append(f"{det}: no engine number in det map (regenerate)")
-    for det in sorted(set(m["entries"]) - live):
+    for det in sorted(set(entries) - live):
         problems.append(f"{det}: in det map but no rule exists (regenerate to retire it)")
+    bad = sorted(d for d, n in entries.items() if type(n) is not int)
+    bad += [f"retired {n!r}" for n in retired if type(n) is not int]
+    for d in bad:
+        problems.append(f"{d}: engine number is not an integer")
+    by_num: dict[object, list[str]] = {}
+    for det, n in entries.items():
+        by_num.setdefault(n, []).append(det)
+    for n, dets in sorted(by_num.items(), key=lambda kv: str(kv[0])):
+        if len(dets) > 1:
+            problems.append(f"engine number {n} is assigned to {', '.join(sorted(dets))}")
+    for det, n in sorted(entries.items()):
+        if n in retired:
+            problems.append(f"{det}: engine number {n} is retired and must never be reused")
+    if len(retired) != len(set(map(str, retired))):
+        problems.append("retired: a number is listed more than once")
+    if not problems:
+        regen = generate(rules, m)
+        if any(regen[k] != m.get(k) for k in regen):
+            problems.append("det map is not what the generator would write (regenerate)")
     return problems

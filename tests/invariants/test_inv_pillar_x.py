@@ -290,3 +290,32 @@ def test_the_pillar_x_checks_registered_here():
 def test_x11_runs_the_product_name_lint(tmp_path):
     r = default_registry().get("X-11").fn(ctx(tmp_path))
     assert r.status == "skip"  # no tool in an empty tree
+
+
+# X-06 and `detections lint-ids` are one rule with one implementation: same files, same verdict
+PARITY_FILES = {
+    "agents/triage/charters/charter.md": "Escalate when rule 100201 fires.\n",
+    "profiles/p/x.md": "sid: 100202\n",
+    "workflows/decisions/page.yml": "when: rule 100200\n",
+    "homelabnext/decide/examples/decision_spec.yml": "on: rule_id 100203\n",
+    "schedules/s.yml": "watch: det:no-such-detection\n",
+}
+
+
+def test_x06_and_lint_ids_agree_on_the_same_tree(tmp_path, monkeypatch, capsys):
+    from homelabnext.detections.cli import main as det_main
+
+    write(tmp_path / "detections/det_map.yml", (REPO / "detections/det_map.yml").read_text())
+    for rel, text in PARITY_FILES.items():
+        write(tmp_path / rel, text)
+    monkeypatch.chdir(tmp_path)
+    r = pillar_x.x06(ctx(tmp_path))
+    assert det_main(["--root", "detections", "lint-ids"]) == 1
+    out = capsys.readouterr().out
+    assert r.status == "fail"
+    for rel in PARITY_FILES:
+        assert rel in r.evidence and rel in out, rel
+    for rel in PARITY_FILES:
+        write(tmp_path / rel, "Watches det:web-shell-write. Revised on 2026-10-15.\n")
+    assert pillar_x.x06(ctx(tmp_path)).status == "pass"
+    assert det_main(["--root", "detections", "lint-ids"]) == 0

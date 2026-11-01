@@ -31,6 +31,7 @@ DET = REPO / "detections"
 GOLDEN = Path(__file__).parent / "golden"
 DATA = Path(__file__).parent / "data"
 MAPPING = load_mapping(DET / "mappings" / "generic.yml")
+STUB = WazuhStubBackend.name  # the XML stub backend
 
 
 def golden(name: str, text: str):
@@ -259,10 +260,10 @@ def test_generic_compile_golden(slug):
 @pytest.mark.parametrize("slug", [r.slug for r in load_rules(DET)])
 def test_wazuh_stub_golden_wellformed_and_keeps_logical_id(slug):
     rule = next(r for r in load_rules(DET) if r.slug == slug)
-    art = get_backend("wazuh").compile(rule, target("wazuh"))
-    golden(f"wazuh/{slug}.xml", art.content)
+    art = get_backend(STUB).compile(rule, target(STUB))
+    golden(f"{STUB}/{slug}.xml", art.content)
     root = ET.fromstring(art.content)
-    assert root.tag == "rule" and root.get("id") == str(target("wazuh").det_map[rule.det_id])
+    assert root.tag == "rule" and root.get("id") == str(target(STUB).det_map[rule.det_id])
     assert f"<!-- {rule.det_id} -->" in art.content
 
 
@@ -434,3 +435,155 @@ def test_cli_run_and_compile(capsys):
     assert main(["--root", str(DET), "run"]) == 0
     assert main(["--root", str(DET), "compile", "generic"]) == 0
     assert "WHERE" in capsys.readouterr().out
+
+
+# ---- det map --check judges the numbers, not only the key sets
+def _stored_map():
+    return detmap.load(DET / "det_map.yml")
+
+
+def test_detmap_check_flags_a_duplicated_engine_number():
+    m = _stored_map()
+    m["entries"]["det:web-shell-write"] = m["entries"]["det:cloud-api-key-new-asn"]
+    probs = detmap.check_current(load_rules(DET), m)
+    assert any("is assigned to det:cloud-api-key-new-asn, det:web-shell-write" in p for p in probs)
+
+
+def test_detmap_check_flags_a_reused_retired_number():
+    m = _stored_map()
+    m["retired"] = [m["entries"]["det:web-shell-write"]]
+    probs = detmap.check_current(load_rules(DET), m)
+    assert any("det:web-shell-write: engine number" in p and "retired" in p for p in probs)
+
+
+def test_detmap_check_flags_a_non_integer_and_a_map_regeneration_would_change(tmp_path):
+    m = _stored_map()
+    m["entries"]["det:web-shell-write"] = "900006"
+    assert any("not an integer" in p for p in detmap.check_current(load_rules(DET), m))
+    m = _stored_map()
+    m["retired"] = [900099, 900098]  # unsorted: not what `map` writes
+    assert any("regenerate" in p for p in detmap.check_current(load_rules(DET), m))
+    assert detmap.check_current(load_rules(DET), _stored_map()) == []
+
+
+def test_map_check_cli_fails_on_a_hand_edited_duplicate(tree):
+    p = tree / "det_map.yml"
+    p.write_text(
+        p.read_text().replace("det:web-shell-write: 900006", "det:web-shell-write: 900001")
+    )
+    assert main(["--root", str(tree), "map", "--check"]) == 1
+
+
+# ---- compile: per-backend field mapping; an inexpressible rule never aborts the bundle
+def test_compile_uses_the_backends_own_mapping_when_it_has_one(tree, capsys):
+    assert main(["--root", str(tree), "compile", STUB]) == 0
+    captured = capsys.readouterr()
+    assert f"no mappings/{STUB}.yml" in captured.err
+    assert 'name="process.executable"' in captured.out
+    (tree / "mappings" / f"{STUB}.yml").write_text("fields:\n  Image: win.eventdata.image\n")
+    assert main(["--root", str(tree), "compile", STUB]) == 0
+    captured = capsys.readouterr()
+    assert 'name="win.eventdata.image"' in captured.out
+    assert 'name="process.executable"' not in captured.out
+    assert "warning" not in captured.err
+
+
+def test_compile_leaves_out_an_inexpressible_rule_and_writes_the_rest(tree, capsys):
+    (tree / "sigma/execution/or-rule.yml").write_text(
+        "title: t\nlogsource: {category: x}\nlevel: low\n"
+        "tags: [attack.execution, attack.t1059]\n"
+        "detection:\n  a:\n    k: 1\n  b:\n    k: 2\n  condition: a or b\n"
+    )
+    for kind, k in (("must_fire", 1), ("must_not_fire", 3)):
+        f = tree / f"fixtures/or-rule/{kind}/a.json"
+        f.parent.mkdir(parents=True)
+        f.write_text(json.dumps({"k": k}))
+    assert main(["--root", str(tree), "map"]) == 0
+    capsys.readouterr()
+    assert main(["--root", str(tree), "compile", STUB]) == 1
+    captured = capsys.readouterr()
+    assert f"det:or-rule: not expressible in {STUB}" in captured.err
+    ET.fromstring(captured.out)  # the bundle is still written, well-formed
+    assert "<!-- det:web-shell-write -->" in captured.out
+    assert "<!-- det:or-rule -->" not in captured.out
+
+
+# ---- ATT&CK tags: a fixed tactic vocabulary
+def test_only_vocabulary_tactics_count_and_other_attack_tags_are_lint_problems(tmp_path):
+    root = tmp_path / "d"
+    shutil.copytree(DET, root)
+    p = root / "sigma/persistence/ssh-authorized-key-added.yml"
+    text = p.read_text()
+    p.write_text(
+        text.replace(
+            "tags: [attack.persistence",
+            "tags: [attack.persistance, attack.g0016, attack.s0002, attack.T1059, attack.persistence",
+        )
+    )
+    rule = next(r for r in load_rules(root) if r.slug == "ssh-authorized-key-added")
+    assert rule.attack_tactics == ["persistence"]
+    assert "T1059" not in rule.attack_techniques
+    probs = [x for x in lint.lint_rules(root) if x.startswith("det:ssh-authorized-key-added")]
+    assert any("'attack.persistance' is not a tactic" in x for x in probs)
+    assert any("'attack.T1059' must be lower-case" in x for x in probs)
+    assert not any("g0016" in x or "s0002" in x for x in probs)
+
+
+def test_a_misspelt_tactic_directory_fails_lint(tmp_path):
+    root = tmp_path / "d"
+    shutil.copytree(DET, root)
+    (root / "sigma/persistance").mkdir()
+    src = root / "sigma/persistence/ssh-authorized-key-added.yml"
+    dst = root / "sigma/persistance/ssh-authorized-key-added.yml"
+    dst.write_text(src.read_text().replace("attack.persistence", "attack.persistance"))
+    src.unlink()
+    probs = lint.lint_rules(root)
+    assert any("directory 'persistance' is not one of its tactic tags" in x for x in probs)
+
+
+# ---- a rule file no gate would load is a lint problem
+@pytest.mark.parametrize("rel", ["stray.yml", "execution/rule.yaml", "execution/nested/rule.yml"])
+def test_a_rule_file_outside_the_layout_fails_lint(tree, rel):
+    f = tree / "sigma" / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("title: t\n")
+    assert any(
+        x.startswith(f"sigma/{rel}: not sigma/<tactic>/<slug>.yml") for x in lint.lint_rules(tree)
+    )
+
+
+def test_the_shipped_tree_has_no_stray_rule_files():
+    assert not [x for x in lint.lint_rules(DET) if "not sigma/<tactic>" in x]
+
+
+# ---- lint-ids: dates are not rule numbers; det: ids must resolve
+def test_a_date_after_the_word_rule_is_not_an_engine_number(tmp_path):
+    f = tmp_path / "x-charter.md"
+    f.write_text("This rule was revised on 2026-10-15 and again on 2026/10/20.\n")
+    assert lint.lint_no_rule_numbers([f]) == []
+    f.write_text("This rule 900299 was revised on 2026-10-15.\n")
+    assert len(lint.lint_no_rule_numbers([f])) == 1
+
+
+def test_lint_ids_fails_on_a_det_id_the_map_lacks(tmp_path, capsys):
+    f = tmp_path / "x-charter.md"
+    f.write_text("Watch det:web-shell-write and det:no-such-detection.\n")
+    assert main(["--root", str(DET), "lint-ids", str(f)]) == 1
+    out = capsys.readouterr().out
+    assert "det:no-such-detection is not in" in out and "web-shell-write" not in out
+
+
+def test_decision_specs_are_agent_facing_files(tmp_path):
+    for rel in (
+        "workflows/decisions/page.yml",
+        "homelabnext/decide/examples/decision_spec.yml",
+    ):
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True)
+        f.write_text("when: rule 100200 fires\n")
+    found = {p.relative_to(tmp_path).as_posix() for p in lint.find_agent_files(tmp_path)}
+    assert found == {
+        "workflows/decisions/page.yml",
+        "homelabnext/decide/examples/decision_spec.yml",
+    }
+    assert len(lint.lint_agent_ids(lint.find_agent_files(tmp_path))) == 2

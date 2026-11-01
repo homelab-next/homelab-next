@@ -136,7 +136,7 @@ file.
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |
    | Script catalog, `docs/scripts/catalog.md` and `catalog.json` | script headers | `hnx scripts catalog --check` (CI) |
-   | Detections ATT&CK map `detections/det_map.yml` and coverage report `detections/attack_coverage.json` | the Sigma rules and the ATT&CK snapshots | `hnx detections map --check`, `coverage --check` (CI) |
+   | Detections logical-id map `detections/det_map.yml` and ATT&CK coverage report `detections/attack_coverage.json` | the map: the Sigma rules and the stored map (stable and retired numbers); the report: the Sigma rules and their fixture results (D-04). The ATT&CK snapshots feed only `validate-techniques` | `hnx detections map --check`, `coverage --check` (CI) |
    | Golden reports: injection `homelabnext/agent/prompts/injection/report.json`, model evaluation `examples/model_roles.eval.json` | templates and corpus; model pins and golden suites | `agent injection run --check`, `golden pins check` (CI) |
    | StackStorm pack, `workflows/stackstorm/` | workflow packs and the binding | `hnx workflows st2 check`; pytest `tests/workflows/` (CI) |
    | Status source catalog `docs/status/sources.md` | the registry's status sources | `hnx status catalog check` (`make gates`); pytest `tests/status/test_status_views.py` (CI) |
