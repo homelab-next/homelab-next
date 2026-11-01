@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,14 +35,22 @@ class EventError(ValueError):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
+#: the envelope's ``type`` pattern (schemas/events/envelope.schema.json)
+_TYPE = re.compile(r"homelabnext(?:\.[a-z][a-z0-9_]*){2,}", re.ASCII)
+
+
 def _events_dir() -> Path:
     return paths.schemas_dir() / "events"
 
 
 def schema_for_type(event_type: str) -> Path | None:
-    """The per-type schema file for ``homelabnext.<a>.<b>``, or None when there is none."""
+    """The per-type schema file for ``homelabnext.<a>.<b>``, or None when there is none.
+
+    Only a type the envelope's own ``type`` pattern allows names a file: anything else (a path
+    such as ``homelabnext.../ids/common``) is validated against the envelope alone, so a crafted
+    type cannot pick another schema and skip the envelope's checks."""
     prefix = "homelabnext."
-    if not isinstance(event_type, str) or not event_type.startswith(prefix):
+    if not isinstance(event_type, str) or _TYPE.fullmatch(event_type) is None:
         return None
     p = _events_dir() / f"{event_type[len(prefix) :]}.schema.json"
     return p if p.is_file() else None

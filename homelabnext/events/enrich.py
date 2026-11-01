@@ -204,14 +204,17 @@ def enrich_event(
 ) -> dict[str, Any]:
     """A copy of ``event`` with ``assetid``/``assetowner``/``assetcriticality`` set.
 
-    Values the publisher already set are kept (the closest source wins).  An event whose asset
-    cannot be resolved is returned unchanged.  Note that enrichment changes the body, so it runs
-    *before* the publisher records the event, never on an id already sent.
+    Values the publisher already set are kept (the closest source wins).  An ``assetid`` the
+    publisher set names the asset: the other two are filled from that asset only, and left unset
+    when the inventory does not know it, so the triple never mixes two assets.  An event whose
+    asset cannot be resolved is returned unchanged.  Note that enrichment changes the body, so it
+    runs *before* the publisher records the event, never on an id already sent.
     """
     out = copy.deepcopy(dict(event))
     if all(out.get(k) for k in ATTRS):
         return out
-    asset = resolve_asset(out, inventory)
+    given = out.get("assetid")
+    asset = inventory.lookup(given) if given else resolve_asset(out, inventory)
     if asset is None:
         return out
     out.setdefault("assetid", asset.id)

@@ -93,7 +93,9 @@ unenriched rather than being attributed to its emitter. Criticality comes from t
 `secrets`/`identity` critical; `core`/`prod`/`hypervisor`/`storage`/`database`/`bus` high; `data`,
 `compute`, `edge`, `monitoring` and friends medium; otherwise low), with per-asset `overrides`; a host
 takes the highest of its guest and its services, and its owner is the guest's `owners.primary`, else
-the single owner of its services. Values a publisher already set are kept. Enrich before publishing:
+the single owner of its services. Values a publisher already set are kept; a publisher-set
+`assetid` names the asset, so the owner and criticality come from it (or stay unset when the
+inventory does not know it), never from another asset. Enrich before publishing:
 it changes the body, and the id is the idempotency key.
 
 `enrichment_coverage(events)` is the metric (share of events carrying owner and a known criticality,
