@@ -113,6 +113,29 @@ def test_the_cli_decide_fails_closed_and_takes_a_policy(lab, records, capsys):
     assert "applied" in capsys.readouterr().out
 
 
+def test_no_review_policy_fails_closed_with_an_empty_inbox_too(lab, records, capsys):
+    """Nothing to decide is no exemption: ``decide`` without a policy exits 1 whether or not an
+    intent is pending (the policy used to be resolved only when one was)."""
+    from homelabnext.reviews import NO_POLICY
+    from homelabnext.strategy.cli import main
+
+    (lab.parent / "review-policy.yml").unlink()
+    with pytest.raises(RegisterError, match="no review policy"):
+        decider(lab, records).decide_all()
+    assert main(["decide", str(lab), str(records), "--as", DECIDER], clock=clock()) == 1
+    assert NO_POLICY in capsys.readouterr().err
+
+
+def test_the_sweep_without_a_policy_files_nothing(lab, records):
+    """The sweep resolves the policy before it files an expiry intent, so a run that fails closed
+    leaves no intent behind in the inbox."""
+    (lab.parent / "review-policy.yml").unlink()
+    late = dt.datetime(2026, 11, 20, tzinfo=dt.UTC)
+    with pytest.raises(RegisterError, match="no review policy"):
+        sweep(lab, records, today=late.date(), decided_by=DECIDER, clock=clock(late))
+    assert not RecordsReader(records).list("inbox")
+
+
 # --- the sweep decides only its own expiries ---------------------------------------------------
 
 
