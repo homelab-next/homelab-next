@@ -324,11 +324,11 @@
     {
       "exit": {
         "0": "no clone beyond the baseline and no stale entry",
-        "1": "a new or grown clone, or a stale baseline entry",
-        "2": "usage error, a bad baseline, or an update that would raise the total"
+        "1": "a new or grown clone, a stale baseline entry, or a baseline loosened against the base",
+        "2": "usage error, a bad baseline, an unusable base, or an update that would raise the total"
       },
       "id": "dup-check",
-      "inputs": "the tracked Python files and tools/dup_check.baseline.json",
+      "inputs": "the tracked Python files and tools/dup_check.baseline.json; the base commit's baseline (--base, --ci-base)",
       "invariant": [
         "M-03"
       ],
