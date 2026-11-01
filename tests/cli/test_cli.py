@@ -120,6 +120,8 @@ def test_invariants_and_registers_reachable(tmp_path, capsys):
     src = ROOT / "examples" / "registers"
     out = tmp_path / "out"
     shutil.copytree(src, tmp_path / "src")
+    # the policy is looked up in or beside SRC, and a register with none is refused (fail closed)
+    shutil.copy(ROOT / "examples" / "review-policy.yml", tmp_path / "review-policy.yml")
     assert cli.main(["registers", "build", str(tmp_path / "src"), str(out)]) == 0
     capsys.readouterr()
     assert json.loads(next(out.glob("*.json")).read_text()) is not None
