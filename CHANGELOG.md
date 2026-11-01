@@ -174,6 +174,7 @@ has no section below.
 - `homelabnext.compute.load_zones_file`: a second site reader that kept the last of two equal keys and that nothing called; `open_site` reads the site with the network model's loader.
 
 ### Fixed
+- `tools/fix_has_test.py --prove` reads a parent-run `TypeError` for an unexpected keyword argument as a missing name: a regression test that passes a parameter or dataclass field the fix adds (a module-level `Source(..., new_field=True)`) failed to collect on the parent and was reported "cannot prove", where an `AttributeError` for a name the fix adds already proves it. The keyword must be a function parameter or annotated class field the fix's own diff adds; any other `TypeError` stays an error.
 - `TrinoHTTP` retries the statement `POST` on `503` only, as its docstring says: a `502` or `504` from a proxy may come after the coordinator took the query, and re-sending it could run an `INSERT` twice past the content-key lookup. Reading `nextUri` still retries `502`/`503`/`504`.
 - `events.schema_for_type` builds a schema path only from a type the envelope's pattern allows, so a crafted type (`homelabnext.../ids/common`) can no longer pick another schema and skip the envelope's required fields.
 - `events.enrich_event` fills owner and criticality from the asset a publisher-set `assetid` names (or leaves them unset when the inventory does not know it), never from a different resolved asset (docs/events.md).

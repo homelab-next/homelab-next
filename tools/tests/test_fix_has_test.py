@@ -199,6 +199,60 @@ def test_a_new_module_the_fix_adds_counts_as_failing(tmp_path):
     assert gate.prove(c, cwd=r) is None
 
 
+CAPPED = (
+    "from dataclasses import dataclass\n\n"
+    "@dataclass\nclass Cap:\n    at: int = 10\n{field}\n"
+    "def clamp(x, {param}):\n    return min(x, 10)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "test",
+    [
+        # module level: a dataclass built with the field the fix adds does not collect
+        "from mod import Cap\n\nCAP = Cap(strict=True)\n\ndef test_v():\n    assert CAP.strict\n",
+        # inside the test: a call passing the parameter the fix adds
+        "from mod import clamp\n\ndef test_v():\n    assert clamp(12, lo=0) == 10\n",
+    ],
+    ids=["module-level dataclass field", "in-function parameter"],
+)
+def test_an_unknown_keyword_the_fix_adds_counts_as_failing(tmp_path, test):
+    """A TypeError for an unexpected keyword is a missing name: the parameter or field it names
+    is what the fix adds (Go's 'unknown field X in struct literal')."""
+    old = CAPPED.format(field="", param="hi=10")
+    r, commit = _repo(tmp_path)
+    commit("feat: cap", **{"mod.py": old})
+    new = CAPPED.format(field="    strict: bool = False\n", param="hi=10, lo=None")
+    sha = commit("fix: cap", **{"mod.py": new, "tests/test_mod.py": PY_PATH + test})
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.added_symbols(c, cwd=r).keywords == {"strict", "lo"}
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_an_unknown_keyword_the_fix_does_not_add_cannot_prove_it(tmp_path):
+    # ``strict`` is added to another owner's signature; the call names a field nobody added
+    test = "from mod import Cap\n\nCAP = Cap(loose=True)\n\ndef test_v():\n    assert CAP\n"
+    mod = CAPPED.format(field="", param="hi=10, strict=False")
+    r, commit = _repo(tmp_path)
+    commit("feat: cap", **{"mod.py": CAPPED.format(field="", param="hi=10")})
+    sha = commit("fix: cap", **{"mod.py": mod, "tests/test_mod.py": PY_PATH + test})
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "which the fix does not add" in problem and "loose" in problem
+
+
+def test_a_type_error_that_names_no_keyword_is_not_a_missing_name(tmp_path):
+    # a collection error that is a TypeError of another shape is not a missing keyword
+    report = tmp_path / "r.xml"
+    report.write_text(
+        '<testsuite><testcase name="m"><error message="collection failure">'
+        "TypeError: Cap.__init__() takes 1 positional argument but 2 were given"
+        "</error></testcase></testsuite>"
+    )
+    out = gate.python_outcome(report, gate.Added(keywords={"strict"}))
+    assert out.errors and not out.failed and not out.missing
+
+
 def test_an_error_that_is_not_a_failing_test_cannot_prove_the_fix(tmp_path):
     # a fixture that raises on the parent for a reason other than a missing name is an error
     test = (

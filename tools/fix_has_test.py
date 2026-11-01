@@ -34,13 +34,16 @@ reported; so is every case that cannot prove it, never counted as a pass.
 
 One rule for Python and Go decides what a failure on the parent proves.  A test that fails there
 only because it does not build, collect or import counts as failing ONLY IF every such error names
-a symbol (function, class, type, method, module attribute or variable, or a module or package) that
-the fix's own diff adds; any other build, collection or import error, and any other error that is
-not a failing test, means the fix cannot be proven.  For Python the junit report of the parent run
-is read: an ``ImportError``/``ModuleNotFoundError``, an ``AttributeError`` on a module or a
-``NameError``, at collection or inside a test, is a missing name; for Go, the compiler's
-``undefined: X`` / ``has no field or method X`` errors and a missing package are.  The added
-symbols are the definitions in the commit's non-test files that its parent lacks.
+a symbol (function, class, type, method, module attribute or variable, keyword parameter or class
+field, or a module or package) that the fix's own diff adds; any other build, collection or import
+error, and any other error that is not a failing test, means the fix cannot be proven.  For
+Python the junit report of the parent run is read: an ``ImportError``/``ModuleNotFoundError``, an
+``AttributeError`` on a module or a ``NameError``, at collection or inside a test, is a missing
+name, and so is a ``TypeError`` for an unexpected keyword argument (a call passing a parameter or
+dataclass field the parent lacks); for Go, the compiler's ``undefined: X`` / ``has no field or
+method X`` errors and a missing package are.  The added symbols are the definitions in the
+commit's non-test files that its parent lacks (for keywords: a function's parameters and a class
+body's annotated fields, by owner).
 
 A fix whose only test files are fixtures, ``conftest.py`` or other non-test files (outside a Go
 package's ``testdata/``) cannot be proven either, in both languages, unless it carries a
@@ -183,6 +186,9 @@ PY_MISSING = (
 )
 PY_MISSING_MODULE = re.compile(r"No module named '([^']+)'")
 PY_IMPORT_ERROR = re.compile(r"\b(?:ImportError|ModuleNotFoundError|AttributeError|NameError)\b")
+# a call naming a keyword the callee lacks: Python's form of Go's "unknown field X in struct
+# literal", read against the parameters and class fields the fix adds (Added.keywords)
+PY_UNKNOWN_KEYWORD = re.compile(r"\bTypeError: \S*\(\) got an unexpected keyword argument '(\w+)'")
 GO_ERROR_LINE = re.compile(r"^(?:\S+\.go:\d+(?::\d+)?: |\S+\.go: )(?P<msg>.*)$", re.M)
 GO_MISSING = (
     re.compile(r"undefined: (?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)"),
@@ -203,6 +209,8 @@ class Added:
 
     names: set[str] = field(default_factory=set)
     modules: set[str] = field(default_factory=set)  # dotted Python modules, Go package dirs
+    # keyword parameters and class-body fields (a dataclass field is an ``__init__`` keyword)
+    keywords: set[str] = field(default_factory=set)
 
     def has_module(self, name: str) -> bool:
         name = name.strip().rstrip("/")
@@ -221,6 +229,36 @@ def _show(cwd: Path, rev: str, path: str) -> str | None:
 
 def _py_defs(text: str) -> set[str]:
     return {next(g for g in m.groups() if g) for m in PY_DEF.finditer(text)}
+
+
+def _py_keywords(text: str) -> set[tuple[str, str]]:
+    """``(owner, name)`` for every keyword a call can pass: a function's parameters (not
+    positional-only, not ``self``/``cls``) and a class body's annotated fields, the owner the
+    dotted path of the enclosing classes and functions; empty when the text does not parse."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()
+    out: set[tuple[str, str]] = set()
+
+    def walk(node: ast.AST, owner: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                here = f"{owner}.{child.name}"
+                params = [*child.args.args, *child.args.kwonlyargs]
+                out.update((here, a.arg) for a in params if a.arg not in ("self", "cls"))
+                walk(child, here)
+            elif isinstance(child, ast.ClassDef):
+                here = f"{owner}.{child.name}"
+                for stmt in child.body:
+                    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                        out.add((here, stmt.target.id))
+                walk(child, here)
+            else:
+                walk(child, owner)
+
+    walk(tree, "")
+    return out
 
 
 def _go_defs(text: str) -> set[str]:
@@ -254,6 +292,9 @@ def added_symbols(c: Commit, cwd: Path = REPO_ROOT) -> Added:
             continue
         defs = _py_defs if f.endswith(".py") else _go_defs
         out.names |= defs(new) - (defs(old) if old is not None else set())
+        if f.endswith(".py"):
+            gained = _py_keywords(new) - (_py_keywords(old) if old is not None else set())
+            out.keywords |= {name for _, name in gained}
         if old is None and f.endswith(".py"):
             parts = f[: -len(".py")].split("/")
             if parts[-1] == "__init__":
@@ -305,10 +346,17 @@ def _python_missing(text: str, added: Added) -> tuple[set[str], set[str]] | None
     missing-name error."""
     names = {m.group(1) for rx in PY_MISSING for m in rx.finditer(text)}
     modules = {m.group(1) for m in PY_MISSING_MODULE.finditer(text)}
-    if not (names or modules) or not PY_IMPORT_ERROR.search(text):
+    if not PY_IMPORT_ERROR.search(text):
+        names, modules = set(), set()
+    keywords = {m.group(1) for m in PY_UNKNOWN_KEYWORD.finditer(text)}
+    if not (names or modules or keywords):
         return None
-    ok = {n for n in names if n in added.names} | {m for m in modules if added.has_module(m)}
-    return ok, (names | modules) - ok
+    ok = (
+        {n for n in names if n in added.names}
+        | {m for m in modules if added.has_module(m)}
+        | {k for k in keywords if k in added.keywords}
+    )
+    return ok, (names | modules | keywords) - ok
 
 
 def python_outcome(report: Path, added: Added) -> Outcome:
