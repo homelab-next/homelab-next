@@ -631,8 +631,9 @@
             "uniqueItems": true,
             "items": {
               "enum": [
+                "cap:idp",
                 "cap:edge",
-                "cap:idp"
+                "cap:remote-admin"
               ]
             },
             "minItems": 1

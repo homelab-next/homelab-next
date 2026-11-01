@@ -103,6 +103,7 @@ from typing import Any
 from homelabnext import paths
 from homelabnext.gitbase import add_base_arguments
 from homelabnext.modules import loader as ld
+from homelabnext.modules.authority import slot_flag_problems
 
 #: what a lab names when it takes up modules: with none of them, ``--deploy`` checks an empty
 #: selection
@@ -255,6 +256,7 @@ def _slot_entries(registry: dict[str, Any]) -> tuple[dict[str, Any], list[ld.Pro
             out += [ld.Problem("slots", f"{name}: schema: {e}") for e in errs]
         else:
             good[name] = entries[name]
+    out += [ld.Problem("slots", p) for p in slot_flag_problems(good)]
     return good, out
 
 

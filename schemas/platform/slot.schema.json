@@ -30,6 +30,14 @@
     "pass_through": {
       "$ref": "#/$defs/flag"
     },
+    "authority": {
+      "$ref": "#/$defs/flag",
+      "description": "a trust root a module reaches only through its owner or an overlay grant: a module agent never names it in needs, and the site rules treat it as an authority; the flag must agree with homelabnext.modules.authority (the loader refuses a registry where it does not)"
+    },
+    "granted_upstream": {
+      "$ref": "#/$defs/flag",
+      "description": "an authority slot a service row may name as an upstream only with grants.upstreams; the flag must agree with homelabnext.modules.authority"
+    },
     "egress": {
       "$ref": "#/$defs/flag",
       "description": "data leaves its store through this slot: it must be on the egress list (docs/modules.md, 'Egress points') and apply the TLP check there (ADR-0033 decision 13); a module reaching an egress slot not on the list is refused"
@@ -151,6 +159,28 @@
             "properties": {
               "contract": {
                 "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "granted_upstream"
+            ],
+            "properties": {
+              "granted_upstream": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "authority"
+            ],
+            "properties": {
+              "authority": {
+                "const": true
               }
             }
           }

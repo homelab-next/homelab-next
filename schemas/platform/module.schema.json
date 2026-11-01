@@ -1812,7 +1812,7 @@
               }
             }
           ],
-          "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration or codemode-executor, and edge or idp only with an overlay grant."
+          "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration, codemode-executor or codemode-runner, and idp, edge or remote-admin only with an overlay grant."
         },
         "file": {
           "$ref": "#/$defs/rel_path"
