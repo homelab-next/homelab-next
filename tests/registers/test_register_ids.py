@@ -4,6 +4,7 @@
 
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -193,6 +194,40 @@ def test_a_live_entry_may_not_reuse_a_retired_id(tmp_path):
     (r / "invariants.yml").write_text("criteria:\n" + live)
     assert run_tool(r, "check-dupes", "invariants.yml").returncode == 0
     assert run_tool(r, "check-lost", "invariants.yml").returncode == 0
+
+
+CHECKLIST_ROW = re.compile(r"^\| ([A-Z]-\d{2}) \| ", re.M)
+
+
+def test_every_checklist_row_id_is_free_for_its_own_criterion():
+    """ADR-0019: a criterion's id IS its checklist row's id, so no live checklist row may sit
+    under a `retired:` tombstone (that would make automating the row a duplicate)."""
+    rows = set(CHECKLIST_ROW.findall((REPO / "docs" / "checklist.md").read_text()))
+    reg = REPO / "examples" / "registers" / "invariants.yml"
+    text = reg.read_text()
+    spec = ids.SPECS["invariants"]
+    assert rows and not rows & set(ids.retired_in(text, spec))
+    missing = sorted(rows - set(ids.ids_in(text, spec)))
+    assert missing, "every row already has a criterion: pick rows another way"
+    # automating every row not yet in the register, under its own id, is not a duplicate,
+    # and the earlier uses (retired_legacy) stay accounted for
+    added = text + "".join(CRIT.format(id=i) for i in missing)
+    assert ids.duplicates(added, spec) == []
+    assert set(ids.retired_in(text, spec, "retired_legacy")) <= ids._known(added, spec)
+
+
+def test_a_legacy_tombstone_is_kept_by_check_lost_and_shares_its_id(tmp_path):
+    r, _ = _inv_repo(tmp_path)
+    path = r / "invariants.yml"
+    legacy = TOMB.replace("retired:", "retired_legacy:", 1)
+    # the earlier use of F-01 moves to retired_legacy while F-01's own criterion stays live
+    path.write_text(legacy.format(id="F-01") + "criteria:\n" + CRIT.format(id="F-01"))
+    path.write_text(path.read_text() + CRIT.format(id="X-02"))
+    assert run_tool(r, "check-dupes", "invariants.yml").returncode == 0
+    assert run_tool(r, "check-lost", "invariants.yml").returncode == 0
+    git(r, "commit", "-qam", "legacy F-01")
+    path.write_text("criteria:\n" + CRIT.format(id="X-02"))  # dropping both loses F-01
+    assert run_tool(r, "check-lost", "invariants.yml").returncode == 1
 
 
 def test_a_queue_or_any_unknown_file_is_not_a_register():

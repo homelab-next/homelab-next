@@ -26,7 +26,8 @@ reports:
           -> use ``homelabnext.notify`` (``Notifier`` + a ``Sender``)
   state   an ad-hoc JSON state file: a function that serialises JSON to a file (``json.dump``,
           or ``write_text``/``write`` of ``json.dumps(...)``) and either replaces it atomically
-          (``os.replace``/``os.rename``) or names it state (the written or opened path is an
+          (``os.replace``/``os.rename``, or ``Path.replace``/``Path.rename``: a ``.replace(p)``
+          or ``.rename(p)`` with one argument) or names it state (the written or opened path is an
           identifier or string such as ``state``, ``state_file``, ``run.state.json``)
           -> use ``homelabnext.state`` (``StateStore`` / ``KeyedState``)
   lake    a raw lake-query client: importing ``trino``, ``duckdb``, ``pyiceberg`` or ``sqlite3``,
@@ -177,6 +178,17 @@ def _is_json_write(call: ast.Call, aliases: dict[str, str]) -> bool:
     return False
 
 
+def _path_replace(call: ast.Call) -> bool:
+    """``tmp.replace(p)`` / ``tmp.rename(p)``: ``pathlib.Path``'s atomic rename.  One positional
+    argument and no keywords tells it from ``str.replace(old, new)``, which always has two."""
+    return (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr in ("replace", "rename")
+        and len(call.args) == 1
+        and not call.keywords
+    )
+
+
 def _names_state(node: ast.AST, docs: set[int]) -> bool:
     for n in ast.walk(node):
         text = (
@@ -249,7 +261,7 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
         writes = [c for c in calls if _is_json_write(c, aliases)]
         if not writes:
             continue
-        atomic = any(_dotted(c.func, aliases) in ATOMIC for c in calls)
+        atomic = any(_dotted(c.func, aliases) in ATOMIC or _path_replace(c) for c in calls)
         # "names a state file": the write's target, or a file the function opens, says state
         targets: list[ast.AST] = []
         for c in writes:

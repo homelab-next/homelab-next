@@ -87,10 +87,12 @@ def test_slow_criteria_have_room_to_finish():
 
 
 def test_retired_ids_are_checklist_conflicts_with_a_live_replacement():
+    # the early F-01..F-03 were checklist ids used wrongly: an earlier use (retired_legacy), so
+    # the checklist rows keep their ids for their own criteria (ADR-0019)
     reg = register()
     live = {c["id"] for c in reg["criteria"]}
-    assert set(reg["retired"]) == {"F-01", "F-02", "F-03"}
-    assert {t["replaced_by"] for t in reg["retired"].values()} <= live
+    assert set(reg["retired_legacy"]) == {"F-01", "F-02", "F-03"} and not reg["retired"]
+    assert {t["replaced_by"] for t in reg["retired_legacy"].values()} <= live
 
 
 # rows whose gate already runs in `make check`; each must be runnable from a checkout

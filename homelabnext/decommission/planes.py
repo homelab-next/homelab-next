@@ -321,17 +321,32 @@ def monitoring(t: Target, a: Adapters) -> Result:
     )
 
 
+def _secret_key_pattern(term: str) -> re.Pattern[str]:
+    """``app-core`` as a secret-name prefix: ``app_core`` or ``app_core_<word>``, never inside
+    another word (``myapp_core_token``) or a numbered sibling (``app_core_2_db_password``).
+    Names are compared with ``-`` and ``.`` folded to ``_``, the way secret variables spell
+    guest names."""
+    key = re.escape(_fold(term))
+    return re.compile(r"(?<![a-z0-9_])" + key + r"(?![a-z0-9]|_\d)")
+
+
+def _fold(s: str) -> str:
+    return s.lower().replace("-", "_").replace(".", "_")
+
+
 @plane("secret-names")
 def secret_names(t: Target, a: Adapters) -> Result:
-    """Secret-store variable NAMES only.  ``app-core`` also matches ``app_core_password``."""
+    """Secret-store variable NAMES only.  ``app-core`` (or an ``--alias``) also matches
+    ``app_core_password``, and is word-bounded like every other plane: the action is to
+    delete the entries, so a live sibling's secret must never be flagged."""
     if a.secrets is None:
         return _skip("secret-names", "no adapter configured")
     try:
         names = [str(n) for n in a.secrets.entries()]
     except Unreachable as exc:
         return _skip("secret-names", f"unreachable: {exc}")
-    keys = {t.name.lower().replace("-", "_")}
-    hits = [n for n in names if any(k in n.lower().replace("-", "_") for k in keys)]
+    pats = [_secret_key_pattern(k) for k in (t.name, *t.aliases) if k]
+    hits = [n for n in names if any(p.search(_fold(n)) for p in pats)]
     return _verdict("secret-names", hits, "no secret named for it", "secret name(s) remain")
 
 

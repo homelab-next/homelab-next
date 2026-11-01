@@ -2,8 +2,8 @@
 """The scope guard: ``in_scope(target) -> Decision`` and the decorator writer tools wear.
 
 Every reference a tool passes (logical id, bare name, FQDN, address, ``vmid:<n>``, a registered
-alias) is **resolved to one canonical logical id first**; the decision is made on the canonical
-target only.  A different spelling of an out-of-scope target therefore cannot slip past, and a
+alias, or a URL / ``host:port`` / ``user@host`` / one-address CIDR naming one of those) is
+**resolved to one canonical logical id first**; the decision is made on the canonical target only.  A different spelling of an out-of-scope target therefore cannot slip past, and a
 reference that does not resolve, or resolves to two different targets, is refused (fail closed)
 unless the policy says ``unknown: allow``.
 """
@@ -16,6 +16,7 @@ import inspect
 import ipaddress
 import re
 import socket
+import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -156,6 +157,51 @@ def _norm(ref: str) -> str:
     return canonical or text
 
 
+#: ``host:port`` with one colon; the host part is checked by :func:`_compound_host`
+_HOST_PORT = re.compile(r"^(?P<host>[^\s:@/\[\]]+):(?P<port>[0-9]{1,5})\Z")
+_BRACKETED = re.compile(r"^\[(?P<host>[^\]\s]+)\](?::[0-9]{1,5})?\Z")
+_ADDR_PREFIX = re.compile(r"^[0-9a-f:.]+/[0-9]{1,3}\Z")
+
+
+def _compound_host(ref: str) -> tuple[str, bool] | None:
+    """The one host a compound reference names, and whether it is unmistakably compound.
+
+    ``(host, True)`` for a URL (``scheme://[user@]host[:port]/path``), ``user@host``, ``[v6]`` / ``[v6]:port``,
+    a one-address CIDR (``a.b.c.d/32``, ``v6/128``) and ``host:port`` whose host is dotted or an
+    address; ``(host, False)`` for ``name:port`` (it may be a logical id such as ``vmid:180``,
+    so only a host that resolves counts); ``("", True)`` for a compound form with no single host
+    (a wider CIDR, a URL without a host); ``None`` for a bare name or address.
+    """
+    text = ref.strip()
+    if "://" in text:
+        try:
+            host = urllib.parse.urlsplit(text).hostname
+        except ValueError:
+            return "", True
+        return (host or ""), True
+    if "@" in text:
+        rest = text.rpartition("@")[2]
+        inner = _compound_host(rest)
+        return (inner[0] if inner is not None else rest), True
+    m = _BRACKETED.match(text)
+    if m:
+        return m["host"], True
+    if text.startswith("["):
+        return "", True
+    if _ADDR_PREFIX.match(text.lower()):
+        try:
+            net = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            return "", True
+        return (str(net.network_address) if net.num_addresses == 1 else ""), True
+    m = _HOST_PORT.match(text)
+    if m:
+        host = m["host"]
+        dotted = "." in host or _ip_spelling(host.lower())[0] is not None
+        return host, dotted
+    return None
+
+
 def _odd_address(ref: str) -> bool:
     """Whether ``ref`` is an IP address written in any but its canonical spelling."""
     return isinstance(ref, str) and _ip_spelling(ref.strip().lower().rstrip("."))[1]
@@ -195,6 +241,12 @@ class ScopeGuard:
             return None, "ambiguous-target"
         if hits:
             return next(iter(hits)), None
+        comp = _compound_host(ref)
+        if comp is not None and comp[0] and comp[0] != ref:
+            # a URL, host:port, user@host or one-address CIDR: decided on the host it names
+            canonical, why = self.resolve(comp[0])
+            if canonical is not None or why == "ambiguous-target":
+                return canonical, why
         if self.resolver is not None:
             try:
                 got = self.resolver.resolve(ref)
@@ -228,6 +280,18 @@ class ScopeGuard:
                     None,
                     "unknown-target",
                     "an address in a non-canonical or embedded spelling that does not resolve",
+                )
+            comp = _compound_host(ref) if why == "unknown-target" and isinstance(ref, str) else None
+            if comp is not None and comp[1]:
+                # a URL, host:port, user@host, bracketed or CIDR reference whose host names no
+                # target: refused whatever the policy says about unknowns, like an odd address
+                return Decision(
+                    False,
+                    ref,
+                    None,
+                    "unknown-target",
+                    "a compound reference (URL, host:port, user@host, CIDR) whose host does not "
+                    "resolve to one known target",
                 )
             if why == "unknown-target" and self.policy.unknown == "allow":
                 return Decision(

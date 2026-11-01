@@ -441,23 +441,26 @@ def sync_warnings(lessons, runbooks) -> list[str]:
     return out
 
 
-def _retired(data, live, id_rx: re.Pattern, problems: list[str]) -> dict:
+def _retired(data, live, id_rx: re.Pattern, problems: list[str], key: str = "retired") -> dict:
     """The invariants' optional top-level ``retired:`` mapping of tombstoned criterion ids (see
     registers.ids): {ID: {reason: why it was retired, replaced_by: live ID or omitted}}.  A
     tombstone may not name a live id (that is reuse) and may only point at an id that is live.
+
+    ``key="retired_legacy"`` reads the register's earlier, wrong uses of a checklist row's id
+    (ADR-0019): the same shape, but the id may also be live, since the row's criterion takes it.
     """
-    ret = data.get("retired") if isinstance(data, dict) else None
+    ret = data.get(key) if isinstance(data, dict) else None
     if ret is None:
         return {}
     if not isinstance(ret, dict):
-        problems.append("`retired` must be a mapping of id -> {reason, replaced_by}")
+        problems.append(f"`{key}` must be a mapping of id -> {{reason, replaced_by}}")
         return {}
     live = set(live)
     for k, v in ret.items():
-        who = f"retired {k}"
+        who = f"{key} {k}"
         if not id_rx.match(str(k)):
             problems.append(f"{who}: is not a criterion id")
-        if str(k) in live:
+        if str(k) in live and key == "retired":
             problems.append(f"{who}: is also a live entry (delete the tombstone to reuse it)")
         if not isinstance(v, dict):
             problems.append(f"{who}: must be a mapping with `reason` (and `replaced_by`)")
@@ -712,9 +715,11 @@ def validate_invariants(data) -> dict:
         else:
             letters.add(p["letter"])
     _dupes([str(e.get("id")) for e in items if isinstance(e, dict)], problems)
-    retired = _retired(
-        data, [str(e.get("id")) for e in items if isinstance(e, dict)], CRIT_ID, problems
-    )
+    live_ids = [str(e.get("id")) for e in items if isinstance(e, dict)]
+    retired = _retired(data, live_ids, CRIT_ID, problems)
+    legacy = _retired(data, live_ids, CRIT_ID, problems, key="retired_legacy")
+    for k in sorted(set(map(str, retired)) & set(map(str, legacy))):
+        problems.append(f"retired {k}: is tombstoned in both `retired` and `retired_legacy`")
     for e in items:
         if not isinstance(e, dict):
             problems.append(f"entry is not a mapping: {e!r}")
@@ -745,4 +750,9 @@ def validate_invariants(data) -> dict:
         _text(e, "remediation", problems, who)
     if problems:
         raise RegisterError("invariants", problems)
-    return {"pillars": pillars, "criteria": items, "retired": retired}
+    return {
+        "pillars": pillars,
+        "criteria": items,
+        "retired": retired,
+        "retired_legacy": legacy,
+    }

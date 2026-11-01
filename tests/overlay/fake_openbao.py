@@ -8,7 +8,8 @@ token), a KV v2 read (``GET /v1/<mount>/data/<name>``, needs a live token) and
 answers a KV v2 metadata read (``GET /v1/<mount>/metadata/<name>``) and a write
 (``POST /v1/<mount>/data/<name>``, honouring ``options.cas``) and the mount's description
 (``GET /v1/sys/internal/ui/mounts/<mount>``, KV version ``kv_version``); ``tokens`` are operator
-tokens that are live from the start, ``deleted`` names whose current version is soft-deleted.  With ``redirect_to`` set it
+tokens that are live from the start, ``deleted`` names whose current version is soft-deleted,
+``deletion_times`` a name's scheduled ``deletion_time`` (``delete_version_after``).  With ``redirect_to`` set it
 answers every request with a 307 to that origin instead, the way a hostile or misconfigured
 proxy would.  Every request is recorded as ``(method, path, X-Vault-Token)``.
 """
@@ -34,6 +35,7 @@ class FakeOpenBao:
         tokens: tuple[str, ...] = (),
         kv_version: str = "2",
         deleted: tuple[str, ...] = (),
+        deletion_times: dict[str, str] | None = None,
     ):
         self.values = values or {}  # "<mount>/<name>" -> {field: value}
         self.redirect_to = redirect_to
@@ -42,6 +44,7 @@ class FakeOpenBao:
         self.live: set[str] = set(tokens)
         self.kv_version = kv_version
         self.deleted = set(deleted)
+        self.deletion_times = dict(deletion_times or {})  # name -> scheduled deletion_time
         self.minted = 0
         fake = self
 
@@ -94,6 +97,7 @@ class FakeOpenBao:
                     if key not in fake.values and key not in fake.deleted:
                         return self._reply(404, {"errors": []})
                     gone = "2026-01-01T00:00:00Z" if key in fake.deleted else ""
+                    gone = fake.deletion_times.get(key, gone)
                     version = {"deletion_time": gone, "destroyed": False}
                     return self._reply(
                         200, {"data": {"current_version": 1, "versions": {"1": version}}}

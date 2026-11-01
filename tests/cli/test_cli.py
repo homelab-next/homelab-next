@@ -132,3 +132,22 @@ def test_interfaces_md_lists_every_subcommand_in_order():
     para = doc.split("### 2.2 Command line", 1)[1].split("`parity` is a library only", 1)[0]
     names = re.findall(r"`([a-z][a-z-]*)`", para.split("Current names", 1)[1])
     assert names == list(cli.COMMANDS)
+
+
+def test_a_missing_optional_dependency_is_named(monkeypatch, capsys):
+    def boom(_args):
+        raise ModuleNotFoundError("No module named 'yamlish'", name="yamlish")
+
+    monkeypatch.setitem(cli.COMMANDS, "boom", ("raise", boom))
+    assert cli.main(["boom"]) == 2
+    assert "missing optional dependency 'yamlish'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["homelabnext.nothing_here", "conformance.protocols", None])
+def test_a_missing_first_party_module_is_not_called_an_optional_dependency(monkeypatch, name):
+    def boom(_args):
+        raise ModuleNotFoundError("No module named ...", name=name)
+
+    monkeypatch.setitem(cli.COMMANDS, "boom", ("raise", boom))
+    with pytest.raises(ModuleNotFoundError):
+        cli.main(["boom"])

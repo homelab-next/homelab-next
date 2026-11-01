@@ -38,6 +38,8 @@ from ..model import iso
 from .config import FrontDoor
 
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$")
+#: the separator of the groups header (Authentik's ``X-Authentik-Groups``: ``|``)
+GROUPS_SEPARATOR = "|"
 
 
 class _Headers(Protocol):
@@ -85,7 +87,9 @@ def authorize(
         return Decision(False, reason="no identity from the forward-auth proxy")
     groups = _one(headers, front_door.groups_header) or ""
     need = front_door.viewer_group if group is None else group
-    if not need or need not in {g.strip() for g in re.split(r"[|,]", groups)}:
+    # ``|`` only, as the forward-auth proxy sends it: a ``,`` is part of a group name, so a
+    # group named ``staff,hub-viewers`` is never read as membership of ``hub-viewers``
+    if not need or need not in {g.strip() for g in groups.split(GROUPS_SEPARATOR)}:
         which = "viewer" if group is None else "required"
         return Decision(False, user=user, reason=f"identity is not in the {which} group")
     return Decision(True, user=user)
