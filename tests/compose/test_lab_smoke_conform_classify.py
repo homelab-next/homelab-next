@@ -12,7 +12,7 @@ import pytest
 
 SMOKE = Path(__file__).resolve().parents[2] / "compose" / "lab-in-a-box" / "smoke.sh"
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+pytestmark = pytest.mark.requires_tool("bash")
 
 
 def _function() -> str:
