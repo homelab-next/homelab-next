@@ -7,7 +7,8 @@ An agent does not get a writable store.  It hands back ``memory_updates`` in its
 them here, after validating them exactly as the report schema does.  Reads are scoped to the
 agent profile that owns the memory.
 
-* **One write path.**  :meth:`MemoryStore.apply_report` (a whole report, optionally checked
+* **One write path** (for this store: the broker's ``memory.write`` lane writes free-form note
+  files elsewhere and carries none of these guarantees).  :meth:`MemoryStore.apply_report` (a whole report, optionally checked
   against the pack it ran on with :func:`~homelabnext.agent.report.validate_report`) and
   :meth:`MemoryStore.apply_updates` are the only mutators.  A batch is all-or-nothing: one bad
   update refuses the whole report and nothing is stored.  There is no ``put``.
@@ -18,7 +19,8 @@ agent profile that owns the memory.
   profile's ``memory_scopes``.  A write or read in a scope the profile does not hold is refused,
   and so is a read of another profile's memory (``owner=``): two profiles that both list a scope
   named ``analyst`` still have two separate memories.  The profile must carry its ``digest`` and
-  match it, so widening ``memory_scopes`` on the dict in hand does not widen access.
+  match it.  That is internal consistency only: whoever holds the dict can re-digest it, so the
+  caller (platform code) passes a profile it checked with ``verify_profile(policy=, lock=)``.
 
 Backends only store bytes: :class:`InMemoryBackend` (tests, one process) and
 :class:`FileBackend` (one crash-safe, locked :class:`~homelabnext.state.StateStore` file keyed by

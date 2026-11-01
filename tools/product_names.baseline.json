@@ -1388,7 +1388,7 @@
    "wazuh": 24
   },
   "tests/detections/test_detections.py": {
-   "wazuh": 18
+   "wazuh": 15
   },
   "tests/fleet_units/specs/basic.yml": {
    "stackstorm": 1

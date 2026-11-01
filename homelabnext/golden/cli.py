@@ -275,7 +275,7 @@ def _live(
     registry: str, table: RoleTable, api_key: str | None = None
 ):  # pragma: no cover - needs a real model server
     from homelabnext.decide.evalset import EXAMPLES
-    from homelabnext.decide.spec import LABELS, load_spec
+    from homelabnext.decide.spec import load_spec
     from homelabnext.decide.tiers import ModelTier
     from homelabnext.registry.models import ModelClient
 
@@ -286,7 +286,7 @@ def _live(
         if t.model_role:
             client = ModelClient(resolver.resolve(t.model_role), api_key=api_key)
             tiers[t.name] = ModelTier(
-                t.name, lambda m, c=client: c.chat(m), spec.question_set, LABELS
+                t.name, lambda m, c=client: c.chat(m), spec.question_set, spec.answer_labels
             )
 
     def factory(role: str):

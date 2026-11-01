@@ -201,3 +201,12 @@ def test_the_doctrine_defaults_are_a_copy(lab):
     d = load_doctrine(lab)
     d.rules["activity_never_moe"]["enforce"] = "off"
     assert DEFAULT_RULES["activity_never_moe"]["enforce"] == "error"
+
+
+def test_a_tree_with_no_review_policy_is_an_error_not_unreviewed(lab):
+    """No ``review-policy.yml`` in or beside the root fails closed; ``policy=False`` opts out."""
+    from homelabnext.reviews import NO_POLICY
+
+    (lab.parent / "review-policy.yml").unlink()
+    assert any(NO_POLICY in e for e in validate(load_tree(lab)).errors)
+    assert not any(NO_POLICY in e for e in validate(load_tree(lab), policy=False).errors)

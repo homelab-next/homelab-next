@@ -336,6 +336,10 @@ TASK_KEYWORDS = {
 }  # fmt: skip
 SHELL_MODULES = {"shell", "raw"}  # both hand a string to a shell
 COMMAND_MODULES = {"command"}
+# modules whose free-form string goes through a shell (script) or is split like one (expect): a
+# templated value is allowed only when every expression ends in ``| quote``
+SHELL_STRING_MODULES = {"script": "cmd", "expect": "command"}
+QUOTE_LAST = re.compile(r"\|\s*quote\s*$")
 # keys whose templated value is evaluated but never echoed into task output
 NOT_LOGGED = {"name", "when", "changed_when", "failed_when", "until", "tags", "no_log"}
 JINJA = re.compile(r"{{(.*?)}}|{%(.*?)%}", re.S)
@@ -430,8 +434,38 @@ def _check_tasks(role: Path, findings: list[Finding]) -> None:
                             "RL012", label, "command with a templated free-form string; use argv"
                         )
                     )
+            elif short in SHELL_STRING_MODULES:
+                free = _free_form(task, module, SHELL_STRING_MODULES[short])
+                if free is not None and not _every_expression_quoted(free):
+                    findings.append(
+                        Finding(
+                            "RL012",
+                            label,
+                            f"{short} with a templated string whose every expression does not "
+                            "end in | quote",
+                        )
+                    )
             if _certs_off(task):
                 findings.append(Finding("RL013", label, "validate_certs is false"))
+
+
+def _free_form(task: dict, module: str, key: str) -> str | None:
+    """The task's free-form string for ``module``: the value itself, its ``key`` or args' ``key``."""
+    arg = task.get(module)
+    free = arg if isinstance(arg, str) else None
+    if isinstance(arg, dict) and isinstance(arg.get(key), str):
+        free = arg[key]
+    if isinstance(task.get("args"), dict) and isinstance(task["args"].get(key), str):
+        free = task["args"][key]
+    return free
+
+
+def _every_expression_quoted(text: str) -> bool:
+    """True when ``text`` has no Jinja statement and each ``{{ }}`` expression ends in ``quote``."""
+    for m in JINJA.finditer(text):
+        if m.group(2) is not None or not QUOTE_LAST.search(m.group(1).strip()):
+            return False
+    return True
 
 
 PRIVILEGED = re.compile(

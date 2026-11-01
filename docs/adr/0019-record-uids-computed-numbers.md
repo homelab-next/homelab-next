@@ -104,7 +104,11 @@ that row's id, so that "F-21 holds" means the same thing on the checklist, in th
 who writes the row, in the row's pillar (`F` foundation, `Q` quality gates ...); it is never
 allocated by the tooling, never derived from a position, and there is no hierarchy to re-parent.
 A retired id is tombstoned (`retired:` with `replaced_by`), never reused or renumbered, so the
-id is as stable as a uid, and unlike a uid a reader can act on it. Moving criteria to uids would
+id is as stable as a uid, and unlike a uid a reader can act on it. The one exception is an id
+the register used wrongly for a criterion that was not that checklist row's (the early F-01,
+F-02 and F-03): the id belongs to the row, so its tombstone goes under `retired_legacy:`,
+which `check-lost` still counts and `check-dupes` does not, and the row's own criterion takes
+the id when the row is automated. A live checklist row is never under `retired:`. Moving criteria to uids would
 make every one of those citations an alias lookup, or leave the checklist and the register keyed
 differently, which is the drift the shared key exists to prevent. The cost accepted: two
 branches that each add a checklist row can pick the same id; `check-dupes` fails on it (fatal,

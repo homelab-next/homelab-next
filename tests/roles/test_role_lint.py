@@ -260,6 +260,19 @@ def test_rl011_secret_reference_needs_no_log(tmp_path, tasks, bad):
         ("- name: c\n  ansible.builtin.command: uptime\n  changed_when: false\n", False),
         ('- name: c\n  ansible.builtin.command:\n    argv: [ls, "{{ demo_role_data_dir }}"]\n'
          "  changed_when: false\n", False),
+        # script runs its cmd through a shell, expect splits its command like one: a templated
+        # value passes only when every expression ends in | quote
+        ('- name: s\n  ansible.builtin.script: "x.py {{ demo_role_data_dir }}"\n', True),
+        ('- name: s\n  ansible.builtin.script:\n    cmd: "x.py {{ demo_role_data_dir }}"\n', True),
+        ('- name: s\n  ansible.builtin.script:\n    cmd: "x.py {{ demo_role_data_dir | quote }} '
+         '{{ demo_role_bridge }}"\n', True),
+        ('- name: s\n  ansible.builtin.script:\n    cmd: "x.py {% if demo_role_bridge %}-b{% endif %}"\n',
+         True),
+        ('- name: e\n  ansible.builtin.expect:\n    command: "passwd {{ demo_role_user }}"\n'
+         "    responses: {}\n", True),
+        ('- name: s\n  ansible.builtin.script:\n    cmd: "x.py {{ demo_role_data_dir | to_json | quote }}"\n',
+         False),
+        ("- name: s\n  ansible.builtin.script: x.py --check\n", False),
     ],
 )  # fmt: skip
 def test_rl012_shell_and_templated_free_form_command(tmp_path, tasks, bad):

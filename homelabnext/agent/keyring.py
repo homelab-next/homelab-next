@@ -9,7 +9,8 @@ only inputs are the sources that already decide access:
 * the service registry (``services.yml``): services, their capability aliases, MCP servers,
   hosts, zones and which zones may connect (``clients``, dependencies);
 * the compiled agent profiles (``agent/profile``): each agent's grants, tier, data tier and
-  memory scopes (digest-checked, so an edited profile is refused, not mapped);
+  memory scopes (digest-checked, so a profile edited without recomputing its digest is refused;
+  run ``verify_profile`` with the policy and lock to know each is the reviewed one);
 * optionally the broker manifest (``broker/manifest``): which profile may request which action
   at which tier, and who may approve.
 

@@ -13,6 +13,10 @@ Hard rules, enforced here and covered by tests:
 * A registry patch is applied to a COPY of the registry and the result must pass the service
   schema and the registry's semantic checks, or the patch is rejected.
 * Deterministic: order is (kind rank, id); the same inputs give a byte-identical plan.
+* Scoped: every entry of the resolved view carries the ``id`` and the ``hosts`` of the
+  customization that produced it (``[]`` = a scope that could not be expanded to hosts, so
+  wherever the role runs). Two customizations may claim one extension point on disjoint hosts,
+  so a resolved view keyed only by role would apply the later one fleet-wide.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from .universe import Universe
 
 __all__ = ["PLAN_SCHEMA", "build_plan", "write_plan"]
 
-PLAN_SCHEMA = "hnx.customization.plan/1"
+PLAN_SCHEMA = "hnx.customization.plan/2"
 
 
 def _sha(path: Path) -> str:
@@ -63,10 +67,10 @@ def build_plan(
     live = [c for c in active(items, enabled) if c.id not in bad_ids and not c.schema_errors]
     live.sort(key=sort_key)
 
-    role_vars: dict[str, dict[str, Any]] = {}
-    hooks: dict[str, dict[str, dict[str, list[str]]]] = {}
-    overlays: dict[str, dict[str, list[dict[str, str]]]] = {}
-    profiles: dict[str, dict[str, Any]] = {}
+    role_vars: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    hooks: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    overlays: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    profiles: dict[str, list[dict[str, Any]]] = {}
     registry_changes: list[dict[str, Any]] = []
     plan_items: list[dict[str, Any]] = []
     patched = copy.deepcopy(universe.registry) if universe.registry is not None else None
@@ -87,20 +91,28 @@ def build_plan(
         }
         if c.kind == "override":
             for var, val in sorted(a["vars"].items()):
-                role_vars.setdefault(a["role"], {})[var] = val
+                role_vars.setdefault(a["role"], {}).setdefault(var, []).append(
+                    {"id": c.id, "hosts": hosts, "value": val}
+                )
                 entry["changes"].append({"set_var": f"{a['role']}.{var}", "value": val})
         elif c.kind == "hook":
             f = str((c.base / a["tasks_file"]).relative_to(c.base))
             hooks.setdefault(a["role"], {}).setdefault(a["entry_point"], {}).setdefault(
                 a["phase"], []
-            ).append(f"{c.id}:{f}")
+            ).append({"id": c.id, "hosts": hosts, "tasks": f})
             entry["changes"].append(
                 {"hook": f"{a['role']}.{a['entry_point']}", "phase": a["phase"], "tasks": f}
             )
         elif c.kind == "patch-overlay":
             ov = c.base / a["overlay"]
             overlays.setdefault(a["role"], {}).setdefault(a["template"], []).append(
-                {"id": c.id, "mode": a["mode"], "overlay": a["overlay"], "sha256": _sha(ov)}
+                {
+                    "id": c.id,
+                    "hosts": hosts,
+                    "mode": a["mode"],
+                    "overlay": a["overlay"],
+                    "sha256": _sha(ov),
+                }
             )
             entry["changes"].append(
                 {
@@ -110,10 +122,14 @@ def build_plan(
                 }
             )
         elif c.kind == "profile":
-            p = profiles.setdefault(a["profile"], {"hosts": set(), "tasks": [], "vars": {}})
-            p["hosts"] |= set(hosts)
-            p["tasks"] += [{"id": c.id, "name": t["name"], "file": t["file"]} for t in a["tasks"]]
-            p["vars"].update(a.get("vars", {}))
+            profiles.setdefault(a["profile"], []).append(
+                {
+                    "id": c.id,
+                    "hosts": hosts,
+                    "tasks": [{"name": t["name"], "file": t["file"]} for t in a["tasks"]],
+                    "vars": dict(sorted((a.get("vars") or {}).items())),
+                }
+            )
             entry["changes"].append({"add_profile_tasks": a["profile"], "count": len(a["tasks"])})
         elif c.kind == "registry-patch":
             if patched is None:
@@ -170,9 +186,7 @@ def build_plan(
             "role_vars": {r: dict(sorted(v.items())) for r, v in sorted(role_vars.items())},
             "hooks": hooks,
             "template_overlays": overlays,
-            "profiles": {
-                n: {**p, "hosts": sorted(p["hosts"])} for n, p in sorted(profiles.items())
-            },
+            "profiles": dict(sorted(profiles.items())),
             "registry_changes": registry_changes,
         },
     }

@@ -221,3 +221,87 @@ def test_tokens_are_the_same_on_every_interpreter():
     toks, lines = dup.tokens_of(src, "exact")
     assert toks == ["x", "=", 'f"a{b!r:>{w}}c"', "+", 'f"""\n{d}\n"""', ";"]
     assert lines == [1, 1, 1, 1, 1, 3]
+
+
+# ---------------------------------------------------------------- --base: the baseline only shrinks
+
+
+def _commit(root: Path) -> str:
+    subprocess.run([*GIT, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*GIT, "commit", "-qm", "c"], cwd=root, check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _edit_baseline(root: Path, change) -> None:
+    doc = _baseline(root)
+    change(doc)
+    (root / dup.DEFAULT_BASELINE).write_text(json.dumps(doc))
+
+
+def _based(tmp_path):
+    root = _with_baseline(tmp_path, {"a.py": HELPER, "b.py": OTHER})
+    base = _commit(root)
+    _tree(tmp_path, {"c.py": "X = 1\n" + HELPER})  # a new copy of a.py's helper
+    return root, base
+
+
+def test_a_hand_edit_that_loosens_the_parameters_fails_against_the_base(tmp_path):
+    root, base = _based(tmp_path)
+
+    def loosen(doc):
+        doc["params"]["min_tokens"] = 100000
+        doc["clones"] = {}
+
+    _edit_baseline(root, loosen)
+    assert _run(root)[0] == 0  # alone, the committed baseline decides its own parameters
+    rc, log = _run(root, "--base", base)
+    assert rc == 1 and "differ from the base's" in log, log
+
+
+def test_a_hand_added_clone_entry_fails_against_the_base(tmp_path):
+    root, base = _based(tmp_path)
+    clones, total, _, _ = dup.scan(root, dup.DEFAULTS)
+    doc = dup.build_baseline(clones, total, dup.DEFAULTS, _baseline(root))  # no reason recorded
+    (root / dup.DEFAULT_BASELINE).write_text(json.dumps(doc))
+    assert _run(root)[0] == 0
+    rc, log = _run(root, "--base", base)
+    assert rc == 1 and "not in the base's baseline" in log and "c.py:3-14" in log, log
+
+
+def test_a_recorded_increase_passes_against_the_base_and_cannot_be_erased(tmp_path):
+    root, base = _based(tmp_path)
+    rc, log = _run(root, "--update-baseline", "--allow-increase", "vendored on purpose")
+    assert rc == 0, log
+    rc, log = _run(root, "--base", base)
+    assert rc == 0 and "vendored on purpose" in log, log
+    later = _commit(root)
+    _edit_baseline(root, lambda doc: doc.update(increases=[]))
+    rc, log = _run(root, "--base", later)
+    assert rc == 1 and "changed or removed" in log, log
+
+
+def test_a_shrinking_update_passes_against_the_base(tmp_path):
+    root = _with_baseline(tmp_path, {"a.py": HELPER, "b.py": HELPER})
+    base = _commit(root)
+    _tree(tmp_path, {"b.py": OTHER})
+    assert _run(root, "--update-baseline")[0] == 0
+    rc, log = _run(root, "--base", base)
+    assert rc == 0, log
+
+
+def test_ci_base_takes_the_push_s_previous_tip(tmp_path, monkeypatch):
+    root, base = _based(tmp_path)
+    _edit_baseline(root, lambda doc: doc["params"].update(min_tokens=100000))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("HNX_PUSH_BEFORE", base)
+    rc, log = _run(root, "--ci-base")
+    assert rc == 1 and f"base {base}" in log and "differ from the base's" in log, log
+
+
+@pytest.mark.parametrize("rev", ["", " ", "no-such-rev"])
+def test_an_unusable_base_is_a_usage_error(tmp_path, rev):
+    root, _ = _based(tmp_path)
+    rc, log = _run(root, "--base", rev)
+    assert rc == 2, log

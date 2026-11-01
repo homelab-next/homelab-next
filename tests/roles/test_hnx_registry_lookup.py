@@ -22,6 +22,9 @@ def lookup(tmp_path):
         "services:\n"
         "  query-core: {host: query.example.test, port: 8443, scheme: https}\n"
         "  bus-core: {host: bus.example.test, port: 4222, scheme: tcp}\n"
+        "  no-port: {host: x.example.test, scheme: udp}\n"
+        "  no-host: {port: 53}\n"
+        "  not-a-row: just text\n"
     )
     plugin = mod.LookupModule()
     return lambda terms, **kw: plugin.run(terms, {"hnx_registry_file": str(reg)}, **kw)
@@ -42,6 +45,12 @@ def test_url_host_and_port(lookup):
     [
         (["nope"], {}, "unknown service id 'nope'"),
         (["query-core"], {"field": "scheme"}, "unknown field 'scheme'"),
+        # a row missing what the field needs is refused by name, never a bare KeyError
+        (["no-port"], {}, "service 'no-port' has no port"),
+        (["no-port"], {"field": "port"}, "service 'no-port' has no port"),
+        (["no-host"], {"field": "host"}, "service 'no-host' has no host"),
+        (["no-host"], {}, "service 'no-host' has no host"),
+        (["not-a-row"], {}, "service 'not-a-row' is not a mapping"),
     ],
 )
 def test_refusals(lookup, terms, kwargs, message):

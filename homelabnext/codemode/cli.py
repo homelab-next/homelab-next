@@ -3,7 +3,7 @@
 ``hnx codemode mcp --index DIR --socket PATH``: the search and describe tools (stdio).
 
 Renders, for every profile the broker manifest grants actions to, ``<out>/<profile>/types.d.ts``,
-``stubs.pyi`` and ``search.json`` (:mod:`homelabnext.codemode.render`).  The defaults are the
+``stubs.pyi``, ``search.json`` and ``prelude.py`` (:mod:`homelabnext.codemode.render`, ``FILES``).  The defaults are the
 public example and its committed goldens, ``examples/broker/manifest.yml`` into
 ``examples/codemode/``, relative to the working directory (the checkout, as ``make gates`` and CI
 run it).  ``--check`` writes nothing and fails on any drift: a hand edit, a manifest or handler

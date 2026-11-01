@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# TEMPLATE (fictional): SSH user certificates from OpenBao's SSH secrets engine, people logging in
+# to OpenBao with OIDC against the identity provider. `hnx ssh-ca check lab/ssh-ca.yml` validates
+# it; `hnx ssh-ca render lab/ssh-ca.yml --format sh` prints the OpenBao writes (policies, SSH
+# roles, OIDC login roles) to run as an admin. docs/private-overlay.md, "SSH certificates".
+#
+# Hosts accept these certificates through ssh_hardening: the CA's public key in
+# ssh_hardening_trusted_user_ca_keys and, per local account, the principals below in
+# ssh_hardening_authorized_principals (for example {ansible: [hnx-deploy], admin: [hnx-admin]}).
+ssh_ca_version: 1
+ssh_mount: ssh
+oidc_mount: oidc
+oidc:
+  # the identity provider's client OpenBao logs in through (its id is the token's audience)
+  audience: hnx-secrets
+  redirect_uris: ["http://localhost:8250/oidc/callback"]
+  user_claim: preferred_username
+  groups_claim: groups
+  scopes: [openid]
+  login_ttl: 10m
+roles:
+  # the deploy job: signs a key it generates per job, with its AppRole token (attach the policy
+  # hnx-ssh-hnx-deploy to the AppRole); no terminal, no forwarding. The certificate must outlive
+  # the deploy run (a new SSH connection after it expires fails), so size ttl to the longest run.
+  # source_addresses: the range the deploy connects from (the tailnet range or the runner subnet)
+  - name: hnx-deploy
+    for: deploy
+    principals: [hnx-deploy]
+    ttl: 30m
+    max_ttl: 1h
+    extensions: []
+    source_addresses: ["198.51.100.0/24"]
+  # people in the identity provider's hnx-admins group: a working day, a terminal, no forwarding
+  - name: hnx-admin
+    for: human
+    principals: [hnx-admin]
+    groups: [hnx-admins]
+    ttl: 8h
+    max_ttl: 8h
+    extensions: [permit-pty]

@@ -598,6 +598,86 @@ def test_the_withheld_routes_cover_every_withheld_page():
     assert not any(withheld_route(r) for r in ("/", "/agents", "/activity", "/activity.csv"))
 
 
+def test_every_route_the_hub_serves_has_a_ceiling_by_its_tier():
+    """ADR-0033 decision 6: the hub's readers are its routes, each with a ceiling in code."""
+    from homelabnext.status import approvals
+    from homelabnext.status.agents.pages import SummaryPages
+    from homelabnext.status.maps import MAP_ROUTES, assets
+    from homelabnext.status.views import (
+        PAGE_PANELS,
+        PRIVATE_CEILING,
+        PUBLIC_CEILING,
+        RELEASED_ROUTES,
+        route_ceiling,
+    )
+
+    assert set(SummaryPages.ROUTES) <= set(RELEASED_ROUTES)
+    for panel, path in PAGE_PANELS.items():
+        want = PUBLIC_CEILING if panel in rel.VIEWS else PRIVATE_CEILING
+        assert route_ceiling(path) == want, panel
+    for path in (*MAP_ROUTES, assets.SCRIPT_ROUTE, approvals.PAGE, approvals.DECIDE,
+                 "/private/session", "/orchestration/job"):  # fmt: skip
+        assert route_ceiling(path) == PRIVATE_CEILING, path
+    for path in ("/", "/index.html", "/status.json", "/activity.csv", "/agents/session"):
+        assert route_ceiling(path) == PUBLIC_CEILING, path
+    for path in ("/agents-raw", "/agents/session/x", "/privatex", "/approvalsx", "/favicon.ico"):
+        assert route_ceiling(path) is None, path
+
+
+def test_a_route_a_site_serves_without_a_ceiling_is_not_served(served, monkeypatch):
+    """Regression: a page a site added was served whether or not any tier declared it.  Now a
+    route with no declared ceiling is 404, whatever a site would answer."""
+    real = AgentSite.handle
+
+    def handle(self, route, query, doc, client, headers):
+        if route == "/agents-raw":  # a new page that forgot the release
+            return 200, "text/plain; charset=utf-8", b"lab-host-7 private-project"
+        return real(self, route, query, doc, client, headers)
+
+    monkeypatch.setattr(AgentSite, "handle", handle)
+    base = served()
+    for headers in ({}, AUTHORIZED):
+        code, _, body = request(base, "/agents-raw", headers=headers)
+        assert (code, body) == (404, b"not found\n")
+    assert request(base, "/agents")[0] == 200
+
+
+def test_the_summary_pages_read_only_released_rows(store, clock):
+    """ADR-0033 decision 6: the filter is in the shared read path, not in each page.  The
+    summary pages hold the released reader and no store, so a new page cannot read a raw row."""
+    import ast
+    import inspect
+
+    from homelabnext.status.agents import pages
+
+    site = AgentSite(store, clock=clock)
+    assert not any(isinstance(v, ActivityStore) for v in vars(site.pages).values())
+    tree = ast.parse(inspect.getsource(pages.SummaryPages))
+    reads = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert not reads & {"store", "_store", "releases", "_releases"}, reads & {"store", "_store"}
+    public = site.public
+    rows = [*public.sessions("agents"), public.session("agents", "s-1"),
+            *public.events("activity", limit=None), public.event("activity", "ev-s-1-1"),
+            *public.events("agent-analytics", session="s-1", limit=None)]  # fmt: skip
+    text = json.dumps(rows)
+    assert all(rows) and not any(s in text for s in SECRETISH)
+    assert public.session("agents", "nope") is None and public.event("activity", "nope") is None
+
+
+def test_a_title_the_release_would_withhold_is_refused():
+    """A title the views schema accepts but the release's title check would publish as
+    'withheld' is a views check problem, never a silent placeholder."""
+    from homelabnext.status.views import ceiling_problems
+
+    doc = copy.deepcopy(FULL_VIEWS)
+    assert ceiling_problems(doc) == []
+    doc["menu"][0]["title"] = "Agents: activity"
+    doc["shell"]["title"] = "Ops/SOC"
+    problems = ceiling_problems(doc)
+    assert any(p.startswith("view overview: title 'Agents: activity'") for p in problems)
+    assert any(p.startswith("shell: title 'Ops/SOC'") for p in problems)
+
+
 def test_the_public_agent_pages_render_from_the_released_document(served):
     """Their shell (menu, title, the change link) comes from the released document only."""
     base = served()

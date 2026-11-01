@@ -8,8 +8,13 @@ Exit semantics for an ``observable`` command:
              This is neither a pass nor a fail; collapsing it into either is how a control
              turns decorative.
     timeout  error
+    signal   error (killed by a signal: a negative return code; the check did not finish)
 
-Overall runner exit: 1 if anything failed, else 100 if anything could not be measured, else 0.
+Overall runner exit: 1 if anything failed, else 100 if anything could not be measured, else 0,
+judged over the criteria this run executed (``--only`` carries the others' last results into
+the document without letting them decide the exit code).
+
+The command runs through ``Context.run`` (injectable, so tests never spawn real tools).
 
 An observable is a command line that is executed: the register file it comes from is trusted
 input (SECURITY.md, "Trusted inputs").
@@ -50,20 +55,16 @@ RED = (FAIL, ERROR)
 def _command_result(c: dict, ctx: Context):
     tmo = int(c.get("timeout") or DEFAULT_TIMEOUT)
     try:
-        p = subprocess.run(
-            ["bash", "-o", "pipefail", "-c", c["observable"]],
-            capture_output=True,
-            text=True,
-            timeout=tmo,
-            cwd=ctx.root,
-        )
+        rc, out = ctx.run(["bash", "-o", "pipefail", "-c", c["observable"]], tmo)
     except subprocess.TimeoutExpired:
         return ERROR, f"timeout after {tmo}s"
-    out = (p.stdout or "").strip() or (p.stderr or "").strip()
-    if p.returncode >= 100:
-        return ERROR, f"[exit {p.returncode}] " + (out or "check could not measure")
-    if p.returncode != 0:
-        return FAIL, f"[exit {p.returncode}] {out}".strip()
+    out = (out or "").strip()
+    if rc < 0:
+        return ERROR, f"[killed by signal {-rc}] " + (out or "check did not finish")
+    if rc >= 100:
+        return ERROR, f"[exit {rc}] " + (out or "check could not measure")
+    if rc != 0:
+        return FAIL, f"[exit {rc}] {out}".strip()
     rx = c.get("expect_regex")
     if rx and not re.search(rx, out):
         return FAIL, f"exit 0 but output does not match /{rx}/: {out}"
@@ -91,20 +92,24 @@ def run_criteria(
     clock: Callable[[], dt.datetime] | None = None,
     timer: Callable[[], float] = time.monotonic,
     previous: dict | None = None,
+    skip: set[str] | None = None,
 ) -> dict:
     """Execute runnable criteria and return a results document.
 
     ``previous`` (an earlier results doc) is merged for criteria not run (``only``) and supplies
     ``checked_at`` stability: a criterion's ``checked_at`` only advances when its status or
-    evidence changes, so an unchanged re-run produces an identical document.
+    evidence changes, so an unchanged re-run produces an identical document. A previous result
+    whose criterion is no longer in ``criteria`` is dropped, never carried forward. ``skip``
+    names criteria not to execute this run.
     """
     registry = registry or Registry()
     clock = clock or (lambda: dt.datetime.now(dt.UTC))
     now = clock().replace(microsecond=0).isoformat()
-    prev = dict((previous or {}).get("results", {}))
+    current = {c["id"] for c in criteria}
+    prev = {i: r for i, r in (previous or {}).get("results", {}).items() if i in current}
     results = dict(prev) if only else {}
     for c in criteria:
-        if only and c["id"] not in only:
+        if (only and c["id"] not in only) or (skip and c["id"] in skip):
             continue
         ev = c.get("evidence")
         if ev not in ("auto", "plugin"):
@@ -128,8 +133,11 @@ def run_criteria(
     return {"schema": RESULTS_SCHEMA, "last_run": now[:10], "results": results}
 
 
-def overall_exit(results_doc: dict) -> int:
-    sts = [r["status"] for r in results_doc["results"].values()]
+def overall_exit(results_doc: dict, ids: set[str] | None = None) -> int:
+    """The runner's exit code, over ``ids`` (the criteria this run executed) when given, else
+    over every result in the document."""
+    res = results_doc["results"]
+    sts = [r["status"] for i, r in res.items() if ids is None or i in ids]
     if FAIL in sts:
         return EXIT_FAIL
     return EXIT_COULD_NOT_MEASURE if ERROR in sts else EXIT_PASS
@@ -162,11 +170,11 @@ def save_state(path, prev: dict[str, str], results_doc: dict) -> None:
     for i, r in results_doc["results"].items():
         if r["status"] != SKIP:
             merged[i] = r["status"]
+    from homelabnext.state import atomic_write_text
+
     p = pathlib.Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
-    tmp.replace(p)
+    atomic_write_text(p, json.dumps(merged, indent=2, sort_keys=True) + "\n")
 
 
 def page_changes(

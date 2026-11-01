@@ -105,7 +105,7 @@ fixtures:
       table:cmdb.asset_owners:
         build-02: {team: platform, oncall_rota: platform-primary, tier: staging}
     model:
-      classify: {label: escalate, confidence: 0.55}
+      classify: {label: human, confidence: 0.0}
     expect:
       calls:
         - action: case.open

@@ -118,7 +118,10 @@ The compiler:
    ceiling allows it;
 4. refuses an `include:` rule that would seed knowledge from something the profile is not granted
    (`IncludeViolation`, see "Linked knowledge" below);
-5. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`);
+5. requires all four budgets to be integers within the ceiling's budget caps (`BudgetError`),
+   and writes `budget_mode` (`enforce` unless the spec says `warn`): a field for the runtime that
+   meters a run, which no code in this package reads yet, so a cap is a cap only where that
+   runtime enforces it;
 6. sorts and de-duplicates lists, so source order never changes the result;
 7. records `provenance`: each part's id, source and content digest, plus the digest of the
    normalised spec;
@@ -154,16 +157,20 @@ through allowlisted broker actions (G-04).
   and broker tier, and the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]) every MCP server (the
   union of its tools' classes: `ToolClasses.load` derives the table's `mcp` section), to capability
   classes (`read`, `record-write`, `exec`, `file-write`,
-  `egress`, `credential`) and lists the classes a reader may not hold (`reader_forbidden`: exec,
-  file-write, egress, credential). A grant with several classes counts as its worst. A grant the
+  `egress`, `send`, `credential`, `codemode`) and lists the classes a reader may not hold
+  (`reader_forbidden`: exec, file-write, egress, send, credential, codemode) and those only the
+  broker may hold (`broker_only`: exec, file-write, send, credential). A grant with several classes counts as its worst. A grant the
   table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
   server means adding a reviewed catalog record (the repository's own read-only server,
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
   table, whose `mcp` section is still derived from the catalog: a table with an `mcp:` section of
   its own is refused (it would class servers by hand and skip the catalog's status and data-tier
   rules), and so is one whose `reader_forbidden` or `broker_only` leaves out a class the packaged
-  table lists, or that classes one of the packaged table's capabilities or tiers without a class
-  the packaged table gives it (`cap:dns: [read]`): a table may forbid more, never less.
+  table lists, or that classes one of the packaged table's capabilities or tiers without a
+  `reader_forbidden` or `broker_only` class the packaged table gives it (`cap:dns: [read]`): a
+  table may forbid more, never less. Other classes may differ (`cap:records: [read]` for a
+  packaged `record-write` loads), which changes a grant's level in the access block but not what
+  the reader and broker rules allow.
 - **Grants name catalog ids.** For every profile and manifest, reader or not, the compiler
   (`CatalogViolation`), `verify_profile` and `hnx agent lint` refuse an MCP server the catalog
   does not hold, one whose status is not `active` or `deprecated` (an allowlist), one without a
@@ -178,6 +185,10 @@ through allowlisted broker actions (G-04).
   profile in the repository (specs, compiled `agent/profile`, the lean `platform/agent_profile`)
   and to every context manifest, where it *is* derivable: a manifest with an input section feeds
   untrusted content, so its `tools` obey the same rule. The lint fails when it finds no profile.
+  With `--policy` (as the G-03 and G-13 observables run it) the lint applies the policy's reader
+  pin and, for every profile the policy has an entry for, its attestations (`data_tier`,
+  `model_role`, `tlp_ceiling`, local-only and internet servers): `profile_problems` is the one
+  copy of those rules, shared by the lint, `verify_profile` and the client render.
 
 ### Actors act only on validated structured input (G-04)
 
@@ -230,16 +241,18 @@ one of them only through the broker:
   front: its record says `acts_via: broker` and is structurally that front, fixed in code (id
   `hnx-broker`, first-party `homelabnext/broker/mcp_tools.py`, exactly the tools that module
   registers, [[mcp]]), with the reviews its status needs for its current content. No other
-  record can claim `broker`. The one exception
-  is a **direct** server: its record says `acts_via: direct` with a `direct_reason` and carries a
-  current human `approve` review, and the ceiling policy's entry for the profile lists it in
-  `direct_mcp` (the policy owner's exception per profile and server, like `internet_mcp`; a spec's
-  own ceiling cannot make it, and without a policy no direct server passes). A review line is
-  text an author can write: the real control is a human's review of the pull request that adds
-  the record and the `direct_mcp` line (CODEOWNERS on the catalog, the ceiling policies and the
-  class table). The shipped catalog's direct servers (`ssh`, `shell`, `ansible`, `kubernetes`,
-  `vault`, `filesystem`, `git`, `github`, `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are
-  unreviewed drafts that no profile can hold.
+  record can claim `broker`. The one exception is a **direct** server: its record says `acts_via:
+  direct` with a `direct_reason` and carries a current human `approve` review, and the ceiling
+  policy's entry for the profile lists it in `direct_mcp` (the policy owner's exception per
+  profile and server, like `internet_mcp`; a spec's own ceiling cannot make it, and without a
+  policy no direct server passes). A review line is text an author can write: the real control is
+  a human's review of the pull request that adds the record and the `direct_mcp` line (CODEOWNERS
+  on the catalog, the ceiling policies and the class table), which `main`'s ruleset does not yet
+  require, so today that control is advisory
+  ([modules](modules.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
+  servers (`ssh`, `shell`, `ansible`, `kubernetes`, `vault`, `filesystem`, `git`, `github`,
+  `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are unreviewed drafts that no profile can
+  hold.
 - **Capabilities.** Judged failing closed: a capability the table does not class is refused, and
   the table classes every capability the registry, the conformance contracts, `capabilities.yml`
   and the module slots name. No acting capability but `cap:broker`: `cap:hypervisor`,
@@ -303,7 +316,10 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   length of a key.
   Documentation values (`example.org`, the RFC 5737 ranges, 555 numbers) **are**
   redacted: the screener cannot tell a fixture from real data. Version numbers, dates, UUIDs,
-  hashes and commit ids in prose, CVE and ATT&CK ids are not. Private, loopback, link-local and
+  hashes and commit ids in prose, CVE and ATT&CK ids are not. A dotted quad counts as a version
+  only right after `v`, `ver`, `version` or `OID` as whole words; after `@` (`root@`, `git@`,
+  URL userinfo), a comparison operator (`==`, `!=`, `>=`) or a word such as `server` it is an
+  address (the leak scanner's wider version context is not used here). Private, loopback, link-local and
   CGNAT addresses are redacted unless the manifest sets `screen: {redact_private_ips: false}`.
   Screening is on by default; `screen: {redact: false, reason: ...}` opts out, and the reason is
   required. The pack's `screen` block records the settings, the screened sections and counts per
@@ -338,7 +354,8 @@ manifest's `must_cite` sources are cited by an `ok` report.
 `start_session(manifest, inputs, profile, registry, runs_on=None, broker=None)` is how a session
 gets its pack: it renders the profile's **access block** and adds it as a required `stable`
 section named `access`, then calls `assemble_pack`. The block is derived from the compiled
-profile (digest-checked) and the registry, for the host the agent runs on (default: the host of
+profile (digest-checked for internal consistency; `verify_profile` with a lock pins the
+reviewed one) and the registry, for the host the agent runs on (default: the host of
 the registry's `agent-runtime` service):
 
 - who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
@@ -357,7 +374,11 @@ and threat vocabulary kept for external threats. Its single source is the packag
 `make check`), so every session pack carries the same text and the pack digest pins it.
 
 `access` and `terms` are reserved section names: a manifest that defines either is refused, so a
-manifest cannot replace or remove what the agent is told. The manifest's persona must be the profile's. Stable content is
+manifest cannot replace or remove what the agent is told. The manifest's persona must be the profile's,
+and `session_problems(manifest, profile)` must find nothing: a profile with
+`reads_untrusted: false` (an actor) is never given a `source: input` section (it receives a
+reader's validated output through a handoff, G-04), every manifest `tools` entry is an MCP server
+the profile is granted, and every manifest `memory_scopes` entry is one of the profile's. Stable content is
 never cut, so a block that does not fit `budget_chars` defers the pack. On the command line,
 `hnx agent pack MANIFEST --inputs F --profile P --registry R [--runs-on HOST] [--broker M]`.
 
@@ -481,7 +502,8 @@ running platform.
 
 ## Agent memory (M-09)
 
-`homelabnext.agent.memory.MemoryStore` is the only way to change an agent's memory, and it takes
+`homelabnext.agent.memory.MemoryStore` is the only way to change an agent's **structured**
+memory, the scoped, keyed facts this section describes, and it takes
 only the `memory_updates` of a `report_result` (`apply_report`, which validates the report and,
 given the pack, checks it with `validate_report`) or a list of them (`apply_updates`). Updates
 are validated exactly as inside a report, then applied all or nothing: `add` needs a value and a
@@ -492,10 +514,21 @@ profile's memory.
 Reads are scoped to the owner: `read(profile, scope)` returns that profile's own entries in one
 of its `memory_scopes`; `owner=` naming another profile is a cross-agent read and is refused
 (`MemoryAccessError`), and the same scope name on two profiles is two memories. Every call
-checks the profile's digest, so widening `memory_scopes` on a profile in hand gains nothing.
+checks the profile's digest, which catches a profile edited without recomputing it; it is not
+tamper protection, since anyone holding the dict can re-digest it (a changed `id` or wider
+`memory_scopes` then passes). The caller is platform code, not the model: load the profile with
+`verify_profile(..., policy=, lock=)` first, as `hnx mcp serve --scope-from-profile` does, to
+know it is the reviewed one.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
 
+
+Two stores are called memory, and only this one carries the M-09 guarantees. The broker's
+`memory.write` action (the `memory` lane of `examples/broker/manifest.yml`, [Broker](broker.md),
+[[broker]]) writes free-form per-agent note files under `<data-root>/memory/<profile>/`: no
+scopes, no keys, no retire, no schema. It is a scratch-notes lane, not a path into
+`MemoryStore`; whether to route it through `MemoryStore.apply_updates` or rename it is an open
+decision.
 ## Prompt templates (G-01)
 
 Every prompt the platform sends is a template under `homelabnext/agent/prompts/templates/`

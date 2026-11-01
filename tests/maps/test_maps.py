@@ -692,8 +692,11 @@ def test_render_writes_the_maps_to_the_private_out_only(tmp_path, capsys):
     assert main([*args, "--private-out", str(private)]) == 0
     assert sorted(p.name for p in out.iterdir()) == ["index.html", "status.json"]
     names = sorted(p.name for p in private.iterdir())
-    assert names == ["architecture.html", "dataflow.html", "links.html", "mcp-servers.html",
-                     "roadmap.html", "roster.html", "schedule.html", "topology.html"]  # fmt: skip
+    assert names == ["architecture.html", "dataflow.html", "index.html", "links.html",
+                     "mcp-servers.html", "roadmap.html", "roster.html", "schedule.html",
+                     "topology.html"]  # fmt: skip
+    home = (private / "index.html").read_text()  # what the maps' menu anchors link back to
+    assert 'id="view-overview"' in home and '<a href="topology.html">Topology</a>' in home
     index = (out / "index.html").read_text()
     assert "topology.html" not in index and "Topology" not in index
     assert '<a href="topology.html">Topology</a>' in (private / "roadmap.html").read_text()

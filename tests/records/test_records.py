@@ -212,6 +212,20 @@ def test_complete_is_all_or_nothing_when_a_related_item_vanished(rec, tree):
     assert rec.reader.list("inbox") == [req.name]  # untouched
 
 
+def test_complete_moves_nothing_when_a_later_item_would_collide(rec, tree):
+    first = _approved(tree, rec)
+    p2 = rec.propose(proposal(title="A second change to file"))
+    Decider(tree, decided_by="operator", clock=lambda: NOW).approve(p2.name)
+    req = rec.completion_request([first, p2.name], "done", agent="triage")
+    (tree / "decided/completed" / p2.name).write_text("already here\n")
+    with pytest.raises(FileExistsError, match=p2.name):
+        Decider(tree, decided_by="op").complete(req.name)
+    # nothing moved: the first item is still approved, the request still in the inbox
+    assert sorted(rec.reader.list("decided/approved")) == sorted([first, p2.name])
+    assert rec.reader.list("inbox") == [req.name]
+    assert not (tree / "decided/completed" / first).exists()
+
+
 def test_decider_guards(rec, tree):
     d = Decider(tree, decided_by="op", clock=lambda: NOW)
     p = rec.propose(proposal())

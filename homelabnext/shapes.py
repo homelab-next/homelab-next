@@ -33,6 +33,11 @@ EMAIL = r"[\w.+-]+@(?P<domain>(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b"
 VERSION_CONTEXT_RE = re.compile(
     r"(?i)(?:\bv|version\W{0,3}|ver\W{0,2}|[=<>~^!]=?\s*|@|oid\W{0,3})$"
 )
+# The screener's narrower version context: only a version or OID word right before the value.
+# "@" (user@host, git@host:, scheme://user@host), comparison operators (==, !=, >=) and a word
+# that merely ends in "ver" or "oid" (server, driver, avoid) are where addresses live in logs,
+# alerts and filters; a missed version costs a label, a missed address is a leak.
+SCREEN_VERSION_CONTEXT_RE = re.compile(r"(?i)(?:\bv|\bversion\W{0,3}|\bver\W{0,2}|\boid\W{0,3})$")
 
 
 #: the separators inside a name: a plain deny-list term matches across any run of them, or none

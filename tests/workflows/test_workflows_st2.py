@@ -495,6 +495,13 @@ def test_a_scheduled_pack_becomes_a_crontimer_rule():
         ("0 2 1 * *", {"minute": 0, "hour": 2, "day": 1}),
         ("0 2 * * 0", {"minute": 0, "hour": 2, "day_of_week": "sun"}),
         ("30 23 * 1-6 6,7", {"minute": 30, "hour": 23, "month": "1-6", "day_of_week": "sat,sun"}),
+        # ranges touching Sunday: on the scheduler's Monday-first week a range may not start at sun
+        ("0 6 * * 0-4", {"minute": 0, "hour": 6, "day_of_week": "sun,mon-thu"}),
+        ("0 6 * * 0-6", {"minute": 0, "hour": 6, "day_of_week": "sun,mon-sat"}),
+        ("0 6 * * 0-7", {"minute": 0, "hour": 6, "day_of_week": "mon-sun"}),
+        ("0 6 * * 0-1", {"minute": 0, "hour": 6, "day_of_week": "sun,mon"}),
+        ("0 6 * * 5-7", {"minute": 0, "hour": 6, "day_of_week": "fri-sun"}),
+        ("0 6 * * 3-3", {"minute": 0, "hour": 6, "day_of_week": "wed"}),
     ],
 )
 def test_cron_fields(cron, params):
@@ -1574,3 +1581,14 @@ def test_a02_skips_a_run_already_retried_and_keys_on_the_run():
     assert not st2_matches(rule, ev)
     got = st2_runtime.admit_event(pack=doc["pack"], trigger=doc["trigger"], event=ev, kv=KV())
     assert got["reason"] == "not-triggered"
+
+
+def test_the_controller_source_is_one_constant():
+    import inspect
+
+    from homelabnext.orchestration import CONTROLLER_SOURCE
+
+    # the bound check pins the producer the telemetry defaults to; two literals could drift apart
+    renderer = inspect.getmodule(render)
+    assert renderer.ORCHESTRATOR_SOURCE == CONTROLLER_SOURCE
+    assert CONTROLLER_SOURCE not in inspect.getsource(renderer)

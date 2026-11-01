@@ -71,7 +71,12 @@ manifest, the knowledge graph's capability readers, the build order and the chec
    names and fails on a console error or a CSP violation.
 8. **What the guest and registry models gained** (additive, frozen): guest 1.4 `status`
    (`planned | live | retired`, default `live`) and a one-line `description`; service 2.4 a
-   one-line `description`. Informational only: no generator reads them.
+   one-line `description`. A guest's `status` drives how the topology and dataflow maps grade it:
+   its cards, and every flow touching it, are drawn `planned` (dashed) or `retired`
+   (`homelabnext/status/maps/lab.py` `status_of`, decision 6). The descriptions are shown in
+   the map detail panels. The compute validation (`homelabnext/compute/validate.py`) also
+   treats a `retired` guest as filtering nothing and leaves it out of its model-runtime egress
+   and node-capacity checks.
 9. **Power is part of the topology** (added after review). The site model (1.1) lists its UPSes
    and the uplink chain (`edge`: internet, modem, router, ...); every router, switch, edge device,
    hypervisor and physical host says which UPS feeds it, or `none` with a reason, or takes the

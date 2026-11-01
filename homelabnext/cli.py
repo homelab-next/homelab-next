@@ -255,6 +255,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "list|check|plan|register lab/vendor customizations",
         lambda a: importlib.import_module("homelabnext.customization.cli").main(a),
     ),
+    "ssh-ca": (
+        "SSH user certificates from the secrets store: check (the spec) | render (its configuration "
+        "writes: policies, SSH roles, OIDC login roles)",
+        lambda a: importlib.import_module("homelabnext.sshca").main(a),
+    ),
 }
 
 
@@ -266,6 +271,11 @@ def _usage() -> str:
         "HomelabNext command line. Run `hnx COMMAND --help` for a command's options.\n\n"
         f"commands:\n{rows}\n"
     )
+
+
+#: top-level packages this project ships: a ModuleNotFoundError naming one is a bug to show
+#: with its traceback, not an optional dependency to install
+FIRST_PARTY = frozenset({"homelabnext", "conformance"})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -288,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         code = entry[1](rest)
     except ModuleNotFoundError as exc:
+        if (exc.name or "").partition(".")[0] in FIRST_PARTY or not exc.name:
+            raise  # a module of this project is missing: a packaging bug, never an extra
         print(
             f"hnx {cmd}: missing optional dependency {exc.name!r}; "
             "install the matching extra (see pyproject.toml)",

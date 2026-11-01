@@ -123,6 +123,19 @@ The standard for this already exists and the lab's threat-intel sources already 
    viewer's grant and the reader's ceiling. Network reachability (`public` or `lab only` on the
    links page, a public hostname, the front door) never raises a ceiling; only a grant does. In
    this ADR "ceiling" always means a TLP ceiling, never the ceiling policy.
+
+   *How the status hub and the notification channels meet this (clarified 2026-10-31).* The
+   hub's readers are its routes. Their ceilings are fixed per tier in code
+   (`homelabnext.status.views.route_ceiling`): a released route is `clear`, a private or withheld
+   one `red`, and `hnx status serve` answers `404` for a route with no declared ceiling, whatever
+   site offers it. A `views.yml` menu entry's `tlp` is a declaration checked against its tier,
+   not the control that gates the route. The summary pages read only through one released
+   reader (`homelabnext.status.agents.pages.PublicActivity`). A notification channel with no
+   `--notify-ceiling` is `red`: an accepted exception to "refused by validation", kept because
+   the channel's topic is the registry's own `notify` service, read by the lab's operators, and
+   no producer labels its messages yet (below `red`, every page would arrive as the withheld
+   notice). Declaring a lower ceiling is the operator's step; docs/modules.md lists the channel
+   as an egress point.
 7. **Release transforms are the only declassification.** A wider-audience product derived from
    labelled data (a health badge, a count, a redacted summary, a public rollup) is produced by a
    declared *release transform*: a named, reviewed piece of code or configuration that records
@@ -223,6 +236,13 @@ The standard for this already exists and the lab's threat-intel sources already 
 - The lake, the SIEM's event schema and the log pipeline each gain a `tlp` field and a one-off
   backfill. Until a table is backfilled its rows read `red` and are hidden from looser readers:
   the intended failure direction.
+- So far labels live on lake rows and source declarations, and are checked at the lake, the
+  status hub and the model gateway. The event envelope, records and tickets, broker action
+  results and the context store's documents carry none (decisions 4 and 11 name labels there
+  that no schema has yet), so everything assembled from them reads `red`, and a caller labelling
+  a model request from them can only label it `red`. Adding an optional label (absent reads
+  `red`) and `derived_from` to each is follow-up work; until then the bus, records and memory
+  stores stay "not yet" egress points (`docs/modules.md`).
 - Rollups for wider audiences come from the same data through release transforms, not a separate
   pipeline.
 - Cloud models see only `clear` by default, and never `amber` or above. Work that needs labelled

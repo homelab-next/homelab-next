@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext.status.render import _e, nav_html, shell_html
+from homelabnext.status.render import _e, nav_html, render_html, shell_html
 
 from . import assets
 
@@ -269,11 +269,16 @@ class MapSite:
         return 200, HTML, body
 
     def write(self, out: str | Path, doc: Mapping[str, Any]) -> list[Path]:
-        """Write every available map as ``<panel>.html`` into ``out``; returns the paths.  The
-        interactive ones are self-contained (script and style inline, pinned by hash)."""
+        """Write every available map as ``<panel>.html`` into ``out``, and the private
+        ``index.html`` their menus link back to (the full document, as the private tier sees it:
+        ``hnx status render --private-out``, which is never beside the public one); returns the
+        paths.  The interactive ones are self-contained (script and style inline, pinned by
+        hash)."""
         d = Path(out)
         d.mkdir(parents=True, exist_ok=True)
-        paths = []
+        home = d / "index.html"
+        home.write_text(render_html(doc, private=True), encoding="utf-8")
+        paths = [home]
         for panel in sorted(self.available()):
             p = d / f"{panel}.html"
             p.write_text(self.page(panel, doc, live=False), encoding="utf-8")

@@ -6,7 +6,8 @@ a tree, a registry and inventory files and reports each stale alias, registry ro
 variable, systemd unit and documentation mention. A clean scan is the gate for the swap's
 ``decommission-check`` step; any finding is a non-zero exit.
 
-Matching is word-bounded (``lake-core`` does not match ``lake-core-2``), case-insensitive for
+Matching is word-bounded (``lake-core`` does not match ``lake-core-2`` or ``lake-core.2``; one
+:func:`word_pattern`, shared with ``hnx decommission``), case-insensitive for
 names and aliases, case-sensitive for environment variables. History that legitimately names the
 retired product (changelog, ADRs, swap records) is excluded with allow globs, never silently.
 
@@ -86,9 +87,13 @@ class Finding:
         }
 
 
-def _pattern(term: str, case_sensitive: bool) -> re.Pattern[str]:
+def word_pattern(term: str, case_sensitive: bool = False) -> re.Pattern[str]:
+    """The one word-bounded match for a retired name, shared with ``hnx decommission``
+    (:func:`homelabnext.decommission.model.term_pattern`): ``app-core`` does not match
+    ``app-core-2``, ``x.app-core`` or a numbered sibling ``app-core.2``."""
     return re.compile(
-        r"(?<![\w.-])" + re.escape(term) + r"(?![\w-])", 0 if case_sensitive else re.IGNORECASE
+        r"(?<![\w.-])" + re.escape(term) + r"(?![\w-]|\.\d)",
+        0 if case_sensitive else re.IGNORECASE,
     )
 
 
@@ -140,7 +145,7 @@ def _scan_file(
         text = path.read_bytes().decode("utf-8", errors="replace")
     except OSError as exc:
         return [Finding("unscanned", rel, 0, f"cannot read: {type(exc).__name__}", "")]
-    pats = [(k, t, _pattern(t, cs)) for k, t, cs in retired.terms()]
+    pats = [(k, t, word_pattern(t, cs)) for k, t, cs in retired.terms()]
     found: list[Finding] = []
     for no, line in enumerate(text.splitlines(), 1):
         for kind, term, pat in pats:

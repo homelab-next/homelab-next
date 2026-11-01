@@ -7,14 +7,22 @@ exports show has been through its release transform, :mod:`homelabnext.status.re
 nothing else, for every viewer, the trusted front door's included):
 
 =================== ===============================================================================
-``/agents``          sessions with state badges; filter chips by runtime, state, project
+``/agents``          sessions with state badges; filter chips by runtime and state
 ``/agents/session``  one session (``?id=``): its facts and the timeline of its summary events
 ``/activity``        the event stream, newest first, refreshing every 15 s (a meta refresh, no
                      script); filters by runtime, outcome, kind, session; ``?event=`` opens the
                      inspector pane beside the list; ``/activity.csv`` and ``/activity.jsonl``
                      export the same selection (summary tier only)
-``/agent-analytics`` counts by outcome, runtime, model, tool and day
+``/agent-analytics`` counts by outcome, runtime, tool and day
 =================== ===============================================================================
+
+The summary pages read the store only through :class:`PublicActivity`, the shared read path
+(ADR-0033 decision 6): every session and event it returns has been through its release
+transform, so a page cannot forget the release.  :class:`SummaryPages` holds that reader and
+nothing else; the raw :class:`ActivityStore` stays with :class:`AgentSite` for the private tier
+and for ``status.json``'s ``agents`` block (the full document, released by
+:func:`homelabnext.status.views.public_status`).  A ``project`` or ``model`` filter or count
+appears only when the transform keeps that field (the shipped one withdraws both).
 
 Private tier (only through the trusted front door, :mod:`.auth`; every view is access-logged):
 ``/private/sessions``, ``/private/session?id=``, ``/private/event?id=``, ``/private/access-log``.
@@ -38,6 +46,7 @@ from typing import Any
 
 from .. import release
 from ..render import _e, nav_html, shell_html
+from ..views import AGENT_ROUTES
 from .auth import AccessLog, Decision, authorize
 from .config import FrontDoor
 from .model import DETAIL_TEXT, SESSION_STATES, state_counts
@@ -109,61 +118,85 @@ def _csv_cell(v: Any) -> str:
     return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
 
 
-class AgentSite:
-    """The agent routes of ``hnx status serve`` over one :class:`ActivityStore`."""
+class PublicActivity:
+    """The summary tier as a public reader may see it: the one read path of the summary pages and
+    exports (ADR-0033 decision 6).  Every session and event it returns has been through its
+    release transform for the named ``view`` (``agent-sessions-public``,
+    ``agent-events-public``), and a :class:`homelabnext.status.release.ReleaseError` is raised,
+    never a raw row returned, when the release fails."""
 
-    def __init__(
-        self,
-        store: ActivityStore,
-        *,
-        front_door: FrontDoor | None = None,
-        clock: Callable[[], float] = time.time,
-        releases: release.Releases | None = None,
-    ):
-        self.store = store
-        self.front_door = front_door
-        self.clock = clock
-        self.releases = release.registry() if releases is None else releases
-        self.access_log = AccessLog(front_door.access_log, clock=clock) if front_door else None
+    def __init__(self, store: ActivityStore, releases: release.Releases):
+        self._store = store
+        self._releases = releases
 
-    # ---------------------------------------------------------------- helpers
-    def authorize(self, client: str | None, headers: Any) -> Decision:
-        return authorize(self.front_door, client, headers)
+    def keeps(self, tid: str, view: str, field: str) -> bool:
+        return self._releases.transform(tid, view).keeps(field)
 
-    def summary(self, now: float | None = None) -> dict[str, Any]:
-        """``status.json``'s ``agents`` block: sessions (summary tier) and counts by state."""
-        sessions = self.store.sessions(now)
-        return {"sessions": sessions, "counts": state_counts(sessions)}
-
-    def _events(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        """Summary events as ``view`` may show them (their release transform)."""
-        return [self.releases.release(release.EVENTS_PUBLIC, view, e) for e in rows]
-
-    def _sessions_of(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-        """Derived sessions as ``view`` may show them (their release transform)."""
-        return [self.releases.release(release.SESSIONS_PUBLIC, view, s) for s in rows]
-
-    def _keeps(self, tid: str, view: str, field: str) -> bool:
-        return self.releases.transform(tid, view).keeps(field)
-
-    def _shown(self, tid: str, view: str, fields: str | tuple[str, ...]) -> bool:
+    def shown(self, tid: str, view: str, fields: str | tuple[str, ...]) -> bool:
         """Whether a column over ``fields`` has anything to show after the release."""
         names = (fields,) if isinstance(fields, str) else fields
-        return any(self._keeps(tid, view, f) for f in names)
+        return any(self.keeps(tid, view, f) for f in names)
 
-    def _page(self, doc, title, main, decision, *, refresh=False) -> Response:
-        nav = nav_html(doc, live=True, private=decision.allowed)
-        html = shell_html(doc, title, main, nav=nav, refresh_s=REFRESH_S if refresh else None)
-        return 200, HTML, html.encode("utf-8")
+    def _event_rows(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        return [self._releases.release(release.EVENTS_PUBLIC, view, e) for e in rows]
+
+    def _session_rows(self, view: str, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        return [self._releases.release(release.SESSIONS_PUBLIC, view, s) for s in rows]
+
+    def sessions(self, view: str) -> list[dict[str, Any]]:
+        """Every derived session, released for ``view``."""
+        return self._session_rows(view, self._store.sessions())
+
+    def session(self, view: str, session_id: str) -> dict[str, Any] | None:
+        """One derived session, released for ``view``; None when there is none."""
+        raw = [s for s in self._store.sessions() if s["session_id"] == session_id]
+        return self._session_rows(view, raw)[0] if raw else None
+
+    def events(
+        self,
+        view: str,
+        *,
+        session: str | None = None,
+        runtime: str | None = None,
+        outcome: str | None = None,
+        kind: str | None = None,
+        limit: int | None = STREAM_LIMIT,
+        oldest_first: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Summary events, newest first (``oldest_first`` for a timeline), filtered, released."""
+        rows = self._store.events(
+            session=session, runtime=runtime, outcome=outcome, kind=kind, limit=limit,
+            oldest_first=oldest_first,
+        )  # fmt: skip
+        return self._event_rows(view, rows)
+
+    def event(self, view: str, event_id: str) -> dict[str, Any] | None:
+        """One summary event, released for ``view``; None when there is none."""
+        raw = self._store.event(event_id)
+        return None if raw is None else self._event_rows(view, [raw])[0]
+
+
+def _shell(doc, title, main, decision, *, refresh=False) -> Response:
+    nav = nav_html(doc, live=True, private=decision.allowed)
+    html = shell_html(doc, title, main, nav=nav, refresh_s=REFRESH_S if refresh else None)
+    return 200, HTML, html.encode("utf-8")
+
+
+class SummaryPages:
+    """The summary pages and exports.  They hold a :class:`PublicActivity` and no store, so
+    every row they show has been released (fail closed: a failed release is ``500``)."""
+
+    #: the routes served here: released routes of the hub, declared once in views
+    ROUTES = AGENT_ROUTES
+
+    def __init__(self, public: PublicActivity):
+        self.public = public
 
     def handle(
-        self, route: str, query: str, doc: Mapping[str, Any], client: str | None, headers: Any
+        self, route: str, q: Mapping[str, str], doc: Mapping[str, Any], decision: Decision
     ) -> Response | None:
-        """The response for an agent route, or None when ``route`` is not one."""
-        q = _q(query)
-        if route.startswith("/private/") or route == "/private":
-            return self._private(route, q, doc, client, headers)
-        decision = self.authorize(client, headers)
+        if route not in self.ROUTES:
+            return None
         pages = {
             "/agents": self._sessions,
             "/agents/session": self._session,
@@ -179,9 +212,8 @@ class AgentSite:
             return 500, "text/plain; charset=utf-8", b"withdrawn: release failed\n"
         return None
 
-    # ---------------------------------------------------------------- summary pages
     def _sessions(self, q, doc, decision) -> Response:
-        all_rows = self._sessions_of("agents", self.store.sessions())
+        all_rows = self.public.sessions("agents")
         rows = [  # after the release: a filter on a withdrawn field matches nothing
             s
             for s in all_rows
@@ -222,28 +254,28 @@ class AgentSite:
             ("Last event", "last_seen", lambda s: _n(s.get("last_seen"))),
             ("Idle", "idle_s", lambda s: _e(f"{s['idle_s']}s") if s.get("idle_s") is not None else ""),
         ]  # fmt: skip
-        cols = [c for c in cols if self._shown(release.SESSIONS_PUBLIC, "agents", c[1])]
+        cols = [c for c in cols if self.public.shown(release.SESSIONS_PUBLIC, "agents", c[1])]
         table = _table(
             [h for h, _, _ in cols], [tuple(cell(s) for _, _, cell in cols) for s in rows]
         )
         main = f"<h2>Agents</h2><p>{head}</p>{chips}{table}"
-        return self._page(doc, "Agents", main, decision, refresh=True)
+        return _shell(doc, "Agents", main, decision, refresh=True)
 
     def _session(self, q, doc, decision) -> Response:
         sid = q.get("id")
-        events = self.store.events(session=sid, limit=None, oldest_first=True) if sid else []
-        if not events:
+        events = (
+            self.public.events("agents", session=sid, limit=None, oldest_first=True) if sid else []
+        )
+        s = self.public.session("agents", sid) if events else None
+        if not events or s is None:
             return 404, HTML, b"unknown session\n"
-        events = self._events("agents", events)
-        raw = next(r for r in self.store.sessions() if r["session_id"] == sid)
-        s = self._sessions_of("agents", [raw])[0]
         facts = "".join(
             f"<dt>{_e(k)}</dt><dd>{_n(s.get(k))}</dd>"
             for k in ("state", "runtime", "surface", "host", "project", "model", "agent",
                       "parent_session_id", "first_seen", "last_seen", "tool_calls", "denials",
                       "approvals", "errors", "tokens_in", "tokens_out", "cost_usd",
                       "stuck_after_s")
-            if self._keeps(release.SESSIONS_PUBLIC, "agents", k)
+            if self.public.keeps(release.SESSIONS_PUBLIC, "agents", k)
         )  # fmt: skip
         link = ""
         if decision.allowed:
@@ -264,10 +296,11 @@ class AgentSite:
             f'<div class="pane"><dl>{facts}</dl></div>{link}<h3>Timeline</h3>'
             + _table(("Time", "Kind", "Tool", "Outcome", "Tokens", "Event"), rows)
         )
-        return self._page(doc, f"Session {s['session_id']}", main, decision)
+        return _shell(doc, f"Session {s['session_id']}", main, decision)
 
-    def _selection(self, q: Mapping[str, str], limit: int) -> list[dict[str, Any]]:
-        return self.store.events(
+    def _selection(self, view: str, q: Mapping[str, str], limit: int) -> list[dict[str, Any]]:
+        return self.public.events(
+            view,
             session=q.get("session"),
             runtime=q.get("runtime"),
             outcome=q.get("outcome"),
@@ -276,8 +309,8 @@ class AgentSite:
         )
 
     def _activity(self, q, doc, decision) -> Response:
-        events = self._events("activity", self._selection(q, STREAM_LIMIT))
-        recent = self._events("activity", self.store.events(limit=2000))
+        events = self._selection("activity", q, STREAM_LIMIT)
+        recent = self.public.events("activity", limit=2000)
         chips = "".join(
             _chips("/activity", q, key, sorted({e[key] for e in recent if e.get(key)}))
             for key in ("runtime", "outcome", "kind")
@@ -305,9 +338,8 @@ class AgentSite:
             for e in events
         ]
         listing = _table(("Time", "Runtime", "Session", "Kind", "Tool", "Outcome", ""), rows)
-        selected = self.store.event(q["event"]) if q.get("event") else None
+        selected = self.public.event("activity", q["event"]) if q.get("event") else None
         if selected:
-            selected = self._events("activity", [selected])[0]
             dl = "".join(f"<dt>{_e(k)}</dt><dd>{_n(v)}</dd>" for k, v in sorted(selected.items()))
             extra = ""
             if decision.allowed and selected.get("has_detail"):
@@ -320,15 +352,17 @@ class AgentSite:
             f"<h2>Activity</h2>{chips}{exports}"
             f'<div class="split"><div>{listing}</div>{inspector}</div>'
         )
-        return self._page(doc, "Activity", main, decision, refresh=not selected)
+        return _shell(doc, "Activity", main, decision, refresh=not selected)
 
     def _export(self, fmt: str, q: Mapping[str, str]) -> Response:
         export = f"activity.{fmt}"
-        events = self._events(export, self._selection(q, EXPORT_LIMIT))
+        events = self._selection(export, q, EXPORT_LIMIT)
         if fmt == "jsonl":
             body = "".join(json.dumps(e, sort_keys=True) + "\n" for e in events)
             return 200, "application/x-ndjson; charset=utf-8", body.encode("utf-8")
-        columns = [c for c in _SUMMARY_COLUMNS if self._keeps(release.EVENTS_PUBLIC, export, c)]
+        columns = [
+            c for c in _SUMMARY_COLUMNS if self.public.keeps(release.EVENTS_PUBLIC, export, c)
+        ]
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\n")
         w.writerow(columns)
@@ -337,7 +371,7 @@ class AgentSite:
         return 200, "text/csv; charset=utf-8", buf.getvalue().encode("utf-8")
 
     def _analytics(self, q, doc, decision) -> Response:
-        events = self._events("agent-analytics", self.store.events(limit=None))
+        events = self.public.events("agent-analytics", limit=None)
 
         def counts(title: str, key: Callable[[Mapping[str, Any]], Any], top: int = 25) -> str:
             c = Counter(k for k in map(key, events) if k)
@@ -352,7 +386,7 @@ class AgentSite:
             (_e(d), *(_e(days[d][o]) for o in outcomes), _e(sum(days[d].values())))
             for d in sorted(days, reverse=True)[:30]
         ]
-        sessions = self._sessions_of("agent-analytics", self.store.sessions())
+        sessions = self.public.sessions("agent-analytics")
         st = state_counts(sessions)
         by = [("By outcome", "outcome"), ("By runtime", "runtime"), ("By model", "model"),
               ("By tool", "tool")]  # fmt: skip
@@ -364,12 +398,54 @@ class AgentSite:
             + "".join(
                 counts(title, lambda e, k=k: e.get(k))
                 for title, k in by
-                if self._keeps(release.EVENTS_PUBLIC, "agent-analytics", k)
+                if self.public.keeps(release.EVENTS_PUBLIC, "agent-analytics", k)
             )
             + "<h3>By day</h3>"
             + _table(("Day", *outcomes, "Total"), day_rows)
         )
-        return self._page(doc, "Agent analytics", main, decision)
+        return _shell(doc, "Agent analytics", main, decision)
+
+
+class AgentSite:
+    """The agent routes of ``hnx status serve`` over one :class:`ActivityStore`: the summary
+    pages through :class:`SummaryPages` (released rows only), the private tier over the store."""
+
+    def __init__(
+        self,
+        store: ActivityStore,
+        *,
+        front_door: FrontDoor | None = None,
+        clock: Callable[[], float] = time.time,
+        releases: release.Releases | None = None,
+    ):
+        self.store = store  # raw rows: the private tier and summary() only
+        self.front_door = front_door
+        self.clock = clock
+        self.releases = release.registry() if releases is None else releases
+        self.public = PublicActivity(store, self.releases)
+        self.pages = SummaryPages(self.public)
+        self.access_log = AccessLog(front_door.access_log, clock=clock) if front_door else None
+
+    def authorize(self, client: str | None, headers: Any) -> Decision:
+        return authorize(self.front_door, client, headers)
+
+    def summary(self, now: float | None = None) -> dict[str, Any]:
+        """``status.json``'s ``agents`` block: sessions (summary tier) and counts by state.  The
+        full document's, which :func:`homelabnext.status.views.public_status` releases."""
+        sessions = self.store.sessions(now)
+        return {"sessions": sessions, "counts": state_counts(sessions)}
+
+    def handle(
+        self, route: str, query: str, doc: Mapping[str, Any], client: str | None, headers: Any
+    ) -> Response | None:
+        """The response for an agent route, or None when ``route`` is not one."""
+        q = _q(query)
+        if route.startswith("/private/") or route == "/private":
+            return self._private(route, q, doc, client, headers)
+        return self.pages.handle(route, q, doc, self.authorize(client, headers))
+
+    def _page(self, doc, title, main, decision, *, refresh=False) -> Response:
+        return _shell(doc, title, main, decision, refresh=refresh)
 
     # ---------------------------------------------------------------- private tier
     def _private(self, route, q, doc, client, headers) -> Response:

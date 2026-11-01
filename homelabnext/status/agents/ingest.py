@@ -61,7 +61,7 @@ from homelabnext._http import content_length, is_loopback
 
 from ..serve import LOOPBACK, LOOPBACK_NAMES, BoundedHTTPServer, host_allowed
 from .config import IngestSettings, Sender
-from .store import ActivityError, ActivityStore
+from .store import ActivityError, ActivityOwnershipError, ActivityStore
 
 PATH = "/ingest/agent-activity"
 #: seconds a connection may take to deliver its request; connections served at once
@@ -315,8 +315,12 @@ def make_ingest_server(
             if not sender.detail:  # its details are dropped here, so none exists for these
                 summaries = [{**s, "has_detail": False} if s.get("has_detail") else s
                              for s in summaries]  # fmt: skip
-            try:
-                res = store.add(summaries, details, via=f"push:{sender.name}")
+            try:  # ownership again, inside the write: a racing batch cannot take a session
+                res = store.add(summaries, details, via=f"push:{sender.name}", owner=True)
+            except ActivityOwnershipError as exc:
+                text = "; ".join(exc.problems[:5]).replace("\r", "\\r").replace("\n", "\\n")
+                _log.warning("agent ingest refused sender %s: %s", sender.name, text)
+                return self._deny(403, "refused", exc.problems)
             except ActivityError as exc:
                 return self._deny(422, "refused", exc.problems)
             if publish is not None and res.accepted:

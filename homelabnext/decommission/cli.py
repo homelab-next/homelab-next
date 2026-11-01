@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx decommission check|plan NAME``.
 
-Exit codes: 0 clean, 1 remnants (or nothing could be measured, or the positive control came back
-clean), 2 usage error.
+Exit codes: 0 clean, 1 remnants (or, with ``--strict``, REVIEW/SKIP left; or the positive control
+came back clean), 2 usage error, 100 nothing could be measured (UNMEASURED).
 """
 
 from __future__ import annotations

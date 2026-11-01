@@ -239,9 +239,10 @@ only the sweep's own expiry intents (other pending intents wait for `hnx strateg
 default LTIOV is `rfi_default_ltiov_days` (30) after the intent.
 
 The review policy is `review-policy.yml` in or beside the tree unless `--policy FILE` names one.
-`hnx strategy decide` and `rfis --sweep` fail closed without one: a misplaced private policy would
-otherwise waive every tier and let a human-approve transition apply unreviewed (`--no-policy`
-decides without tiers, on purpose). `hnx strategy check` warns that it checks no review tier.
+`hnx strategy check`, `decide` and `rfis --sweep` fail closed without one (exit 1, naming the
+absence: `homelabnext.reviews.NO_POLICY`): a misplaced private policy would otherwise waive every
+tier and let a human-approve transition apply unreviewed. `--no-policy`, also spelled
+`--no-review-policy`, checks and decides without tiers, on purpose, for a local experiment.
 
 ## The graph and the hub
 

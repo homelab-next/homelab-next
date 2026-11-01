@@ -21,6 +21,6 @@ firewall_rules:
     - {name: dns-tcp-data, proto: tcp, ports: "53", source: "zone:data"}
     - {name: dns-udp-edge, proto: udp, ports: "53", source: "zone:edge"}
     - {name: dns-tcp-edge, proto: tcp, ports: "53", source: "zone:edge"}
-capability: cap:context
+capability: cap:dns
 tags: [prod]
 owners: {primary: platform-team}

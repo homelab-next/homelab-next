@@ -599,7 +599,7 @@ def run_test_step(
     return r
 
 
-needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+needs_bash = pytest.mark.requires_tool("bash")
 
 
 @needs_bash

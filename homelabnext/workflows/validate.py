@@ -20,8 +20,10 @@ Rules (each problem is reported as ``<path>: <rule>: <detail>``):
                          step before its first model step (R-03).
 ``model-input``          every model step reads the output of at least one earlier enrich step:
                          the model sees enriched data, not only the raw event (R-03).
-``risky-params``         a risky action takes no parameter from a prompt step's free-text output;
-                         what it acts on comes from the event or a deterministic step.
+``risky-params``         a risky action takes no parameter from a prompt step's free-text output,
+                         directly or through an enrich step that read it (``extract-iocs``
+                         over a model reply is still the model's text): what it acts on comes
+                         from the event or a deterministic step over event data.
 ``fixture``              each fixture event is a valid event of its type; the fixture gives a
                          model output for every model step that runs and no stale ones, and no
                          approval for a request the run never makes (R-07).
@@ -33,13 +35,19 @@ Rules (each problem is reported as ``<path>: <rule>: <detail>``):
                          action, and the same run with the action's payload altered after
                          approval does not execute it (R-04).
 ``deploy``               the deploy manifest is valid and tracked; every pin names a pack that
-                         validates cleanly, once, with exactly that pack's digest (R-01).
+                         validates cleanly, once, with exactly that pack's digest (R-01), and
+                         that can run (:func:`deployable_problems`): every broker action it calls
+                         has its handler in the tree, pinned by a ``<handler>.handler.json``,
+                         and an event-triggered pack pins its producer (``$event.source``
+                         ``equals`` one logical id).  The orchestrator adapter's render refuses
+                         the same two, with its own handler and producer checks.
 
 Exit codes: 0 clean, 1 a rule failed, 2 bad input, 100 the packs could not be enumerated (no git).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,11 +66,13 @@ from .pack import (
 )
 from .runner import (
     MODEL_KINDS,
+    SCHEDULE_EVENT,
     BrokerExecutor,
     ExecutorFactory,
     RunResult,
     action_entry,
     is_risky,
+    pinned_sources,
     ref_root,
     refs_in,
     run_fixture,
@@ -90,6 +100,9 @@ class Universe:
     root: Path
     spec_labels: dict[str, tuple[str, ...]] = field(default_factory=dict)
     templates: dict[str, Any] = field(default_factory=dict)  # id -> PromptTemplate
+    #: spec ids git does not track, and tracked specs that do not parse: named, never answered
+    untracked_specs: set[str] = field(default_factory=set)
+    broken_specs: set[str] = field(default_factory=set)
     _manifests: dict[str, tuple[Any, list[str]]] = field(default_factory=dict)
 
     def manifest(self, rel: str) -> tuple[Any, list[str]]:
@@ -110,8 +123,9 @@ class Universe:
 
 
 def load_universe(root: Path) -> Universe:
-    """Decision specs git tracks (or has untracked; ``hnx decide lint`` flags those) and the
-    shipped prompt templates."""
+    """Decision specs git tracks and the shipped prompt templates.  An untracked spec, or a
+    tracked one that does not parse, is not one a pack may name; their ids are kept so the
+    ``spec`` problem can say which (``hnx decide lint`` reports the parse errors)."""
     from homelabnext.agent.template import TemplateError, load_templates
     from homelabnext.decide.lint import LintError
     from homelabnext.decide.lint import discover as discover_specs
@@ -124,11 +138,19 @@ def load_universe(root: Path) -> Universe:
     except LintError as exc:
         raise WorkflowError(str(exc), exc.code) from exc
     for f in [*tracked, *untracked]:
-        try:
-            spec = parse_spec(load_spec_doc(f))
-        except (SpecError, Exception):  # an invalid spec is decide lint's finding, not ours
+        doc = load_spec_doc(f)
+        sid = doc.get("id") if isinstance(doc, Mapping) else None
+        if f not in tracked:
+            if isinstance(sid, str):
+                uni.untracked_specs.add(sid)
             continue
-        uni.spec_labels[spec.id] = tuple(dict.fromkeys(t for _, t in spec.decision_table))
+        try:
+            spec = parse_spec(doc)
+        except (SpecError, Exception):  # an invalid spec is decide lint's finding, not ours
+            if isinstance(sid, str):
+                uni.broken_specs.add(sid)
+            continue
+        uni.spec_labels[spec.id] = spec.verdicts
     try:
         uni.templates = {t.id: t for t in load_templates()}
     except TemplateError as exc:
@@ -168,6 +190,7 @@ def check_pack(
 def _steps(doc, steps, manifest, uni: Universe) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     seen: dict[str, str] = {}  # id -> kind of every earlier step
+    tainted: set[str] = set()  # earlier steps whose output carries a prompt step's free text
     for i, step in enumerate(steps):
         sid, kind = step["id"], step["kind"]
         where = f"steps[{i}] {sid}"
@@ -177,12 +200,29 @@ def _steps(doc, steps, manifest, uni: Universe) -> list[tuple[str, str]]:
             root, target = ref_root(ref)
             if root == "steps" and target not in seen:
                 out.append(("ref", f"{where}: {ref!r} names no earlier step"))
+            elif not root:
+                out.append(
+                    (
+                        "ref",
+                        f"{where}: {ref!r} reads neither $event nor $steps.<id> (it would "
+                        "resolve to null; write a literal $ as $$)",
+                    )
+                )
         if kind == "decide" and step["spec"] not in uni.spec_labels:
-            out.append(("spec", f"{where}: no decision spec {step['spec']!r} in git"))
+            sid_ = step["spec"]
+            if sid_ in uni.broken_specs:
+                why = f"decision spec {sid_!r} does not parse (see hnx decide lint)"
+            elif sid_ in uni.untracked_specs:
+                why = f"decision spec {sid_!r} is not tracked by git"
+            else:
+                why = f"no decision spec {sid_!r} in git"
+            out.append(("spec", f"{where}: {why}"))
         if kind == "prompt":
             out += _slots(where, step, uni)
         if kind == "action" and manifest is not None:
-            out += _action(where, doc, step, manifest, seen, steps)
+            out += _action(where, doc, step, manifest, tainted)
+        if kind == "prompt" or (kind == "enrich" and _reads_tainted(step, tainted)):
+            tainted.add(sid)
         seen[sid] = kind
     return out
 
@@ -210,7 +250,14 @@ def _slots(where, step, uni: Universe) -> list[tuple[str, str]]:
     return out
 
 
-def _action(where, doc, step, manifest, seen, steps) -> list[tuple[str, str]]:
+def _reads_tainted(step, tainted: set[str]) -> bool:
+    """An enrich step's output derives from what it reads (``from``/``key``/``input``); a ``when``
+    only gates whether it runs, so it does not carry text into the output."""
+    refs = [r for k in ("from", "key", "input") if k in step for r in refs_in(step[k])]
+    return any(ref_root(r) == ("steps", t) for r in refs for t in tainted)
+
+
+def _action(where, doc, step, manifest, tainted: set[str]) -> list[tuple[str, str]]:
     entry = action_entry(manifest, step["action"])
     if entry is None:
         return [("action", f"{where}: {step['action']!r} is not in {doc['broker_manifest']}")]
@@ -236,12 +283,13 @@ def _action(where, doc, step, manifest, seen, steps) -> list[tuple[str, str]]:
     if is_risky(manifest, step["action"]):
         for ref in refs_in(step["params"]):
             root, target = ref_root(ref)
-            if root == "steps" and seen.get(target) == "prompt":
+            if root == "steps" and target in tainted:
                 out.append(
                     (
                         "risky-params",
-                        f"{where}: risky action {step['action']!r} takes {ref!r} from a "
-                        "prompt step's free text; take it from the event or an enrich step",
+                        f"{where}: risky action {step['action']!r} takes {ref!r}, which carries "
+                        "a prompt step's free text; take it from the event or an enrich step "
+                        "over event data",
                     )
                 )
     return out
@@ -434,11 +482,51 @@ def validate_repo(
     dpath = deploy if deploy is not None else base / DEFAULT_DEPLOY
     # explicit paths validate a subset: the default deploy manifest pins the whole tree
     if deploy is not None or (not paths_ and dpath.is_file()):
-        rep.problems += _deploy(dpath, base, rep)
+        rep.problems += _deploy(dpath, base, rep, uni)
     return rep
 
 
-def _deploy(path: Path, base: Path, rep: Report) -> list[Problem]:
+def handler_problem(root: Path, manifest_rel: str, handler: str) -> str | None:
+    """Why ``handler`` (relative to the manifest's directory) is not in the tree, pinned: the file
+    and a ``<stem>.handler.json`` beside it whose ``handler_digest`` is the file's."""
+    from homelabnext.broker.execute import file_digest
+
+    base = (root / manifest_rel).parent
+    path = base / handler
+    if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+        return f"handler {handler} is not in the tree"
+    doc_path = path.with_name(path.name.rsplit(".", 1)[0] + ".handler.json")
+    try:
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"handler {handler} has no handler document {doc_path.name}"
+    if not isinstance(doc, Mapping) or doc.get("handler") != handler:
+        return f"{doc_path.name} does not name {handler}"
+    if doc.get("handler_digest") != file_digest(path):
+        return f"{doc_path.name}: handler_digest is not the digest of {handler}"
+    return None
+
+
+def deployable_problems(root: Path, doc: Mapping[str, Any], manifest: Any) -> list[str]:
+    """Why a validated pack cannot be deployed (empty = it can): an action whose handler is not
+    in the tree pinned (:func:`handler_problem`), or an event trigger that does not pin its
+    producer, so any service emitting the event type would start it.  A scheduled pack's
+    producer is the schedule (``$event.data.schedule``), checked where schedules are bound."""
+    out: list[str] = []
+    trig = doc["trigger"]
+    if trig["event"] != SCHEDULE_EVENT and not pinned_sources(trig):
+        out.append("the trigger does not pin its producer ($event.source equals one logical id)")
+    if manifest is None:
+        return [*out, f"broker manifest {doc['broker_manifest']} does not load"]
+    for s in doc["steps"]:
+        entry = action_entry(manifest, s["action"]) if s["kind"] == "action" else None
+        why = entry and handler_problem(root, doc["broker_manifest"], entry["handler"])
+        if why:
+            out.append(f"step {s['id']} ({s['action']}): {why}")
+    return out
+
+
+def _deploy(path: Path, base: Path, rep: Report, uni: Universe) -> list[Problem]:
     rel = _rel(path, base)
     if not path.is_file():
         return [Problem(rel, "deploy", "no such deploy manifest")]
@@ -471,4 +559,9 @@ def _deploy(path: Path, base: Path, rep: Report) -> list[Problem]:
             )
         elif name not in rep.clean:
             out.append(Problem(rel, "deploy", f"{name}: pinned, but {where} does not validate"))
+        else:
+            doc_ = load_doc(base / where)
+            manifest = uni.manifest(doc_["broker_manifest"])[0]
+            for why in deployable_problems(base, doc_, manifest):
+                out.append(Problem(rel, "deploy", f"{name}: pinned, but cannot run: {why}"))
     return out

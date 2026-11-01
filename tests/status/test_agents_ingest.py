@@ -256,6 +256,39 @@ def test_a_sender_cannot_write_into_another_senders_or_a_local_session(owned):
     assert post_json(base, {"detail": [detail(1, prompt="mine")]}, TOKEN)[0] == 200  # the owner
 
 
+def test_ownership_is_checked_again_inside_the_write(owned, monkeypatch):
+    """Regression: the ownership check ran in its own read, before the write.  A batch from
+    another sender that lands between the two took the new session for both senders."""
+    from homelabnext.status.agents import ingest as ingest_mod
+
+    base, store = owned
+    real = ingest_mod.check_batch
+
+    def racing(body, st, settings, sender=None):
+        out = real(body, st, settings, sender)  # passes: session "race" is new
+        st.add([summary(1, session="race", runtime="hermes")], via="push:fleet")  # the race
+        return out
+
+    monkeypatch.setattr(ingest_mod, "check_batch", racing)
+    code, _, body = post_json(base, {"summary": [summary(2, session="race")]}, TOKEN)
+    assert code == 403 and b"belongs to another sender" in body
+    assert store.owners(["race"]) == {"race": {"push:fleet"}}
+
+
+def test_the_store_refuses_a_batch_its_writer_does_not_own(tmp_path, clock):
+    from homelabnext.status.agents.store import ActivityOwnershipError
+
+    store = ActivityStore(tmp_path / "activity.db", clock=clock)
+    store.add([summary(1, session="local")], via="agent-spool")
+    with pytest.raises(ActivityOwnershipError, match="another sender or source"):
+        store.add([summary(2, session="local")], via="push:cloud", owner=True)
+    with pytest.raises(ActivityOwnershipError, match="another session or sender"):
+        store.add([summary(1, session="local")], via="push:cloud", owner=True)
+    assert len(store.events(session="local")) == 1  # nothing of either batch was stored
+    assert store.add([summary(1, session="mine")], via="push:cloud", owner=True).added == 1
+    assert store.add([summary(2, session="mine")], via="push:cloud", owner=True).added == 1
+
+
 def test_a_refused_sender_is_logged_on_one_line(owned, caplog):
     """The refusal log quotes sender-supplied values; it must stay one line (no log forging)."""
     base, _ = owned
