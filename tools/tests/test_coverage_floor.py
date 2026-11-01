@@ -224,18 +224,14 @@ def test_the_coverage_run_selects_the_tests_every_blocking_job_selects(tmp_path,
 
 
 def test_an_experimental_component_s_code_is_not_counted_in_its_unit(tmp_path, capsys):
-    st2 = "homelabnext/workflows/st2.py"
-    assert coverage_floor.EXPERIMENTAL_CODE[st2] == "stackstorm"
-    report = _write(tmp_path, _report(**{st2: _file(1000, 0)}))
+    (code,) = [p for p in coverage_floor.EXPERIMENTAL_CODE if p.endswith("_bridge.py")]
+    report = _write(tmp_path, _report(**{code: _file(1000, 0)}))
     assert coverage_floor.main(["--json", str(report)]) == 0, capsys.readouterr().err
+    report = _write(tmp_path, _report(**{"homelabnext/workflows/other.py": _file(1000, 0)}))
+    assert coverage_floor.main(["--json", str(report)]) == 1
 
 
-def test_the_experimental_code_is_a_listed_component_s_and_inside_a_unit():
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    import experimental
-
-    components = {c.name for c in experimental.load()}
-    for path, component in coverage_floor.EXPERIMENTAL_CODE.items():
-        assert (coverage_floor.REPO_ROOT / path).is_file(), path
-        assert component in components, (path, component)
+def test_the_experimental_code_is_inside_a_unit():
+    assert len(coverage_floor.EXPERIMENTAL_CODE) == 3
+    for path in coverage_floor.EXPERIMENTAL_CODE:
         assert any(path.startswith(u.rstrip("/") + "/") for u in coverage_floor.UNITS), path

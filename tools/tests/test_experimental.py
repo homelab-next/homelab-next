@@ -176,6 +176,9 @@ def test_the_minimal_entry_parses():
         ({"gates": ["make strategy"]}, "must be `python -m <module> ...`"),
         ({"invariants": ["P8"]}, "is not a criterion id"),
         ({"owner": "x"}, "owner: unknown key"),
+        ({"code": ["tests/strategy/conftest.py"]}, "is not a Python module outside the tests"),
+        ({"code": ["docs/strategy.md"]}, "is not a Python module outside the tests"),
+        ({"code": ["homelabnext/no_such_module.py"]}, "is not a path in the repository"),
     ],
 )
 def test_a_bad_entry_is_refused(entry, words):

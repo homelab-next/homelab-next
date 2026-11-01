@@ -23,7 +23,7 @@ by ``tests/status``, the package's tests, so they can credit each other.  Each u
 ``FLOOR`` percent of its statements on its own; one aggregate number would let a well-covered
 package hide a poorly covered one.  The floor is on lines, not branches.  The tests are selected
 as every blocking job selects them (``-m "not live and not experimental"``), and the code of a
-component ``tools/experimental.yml`` takes out of the blocking set (``EXPERIMENTAL_CODE``) is not
+component ``tools/experimental.yml`` takes out of the blocking set (its ``code:``) is not
 counted.  Raising a unit's coverage is always fine; lowering ``FLOOR`` or dropping a unit is a
 reviewed change to this file.
 
@@ -52,6 +52,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
+import experimental  # noqa: E402 (the one list of experimental components)
 from experimental import BLOCKING_SELECT  # noqa: E402 (the one marker expression)
 
 FLOOR = 80.0
@@ -89,14 +90,10 @@ UNITS: dict[str, tuple[str, ...]] = {
 }
 
 
-# The code of an experimental component (tools/experimental.yml) inside a unit: its tests are
-# deselected here as in every blocking job (BLOCKING_SELECT), so it is left out of its unit's count
-# rather than letting a component that blocks nothing fail this gate.  file -> component
-EXPERIMENTAL_CODE: dict[str, str] = {
-    "homelabnext/workflows/st2.py": "stackstorm",
-    "homelabnext/workflows/st2_bridge.py": "stackstorm",
-    "homelabnext/workflows/st2_runtime.py": "stackstorm",
-}
+# The code of the components tools/experimental.yml takes out of the blocking set (their `code:`):
+# their tests are deselected here as in every blocking job (BLOCKING_SELECT), so that code is left
+# out of its unit's count rather than letting a component that blocks nothing fail this gate
+EXPERIMENTAL_CODE: frozenset[str] = frozenset(p for c in experimental.load() for p in c.code)
 
 
 def _cov_target(unit: str) -> str:
