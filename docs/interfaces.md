@@ -295,6 +295,8 @@ verified_profile(profile, *, policy, lock) -> VerifiedProfile; load_verified_pro
 assemble_pack(manifest, inputs) -> (pack, "sha256:...")  # pure; stable -> session -> volatile; status ready|deferred
 validate_report(report, pack, pack_hash, manifest=None) -> list[str]
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
+# homelabnext.grants  (core, dependency-free; the one definition of the broker tiers and the grant lookup)
+TIERS; TIER_RANK; grant_for(manifest, actor, action) -> grant | None; tier_exceeds(tier, max_tier) -> bool
 # homelabnext.broker  (reference evaluator for schemas/broker; default deny)
 decide(manifest, request, approval=None, *, now=None) -> decision; request_digest(request); check_manifest_handlers(manifest, handlers)
 # homelabnext.broker.service  (the reference broker service; hnx broker; docs/broker.md; ADR-0017)
