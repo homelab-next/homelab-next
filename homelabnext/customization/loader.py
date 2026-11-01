@@ -159,9 +159,17 @@ def resolve_settings(
     enable: list[str] | None = None,
     env: dict[str, str] | None = None,
     public_dir: Path | None = None,
+    root: Path | None = None,
 ) -> Settings:
+    """The one answer to "which customizations, enabled where": ``hnx custom`` and the X-09
+    invariant both call this, so the two gates cannot load different sets.
+
+    ``root`` is the tree being checked; its own ``customizations/`` directory comes first.
+    """
     env = dict(os.environ) if env is None else env
     s = Settings(public_dir=public_dir or paths.profiles_dir())
+    if root is not None:
+        s.local_dirs.append(root / "customizations")
     cfg_file = config or env.get(ENV_CONFIG)
     if cfg_file:
         cfg = yaml.load(Path(cfg_file).read_text(encoding="utf-8"), Loader=_StrLoader) or {}

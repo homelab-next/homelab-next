@@ -352,6 +352,25 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
             + "</article>"
             for i, t in sorted(retired.items())
         )
+    legacy = reg.get("retired_legacy") or {}
+    if legacy:  # an id the register once used wrongly; the checklist row keeps it
+        body += "<h2>Earlier uses of checklist ids</h2>" + "".join(
+            f'<article id="legacy-{e(i)}"><h3>{e(i)} <span class="pill skip">earlier use</span>'
+            "</h3>"
+            + _dl(
+                [
+                    (
+                        "Replaced by",
+                        f'<a href="#{e(t["replaced_by"])}">{e(t["replaced_by"])}</a>'
+                        if t.get("replaced_by")
+                        else "",
+                    ),
+                    ("Reason", _p(t["reason"])),
+                ]
+            )
+            + "</article>"
+            for i, t in sorted(legacy.items())
+        )
     verdict = invariants_verdict(counts)
     summary = f"{verdict} - " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
     if results and results.get("last_run"):
@@ -363,6 +382,7 @@ def render_invariants(data, results=None) -> tuple[str, dict]:
         "last_run": (results or {}).get("last_run"),
         "criteria": merged,
         "retired": retired,
+        "retired_legacy": legacy,
     }
     return page("Invariants", body, summary), json.loads(json.dumps(doc, default=str))
 

@@ -324,9 +324,10 @@ def lint(
         for h in hosts if known is not None else []:
             if h not in known:
                 out.append(Finding("CU013", "error", cid, f"enabled for unknown host {h!r}"))
-    if not any(f.code == "CU001" for f in out):
-        for cf in detect_conflicts(active(valid, enabled), universe, enabled):
-            out.append(Finding("CU011", "error", ",".join(cf.ids), str(cf)))
+    # Unconditional: ``valid`` already leaves out schema-invalid files, and an unrelated broken
+    # file must not switch off the exclusion of a conflicting pair.
+    for cf in detect_conflicts(active(valid, enabled), universe, enabled):
+        out.append(Finding("CU011", "error", ",".join(cf.ids), str(cf)))
     return _dedupe(out)
 
 

@@ -43,7 +43,12 @@ What it can never do: edit a core file, bypass a schema, point outside its own d
 and `..` paths are rejected, symlink escapes are resolved and rejected, paths into core are
 rejected), or carry a raw endpoint (the same detection as `tools/no_raw_endpoints.py` runs on the
 file and on every file it references). The applier writes nothing; it produces a **plan** and a
-**resolved view**, and refuses to save even those inside a core directory.
+**resolved view**, and refuses to save even those inside a core directory. Every entry of the
+resolved view (`role_vars.<role>.<var>`, `hooks.<role>.<entry>.<phase>`,
+`template_overlays.<role>.<template>`, `profiles.<name>`) is a list of `{id, hosts, ...}`: the
+customization that produced it and the hosts its scope resolved to (`[]` when the scope could not
+be expanded to hosts, so wherever the role runs). Two customizations may claim one extension
+point on disjoint hosts, and each keeps its own hosts (plan schema `hnx.customization.plan/2`).
 
 ## The file
 
@@ -78,8 +83,11 @@ negatives live next to it.
   linted, and applied only when a deployment enables them. Treat them as templates: copy one into
   your own directory and change it.
 * **Your own** go in a directory outside the repository, found through (all combined, in this
-  order): the `--config` file (or `HNX_CUSTOMIZATIONS_CONFIG`), repeated `--dir` flags, and the
-  `HNX_CUSTOMIZATIONS_DIR` environment variable (several directories separated by `:`).
+  order): `customizations/` under the checked tree (`--root`), the `--config` file (or
+  `HNX_CUSTOMIZATIONS_CONFIG`), repeated `--dir` flags, and the `HNX_CUSTOMIZATIONS_DIR`
+  environment variable (several directories separated by `:`). `hnx custom` and the X-09
+  invariant resolve this list, and the `enable` list, through one function
+  (`loader.resolve_settings`), so they always check the same set.
 
 ```yaml
 # customizations.config.yml
@@ -127,7 +135,8 @@ the `links` values: a code in the `reason` is prose and stays. A second run chan
 ## Conflicts and ordering
 
 Two active customizations that claim the same extension point on overlapping scope are a
-conflict, and the plan excludes both and fails. Scopes overlap when their resolved host sets
+conflict, and the plan excludes both and fails, even when another file in the set is
+schema-invalid. Scopes overlap when their resolved host sets
 intersect; a scope that cannot be expanded to hosts is treated as overlapping, because "I cannot
 tell" is the unsafe answer. Order is fixed: registry patches, variable overrides, template
 overlays, hooks, then profiles, each sorted by id. The same inputs give a byte-identical plan.
@@ -171,8 +180,10 @@ until it fires years later, it makes the shipped files churn every year to push 
 teaches overlay authors that a distant date is an acceptable way to opt out of review. Expiry is
 a promise that a human owner re-reads a deviation. A shipped profile has no such owner on the
 deployment side: the project reviews it with each release, and the deployment cannot renew it.
-Making that explicit in a field, enforced by where the file was loaded from, is honest and
-cannot be abused.
+Making that explicit in a field, enforced by where the file was loaded from, is honest: no file
+can grant itself the exemption. Which directory counts as shipped is chosen by whoever runs the
+check (`--profiles`, default `<root>/profiles`; X-09 uses `<root>/profiles`), so the exemption is
+exactly as trustworthy as that command line. CI runs it on the repository's own `profiles/`.
 
 ## The invariant and the register
 
@@ -198,4 +209,5 @@ All synthetic; see [profiles/README.md](../profiles/README.md).
 * Nothing here can be tested against hardware; the profiles' task files are linted and planned,
   not executed. Running them on a real host is SERVER-side validation.
 * The applier computes and validates; wiring `plan` output into playbook runs (feeding
-  `resolved.role_vars` as extra vars, including hook files) is the playbook layer's job.
+  each `resolved.role_vars` entry as extra vars on its own `hosts`, including hook files) is the
+  playbook layer's job.
