@@ -699,9 +699,10 @@ forgetting its record) and every TLP marker in its body; it leaves only at or be
 destination's ceiling (`egress_check`). A body is read after folding look-alike and hidden
 characters (NFKC, format characters dropped); bytes are read as UTF-8, a mapping or a list leaf by
 leaf with its keys, and a body that cannot be scanned is `red`. A marker is `TLP:` and a word in any
-ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label word after up
-to three characters that are neither a letter nor a digit, or none (`TLP RED`, `TLP-AMBER`,
-`TLP_RED`, `TLP/AMBER`, `[TLP=RED]`, `TLPRED`); any other
+ASCII case (`TLP:AMBER+STRICT` with spaces allowed around `+`), or `TLP` and a label word after any
+run of white space and up to three other characters that are neither a letter nor a digit, or none
+(`TLP RED`, `TLP    RED`, `TLP-AMBER`, `TLP_RED`, `TLP/AMBER`, `[TLP=RED]`, `TLP  -  RED`,
+`TLPRED`); white space is never counted against the three, so padding cannot hide a marker; any other
 spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 
 | Egress point | Its ceiling comes from | What lets a module use it today | Checked today |

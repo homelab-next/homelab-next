@@ -42,13 +42,15 @@ __all__ = [
 ]
 
 #: a marker: ``TLP`` then a colon (``TLP:RED``, ``tlp : amber``), the word read by
-#: :func:`_marker_label`; or ``TLP`` then a label word with no colon, after up to three characters
-#: that are neither a letter nor a digit, or none (``TLP RED``, ``TLP-AMBER``, ``TLP_RED``,
-#: ``TLP/AMBER``, ``[TLP=RED]``, ``TLP--GREEN``, ``TLPRED``): the spellings report headers,
-#: file names and exports use
+#: :func:`_marker_label`; or ``TLP`` then a label word with no colon, after any run of white space
+#: and up to three other characters that are neither a letter nor a digit, or none (``TLP RED``,
+#: ``TLP    RED``, ``TLP-AMBER``, ``TLP_RED``, ``TLP/AMBER``, ``[TLP=RED]``, ``TLP--GREEN``,
+#: ``TLP  -  RED``, ``TLPRED``): the spellings report headers, column-padded tables, file names
+#: and exports use.  White space is never counted against the three, so padding cannot hide one.
 _COLON = re.compile(r"TLP\s*:\s*", re.IGNORECASE | re.ASCII)
 _BARE = re.compile(
-    r"TLP(?!\s*:)[^A-Za-z0-9]{0,3}(?=(?:CLEAR|WHITE|GREEN|AMBER|RED))", re.IGNORECASE | re.ASCII
+    r"TLP(?!\s*:)\s*(?:[^A-Za-z0-9\s]{1,3}\s*)?(?=(?:CLEAR|WHITE|GREEN|AMBER|RED))",
+    re.IGNORECASE | re.ASCII,
 )
 _WORD = re.compile(r"[A-Za-z]+", re.ASCII)
 _PLUS_WORD = re.compile(r"\s*\+\s*([A-Za-z]+)", re.ASCII)

@@ -43,6 +43,14 @@ from homelabnext.tlp_egress import (
         ("report_TLP-GREEN.pdf", [Label.GREEN]),
         ("TLP--CLEAR", [Label.CLEAR]),
         ("TLP - AMBER", [Label.AMBER]),
+        # a run of white space of any length, padding included, is a separator, not a limit
+        ("TLP    RED", [Label.RED]),
+        ("TLP\n\n\n\nAMBER", [Label.AMBER]),
+        ("TLP  -  RED", [Label.RED]),
+        ("TLP        AMBER", [Label.AMBER]),
+        ("TLP\t\t\t\t\tGREEN", [Label.GREEN]),
+        (" TLP \t - \n RED ", [Label.RED]),
+        ("TLP    protocol", []),  # still prose without a label word
         ("TLP_AMBER+STRICT", [Label.AMBER_STRICT]),
         ("TLP_AMBER_STRICT", [Label.RED]),
         ("TLPRED", [Label.RED]),
