@@ -62,3 +62,33 @@ def test_code_paths_named_in_the_docs_exist():
                 if not (ROOT / m[1]).is_file():
                     missing.append(f"{doc.relative_to(ROOT)}:{n}: {m[1]}")
     assert missing == []
+
+
+def _rows(text: str, prefix: str) -> dict[str, list[str]]:
+    """The cells of each table row whose first cell starts with ``prefix``, by that cell."""
+    out = {}
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if line.startswith("| ") and re.fullmatch(prefix + r"\d+", cells[0]):
+            out[cells[0]] = cells
+    return out
+
+
+def test_every_public_phase_names_where_it_lives():
+    phases = _rows((ROOT / "docs" / "build-order.md").read_text(), "P")
+    assert len(phases) >= 9
+    for phase, cells in phases.items():
+        where = re.findall(r"`([^`]+)`", cells[4])
+        assert where, f"{phase}: the Where cell names no path ({cells[4]!r})"
+        for path in where:
+            assert (ROOT / path.split(" ")[0]).exists(), f"{phase}: {path} does not exist"
+
+
+def test_the_server_phases_carry_the_tlp_exit_criteria():
+    """Data is copied only after the label backfill (S-09) and the agent window closes only with
+    every model role and profile under a TLP ceiling (O-12), as docs/checklist.md says."""
+    checklist = (ROOT / "docs" / "checklist.md").read_text()
+    phases = _rows((ROOT / "docs" / "build-order.md").read_text(), "S")
+    for phase, row in (("S3", "S-09"), ("S6", "O-12")):
+        assert f"| {row} |" in checklist
+        assert row in phases[phase][1] and row in phases[phase][-1], (phase, row)

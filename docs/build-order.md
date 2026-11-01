@@ -38,7 +38,7 @@ P9 --> S2.6 staging on the real server --> S3.. capability swaps --> S8 cutover
 | P5 | Role interface and IaC conventions | role argument spec and hooks, capability inventory groups, scaffolds | role and playbook linter with passing and failing roles | `ansible/`, `tools/role_lint.py` | X-05, X-09 |
 | P6 | Detections as code, model-role aliases | Sigma plus fixtures, logical-id map, role resolver, golden tasks | fixture runner against an engine adapter; a fake inference server | `detections/`, `homelabnext/golden/` | D, G, X-06 |
 | P7 | Registers and invariants | generated registers, an invariants runner, the modularity-pillar checks | fixture pass and fail for each check | `homelabnext/registers/`, `homelabnext/invariants/` | L, M |
-| P8 | Swap procedure kit | the nine-step checklist runner, parity tools, flip and decommission checks | the whole flow against two fake lakes | arrives with the swap kit | - |
+| P8 | Swap procedure kit | the nine-step checklist runner, parity tools, flip and decommission checks | the whole flow against two fake lakes | `homelabnext/swap/`, `homelabnext/parity/`, `homelabnext/decommission/` | X-08 |
 | P9 | Lab-in-a-box | a compose stack of real containers for the seams, a smoke script, a nightly workflow | `docker compose config` in tests; the smoke script and nightly job bring it up for real | `compose/lab-in-a-box/`, `.github/workflows/nightly.yml` | - |
 
 ### P9 in detail
@@ -57,10 +57,10 @@ phases, so the public work is a prerequisite and not a duplicate.
 |---|---|---|---|
 | S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 | F-01, F-02, F-09-F-11, F-13, F-14, C |
 | S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16, F-24 |
-| S3 | Data platform: object store, catalog, query engine; copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S |
+| S3 | Data platform: object store, catalog, query engine; run the recorded TLP label backfill of every table holding rows from before its `tlp` column (S-09) before the copy, then copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S, S-09 |
 | S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 | D, T |
 | S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 | P, R, K |
-| S6 | Agent runtime, then the accelerator window: profile compiler live, budgets enforced, model roles resolved by the gateway | P3, P6 | A, G, M |
+| S6 | Agent runtime, then the accelerator window: profile compiler live, budgets enforced, model roles resolved by the gateway; exit when every model role and agent profile has a TLP ceiling and model requests leave only at or below it (O-12) | P3, P6 | A, G, M, O-12 |
 | S7 | Outputs: case system, threat intelligence, exposure management, operator console; every stateful product gets an export hook | P2, P5 | O |
 | S8 | Cutover: capability flips in order, each through the swap procedure | P8 | E, X |
 | S9 | Decommission and consolidation (operator-gated), each through the decommission check | P8 | - |
