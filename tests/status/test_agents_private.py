@@ -81,14 +81,14 @@ def served(tmp_path, clock, store, registry):
         (LOOPBACK, {**AUTHORIZED, "X-Hnx-Front-Door": ""}, "secret header"),
         (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Hnx-Front-Door"}, "secret header"),
         (LOOPBACK, {**AUTHORIZED, "X-Hnx-Front-Door": "fake-wrong"}, "secret header"),
-        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Authentik-Username"}, "no identity"),
-        (LOOPBACK, {**AUTHORIZED, "X-Authentik-Username": "a b<c>"}, "no identity"),
-        (LOOPBACK, {**AUTHORIZED, "X-Authentik-Groups": "staff"}, "viewer group"),
-        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Authentik-Groups"}, "viewer group"),
-        (LOOPBACK, {**AUTHORIZED, "X-Authentik-Groups": "hub-private-viewers-not"}, "viewer group"),
-        # regression: the header was split on "," too, so one group whose name holds a comma
-        # read as membership of the viewer group; the separator is "|" only
-        (LOOPBACK, {**AUTHORIZED, GROUPS: "staff,hub-private-viewers"}, "viewer group"),
+        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Auth-Request-User"}, "no identity"),
+        (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-User": "a b<c>"}, "no identity"),
+        (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-Groups": "staff"}, "viewer group"),
+        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Auth-Request-Groups"}, "viewer group"),
+        (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-Groups": "hub-private-viewers-not"}, "viewer group"),
+        # the separator is the identity set's "," only: another one keeps the value one name
+        (LOOPBACK, {**AUTHORIZED, GROUPS: "staff|hub-private-viewers"}, "viewer group"),
+        (LOOPBACK, {**AUTHORIZED, GROUPS: "staff;hub-private-viewers"}, "viewer group"),
     ],
 )  # fmt: skip
 def test_front_door_refuses_each_missing_piece(tmp_path, client, headers, reason):
@@ -105,7 +105,7 @@ def test_front_door_allows_with_every_piece(tmp_path):
 def test_a_repeated_header_fails_closed(tmp_path):
     twice = [*AUTHORIZED.items(), ("X-Hnx-Front-Door", FAKE_SECRET)]
     assert not authorize(front_door(tmp_path), LOOPBACK, Headers(twice)).allowed
-    spoof = [*AUTHORIZED.items(), ("X-Authentik-Username", "someone-else")]
+    spoof = [*AUTHORIZED.items(), ("X-Auth-Request-User", "someone-else")]
     assert not authorize(front_door(tmp_path), LOOPBACK, Headers(spoof)).allowed
 
 
@@ -125,7 +125,7 @@ def test_main_listener_without_a_front_door_never_serves_private(served, path):
 
 
 @pytest.mark.parametrize(
-    "drop", ["proxy", "X-Hnx-Front-Door", "X-Authentik-Username", "X-Authentik-Groups"]
+    "drop", ["proxy", "X-Hnx-Front-Door", "X-Auth-Request-User", "X-Auth-Request-Groups"]
 )
 @pytest.mark.parametrize("path", PRIVATE)
 def test_private_view_is_403_without_each_piece(served, tmp_path, drop, path):
@@ -253,7 +253,7 @@ def test_config_refuses_a_literal_token_and_an_unknown_host(tmp_path):
     with pytest.raises(AgentsConfigError, match="token"):
         load_config(bad, reg, {}.get)
     bad.write_text(
-        "agents_version: 1\nstore: a.db\nprivate: {service: status-hub, viewer_group: g, "
+        "agents_version: 1\nstore: a.db\nprivate: {service: status-hub, "
         "access_log: a.jsonl, trusted_proxies: [nowhere]}\n"
     )
     with pytest.raises(AgentsConfigError, match="not a registry host"):

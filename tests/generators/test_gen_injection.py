@@ -6,6 +6,7 @@ when a model is built by hand and skips validation.
 """
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -22,10 +23,8 @@ PAYLOAD = Path(__file__).resolve().parent / "fixtures" / "inj-owner.services.yml
 REG = load(EXAMPLE)
 
 CADDY_BREAKOUT = "x\n\treverse_proxy evil-upstream.lab.example\n}\nevil.lab.example {\n\treverse_proxy evil-upstream.lab.example"
-BLUEPRINT_ENTRY = (
-    "x\n  - model: authentik_core.user\n    identifiers: {username: backdoor}\n"
-    "    attrs: {is_superuser: true, password: hunter2}\n#"
-)
+#: a JSON break-out: an owner closing its string to add a realm user (an admin)
+REALM_ENTRY = 'x", "users": [{"username": "backdoor", "realmRoles": ["admin"]}], "y": "'
 
 
 def _with(reg, service: str, **changes):
@@ -33,21 +32,6 @@ def _with(reg, service: str, **changes):
     svcs = dict(reg.services)
     svcs[service] = dataclasses.replace(svcs[service], **changes)
     return dataclasses.replace(reg, services=svcs)
-
-
-def _authentik_loader():
-    class L(yaml.SafeLoader):
-        pass
-
-    L.add_multi_constructor(
-        "!",
-        lambda loader, suffix, node: (
-            loader.construct_sequence(node)
-            if isinstance(node, yaml.SequenceNode)
-            else loader.construct_scalar(node)
-        ),
-    )
-    return L
 
 
 # ---------------------------------------------------------------- layer 1: the registry
@@ -62,9 +46,9 @@ def test_review_payload_is_rejected_by_the_registry():
     "path,value",
     [
         (("services", "edge-proxy", "owner"), CADDY_BREAKOUT),
-        (("services", "idp", "owner"), BLUEPRINT_ENTRY),
+        (("services", "idp", "owner"), REALM_ENTRY),
         (("services", "idp", "owner"), "identity-team\n"),
-        (("services", "idp", "impl"), "authentik\n"),
+        (("services", "idp", "impl"), "keycloak\n"),
         (("services", "idp", "backup_job"), "daily-core\n"),
         (("services", "idp", "health", "path"), "/-/health/live/\n"),
         (("hosts", "idp-core", "role"), "identity\n"),
@@ -114,33 +98,19 @@ def test_service_docs_refuse_multiline_and_markdown_breakouts():
         )
 
 
-def test_idp_blueprint_is_data_so_a_payload_stays_a_string():
-    """The blueprint is emitted with a YAML dumper, so the owner is one scalar, never new entries.
+def test_idp_realm_is_data_so_a_payload_stays_a_string():
+    """The realm is emitted with a JSON encoder, so an owner is one string, never a new key or a
+    new user, and a placeholder-looking value is not substituted by anything here.
 
-    Calls the generator function directly: ``generate`` would refuse the newline before it runs.
+    Calls the generator function directly: ``generate`` would refuse a newline before it runs.
     """
-    reg = _with(REG, "dashboards", owner=BLUEPRINT_ENTRY)
-    text = builtin.idp_blueprint(reg)["idp/blueprint.yaml"]
-    doc = yaml.load(text, Loader=_authentik_loader())
-    models = [e["model"] for e in doc["entries"]]
-    assert "authentik_core.user" not in models
-    assert len(doc["entries"]) == 2 * sum(1 for s in REG.services.values() if s.auth == "idp")
-    app = next(e for e in doc["entries"] if e["identifiers"].get("slug") == "dashboards")
-    assert app["attrs"]["meta_description"] == f"owner {BLUEPRINT_ENTRY}"
-
-
-def test_idp_blueprint_keeps_the_authentik_tags():
-    text = generate(REG, ["idp_blueprint"])["idp_blueprint"]["idp/blueprint.yaml"]
-    assert (
-        "!Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]"
-        in text
-    )
-    assert "!KeyOf" in text
-    tag_payload = _with(REG, "lake-query", owner="x !Env AUTHENTIK_SECRET_KEY")
-    out = generate(tag_payload, ["idp_blueprint"])["idp_blueprint"]["idp/blueprint.yaml"]
-    doc = yaml.load(out, Loader=_authentik_loader())
-    app = next(e for e in doc["entries"] if e["identifiers"].get("slug") == "lake-query")
-    assert app["attrs"]["meta_description"] == "owner x !Env AUTHENTIK_SECRET_KEY"
+    clients = len(json.loads(builtin.idp_realm(REG)["idp/realm.json"])["clients"])
+    for payload in (REALM_ENTRY, REALM_ENTRY + "\n#", "x $(env:HNX_SECRET_ADMIN) ${vault.k}"):
+        reg = _with(REG, "dashboards", owner=payload)
+        doc = json.loads(builtin.idp_realm(reg)["idp/realm.json"])
+        assert "users" not in doc and len(doc["clients"]) == clients
+        client = next(c for c in doc["clients"] if c["clientId"] == "dashboards")
+        assert client["description"] == f"owner {payload}"
 
 
 @pytest.mark.parametrize("name", sorted(generate(REG)))

@@ -92,7 +92,7 @@ author: unknown
 ## Credentials and access
 
 <!-- hnx:gen:access -->
-- Authentication: `none`
+- Authentication: `idp`
 - Endpoint override variable: `HNX_ENDPOINT_DATAFLOW`
 <!-- /hnx:gen -->
 

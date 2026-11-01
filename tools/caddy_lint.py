@@ -15,11 +15,18 @@
 #     "2": usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)
 """Gate: the edge never lets a client name its own identity to a service behind forward-auth.
 
-``forward_auth`` copies the identity provider's answer (``copy_headers``) onto the request, and the
+``forward_auth`` copies the auth proxy's answer (``copy_headers``) onto the request, and the
 service trusts those headers. Caddy 2.9.0 to 2.11.1 keep a header the *client* sent when the
-IdP's answer omits it, and every Caddy up to 2.11.1 passes the underscore and mixed spellings
-(``X_Authentik_Groups``, ``X-Authentik_Groups``), which a CGI-style upstream folds into the real
-header. (2.11.2's fix deletes only the exact name it copies; 2.11.7's ``reverse_proxy`` was
+answer omits it, and every Caddy up to 2.11.1 passes the underscore and mixed spellings
+(``X_Auth_Request_Groups``, ``X-Auth_Request-Groups``), which a CGI-style upstream folds into the
+real header.
+
+The identity headers are the platform's one declared set (``homelabnext.edge_identity``,
+ADR-0034; by default ``X-Auth-Request-User``, ``-Groups`` and ``-Email``): every header whose name
+carries its **mark** (``auth-request``, in any case, with ``-`` or ``_`` at each separator), and
+every header a ``copy_headers`` sets. "The strip" below is one contains-wildcard delete per
+spelling of the mark (``request_header -*auth-request*`` and ``request_header -*auth_request*``),
+which the generator writes; :func:`use_identity` judges another set. (2.11.2's fix deletes only the exact name it copies; 2.11.7's ``reverse_proxy`` was
 observed dropping every header with an ``_``, which is not a documented guarantee, so the strip
 is what covers those spellings.)
 
@@ -44,8 +51,8 @@ So these must hold, everywhere:
   strip      in a config with a ``forward_auth`` anywhere, every site that proxies
              (``reverse_proxy``, ``php_fastcgi``) or runs ``forward_auth`` (directly, or through
              ``invoke`` of a named route) deletes at site level, with no matcher, every header
-             carrying ``authentik`` and every header a ``copy_headers`` sets, in every spelling
-             (``request_header -*authentik*`` first in the site, as the generator writes it).
+             carrying the mark and every header a ``copy_headers`` sets, in every spelling
+             (the strip first in the site, as the generator writes it).
              Caddy sorts a site-level ``request_header`` before every ``handle`` and ``route``,
              so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
              matcher on the route) cannot carry the client's identity headers either, and
@@ -67,7 +74,7 @@ So these must hold, everywhere:
              fails closed, and so does a ``forward_auth @matcher``: a request it skips is never
              authenticated.
   reset      no header directive sets, adds or replaces an identity header (a field name carrying
-             ``authentik``, or one a ``copy_headers`` of the same site sets, in any spelling),
+             the mark, or one a ``copy_headers`` of the same site sets, in any spelling),
              and none copies one into another header through a header placeholder
              (``{http.request.header.*}``, ``{header.*}``, ``{http.reverse_proxy.header.*}``,
              ``{rp.header.*}``): ``request_header``/``header`` after an optional matcher,
@@ -84,12 +91,12 @@ So these must hold, everywhere:
              from a value the client chooses: Caddy builds the CGI environment from ``env``
              first, so a name no request header carries keeps the ``env`` value. To hand the
              IdP's answer on under another header name, use ``copy_headers
-             X-Authentik-Username>Remote-User``: the lint then requires every spelling of the
+             X-Auth-Request-User>Remote-User``: the lint then requires every spelling of the
              target stripped, which a ``header_up Remote-User {...}`` copy does not ensure (a
              client's ``Remote_User`` reaches a CGI-style upstream beside it, observed on
              2.11.1 and 2.11.2). One copy is allowed: a FastCGI ``env`` of ``REMOTE_USER``,
              ``AUTH_USER`` or ``REDIRECT_REMOTE_USER``
-             (``env REMOTE_USER {http.request.header.X-Authentik-Username}``) whose value is
+             (``env REMOTE_USER {http.request.header.X-Auth-Request-User}``) whose value is
              exactly one request-header placeholder of an identity header the site's matcherless
              site-level strip deletes. Neither a request header nor PHP can set those three
              (observed on 2.11.1, 2.11.2 and 2.11.7 under php-fpm and php-cgi, with every
@@ -99,7 +106,7 @@ So these must hold, everywhere:
              ``PHP_AUTH_PW``, ``PHP_AUTH_DIGEST``, ``AUTH_TYPE``) because PHP rebuilds it from
              the client's ``Authorization`` header. The env form still leaves the client's own
              ``Remote-User`` reaching the app as ``HTTP_REMOTE_USER``; for an app that falls back
-             to it, strip it too, or use ``copy_headers X-Authentik-Username>Remote-User`` and
+             to it, strip it too, or use ``copy_headers X-Auth-Request-User>Remote-User`` and
              ``env REMOTE_USER {http.request.header.Remote-User}``.
   dial       a ``forward_auth`` whose upstream is a placeholder the request chooses (the client
              picks the IdP that vouches for it), and any proxy of a site that runs
@@ -128,7 +135,7 @@ So these must hold, everywhere:
              is judged in the order Caddy runs it. In a config with a forward-auth (a
              ``reverse_proxy`` with ``handle_response``) in any server, every ``reverse_proxy`` a
              request reaches, in any server and site but the IdP's own, the auth one included,
-             is reached with every header carrying ``authentik``
+             is reached with every header carrying the mark
              and every spelling of every copied header deleted on every path (a route with a
              matcher, or in a ``handle`` group, may not run; an upstream's own ``header_up``
              delete counts for it; ``handle_errors`` starts from what its site deleted first;
@@ -139,7 +146,7 @@ So these must hold, everywhere:
              the answer onto the request; a ``handle_response`` that serves a file
              (X-Accel-Redirect) is not one. A wildcard field, a placeholder dial and a FastCGI
              ``env`` are judged in the JSON as in the text. Anywhere, a header set, added or replaced whose
-             name is not literal, carries ``authentik`` or is a copied one, or that copies one
+             name is not literal, carries the mark or is a copied one, or that copies one
              through a placeholder, is a finding (``reset`` or ``semantic``), but in the auth
              answer's own ``handle_response``, from the answer's headers. An unknown handler in
              a forward-auth server fails closed. Caddy refusing a Caddyfile is a finding; a
@@ -230,6 +237,64 @@ except ImportError:  # reported by main() as exit 2, could not measure
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+try:  # the identity-header set: one declaration, the generator's (ADR-0034)
+    from homelabnext.edge_identity import IDENTITY_HEADERS as PLATFORM_IDENTITY
+except ImportError:  # reported by main() as exit 2, could not measure
+    PLATFORM_IDENTITY = None  # type: ignore[assignment]
+
+#: the identity-header set judged (``homelabnext.edge_identity.IDENTITY_HEADERS``): an identity
+#: header is one carrying its mark, or one a ``copy_headers`` sets; :func:`use_identity` swaps it
+IDENTITY = PLATFORM_IDENTITY
+
+
+def use_identity(identity):
+    """Judge against another identity-header set (an ``IdentityHeaders``); returns the previous
+    one.  The generated ``hnx_forward_auth`` the lint expands is rendered with it too."""
+    global IDENTITY
+    previous, IDENTITY = IDENTITY, identity
+    return previous
+
+
+def _marked(name: str) -> bool:
+    """Whether a header (or ``HTTP_<header>`` variable) name carries the identity mark, in any
+    case and spelling."""
+    return IDENTITY.carries_mark(name)
+
+
+def _mark_missing(patterns: list[str]) -> list[str]:
+    """The strip patterns (``*<spelling of the mark>*``) that ``request_header -<pattern>``
+    deletes in ``patterns`` leave uncovered: a spelling of the mark is covered by Caddy's ``*``
+    or by a contains-wildcard whose text is part of it, in any case."""
+    out = []
+    for sp in IDENTITY.mark_spellings():
+        if not any(
+            p == "*" or (len(p) >= 2 and p[0] == p[-1] == "*" and p[1:-1] in sp)
+            for p in (q.lower() for q in patterns)
+        ):
+            out.append(f"*{sp}*")
+    return out
+
+
+def _covers_mark(patterns: list[str]) -> bool:
+    """Whether the deletes ``patterns`` remove every header carrying the identity mark, in every
+    case and spelling (``-*auth-request*`` and ``-*auth_request*`` for the default set)."""
+    return not _mark_missing(patterns)
+
+
+def _strip_text() -> str:
+    """The site-level strip the generator writes, as a finding names it."""
+    return " and ".join(f"request_header -{p}" for p in IDENTITY.strip_patterns())
+
+
+def _generated_snippet() -> str:
+    """The generator's ``hnx_forward_auth``, rendered with the judged identity set."""
+    try:
+        from homelabnext.generators.builtin import _forward_auth_snippet
+    except ImportError as exc:
+        raise MissingDependency(f"homelabnext ({exc})") from None
+    return _forward_auth_snippet("auth-proxy:4180", IDENTITY)
+
 
 #: the first release whose forward_auth drops a client-sent header the IdP's answer omits
 MIN_CADDY = (2, 11, 2)
@@ -482,12 +547,7 @@ def _external_snippet(name: str) -> Node | None:
     documented example importing ``hnx_forward_auth``)."""
     if name != "hnx_forward_auth":
         return None
-    try:
-        from homelabnext.generators.builtin import _forward_auth_snippet
-    except ImportError as exc:
-        raise MissingDependency(f"homelabnext ({exc})") from None
-
-    root, _ = parse_caddyfile(_forward_auth_snippet("idp:9443"), "<generated hnx_forward_auth>")
+    root, _ = parse_caddyfile(_generated_snippet(), "<generated hnx_forward_auth>")
     return root.children[0]
 
 
@@ -703,15 +763,13 @@ CGI_IDENTITY = {
 #: does ``PHP_AUTH_USER``/``PHP_AUTH_PW``/``PHP_AUTH_DIGEST`` (each observed live, php-fpm and
 #: php-cgi on 2.11.1, 2.11.2 and 2.11.7); an allowlist, so an unproven name is refused
 ENV_FROM_IDP = {"REMOTE_USER", "AUTH_USER", "REDIRECT_REMOTE_USER"}
-#: a sample identity header, to ask whether a wildcard field name matches one
-SAMPLE_IDENTITY = "X-Authentik-Username"
 
 
 def _wild_identity(field_: str, copied: set[str]) -> bool:
     """Whether a field name with a ``*`` (Caddy's every-header ``*``, or a wildcard) can name an
     identity header: the IdP's, or one a ``copy_headers`` of the scope sets."""
     return "*" in field_ and (
-        _covers(field_, SAMPLE_IDENTITY) or any(_covers(field_, c) for c in copied)
+        _covers(field_, IDENTITY.user) or any(_covers(field_, c) for c in copied)
     )
 
 
@@ -722,7 +780,7 @@ def cgi_identity(name: str, copied: set[str]) -> bool:
     n = name.upper()
     if n.startswith("HTTP_"):
         h = n[5:]
-        return "AUTHENTIK" in h or _norm(h) in copied
+        return _marked(h) or _norm(h) in copied
     return n in CGI_IDENTITY or n.startswith("AUTH_")
 
 
@@ -808,9 +866,9 @@ def _from_idp(values: list[str], site_deletes: list[str], copied: set[str]) -> b
     name = _request_header_ref(values) if site_deletes else None
     if name is None:
         return False
-    if not ("authentik" in name.lower() or _norm(name) in copied):
+    if not (_marked(name) or _norm(name) in copied):
         return False
-    if "authentik" in name.lower() and any(_covers_mark(p) for p in site_deletes):
+    if _marked(name) and _covers_mark(site_deletes):
         return True
     return all(any(_covers(p, sp) for p in site_deletes) for sp in spellings(name))
 
@@ -819,14 +877,14 @@ def _resets(
     nodes: list[Node], copied: set[str], site_deletes: list[str] | None = None
 ) -> list[Finding]:
     """Every header directive that sets, adds or replaces an identity header (a field name
-    carrying ``authentik`` or one a ``copy_headers`` of the same site sets, in any spelling), or
+    carrying the mark or one a ``copy_headers`` of the same site sets, in any spelling), or
     copies one into another header through a placeholder. Each would let a client choose the
     value the service trusts, whatever the strip before ``forward_auth`` did. Only header field
     names and header placeholders are judged: a site address, an upstream host or a matcher
     named after the IdP is not a header."""
 
     def identity(name: str) -> bool:
-        return "authentik" in name.lower() or _norm(name) in copied
+        return _marked(name) or _norm(name) in copied
 
     out = []
     for node in nodes:
@@ -922,13 +980,6 @@ def _kind(node: Node) -> str:
     return "site"
 
 
-def _covers_mark(pattern: str) -> bool:
-    """Whether ``request_header -<pattern>`` deletes every header whose name contains
-    ``authentik``, in any case and spelling: ``*authentik*``, or a shorter contains-wildcard."""
-    p = pattern.lower()
-    return p == "*" or (len(p) >= 2 and p[0] == p[-1] == "*" and p[1:-1] in "authentik")
-
-
 def _check_auth(node: Node, site_deletes: list[str] | None = None) -> list[Finding]:
     """One ``forward_auth``: no matcher, directly inside a ``route``, after a delete of every
     spelling of every header its ``copy_headers`` sets, earlier in that ``route`` or at site
@@ -996,15 +1047,16 @@ def _site_strip(
     site: Node, direct: list[Node], names: list[str], label: str, plain: bool = False
 ) -> list[Finding]:
     """A site that runs ``forward_auth`` anywhere deletes, at site level and with no matcher,
-    every header carrying ``authentik`` and every spelling of every header a ``copy_headers``
+    every header carrying the mark and every spelling of every header a ``copy_headers``
     in it sets. Caddy sorts a site-level ``request_header`` before every ``handle`` and
     ``route``, so a path that never reaches the auth route (a ``handle /api/*`` beside it, a
     matcher on the route) cannot carry the client's identity headers to the upstream."""
     deletes = _site_deletes(direct)
-    missing = [] if any(_covers_mark(p) for p in deletes) else ["*authentik*"]
+    missing = _mark_missing(deletes)
+    mark_missing = bool(missing)
     for h in names:
-        if missing[:1] == ["*authentik*"] and "authentik" in h.lower():
-            continue  # already named by the missing *authentik*
+        if mark_missing and _marked(h):
+            continue  # already covered by the missing strip patterns of the mark
         missing += [
             sp
             for sp in spellings(h)
@@ -1021,7 +1073,7 @@ def _site_strip(
                 f"site {label} proxies, in a config that runs forward_auth, with no matcherless "
                 f"site-level request_header deleting {', '.join(missing)}: whatever service it "
                 "reaches (the same app under another name, too), a client sends it its own "
-                "identity headers here; put request_header -*authentik* first in this site",
+                f"identity headers here; put {_strip_text()} first in this site",
             )
         ]
     return [
@@ -1032,7 +1084,7 @@ def _site_strip(
             f"site {label} runs forward_auth but has no matcherless site-level request_header "
             f"deleting {', '.join(missing)}: a handle, or a matcher on the auth route, sends a "
             "request past forward_auth with the client's identity headers (put "
-            "request_header -*authentik* first in the site, as the generator does)",
+            f"{_strip_text()} first in the site, as the generator does)",
         )
     ]
 
@@ -1190,11 +1242,18 @@ JSON_PASS = {
 JSON_END = {"static_response", "file_server", "error", "copy_response", "acme_server"}
 #: a forward-auth copy: a header set to exactly the auth answer's own header
 RP_HEADER_VALUE = re.compile(r"(?i)^\{(?:http\.reverse_proxy|rp)\.header\.[^{}]+\}$")
-MARK = "*authentik*"  # the requirement "every header carrying authentik is deleted"
+
+
+def _mark_keys() -> set[str]:
+    """The requirement "every header carrying the mark is deleted", one key per spelling of the
+    mark (``*auth-request*``, ``*auth_request*``); a header spelling key never starts with ``*``."""
+    return set(IDENTITY.strip_patterns())
 
 
 def _covers_key(pattern: str, key: str) -> bool:
-    return _covers_mark(pattern) if key == MARK else _covers(pattern, key)
+    if key.startswith("*"):  # one spelling of the mark
+        return key not in _mark_missing([pattern])
+    return _covers(pattern, key)
 
 
 def _copies(rp: dict) -> list[str]:
@@ -1294,9 +1353,9 @@ class _Judge:
     header is known deleted after it only when it is deleted on both ways. In a config with a
     forward-auth (a ``reverse_proxy`` whose ``handle_response`` copies the answer's headers) in
     any server, every ``reverse_proxy`` a request reaches, the auth one included, must be
-    reached with every header carrying ``authentik`` and every spelling of every copied header
+    reached with every header carrying the mark and every spelling of every copied header
     deleted first, in every site but the IdP's own (whose every proxy dials the IdP). Anywhere, a
-    header set, added or replaced whose name is not literal, carries ``authentik`` or is a
+    header set, added or replaced whose name is not literal, carries the mark or is a
     copied one, or that copies such a header through a placeholder, is a finding; only the auth
     answer's own ``handle_response`` may set those, from the answer's headers."""
 
@@ -1327,7 +1386,7 @@ class _Judge:
                 stack += x
         copied = list(dict.fromkeys(copied))
         self.idents = {_norm(c) for c in copied}
-        self.keys = {MARK} | {sp.lower() for c in copied for sp in spellings(c)}
+        self.keys = _mark_keys() | {sp.lower() for c in copied for sp in spellings(c)}
 
     def site(self, r: dict) -> None:
         apart = bool(r.get("match") and r.get("terminal"))  # a host-matched site of its own
@@ -1336,7 +1395,9 @@ class _Judge:
         else:  # a site with no forward-auth of its own: no identity header of its own, but it
             # deletes every header any forward-auth of the config copies before it proxies
             self.idents = set()
-            self.keys = {MARK} | {sp.lower() for c in self.config.copied for sp in spellings(c)}
+            self.keys = _mark_keys() | {
+                sp.lower() for c in self.config.copied for sp in spellings(c)
+            }
 
     def add(self, rule: str, where: str, detail: str) -> None:
         self.out.append((rule, f"{self.server} {where}: {detail}"))
@@ -1454,7 +1515,7 @@ class _Judge:
             if _is_auth(h):
                 copied = {sp.lower() for c in _copies(h) for sp in spellings(c)}
                 if scope:
-                    self.require(st, {MARK} | copied, loc, "forward_auth")
+                    self.require(st, _mark_keys() | copied, loc, "forward_auth")
                 self.headers(request, None, loc, copy=False)  # the auth request's own header_up
                 for k, resp in enumerate(h.get("handle_response") or []):
                     if isinstance(resp, dict):
@@ -1540,8 +1601,8 @@ class _Judge:
         name = _request_header_ref(values) if covered is not None else None
         if name is None:
             return False
-        if "authentik" in name.lower():
-            return MARK in covered or all(sp.lower() in covered for sp in spellings(name))
+        if _marked(name):
+            return _mark_keys() <= covered or all(sp.lower() in covered for sp in spellings(name))
         return _norm(name) in self.idents and all(sp.lower() in covered for sp in spellings(name))
 
     def judge_set(self, kind: str, field_: str, values: list[str], loc: str, copy: bool) -> None:
@@ -1551,7 +1612,7 @@ class _Judge:
             return
 
         def identity(name: str) -> bool:
-            return "authentik" in name.lower() or _norm(name) in self.idents
+            return _marked(name) or _norm(name) in self.idents
 
         if _wild_identity(field_, self.idents) and any("{" in v for v in values):
             self.add("reset", loc, f"headers {kind} {field_} with a placeholder value rewrites "
@@ -1584,13 +1645,13 @@ class _Judge:
                          "or one set from a value the client chooses")  # fmt: skip
 
     def require(self, st: frozenset | None, needed: set[str], loc: str, what: str) -> None:
-        missing = sorted(needed - (st or frozenset()), key=lambda k: (k != MARK, k))
-        if MARK in missing:  # the names carrying authentik go with it
-            missing = [k for k in missing if k == MARK or "authentik" not in k]
+        missing = sorted(needed - (st or frozenset()), key=lambda k: (not k.startswith("*"), k))
+        if missing and missing[0].startswith("*"):  # the names carrying the mark go with it
+            missing = [k for k in missing if k.startswith("*") or not _marked(k)]
         if missing:
             self.add("semantic", loc, f"{what} is reached on a path where client-sent "
                      f"{', '.join(missing)} is not deleted first (a matcherless "
-                     "request_header -*authentik* first in the site covers every path)")  # fmt: skip
+                     f"{_strip_text()} first in the site covers every path)")  # fmt: skip
 
 
 def caddy_shape(doc: object) -> bool:
@@ -2333,8 +2394,9 @@ def _templated(text: str) -> bool:
     return bool(TEMPLATE_TEXT.search(CADDY_COMMENT.sub(r"\1", text)))
 
 
-#: an import of the generated snippet by a config that does not define it
-IMPORTS_GENERATED = re.compile(r"(?m)^[ \t]*import[ \t]+hnx_forward_auth[ \t]*$")
+#: an import of the generated snippet by a config that does not define it (with its argument, the
+#: site's allowed groups)
+IMPORTS_GENERATED = re.compile(r"(?m)^[ \t]*import[ \t]+hnx_forward_auth(?:[ \t]+\S+)*[ \t]*$")
 
 
 @dataclass
@@ -2358,11 +2420,7 @@ def _semantic(item: Pending, adapter: Adapter) -> tuple[list[Finding], bool]:
     if file is not None:
         text = file.read_text(encoding="utf-8")
     if text is not None and IMPORTS_GENERATED.search(text) and "(hnx_forward_auth)" not in text:
-        try:
-            from homelabnext.generators.builtin import _forward_auth_snippet
-        except ImportError as exc:
-            raise MissingDependency(f"homelabnext ({exc})") from None
-        text, file = _forward_auth_snippet("idp:9443") + text, None
+        text, file = _generated_snippet() + text, None
     doc, err = adapter.adapt(text, file)
     if doc is None:
         if not item.strict:
@@ -2651,6 +2709,8 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     binary = find_caddy(opts.caddy)
     required = os.environ.get(CADDY_REQUIRED_ENV, "") not in ("", "0")
     try:
+        if IDENTITY is None:
+            raise MissingDependency("homelabnext (the identity-header set)")
         if binary is None and required:
             raise MissingDependency(
                 f"caddy ({CADDY_REQUIRED_ENV} is set and no caddy binary was found: "

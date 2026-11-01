@@ -79,6 +79,8 @@ class Service:
     status_sources: tuple[dict, ...] = ()
     front_door: dict | None = None
     description: str = ""  # 2.4: one line, informational (the generated maps)
+    #: 2.7: the group-to-role table of single sign-on (ADR-0034): role -> the IdP groups holding it
+    roles: dict = field(default_factory=dict)
 
     @property
     def scheme(self) -> str:
@@ -217,6 +219,10 @@ def semantic_problems(doc: dict) -> list[str]:
                 problems.append(f"service {sname}: mcp requires an http(s) protocol")
         if s.get("auth") == "idp" and not any(x["capability"] == "idp" for x in services.values()):
             problems.append(f"service {sname}: auth=idp but no service provides capability 'idp'")
+        if s.get("roles") and s.get("auth") != "idp":
+            problems.append(
+                f"service {sname}: roles needs auth: idp (the IdP grants them at sign-in)"
+            )
         if s.get("front_door") and (s.get("auth") != "idp" or not pub):
             problems.append(
                 f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
@@ -485,6 +491,7 @@ def build_registry(doc: dict) -> Registry:
             status_sources=tuple(s.get("status_sources", [])),
             front_door=s.get("front_door"),
             description=s.get("description", ""),
+            roles={r: tuple(g) for r, g in sorted((s.get("roles") or {}).items())},
         )
     return Registry(
         lab_name=lab["name"],

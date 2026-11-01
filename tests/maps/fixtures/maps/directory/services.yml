@@ -10,6 +10,19 @@ hosts:
   tools-1: {address: 192.0.2.10, zone: mgmt}
   store-1: {address: 198.51.100.20, zone: data}
 services:
+  auth-proxy:
+    capability: auth-proxy
+    impl: oauth2-proxy
+    host: tools-1
+    protocol: http
+    port: 4180
+    health: {kind: http, path: /ping, expect_status: 200}
+    upstreams: [idp]
+    owner: identity-team
+    version: "7.15.5"
+    tls: none
+    auth: own
+
   login:
     capability: idp
     impl: authentik

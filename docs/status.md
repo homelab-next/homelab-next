@@ -1,6 +1,6 @@
 ---
 summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
-summary_of: outline:sha256:00ac3b56e4a255d4
+summary_of: outline:sha256:b092be7736f5ba63
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -700,7 +700,7 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 | `/private/sessions`, `/private/session?id=`, `/private/event?id=`, `/private/access-log` | the detail tier and the access log: **private** |
 | `/approvals`, `POST /approvals/decide` | broker requests awaiting an approver, recent decisions, approve and deny: **private**, with an approver group (below) |
 
-### The private tier: Caddy + Authentik setup
+### The private tier: Caddy + auth proxy + IdP setup
 
 The private pages and the `private` menu group exist only for a request that passes **all** of:
 
@@ -712,8 +712,9 @@ The private pages and the `private` menu group exist only for a request that pas
    needs `auth: idp` and a `public_hostname`), and the generated Caddy site adds it:
    ```caddyfile
    status.lab.example {
-   	request_header -*authentik*
-   	import hnx_forward_auth
+   	request_header -*auth-request*
+   	request_header -*auth_request*
+   	import hnx_forward_auth hub-approvers,hub-private-viewers
    	reverse_proxy <the hub's capability alias and port> {
    		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
    	}
@@ -721,17 +722,42 @@ The private pages and the `private` menu group exist only for a request that pas
    ```
    Give the edge and the hub the same value in `HNX_SECRET_STATUS_FRONT_DOOR_SECRET` from the secret
    store;
-3. it carries the **identity** the forward-auth proxy sets (`X-Authentik-Username`, copied by
-   the generated `hnx_forward_auth` snippet);
-4. that identity is in the **viewer group** (`X-Authentik-Groups`, `|`-separated; create the
-   group in Authentik and add the people who may read prompts and commands).
+3. it carries the **identity** the forward-auth proxy sets (`X-Auth-Request-User`, copied by
+   the generated `hnx_forward_auth` snippet from the auth proxy's answer; the one identity-header
+   set is `homelabnext.edge_identity`, ADR-0034);
+4. that identity is in a **viewer group** (`X-Auth-Request-Groups`, `,`-separated): the groups
+   the hub's registry row names under `roles.viewer` (the group-to-role table the IdP realm is
+   generated from, so the generated realm creates the group; add the people who may read
+   prompts and commands to it).
+
+The pieces (ADR-0034): Caddy (the edge, the generated `caddy` output), the **auth proxy** (the
+registry's `auth-proxy` service, oauth2-proxy by default, run with `--set-xauthrequest` and
+`--reverse-proxy`, its client and cookie secrets from the secret store) and the **IdP** (the
+registry's `idp` service, Keycloak by default, its realm imported from the generated
+`idp/realm.json`, which requires a second factor at sign-in). The generated `hnx_forward_auth`
+snippet proxies the auth proxy's `/oauth2/*` paths under the hub's own host, asks its
+`/oauth2/auth` check about every other request with `allowed_groups` set to the groups of the
+hub's `roles` (its argument on the import; the auth proxy answers `403` to a signed-in user in
+none of them, so only viewers and approvers reach the hub at all) and sends a signed-out browser
+to `/oauth2/sign_in`. To let other signed-in people see the hub's non-private pages, give their
+group a role of its own on the hub's row (say `reader`); the hub ignores roles it does not read.
+
+**Provisioning the people.** The realm requires a one-time code on every sign-in (browser and
+direct grant) and makes a user with none enrol one at their first browser sign-in. That
+enrolment is **trust on first use**: whoever first signs in with an un-enrolled account's
+password enrols the authenticator, so someone who learns that password before its owner signs
+in enrols their own and holds the account. Create each viewer and approver with a temporary
+password (the realm's `UPDATE_PASSWORD` action makes them change it) and have them enrol in
+person, at a session you watch, or pre-enrol their OTP credential when you create the account;
+do not leave an account with a password and no enrolled factor (ADR-0034 decision 2).
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
 examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
-**Check your edge** once: a request to the site with a forged `X-Authentik-Username` and no
+**Check your edge** once: a request to the site with a forged `X-Auth-Request-User` and no
 login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
-client-sent header the IdP omits) with the generated snippet, which deletes every client-sent
-header whose name contains `authentik` (any case, `-` or `_`) twice: first in the site, so no
+client-sent header the auth proxy omits) with the generated snippet, which deletes every
+client-sent header whose name contains `auth-request` (any case, `-` or `_` at each separator)
+twice: first in the site, so no
 path of the site reaches the hub with one, and again inside the `route` before `forward_auth`;
 `tools/caddy_lint.py` fails CI on a pin or a config that does not. Every private view is
 appended to the access log (`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`,
@@ -745,8 +771,8 @@ adds `/approvals`: the broker requests awaiting an approver (action, actor, targ
 created, digest, age) and the last 20 approvals and denials, with an approve/deny form on each
 request. `?request=ID` shows one request (the broker's notification links there). Its menu
 entry is `panel: approvals` in `group: private` (views 1.4): it is listed only when `approvals:`
-is configured, only to a request through the front door in the viewer group, never on the
-static page or in the served `status.json`. A person in only the approver group sees no private
+is configured, only to a request through the front door in a viewer group, never on the
+static page or in the served `status.json`. A person in only an approver group sees no private
 menu group; they reach the page by its URL or the notification link. Code:
 `homelabnext.status.approvals`; the broker side: [broker](broker.md#front-door-approvals)
 ([[broker]]).
@@ -755,7 +781,7 @@ menu group; they reach the page by its URL or the notification link. Code:
 approvals:
   socket: /run/hnx-broker/broker.sock   # the broker's Unix socket (absolute)
   issuer: sso                           # the broker manifest's approval_relays[].issuer for the hub
-  approver_group: hub-approvers         # required to decide; must differ from viewer_group
+  # who may decide: the hub's registry row, roles.approver (never a viewer group; agents 1.4)
   csrf_key: "secret:status/approvals-csrf-secret"   # the form tokens' HMAC key (agents 1.2)
   public_origin: https://status.lab.example   # the page's origin in browsers (agents 1.3)
   # timeout_s: 10
@@ -782,20 +808,23 @@ rotate when no one is mid-decision, or accept that they reload the page.
 
 **Who.** The page is behind the same front door as the private tier, by the same code
 (`homelabnext.status.agents.auth.authorize`: trusted proxy, front-door secret, identity header),
-then a group. **Viewers** (`viewer_group`) may see the queue, read only: a pending request's
-params are as sensitive as the private tier's details, and people who already read prompts and
-commands can see what agents ask to do. **Deciding** needs the **approver group** (create it in
-Authentik next to the viewer group; a person in only the approver group may also see the page).
+then a group. **Viewers** (`roles.viewer` on the hub's registry row) may see the queue, read
+only: a pending request's params are as sensitive as the private tier's details, and people who
+already read prompts and commands can see what agents ask to do. **Deciding** needs an
+**approver group** (`roles.approver`, none of them a viewer group; the generated realm creates
+it; a person in only an approver group may also see the page). Both come from the one
+group-to-role table (ADR-0034); a hub row without `roles` still reads the deprecated
+`private.viewer_group` and `approvals.approver_group`, and a row with `roles` refuses them.
 The approver the hub sends to the broker is `issuer` from the config and `subject` = the
-`X-Authentik-Username` the front door passed, unchanged, never a form field. The broker matches
-its approver allowlist exactly and Authentik's usernames are case-sensitive, so the hub never
+`X-Auth-Request-User` the front door passed, unchanged, never a form field. The broker matches
+its approver allowlist exactly and an IdP's usernames may be case-sensitive, so the hub never
 folds one username into another: a username that is not already a canonical approver subject
 (lower-case: a letter, then letters, digits, `.`, `_` or `-`) is read only on this page and its
 decisions are refused (`403`). Give approvers lower-case usernames. The broker then applies its
 own approver rules (allowlist, no self-approval, no agent approver).
 
 **The hub's only write.** `POST /approvals/decide` (every other `POST` is still `405`) answers, in
-order: `403` the front door or the approver group fails; `403` a foreign `Host`/`Origin` (the
+order: `403` the front door or the approver groups fail; `403` a foreign `Host`/`Origin` (the
 console's DNS-rebinding guard), an `Origin` (else `Referer`) that is not `public_origin` (scheme,
 host and port; without it, not the `Host`'s host and port), or a `Sec-Fetch-Site` other than
 `same-origin`; `415` not `application/x-www-form-urlencoded`; `411` no length; `413` over

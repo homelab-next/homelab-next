@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Golden outputs from the synthetic lab, determinism, idempotency, parseability."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -121,7 +122,8 @@ def test_dns_zone_records_cover_every_service():
     zone = generate(REG, ["dns_zone"])["dns_zone"]["dns/svc.example.internal.zone"]
     for s in REG.services.values():
         assert f"\n{s.capability} IN A " in zone
-    assert zone.count(" IN SRV ") == 19 and zone.count(" IN TXT ") == 19
+    n = len(REG.services)
+    assert zone.count(" IN SRV ") == n and zone.count(" IN TXT ") == n
 
 
 def test_hosts_block_apply_is_idempotent_and_preserves_other_lines():
@@ -185,70 +187,368 @@ def test_firewall_rules_derive_from_registry():
     assert len(rows) == len(csv)  # reasons merged, no duplicate rule rows
 
 
-def test_idp_blueprint_is_parseable_yaml_with_authentik_tags():
-    class L(yaml.SafeLoader):
-        pass
+def _realm(reg=REG):
+    return json.loads(generate(reg, ["idp_realm"])["idp_realm"]["idp/realm.json"])
 
-    L.add_multi_constructor(
-        "!",
-        lambda loader, suffix, node: (
-            loader.construct_sequence(node)
-            if isinstance(node, yaml.SequenceNode)
-            else loader.construct_scalar(node)
-        ),
+
+def test_idp_realm_has_a_confidential_client_per_idp_service_and_the_auth_proxy():
+    realm = _realm()
+    clients = {c["clientId"]: c for c in realm["clients"]}
+    gated = {s.name for s in REG.services.values() if s.auth == "idp"}
+    assert set(clients) == gated | {"auth-proxy"}
+    for c in clients.values():
+        assert c["protocol"] == "openid-connect" and c["publicClient"] is False
+        assert c["directAccessGrantsEnabled"] is False and c["implicitFlowEnabled"] is False
+        assert c["attributes"]["pkce.code.challenge.method"] == "S256"
+        # the scopes are trimmed: a token carries only what the client asks for
+        assert c["defaultClientScopes"] == ["basic"]
+        # no secret value: a reference the realm import substitutes from the secret store
+        assert (
+            c["secret"]
+            == f"$(env:HNX_SECRET_IDP_CLIENTS_{c['clientId'].upper().replace('-', '_')})"
+        )
+    assert clients["dashboards"]["redirectUris"] == ["https://dashboards.lab.example/*"]
+    assert (
+        clients["lake-query"]["redirectUris"] == []
+        and not clients["lake-query"]["standardFlowEnabled"]
     )
-    doc = yaml.load(
-        generate(REG, ["idp_blueprint"])["idp_blueprint"]["idp/blueprint.yaml"], Loader=L
+    callbacks = clients["auth-proxy"]["redirectUris"]
+    assert "https://status.lab.example/oauth2/callback" in callbacks
+    assert len(callbacks) == sum(
+        1 for s in REG.services.values() if s.auth == "idp" and s.public_hostname
     )
-    assert doc["version"] == 1
-    apps = [e for e in doc["entries"] if e["model"] == "authentik_core.application"]
-    assert {a["identifiers"]["slug"] for a in apps} == {
-        s.name for s in REG.services.values() if s.auth == "idp"
-    }
+
+
+def _sign_in_paths(flows: dict, alias: str) -> set[frozenset[str]]:
+    """Every set of authenticators a successful pass through ``alias`` can have run, read the
+    way the IdP runs a flow and assuming the worst of each step: REQUIRED children all run,
+    alternatives are ignored when a REQUIRED or CONDITIONAL child exists, a CONDITIONAL child
+    may be skipped, a DISABLED one never runs, and an ALTERNATIVE authenticator the user has
+    not configured counts for nothing: when every alternative of a flow could be such a one
+    (none is a subflow or the session cookie), the flow may pass having verified nothing."""
+    out_req: set[frozenset[str]] = {frozenset()}
+    alts: set[frozenset[str]] = set()
+    has_req, all_skippable = False, True
+    for e in sorted(flows[alias]["authenticationExecutions"], key=lambda e: e["priority"]):
+        req = e["requirement"]
+        if req == "DISABLED":
+            continue
+        own = (
+            _sign_in_paths(flows, e["flowAlias"])
+            if e.get("flowAlias")
+            else {frozenset({e["authenticator"]})}
+        )
+        if req in ("REQUIRED", "CONDITIONAL"):
+            has_req = True
+            if req == "CONDITIONAL":
+                own = own | {frozenset()}
+            out_req = {a | b for a in out_req for b in own}
+        elif req == "ALTERNATIVE":
+            alts |= own
+            all_skippable &= not e.get("flowAlias") and e.get("authenticator") != "auth-cookie"
+        else:
+            raise AssertionError(f"unknown requirement {req}")
+    if has_req:
+        return out_req
+    return alts | {frozenset()} if alts and all_skippable else alts
+
+
+#: the steps that check a password, and those that check a one-time code, in any sign-in flow
+PASSWORD_STEPS = {"auth-username-password-form", "direct-grant-validate-password"}
+OTP_STEPS = {"auth-otp-form", "direct-grant-validate-otp"}
+#: the realm's flow bindings that sign a user in, and those the realm must leave unreachable
+USER_FLOW_BINDINGS = ("browserFlow", "directGrantFlow")
+
+
+def _sign_in_problems(realm: dict) -> list[str]:
+    """Every way a rendered realm could sign a user in without a password and a one-time code.
+
+    Each user sign-in binding (browser, direct grant) must name a flow the realm renders (an
+    unbound one falls back to the IdP's built-in flow, which has no required OTP), and every
+    path through it that is not an existing session must run a password step and an OTP step.
+    Registration and credential reset, the other user-facing bindings, must be off; no identity
+    provider (a broker login flow) and no per-client flow override may exist; no client may
+    allow direct access grants."""
+    flows = {f["alias"]: f for f in realm["authenticationFlows"]}
+    out = []
+    for binding in USER_FLOW_BINDINGS:
+        alias = realm.get(binding)
+        if alias not in flows:
+            out.append(f"{binding}: {alias!r} is not a rendered flow (the built-in one runs)")
+            continue
+        paths = [p for p in _sign_in_paths(flows, alias) if "auth-cookie" not in p]
+        if not paths:
+            out.append(f"{binding}: no path signs a user in")
+        for p in paths:
+            if not (p & PASSWORD_STEPS and p & OTP_STEPS):
+                out.append(f"{binding}: a path without a password and an OTP: {sorted(p)}")
+    for flag in ("registrationAllowed", "resetPasswordAllowed"):
+        if realm.get(flag) is not False:
+            out.append(f"{flag} is not false")
+    if realm.get("identityProviders"):
+        out.append("identity providers render a broker login flow")
+    for c in realm["clients"]:
+        if c.get("authenticationFlowBindingOverrides"):
+            out.append(f"client {c['clientId']} overrides a flow binding")
+        if c.get("directAccessGrantsEnabled") is not False:
+            out.append(f"client {c['clientId']} allows direct access grants")
+    return out
+
+
+def test_idp_realm_has_no_sign_in_without_a_second_factor():
+    """No flow the realm binds or leaves reachable signs a user in on a password alone: the
+    browser flow and the direct grant flow both run a password and an OTP step on every path
+    that is not an existing session; the OTP form is REQUIRED with no ALTERNATIVE beside it (an
+    alternative the user has not configured is skipped); and a user with no OTP yet is made to
+    enrol it in the browser (CONFIGURE_TOTP, enabled, a default action)."""
+    realm = _realm()
+    assert _sign_in_problems(realm) == []
+    flows = {f["alias"]: f for f in realm["authenticationFlows"]}
+    for step in OTP_STEPS:
+        holders = [
+            f for f in flows.values()
+            if any(e.get("authenticator") == step for e in f["authenticationExecutions"])
+        ]  # fmt: skip
+        assert len(holders) == 1, step
+        siblings = holders[0]["authenticationExecutions"]
+        [otp] = [e for e in siblings if e.get("authenticator") == step]
+        assert otp["requirement"] == "REQUIRED"
+        assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
+    actions = {a["alias"]: a for a in realm["requiredActions"]}
+    totp = actions["CONFIGURE_TOTP"]
+    assert totp["enabled"] is True and totp["defaultAction"] is True
+    assert totp["providerId"] == "CONFIGURE_TOTP"
+
+
+@pytest.mark.parametrize(
+    "mutate,binding",
+    [
+        # the direct grant flow loses its OTP step: a password alone gets a token
+        (lambda r: next(f for f in r["authenticationFlows"] if f["alias"] == r["directGrantFlow"])[
+            "authenticationExecutions"].pop(), "directGrantFlow"),
+        # the realm stops binding it: the IdP's built-in direct grant (OTP conditional) runs
+        (lambda r: r.pop("directGrantFlow"), "directGrantFlow"),
+        (lambda r: r.update(resetPasswordAllowed=True), "resetPasswordAllowed"),
+        (lambda r: r["clients"][0].update(directAccessGrantsEnabled=True), "direct access"),
+    ],
+)  # fmt: skip
+def test_sign_in_reader_catches_a_flow_without_a_second_factor(mutate, binding):
+    realm = _realm()
+    mutate(realm)
+    problems = _sign_in_problems(realm)
+    assert problems and any(binding in p for p in problems), problems
+
+
+def test_sign_in_path_reader_sees_a_skippable_second_factor():
+    """The reader above flags the shape it guards against: OTP and a key as ALTERNATIVEs."""
+    flows = {
+        "top": {"authenticationExecutions": [
+            {"authenticator": "auth-cookie", "priority": 10, "requirement": "ALTERNATIVE"},
+            {"flowAlias": "forms", "priority": 20, "requirement": "ALTERNATIVE"},
+        ]},
+        "forms": {"authenticationExecutions": [
+            {"authenticator": "auth-username-password-form", "priority": 10,
+             "requirement": "REQUIRED"},
+            {"flowAlias": "second", "priority": 20, "requirement": "REQUIRED"},
+        ]},
+        "second": {"authenticationExecutions": [
+            {"authenticator": "auth-otp-form", "priority": 10, "requirement": "ALTERNATIVE"},
+            {"authenticator": "webauthn-authenticator", "priority": 20,
+             "requirement": "ALTERNATIVE"},
+        ]},
+    }  # fmt: skip
+    assert frozenset({"auth-username-password-form"}) in _sign_in_paths(flows, "top")
+
+
+def test_idp_realm_grants_each_group_exactly_the_registry_roles():
+    """The realm check (ADR-0034): what the rendered realm grants is the registry's
+    group-to-role table, no more and no less, and every granted role exists on its client."""
+    from homelabnext.generators.builtin import realm_grants, registry_grants
+
+    realm = _realm()
+    assert realm_grants(realm) == registry_grants(REG)
+    assert realm_grants(realm)["hub-approvers"] == {"status-hub": {"approver"}}
+    defined = {c: {r["name"] for r in rs} for c, rs in realm["roles"]["client"].items()}
+    for grants in realm_grants(realm).values():
+        for client, roles in grants.items():
+            assert roles <= defined[client]
+    # a role added to the table reaches the realm, and only that group
+    hub = REG.services["status-hub"]
+    more = dataclasses.replace(
+        REG, services={**REG.services, "status-hub": dataclasses.replace(
+            hub, roles={**hub.roles, "viewer": (*hub.roles["viewer"], "lab-viewers")})},
+    )  # fmt: skip
+    assert realm_grants(_realm(more))["lab-viewers"] == {
+        **realm_grants(realm)["lab-viewers"], "status-hub": {"viewer"}
+    }  # fmt: skip
+
+
+#: the edge generator's one output
+EDGE, EDGE_OUT = "caddy", "caddy/sites.caddy"
+
+
+def _sites(reg=REG) -> str:
+    return generate(reg, [EDGE])[EDGE][EDGE_OUT]
 
 
 def test_caddy_only_public_hosts_and_forward_auth():
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
-    assert text.count("reverse_proxy") == 3  # dashboards, idp, status-hub
+    text = _sites()
+    public = [s for s in REG.services.values() if s.public_hostname]
+    # one proxy per public site, plus the snippet's /oauth2/* proxy to the auth proxy
+    assert text.count("reverse_proxy") == len(public) + 1
     assert "dashboards.lab.example {" in text and "import hnx_forward_auth" in text
 
 
-def test_forward_auth_strips_every_client_sent_identity_header_first():
-    """Caddy 2.9.0-2.11.1 keep a client-sent header when the IdP's answer omits it: a client
-    could send its own X-Authentik-Username or -Groups and the service would trust it.  A
-    CGI-style upstream folds - and _ alike, so the mixed X-Authentik_Groups counts too: a prefix
-    wildcard per spelling (-X-Authentik-*, -X_Authentik_*) misses it, *authentik* does not."""
-    from homelabnext.generators.builtin import FORWARD_AUTH_HEADERS, IDENTITY_HEADER_MARK
+def test_a_public_idp_site_without_an_auth_proxy_fails_generation():
+    """Without the forward-auth proxy an auth: idp site would be published with no login."""
+    services = {k: v for k, v in REG.services.items() if v.capability != "auth-proxy"}
+    with pytest.raises(ValueError, match="auth-proxy"):
+        generate(dataclasses.replace(REG, services=services))
 
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
+
+def test_forward_auth_strips_every_client_sent_identity_header_first():
+    """Caddy 2.9.0-2.11.1 keep a client-sent header when the auth proxy's answer omits it: a
+    client could send its own X-Auth-Request-User or -Groups and the service would trust it.  A
+    CGI-style upstream folds - and _ alike, so the mixed X-Auth_Request-Groups counts too: one
+    contains-wildcard per spelling of the mark (*auth-request*, *auth_request*) covers them all."""
+    from homelabnext.edge_identity import AUTH_PROXY_CHECK, IDENTITY_HEADERS
+
+    text = _sites()
     snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
     lines = [ln.strip() for ln in snippet.splitlines()]
     [copy] = [ln for ln in lines if ln.startswith("copy_headers ")]
     copied = copy.split()[1:]
-    assert copied == list(FORWARD_AUTH_HEADERS)
-    assert all(IDENTITY_HEADER_MARK in h.lower() for h in copied), "one contains-wildcard covers"
+    assert copied == list(IDENTITY_HEADERS.headers)
+    assert all(IDENTITY_HEADERS.carries_mark(h) for h in copied), "the strip covers them"
     auth_at = next(i for i, ln in enumerate(lines) if ln.startswith("forward_auth "))
+    assert lines[auth_at + 1] == f"uri {AUTH_PROXY_CHECK}?allowed_groups={{args[0]}}"
     strips = [ln.split()[1] for ln in lines[:auth_at] if ln.startswith("request_header -")]
-    assert strips == [f"-*{IDENTITY_HEADER_MARK}*"]
+    assert strips == [f"-{p}" for p in IDENTITY_HEADERS.strip_patterns()]
     # in one route, so they run in the order written (forward_auth sorts before request_header)
     route_at = lines.index("route {")
     assert route_at < min(i for i, ln in enumerate(lines) if ln.startswith("request_header"))
+    assert "redir * /oauth2/sign_in?rd={scheme}://{host}{http.request.uri_escaped}" in lines
     assert snippet.count("{") == snippet.count("}") + 1  # balanced but for the snippet's own
 
 
-def test_every_forward_auth_site_strips_identity_headers_at_site_level_first():
+def test_every_public_site_strips_identity_headers_at_site_level_first():
     """A path that never reaches the snippet's route (a handle beside it, a matcher on a route)
     must not carry a client's identity headers either: Caddy sorts a site-level request_header
-    before every handle and route, so the site deletes them before anything else runs."""
-    from homelabnext.generators.builtin import IDENTITY_HEADER_MARK
+    before every handle and route, so the site deletes them before anything else runs; a site
+    with no forward auth (the IdP's own) strips them as well."""
+    from homelabnext.edge_identity import IDENTITY_HEADERS
 
-    text = generate(REG, ["caddy"])["caddy"]["caddy/sites.caddy"]
-    sites = [b for b in text.split("\n\n") if "import hnx_forward_auth" in b]
-    assert len(sites) == 2  # dashboards, status-hub
+    text = _sites()
+    sites = [b for b in text.split("\n\n") if b.startswith(tuple("abcdefghijklmnopqrstuvwxyz"))]
+    gated = {
+        s.public_hostname for s in REG.services.values() if s.auth == "idp" and s.public_hostname
+    }
+    assert len(sites) == sum(1 for s in REG.services.values() if s.public_hostname)
+    want = [f"request_header -{p}" for p in IDENTITY_HEADERS.strip_patterns()]
     for site in sites:
         lines = [ln.strip() for ln in site.splitlines()[1:] if not ln.strip().startswith("#")]
-        assert lines[0] == f"request_header -*{IDENTITY_HEADER_MARK}*", site
-        assert lines[1] == "import hnx_forward_auth"
+        assert lines[: len(want)] == want, site
+        imports = lines[len(want)].startswith("import hnx_forward_auth ")
+        assert imports == (site.split()[0] in gated), site
+
+
+def _site(text: str, host: str) -> list[str]:
+    block = next(b for b in text.split("\n\n") if b.startswith(f"{host} {{"))
+    return [ln.strip() for ln in block.splitlines()]
+
+
+def test_each_public_idp_site_lets_in_exactly_its_role_groups():
+    """Being signed in to the realm is not enough to reach an app: each site asks the check
+    for exactly the groups its group-to-role table names (the sorted union over its roles), so
+    the auth proxy answers 403 to any other signed-in user."""
+    text = _sites()
+    gated = [s for s in REG.sorted_services() if s.auth == "idp" and s.public_hostname]
+    assert gated
+    for s in gated:
+        [imp] = [ln for ln in _site(text, s.public_hostname) if ln.startswith("import ")]
+        want = ",".join(sorted({g for gs in s.roles.values() for g in gs}))
+        assert imp == f"import hnx_forward_auth {want}", s.name
+    status = _site(text, "status.lab.example")
+    assert "import hnx_forward_auth hub-approvers,hub-private-viewers" in status
+    # the snippet hands the argument to the check, and nothing else names the groups
+    snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    assert "uri /oauth2/auth?allowed_groups={args[0]}" in snippet
+    assert snippet.count("{args[0]}") == 1
+
+
+def test_a_role_change_reaches_only_that_site():
+    hub = REG.services["status-hub"]
+    more = dataclasses.replace(
+        REG, services={**REG.services, "status-hub": dataclasses.replace(
+            hub, roles={**hub.roles, "reader": ("lab-viewers",)})},
+    )  # fmt: skip
+    before = _sites()
+    after = _sites(more)
+    assert "import hnx_forward_auth hub-approvers,hub-private-viewers,lab-viewers" in _site(
+        after, "status.lab.example"
+    )
+    assert _site(after, "dashboards.lab.example") == _site(before, "dashboards.lab.example")
+
+
+def test_a_public_idp_site_without_roles_fails_generation():
+    """An empty allowed_groups admits every signed-in user, so a public auth: idp site with no
+    group-to-role table is refused rather than published open to the whole realm."""
+    up = REG.services["uptime"]
+    bare = dataclasses.replace(
+        REG, services={**REG.services, "uptime": dataclasses.replace(up, roles={})}
+    )
+    with pytest.raises(ValueError, match=r"uptime .*no roles"):
+        _sites(bare)
+
+
+def test_a_group_name_with_a_separator_fails_generation():
+    up = REG.services["uptime"]
+    odd = dataclasses.replace(
+        REG, services={**REG.services, "uptime": dataclasses.replace(
+            up, roles={"viewer": ("ops,admins",)})},
+    )  # fmt: skip
+    with pytest.raises(ValueError, match="lower case"):
+        _sites(odd)
+
+
+def test_only_a_signed_out_answer_goes_to_sign_in():
+    """A 401 (not signed in) goes to the sign-in page, its return target query-escaped so a
+    query with & survives; a 403 (signed in, in none of the site's groups) is passed on as it
+    is: sending it to sign in would answer 403 again, a loop."""
+    text = _sites()
+    snippet = text[text.index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    lines = [ln.strip() for ln in snippet.splitlines()]
+    matchers = [ln for ln in lines if ln.startswith("@")]
+    assert matchers == ["@hnx_sign_in status 401"]
+    assert [ln for ln in lines if ln.startswith("handle_response")] == [
+        "handle_response @hnx_sign_in {"
+    ]
+    [redir] = [ln for ln in lines if ln.startswith("redir ")]
+    assert redir.endswith("rd={scheme}://{host}{http.request.uri_escaped}")
+    assert "{uri}" not in redir
+
+
+def test_a_return_target_with_an_ampersand_in_its_query_survives():
+    """The sign-in redirect's ``rd`` is the request URI query-escaped (Caddy's
+    ``{http.request.uri_escaped}`` is Go's ``url.QueryEscape`` of the request URI), so the
+    auth proxy reads back the whole target; the raw ``{uri}`` would split it at the ``&``."""
+    from urllib.parse import parse_qs, quote_plus, urlsplit
+
+    snippet = _sites()[_sites().index("(hnx_forward_auth) {") :].split("\n}\n", 1)[0]
+    [redir] = [ln.strip() for ln in snippet.splitlines() if ln.strip().startswith("redir ")]
+    target = redir.split()[2]
+    uri = "/reports/view?id=7&tab=a b&next=/x?y=1"
+
+    def run(t: str) -> dict[str, list[str]]:
+        t = t.replace("{scheme}", "https").replace("{host}", "app.lab.example")
+        t = t.replace("{http.request.uri_escaped}", quote_plus(uri)).replace("{uri}", uri)
+        return parse_qs(urlsplit(t).query)
+
+    assert run(target) == {"rd": [f"https://app.lab.example{uri}"]}
+    # the old target loses everything after the first & to other parameters
+    assert run(target.replace("{http.request.uri_escaped}", "{uri}"))["rd"] != [
+        f"https://app.lab.example{uri}"
+    ]
 
 
 def test_docs_page_lists_dependants():

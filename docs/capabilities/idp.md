@@ -194,9 +194,9 @@ Provided by (`examples/services.yml`):
 
 | Service | Implementation |
 |---|---|
-| [idp](../systems/idp.md) ([[systems/idp\|idp]]) | `authentik` |
+| [idp](../systems/idp.md) ([[systems/idp\|idp]]) | `keycloak` |
 
-Depended on by: [dashboards](../systems/dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](../systems/lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](../systems/status-hub.md) ([[systems/status-hub|status-hub]])
+Depended on by: [auth-proxy](../systems/auth-proxy.md) ([[systems/auth-proxy|auth-proxy]]), [dashboards](../systems/dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](../systems/lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](../systems/status-hub.md) ([[systems/status-hub|status-hub]])
 
 ## Integrating a new product
 

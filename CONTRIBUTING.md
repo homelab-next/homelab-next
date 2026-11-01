@@ -146,8 +146,9 @@ and an entry that no longer excuses anything fails the lint.
   and their templates and imports, markdown fences, Caddyfiles in YAML, Caddy JSON/YAML, the
   `caddy` generator's output for each registry), in a config with a `forward_auth` anywhere
   every site that runs it or proxies deletes the identity headers first at site level with no
-  matcher (`request_header -*authentik*`, as the generator writes it; the IdP's own site is
-  exempt), every `forward_auth` sits in a `route`, with no matcher, after a delete (site level
+  matcher (`request_header -*auth-request*` and `-*auth_request*`: the strip of the declared
+  identity-header set, `homelabnext.edge_identity`, as the generator writes it; the IdP's own
+  site is exempt), every `forward_auth` sits in a `route`, with no matcher, after a delete (site level
   or in the route) of each header its `copy_headers` sets in every `-`/`_` spelling; no header directive sets, adds
   or copies an identity header (`copy_headers A>B` is the way to rename one), or rewrites one
   through a `*` field; no FastCGI `env` sets an
@@ -155,7 +156,7 @@ and an entry that no longer excuses anything fails the lint.
   `REDIRECT_REMOTE_USER` may take the IdP's answer, after the site-level strip: PHP rebuilds
   `PHP_AUTH_*` from the client's `Authorization`; and if the app falls back to the
   `Remote-User` header, strip `Remote-User`/`Remote_User` too, or use
-  `copy_headers X-Authentik-Username>Remote-User` with
+  `copy_headers X-Auth-Request-User>Remote-User` with
   `env REMOTE_USER {http.request.header.Remote-User}`); no `forward_auth` (or forward-auth site proxy)
   dials a request placeholder (`dial`); what the lint cannot read (a heredoc, `{$ENV}` in
   directive position, a header name that is a placeholder, an import outside the tree, a

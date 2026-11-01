@@ -13,16 +13,17 @@ Who may do what -- the private tier's front door (:func:`.agents.auth.authorize`
 address, shared front-door secret header, the forward-auth identity header), then a group:
 
 =========================  ==================================================================
-see the queue (``GET``)    the **viewer group** (the private tier's) *or* the approver group:
+see the queue (``GET``)    a **viewer group** (the private tier's) *or* an approver group:
                            pending params are as sensitive as the private tier's details
-approve / deny (``POST``)  the **approver group** only, distinct from the viewer group
+approve / deny (``POST``)  an **approver group** only, none of them a viewer group
 =========================  ==================================================================
 
 The approver sent to the broker is ``issuer`` = the configured SSO issuer and ``subject`` = the
 forward-auth username **unchanged** -- **never anything from the form body**, which may carry
 only ``request_id``, ``digest``, ``decision``, ``token`` and ``note``.  The broker matches its
-approver allowlist exactly, and an IdP's usernames are case-sensitive (Authentik's are: ``Bob``
-and ``bob`` can be two accounts), so the hub never folds one into another: a username that is not
+approver allowlist exactly, and an IdP's usernames may be case-sensitive (in some IdPs ``Bob``
+and ``bob`` can be two accounts; the default IdP stores them lower case), so the hub never folds
+one into another: a username that is not
 already a canonical approver subject (:data:`SUBJECT_RE`, the approval schema's: lower-case, a
 letter first, then letters, digits, ``.``, ``_`` or ``-``) cannot decide (``403``) and the page
 says why.
@@ -229,7 +230,7 @@ class ApprovalsSite:
         return a if a.allowed else d
 
     def _approver(self, client: str | None, headers: Any) -> Decision:
-        return authorize(self.front_door, client, headers, group=self.settings.approver_group)
+        return authorize(self.front_door, client, headers, groups=self.settings.approver_groups)
 
     def subject(self, user: str) -> str | None:
         """The approver subject for the front door's ``user``: the username unchanged when it is

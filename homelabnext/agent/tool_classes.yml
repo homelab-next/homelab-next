@@ -82,6 +82,7 @@ capabilities:
   cap:hypervisor: [exec]
   cap:secrets: [credential]
   cap:idp: [credential]
+  cap:auth-proxy: [credential]  # signs people in and vouches for their identity to every gated site
   # every other capability the registry, the conformance contracts and the module slots name
   # (G-13 fails closed: a capability this table does not class is refused for every profile)
   cap:metrics: [read]

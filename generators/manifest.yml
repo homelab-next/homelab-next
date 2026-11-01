@@ -18,9 +18,9 @@ generators:
   hosts_file:
     description: "hosts(5) block mapping host and capability names to addresses (resolver fallback)"
     target: "/etc/hosts via base role"
-  idp_blueprint:
-    description: "Identity provider (Authentik-style) blueprint skeleton for services with auth=idp"
-    target: "identity provider"
+  idp_realm:
+    description: "OIDC IdP realm (clients, groups and their roles, MFA browser flow) for services with auth=idp"
+    target: "identity provider (realm import)"
   mcp_config:
     description: "Agent MCP client configuration for services that expose an MCP endpoint"
     target: "agent runtime"

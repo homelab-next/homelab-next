@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Injection payload from the security review: a registry change that edits only 'owner'
-# (idp: a new public Caddy site with no forward_auth; lake-query: an IdP blueprint tag).
+# (idp: a new public Caddy site with no forward_auth; lake-query: an IdP config tag).
 registry_version: 1
 lab:
   name: northwind
@@ -58,6 +58,19 @@ hosts:
     zone: edge
     role: edge
 services:
+  auth-proxy:
+    capability: auth-proxy
+    impl: oauth2-proxy
+    host: edge-core
+    protocol: http
+    port: 4180
+    health: {kind: http, path: /ping, expect_status: 200}
+    upstreams: [idp]
+    owner: identity-team
+    version: "7.15.5"
+    tls: none
+    auth: own
+
   dns:
     capability: dns
     impl: technitium

@@ -57,7 +57,7 @@ services:
     protocol: https
     port: 443
     health: {kind: tcp}
-    upstreams: [dashboards, idp, status-hub]
+    upstreams: [auth-proxy, dashboards, idp, metrics, status-hub, uptime]
     owner: platform-team
     version: "2.11.7"
     tls: public
@@ -65,19 +65,36 @@ services:
 
   idp:
     capability: idp
-    impl: authentik
+    impl: keycloak
     host: idp-core
     protocol: https
-    port: 9443
-    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    port: 8443
+    health: {kind: http, path: /realms/northwind/.well-known/openid-configuration, expect_status: 200}
     clients: [edge, data, compute]
     owner: identity-team
-    version: "2024.8"
+    version: "26.8.1"
     tls: internal
-    auth: own
+    auth: own              # its admin console: the break-glass admin's secret is in the secret store
     public_hostname: login.lab.example
     backup_job: daily-core
     tags: [core, identity]
+
+  # the edge's forward auth (ADR-0034): every public auth: idp site asks it about each request; it
+  # signs the user in at the IdP (OIDC) and answers with the identity headers the edge copies
+  auth-proxy:
+    capability: auth-proxy
+    impl: oauth2-proxy
+    host: edge-core
+    protocol: http
+    port: 4180
+    health: {kind: http, path: /ping, expect_status: 200}
+    upstreams: [idp]
+    clients: [edge]
+    owner: identity-team
+    version: "7.15.5"
+    tls: none
+    auth: own
+    tags: [core, identity, edge]
 
   secrets:
     capability: secrets
@@ -90,6 +107,7 @@ services:
     owner: identity-team
     version: "2.1.0"
     tls: mtls
+    auth: own              # break-glass root token; OIDC login is an auth method of its own
     backup_job: daily-core
     tags: [core, secrets]
 
@@ -105,6 +123,7 @@ services:
     owner: data-team
     version: "2024.9"
     tls: internal
+    auth: own
     backup_job: weekly-lake
     tags: [data, storage]
 
@@ -235,6 +254,7 @@ services:
     owner: platform-team
     version: "2.11"
     tls: none
+    auth: own              # publishers hold per-topic tokens
     tags: [ops, notify]
     status_sources:
       - id: notify-health
@@ -260,6 +280,10 @@ services:
     owner: platform-team
     version: "2.54.1"
     tls: none
+    auth: idp
+    public_hostname: metrics.lab.example
+    # who the edge lets in (ADR-0034): a public auth: idp site admits only its roles' groups
+    roles: {viewer: [lab-viewers, platform-team]}
     tags: [ops, monitoring]
     status_sources:
       - id: metrics-alerts
@@ -299,6 +323,9 @@ services:
     owner: platform-team
     version: "1.23.16"
     tls: none
+    auth: idp
+    public_hostname: uptime.lab.example
+    roles: {viewer: [lab-viewers, platform-team]}
     tags: [ops, monitoring]
     status_sources:
       - id: uptime-monitors
@@ -318,6 +345,7 @@ services:
     owner: platform-team
     version: "3.8.1"
     tls: internal
+    auth: own
     tags: [ops, automation]
     status_sources:
       - id: automation-executions
@@ -339,6 +367,7 @@ services:
     owner: data-team
     version: "2.0.0"
     tls: internal
+    auth: idp              # its own OIDC login (a client in the realm)
     tags: [data, dataflow]
     status_sources:
       - id: dataflow-status
@@ -361,6 +390,7 @@ services:
     owner: platform-team
     version: "0.2.0"
     tls: none
+    auth: own              # its API answers only to an API key
     tags: [ops, agents]
     status_sources:
       - id: agentmetry-audit
@@ -386,6 +416,7 @@ services:
     tls: none
     auth: idp
     public_hostname: dashboards.lab.example
+    roles: {viewer: [lab-viewers], editor: [platform-team], admin: [lab-admins]}
     backup_job: daily-core
     tags: [ops, ui]
 
@@ -402,6 +433,8 @@ services:
     tls: none
     auth: idp
     public_hostname: status.lab.example
+    # the group-to-role table (ADR-0034): the realm grants these, the hub reads them
+    roles: {viewer: [hub-private-viewers], approver: [hub-approvers]}
     # the edge adds this header (value from the secret store) so the hub can trust the
     # forward-auth identity headers for its private agent-activity tier (docs/status.md)
     front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}

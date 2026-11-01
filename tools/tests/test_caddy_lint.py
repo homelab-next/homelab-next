@@ -17,31 +17,66 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caddy_lint as lint
 
+from homelabnext.edge_identity import IDENTITY_HEADERS, IdentityHeaders
+
 REPO = Path(__file__).resolve().parents[2]
+
+#: the identity-header set most tests judge against: not the platform's (ADR-0034), so the whole
+#: suite also proves the lint and the generator follow the one declaration, whatever it names.
+#: Its mark is one word, so one contains-wildcard strips every spelling; the platform's own set
+#: (a two-word mark, two strips) has its own tests at the end of this file.
+TEST_IDENTITY = IdentityHeaders(
+    user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email", mark="hnxid"
+)
+
+
+def _judge_with(identity, monkeypatch):
+    """Judge and generate with ``identity``; returns the set the lint judged with before."""
+    from homelabnext.generators import builtin
+
+    monkeypatch.setattr(builtin, "IDENTITY_HEADERS", identity)
+    return lint.use_identity(identity)
+
+
+@pytest.fixture(autouse=True)
+def identity_set(monkeypatch):
+    """Every test judges (and generates) with :data:`TEST_IDENTITY` unless it asks for
+    ``platform_identity``."""
+    previous = _judge_with(TEST_IDENTITY, monkeypatch)
+    yield TEST_IDENTITY
+    lint.use_identity(previous)
+
+
+@pytest.fixture
+def platform_identity(identity_set, monkeypatch):
+    """The platform's own identity-header set (``homelabnext.edge_identity``)."""
+    _judge_with(IDENTITY_HEADERS, monkeypatch)
+    return IDENTITY_HEADERS
+
 
 GOOD = """\
 (hnx_forward_auth) {
 	route {
 		# client-sent identity headers never reach the service
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 }
 
 app.lab.example {
-	request_header -*Authentik*
+	request_header -*Hnxid*
 	import hnx_forward_auth
 	reverse_proxy app:8080
 }
 """
-# The site-level strip is spelled -*Authentik* (Caddy matches it case-insensitively) so that the
-# tests below that rewrite the route's -*authentik* leave it alone.
+# The site-level strip is spelled -*Hnxid* (Caddy matches it case-insensitively) so that the
+# tests below that rewrite the route's -*hnxid* leave it alone.
 #: GOOD without its site-level strip: the route-level rule on its own (the site-level strip
 #: covers a forward_auth in a route too, so with it the route-level rule has nothing to find)
-NOSITE = GOOD.replace("\trequest_header -*Authentik*\n", "")
+NOSITE = GOOD.replace("\trequest_header -*Hnxid*\n", "")
 
 
 def _strip(text: str) -> list[str]:
@@ -65,8 +100,8 @@ def _site(fragment: str, *deletes: str) -> str:
     return f"app.lab.example {{\n{strips}{textwrap.indent(textwrap.dedent(fragment), chr(9))}}}\n"
 
 
-ALL_USER = ("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username",
-            "X_Authentik_Username")  # fmt: skip
+ALL_USER = ("X-Hnxid-Username", "X-Hnxid_Username", "X_Hnxid-Username",
+            "X_Hnxid_Username")  # fmt: skip
 
 
 def test_the_generators_shape_passes():
@@ -80,7 +115,7 @@ def test_forward_auth_outside_a_route_fails():
 
 
 def test_a_bare_forward_auth_in_a_site_fails():
-    text = "app.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    text = "app.lab.example {\n\trequest_header -*hnxid*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n"
     assert _strip(text) == ["forward_auth is not directly inside a route block"]
 
 
@@ -88,47 +123,47 @@ def test_a_strip_after_forward_auth_does_not_count():
     text = """\
     route {
         forward_auth idp:9443 {
-            copy_headers X-Authentik-Username
+            copy_headers X-Hnxid-Username
         }
-        request_header -*authentik*
+        request_header -*hnxid*
     }
     """
-    assert _strip(text) == [_missed("X-Authentik-Username", *ALL_USER)]
+    assert _strip(text) == [_missed("X-Hnxid-Username", *ALL_USER)]
 
 
 def test_the_underscore_spelling_is_required():
-    text = NOSITE.replace("-*authentik*", "-X-Authentik-*")
+    text = NOSITE.replace("-*hnxid*", "-X-Hnxid-*")
     assert _strip(text) == [
-        _missed("X-Authentik-Username", *ALL_USER[1:]),
-        _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups",
-                "X_Authentik_Groups"),
+        _missed("X-Hnxid-Username", *ALL_USER[1:]),
+        _missed("X-Hnxid-Groups", "X-Hnxid_Groups", "X_Hnxid-Groups",
+                "X_Hnxid_Groups"),
     ]  # fmt: skip
 
 
 def test_the_mixed_spellings_are_required():
     """The snippet main generated: a dash and an underscore prefix wildcard.  A CGI-style
-    upstream folds X-Authentik_Groups into HTTP_X_AUTHENTIK_GROUPS too, and Caddy 2.11.1 passes
+    upstream folds X-Hnxid_Groups into HTTP_X_HNXID_GROUPS too, and Caddy 2.11.1 passes
     it through both wildcards (observed live)."""
-    text = NOSITE.replace("-*authentik*", "-X-Authentik-*\n\t\trequest_header -X_Authentik_*")
+    text = NOSITE.replace("-*hnxid*", "-X-Hnxid-*\n\t\trequest_header -X_Hnxid_*")
     assert _strip(text) == [
-        _missed("X-Authentik-Username", "X-Authentik_Username", "X_Authentik-Username"),
-        _missed("X-Authentik-Groups", "X-Authentik_Groups", "X_Authentik-Groups"),
+        _missed("X-Hnxid-Username", "X-Hnxid_Username", "X_Hnxid-Username"),
+        _missed("X-Hnxid-Groups", "X-Hnxid_Groups", "X_Hnxid-Groups"),
     ]
 
 
-@pytest.mark.parametrize("pattern", ["*authentik*", "*AUTHENTIK*", "*Authentik-*", "*thent*"])
+@pytest.mark.parametrize("pattern", ["*hnxid*", "*HNXID*", "*Hnxid-*", "*nxi*"])
 def test_a_contains_wildcard_covers_every_spelling_in_any_case(pattern):
-    text = NOSITE.replace("*authentik*", pattern)
-    if pattern == "*Authentik-*":  # a contains with a separator in it covers only that one
+    text = NOSITE.replace("*hnxid*", pattern)
+    if pattern == "*Hnxid-*":  # a contains with a separator in it covers only that one
         assert len(_strip(text)) == 2
     else:
         assert _strip(text) == []
 
 
 def test_header_names_match_case_insensitively():
-    text = NOSITE.replace("-*authentik*", "-x-authentik-*\n\t\trequest_header -x_authentik_*")
-    text = text.replace("X-Authentik-Username X-Authentik-Groups", "X-AUTHENTIK-USER")
-    assert _strip(text) == [_missed("X-AUTHENTIK-USER", "X-AUTHENTIK_USER", "X_AUTHENTIK-USER")]
+    text = NOSITE.replace("-*hnxid*", "-x-hnxid-*\n\t\trequest_header -x_hnxid_*")
+    text = text.replace("X-Hnxid-Username X-Hnxid-Groups", "X-HNXID-USER")
+    assert _strip(text) == [_missed("X-HNXID-USER", "X-HNXID_USER", "X_HNXID-USER")]
 
 
 def test_spellings():
@@ -139,29 +174,29 @@ def test_spellings():
 def test_exact_names_cover_only_themselves():
     text = """\
     route {
-        request_header -X-Authentik-Username
-        request_header -X_Authentik_Username
-        request_header -X-Authentik_Username
-        request_header -X_Authentik-Username
+        request_header -X-Hnxid-Username
+        request_header -X_Hnxid_Username
+        request_header -X-Hnxid_Username
+        request_header -X_Hnxid-Username
         forward_auth idp:9443 {
-            copy_headers X-Authentik-Username X-Authentik-Email
+            copy_headers X-Hnxid-Username X-Hnxid-Email
         }
     }
     """
     assert _strip(_site(text)) == [
-        _missed("X-Authentik-Email", "X-Authentik-Email", "X-Authentik_Email",
-                "X_Authentik-Email", "X_Authentik_Email")
+        _missed("X-Hnxid-Email", "X-Hnxid-Email", "X-Hnxid_Email",
+                "X_Hnxid-Email", "X_Hnxid_Email")
     ]  # fmt: skip
 
 
 def test_a_strip_in_another_route_does_not_count():
     text = """\
     route {
-        request_header -*authentik*
+        request_header -*hnxid*
     }
     route {
         forward_auth idp:9443 {
-            copy_headers X-Authentik-Groups
+            copy_headers X-Hnxid-Groups
         }
     }
     """
@@ -176,7 +211,7 @@ def test_a_renamed_header_and_the_block_form_are_both_read():
         request_header -*_User
         forward_auth idp:9443 {
             copy_headers {
-                X-Authentik-Username>X-Remote-User
+                X-Hnxid-Username>X-Remote-User
             }
         }
     }
@@ -191,9 +226,9 @@ def test_a_renamed_header_and_the_block_form_are_both_read():
 def test_a_templated_copy_headers_fails_closed():
     text = """\
     route {
-        request_header -*authentik*
+        request_header -*hnxid*
         forward_auth idp:9443 {
-            copy_headers {{ authentik_copy_headers }}
+            copy_headers {{ hnxid_copy_headers }}
         }
     }
     """
@@ -203,7 +238,7 @@ def test_a_templated_copy_headers_fails_closed():
 
 
 def test_an_inline_allow_waives_a_forward_auth():
-    text = GOOD.replace("\t\trequest_header -*authentik*\n", "").replace(
+    text = GOOD.replace("\t\trequest_header -*hnxid*\n", "").replace(
         "forward_auth idp:9443 {",
         "forward_auth idp:9443 {  # caddy-lint: allow lab fixture",
     )
@@ -215,7 +250,7 @@ def test_an_inline_allow_waives_only_its_own_forward_auth():
     allowed = GOOD.replace(
         "forward_auth idp:9443 {", "forward_auth idp:9443 {  # caddy-lint: allow x"
     )
-    unallowed = "other.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    unallowed = "other.lab.example {\n\trequest_header -*hnxid*\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n"
     assert _strip(allowed + unallowed) == ["forward_auth is not directly inside a route block"]
 
 
@@ -544,7 +579,7 @@ def test_an_allowlist_entry_names_its_rules_and_a_bounded_path(tmp_path, entry, 
 def test_an_allowlist_entry_excuses_only_its_rules_and_never_a_config_by_glob(tmp_path):
     (tmp_path / "edge").mkdir()
     (tmp_path / "edge" / "Caddyfile").write_text(
-        "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+        "app.lab.example {\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n"
     )
     (tmp_path / "gen.py").write_text(
         'SITE = """\nforward_auth idp:9443\n"""\nREG = {"edge": {"impl": "caddy", "version": "2.8.4"}}\n'
@@ -569,9 +604,9 @@ def test_an_allowlist_entry_excuses_only_its_rules_and_never_a_config_by_glob(tm
 def test_markdown_blocks_and_files_in_the_tree(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "edge.md").write_text(
-        "Setup:\n\n   ```caddyfile\n   app.lab.example {\n   \trequest_header -*authentik*\n"
+        "Setup:\n\n   ```caddyfile\n   app.lab.example {\n   \trequest_header -*hnxid*\n"
         "   \tforward_auth idp:9443 {\n"
-        "   \t\tcopy_headers X-Authentik-Username\n   \t}\n   }\n   ```\n"
+        "   \t\tcopy_headers X-Hnxid-Username\n   \t}\n   }\n   ```\n"
     )
     (tmp_path / "Caddyfile.j2").write_text(GOOD)
     findings, counts = lint.scan(tmp_path)
@@ -589,7 +624,10 @@ def test_generated_configs_are_checked(tmp_path, monkeypatch):
     assert findings == [] and counts["generated"] == 1
 
     # the generator's mark narrowed to a prefix: both strips (site and route) miss spellings
-    monkeypatch.setattr(builtin, "IDENTITY_HEADER_MARK", "x-authentik-")
+    narrow = IdentityHeaders(
+        user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email", mark="x-hnxid"
+    )
+    monkeypatch.setattr(builtin, "IDENTITY_HEADERS", narrow)
     findings, _ = lint.scan(tmp_path)
     assert {f.path for f in findings} == {"services.yml (caddy generator)"}
     assert {f.rule for f in findings} == {"strip"} and len(findings) >= 2
@@ -606,7 +644,7 @@ def test_main_reports_and_exits(tmp_path):
     assert lint.main([str(tmp_path / "missing")], out=out, err=err) == 2
 
 
-def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth():
+def test_this_repo_pins_a_fixed_caddy_and_strips_before_forward_auth(platform_identity):
     """Every Caddy pin in the tree was 2.8.4: 2.9.0-2.11.1 pass a client-sent identity header
     the IdP omits, and up to 2.11.1 the underscore spelling. The tree must stay clean, and the
     generated configs must stay covered: a generator change that made every registry fail
@@ -630,10 +668,10 @@ PAST = """\
 app.lab.example {
 	%s
 	route%s {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 	%s
@@ -646,7 +684,7 @@ app.lab.example {
     ("matcher", "beside"),
     [
         # Caddy sorts handle before route: /api/x never reaches forward_auth, and the client's
-        # X-Authentik-Groups reached the upstream live on 2.11.7 (review probe a02)
+        # X-Hnxid-Groups reached the upstream live on 2.11.7 (review probe a02)
         ("", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"),
         # a matcher on the route: every other path skips it (a03)
         (" /admin/*", ""),
@@ -658,20 +696,20 @@ def test_a_path_past_the_auth_route_needs_the_site_level_strip(matcher, beside):
     assert [(f.line, f.rule) for f in found] == [(1, "strip")]
     assert found[0].detail.startswith(
         "site app.lab.example runs forward_auth but has no matcherless site-level "
-        "request_header deleting *authentik*:"
+        "request_header deleting *hnxid*:"
     )
     # a site-level request_header runs before every handle and route (verified live on 2.11.1
     # and 2.11.7: /api/x and / reach the upstream with no identity header, /admin/ with alice's)
-    assert lint.lint_caddy(PAST % ("request_header -*authentik*", matcher, beside)) == []
+    assert lint.lint_caddy(PAST % ("request_header -*hnxid*", matcher, beside)) == []
 
 
 @pytest.mark.parametrize(
     "site",
     [
-        "request_header /admin/* -*authentik*",  # a matcher: the other paths keep the headers
-        "request_header @api -*authentik*",
-        "request_header -X-Authentik-*",  # misses the _ and mixed spellings
-        "handle {\n\t\trequest_header -*authentik*\n\t}",  # not site level
+        "request_header /admin/* -*hnxid*",  # a matcher: the other paths keep the headers
+        "request_header @api -*hnxid*",
+        "request_header -X-Hnxid-*",  # misses the _ and mixed spellings
+        "handle {\n\t\trequest_header -*hnxid*\n\t}",  # not site level
     ],
 )
 def test_only_a_matcherless_site_level_strip_of_every_spelling_counts(site):
@@ -681,12 +719,12 @@ def test_only_a_matcherless_site_level_strip_of_every_spelling_counts(site):
 
 def test_the_site_level_strip_covers_a_renamed_copy_too():
     text = (
-        (PAST % ("request_header -*authentik*", "", ""))
+        (PAST % ("request_header -*hnxid*", "", ""))
         .replace(
-            "copy_headers X-Authentik-Username X-Authentik-Groups",
-            "copy_headers X-Authentik-Username>Remote-User",
+            "copy_headers X-Hnxid-Username X-Hnxid-Groups",
+            "copy_headers X-Hnxid-Username>Remote-User",
         )
-        .replace("\t\trequest_header -*authentik*", "\t\trequest_header -Remote*")
+        .replace("\t\trequest_header -*hnxid*", "\t\trequest_header -Remote*")
     )
     found = lint.lint_caddy(text)
     assert [f.rule for f in found] == ["strip"]
@@ -694,8 +732,8 @@ def test_the_site_level_strip_covers_a_renamed_copy_too():
     assert (
         lint.lint_caddy(
             text.replace(
-                "\trequest_header -*authentik*",
-                "\trequest_header -*authentik*\n\trequest_header -remote*",
+                "\trequest_header -*hnxid*",
+                "\trequest_header -*hnxid*\n\trequest_header -remote*",
                 1,
             )
         )
@@ -710,9 +748,9 @@ def test_a_named_route_is_not_a_route_and_its_invoker_needs_the_strip():
     named = """\
 &(authed) {
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			copy_headers X-Authentik-Username
+			copy_headers X-Hnxid-Username
 		}
 		reverse_proxy app:8080
 	}
@@ -723,30 +761,37 @@ app.lab.example {
 }
 """
     assert [(f.line, f.rule) for f in lint.lint_caddy(named % "")] == [(10, "strip")]
-    assert lint.lint_caddy(named % "request_header -*authentik*") == []
+    assert lint.lint_caddy(named % "request_header -*hnxid*") == []
     flat = named.replace("\troute {\n", "").replace("\t\treverse_proxy app:8080\n\t}\n", "")
     flat = flat.replace("\t\t", "\t")
-    found = lint.lint_caddy(flat % "request_header -*authentik*")
+    found = lint.lint_caddy(flat % "request_header -*hnxid*")
     assert [f.detail for f in found] == ["forward_auth is not directly inside a route block"]
 
 
-def test_the_generated_sites_need_their_site_level_strip():
+def test_the_generated_sites_need_their_site_level_strip(platform_identity):
     golden = (REPO / "tests/generators/golden/caddy/sites.caddy").read_text(encoding="utf-8")
     assert lint.lint_caddy(golden) == []
-    without = golden.replace("\trequest_header -*authentik*\n\timport", "\timport")
-    assert [(f.line, f.rule) for f in lint.lint_caddy(without)] == [(14, "strip"), (25, "strip")]
+    strip = platform_identity.strip_lines("\t")
+    without = golden.replace(f"{strip}\timport", "\timport")
+    gated = [
+        i + 1 for i, ln in enumerate(without.splitlines()) if ln.endswith(" {") and not
+        ln.startswith(("\t", "(")) and "\timport hnx_forward_auth" in without[
+            without.index(ln):].split("\n}\n", 1)[0]
+    ]  # fmt: skip
+    assert len(gated) >= 2
+    assert [(f.line, f.rule) for f in lint.lint_caddy(without)] == [(n, "strip") for n in gated]
 
 
 # ---------------------------------------------------------------- an identity header set later
 
 AUTHED = """\
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 		%s
 	}
@@ -774,20 +819,20 @@ def test_the_authed_shape_passes():
     ("route", "proxy", "site", "expected"),
     [
         # reverse_proxy sets it from a client header after forward_auth ran
-        ("", "header_up X-Authentik-Groups {http.request.header.X-Evil}", "", [(12, "header_up")]),
-        ("", "header_up +X-Authentik-Groups admins", "", [(12, "header_up")]),
-        ("", "header_up X-Authentik-Groups admins users", "", [(12, "header_up")]),
+        ("", "header_up X-Hnxid-Groups {http.request.header.X-Evil}", "", [(12, "header_up")]),
+        ("", "header_up +X-Hnxid-Groups admins", "", [(12, "header_up")]),
+        ("", "header_up X-Hnxid-Groups admins users", "", [(12, "header_up")]),
         # set again inside the route, after forward_auth
-        ("request_header X-Authentik-Groups {http.request.header.X-Evil}", "", "", [(9, "request_header")]),
-        ("request_header +x_authentik_groups admins", "", "", [(9, "request_header")]),
+        ("request_header X-Hnxid-Groups {http.request.header.X-Evil}", "", "", [(9, "request_header")]),
+        ("request_header +x_hnxid_groups admins", "", "", [(9, "request_header")]),
         # a second route
-        ("", "", "route {\n\t\trequest_header X-Authentik-Username {header.X-Evil}\n\t}", [(15, "request_header")]),
+        ("", "", "route {\n\t\trequest_header X-Hnxid-Username {header.X-Evil}\n\t}", [(15, "request_header")]),
         # copied from the client's own header into another one before the route runs
-        ("", "", "request_header X-Remote-User {http.request.header.X-Authentik-Username}", [(14, "request_header")]),
+        ("", "", "request_header X-Remote-User {http.request.header.X-Hnxid-Username}", [(14, "request_header")]),
         # a header block
-        ("", "", "header {\n\t\t+X-Authentik_Groups admins\n\t}", [(15, "header")]),
+        ("", "", "header {\n\t\t+X-Hnxid_Groups admins\n\t}", [(15, "header")]),
         # deletes are not a reset, and other headers are not identity headers
-        ("request_header -X-Authentik-Groups", "header_up -X_Authentik_*", "header {\n\t\t-Server\n\t}", []),
+        ("request_header -X-Hnxid-Groups", "header_up -X_Hnxid_*", "header {\n\t\t-Server\n\t}", []),
         ("", "header_up Host {upstream_hostport}", "", []),
     ],
 )  # fmt: skip
@@ -797,69 +842,69 @@ def test_an_identity_header_set_anywhere_but_copy_headers_fails(route, proxy, si
 
 def test_a_renamed_target_is_an_identity_header_too():
     text = (AUTHED % ("", "header_up Remote-User alice", "")).replace(
-        "copy_headers X-Authentik-Username X-Authentik-Groups",
-        "copy_headers X-Authentik-Username>Remote-User",
+        "copy_headers X-Hnxid-Username X-Hnxid-Groups",
+        "copy_headers X-Hnxid-Username>Remote-User",
     )
     findings = lint.lint_caddy(
-        text.replace("-*authentik*", "-*authentik*\n\trequest_header -Remote*", 1).replace(
-            "\t\trequest_header -*authentik*",
-            "\t\trequest_header -*authentik*\n\t\trequest_header -Remote*",
+        text.replace("-*hnxid*", "-*hnxid*\n\trequest_header -Remote*", 1).replace(
+            "\t\trequest_header -*hnxid*",
+            "\t\trequest_header -*hnxid*\n\t\trequest_header -Remote*",
         )
     )
     assert [(f.line, f.rule) for f in findings] == [(14, "reset")]
     assert "Remote-User" in findings[0].detail
 
 
-def test_the_authentik_uri_path_is_not_a_header():
-    assert lint.lint_caddy(AUTHED % ("", "", "redir /outpost.goauthentik.io/start /")) == []
+def test_the_hnxid_uri_path_is_not_a_header():
+    assert lint.lint_caddy(AUTHED % ("", "", "redir /hnxid/start /")) == []
 
 
 def test_an_inline_allow_waives_one_reset():
-    proxy = "header_up X-Authentik-Groups admins  # caddy-lint: allow fixture"
-    assert _resets("request_header X-Authentik-Groups x", proxy) == [(9, "request_header")]
+    proxy = "header_up X-Hnxid-Groups admins  # caddy-lint: allow fixture"
+    assert _resets("request_header X-Hnxid-Groups x", proxy) == [(9, "request_header")]
 
 
-# Authentik's own Caddy layout (its documentation's Caddy guide): the IdP's own site, the outpost
-# passthrough and a matcher named after it. None of these names a header the upstream receives.
-AUTHENTIK_LAYOUT = """\
+# An identity product's own Caddy layout (the shape a vendor's Caddy guide documents, its names
+# carrying the mark): the IdP's own site, the proxy-path passthrough and a matcher named after it. None of these names a header the upstream receives.
+HNXID_LAYOUT = """\
 (hnx_forward_auth) {
 	route {
-		request_header -*authentik*
-		forward_auth authentik-server:9000 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+		request_header -*hnxid*
+		forward_auth hnxid-server:9000 {
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 }
 
-authentik.lab.example {
-	reverse_proxy authentik-server:9000
+hnxid.lab.example {
+	reverse_proxy hnxid-server:9000
 }
 
 app.lab.example {
-	request_header -*authentik*
-	reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
+	request_header -*hnxid*
+	reverse_proxy /hnxid/* hnxid-server:9000
 	import hnx_forward_auth
 	reverse_proxy app:8080
 }
 
 wiki.lab.example {
-	request_header -*authentik*
-	@authentik path /outpost.goauthentik.io/*
-	handle @authentik {
-		reverse_proxy authentik-outpost:9000
+	request_header -*hnxid*
+	@hnxid path /hnxid/*
+	handle @hnxid {
+		reverse_proxy hnxid-outpost:9000
 	}
-	@admins header X-Authentik-Groups *admins*
-	@editors expression `{http.request.header.X-Authentik-Groups}.contains("editors")`
-	@authentik_api {
-		header X-Authentik-Username *
+	@admins header X-Hnxid-Groups *admins*
+	@editors expression `{http.request.header.X-Hnxid-Groups}.contains("editors")`
+	@hnxid_api {
+		header X-Hnxid-Username *
 		path /api/*
 	}
 	route {
-		request_header -*authentik*
-		forward_auth authentik-outpost:9000 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+		request_header -*hnxid*
+		forward_auth hnxid-outpost:9000 {
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 	handle @admins {
@@ -870,19 +915,19 @@ wiki.lab.example {
 """
 
 
-def test_authentiks_own_caddy_layout_passes():
-    """Review SF3: every token carrying authentik was a reset, so the IdP's own vhost, the
-    outpost passthrough, the default authentik-server service name and an @authentik matcher
+def test_an_idps_own_caddy_layout_passes():
+    """Review SF3: every token carrying the mark was a reset, so the IdP's own vhost, the
+    proxy-path passthrough, the default hnxid-server service name and an @hnxid matcher
     were all refused; only header field names and header placeholders are judged now."""
-    assert lint.lint_caddy(AUTHENTIK_LAYOUT) == []
+    assert lint.lint_caddy(HNXID_LAYOUT) == []
 
 
 def test_a_header_matcher_is_not_a_header_set_but_a_header_directive_still_is():
-    text = AUTHENTIK_LAYOUT.replace(
-        "\thandle @admins {", "\theader X-Authentik-Role admin\n\thandle @admins {"
+    text = HNXID_LAYOUT.replace(
+        "\thandle @admins {", "\theader X-Hnxid-Role admin\n\thandle @admins {"
     )
     assert [(f.rule, f.detail.split(" other ")[0]) for f in lint.lint_caddy(text)] == [
-        ("reset", "header names the identity header X-Authentik-Role")
+        ("reset", "header names the identity header X-Hnxid-Role")
     ]
 
 
@@ -891,15 +936,15 @@ def test_a_snippet_definition_is_judged_where_it_is_imported():
     strip finding at its definition (whose parent is the snippet, not a route)."""
     text = """\
 (auth) {
-	request_header -*authentik*
+	request_header -*hnxid*
 	forward_auth idp:9443 {
-		uri /outpost.goauthentik.io/auth/caddy
-		copy_headers X-Authentik-Username X-Authentik-Groups
+		uri /hnxid/auth
+		copy_headers X-Hnxid-Username X-Hnxid-Groups
 	}
 }
 
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	route {
 		import auth
 	}
@@ -919,19 +964,19 @@ def test_a_copied_name_is_an_identity_header_only_in_its_own_site():
     Remote-User a reset."""
     text = """\
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	request_header -remote*
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		request_header -remote*
 		forward_auth idp:9443 {
-			copy_headers X-Authentik-Username>Remote-User
+			copy_headers X-Hnxid-Username>Remote-User
 		}
 	}
 	reverse_proxy app:8080
 }
 legacy.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	request_header -remote*
 	basic_auth {
 		bob $2a$14$examplehashexamplehashexamplehashexamplehash
@@ -959,8 +1004,8 @@ def _rules(text: str) -> list[tuple[int, str, str]]:
 def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
     # Caddy reads both deletes as the heredoc's text: on 2.11.1 every forged spelling passed
     text = NOSITE.replace(
-        "\t\trequest_header -*authentik*\n",
-        "\t\tvars note <<TXT\n\t\trequest_header -*authentik*\n\t\tTXT\n",
+        "\t\trequest_header -*hnxid*\n",
+        "\t\tvars note <<TXT\n\t\trequest_header -*hnxid*\n\t\tTXT\n",
     )
     found = _rules(text)
     assert found[0] == (4, "parse", "a heredoc (<<TXT) hides lines from the lint")
@@ -970,15 +1015,15 @@ def test_a_heredoc_fails_closed_and_hides_what_caddy_hides():
 def test_a_heredoc_line_cannot_open_a_phantom_block():
     text = """\
     app.lab.example {
-        request_header -*authentik*
+        request_header -*hnxid*
         route {
-            request_header -*authentik*
+            request_header -*hnxid*
             vars note <<TXT
             route {
             TXT
         }
         forward_auth idp:9443 {
-            copy_headers X-Authentik-Username
+            copy_headers X-Hnxid-Username
         }
     }
     """
@@ -987,7 +1032,7 @@ def test_a_heredoc_line_cannot_open_a_phantom_block():
 
 
 def test_a_quoted_token_spanning_lines_fails_closed():
-    text = 'app.lab.example {\n\trequest_header -*authentik*\n\troute {\n\t\trequest_header -*authentik*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Authentik-Username\n\t}\n}\n'
+    text = 'app.lab.example {\n\trequest_header -*hnxid*\n\troute {\n\t\trequest_header -*hnxid*\n\t\tvars note "a {\n"\n\t}\n\tforward_auth idp:9443 {\n\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n'
     assert [(ln, r) for ln, r, _ in _rules(text)] == [(5, "parse"), (8, "strip")]
 
 
@@ -999,7 +1044,7 @@ def test_an_unclosed_quote_fails_closed():
 
 
 def test_a_brace_sharing_a_line_closes_the_block_as_caddy_does():
-    text = GOOD.replace("request_header -*authentik*\n", "request_header -*authentik* }\n\t")
+    text = GOOD.replace("request_header -*hnxid*\n", "request_header -*hnxid* }\n\t")
     found = _rules(text)
     assert found[0] == (4, "parse", "a { or } shares its line with a directive")
     assert any("not directly inside a route" in d for _, _, d in found)
@@ -1054,14 +1099,14 @@ def test_a_matcher_on_forward_auth_fails():
 def test_a_snippet_import_is_expanded_in_place():
     text = """\
     (strip) {
-        request_header -*authentik*
+        request_header -*hnxid*
     }
     app.lab.example {
-        request_header -*authentik*
+        request_header -*hnxid*
         route {
             import strip
             forward_auth idp:9443 {
-                copy_headers X-Authentik-Username
+                copy_headers X-Hnxid-Username
             }
         }
     }
@@ -1075,19 +1120,32 @@ def test_the_generated_snippet_resolves_where_it_is_not_defined():
     # a documented site imports the generated snippet without defining it
     assert (
         _rules(
-            "app.lab.example {\n\trequest_header -*authentik*\n\timport hnx_forward_auth\n"
+            "app.lab.example {\n\trequest_header -*hnxid*\n\timport hnx_forward_auth app-users\n"
             "\treverse_proxy app:8080\n}\n"
         )
         == []
     )
 
 
+def test_the_generated_snippet_without_its_groups_fails_closed():
+    """The generated snippet's check takes the site's allowed groups as its argument; an import
+    without one would ask the auth proxy with no group at all (every signed-in user admitted),
+    so the lint refuses to expand it."""
+    found = _rules(
+        "app.lab.example {\n\trequest_header -*hnxid*\n\timport hnx_forward_auth\n"
+        "\treverse_proxy app:8080\n}\n"
+    )
+    assert [(r, "past the 0 argument" in d) for _, r, d in found] == [("parse", True)]
+
+
 def test_a_file_import_is_followed_and_a_glob_fails_closed(tmp_path):
     (tmp_path / "conf.d").mkdir()
     (tmp_path / "conf.d" / "auth.conf").write_text(
-        "forward_auth idp:9443 {\n\tcopy_headers X-Authentik-Username\n}\n"
+        "forward_auth idp:9443 {\n\tcopy_headers X-Hnxid-Username\n}\n"
     )
-    site = "app.lab.example {\n\trequest_header -*authentik*\n\timport %s\n\treverse_proxy app:8080\n}\n"
+    site = (
+        "app.lab.example {\n\trequest_header -*hnxid*\n\timport %s\n\treverse_proxy app:8080\n}\n"
+    )
     ctx = lint.CaddyContext(tmp_path)
     found = lint.lint_caddy(site % "conf.d/auth.conf", "Caddyfile", base=tmp_path, ctx=ctx)
     assert [(f.path, f.line, f.rule) for f in found] == [("conf.d/auth.conf", 1, "strip")]
@@ -1116,11 +1174,11 @@ NAMED_LATER = """\
 	request_header {args[0]} {http.request.header.X-Evil}
 }
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 		%s
 	}
@@ -1133,9 +1191,9 @@ app.lab.example {
     ("route", "proxy", "expected"),
     [
         # review SF1: each passed the lint, adapted on 2.11.7 and, live, delivered
-        # X-Authentik-Groups: forged-evil with the IdP answering alice/users (a finding in an
+        # X-Hnxid-Groups: forged-evil with the IdP answering alice/users (a finding in an
         # expanded snippet is reported on the snippet's own line)
-        ("import setid X-Authentik-Groups", "", ("reset", 2, "request_header names the identity header X-Authentik-Groups")),
+        ("import setid X-Hnxid-Groups", "", ("reset", 2, "request_header names the identity header X-Hnxid-Groups")),
         ("request_header {vars.a}{vars.b} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {vars.a}{vars.b}: a header name taken from a placeholder")),
         ("request_header {$IDH} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {$IDH}: a header name")),
         ("request_header {http.request.header.X-Name} {http.request.header.X-Evil}", "", ("parse", 11, "request_header {http.request.header.X-Name}: a header")),
@@ -1168,11 +1226,11 @@ BLOCK = """\
 	}
 }
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth idp:9443 {
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 	import proxied app:8080 {
@@ -1186,7 +1244,7 @@ def test_an_import_block_lands_where_the_snippet_says_block():
     """Review N4: {block} (Caddy 2.9+) was a parse finding; the import's block is expanded into
     it, and what it carries is judged."""
     assert lint.lint_caddy(BLOCK % "header_up Host {upstream_hostport}") == []
-    found = lint.lint_caddy(BLOCK % "header_up X-Authentik-Groups admins")
+    found = lint.lint_caddy(BLOCK % "header_up X-Hnxid-Groups admins")
     assert [(f.line, f.rule) for f in found] == [(15, "reset")]
     # outside a snippet it is still a directive the lint cannot see
     assert [f.rule for f in lint.lint_caddy("app.lab.example {\n\t{block}\n}\n")] == ["parse"]
@@ -1197,7 +1255,7 @@ def test_a_snippet_is_available_only_after_its_definition():
     found"); the lint expanded it anyway."""
     text = (
         "app.lab.example {\n\timport auth\n\treverse_proxy app:8080\n}\n"
-        "(auth) {\n\trequest_header -*authentik*\n}\n"
+        "(auth) {\n\trequest_header -*hnxid*\n}\n"
     )
     assert [(f.line, f.rule) for f in lint.lint_caddy(text)] == [(2, "parse")]
     moved = text.split("(auth)")[1]
@@ -1207,8 +1265,8 @@ def test_a_snippet_is_available_only_after_its_definition():
 # ---------------------------------------------------------------- discovery and coverage
 
 BARE = (
-    "app.lab.example {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n"
-    "\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+    "app.lab.example {\n\trequest_header -*hnxid*\n\tforward_auth idp:9443 {\n"
+    "\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n"
 )
 
 
@@ -1313,11 +1371,11 @@ def test_a_prose_mention_is_not_coverage(tmp_path):
 def test_an_imported_file_is_read_as_a_config(tmp_path):
     (tmp_path / "conf.d").mkdir()
     (tmp_path / "conf.d" / "auth.conf").write_text(
-        "route {\n\trequest_header -*authentik*\n\tforward_auth idp:9443 {\n"
-        "\t\tcopy_headers X-Authentik-Username\n\t}\n}\n"
+        "route {\n\trequest_header -*hnxid*\n\tforward_auth idp:9443 {\n"
+        "\t\tcopy_headers X-Hnxid-Username\n\t}\n}\n"
     )
     (tmp_path / "Caddyfile").write_text(
-        "app.lab.example {\n\trequest_header -*authentik*\n\timport conf.d/auth.conf\n}\n"
+        "app.lab.example {\n\trequest_header -*hnxid*\n\timport conf.d/auth.conf\n}\n"
     )
     assert _found(tmp_path) == []
 
@@ -1339,7 +1397,7 @@ def test_a_generator_failure_is_a_finding(tmp_path, monkeypatch):
         (REPO / "examples" / "services.yml").read_text(encoding="utf-8")
     )
 
-    def broken(endpoint):
+    def broken(endpoint, identity=None):
         raise RuntimeError("a generator bug")
 
     monkeypatch.setattr(builtin, "_forward_auth_snippet", broken)
@@ -1371,11 +1429,11 @@ def test_a_missing_dependency_exits_2(tmp_path, monkeypatch):
     ("change", "expected"),
     [
         # a matcher on the delete: the strip runs only for requests it matches (review probe p10)
-        (("request_header -*authentik*", "request_header @api -*authentik*"), ["strip", "strip"]),
+        (("request_header -*hnxid*", "request_header @api -*hnxid*"), ["strip", "strip"]),
         # a value after a delete still deletes in Caddy (p14)
-        (("request_header -*authentik*", "request_header -*authentik* x"), []),
+        (("request_header -*hnxid*", "request_header -*hnxid* x"), []),
         # a copy_headers taken from the environment cannot be checked (p12)
-        (("copy_headers X-Authentik-Username X-Authentik-Groups", "copy_headers {$IDENTITY}"), ["strip"]),
+        (("copy_headers X-Hnxid-Username X-Hnxid-Groups", "copy_headers {$IDENTITY}"), ["strip"]),
     ],
 )  # fmt: skip
 def test_review_probes(change, expected):
@@ -1433,8 +1491,8 @@ def _config(*routes: dict, **server) -> dict:
     }
 
 
-IDS = ("X-Authentik-Username", "X-Authentik-Groups")
-AUTH_ROUTE = _route(_sub(_route(_del("*authentik*"), _fa(*IDS))))
+IDS = ("X-Hnxid-Username", "X-Hnxid-Groups")
+AUTH_ROUTE = _route(_sub(_route(_del("*hnxid*"), _fa(*IDS))))
 
 
 def _judged(doc: dict) -> list[tuple[str, str]]:
@@ -1444,7 +1502,7 @@ def _judged(doc: dict) -> list[tuple[str, str]]:
 
 
 def test_the_generated_shape_passes_the_semantic_check():
-    site = _route(_sub(_route(_del("*authentik*")), _route(_sub(_route(_del("*authentik*"), _fa(*IDS)))), _route(_proxy())),
+    site = _route(_sub(_route(_del("*hnxid*")), _route(_sub(_route(_del("*hnxid*"), _fa(*IDS)))), _route(_proxy())),
                   match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
     idp = _route(
         _sub(_route(_proxy("idp:9443"))), match=[{"host": ["login.lab.example"]}], terminal=True
@@ -1461,16 +1519,16 @@ def test_the_generated_shape_passes_the_semantic_check():
         # a matcher on the auth route (a03): the other paths skip it
         ([{**AUTH_ROUTE, "match": [{"path": ["/admin/*"]}]}, _route(_proxy())], [("semantic", "srv0 routes[1]/handle[0]")]),
         # the strip after forward_auth deletes the IdP's answer, not the client's headers
-        ([_route(_sub(_route(_fa(*IDS), _del("*authentik*")))), _route(_proxy())],
+        ([_route(_sub(_route(_fa(*IDS), _del("*hnxid*")))), _route(_proxy())],
          [("semantic", "srv0 routes[0]/handle[0]/routes[0]/handle[0]")]),
         # a delete only some requests run (a matcher on the strip's route), before a forward_auth
         # whose route does not strip again
-        ([_route(_del("*authentik*"), match=[{"path": ["/x"]}]), _route(_sub(_route(_fa(*IDS)))), _route(_proxy())],
+        ([_route(_del("*hnxid*"), match=[{"path": ["/x"]}]), _route(_sub(_route(_fa(*IDS)))), _route(_proxy())],
          [("semantic", "srv0 routes[1]/handle[0]/routes[0]/handle[0]"), ("semantic", "srv0 routes[2]/handle[0]")]),
         # a site-level strip covers every path
-        ([_route(_del("*authentik*")), _route(_sub(_route(_proxy("api:8080"))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
+        ([_route(_del("*hnxid*")), _route(_sub(_route(_proxy("api:8080"))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
         # an upstream's own header_up delete counts for that upstream
-        ([_route(_sub(_route(_proxy("api:8080", delete=["*authentik*"]))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
+        ([_route(_sub(_route(_proxy("api:8080", delete=["*hnxid*"]))), match=[{"path": ["/api/*"]}], group="g"), AUTH_ROUTE, _route(_proxy())], []),
     ],
 )  # fmt: skip
 def test_every_upstream_is_reached_with_the_identity_headers_deleted(routes, expected):
@@ -1480,20 +1538,20 @@ def test_every_upstream_is_reached_with_the_identity_headers_deleted(routes, exp
 @pytest.mark.parametrize(
     ("request_ops", "expected"),
     [
-        ({"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}}, "reset"),  # p04
-        ({"add": {"x_authentik_groups": ["admins"]}}, "reset"),
-        ({"replace": {"X-Authentik-Groups": [{"search_regexp": "^.*$", "replace": "admins"}]}}, "reset"),  # a08
+        ({"set": {"X-Hnxid-Groups": ["{http.request.header.X-Evil}"]}}, "reset"),  # p04
+        ({"add": {"x_hnxid_groups": ["admins"]}}, "reset"),
+        ({"replace": {"X-Hnxid-Groups": [{"search_regexp": "^.*$", "replace": "admins"}]}}, "reset"),  # a08
         # the IdP's answer under another name: a client sends X-Remote-User (or X_Remote_User)
-        # itself; copy_headers X-Authentik-Username>X-Remote-User is the supported form (VERIFY4)
-        ({"set": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
-        ({"add": {"X-Remote-User": ["{header.X-Authentik-Username}"]}}, "reset"),
+        # itself; copy_headers X-Hnxid-Username>X-Remote-User is the supported form (VERIFY4)
+        ({"set": {"X-Remote-User": ["{header.X-Hnxid-Username}"]}}, "reset"),
+        ({"add": {"X-Remote-User": ["{header.X-Hnxid-Username}"]}}, "reset"),
         ({"set": {"{http.request.header.X-Name}": ["{http.request.header.X-Evil}"]}}, "semantic"),  # a06b
         ({"set": {"{http.vars.a}{http.vars.b}": [""]}}, "semantic"),  # a04
-        ({"set": {"Host": ["{upstream_hostport}"]}, "delete": ["X-Authentik-Groups"]}, None),
+        ({"set": {"Host": ["{upstream_hostport}"]}, "delete": ["X-Hnxid-Groups"]}, None),
     ],
 )  # fmt: skip
 def test_an_identity_header_set_after_the_strip_is_a_finding(request_ops, expected):
-    doc = _config(_route(_del("*authentik*")), AUTH_ROUTE, _route(_proxy(**request_ops)))
+    doc = _config(_route(_del("*hnxid*")), AUTH_ROUTE, _route(_proxy(**request_ops)))
     assert [rule for rule, _ in lint.judge_json(doc)] == ([expected] if expected else [])
 
 
@@ -1504,25 +1562,25 @@ def test_only_the_auth_answer_may_set_an_identity_header_in_handle_response():
             "handle": [
                 {
                     "handler": "headers",
-                    "request": {"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}},
+                    "request": {"set": {"X-Hnxid-Groups": ["{http.request.header.X-Evil}"]}},
                 }
             ]
         }
     )
     doc = _config(
-        _route(_del("*authentik*")), _route(_sub(_route(_del("*authentik*"), fa))), _route(_proxy())
+        _route(_del("*hnxid*")), _route(_sub(_route(_del("*hnxid*"), fa))), _route(_proxy())
     )
     assert [rule for rule, _ in lint.judge_json(doc)] == ["reset"]
 
 
 def test_the_idps_own_site_and_another_sites_copied_name_are_not_held_to_the_rule():
-    renamed = _route(_sub(_route(_del("*authentik*", "remote*")), _route(_sub(_route(_del("*authentik*", "remote*"), _fa("Remote-User")))), _route(_proxy())),
+    renamed = _route(_sub(_route(_del("*hnxid*", "remote*")), _route(_sub(_route(_del("*hnxid*", "remote*"), _fa("Remote-User")))), _route(_proxy())),
                      match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
-    legacy = _route(_sub(_route(_del("*authentik*", "remote*"), _proxy("legacy:8080", set={"Remote-User": ["{http.auth.user.id}"]}))),
+    legacy = _route(_sub(_route(_del("*hnxid*", "remote*"), _proxy("legacy:8080", set={"Remote-User": ["{http.auth.user.id}"]}))),
                     match=[{"host": ["legacy.lab.example"]}], terminal=True)  # fmt: skip
     idp = _route(
         _sub(_route(_proxy("idp:9443"))),  # every proxy dials the forward-auth's IdP
-        match=[{"host": ["authentik.lab.example"]}],
+        match=[{"host": ["hnxid.lab.example"]}],
         terminal=True,
     )
     assert lint.judge_json(_config(renamed, legacy, idp)) == []
@@ -1538,11 +1596,11 @@ def test_the_idps_own_site_and_another_sites_copied_name_are_not_held_to_the_rul
 
 def test_handle_errors_starts_from_what_the_site_deleted_first():
     api = _route(
-        _sub(_route(_proxy("api:8080", delete=["*authentik*"]))),
+        _sub(_route(_proxy("api:8080", delete=["*hnxid*"]))),
         match=[{"path": ["/api/*"]}],
         group="g",
     )
-    site = _route(_sub(_route(_del("*authentik*")), api, AUTH_ROUTE, _route(_proxy())),
+    site = _route(_sub(_route(_del("*hnxid*")), api, AUTH_ROUTE, _route(_proxy())),
                   match=[{"host": ["app.lab.example"]}], terminal=True)  # fmt: skip
     errors = {
         "routes": [
@@ -1561,13 +1619,13 @@ def test_handle_errors_starts_from_what_the_site_deleted_first():
 
 
 def test_a_named_route_and_an_unknown_handler():
-    named = {"authed": _route(_sub(_route(_del("*authentik*"), _fa(*IDS))), _proxy())}
+    named = {"authed": _route(_sub(_route(_del("*hnxid*"), _fa(*IDS))), _proxy())}
     invoke = {"handler": "invoke", "name": "authed"}
     assert lint.judge_json(_config(_route(invoke), named_routes=named)) == []
     missing = _config(_route({"handler": "invoke", "name": "nope"}, _proxy()), _route(_fa(*IDS)))
     assert ("semantic", "srv0 routes[0]/handle[0]") in _judged(missing)
     plugin = _config(
-        _route(_del("*authentik*"), {"handler": "set_identity"}), AUTH_ROUTE, _route(_proxy())
+        _route(_del("*hnxid*"), {"handler": "set_identity"}), AUTH_ROUTE, _route(_proxy())
     )
     assert _judged(plugin) == [("semantic", "srv0 routes[0]/handle[1]")]
 
@@ -1641,8 +1699,8 @@ def test_a_caddy_json_or_yaml_config_in_the_tree_is_judged(tmp_path):
     """Review SF6: caddy adapt of p04 saved as edge/caddy.json (and as YAML) spoofed live on
     2.11.7, and the scan neither read it nor counted it."""
     p04 = _config(
-        _route(_sub(_route(_del("X-Authentik-*"), _fa(*IDS)))),
-        _route(_proxy(set={"X-Authentik-Groups": ["{http.request.header.X-Evil}"]})),
+        _route(_sub(_route(_del("X-Hnxid-*"), _fa(*IDS)))),
+        _route(_proxy(set={"X-Hnxid-Groups": ["{http.request.header.X-Evil}"]})),
     )
     (tmp_path / "edge").mkdir()
     (tmp_path / "edge" / "caddy.json").write_text(json.dumps(p04))
@@ -1676,9 +1734,9 @@ live = pytest.mark.skipif(
     [
         (PAST % ("", "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"), {"semantic"}),
         (PAST % ("", " /admin/*", ""), {"semantic"}),
-        (PAST % ("request_header -*authentik*", "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"), set()),
-        (AUTHENTIK_LAYOUT, set()),
-        ((NAMED_LATER % ("import setid X-Authentik-Groups", "")).replace("\t\t\tcopy", "\t\t\turi /auth\n\t\t\tcopy"), {"reset"}),
+        (PAST % ("request_header -*hnxid*", "", "handle /api/* {\n\t\treverse_proxy api:8080\n\t}"), set()),
+        (HNXID_LAYOUT, set()),
+        ((NAMED_LATER % ("import setid X-Hnxid-Groups", "")).replace("\t\t\tcopy", "\t\t\turi /auth\n\t\t\tcopy"), {"reset"}),
     ],
 )  # fmt: skip
 def test_live_caddy_adapt(text, rules):
@@ -1691,15 +1749,15 @@ def test_live_caddy_adapt(text, rules):
 R3 = """\
 (hnx_forward_auth) {
 	route {
-		request_header -*authentik*
+		request_header -*hnxid*
 		forward_auth %s {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 }
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	import hnx_forward_auth
 	%s
 }
@@ -1713,11 +1771,11 @@ def _r3(body: str, idp: str = "idp:9443") -> list[tuple[str, int]]:
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        # VERIFY2 SF1: a * field rewrites the IdP's X-Authentik-Username with the client's value
-        # (live on 2.11.7 and 2.11.1: the upstream got X-Authentik-Username: forged-evil)
+        # VERIFY2 SF1: a * field rewrites the IdP's X-Hnxid-Username with the client's value
+        # (live on 2.11.7 and 2.11.1: the upstream got X-Hnxid-Username: forged-evil)
         ("reverse_proxy app:8080 {\n\t\theader_up * alice {http.request.header.X-Evil}\n\t}", [("reset", 14)]),
         ("route {\n\t\trequest_header * * alice {http.request.header.X-Evil}\n\t}\n\treverse_proxy app:8080", [("reset", 14)]),
-        ("reverse_proxy app:8080 {\n\t\theader_up X-Auth* ^.*$ {header.X-Evil}\n\t}", [("reset", 14)]),
+        ("reverse_proxy app:8080 {\n\t\theader_up X-Hnx* ^.*$ {header.X-Evil}\n\t}", [("reset", 14)]),
         # a wildcard that cannot match an identity header, or a literal value, is not one
         ("reverse_proxy app:8080 {\n\t\theader_up X-Request-* a {header.X-Evil}\n\t}", []),
         ("reverse_proxy app:8080 {\n\t\theader_up * http:// https://\n\t}", []),
@@ -1753,10 +1811,10 @@ def test_a_placeholder_dial_outside_a_forward_auth_site_is_not_this_rule():
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        # VERIFY2 SF3: live, the FastCGI app got HTTP_X_AUTHENTIK_EMAIL and REMOTE_USER = forged-evil
-        ("reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv HTTP_X_AUTHENTIK_EMAIL {http.request.header.X-Evil}\n\t\t\tenv REMOTE_USER {http.request.header.X-Evil}\n\t\t}\n\t}",
+        # VERIFY2 SF3: live, the FastCGI app got HTTP_X_HNXID_EMAIL and REMOTE_USER = forged-evil
+        ("reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv HTTP_X_HNXID_EMAIL {http.request.header.X-Evil}\n\t\t\tenv REMOTE_USER {http.request.header.X-Evil}\n\t\t}\n\t}",
          [("reset", 15), ("reset", 16)]),
-        ("php_fastcgi app:9000 {\n\t\tenv HTTP_X_AUTHENTIK_EMAIL x\n\t}", [("reset", 14)]),
+        ("php_fastcgi app:9000 {\n\t\tenv HTTP_X_HNXID_EMAIL x\n\t}", [("reset", 14)]),
         ("php_fastcgi app:9000 {\n\t\tenv AUTH_TYPE Basic\n\t}", [("reset", 14)]),
         ("php_fastcgi app:9000 {\n\t\tenv APP_THEME {header.X-Theme}\n\t}", [("reset", 14)]),
         # an ordinary variable with an operator value is fine
@@ -1770,19 +1828,19 @@ def test_a_fastcgi_identity_variable_or_client_value_is_a_reset(body, expected):
 EXPOSED = """\
 (hnx_forward_auth) {
 	route {
-		request_header -*authentik*
-		forward_auth authentik-server:9000 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+		request_header -*hnxid*
+		forward_auth hnxid-server:9000 {
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 }
-authentik.lab.example {
-	reverse_proxy authentik-server:9000
+hnxid.lab.example {
+	reverse_proxy hnxid-server:9000
 }
 a.lab.example {
-	request_header -*authentik*
-	reverse_proxy /outpost.goauthentik.io/* authentik-server:9000
+	request_header -*hnxid*
+	reverse_proxy /hnxid/* hnxid-server:9000
 	import hnx_forward_auth
 	reverse_proxy APP:8080
 }
@@ -1804,10 +1862,10 @@ a.lab.example {
         ("app-alias.lab.example", "reverse_proxy app-alias:8080", [("strip", 19)]),
         ("a.lab.example/api/*", "reverse_proxy app:8080", [("strip", 19)]),
         # the fix the lint asks for (h06c): live, no identity header reaches the app
-        ("b.lab.example", "request_header -*authentik*\n\treverse_proxy app:8080", []),
+        ("b.lab.example", "request_header -*hnxid*\n\treverse_proxy app:8080", []),
         # a site that proxies nothing, and the IdP's own upstream, are not held to it
         ("static.lab.example", "file_server", []),
-        ("login.lab.example", "reverse_proxy authentik-server:9000", []),
+        ("login.lab.example", "reverse_proxy hnxid-server:9000", []),
     ],
 )  # fmt: skip
 def test_every_proxying_site_of_a_forward_auth_config_strips(site, body, expected):
@@ -1816,7 +1874,7 @@ def test_every_proxying_site_of_a_forward_auth_config_strips(site, body, expecte
     )
     assert [(f.rule, f.line) for f in found] == expected
     if found:  # the remedy is the strip, never an allowlist entry
-        assert found[0].detail.endswith("put request_header -*authentik* first in this site")
+        assert found[0].detail.endswith("put request_header -*hnxid* first in this site")
 
 
 def test_exposure_is_no_longer_an_allowlist_rule(tmp_path):
@@ -1835,27 +1893,27 @@ def test_json_wildcard_dial_fastcgi_and_exposure():
         replace={"*": [{"search_regexp": "alice", "replace": "{http.request.header.X-Evil}"}]}
     )
     assert [
-        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), star)))
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), star)))
     ] == ["reset"]
     idp = _fa(*IDS, dial="{http.request.header.X-Idp}")
-    assert [
-        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), idp, _proxy())))
-    ] == ["dial"]
+    assert [r for r, _ in lint.judge_json(_config(_json_site(_del("*hnxid*"), idp, _proxy())))] == [
+        "dial"
+    ]
     fcgi = _proxy("app:9000")
     fcgi["transport"] = {
         "protocol": "fastcgi",
         "env": {"REMOTE_USER": "{http.request.header.X-Evil}"},
     }
     assert [
-        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi)))
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), fcgi)))
     ] == ["reset"]
-    authed = _json_site(_del("*authentik*"), _fa(*IDS), _proxy("app:8080"))
+    authed = _json_site(_del("*hnxid*"), _fa(*IDS), _proxy("app:8080"))
     idp_site = _json_site(_proxy("idp:9443"), host="login.lab.example")
     # VERIFY3 SF1/SF2: any other proxying site, whatever it dials, carries the strip
     for dial in ("app:8080", "app-alias:8080", "status:9000"):
         other = _json_site(_proxy(dial), host="b.lab.example")
         assert [r for r, _ in lint.judge_json(_config(authed, other, idp_site))] == ["semantic"]
-        stripped = _json_site(_del("*authentik*"), _proxy(dial), host="b.lab.example")
+        stripped = _json_site(_del("*hnxid*"), _proxy(dial), host="b.lab.example")
         assert lint.judge_json(_config(authed, stripped, idp_site)) == []
     static = _json_site({"handler": "file_server"}, host="static.lab.example")
     assert lint.judge_json(_config(authed, static, idp_site)) == []
@@ -1863,28 +1921,28 @@ def test_json_wildcard_dial_fastcgi_and_exposure():
 
 def test_json_identity_sets_nested_in_handle_response_are_judged():
     """VERIFY2 SF4: a subroute or an invoke inside the auth's handle_response, and intercept's
-    handle_response, were never walked (live: X-Authentik-Groups: forged-evil)."""
+    handle_response, were never walked (live: X-Hnxid-Groups: forged-evil)."""
     evil = {
         "handle": [
             {
                 "handler": "headers",
-                "request": {"set": {"X-Authentik-Groups": ["{http.request.header.X-Evil}"]}},
+                "request": {"set": {"X-Hnxid-Groups": ["{http.request.header.X-Evil}"]}},
             }
         ]
     }
     nested = _fa(*IDS)
     nested["handle_response"][0]["routes"].append({"handle": [_sub(evil)]})
     assert [
-        r for r, _ in lint.judge_json(_config(_json_site(_del("*authentik*"), nested, _proxy())))
+        r for r, _ in lint.judge_json(_config(_json_site(_del("*hnxid*"), nested, _proxy())))
     ] == ["reset"]
     invoked = _fa(*IDS)
     invoked["handle_response"][0]["routes"].append(
         {"handle": [{"handler": "invoke", "name": "setid"}]}
     )
-    doc = _config(_json_site(_del("*authentik*"), invoked, _proxy()), named_routes={"setid": evil})
+    doc = _config(_json_site(_del("*hnxid*"), invoked, _proxy()), named_routes={"setid": evil})
     assert [r for r, _ in lint.judge_json(doc)] == ["reset"]
     intercept = {"handler": "intercept", "handle_response": [{"routes": [evil]}]}
-    doc = _config(_json_site(_del("*authentik*"), _fa(*IDS), intercept, _proxy()))
+    doc = _config(_json_site(_del("*hnxid*"), _fa(*IDS), intercept, _proxy()))
     assert [r for r, _ in lint.judge_json(doc)] == ["reset"]
 
 
@@ -1934,7 +1992,7 @@ def test_a_comment_does_not_make_a_template_and_a_required_check_refuses_a_templ
         (R3 % ("{http.request.header.X-Idp}", "reverse_proxy app:8080"), {"dial"}),
         (EXPOSED % "b.lab.example", {"semantic"}),
         (EXPOSED % "a.lab.example/api/*", {"semantic"}),
-        (EXPOSED.replace("%s {\n", "b.lab.example {\n\trequest_header -*authentik*\n"), set()),
+        (EXPOSED.replace("%s {\n", "b.lab.example {\n\trequest_header -*hnxid*\n"), set()),
     ],
 )  # fmt: skip
 def test_live_round3_shapes(text, rules):
@@ -1950,20 +2008,20 @@ MAIN = """\
 }
 (auth) {
 	route {
-		request_header -*authentik*
-		forward_auth authentik-server:9000 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+		request_header -*hnxid*
+		forward_auth hnxid-server:9000 {
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 }
-authentik.lab.example {
-	reverse_proxy authentik-server:9000
+hnxid.lab.example {
+	reverse_proxy hnxid-server:9000
 }
 %s
 """
 SITE_FILE = (
-    "%s.lab.example {\n\trequest_header -*authentik*\n\timport auth\n\treverse_proxy %s:8080\n}\n"
+    "%s.lab.example {\n\trequest_header -*hnxid*\n\timport auth\n\treverse_proxy %s:8080\n}\n"
 )
 
 
@@ -1987,7 +2045,7 @@ def test_site_files_imported_after_shared_snippets_pass(tmp_path, imports, ext):
     assert findings == [] and counts["caddy_configs"] >= 1
     # what the site files carry is still judged, in the importer's context
     (tmp_path / "sites" / f"wiki.{ext}").write_text(
-        SITE_FILE.replace("\trequest_header -*authentik*\n", "") % ("wiki", "wiki")
+        SITE_FILE.replace("\trequest_header -*hnxid*\n", "") % ("wiki", "wiki")
     )
     found, _ = lint.scan(tmp_path)
     assert [(f.path, f.rule) for f in found] == [(f"sites/wiki.{ext}", "strip")]
@@ -2006,10 +2064,10 @@ def test_a_glob_import_reaching_outside_the_tree_is_refused(tmp_path):
     "compose",
     [
         "services:\n  whoami:\n    image: example/whoami:1.0\n    labels:\n      caddy: app.lab.example\n"
-        "      caddy.forward_auth: authentik-server:9000\n"
-        "      caddy.forward_auth.copy_headers: X-Authentik-Username\n",
+        "      caddy.forward_auth: hnxid-server:9000\n"
+        "      caddy.forward_auth.copy_headers: X-Hnxid-Username\n",
         "services:\n  whoami:\n    image: example/whoami:1.0\n    labels:\n      - caddy=app.lab.example\n"
-        "      - caddy_0.route.forward_auth=authentik-server:9000\n",
+        "      - caddy_0.route.forward_auth=hnxid-server:9000\n",
     ],
 )
 def test_caddy_docker_proxy_forward_auth_labels_are_a_coverage_finding(tmp_path, compose):
@@ -2022,12 +2080,12 @@ def test_caddy_docker_proxy_forward_auth_labels_are_a_coverage_finding(tmp_path,
 
 H_SITE = """\
 app.lab.example {
-	request_header -*authentik*
+	request_header -*hnxid*
 	route {
 		%s
 		forward_auth idp:9443 {
-			uri /outpost.goauthentik.io/auth/caddy
-			copy_headers X-Authentik-Username X-Authentik-Groups
+			uri /hnxid/auth
+			copy_headers X-Hnxid-Username X-Hnxid-Groups
 		}
 	}
 	%s
@@ -2044,30 +2102,30 @@ app.lab.example {
         # VERIFY4 SF1 (k01, k02): header_up hands the IdP's answer on under another name but
         # leaves the target's other spellings to the client (live on 2.11.2 and 2.11.1: the
         # client's Remote_User reached the upstream beside it); copy_headers A>B is the form
-        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
         # VERIFY4 SF1 (k03): a request header becomes HTTP_<NAME> and overwrites the env (live on
         # the CI-required 2.11.7: HTTP_REMOTE_USER = the client's Remote-User)
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv HTTP_REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv HTTP_REMOTE_USER {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
         # h19 / k03b: no request header can set REMOTE_USER (live on 2.11.1, 2.11.2 and 2.11.7
         # with every spelling of Remote-User sent: REMOTE_USER = alice)
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-Hnxid-Username}\n\t}", []),
         # e02 / e08: AUTH_USER and REDIRECT_REMOTE_USER held alice too, under php-fpm and php-cgi
         # with every spelling and every Authorization scheme sent
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv AUTH_USER {http.request.header.X-Authentik-Username}\n\t}", []),
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REDIRECT_REMOTE_USER {http.request.header.X-Authentik-Username}\n\t}", []),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv AUTH_USER {http.request.header.X-Hnxid-Username}\n\t}", []),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv REDIRECT_REMOTE_USER {http.request.header.X-Hnxid-Username}\n\t}", []),
         # VERIFY5 SF1 (e01): PHP rebuilds PHP_AUTH_USER from the client's Authorization after it
         # reads the FastCGI env (live, 2.11.7 php-fpm and php-cgi: admin from Basic admin:x)
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
         # e12: the same through reverse_proxy's own fastcgi transport
-        ("request_header -*authentik*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t\t}\n\t}", [("reset", 12)]),
+        ("request_header -*hnxid*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Hnxid-Username}\n\t\t}\n\t}", [("reset", 12)]),
         # PHP_AUTH_PW (Basic) and PHP_AUTH_DIGEST (Digest) are rebuilt the same way; AUTH_TYPE
         # is outside the proven three, so it is refused
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_PW {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_DIGEST {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv AUTH_TYPE {http.request.header.X-Authentik-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_PW {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_DIGEST {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv AUTH_TYPE {http.request.header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
         # not when the header is added beside a client's, nor read from the client's own header
-        ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up +Remote-User {header.X-Authentik-Username}\n\t}", [("reset", 11)]),
-        ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-User}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "reverse_proxy app:8080 {\n\t\theader_up +Remote-User {header.X-Hnxid-Username}\n\t}", [("reset", 11)]),
+        ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv REMOTE_USER {http.request.header.X-User}\n\t}", [("reset", 11)]),
     ],
 )  # fmt: skip
 def test_the_site_level_strip_covers_the_route_and_hands_the_idps_answer_on(route, rest, expected):
@@ -2075,33 +2133,32 @@ def test_the_site_level_strip_covers_the_route_and_hands_the_idps_answer_on(rout
 
 
 def test_without_the_site_level_strip_the_idps_answer_cannot_be_told_from_the_clients():
-    text = (H_SITE % ("request_header -*authentik*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {header.X-Authentik-Username}\n\t}")).replace(
-        "app.lab.example {\n\trequest_header -*authentik*\n", "app.lab.example {\n"
+    text = (H_SITE % ("request_header -*hnxid*", "reverse_proxy app:8080 {\n\t\theader_up Remote-User {header.X-Hnxid-Username}\n\t}")).replace(
+        "app.lab.example {\n\trequest_header -*hnxid*\n", "app.lab.example {\n"
     )  # fmt: skip
     assert sorted(f.rule for f in lint.lint_caddy(text)) == ["reset", "strip"]
 
 
 def test_json_hands_the_idps_answer_on_only_through_a_variable_no_header_sets():
-    up = _proxy(set={"Remote-User": ["{http.request.header.X-Authentik-Username}"]})
-    found = lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), up)))
+    up = _proxy(set={"Remote-User": ["{http.request.header.X-Hnxid-Username}"]})
+    found = lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), up)))
     assert [r for r, _ in found] == ["reset"] and "use copy_headers" in found[0][1]
 
     def fcgi(name: str) -> dict:
         h = _proxy("app:9000")
         h["transport"] = {
             "protocol": "fastcgi",
-            "env": {name: "{http.request.header.X-Authentik-Username}"},
+            "env": {name: "{http.request.header.X-Hnxid-Username}"},
         }
         return h
 
     assert (
-        lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi("REMOTE_USER"))))
-        == []
+        lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), fcgi("REMOTE_USER")))) == []
     )
     assert [
         r
         for r, _ in lint.judge_json(
-            _config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi("HTTP_REMOTE_USER")))
+            _config(_json_site(_del("*hnxid*"), _fa(*IDS), fcgi("HTTP_REMOTE_USER")))
         )
     ] == ["reset"]
     # without the strip, the source itself is the client's
@@ -2110,17 +2167,15 @@ def test_json_hands_the_idps_answer_on_only_through_a_variable_no_header_sets():
     }
     # VERIFY5 SF1: an allowlist, not "any name without HTTP_" (PHP rebuilds PHP_AUTH_*)
     for name in ("AUTH_USER", "REDIRECT_REMOTE_USER"):
-        assert (
-            lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi(name)))) == []
-        )
+        assert lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), fcgi(name)))) == []
     for name in ("PHP_AUTH_USER", "PHP_AUTH_PW", "PHP_AUTH_DIGEST", "AUTH_TYPE"):
-        found = lint.judge_json(_config(_json_site(_del("*authentik*"), _fa(*IDS), fcgi(name))))
+        found = lint.judge_json(_config(_json_site(_del("*hnxid*"), _fa(*IDS), fcgi(name))))
         assert [r for r, _ in found] == ["reset"], name
 
 
 #: VERIFY5 SF1 probes e01 (php_fastcgi) and e12 (reverse_proxy's fastcgi transport)
-E01 = H_SITE % ("request_header -*authentik*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t}")  # fmt: skip
-E12 = H_SITE % ("request_header -*authentik*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Authentik-Username}\n\t\t}\n\t}")  # fmt: skip
+E01 = H_SITE % ("request_header -*hnxid*", "php_fastcgi app:9000 {\n\t\tenv PHP_AUTH_USER {http.request.header.X-Hnxid-Username}\n\t}")  # fmt: skip
+E12 = H_SITE % ("request_header -*hnxid*", "reverse_proxy app:9000 {\n\t\ttransport fastcgi {\n\t\t\tenv PHP_AUTH_USER {http.request.header.X-Hnxid-Username}\n\t\t}\n\t}")  # fmt: skip
 
 
 def test_php_auth_user_from_the_idp_is_a_reset_in_the_json_report(tmp_path):
@@ -2164,12 +2219,12 @@ def test_live_site_files_imported_after_shared_snippets_adapt_clean(tmp_path, im
 CONFD = {
     "Caddyfile": "{\n\temail admin@lab.example\n}\nimport conf.d/*.caddy\n",
     "conf.d/00-snippets.caddy": (
-        "(sso) {\n\trequest_header -*authentik*\n\troute {\n\t\tforward_auth idp:9443 {\n"
-        "\t\t\turi /outpost.goauthentik.io/auth/caddy\n"
-        "\t\t\tcopy_headers X-Authentik-Username X-Authentik-Groups\n\t\t}\n\t}\n}\n"
+        "(sso) {\n\trequest_header -*hnxid*\n\troute {\n\t\tforward_auth idp:9443 {\n"
+        "\t\t\turi /hnxid/auth\n"
+        "\t\t\tcopy_headers X-Hnxid-Username X-Hnxid-Groups\n\t\t}\n\t}\n}\n"
     ),
     "conf.d/app.caddy": "app.lab.example {\n\timport sso\n\treverse_proxy app:8080\n}\n",
-    "conf.d/lan.caddy": "lan.lab.example {\n\trequest_header -*authentik*\n\treverse_proxy lan:8080\n}\n",
+    "conf.d/lan.caddy": "lan.lab.example {\n\trequest_header -*hnxid*\n\treverse_proxy lan:8080\n}\n",
 }
 
 
@@ -2201,3 +2256,76 @@ def test_live_a_glob_match_sees_the_snippets_of_the_matches_before_it(tmp_path):
     (tmp_path / "conf.d" / "00-snippets.caddy").rename(tmp_path / "conf.d" / "zz-snippets.caddy")
     found, _ = lint.scan(tmp_path, adapter=lint.Adapter(CADDY_BIN), required=True)
     assert {f.rule for f in found} == {"parse", "semantic"}  # Caddy refuses it too
+
+
+# ---------------------------------------------------------------- the platform's identity set
+def _platform_site(route_strips: str, site_strips: str) -> str:
+    from homelabnext.generators.builtin import _forward_auth_snippet
+
+    snippet = _forward_auth_snippet("auth-proxy:4180")
+    snippet = snippet.replace(IDENTITY_HEADERS.strip_lines("\t\t"), route_strips)
+    return snippet + f"\napp.lab.example {{\n{site_strips}\timport hnx_forward_auth app-users\n\treverse_proxy app:8080\n}}\n"  # fmt: skip
+
+
+def test_the_platform_snippet_passes(platform_identity):
+    """The generator's snippet with the platform's set: both spellings of the two-word mark
+    stripped at site and route level, the auth proxy's paths and the sign-in redirect."""
+    route, site = platform_identity.strip_lines("\t\t"), platform_identity.strip_lines("\t")
+    assert lint.lint_caddy(_platform_site(route, site)) == []
+    assert platform_identity.strip_patterns() == ("*auth-request*", "*auth_request*")
+
+
+def test_one_spelling_of_a_two_word_mark_is_not_enough(platform_identity):
+    """``-*auth-request*`` alone leaves ``X-Auth_Request-User`` (and every name spelled with an
+    ``_`` inside the mark) to a CGI-style upstream: each spelling of the mark needs its delete."""
+    text = _platform_site(
+        "\t\trequest_header -*auth-request*\n", "\trequest_header -*auth-request*\n"
+    )
+    found = lint.lint_caddy(text)
+    site = [f.detail for f in found if f.detail.startswith("site ")]
+    assert site and "deleting *auth_request*:" in site[0]
+    assert "request_header -*auth-request* and request_header -*auth_request*" in site[0]
+    route = [f.detail for f in found if not f.detail.startswith("site ")]
+    assert len(route) == 3 and "X-Auth_Request-User" in route[0]
+    assert "X-Auth-Request_User" not in route[0]  # the strip after the mark covers that one
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "reverse_proxy app:8080 {\n\t\theader_up X_Auth-Request_Groups admins\n\t}",
+        "reverse_proxy app:8080 {\n\t\theader_up X-Auth-Request-Preferred-Username alice\n\t}",
+        "reverse_proxy app:8080 {\n\t\theader_up Remote-User {http.request.header.X-Auth-Request-User}\n\t}",
+    ],
+)
+def test_the_platform_marks_identity_headers_never_copied_too(platform_identity, body):
+    """Every header carrying the mark is an identity header, in any spelling, the auth proxy's
+    uncopied ones (``-Preferred-Username``) included: setting or copying one is a reset."""
+    text = f"app.lab.example {{\n{platform_identity.strip_lines(chr(9))}\t{body}\n}}\n"
+    assert [f.rule for f in lint.lint_caddy(text)] == ["reset"]
+
+
+def test_a_fastcgi_identity_variable_of_the_platform_set_is_a_reset(platform_identity):
+    text = (
+        f"app.lab.example {{\n{platform_identity.strip_lines(chr(9))}"
+        "\tphp_fastcgi app:9000 {\n\t\tenv HTTP_X_AUTH_REQUEST_USER alice\n\t}\n}\n"
+    )
+    assert [f.rule for f in lint.lint_caddy(text)] == ["reset"]
+
+
+def test_a_non_default_identity_set_is_enforced(platform_identity, monkeypatch):
+    """The lint judges the declared set, not a built-in name: a config that strips the
+    platform's mark fails once the declaration names another one, and passes again when it
+    strips that."""
+    route, site = platform_identity.strip_lines("\t\t"), platform_identity.strip_lines("\t")
+    text = _platform_site(route, site)
+    assert lint.lint_caddy(text) == []
+    other = IdentityHeaders(
+        user="X-Remote-Ident-User", groups="X-Remote-Ident-Groups",
+        email="X-Remote-Ident-Email", mark="remote-ident",
+    )  # fmt: skip
+    _judge_with(other, monkeypatch)
+    assert {f.rule for f in lint.lint_caddy(text)} == {"strip"}
+    fixed = text.replace(site, other.strip_lines("\t")).replace(route, other.strip_lines("\t\t"))
+    fixed = fixed.replace(" ".join(platform_identity.headers), " ".join(other.headers))
+    assert lint.lint_caddy(fixed) == []
