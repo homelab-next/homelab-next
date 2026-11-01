@@ -358,6 +358,30 @@ def test_a_result_schema_mismatch_and_envelopes_are_data(tmp_path, executor):
     ], "an ok record must say what the program got instead"
 
 
+def test_a_result_schema_the_validator_cannot_use_fails_closed(tmp_path, executor):
+    """A schema the validator raises on (a dangling $ref) refuses the value, never passes it."""
+    commands = {"cm.typed": lambda **kw: {"n": 1}}
+    index = {AGENT: {"cm.typed": {"result": {"schema": {"$ref": "#/$defs/missing"}}}}}
+    b, _runner = _fake(tmp_path, executor, commands, index=index)
+    code = (
+        "try:\n"
+        "    result = broker.call('cm.typed', {'name': 'a'})\n"
+        "except broker.Error as exc:\n"
+        "    result = exc.reason\n"
+    )
+    res = _run(b, code)
+    assert res["value"] == "result-schema-mismatch", res
+
+
+def test_an_ipv6_broker_bind_is_a_named_executor_error(tmp_path, executor, monkeypatch):
+    """The relay is IPv4 TCP only: an IPv6 bind says so instead of 'the executor failed'."""
+    monkeypatch.setattr(executor, "broker_bind", ("::1", 0), raising=False)
+    b, _runner = _fake(tmp_path, executor, {"cm.text": lambda **kw: {"n": 1}})
+    res = _run(b, "result = 1\n")
+    assert res["status"] != "ok"
+    assert "broker_bind must be an IPv4 address" in json.dumps(res), res
+
+
 def test_unwrap():
     env = {"exit_code": 0, "truncated": False, "stderr_bytes": 3, "output": {"a": 1}}
     assert unwrap(env, "exec") == ("ok", {"a": 1})

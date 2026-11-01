@@ -566,8 +566,14 @@ def test_cli_explain_on_the_repository_graph(tmp_path, capsys):
     classes = ToolClasses.from_catalog(servers.load(REPO / "examples" / "mcp"), table)
     m = manifest()
     m["budget_chars"] = 20000
+    # an actor holds no MCP server and is never fed raw input sections (session_problems)
+    m["tools"] = []
+    m["sections"] = [s for s in m["sections"] if s["source"] != "input"]
+    m["must_cite"] = []
+    ins = inputs()
+    ins["sections"] = {}
     (tmp_path / "manifest.json").write_text(json.dumps(m))
-    (tmp_path / "inputs.json").write_text(json.dumps(inputs()))
+    (tmp_path / "inputs.json").write_text(json.dumps(ins))
     prof = tmp_path / "profile.json"
     parts = {lid: (tmp_path / (lid.replace(":", "-") + ".md")).read_text() for lid in lib}
     compiled = compile_profile(s, library({**PARTS, **parts}), classes=classes)

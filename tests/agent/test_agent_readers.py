@@ -179,6 +179,35 @@ def test_policy_can_force_a_reader_and_the_spec_cannot_undo_it():
     assert any("marks profile:reader" in x for x in verify_profile(p, policy=policy))
 
 
+def test_lint_applies_the_policy_reader_pin_and_attestation_like_verify(tmp_path):
+    """profile_problems is the one copy of the policy's pin and attestation rules: lint with a
+    policy, verify_profile and the lean profile all judge a pinned reader the same way."""
+    s = spec()
+    doc = {"ceilings": {"profile:reader": {**s["ceiling"], "reads_untrusted": True,
+                                          "data_tier": "cloud-allowed"}}}  # fmt: skip
+    policy = CeilingPolicy.from_mapping(doc)
+    lean = {"id": "profile:reader", "mcp": ["lake"], "capabilities": [], "reads_untrusted": False,
+            "data_tier": "local-only"}  # fmt: skip
+    pin = "marks profile:reader as reading untrusted content"
+    att = "attests data_tier cloud-allowed for profile:reader"
+    got = profile_problems(lean, policy=policy)
+    assert any(pin in x for x in got) and any(att in x for x in got)
+    assert profile_problems(lean) == []  # without the policy only the declaration is known
+    _write(tmp_path / "lean.yml", lean)
+    problems, _ = lint_paths([tmp_path], policy=policy)
+    assert any(pin in x for _, x in problems) and any(att in x for _, x in problems)
+    # a profile the policy has no entry for is not judged against attestations it never made
+    assert profile_problems({**lean, "id": "profile:other"}, policy=policy) == []
+    compiled = compile_profile({**s, "reads_untrusted": True}, library())
+    compiled["reads_untrusted"] = False
+    compiled["digest"] = profile_digest(compiled)
+    verified = verify_profile(compiled, policy=policy)
+    assert [x for x in verified if pin in x or att in x] == [
+        x for x in profile_problems(compiled, policy=policy) if pin in x or att in x
+    ]
+    assert sum(pin in x for x in verified) == 1 and sum(att in x for x in verified) == 1
+
+
 @pytest.mark.parametrize("bad", ["yes", 1, None])
 def test_reads_untrusted_must_be_boolean(bad):
     s = spec()
