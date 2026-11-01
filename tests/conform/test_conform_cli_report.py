@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from homelabnext import cli as hnx
-from homelabnext.conform import CAPABILITIES, build_report
+from homelabnext.conform import CAPABILITIES, EXPERIMENTAL, build_report
 from homelabnext.conform.cli import main
 from homelabnext.conform.registry import load_module
 
@@ -136,7 +136,8 @@ def test_report_all_green_on_the_fakes(capsys):
     rep = json.loads(capsys.readouterr().out)
     assert rep["schema"] == "homelabnext.conform.report/1"
     assert rep["ok"] is True and rep["capabilities_without_passing_test"] == []
-    assert set(rep["capabilities"]) == set(CAPABILITIES)
+    assert set(rep["capabilities"]) == set(CAPABILITIES) - set(EXPERIMENTAL)
+    assert sorted(rep["experimental_skipped"]) == sorted(EXPERIMENTAL)
     e = rep["capabilities"]["secrets"]
     assert e["passing"] and e["executed"] >= 6 and e["mutants"][0]["detected"] is True
 
@@ -171,6 +172,26 @@ def test_report_flags_a_vacuous_suite(monkeypatch):
     rep = build_report(capabilities=["events", "secrets"])
     assert rep["capabilities_without_passing_test"] == ["events"]
     assert "harmless" in rep["capabilities"]["events"]["reason"]
+
+
+def _vacuous_projects_suite(monkeypatch):
+    from homelabnext.conform.core import Mutant
+
+    mod = load_module("projects")
+    harmless = Mutant(mod.fakes.FakeProjectStore, "last-step-closes-project", "n")
+    monkeypatch.setitem(mod.MUTANTS, "harmless", harmless)
+
+
+def test_a_frozen_capability_does_not_block_the_report_unless_named(monkeypatch, capsys):
+    # tools/experimental.yml froze the projects store and Code Mode: their suites still run when
+    # named (make experimental), but a failure there no longer fails the blocking report
+    _vacuous_projects_suite(monkeypatch)
+    rep = build_report(capabilities=None, mutants=True)
+    assert "projects" not in rep["capabilities"] and "projects" in rep["experimental_skipped"]
+    assert main(["report", "--capability", "projects", "--json"]) == 1
+    named = json.loads(capsys.readouterr().out)
+    assert named["capabilities_without_passing_test"] == ["projects"]
+    assert named["experimental_skipped"] == []
 
 
 def test_report_flags_a_failing_must_check_on_a_real_target(tmp_path):

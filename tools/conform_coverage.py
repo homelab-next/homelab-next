@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: conform-coverage
 #   kind: check
-#   purpose: Fail unless each of the eighteen capabilities has a passing conformance suite.
+#   purpose: Fail unless each blocking capability has a passing conformance suite.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:conform-check]
 #   inputs: the conformance suites and the target (--target, default fake)
@@ -12,12 +12,13 @@
 #     "0": all capabilities pass
 #     "1": some capability lacks a passing test
 #     "2": the report could not be produced
-"""Gate: every one of the eighteen capabilities has a passing conformance test.
+"""Gate: every blocking capability has a passing conformance test.
 
 Runs ``hnx conform list`` and ``hnx conform report --out build/conform-report.json`` (the
 exporter behind invariant X-10) and fails when any capability of
-``homelabnext.conform.CAPABILITIES`` is missing from the report, has no suite, or is not
-``passing``.  Like X-10, the report is read from that file, never scraped from stdout (an
+``homelabnext.conform.CAPABILITIES`` less the frozen and experimental ones
+(``registry.EXPERIMENTAL``, from tools/experimental.yml; ``make experimental`` runs those) is
+missing from the report, has no suite, or is not ``passing``.  Like X-10, the report is read from that file, never scraped from stdout (an
 adapter imported during the run can print anything), and its verdicts must agree with the
 exporter's exit code.
 
@@ -37,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from homelabnext.conform import CAPABILITIES  # noqa: E402
+from homelabnext.conform import CAPABILITIES, EXPERIMENTAL  # noqa: E402
 from homelabnext.conform.report import SCHEMA, exit_code  # noqa: E402
 
 
@@ -51,7 +52,11 @@ def _hnx(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def missing_passes(report: dict, expected: tuple[str, ...] = CAPABILITIES) -> list[str]:
+#: the capabilities this gate blocks on
+BLOCKING: tuple[str, ...] = tuple(c for c in CAPABILITIES if c not in EXPERIMENTAL)
+
+
+def missing_passes(report: dict, expected: tuple[str, ...] = BLOCKING) -> list[str]:
     caps = report.get("capabilities", {})
     out = []
     for cap in expected:
@@ -116,7 +121,10 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"conform_coverage: {p}\n")
     if problems:
         return 1
-    print(f"conform_coverage: all {len(CAPABILITIES)} capabilities have a passing conformance test")
+    print(
+        f"conform_coverage: all {len(BLOCKING)} blocking capabilities have a passing conformance "
+        f"test ({len(CAPABILITIES) - len(BLOCKING)} frozen or experimental, in make experimental)"
+    )
     return 0
 
 

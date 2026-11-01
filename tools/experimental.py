@@ -48,8 +48,8 @@ MARKER = "experimental"
 #: the pytest selection of the components' tests (the blocking runs select its complement)
 SELECT = f"{MARKER} and not live"
 BLOCKING_SELECT = f"not live and not {MARKER}"
-_KEYS = {"status", "decided", "why", "until", "docs", "tests", "gates", "invariants"}
-_REQUIRED = _KEYS - {"invariants"}
+_KEYS = {"status", "decided", "why", "until", "docs", "tests", "gates", "invariants", "conform"}
+_REQUIRED = _KEYS - {"invariants", "conform"}
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _INVARIANT = re.compile(r"^[A-Z]-[0-9]{2}\Z")
 
@@ -71,6 +71,7 @@ class Component:
     tests: tuple[str, ...]
     gates: tuple[str, ...]
     invariants: tuple[str, ...] = ()
+    conform: tuple[str, ...] = ()
 
 
 def _strings(where: str, value: object, problems: list[str], *, empty_ok: bool = False):
@@ -134,6 +135,13 @@ def parse(doc: object, root: Path = ROOT) -> list[Component]:
         for inv in invariants:
             if not _INVARIANT.match(inv):
                 problems.append(f"{where}.invariants: {inv!r} is not a criterion id")
+        conform = _strings(f"{where}.conform", entry.get("conform", []), problems, empty_ok=True)
+        for cap in conform:
+            named = [shlex.split(g) for g in gates]
+            if not any("report" in w and ["--capability", cap] in _pairs(w) for w in named):
+                problems.append(
+                    f"{where}.conform: no gate runs `hnx conform report --capability {cap}`"
+                )
         out.append(
             Component(
                 name=str(name),
@@ -145,6 +153,7 @@ def parse(doc: object, root: Path = ROOT) -> list[Component]:
                 tests=tests,
                 gates=gates,
                 invariants=invariants,
+                conform=conform,
             )
         )
     seen: dict[str, str] = {}
@@ -156,6 +165,15 @@ def parse(doc: object, root: Path = ROOT) -> list[Component]:
     if problems:
         raise ListError(problems)
     return out
+
+
+def _pairs(words: list[str]) -> list[list[str]]:
+    return [words[i : i + 2] for i in range(len(words) - 1)]
+
+
+def experimental_capabilities(components: list[Component]) -> tuple[str, ...]:
+    """The conformance capabilities the components own (``registry.EXPERIMENTAL`` is this)."""
+    return tuple(c for comp in components for c in comp.conform)
 
 
 def load(path: Path = LIST, root: Path = ROOT) -> list[Component]:

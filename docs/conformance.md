@@ -318,8 +318,12 @@ an error, never a pass with nothing tested.  The exporter, the graph and invaria
 deployment that adds a capability adds it there and must then ship its suite, or the report and the
 invariants go red.  It is a source-tree file: the wheel does not carry it (without it the exporter
 falls back to the built-in eighteen).  `make conform-check` (`tools/conform_coverage.py`) runs
-`hnx conform list` and `hnx conform report --json` and fails if any of the eighteen lacks a passing
-test; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
+`hnx conform list` and `hnx conform report --json` and fails if any blocking capability lacks a
+passing test. The report leaves out the capabilities of frozen or experimental components
+(`homelabnext.conform.registry.EXPERIMENTAL`, the `conform` lists of `tools/experimental.yml`:
+`projects`, `codemode-executor`, `codemode-runner`) unless one is named with `--capability`, and
+records them under `experimental_skipped`, so a frozen suite blocks neither the gate nor X-10;
+`make experimental` runs `hnx conform report --capability` for each; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
 extended suites run under pytest), and the nightly workflow runs
 `hnx conform run all` after the lab-in-a-box smoke.
 

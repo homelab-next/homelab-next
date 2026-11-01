@@ -19,6 +19,7 @@ from .core import Suite
 
 __all__ = [
     "CAPABILITIES",
+    "EXPERIMENTAL",
     "EXTENDED",
     "ConformError",
     "declared_capabilities",
@@ -49,6 +50,11 @@ CAPABILITIES: tuple[str, ...] = (
     "codemode-executor",
     "codemode-runner",
 )
+#: the capabilities among the eighteen whose components are frozen or experimental (the `conform`
+#: lists of tools/experimental.yml, held equal by tools/tests/test_experimental.py): still listed
+#: and still run, but out of the blocking set, so ``hnx conform report`` leaves them out unless
+#: named (``--capability``) and ``make experimental`` runs them
+EXPERIMENTAL: tuple[str, ...] = ("projects", "codemode-executor", "codemode-runner")
 #: additional suites that ship with the harness but are not among the eighteen
 EXTENDED: tuple[str, ...] = (
     "backup",

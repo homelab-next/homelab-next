@@ -24,6 +24,9 @@
 #   gates      the commands that were blocking, run by `make experimental` (`python` is the
 #              interpreter that runs tools/experimental.py)
 #   invariants criteria of examples/registers/invariants.yml it owns, skipped by `make invariants`
+#   conform    conformance capabilities it owns (homelabnext.conform.registry.EXPERIMENTAL is
+#              their union): `hnx conform report` and `make conform-check` leave them out unless
+#              named, and a gate here runs `hnx conform report --capability` for each
 components:
   stackstorm:
     status: experimental
@@ -54,6 +57,8 @@ components:
     gates:
       - python -m homelabnext.cli codemode gen --check
       - python -m homelabnext.cli golden codemode --check homelabnext/golden/examples/codemode/report.json
+      - python -m homelabnext.cli conform report --capability codemode-executor --capability codemode-runner
+    conform: [codemode-executor, codemode-runner]
   strategy:
     status: frozen
     decided: 2026-10-31
@@ -82,4 +87,6 @@ components:
       - tests/projects/test_projects_cli.py
     gates:
       - python -m homelabnext.cli projects check --dir examples/projects --strategy examples/strategy
+      - python -m homelabnext.cli conform report --capability projects
     invariants: [P-08]
+    conform: [projects]
