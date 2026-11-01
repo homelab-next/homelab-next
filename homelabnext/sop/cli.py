@@ -140,7 +140,7 @@ def facts_main(argv: list[str]) -> int:
     ap.add_argument("files", nargs="*", metavar="file")
     ap.add_argument("--root", help="source checkout holding schemas/ (default: this checkout)")
     try:
-        args = ap.parse_args(argv)
+        args = ap.parse_intermixed_args(argv)  # 3.11 refuses files after an option otherwise
     except SystemExit as exc:
         return 2 if exc.code else 0
     from homelabnext import paths as hnx_paths
