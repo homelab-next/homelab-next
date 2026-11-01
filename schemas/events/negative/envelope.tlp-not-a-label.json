@@ -1,0 +1,11 @@
+{
+  "specversion": "1.0",
+  "id": "evt-0042",
+  "source": "svc:siem",
+  "type": "homelabnext.case.summary",
+  "time": "2026-01-01T00:00:00Z",
+  "data": {
+    "k": 1
+  },
+  "tlp": "amber-strict"
+}

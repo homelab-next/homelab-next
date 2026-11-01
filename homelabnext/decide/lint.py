@@ -172,7 +172,9 @@ def _schema_errors(doc: Any) -> list[str]:
         raise LintError(
             "hnx decide lint needs jsonschema: pip install 'homelabnext[core]'"
         ) from exc
-    v = Draft202012Validator(_schema(), registry=_registry())
+    from homelabnext.schema_registry import schema_registry
+
+    v = Draft202012Validator(_schema(), registry=schema_registry())
     return [
         f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message}"
         for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
@@ -189,21 +191,6 @@ def _schema() -> dict:
         f = paths.schema_file("registers", "decision_spec.json")
         _CACHE["schema"] = json.loads(f.read_text(encoding="utf-8"))
     return _CACHE["schema"]
-
-
-def _registry():
-    if "registry" not in _CACHE:
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT202012
-
-        from homelabnext import paths
-
-        reg = Registry()
-        for f in sorted((paths.schemas_dir() / "ids").glob("*.json")):
-            d = json.loads(f.read_text(encoding="utf-8"))
-            reg = reg.with_resource(d["$id"], Resource.from_contents(d, DRAFT202012))
-        _CACHE["registry"] = reg
-    return _CACHE["registry"]
 
 
 # ---------------------------------------------------------------- files and discovery
