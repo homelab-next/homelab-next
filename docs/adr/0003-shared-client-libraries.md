@@ -26,7 +26,11 @@ their error handling.
 3. Every library ships an in-memory fake used by the conformance tests (ADR-0005).
 4. Migration is per script family with byte-stable output tests; a library change may not merge
    without deleting the copies it replaces. CI fails on a private re-implementation outside the
-   package (allow-list with a written reason only).
+   package (allow-list with a written reason only): `tools/shared_helpers_lint.py` (checklist
+   M-03) covers `notify`, `state` and `lake`. `records` is enforced differently: the agent lane
+   `inbox/` is the only place an agent can write a note, by filesystem ownership and the
+   broker's `records-inbox` lane (ADR-0010), and both writers share the library's validation,
+   rendering and naming; no AST rule can tell a note write from any other file write.
 
 ## Consequences
 

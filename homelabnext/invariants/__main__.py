@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """python -m homelabnext.invariants run REGISTER [--root DIR] [--out FILE] [--only A-01,B-02]
-[--skip C-01,D-02] [--fast] [--plugins-dir DIR] [--state FILE --notify-cmd CMD | --no-notify] [--baseline]"""
+[--skip C-01,D-02] [--fast] [--plugins-dir DIR] [--state FILE --notify-cmd CMD | --no-notify]
+[--notify-ceiling LABEL] [--baseline]
+
+A page is a notification channel, an egress point (ADR-0033 decision 13): every page goes through
+``homelabnext.notify.CeilingSender`` at ``--notify-ceiling`` (default ``red``).  A page carries
+criterion evidence, lab data that is ``red`` by default (decision 2), so on a channel below
+``red`` it arrives as the fixed withheld notice.
+"""
 
 import argparse
 import json
@@ -10,9 +17,46 @@ import sys
 
 import yaml
 
+from ..notify.ceiling import CeilingSender, ceiling_arg
+from ..notify.core import Message
 from ..registers.schema import RegisterError, validate_invariants
 from . import Context, default_registry, load_directory, load_entry_points, overall_exit
 from .runner import page_changes, run_criteria
+
+
+class _CommandSender:
+    """``--notify-cmd`` as a ``notify.Sender``: the command gets TITLE and BODY as argv."""
+
+    def __init__(self, cmd: str) -> None:
+        self.argv = cmd.split()
+
+    def send(self, message: Message) -> None:
+        subprocess.run([*self.argv, message.title, message.body], check=True)
+
+
+class _PrintSender:
+    def send(self, message: Message) -> None:
+        print(f"[page] {message.title}\n{message.body}")
+
+
+def pager(sender, ceiling):
+    """The ``page_changes`` callable: each page a ``Message`` (no claimed label, so ``red``)
+    through a :class:`CeilingSender` at ``ceiling``."""
+    gate = CeilingSender(sender, ceiling)
+
+    def send(title: str, body: str) -> None:
+        recovered = title == "Invariant recovered"
+        gate.send(
+            Message(
+                key="invariants:recovered" if recovered else "invariants:newly-broken",
+                title=title,
+                body=body,
+                level="info" if recovered else "crit",
+                tags=("recovered",) if recovered else (),
+            )
+        )
+
+    return send
 
 
 def main(argv=None) -> int:
@@ -32,6 +76,13 @@ def main(argv=None) -> int:
     r.add_argument("--state", help="state file for state-diffed paging")
     r.add_argument("--notify-cmd", help="command receiving TITLE and BODY as argv[1], argv[2]")
     r.add_argument("--no-notify", action="store_true")
+    r.add_argument(
+        "--notify-ceiling",
+        type=ceiling_arg,
+        default=None,
+        metavar="LABEL",
+        help="the page channel's TLP ceiling (default red); a page above it is withheld",
+    )
     r.add_argument("--baseline", action="store_true", help="record state without paging")
     ns = ap.parse_args(argv)
     reg_path = pathlib.Path(ns.register)
@@ -70,14 +121,9 @@ def main(argv=None) -> int:
     for i, x in sorted(doc["results"].items()):
         print(f"{x['status']:5s} {i}  {x['evidence'][:100]!r}")
     if ns.state and not ns.no_notify:
-
-        def send(title, body):
-            if ns.notify_cmd:
-                subprocess.run([*ns.notify_cmd.split(), title, body], check=True)
-            else:
-                print(f"[page] {title}\n{body}")
-
-        page_changes(doc, ns.state, send, baseline=ns.baseline)
+        sender = _CommandSender(ns.notify_cmd) if ns.notify_cmd else _PrintSender()
+        ceiling = ns.notify_ceiling if ns.notify_ceiling is not None else ceiling_arg("red")
+        page_changes(doc, ns.state, pager(sender, ceiling), baseline=ns.baseline)
     return overall_exit(doc)
 
 

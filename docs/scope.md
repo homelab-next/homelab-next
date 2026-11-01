@@ -54,8 +54,13 @@ A guest's targets carry every address it has (`network.ip` and its `network.extr
 reference that resolves to nothing is denied (`unknown-target`); one that matches two different
 targets is denied (`ambiguous-target`) even under `unknown: allow`, and so is an address in any
 but its canonical spelling that resolves to nothing, as is NAT64's local-use prefix, whose IPv4
-reading depends on the operator's prefix length. A different spelling of an out-of-scope target
-therefore cannot slip past the guard.
+reading depends on the operator's prefix length. A compound reference is decided on the host it
+names: a URL (`https://scratch.example.invalid/` with or without a port), `host:port`,
+`[v6]:port`, `user@host` and a one-address CIDR (an IPv4 address with `/32`, IPv6 with `/128`)
+resolve through their host; one whose host does
+not resolve (or a wider CIDR, which names no single target) is denied even under
+`unknown: allow`, and `name:port` counts only when `name` resolves, since `vmid:<n>` has the
+same shape. A different spelling of an out-of-scope target therefore cannot slip past the guard.
 
 Denial codes: `explicit-out`, `override-out`, `vmid-threshold`, `out-tag`, `unknown-target`,
 `ambiguous-target`. Tests: `pytest tests/scope`.
