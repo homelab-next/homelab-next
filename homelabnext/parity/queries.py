@@ -2,7 +2,8 @@
 """Parity between two lake implementations: query results and whole tables.
 
 Written against ``LakeQuery`` / ``LakeClient`` only, so it compares any two implementations:
-the in-memory fake, DuckDB/Iceberg, Trino, a recorded cassette.
+the in-memory fake, DuckDB/Iceberg, Trino, a recorded cassette.  A comparison reads every row of
+both sides, so it reads at ``red`` under :data:`RED_GRANT` (ADR-0033 decision 6).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from homelabnext.lake.ceiling import RedGrant, raw_named, raw_query
 from homelabnext.lake.errors import LakeError
 from homelabnext.lake.sqlparams import quote_table
 
@@ -19,6 +21,8 @@ from .report import Check, ParityReport
 from .rows import RowRules, Sample, diff_rows
 from .schema import schema_drift
 
+#: a parity check compares two implementations row for row, so it reads every row of both
+RED_GRANT = RedGrant("parity", "compares two lake implementations row for row")
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
@@ -40,8 +44,8 @@ class ParityQuery:
 
 def _run(client: Any, q: ParityQuery) -> list[dict[str, Any]]:
     if q.sql:
-        return client.query(q.sql, q.params or None)
-    return client.named(q.named, q.params or None)
+        return raw_query(client, RED_GRANT, q.sql, q.params or None)
+    return raw_named(client, RED_GRANT, q.named, q.params or None)
 
 
 def compare_queries(
@@ -95,8 +99,8 @@ def compare_tables(
         )
         r = rules.get(t) or RowRules(key=tuple(li.key), sample=sample)
         try:  # the names come back from each adapter's describe(): validate and quote them too
-            lrows = left.query(f"SELECT * FROM {quote_table(li.name)}")
-            rrows = right.query(f"SELECT * FROM {quote_table(ri.name)}")
+            lrows = raw_query(left, RED_GRANT, f"SELECT * FROM {quote_table(li.name)}")
+            rrows = raw_query(right, RED_GRANT, f"SELECT * FROM {quote_table(ri.name)}")
         except LakeError as exc:
             report.add(Check(f"table:{t}:rows", False, f"read failed: {exc}"))
             continue
