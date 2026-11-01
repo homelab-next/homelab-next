@@ -7,6 +7,7 @@ summary_of: outline:sha256:acd78af44c1f9d94
 - **Status:** proposed
 - **Date:** 2026-10-20
 - **Amended:** 2026-10-21 by ADR-0019 (see the amendment at the end of Decision)
+- **Amended-by:** ADR-0019
 - **Related:** ADR-0010, ADR-0011, ADR-0013, ADR-0014, `docs/strategy.md`, `homelabnext/strategy/`,
   `schemas/strategy/`
 
