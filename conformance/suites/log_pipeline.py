@@ -360,7 +360,8 @@ def _(t):
 
 @SUITE.check(
     "tlp-stricter-claim-kept",
-    "an item label stricter than the declaration is kept; one that is not a label is red",
+    "an item label stricter than the declaration, in any field that carries one, is kept; one "
+    "that is not a label is red",
 )
 def _(t):
     _tlp_is(_routed(t, _dns(tlp="amber"), FEED), "amber")
@@ -370,23 +371,16 @@ def _(t):
     _tlp_is(_routed(t, {**_dns(), "labels.tlp": "amber"}, FEED), "amber")
     _tlp_is(_routed(t, _dns(tlp=None), FEED), "red")
     _tlp_is(_routed(t, _dns(tlp="amber-strict"), FEED), "red")
-
-
-@SUITE.check(
-    "tlp-carried-labels-read",
-    "an item label carried as a tlp: tag, an OCSF osint entry's tlp or a STIX TLP marking counts",
-)
-def _(t):
-    # On a source that honours item labels, a looser tlp field beside a carried label equal to the
-    # declaration: only reading the carrier gives the declaration (so no other TLP rule decides it).
-    green = "marking-definition--34098fce-860f-48ae-8e50-ebd3cc5e41da"  # TLP 1.0 green
+    # a label carried as a tlp: tag (a string or a tag object's name), an OCSF osint entry's tlp
+    # or a STIX TLP marking: on a clear route only reading the carrier gives amber
+    amber = "marking-definition--f88d31f6-486f-44da-b317-01333bde0b82"  # TLP 1.0 amber
     for carried in (
-        {"tags": ["phishing", "tlp:green"]},
-        {"tags": [{"name": "TLP:GREEN"}]},
-        {"osint": [{"value": "x", "tlp": "green"}]},
-        {"object_marking_refs": [green]},
+        {"tags": ["phishing", "tlp:amber"]},
+        {"tags": [{"name": "TLP:AMBER"}]},
+        {"osint": [{"value": "x", "tlp": "amber"}]},
+        {"object_marking_refs": [amber]},
     ):
-        _tlp_is(_routed(t, _dns(tlp="clear", **carried), HONOURED), "green")
+        _tlp_is(_routed(t, _dns(**carried), FEED), "amber")
 
 
 @SUITE.check(
@@ -487,7 +481,7 @@ MUTANTS = {
     ),
     "tlp-reads-only-the-tlp-field": Mutant(
         TlpReadsOnlyTheTlpFieldPipeline,
-        "tlp-carried-labels-read",
+        "tlp-stricter-claim-kept",
         "an item label carried as a tag, an osint entry or a STIX marking is ignored",
     ),
     "tlp-honours-every-source": Mutant(
