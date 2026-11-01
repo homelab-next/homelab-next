@@ -17,8 +17,11 @@ not one (:func:`homelabnext.tlp.read`).
 request's label.  What runs it: the gateway is configured for an external product with no
 admission code of its own (ADR-0022), so the generator applies the part it can decide without a
 request (:mod:`homelabnext.generators.llm_gateway` scopes no key to a role whose ceiling is below
-the key's sending ceiling), and a caller in front of the gateway applies :func:`admit` to each
-request.  Standard library only.
+the key's sending ceiling, and refuses a cloud binding the role table does not mark
+``leaves_lab``, so the ceiling read here is the one the gateway deploys), and the component that
+assembles a request's context is to apply :func:`admit` to each request.  No component calls it
+yet (ADR-0033, amendment to decision 11): until one does, key scope is the enforcement.
+Standard library only.
 """
 
 from __future__ import annotations
