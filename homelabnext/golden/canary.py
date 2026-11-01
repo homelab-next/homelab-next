@@ -147,6 +147,9 @@ OBJECT_STORES = (
     "digitaloceanspaces.com",
     "backblazeb2.com",
     "wasabisys.com",
+    "storage.cloud.google.com",
+    "myqcloud.com",
+    "myhuaweicloud.com",
 )
 #: cloud metadata services reached by name
 METADATA_NAMES = (
