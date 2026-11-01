@@ -209,7 +209,7 @@ def _defs() -> dict[str, Any]:
         ),
         "own_code_ref": pat(
             OWN_CODE,
-            "Code in the module's own package, hnx_modules.<own id with - as _>.<module>:<attr>; the loader puts only that package on the import path.",
+            "Code in the module's own package, hnx_modules.<own id with - as _>.<module>:<attr>; the module's python/ tree may hold only that package (homelabnext.modules.rules.code_tree_problems).",
             200,
         ),
         "secret": pat(
@@ -267,6 +267,7 @@ def _defs() -> dict[str, Any]:
                     "Which instance of the slot, when a site selects several providers of it.",
                     64,
                 ),
+                "hosts": ref("reaching_hosts"),
                 "purpose": text(200),
             },
             ["cap"],
@@ -278,6 +279,11 @@ def _defs() -> dict[str, Any]:
                     "else": {"required": ["version"]},
                 }
             ],
+        ),
+        "reaching_hosts": arr(
+            pat(SLUG, None, 64),
+            "The module's host roles that reach the slot (and a preference's fallback) over the network, in the generated egress policy; absent, every role of the module does. Each is one of the module's own host roles (loader). Name them for an authority or privileged slot (secrets, broker, idp, ...), which a requirement reaches without an overlay grant: the review tier (human for a privileged slot) is its gate, and a role left out cannot reach it.",
+            1,
         ),
         "requirement_model_role": obj(
             {"role": ref("mdl_ref"), "purpose": text(200)},
@@ -338,6 +344,7 @@ def _defs() -> dict[str, Any]:
                 "formats": ref("formats"),
                 "provisional": {"const": True},
                 "instance": pat(SLUG, None, 64),
+                "hosts": ref("reaching_hosts"),
                 "purpose": text(200),
                 "fallback": ref("fallback"),
             },
@@ -554,7 +561,7 @@ def _defs() -> dict[str, Any]:
             desc="What the module offers: slots (provider only) and interfaces (any kind).",
         ),
         "egress": {
-            "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). Enforcement by a generated network policy is specified, not implemented.",
+            "description": "Where the module's hosts may connect beyond the slots they require or prefer (those are reached by requirement, per requires.capabilities[].hosts, without a grant): none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service named here (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). The generated network policy enforces it (homelabnext.modules.egress, hnx modules render).",
             "default": "none",
             "oneOf": [
                 {"const": "none"},

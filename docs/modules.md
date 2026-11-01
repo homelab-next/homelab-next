@@ -80,9 +80,13 @@ examples/modules/<id>/module.yml  the fictional examples (this draft), examples/
 ```
 
 The id equals the directory name and is the graph node `module:<id>`. An overlay module whose id
-equals a shipped one is an **error**, never a silent override. The loader puts only
-`hnx_modules/<id_>` of each module on the import path; a module shipping `hnx_modules/<other>/` or
-`homelabnext/` is refused.
+equals a shipped one is an **error**, never a silent override. A module's
+`python/` tree holds only its own package, `hnx_modules/<id_>/`: the manifest rules
+(`homelabnext.modules.rules.code_tree_problems`) refuse another module's `hnx_modules/<other>/`,
+`homelabnext/`, any other top-level module, an `hnx_modules/__init__.py` (it would end the
+namespace package) and a symlink anywhere in it, so the tree can never shadow code that is not
+the module's. No loader imports module code yet; the one that does puts `python/` on the import
+path, so this rule is what keeps that path to the module's own package.
 
 ## The manifest at a glance
 
@@ -186,8 +190,10 @@ that guard rules no module may contribute about itself.
 Every slot has a descriptor; `examples/modules/slots.yml` is the draft data for the slots the
 examples use, and the contract-test rules read it. The fields and their rules are a draft schema
 of their own, `platform/slot` 1.0 (`schemas/platform/slot.schema.json`, `x-draft`): every
-`slots.yml` entry validates against it, each contract names a real protocol file, and the
-privileged set is pinned to the six trust roots named below, each with a conformance suite.
+`slots.yml` entry validates against it (the loader checks every entry before a rule reads it and
+reports one that does not, leaving it out of the registry), each contract names a real protocol
+file, and the privileged set is pinned to the six trust roots named below, each with a
+conformance suite.
 `platform/capability` stays 1.0 until the ADR is accepted: 1.0 allows undeclared keys, so adding
 these fields' rules to it would refuse a 1.0 descriptor that happened to carry one, which is not
 an additive change. Capability descriptor 1.1 takes them then (a deliberate, documented break, or
@@ -211,7 +217,7 @@ is subsumed by the providers' and core modules' `requires`.
 
 | Key | Entry | Notes |
 |---|---|---|
-| `capabilities` | `{cap, version, features, formats, instance, provisional, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract |
+| `capabilities` | `{cap, version, features, formats, instance, provisional, hosts, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract; `hosts` (optional, the module's own host roles) scopes which roles the [egress policy](#egress-and-publishing) lets reach the slot, every role when absent |
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
 | `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
@@ -259,7 +265,9 @@ that `refquota` and `refreservation`; on any other filesystem an ext4 image of t
 in full, is mounted there by a generated `.mount` unit, keeping the root's owner and mode. It never
 mounts over existing files or a mount it did not make, finishes what a failed run left, carries on
 with the next module when one fails, and `--check` reports without changing anything (exit 3 while
-a cap is owed). A cap is not grown in place (move the data out and rerun); `disk_gb: 0` is no cap.
+a cap is owed). An image cap is not resized in place (move the data out and rerun); a ZFS cap is
+set to the new size in place (ZFS refuses a `refquota` below what the dataset uses); `disk_gb: 0`
+is no cap.
 Roles on `kind: external` hosts are listed, not rendered: those hosts are outside the lab. GPU
 memory has no systemd control and stays a placement sum. `hnx modules render` writes these limits
 from the overlay's selection (`homelabnext/modules/cli.py`).
@@ -378,7 +386,7 @@ contribution class maps to the gate and approver that already exist; none adds a
 | MCP records | tools for agents | the catalog review policy from the core/overlay, never a policy beside the module | catalog reviewers |
 | handoffs | broker actions | actions are a subset of the operator's broker manifest; never added to it | broker manifest owner |
 | shared_config | keys in a shared component | never secrets, broker, mcp-catalog, records, orchestration, codemode-executor, codemode-runner; edge or idp only with `grants.shared_config.<module>: [cap:edge\|cap:idp]` (a site rule) | overlay owner |
-| egress | traffic beyond required slots | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
+| egress | traffic beyond required slots (a required or preferred slot is reached without a grant, by the roles its `hosts` names or every role; a privileged one is gated by the review tier, human) | `egress:` declared, from the module's own host roles, to services that exist; each internet or authority-service target, and `external` for a `kind: external` host role, is named in `grants.egress.<module>.<role>`; an internet-facing role inside the lab needs `grants.internet_facing`; static hosting needs `grants.publish` | overlay owner |
 | secrets | credentials | own namespace; cross-module reads need `grants.secrets` | overlay owner |
 
 **Never contributed**: ceilings, broker actions and approvers, review policy, grants, and runtime
@@ -599,8 +607,9 @@ that slot's round trip").
 ## Egress and publishing
 
 `egress:` is `none` (the default) or, per host role of the module's own, the registry services and
-`internet` it may reach beyond the slots it requires; a `svc:` target must be a registry service
-the site has (a selected slot or instance, or a selected module's row). A grant names its
+`internet` it may reach beyond the slots it requires or prefers; a `svc:` target must be a registry service
+the site has (a selected slot or instance, or a selected feature or core module's row; a
+provider's rows are reached by its slot or instance). A grant names its
 targets: `grants.egress.<module>.<role>: [internet, svc:broker, external]`. Every `internet` target
 and every authority or privileged service (`svc:secrets`, `svc:broker`, `svc:idp`, the instances
 that fill those slots) must be listed for that role, and so must `external` for a `kind: external`
@@ -634,11 +643,13 @@ role's chain, which accepts:
   port of its placed hosts when it has no row (address-granular: give the provider rows to narrow
   it); a provider with no host role runs outside the lab and is reached only over `internet`;
 - each `svc:` target (a feature or core module's row, a slot or an instance);
-- with `internet`, global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
-  so the role resolves through the lab's resolvers): every special-purpose range (private, shared, loopback,
-  link-local, documentation, benchmarking, multicast, reserved, NAT64 and the other
-  IPv4-embedding prefixes), `scope.trusted.nets` (read by the strict scope reader), every
-  host's `addresses` and, when `hnx modules render --network FILE` (with `--overlay DIR`,
+- with `internet`, global unicast only, except DNS (port 53) and DNS over TLS and over QUIC (port
+  853), tcp and udp, so the role resolves through the lab's resolvers (the `dns` allows above; a
+  `dns` provider that runs outside the lab is not reached): every special-purpose range (private,
+  shared, loopback, link-local, documentation, benchmarking, multicast, reserved, NAT64 and the
+  other IPv4-embedding prefixes), `scope.trusted.nets` and `scope.trusted.wan` (the lab's own
+  public addresses, so not the port forwards behind them either; both read by the strict scope
+  reader, which refuses a dynamic WAN source), every host's `addresses` and, when `hnx modules render --network FILE` (with `--overlay DIR`,
   `DIR/lab/site.yml` by default; or `egress.render(..., network=)`) gives the network model, every zone's `subnet6` and every `delegated_prefixes6`
   prefix are never the internet. Over IPv6 the accept also requires `2000::/3`, so nothing
   outside global unicast passes whatever the deny-list holds. **Without the network model**
@@ -655,8 +666,12 @@ cgroup present, before `network-pre.target`; the module's fleet units start only
 `hnx-egress.timer` reloads it every 30 seconds, because nftables resolves a cgroup once (a
 restarted role slice falls under the `hnx.slice` drop until then). A failed load keeps the policy
 already loaded; before the first successful load at boot `hnx.slice` is unfiltered, so watch the
-service for failure. Requirements are the module's, not a role's: every role of a module reaches
-the slots the module requires, authority slots included.
+service for failure. A requirement or preference reaches its slot for the host roles its `hosts`
+names, and for every role of the module when it names none, authority slots included. **A slot
+reached by requirement needs no egress grant**, privileged or not: its gate is the review tier
+(human for a privileged slot, [Trust tiers](#trust-tiers-what-selecting-a-module-grants)), and `hosts` is how a module keeps a
+role that never uses the secrets store or the broker from reaching it. The grant covers only the
+`egress:` targets above.
 
 **What it does not cover**: connections the module accepts (inbound is the network model's and the
 edge's; replies pass as established); loopback, so modules on one host reach each other's local
@@ -750,8 +765,11 @@ tabs, CR and LF ignored; `white` is `clear`. A `Label` compares only with anothe
 source; datasets declare theirs under [`data:`](#data-and-lifecycle-safety). The lake stores the
 label per row: every core OCSF table has a `tlp` column from 1.1, a write without a canonical label
 is refused, and `homelabnext.lake.tables.row_label` reads a stored row's label (`red` unless it
-is one of the canonical spellings). Pipeline tagging, the backfill of rows stored before the column and
-reader ceilings follow in the order the ADR sets. Readers read at their ceiling: the query
+is one of the canonical spellings). The log pipeline tags each event from its source's declaration
+(`homelabnext.logpipeline.tlp_labels`, the `hnx_tlp` label), and `hnx modules tlp-backfill`
+(`homelabnext.lake.backfill`) writes the statements that label rows stored before the column;
+running them, and loading the generated `lake-access.json` into the query engine, are the
+operator's steps on a real lab. Readers read at their ceiling: the query
 engine through the generated row filters ([`tlp_readers`](#site-selection-platformmodule_selection-10-a-draft-schema)),
 and code in this repository through `homelabnext.lake.ceiling.CeilingReader`, which builds its own
 filtered `SELECT` from a table, columns and equality filters, checks each row's label again, and
@@ -1236,9 +1254,12 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    compared, and the report says so; one it merely leaves out is refused by the schema, never
    read as "nothing runs". The fleet units and the recovery pairs come from the hosts, and the
    agents from the running broker where the census asks one
-   ([The loader at deploy time](#the-loader-at-deploy-time)); service rows, MCP servers and tables
-   are not reported by the hosts, so a gathered inventory names them in `not_gathered`, and only a
-   hand-written one compares them.
+   ([The loader at deploy time](#the-loader-at-deploy-time)). MCP servers are gathered when at
+   least one host lists its installed client configurations, and tables when one host lists the
+   lake catalog; otherwise a gathered inventory names them in `not_gathered`. Service rows are
+   never gathered by name (a socket names no row): a gathered inventory names them in
+   `not_gathered`, the loader judges each selected row by whether its placed host listens on its
+   port, and only a hand-written inventory compares them by name.
 
 ### The loader at deploy time
 
@@ -1252,7 +1273,8 @@ runs the loader twice, and both always run:
    `lab/modules.yml`, the role table `lab/model_roles.json`, the core registry `lab/services.yml`,
    the MCP catalog `lab/mcp/` and the keyring) into a problem instead of the note an ad-hoc check
    prints: a deploy never checks the repository's examples in place of the lab. The slot registry
-   is the pinned `hnx` checkout's own (`examples/modules/slots.yml`), never the overlay's. With
+   is the pinned `hnx` checkout's own (`examples/modules/slots.yml`), never the overlay's
+   (`--deploy` refuses `--slots`). With
    modules selected and no `lab/review-policy.yml`, the check says so: the supply chain then
    refuses every fetched module, so a lab of in-tree modules needs no policy, and one that fetches
    a module cannot load it without one.

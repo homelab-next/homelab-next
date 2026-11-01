@@ -800,6 +800,52 @@ def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, inbox):
     assert [e for e in ev.read_events(ev.events_dir(rb), []) if e.kind == "transition"] == []
 
 
+# --- a missing review policy fails closed ---------------------------------------------------------
+
+
+def test_with_no_review_policy_the_decider_applies_nothing(lab, inbox):
+    """No ``review-policy.yml`` in or beside the register root: the decider refuses the run,
+    naming the absence (:data:`homelabnext.reviews.NO_POLICY`), instead of applying with zero
+    reviews; ``policy=False`` is the explicit opt-out.  (This branch first had every intent
+    *wait*; merged with main's fail-closed deciders the one design is that deciding raises
+    :class:`RegisterError` before anything is decided, so the same guarantees are asserted on
+    the raise: nothing applied, the intent still in the inbox.)"""
+    import re
+
+    from homelabnext.reviews import NO_POLICY
+
+    name = _intent(
+        inbox,
+        "ll-003-partial",
+        record=U["LL-003"],
+        **{"from": "open", "to": "partial"},
+        reason="a detector exists; the backup gap is still open for new guests",
+    )
+    _give_ll_003_a_control(lab)
+    (lab.parent / "review-policy.yml").unlink()
+    with pytest.raises(RegisterError, match=re.escape(NO_POLICY)):
+        _decider(lab, inbox).decide_all()
+    assert load_register(lab / "lessons")["lessons"][2]["status"] == "open"
+    assert _lanes(inbox)["inbox"] == [name]
+    [out] = _decider(lab, inbox, policy=False).decide_all()
+    assert out.result == "applied", out
+
+
+def test_with_no_review_policy_build_and_review_refuse(lab, tmp_path, capsys):
+    from homelabnext.reviews import NO_POLICY
+
+    (lab.parent / "review-policy.yml").unlink()
+    with pytest.raises(RegisterError, match=r"no review policy"):
+        build_all(lab, tmp_path / "out")
+    assert not (tmp_path / "out").exists()  # nothing written
+    assert registers_main(["build", str(lab), str(tmp_path / "cli")]) != 0
+    assert NO_POLICY in capsys.readouterr().err
+    assert registers_main(["review", str(lab), "--today", "2026-10-20"]) != 0
+    assert registers_main(["build", str(lab), str(tmp_path / "ok"), "--no-review-policy"]) == 0
+    assert registers_main(["build", str(lab), str(tmp_path / "ok2"), "--no-policy"]) == 0
+    assert registers_main(["review", str(lab), "--today", "2026-10-20", "--no-policy"]) == 0
+
+
 def test_a_rekey_typed_as_the_migration_is_still_refused(lab):
     """``by: hnx:migrate`` is a constant any writer can type: the write path refuses every rekey
     (the migration creates its own), so a stale human approve is never carried onto an edit."""
@@ -816,14 +862,22 @@ def test_a_rekey_typed_as_the_migration_is_still_refused(lab):
 
 
 def test_the_decider_fails_closed_without_a_review_policy(lab, inbox, capsys):
-    (lab.parent / "review-policy.yml").unlink()
+    """The message is the shared :data:`homelabnext.reviews.NO_POLICY` (one source, after the
+    merge with the branch that put the rule in ``homelabnext.reviews``), naming the register
+    root and both spellings of the opt-out; either spelling decides.  The policy goes after the
+    record edit: the write path fails closed without one too."""
     _intent(inbox, "promote", record=U["LL-003"], **{"from": "open", "to": "partial"}, reason="x")
     _give_ll_003_a_control(lab)
-    with pytest.raises(RegisterError, match=r"no review-policy\.yml in or beside"):
+    (lab.parent / "review-policy.yml").unlink()
+    with pytest.raises(RegisterError, match=r"no review policy \(review-policy\.yml\) found"):
         _decider(lab, inbox).decide_all()
     argv = ["decide", str(lab), str(inbox), "--as", "human:example-operator"]
     assert registers_main(argv) == 1
-    assert "--no-policy to decide without review tiers" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert f"{lab}: no review policy" in err and "--no-review-policy or --no-policy" in err
     assert _lanes(inbox)["decided/completed"] == []  # nothing decided
+    assert registers_main([*argv, "--dry-run", "--no-review-policy"]) == 0  # either spelling
+    assert "applied" in capsys.readouterr().out
+    assert _lanes(inbox)["decided/completed"] == []  # a dry run moves nothing
     assert registers_main([*argv, "--no-policy"]) == 0  # the explicit opt-out
     assert "applied" in capsys.readouterr().out
