@@ -181,6 +181,8 @@ def review(sources: dict, today: dt.date | None = None) -> Report:
             cand = e.get("retired_by") or []
             if e["status"] == "controlled" and _mechanism_holds(cand, sources.get("results"), root):
                 why = f"retired_by {', '.join(cand)} already holds"
+                if unverified := [r for r in cand if not CRIT_REF.match(r)]:
+                    why += f" (unverified: {', '.join(unverified)} - only an invariant is run)"
                 add(due("retire", e, why + _needs(e, art, "retired", policy)))
             elif _due(e, today):
                 hint = (

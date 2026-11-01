@@ -239,6 +239,22 @@ def test_check_reports_cycles_and_orphans_written_by_hand(tmp_path):
     assert "names project" in problems and "which does not exist" in problems
 
 
+def test_check_applies_the_write_paths_link_and_parent_rules_to_hand_edits(tmp_path):
+    """A dependency target must be a step or task, and a parent a step or task of the same
+    project: the write path refuses both, and check() reports them in a file edited by hand."""
+    s = store(tmp_path)
+    p, q = s.create("project", "P"), s.create("project", "Q")
+    a = s.create("step", "a", project=p.uid)
+    other = s.create("step", "other", project=q.uid)
+    assert s.check() == []
+    f = tmp_path / f"{a.uid}.md"
+    doc = parse_item(f.read_text(), f.name)
+    f.write_text(render_item({**doc, "links": [{"relation": "blocks", "target": q.uid}], "parent": other.uid}))  # fmt: skip
+    problems = s.check()
+    assert f"{a.uid}: blocks {q.uid}: both ends must be existing steps or tasks" in problems
+    assert f"{a.uid}: parent {other.uid}: parent must be in the same project" in problems
+
+
 def test_parse_item_refuses_malformed_files():
     for text, why in (
         ("---\nuid: x\n", "not closed"),
