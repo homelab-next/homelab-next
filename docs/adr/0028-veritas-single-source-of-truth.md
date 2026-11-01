@@ -85,8 +85,8 @@ file.
    - the fictional examples under `examples/`, which stand in for a site's private tier: the
      registry, the role tables, the model store, the gateway and serving specs
      (`examples/model-serving/gateway.yml`, `serving.yml`, and the lab's
-     `compose/lab-in-a-box/config/llm-gateway/gateway.yml`; not the rendered `litellm/` and
-     `bifrost/` beside them), the keyring sources, the MCP catalog and its render specs, the
+     `compose/lab-in-a-box/config/llm-gateway/gateway.yml`; not the rendered `litellm/` beside
+     them), the keyring sources, the MCP catalog and its render specs, the
      status views, the review policy (`examples/review-policy.yml`), registers and strategy
      records with their `.events/` sidecars. The derived files under `examples/` are the ones
      decision 6 lists.
@@ -115,7 +115,7 @@ file.
    tracked file whose first lines carry a marker comment ("generated ... do not edit", or a
    `generated_from` key) must match a row there that names a CI step or a CI-run test module. It
    does not see a derived file without such a marker. Those are listed here by hand: the JSON
-   gateway outputs (`.../litellm/keys.json`, `.../bifrost/*.json`), the schema generators'
+   gateway outputs (`.../litellm/keys.json`), the schema generators'
    output (decision 3), `docs/scripts/catalog.json`, the golden reports
    (`homelabnext/agent/prompts/injection/report.json`, `examples/model_roles.eval.json`,
    `detections/attack_coverage.json`), and derived blocks inside authored files (Links blocks,
@@ -129,9 +129,9 @@ file.
    | MCP client configs, `examples/mcp/clients/*/` | the MCP catalog, the render specs `examples/mcp/clients/*.yml`, the profiles | `make mcp-check` (CI) |
    | Agent keyring, `examples/keyring/keyring.json` | the files `examples/keyring/sources.yml` names: the registry, the agent profiles, the broker manifest | `hnx agent keyring check` (CI) |
    | Code Mode stubs and search index, `examples/codemode/<profile>/{types.d.ts,stubs.pyi,search.json}` (ADR-0031) | the example broker manifest `examples/broker/manifest.yml` and its handler documents | `hnx codemode gen --check` (`make gates`, CI) |
-   | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/{litellm,bifrost}/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
-   | LLM gateway config, `examples/model-serving/gateway/{litellm,bifrost}/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
-   | LLM gateway config, `examples/llm-orchestrator-gateway/gateway/{litellm,bifrost}/` | the example's role table and `gateway.yml` (whose `controller:` block also holds the controller's backends and homes to them) | pytest `tests/generators/test_agent_homes.py` (CI); `make gateway-check` (`make check`) |
+   | LLM gateway config, `compose/lab-in-a-box/config/llm-gateway/litellm/` | role table, profiles, the lab's `gateway.yml` | pytest `tests/generators/test_llm_gateway.py` (CI); `make gateway-check` (`make check`) |
+   | LLM gateway config, `examples/model-serving/gateway/litellm/` | role table, profiles, gateway and serving specs | pytest `tests/models/test_serving_plan.py` (CI); `make models-check` (`make check`) |
+   | LLM gateway config, `examples/llm-orchestrator-gateway/gateway/litellm/` | the example's role table and `gateway.yml` (whose `controller:` block also holds the controller's backends and homes to them) | pytest `tests/generators/test_agent_homes.py` (CI); `make gateway-check` (`make check`) |
    | vLLM instances, `examples/model-serving/vllm_server/instances.yml` | `examples/model-serving/serving.yml`, the model store, the role table | `hnx models serving check` (`make models-check`); pytest `tests/models/test_serving_plan.py` (CI) |
    | Register records' Links blocks | the records | `hnx registers links --check` (CI) |
    | Strategy index `docs/strategy/README.md` and Links blocks | the strategy records | `make strategy`; pytest `tests/strategy/` (CI) |

@@ -10,7 +10,10 @@ consumer (agents, the decision cascade, tools) calls the `llm-gateway` capabilit
 as the model and its own key (the `inference` capability names a serving engine, which consumers do
 not call). The gateway enforces that key's scope and limits and forwards the call to the
 backend. The decision on which product does this is [ADR-0022](adr/0022-llm-gateway-litellm.md):
-**LiteLLM, run the supported way**. Bifrost is the tested alternate.
+**LiteLLM, run the supported way**, and it is the only gateway: the Bifrost adapter was removed
+on 2026-10-31 (ADR-0022, amendment). Bifrost stays the documented exit if LiteLLM must be
+replaced, through the product-neutral gateway contract below (the spec, the locality rule and the
+`gateway` conformance feature).
 
 The gateway handles single requests. It does not schedule agent sessions, admit work against GPU
 capacity, or choose cloud for an agent. Those belong to the orchestrator, and the gateway config
@@ -31,7 +34,7 @@ inputs:
 | optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve; the plan's `exposure` must be `zone`, and a registry service for a backend must have the plan's port |
 
 ```bash
-hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and bifrost/ under OUT_DIR
+hnx gen gateway render SPEC OUT_DIR            # writes litellm/ under OUT_DIR
 hnx gen gateway render SPEC OUT_DIR --check    # drift check and locality audit (make gateway-check)
 hnx gen gateway provision OUT_DIR/litellm/keys.json   # create LiteLLM keys on a running proxy
 hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or an engine model id (A-14)
@@ -60,8 +63,7 @@ It writes:
   declared figure, and a share that rounds to nothing is refused. LiteLLM counts only per minute, so a limit
   must have a window of whole minutes and at least one call a minute: `1` per `3600` s or `5` per
   `10` s is refused rather than rendered looser (`1` rpm, `30` rpm). Counts are whole numbers of
-  at least 1; `max_requests: 0` is refused, never rendered as unlimited. Bifrost gets the
-  declared count and window exactly. Role fallbacks go in `router_settings`, with
+  at least 1; `max_requests: 0` is refused, never rendered as unlimited. Role fallbacks go in `router_settings`, with
   `enable_pre_call_checks: true` so the limits are enforced. `general_settings` holds the master
   key and the database only as `os.environ/HNX_SECRET_*` references.
 - **`litellm/keys.json`**. These are the virtual keys. LiteLLM stores keys in Postgres, not in its
@@ -83,27 +85,8 @@ It writes:
   `provision`. Its alias is listed ("untagged key(s) ... left alone"): delete it by hand once
   (`/key/delete` with its token). `--check` fails a key whose tag is not the spec's name, a
   `managed_by` that differs from it, and an alias declared twice.
-- **`bifrost/config.json`**. There is one custom OpenAI-compatible provider per local backend
-  (`hnx-<svc>`). Role → model id mappings are key `aliases`. The file also holds virtual keys
-  (`env.HNX_SECRET_*`), per-role `model_configs` with rate limits and budgets, and routing rules
-  (`model == '<role>'`) that list bindings in priority order and then the fallback chain.
-  The admin API and UI need a login (`governance.auth_config`: user `admin`, or
-  `bifrost.admin_user`, and the password from `bifrost.admin_password`, default
-  `secret:llm-gateway/bifrost-admin-password`), and `source_of_truth: config.json` makes the file
-  authoritative: at every start Bifrost overwrites `config.db` from it and prunes rows it does not
-  declare, so a key or limit changed through the API does not survive a restart. `--check` fails
-  if either is missing.
-- **`bifrost/pricing.json`, `bifrost/model-parameters.json`**. These are empty local datasheets.
-  At its default settings Bifrost will not start if it cannot download them. Because the datasheets are
-  empty, Bifrost prices every call at zero: the role budgets are rendered but never trigger, and
-  `cost_per_1k_tokens` is not carried over (LiteLLM's `model_info` does carry it).
-
 Secrets are always `secret:<name>` and are delivered in `HNX_SECRET_<NAME>` (the registry's
 mapping). The renderer refuses a literal value.
-
-Two more shapes are refused because Bifrost cannot render them faithfully: two cloud backends of
-the same provider (Bifrost has one provider per name, so one key would serve both), and a role
-with two bindings on the same backend (a provider keeps one model id per role).
 
 ## The locality rule
 
@@ -131,9 +114,8 @@ was edited to let it through.
 `--check` then audits the rendered files themselves. It decides locality from each file, not from
 the spec:
 
-- In LiteLLM, a deployment is local only if it is `openai/` on a declared local host that passes
-  the rule above.
-- In Bifrost, a provider is local only if it is a custom OpenAI provider on such a host.
+- A LiteLLM deployment is local only if it is `openai/` on a declared local host that passes the
+  rule above.
 
 Anything else counts as cloud. So a hand-edited `fallbacks`, `context_window_fallbacks` or
 `default_fallbacks` entry, a cloud routing-rule target, or a cloud provider on a local-only key
@@ -177,8 +159,7 @@ a request's label. So the rule is split where it can be enforced:
   rendered config deploys to the cloud whose ceiling is below it: a model it lists, an `aliases`
   target, or a fallback of either (`fallbacks`, `context_window_fallbacks`,
   `content_policy_fallbacks`, `default_fallbacks`), followed transitively. A role the spec reads as local
-  but the file deploys out is held at `clear`. Bifrost's virtual keys carry no metadata: its audit
-  holds every `local-only` key (the only kind above `clear`) to local providers, as before.
+  but the file deploys out is held at `clear`.
 - **Per request, by the caller.** `homelabnext.registry.model_tlp.admit(roles, role, claimed,
   sender=send_ceiling(...))` is the rule as a library function. It returns an `Admission` whose
   `reason` (`within-ceiling`, `above-ceiling`, `unlabelled`, `unknown-role`, `invalid-role-table`
@@ -202,7 +183,7 @@ The lab's spec is `compose/lab-in-a-box/config/llm-gateway/gateway.yml`. It uses
 Both backends point at the fake inference server, which serves `example-4b` and `example-27b`
 under the aliases `inference-small` and `inference-large`.
 
-The gateway services are optional compose profiles. They are not part of `make lab-up` or the
+The gateway services are an optional compose profile. They are not part of `make lab-up` or the
 nightly:
 
 ```bash
@@ -219,10 +200,9 @@ hnx conform run inference --target compose/lab-in-a-box/targets/inference-gatewa
 | Profile | Services | mem_limit |
 |---|---|---|
 | `gateway` | `llm-gateway` (LiteLLM 1.103.3, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 768 + 64 MB |
-| `gateway-bifrost` | `llm-gateway-bifrost` (Bifrost 2.2.6, digest-pinned) on port `LAB_PORT_GATEWAY_BIFROST` | 256 MB |
 
 The default stack's 3584 MB budget does not include profile services, because `docker compose up`
-does not start them. `tests/compose` counts the profiles' 1088 MB separately and checks it against
+does not start them. `tests/compose` counts the profile's 832 MB separately and checks it against
 the total stated in the compose header. It allows only `llm-gateway*` services to use a profile,
 and it fails if a gateway service is moved out of its profile. The whole default stack plus
 `gateway` needs about 4.6 GB, more than the 4 GB nightly runner, so the profiles are not in the
@@ -249,9 +229,9 @@ again against the same gateway.
 The product adapter is `homelabnext.conform.adapters.llm_gateway:make`. It is stdlib-only, keeps
 no state between calls, and is not tied to any product. It reads the endpoint from
 `HNX_ENDPOINT_<CAPABILITY>` and the keys from `HNX_SECRET_*` on every call. The declared models
-come from the role table, not from the gateway itself. The lab ships two target files:
-`targets/inference-gateway.yml` (LiteLLM) and `targets/inference-gateway-bifrost.yml`. Switching
-gateways means changing the target file and passing this suite.
+come from the role table, not from the gateway itself. The lab ships one target file,
+`targets/inference-gateway.yml` (LiteLLM). Switching gateways means a renderer for the new
+product, a target file, and passing this suite.
 
 A target that also declares `tlp-ceiling` (`TlpCeilingGateway`) adds
 `gateway-refuses-role-above-key-ceiling`: on a key whose sending TLP ceiling is above a cloud
@@ -287,7 +267,7 @@ recommended:
   a GPU-backed engine.
 - The model-serving stack behind the gateway (one model store, vLLM units generated from it) is in
   [model-serving.md](model-serving.md) ([[model-serving]]), ADR-0023.
-- SSO for either product's admin UI (Bifrost's gets a password login, LiteLLM's the master key).
+- SSO for LiteLLM's admin UI (it takes the master key).
 - Postgres high availability.
 - Spend reporting. The hub reads per-call usage from the spend-log API for orchestration jobs:
   [orchestration telemetry](orchestration-telemetry.md) ([[orchestration-telemetry]]).

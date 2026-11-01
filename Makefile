@@ -168,7 +168,7 @@ models-check:
 	$(PY) -m homelabnext.cli models serving check $(SERVING)/serving.yml $(SERVING)
 	$(PY) -m homelabnext.cli gen gateway render $(SERVING)/gateway.yml $(SERVING)/gateway --check
 
-# the LLM gateway config (LiteLLM + Bifrost) is generated from the role table and the agent
+# the LLM gateway config (LiteLLM) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
 GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
 # the gateway in front of the orchestration controller's engines: --check also holds the

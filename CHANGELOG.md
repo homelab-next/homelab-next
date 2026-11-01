@@ -183,6 +183,7 @@ has no section below.
 
 ### Removed
 
+- The Bifrost LLM gateway adapter (operator decision, 2026-10-31; ADR-0022, amended): its renderer and audit in `homelabnext/generators/llm_gateway.py`, the generated `bifrost/` configs, the lab's `gateway-bifrost` compose profile (`LAB_GATEWAY_BIFROST_ADMIN_PASSWORD`, `LAB_PORT_GATEWAY_BIFROST`), `targets/inference-gateway-bifrost.yml` and their tests. LiteLLM is the only gateway; `hnx gen gateway render` writes `litellm/` only, and a gateway spec with a `bifrost:` block is refused as an unknown key. The two shapes refused only because Bifrost could not render them (two cloud backends of one provider, a role bound twice on one backend) now render as separate LiteLLM deployments. The gateway spec and the `gateway` conformance feature stay product-neutral, and ADR-0022 names Bifrost as the documented exit. The lab's fake gateway keys drop the `sk-bf-` prefix. Remove a `bifrost:` block and any rendered `bifrost/` directory from an overlay's gateway spec.
 - OpenFGA (`authz`) from the lab-in-a-box: it backed no capability or conformance suite, and authorisation in this design is the identity provider plus the broker's allowlists and bound approvals.
 - `homelabnext.compute.load_zones_file`: a second site reader that kept the last of two equal keys and that nothing called; `open_site` reads the site with the network model's loader.
 

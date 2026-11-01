@@ -1,11 +1,13 @@
 ---
-summary: LiteLLM, run the supported way, is the LLM gateway; its config is generated from the role table and profiles.
-summary_of: outline:sha256:c104ebc1439d0dd4
+summary: LiteLLM, run the supported way, is the only LLM gateway (Bifrost is the documented exit); its config is generated from the role table and profiles.
+summary_of: outline:sha256:2de47a0ddfd9cfdd
 ---
-# ADR-0022: Run LiteLLM, the supported way, as the LLM gateway; keep Bifrost as the tested alternate
+# ADR-0022: Run LiteLLM, the supported way, as the only LLM gateway
 
 - **Status:** proposed
 - **Date:** 2026-10-21
+- **Amended:** 2026-10-31: the Bifrost adapter is removed; LiteLLM is the only gateway and Bifrost
+  is the documented exit (decision 5, amended; see the amendment at the end of Decision)
 - **Related:** ADR-0005, ADR-0007, `schemas/platform/model_roles.json`, [LLM gateway](../llm-gateway.md)
 
 ## Context
@@ -71,9 +73,30 @@ launcher downloads the binary without verifying a checksum.
    `make gateway-check` audits the rendered files for it.
 4. `gateway-rejects-bad-key`, `gateway-limit-throttles` and `gateway-models-match-roles` are the
    gateway contract. Any target that declares the `gateway` feature must pass them.
-5. Bifrost stays wired as the tested alternate: config is rendered from the same inputs, there is a
-   `gateway-bifrost` lab profile, and it has a target file. It can be revisited when it passes the
-   same suite unchanged.
+5. *(Amended 2026-10-31.)* ~~Bifrost stays wired as the tested alternate.~~ LiteLLM is the only
+   gateway. Bifrost was evaluated (the evidence above) and is the documented exit if LiteLLM must
+   be replaced; nothing of it is wired any more.
+
+### Amendment (2026-10-31): one gateway; Bifrost is the documented exit
+
+Keeping a second gateway rendered, profiled and conformance-tested cost a renderer, an audit, a
+compose service, a target file and their tests, all of them security-relevant (key handling,
+locality audit), for a product the lab does not run. The operator decided on 2026-10-31 to cut
+it for v0:
+
+- The Bifrost renderer and its audit (`homelabnext/generators/llm_gateway.py`), the
+  `gateway-bifrost` lab profile, its target file and its tests are removed. `hnx gen gateway
+  render` writes `litellm/` only, and a spec with a `bifrost:` block is refused as an unknown key.
+- The gateway *spec* stays product-neutral: the role table, the profiles and the gateway spec say
+  nothing about which product renders them, the locality rule and the TLP key ceilings are rules
+  about roles and backends, and decision 4's `gateway` conformance feature is the contract any
+  gateway must pass.
+- **The exit, if LiteLLM must be replaced:** add a renderer for the replacement beside
+  `render_litellm` (Bifrost is the evaluated candidate: the table above and the git history of
+  the removed renderer, last present before this amendment, say what it needs and where it fell
+  short), an audit that reads its rendered files for locality, a target file, and pass the
+  `inference` suite with the `gateway` feature. Bifrost's three failed MUSTs above are the bar it
+  would have to clear first.
 
 ## Consequences
 
@@ -84,8 +107,9 @@ launcher downloads the binary without verifying a checksum.
 - Its release cadence makes the digest pin and the conformance gate mandatory, not optional.
 - The 429 for a per-role limit carries a misleading error type. Callers must branch on the status
   code.
-- The lab gains two optional profiles (1088 MB together). They are outside the 3584 MB default
-  budget and not part of the nightly.
+- The lab gains an optional profile (`gateway`, 832 MB; 1088 MB with the Bifrost profile until the
+  2026-10-31 amendment removed it). It is outside the 3584 MB default budget and not part of the
+  nightly.
 - Not measured: concurrency, latency, streaming under load, and behaviour with a GPU-backed engine.
   The run used the deterministic fake.
 
@@ -95,7 +119,8 @@ launcher downloads the binary without verifying a checksum.
   inference-contract MUST checks as configured here: `/v1/models` lists provider-prefixed ids, and
   replies name the backend model rather than the requested role. That is exactly the signal the
   `alias-swap` mutant uses to catch a silent model swap. Its role-fallback routing rule can also
-  serve a key a model it did not ask for. It is kept as the alternate, not the choice.
+  serve a key a model it did not ask for. It was kept as the alternate until 2026-10-31 and is now
+  the documented exit only (amendment above).
 - **LiteLLM without Postgres.** This is the configuration that failed before: a wrong key gets
   `400 No connected db.`, and there are no virtual keys or per-key limits.
   `gateway-rejects-bad-key` now fails it.
