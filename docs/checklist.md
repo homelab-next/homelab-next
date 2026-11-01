@@ -301,7 +301,7 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 |---|---|---|---|
 | X-01 | No raw endpoints outside the registry | `tools/no_raw_endpoints.py` exits 0 over the tree (plugin skips when the tool is absent) | PUBLIC-NOW |
 | X-02 | Registry rows match live listeners | Every registry row has health, metrics, backup, auth mode, and every live listener has a row | SERVER |
-| X-03 | Schemas version-pinned, examples valid | Each schema has $schema, $id, a version; examples validate; negatives are rejected | PUBLIC-NOW |
+| X-03 | Schemas version-pinned, examples valid | `tools/schema_check.py --strict` passes: every schema (each `*.json` under `schemas/<dir>/`) has $schema and a versioned $id; examples validate; negatives are rejected; no example or negative is owned by no schema | PUBLIC-NOW |
 | X-04 | Every capability has a conformance test | Each capability has a `conformance/<cap>/test_*.py` | PUBLIC-NOW |
 | X-05 | Role linter clean | `tools/role_lint.py ansible/roles` exits 0 (a directory of roles is expanded), including RL011-RL014: `no_log` on secret use, no `shell` or templated free-form `command`, no `validate_certs: false`, no privileged container or docker socket | PUBLIC-NOW |
 | X-06 | Detection ids are logical | No raw rule number in charters, profiles, decisions or schedules; every `det:` id resolves in `det_map.yml` | PUBLIC-NOW |

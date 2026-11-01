@@ -53,6 +53,29 @@ def merge_into_registry(doc: Mapping[str, Any], frag: Mapping[str, Any]) -> dict
     return out
 
 
+def registry_problems(fleet: Fleet, hosts: Mapping[str, Any]) -> list[str]:
+    """Where a service registry's ``hosts`` disagree with the guests on an address or a zone.
+
+    ``hosts`` maps a host name to an object with ``address`` and ``zone`` (the registry model's
+    hosts).  The registry's address feeds the router's service exceptions, DNS and DHCP; the
+    guest's ``network.ip`` the hypervisor, cloud-init and the guest firewall: one fact, two files,
+    so a difference is an error.  A registry host that is no guest, and a guest that is no
+    registry host, are not compared.
+    """
+    out = []
+    for name, want in fragment(fleet)["hosts"].items():
+        have = hosts.get(name)
+        if have is None:
+            continue
+        for field in ("address", "zone"):
+            if str(getattr(have, field)) != str(want[field]):
+                out.append(
+                    f"guest {name}: registry hosts.{name}.{field} is {getattr(have, field)}, "
+                    f"the guest file says {want[field]}"
+                )
+    return out
+
+
 def render(fleet: Fleet) -> dict[str, str]:
     f = fragment(fleet)
     L = [

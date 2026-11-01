@@ -73,14 +73,20 @@ class LogicalId:
         return tuple(self.body.split(sep)) if sep else (self.body,)
 
 
+#: appended to every anchored pattern: Python's ``re`` (the repository's validators) lets ``$``
+#: match before a trailing newline, ECMA-262 (JSON Schema's dialect) does not; with the guard
+#: both refuse ``cap:dns\n``, as :func:`parse` does
+NEWLINE_GUARD = "(?!\\n)"
+
+
 def schema_pattern(kind: str) -> str:
     """Anchored pattern (JSON-Schema / ECMA compatible) for one kind."""
-    return f"^{kind}:{BODY_PATTERNS[kind]}$"
+    return f"^{kind}:{BODY_PATTERNS[kind]}${NEWLINE_GUARD}"
 
 
 def union_pattern() -> str:
     alts = "|".join(f"{k}:{BODY_PATTERNS[k]}" for k in KINDS)
-    return f"^(?:{alts})$"
+    return f"^(?:{alts})${NEWLINE_GUARD}"
 
 
 def parse(text: str) -> LogicalId:

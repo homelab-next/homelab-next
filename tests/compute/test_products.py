@@ -363,6 +363,17 @@ def test_an_allow_after_a_port_level_deny_is_refused():
     assert ZoneFlow("mgmt", "data", ("tcp",), (443,)) in flows_from_site(z2z(deny, narrow))
 
 
+def test_an_allow_to_any_never_reaches_a_one_way_zone():
+    """The site validator refuses such an allow; the flows are read without it, so ``any`` must
+    not stand for the one-way zone here either (a tailscale-acl accept into the sandbox)."""
+    doc = z2z({"from": "edge", "to": "any", "action": "allow"})
+    doc["zones"] = [
+        {**z, "egress": {"internet": "deny", "one_way": True}} if z["id"] == "compute" else z
+        for z in doc["zones"]
+    ]
+    assert flows_from_site(doc) == (ZoneFlow("edge", "mgmt"), ZoneFlow("edge", "data"))
+
+
 PORTS = (22, 53, 443, 9000)
 
 
@@ -422,7 +433,7 @@ def test_tailnet_flows_allow_exactly_what_the_ir_allows(fleet):
     import random
 
     from homelabnext.compute.gen.tailscale_acl import tailnet_guests
-    from homelabnext.network.ir import _rules
+    from homelabnext.network.ir import firewall_rules
 
     tailnet = sorted({g.zone for g in tailnet_guests(fleet)})
     assert tailnet == ["edge", "mgmt"]
@@ -437,7 +448,7 @@ def test_tailnet_flows_allow_exactly_what_the_ir_allows(fleet):
             assert any(r["action"] == "deny" and "ports" in r for r in rules), rules
             refused += 1
             continue
-        ir = _rules({"firewall": doc["firewall"], "zones": []}, None, nets, {})
+        ir = firewall_rules({"firewall": doc["firewall"], "zones": []}, None, nets, {})
         acls = policy(replace(fleet, flows=flows))["acls"]
         for src in nets:
             for dst in nets:

@@ -1054,7 +1054,8 @@
       "id": "schema-check",
       "inputs": "schemas/ (with examples/, negative/ and _frozen/)",
       "invariant": [
-        "Q-10"
+        "Q-10",
+        "X-03"
       ],
       "kind": "check",
       "language": "python",
