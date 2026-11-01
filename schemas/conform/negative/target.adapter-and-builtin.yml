@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+capabilities:
+  secrets:
+    adapter: conformance.fakes.secret_store:FakeSecretStore
+    builtin: fake

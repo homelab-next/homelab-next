@@ -28,6 +28,7 @@ __all__ = [
     "load_module",
     "load_suite",
     "names",
+    "schema_problems",
 ]
 
 CAPABILITIES: tuple[str, ...] = (
@@ -75,6 +76,33 @@ class ConformError(Exception):
 CAPABILITIES_FILES: tuple[str, ...] = ("capabilities.yml", "registry/capabilities.yml")
 
 
+_VALIDATORS: dict[str, object] = {}
+
+
+def schema_problems(doc: object, schema: str) -> list[str]:
+    """Problems of ``doc`` against ``schemas/conform/<schema>.schema.json`` (empty when valid),
+    each with its path and never the failing value (``homelabnext._schema_text.safe_message``)."""
+    if schema not in _VALIDATORS:
+        import json
+
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError as exc:  # pragma: no cover - the test and core extras carry it
+            raise ConformError(
+                "validating conformance input needs jsonschema (the 'schema' extra)"
+            ) from exc
+        from ..paths import schema_file
+
+        text = schema_file("conform", f"{schema}.schema.json").read_text(encoding="utf-8")
+        _VALIDATORS[schema] = Draft202012Validator(json.loads(text))
+    from .._schema_text import safe_message
+
+    errors = _VALIDATORS[schema].iter_errors(doc)  # type: ignore[attr-defined]
+    return sorted(
+        f"{'/'.join(str(p) for p in e.absolute_path) or '$'}: {safe_message(e)}" for e in errors
+    )
+
+
 def declared_capabilities(root: str | Path) -> list[str] | None:
     """The capabilities ``root`` declares in ``capabilities.yml``, or None when it has no such file.
 
@@ -82,7 +110,8 @@ def declared_capabilities(root: str | Path) -> list[str] | None:
     that exists but does not declare anything is misconfiguration, never "no capabilities": a
     misspelled key or an emptied list would otherwise turn every coverage check green with
     nothing tested.  The file must be a mapping whose ``capabilities`` key holds a non-empty list
-    of distinct, non-empty names; anything else raises :class:`ConformError`.
+    of distinct, non-empty names, and nothing else (``schemas/conform/capabilities.schema.json``);
+    anything else raises :class:`ConformError`.
     """
     r = Path(root)
     for cand in CAPABILITIES_FILES:
@@ -108,6 +137,9 @@ def declared_capabilities(root: str | Path) -> list[str] | None:
         dupes = sorted({c for c in caps if caps.count(c) > 1})
         if dupes:
             raise ConformError(f"{cand}: capability listed twice: {', '.join(dupes)}")
+        problems = schema_problems(data, "capabilities")
+        if problems:
+            raise ConformError(f"{cand}: " + "; ".join(problems))
         return list(caps)
     return None
 

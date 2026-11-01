@@ -127,6 +127,10 @@ capabilities:
     waive: {list-unicode-keys: "backend normalises keys"}   # SHOULD checks only
 ```
 
+A target file is validated against `schemas/conform/target.schema.json` before it is used, and
+`capabilities.yml` against `schemas/conform/capabilities.schema.json`: a key either schema does not
+name (`confg:`, `capabilites:`) is refused with exit `2`, not ignored.
+
 The adapter module must be importable (`pip install` it or put its directory on `PYTHONPATH`).
 It resolves its own endpoint through the registry resolver (ADR-0002), reads credentials at call
 time, and never holds a secret in a `repr`.  The same suite then runs unchanged:

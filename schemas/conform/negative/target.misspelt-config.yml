@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+capabilities:
+  secrets:
+    adapter: homelabnext.conform.adapters.openbao:make
+    confg: {mount: secret}
