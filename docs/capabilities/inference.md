@@ -555,7 +555,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [inference](../systems/inference.md) ([[systems/inference\|inference]]) | `vllm` |
 
-Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+Depended on by: [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway|llm-gateway]])
 
 ## Integrating a new product
 

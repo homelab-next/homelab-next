@@ -199,6 +199,43 @@ def test_a_new_module_the_fix_adds_counts_as_failing(tmp_path):
     assert gate.prove(c, cwd=r) is None
 
 
+def test_a_module_the_fix_adds_counts_as_failing_when_imported_from_its_package(tmp_path):
+    # ``from pkg import newmod`` on the parent says "cannot import name 'newmod'", a name, not
+    # "No module named": a module the fix's own diff creates proves it all the same
+    test = "from pkg import newmod\n\ndef test_cap():\n    assert newmod.CAP == 10\n"
+    r, commit = _repo(tmp_path)
+    commit("feat: pkg", **{"mod.py": "def clamp(x):\n    return x\n", "pkg/__init__.py": ""})
+    sha = commit(
+        "fix: clamp",
+        **{
+            "mod.py": CLAMP.format(cap=10),
+            "pkg/newmod.py": "CAP = 10\n",
+            "tests/test_mod.py": PY_PATH + test,
+        },
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.added_symbols(c, cwd=r).has_module("pkg.newmod")
+    assert gate.prove(c, cwd=r) is None
+
+
+def test_a_name_imported_from_a_package_the_fix_adds_no_module_for_cannot_prove_it(tmp_path):
+    # the fix adds pkg/other.py, but the test needs pkg.ghost: no module of that name is added
+    test = "from pkg import ghost\n\ndef test_cap():\n    assert ghost.CAP == 10\n"
+    r, commit = _repo(tmp_path)
+    commit("feat: pkg", **{"mod.py": "def clamp(x):\n    return x\n", "pkg/__init__.py": ""})
+    sha = commit(
+        "fix: clamp",
+        **{
+            "mod.py": CLAMP.format(cap=10),
+            "pkg/other.py": "CAP = 10\n",
+            "tests/test_mod.py": PY_PATH + test,
+        },
+    )
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    problem = gate.prove(c, cwd=r)
+    assert problem and "ghost" in problem and "which the fix does not add" in problem
+
+
 CAPPED = (
     "from dataclasses import dataclass\n\n"
     "@dataclass\nclass Cap:\n    at: int = 10\n{field}\n"

@@ -82,7 +82,7 @@ author: unknown
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [inference](inference.md) ([[systems/inference|inference]]), [notify](notify.md) ([[systems/notify|notify]]), [events](events.md) ([[systems/events|events]]), [secrets](secrets.md) ([[systems/secrets|secrets]])
+- Depends on: [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [llm-gateway](llm-gateway.md) ([[systems/llm-gateway|llm-gateway]]), [notify](notify.md) ([[systems/notify|notify]]), [events](events.md) ([[systems/events|events]]), [secrets](secrets.md) ([[systems/secrets|secrets]])
 - Depended on by: none declared
 <!-- /hnx:gen -->
 

@@ -82,7 +82,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+- Depended on by: [llm-gateway](llm-gateway.md) ([[systems/llm-gateway|llm-gateway]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

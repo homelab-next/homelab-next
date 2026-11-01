@@ -379,7 +379,8 @@ def _python_missing(text: str, added: Added) -> tuple[set[str], set[str]] | None
     if not (names or modules or keywords):
         return None
     ok = (
-        {n for n in names if n in added.names}
+        # ``from pkg import mod`` names a module the fix adds as a name ("cannot import name")
+        {n for n in names if n in added.names or added.has_module(n)}
         | {m for m in modules if added.has_module(m)}
         | {label for label, key in keywords.items() if key in added.keywords}
     )

@@ -535,9 +535,9 @@ declared ceiling is refused; declare `red` only for a channel only the operators
 labelled above the ceiling is replaced by a content-free
 "withheld" notice at the same level, and a page claiming no label is `red`. The broker labels
 none of its pages yet, so a ceiling below `red` turns every page into that notice
-([modules](modules.md#egress-points-adr-0033-decision-13)). With `--notify-pairs-dir DIR` (or
+([modules](modules/egress.md#egress-points-adr-0033-decision-13)). With `--notify-pairs-dir DIR` (or
 `HNX_NOTIFY_PAIRS_DIR`), the notifier writes the pairs it holds to `DIR/broker/pairs.json` for the
-module census ([modules](modules.md#the-loader-at-deploy-time), "Notify pairs"). The census reads
+module census ([modules](modules/loader-deploy.md#the-loader-at-deploy-time), "Notify pairs"). The census reads
 `/var/lib/homelabnext/notify-pairs`; `DIR` (root's, `0755`) and `DIR/broker` (the broker user's,
 `0755`) are the operator's to make, since no role here deploys the broker, and a unit adds
 `DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a

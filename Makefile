@@ -71,7 +71,8 @@ schemas:
 
 # endpoints come from the registry; role and playbook rules come from the role interface;
 # `custom check` fails on an unowned or expired customization; the system and capability pages
-# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the status
+# (docs/systems/, docs/capabilities/) match the registry and the conformance code; the generated
+# facts in the docs (`hnx docs facts`: capability names, tool classes, schema versions) are current; the status
 # source catalog (docs/status/sources.md) and views.yml match the registry; the knowledge graph
 # has no dangling edge or duplicate id; docs/terms.md matches homelabnext/agent/terms.md; the
 # module loader loads the example lab (modules-check); the example log pipeline's runtime table
@@ -86,6 +87,7 @@ gates:
 	$(PY) -m homelabnext.cli docs systems check examples/services.yml docs/systems
 	$(PY) -m homelabnext.cli docs capabilities check
 	$(PY) -m homelabnext.cli docs index check docs/README.md docs/adr/README.md
+	$(PY) -m homelabnext.cli docs facts check
 	$(PY) -m homelabnext.cli status catalog check
 	$(PY) -m homelabnext.cli status views check
 	$(PY) -m homelabnext.cli graph check

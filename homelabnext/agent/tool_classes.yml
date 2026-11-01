@@ -63,6 +63,7 @@ capabilities:
   cap:monitoring: [read]
   cap:inference: [read]
   cap:fast-classifier: [read]
+  cap:llm-gateway: [read]  # the model gateway every consumer calls with a role name (docs/llm-gateway.md)
   cap:context: [read]
   cap:records-propose: [record-write]
   cap:records: [record-write]

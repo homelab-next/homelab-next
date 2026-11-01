@@ -6,6 +6,7 @@ summary_of: outline:sha256:6593177f24c509b3
 
 - **Status:** proposed
 - **Date:** 2026-10-20
+- **Amends:** ADR-0013
 - **Related:** ADR-0010, ADR-0014, `docs/broker.md`, `docs/agent.md`, `schemas/broker/`,
   `homelabnext/broker/`, `conformance/protocols/broker.py`
 

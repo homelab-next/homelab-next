@@ -163,7 +163,9 @@ def test_every_source_contributes_and_counts(graph):
     kinds = graph.kinds()
     for kind in ("svc", "cap", "adapter", "check", "schema", "lesson", "runbook", "inv"):
         assert kinds.get(kind), kind
-    assert kinds["svc"] == 20
+    # one service node per row of the example registry the graph is built from
+    registry = yaml.safe_load((ROOT / "examples/services.yml").read_text(encoding="utf-8"))
+    assert kinds["svc"] == len(registry["services"])
     assert kinds["lesson"] == 5 and kinds["runbook"] == 3
     # one script node per catalogued script (the catalog is the source of truth for the count)
     catalog = json.loads((ROOT / "docs/scripts/catalog.json").read_text(encoding="utf-8"))

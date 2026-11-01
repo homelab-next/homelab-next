@@ -6,6 +6,7 @@ summary_of: outline:sha256:62e0a78d78d6c7e0
 
 - **Status:** proposed
 - **Date:** 2026-10-21
+- **Amends:** ADR-0014, ADR-0015
 - **Related:** ADR-0014 (conflict-free writes), ADR-0015 (strategy to task),
   `docs/registers.md`, `docs/strategy.md`, `homelabnext/identity/`
 

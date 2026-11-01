@@ -7,6 +7,10 @@ summary: One line, at most 160 characters - what this ADR decides (ADR-0032; the
 - **Status:** proposed | accepted | superseded by ADR-NNNN | rejected
 - **Date:** YYYY-MM-DD
 - **Related:** other ADRs, schemas or docs
+- **Depends-on:** ADR-NNNN, ... (optional: the ADRs this decision rests on; an accepted ADR may
+  depend only on accepted ones)
+- **Amends:** ADR-NNNN, ... (optional: the ADRs this one changes; each of them lists this one under
+  **Amended-by**, and an **Amended:** line in prose names it too)
 
 ## Context
 

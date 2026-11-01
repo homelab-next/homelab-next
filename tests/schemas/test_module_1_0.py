@@ -2047,10 +2047,10 @@ def pytest_generate_tests(metafunc):
 # ------------------------------------------------------- egress slots are on the list (ADR-0033)
 def test_the_registry_flags_exactly_the_listed_egress_slots():
     """The example registry flags as egress exactly the slots the egress list names, and each of
-    them appears in docs/modules.md's "Egress points" table."""
+    them appears in docs/modules/egress.md's "Egress points" table."""
     flagged = {s for s, d in SLOTS.items() if d.get("egress")}
     assert flagged == mr.EGRESS_SLOTS
-    docs = (ROOT / "docs" / "modules.md").read_text()
+    docs = (ROOT / "docs" / "modules" / "egress.md").read_text()
     section = docs.split("### Egress points", 1)[1].split("\n### ", 1)[0]
     rows = [r for r in section.splitlines() if r.startswith("| ") and "---" not in r][1:]
     # the static host is the publishing gate's row (its grant, not a cap, opens it)

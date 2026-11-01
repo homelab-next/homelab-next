@@ -164,10 +164,10 @@ through allowlisted broker actions (G-04).
 - **Classified by data.** `homelabnext/agent/tool_classes.yml` maps every capability (`cap:` id)
   and broker tier, and the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]) every MCP server (the
   union of its tools' classes: `ToolClasses.load` derives the table's `mcp` section), to capability
-  classes (`read`, `record-write`, `exec`, `file-write`,
-  `egress`, `send`, `credential`, `codemode`) and lists the classes a reader may not hold
-  (`reader_forbidden`: exec, file-write, egress, send, credential, codemode) and those only the
-  broker may hold (`broker_only`: exec, file-write, send, credential). A grant with several classes counts as its worst. A grant the
+  classes (<!-- hnx:gen:fact:tool-classes -->`read`, `record-write`, `exec`, `file-write`, `egress`, `send`, `credential`, `codemode`<!-- /hnx:gen -->) and lists the classes a reader may not hold
+  (`reader_forbidden`: <!-- hnx:gen:fact:reader-forbidden -->`exec`, `file-write`, `egress`, `send`, `credential`, `codemode`<!-- /hnx:gen -->) and those only the broker may hold
+  (`broker_only`: <!-- hnx:gen:fact:broker-only -->`exec`, `file-write`, `send`, `credential`<!-- /hnx:gen -->); the table below is generated from it. A grant with
+  several classes counts as its worst. A grant the
   table does not know is refused for a reader (unknown is never assumed harmless); adding an MCP
   server means adding a reviewed catalog record (the repository's own read-only server,
   `hnx-catalog`, is `read`: [MCP server](mcp.md), [[mcp]]). `--classes FILE` substitutes another
@@ -197,6 +197,22 @@ through allowlisted broker actions (G-04).
   pin and, for every profile the policy has an entry for, its attestations (`data_tier`,
   `model_role`, `tlp_ceiling`, local-only and internet servers): `profile_problems` is the one
   copy of those rules, shared by the lint, `verify_profile` and the client render.
+
+The capability classes (generated from `homelabnext/agent/tool_classes.yml` by `hnx docs facts
+generate`):
+
+<!-- hnx:gen:fact:tool-class-table -->
+| class | what it is | a reader may hold it | only through the broker |
+|---|---|---|---|
+| `read` | queries or fetches from a platform service; no effect outside the agent's own output | yes | no |
+| `record-write` | writes structured records through a platform API that validates them (proposals, annotations, case notes, events) | yes | no |
+| `exec` | runs commands, workflows, containers or broker actions with side effects (shell) | no | yes |
+| `file-write` | creates or changes files, objects or repositories | no | yes |
+| `egress` | sends data to a destination outside the platform (web fetch, search, browser, tunnels); a message that changes something elsewhere is send | no | no |
+| `send` | sends a message or a request that changes something elsewhere (mail, chat, a notification, an HTTP request); an effect, so it goes through the broker (its notify actions) | no | yes |
+| `credential` | reads or issues credentials (secret stores, identity providers) | no | yes |
+| `codemode` | searches and describes the broker actions a profile may compose into a Code Mode program (ADR-0031); no effect of its own, since running a program is the broker action codemode.execute (exec, through the broker's front) | no | no |
+<!-- /hnx:gen -->
 
 ### Actors act only on validated structured input (G-04)
 
@@ -257,7 +273,7 @@ one of them only through the broker:
   a human's review of the pull request that adds the record and the `direct_mcp` line (CODEOWNERS
   on the catalog, the ceiling policies and the class table), which `main`'s ruleset does not yet
   require, so today that control is advisory
-  ([modules](modules.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
+  ([modules](modules/contributes.md#trust-tiers-what-selecting-a-module-grants)). The shipped catalog's direct
   servers (`ssh`, `shell`, `ansible`, `kubernetes`, `vault`, `filesystem`, `git`, `github`,
   `gitlab`, `slack`, `email`, `smtp`, `ntfy`, `http`) are unreviewed drafts that no profile can
   hold.

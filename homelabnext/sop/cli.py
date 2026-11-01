@@ -4,6 +4,10 @@
 ``hnx docs index generate|check [FILE]`` fills or checks the page summaries in ``docs/README.md``
 (see :mod:`homelabnext.sop.index`).
 
+``hnx docs facts generate|check [--root CHECKOUT] [FILE...]`` fills or checks the generated facts
+(capability counts and names, tool classes, schema versions) in the docs pages (see
+:mod:`homelabnext.sop.facts`).
+
 ``hnx docs capabilities generate|check [--out DIR] [--registry FILE] [--root CHECKOUT]`` renders or
 checks ``docs/capabilities/`` (see :mod:`homelabnext.sop.capabilities`).
 
@@ -124,14 +128,63 @@ def _index_one(index, cmd: str, path: Path) -> int:
     return 0
 
 
+def facts_main(argv: list[str]) -> int:
+    from . import facts
+
+    ap = argparse.ArgumentParser(
+        prog="hnx docs facts",
+        description="fill or check the generated facts (capabilities, tool classes, schema "
+        "versions) in the docs pages; default: every page under docs/ that holds one",
+    )
+    ap.add_argument("cmd", choices=["generate", "check"])
+    ap.add_argument("files", nargs="*", metavar="file")
+    ap.add_argument("--root", help="source checkout holding schemas/ (default: this checkout)")
+    try:
+        args = ap.parse_intermixed_args(argv)  # 3.11 refuses files after an option otherwise
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    from homelabnext import paths as hnx_paths
+
+    root = Path(args.root).resolve() if args.root else hnx_paths.checkout_root()
+    if root is None or not (root / "schemas").is_dir():
+        print(
+            "hnx docs facts: needs a source checkout holding schemas/; run it from one or pass "
+            "--root",
+            file=sys.stderr,
+        )
+        return 2
+    paths = [Path(f) for f in args.files] or facts.files_with_facts(root)
+    for path in paths:
+        if not path.is_file():
+            print(f"hnx docs facts: {_shown(path)}: no such file", file=sys.stderr)
+            return 2
+    bad = 0
+    for path in paths:
+        if args.cmd == "generate":
+            changed, problems = facts.generate(path, root, root)
+            state = "FAIL" if problems else "written" if changed else "unchanged"
+        else:
+            problems = facts.check(path, root, root)
+            state = "FAIL" if problems else "ok"
+        for line in problems:
+            print(f"FAIL {line}")
+        bad += bool(problems)
+        print(f"docs facts: {state} ({_shown(path)})")
+    if bad and args.cmd == "check":
+        print("docs facts: FAIL; run `hnx docs facts generate`")
+    return 1 if bad else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["facts"]:
+        return facts_main(argv[1:])
     if argv[:1] == ["capabilities"]:
         return capabilities_main(argv[1:])
     if argv[:1] == ["index"]:
         return index_main(argv[1:])
     ap = argparse.ArgumentParser(prog="hnx docs", description="generate and check documentation")
-    ap.add_argument("topic", choices=["systems", "capabilities", "index"])
+    ap.add_argument("topic", choices=["systems", "capabilities", "index", "facts"])
     ap.add_argument("cmd", choices=["generate", "check", "template"])
     ap.add_argument("registry", nargs="?")
     ap.add_argument("dir", nargs="?", default="docs/systems")
