@@ -181,7 +181,7 @@ class ToolClasses:
 
         try:
             cat = servers.load_cached(catalog)
-        except servers.CatalogError as exc:
+        except servers.ServerCatalogError as exc:
             raise SpecError(f"{p}: its mcp section comes from the MCP catalog: {exc}") from None
         return cls.from_catalog(cat, doc, str(p))
 
@@ -190,9 +190,10 @@ class ToolClasses:
         cls, cat: Any, doc: Mapping[str, Any] | None = None, source: str | None = None
     ) -> ToolClasses:
         """The table ``doc`` (default: the packaged one) with its ``mcp`` section derived from the
-        loaded catalog ``cat`` (:class:`homelabnext.mcp.servers.Catalog`).  A catalog that is not
-        sound (a record that fails its schema, an id that is not its file name, two records with
-        one id) is refused: a grant judged against it could be judged against a shadow record."""
+        loaded catalog ``cat`` (:class:`homelabnext.mcp.servers.ServerCatalog`).  A catalog that
+        is not sound (a record that fails its schema, an id that is not its file name, two
+        records with one id) is refused: a grant judged against it could be judged against a
+        shadow record."""
         import yaml
 
         from homelabnext.mcp import servers
