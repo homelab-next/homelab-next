@@ -175,7 +175,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "classic MCP mode, both against the fakes; CM-6)|canary (the egress canary)",
         lambda a: importlib.import_module("homelabnext.golden.cli").main(a),
     ),
-    "site": ("the site/network model: validate|plan|render|ir|adapters|review-tier", _site),
+    "site": (
+        "the site/network model: validate|plan|render|ir|adapters|review-tier|query (the "
+        "first-match verdict for one flow)",
+        _site,
+    ),
     "guests": ("validate/render/plan the guest (compute) model; baselines coverage", _guests),
     "schema-check": ("check schemas, examples, negatives and frozen baselines", _schema_check),
     "secrets": (
@@ -248,7 +252,8 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "review tier, and a code owner for every human-approve one)|swap-check (a swap record with "
         "its model evidence read from the base commit)|swap-gate (a role-table change must be "
         "covered by a swap record in the change)|tlp-backfill (the statements that label a lake "
-        "table's rows stored before its tlp column)",
+        "table's rows stored before its tlp column)|providers (each selected slot instance's "
+        "provider module, version and licence)",
         lambda a: importlib.import_module("homelabnext.modules.cli").main(a),
     ),
     "custom": (

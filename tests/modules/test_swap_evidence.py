@@ -334,6 +334,30 @@ def test_the_cli_checks_a_rebind_end_to_end(checkout, report, capsys, tmp_path):
     assert (rc, out["problems"], out["evidence"]) == (0, [], True)
 
 
+def test_the_cli_reports_both_providers_licences(checkout, report, capsys, tmp_path):
+    """The swap's evidence names the outgoing and incoming provider's licence (ADR-0011), so a
+    licence change is visible when the record is checked, not found after the cutover."""
+    other = checkout / "examples/modules/other-inference/module.yml"
+    doc = yaml.safe_load(other.read_text(encoding="utf-8"))
+    doc["licence"] = {"kind": "subscription", "expires": "2027-01-31"}
+    other.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    record = _write(tmp_path, "swap.json", _swap(report))
+    rc, out = _cli(checkout, record, capsys)
+    assert rc == 0, out
+    frm, to = out["licence"]["from"], out["licence"]["to"]
+    assert (frm["module"], frm["kind"], frm["spdx"]) == (
+        "example-inference",
+        "open-source",
+        "Apache-2.0",
+    )
+    assert (to["module"], to["kind"], to["spdx"], to["text"]) == (
+        "other-inference",
+        "subscription",
+        None,
+        "subscription",
+    )
+
+
 def test_the_cli_takes_the_ci_base(checkout, report, capsys, tmp_path, monkeypatch):
     base = _git(checkout, "rev-parse", "HEAD")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")

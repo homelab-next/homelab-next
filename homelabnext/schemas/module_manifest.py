@@ -18,6 +18,7 @@ import json
 import re
 from typing import Any
 
+from homelabnext.modules import authority
 from homelabnext.modules.scope import (
     DYNAMIC_PARTS,
     EMPTY_ALLOWED,
@@ -47,24 +48,16 @@ RESERVED_IDS = (
     "none", "overlay", "pass-through", "self", "shared", "site",
 )  # fmt: skip
 #: slots a module agent may never be granted directly: authority stays with its owner
-AUTHORITY_SLOTS = (
-    "cap:broker",
-    "cap:secrets",
-    "cap:idp",
-    "cap:edge",
-    "cap:remote-admin",
-    "cap:mcp-catalog",
-)
+AUTHORITY_SLOTS = tuple("cap:" + s for s in authority.AUTHORITY_SLOTS)
 #: shared components whose configuration a module can never merge into (no grant opens these)
-NEVER_SHARED = (
-    "cap:secrets",
-    "cap:broker",
-    "cap:mcp-catalog",
-    "cap:records",
-    "cap:orchestration",
-    "cap:codemode-executor",  # a merged key could widen the sandbox's egress or environment
-    "cap:codemode-runner",  # a merged key could widen a token's actions or the relay's endpoint
-)
+NEVER_SHARED = tuple("cap:" + s for s in authority.NEVER_SHARED)
+
+
+def _or(names: tuple[str, ...]) -> str:
+    """``a, b or c``: a constant's names in a schema description."""
+    return ", ".join(names[:-1]) + " or " + names[-1] if len(names) > 1 else "".join(names)
+
+
 #: interchange formats a dataset or a stateful slot exports in (a draft list; additive)
 NEUTRAL_FORMATS = (
     "parquet", "jsonl", "csv", "json", "markdown-tree", "object-tree", "zone-file", "sigma",
@@ -594,7 +587,9 @@ def _defs() -> dict[str, Any]:
             {
                 "cap": {
                     "allOf": [ref("cap_ref"), {"not": {"enum": list(AUTHORITY_SLOTS)}}],
-                    "description": "Never an authority slot (broker, secrets, idp, edge, remote-admin, mcp-catalog).",
+                    "description": "Never an authority slot ("
+                    + ", ".join(authority.AUTHORITY_SLOTS)
+                    + ").",
                 },
                 "access": {"enum": ["read", "write"]},
                 "scope": arr(
@@ -745,7 +740,11 @@ def _defs() -> dict[str, Any]:
             {
                 "target": {
                     "allOf": [ref("cap_ref"), {"not": {"enum": list(NEVER_SHARED)}}],
-                    "description": "The shared component; never secrets, broker, mcp-catalog, records, orchestration or codemode-executor, and edge or idp only with an overlay grant.",
+                    "description": "The shared component; never "
+                    + _or(authority.NEVER_SHARED)
+                    + ", and "
+                    + _or(authority.SHARED_CONFIG_GRANTS)
+                    + " only with an overlay grant.",
                 },
                 "file": ref("rel_path"),
                 "reason": text(300),
@@ -1491,14 +1490,14 @@ def module_selection_schema() -> dict[str, Any]:
                 pat(SLUG, None, 64), "Service rows that may carry a public_hostname."
             ),
             "shared_config": by_module(
-                {"enum": ["cap:edge", "cap:idp"]},
+                {"enum": ["cap:" + s for s in authority.SHARED_CONFIG_GRANTS]},
                 "Privileged shared components a module may configure.",
             ),
             "units": by_module(
                 pat(SLUG, None, 64), "Units that may run as root or opt out of hardening."
             ),
             "upstreams": by_module(
-                {"enum": ["cap:" + u for u in ("broker", "idp", "remote-admin")]},
+                {"enum": ["cap:" + u for u in authority.GRANTED_UPSTREAMS]},
                 "Authority slots a module's service rows may name as an upstream (the slot or an instance of it).",
             ),
             "cloud_models": by_module(

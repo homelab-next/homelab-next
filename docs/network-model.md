@@ -270,6 +270,15 @@ Firewall rules are evaluated first match wins, in this order:
 Return traffic is allowed by connection state, not by rules. A registry service of protocol `dns`
 expands to both udp and tcp.
 
+`hnx site query SITE FROM TO PROTO [PORT] [--json]` answers "can FROM reach TO" before anything is
+deployed: the verdict this order gives one forwarded packet and the rule that decides it
+(`homelabnext.network.ir.evaluate`; FROM and TO are addresses, or hosts the site names; an address
+in no zone is the internet; IPv6 reads each rule's IPv6 form, below). Return traffic and the
+router's own services are outside it. `tests/network/test_adapter_reach_parity.py` holds every
+adapter to the same answer: for each pair of probe addresses, protocol and port a rule names, the
+verdict read back from the Linux router's rendered forward chain and from the controller's rendered
+rule sets equals the IR's, in both families.
+
 The order holds for IPv6 too. A zone with a `subnet6` carries it, and its router address (the
 prefix's `::1`), in the IR (`Interface.subnet6`, `Interface.address6`, `Policy.zones6`), and every
 adapter renders each rule's IPv6 form (`homelabnext.network.ir.ipv6_form`) right after the rule,
