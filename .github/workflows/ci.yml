@@ -93,12 +93,20 @@ jobs:
           cache: false  # the tests build throwaway modules: nothing worth caching
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
+      # No network: the suite runs as the runner user in a network namespace with only loopback,
+      # as the go job's tests do, so a subprocess a test starts (git, curl, an installed tool) cannot
+      # reach out either; tests/network_guard.py refuses Python's own sockets, and says which test.
+      # sudo -E keeps the job's environment (sudo's secure_path would drop the setup-python PATH)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
           HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
         run: >-
+          sudo -E env "PATH=$PATH" "HOME=$HOME" unshare --net --
+          sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 &&
+          exec setpriv --no-new-privs --reuid="$u" --regid="$g" --init-groups -- "$@"'
+          sh "$(id -u)" "$(id -g)"
           python -m pytest -q -m "not live and not experimental"
           --deselect tools/tests/test_coverage_floor.py::test_this_repo_meets_the_floor
           --shard "$SHARD/6" --shard-report "$RUNNER_TEMP/shard.json"

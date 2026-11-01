@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_ci_runs_tests import without_network
 
 from tests.experimental_marker import experimental as ex
 
@@ -285,7 +286,7 @@ def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
     none of which is, or holds, an experimental one."""
     out = []
     for line in ci_lines(ci_doc):
-        words = shlex.split(line) if "pytest" in line else []
+        words = shlex.split(without_network(line)) if "pytest" in line else []
         if words[:3] != ["python", "-m", "pytest"]:
             continue
         if "-m" in words and words[words.index("-m") + 1] == ex.BLOCKING_SELECT:

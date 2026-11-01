@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_ci_runs_tests import without_network
 from test_experimental import make_target_lines
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +63,7 @@ def ci_pytest_args():
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     # the full run: a `python -m pytest` step selecting "not live ..." (one that only installs a
     # plugin, or runs a subset beside it, is not what make test mirrors)
-    runs = [shlex.split(s.get("run", "")) for s in ci["jobs"]["test"]["steps"]]
+    runs = [shlex.split(without_network(s.get("run", ""))) for s in ci["jobs"]["test"]["steps"]]
     runs = [
         w for w in runs if w[:3] == ["python", "-m", "pytest"] and any("not live" in x for x in w)
     ]
@@ -159,7 +160,7 @@ def _ci_commands(ci) -> set[str]:
         if name == "experimental":
             continue
         for step in job.get("steps") or []:
-            run = str(step.get("run", ""))
+            run = without_network(str(step.get("run", "")))
             # the `hnx` entry point is the CLI module
             run = re.sub(r"^(\s*)hnx ", r"\1python -m homelabnext.cli ", run, flags=re.M)
             out |= {_as_make_runs_it(c) for c in _commands(run.splitlines())}

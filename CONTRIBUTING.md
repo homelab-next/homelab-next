@@ -54,7 +54,9 @@ tests on a laptop with no network and no private context.
    `make constraints` (needs `uv`) in the same PR.
 9. Tests do not use the network, wall-clock time or unseeded randomness. Anything needing a real
    server is marked `@pytest.mark.live` and never runs in default CI. Enforced: an unmarked test
-   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), and
+   that connects beyond loopback or resolves a non-local name fails (`tests/network_guard.py`), CI
+   runs the suite in a network namespace with only loopback (so a subprocess a test starts cannot
+   reach out either), and
    `make hermetic-lint` rejects direct clock and unseeded-random calls in test code, and any
    clock read in `homelabnext/` that is not the default or fallback of an injectable clock/`now`.
    Every component ships tests (`make component-tests`), and the security-critical units (the

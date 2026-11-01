@@ -45,6 +45,19 @@ PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
 PAIRS = {("-m", "not live and not experimental"), ("--deselect", FLOOR_TEST)}
 #: the shard flags: which shard (the job's own, of N) and where its report goes
 SHARD = re.compile(r"^\$SHARD/([1-9][0-9]*)$")
+#: what the test job's full run starts with: the suite runs as the runner user in a network
+#: namespace with only loopback, so no subprocess a test starts can reach the network either
+NO_NETWORK = (
+    'sudo -E env "PATH=$PATH" "HOME=$HOME" unshare --net -- '
+    "sh -c 'ip link set lo up && u=$1 g=$2 && shift 2 && "
+    'exec setpriv --no-new-privs --reuid="$u" --regid="$g" --init-groups -- "$@"\' '
+    'sh "$(id -u)" "$(id -g)" '
+)
+
+
+def without_network(run: str) -> str:
+    """A run less the :data:`NO_NETWORK` wrapper, if it has it: the command run inside."""
+    return run.removeprefix(NO_NETWORK)
 
 
 def _ci():
@@ -120,7 +133,7 @@ def shard_problems(doc, run: str) -> list[str]:
     out = []
     if (test.get("strategy") or {}).get("matrix", {}).get("shard") != list(range(1, n + 1)):
         out.append(f"test: the matrix must run shards 1..{n}, the N of --shard")
-    (step,) = [s for s in test.get("steps") or [] if s.get("run") == run]
+    (step,) = [s for s in test.get("steps") or [] if without_network(s.get("run", "")) == run]
     if (step.get("env") or {}).get("SHARD") != "${{ matrix.shard }}":
         out.append("test: SHARD must be the job's own ${{ matrix.shard }}")
     ok = jobs.get("test-ok") or {}
@@ -190,8 +203,20 @@ def job_problems(doc) -> list[str]:
 def _pytest_runs(doc) -> list[str]:
     """Every test-job step that runs pytest.  A step that only names it (installing a plugin,
     printing a version) is not one, and an extra pytest run cannot shrink the full one."""
-    runs = [s.get("run", "") for s in doc["jobs"]["test"]["steps"]]
+    runs = [without_network(s.get("run", "")) for s in doc["jobs"]["test"]["steps"]]
     return [r for r in runs if shlex.split(r)[:3] == ["python", "-m", "pytest"]]
+
+
+def network_problems(doc) -> list[str]:
+    """The full run (the step selecting ``not live``) runs inside :data:`NO_NETWORK`."""
+    full = [
+        s.get("run", "")
+        for s in doc["jobs"]["test"]["steps"]
+        if "python -m pytest" in s.get("run", "") and "not live" in s.get("run", "")
+    ]
+    if not full:
+        return ["the test job has no full `python -m pytest` run"]
+    return [f"the suite runs with the network: {r!r}" for r in full if not r.startswith(NO_NETWORK)]
 
 
 def selection_problems(doc) -> list[str]:
@@ -214,6 +239,17 @@ def test_the_test_job_runs_every_suite_with_no_selection_but_ci_s_own():
     assert set(ini["testpaths"]) == {"tests", "tools/tests", "conformance"}
     # and addopts only reports and tightens; it never selects
     assert set(shlex.split(ini.get("addopts", ""))) <= {"-ra", "--strict-markers"}
+
+
+def test_the_suite_runs_without_the_network():
+    assert network_problems(_ci()) == []
+
+    def unwrap(doc):
+        for s in doc["jobs"]["test"]["steps"]:
+            s["run"] = without_network(s.get("run", ""))
+
+    assert network_problems(_edited(unwrap))
+    assert selection_problems(_edited(unwrap)) == []  # the selection is the same either way
 
 
 def test_no_guarded_job_is_conditional_or_carries_pytest_addopts():
@@ -314,7 +350,7 @@ def test_another_step_naming_or_running_pytest_is_not_a_problem():
 def test_a_test_job_whose_only_pytest_is_narrowed_is_still_caught():
     def edit(doc):
         for s in doc["jobs"]["test"]["steps"]:
-            if s.get("run", "").startswith("python -m pytest"):
+            if "python -m pytest" in s.get("run", ""):
                 s["run"] += " --ignore=tests/broker"
 
     assert selection_problems(_edited(edit))
@@ -330,7 +366,7 @@ def test_a_conditional_guarded_job_is_caught(job, key):
 def test_a_conditional_pytest_step_is_caught(key):
     def edit(doc):
         for s in doc["jobs"]["test"]["steps"]:
-            if s.get("run", "").startswith("python -m pytest"):
+            if "python -m pytest" in s.get("run", ""):
                 s[key] = "github.event_name == 'push'"
 
     assert job_problems(_edited(edit))
@@ -343,7 +379,7 @@ def test_pytest_addopts_in_any_env_is_caught(scope):
             "workflow": doc,
             "job": doc["jobs"]["test"],
             "step": next(
-                s for s in doc["jobs"]["test"]["steps"] if s.get("run", "").startswith("python -m")
+                s for s in doc["jobs"]["test"]["steps"] if "python -m pytest" in s.get("run", "")
             ),
         }[scope]
         target.setdefault("env", {})["PYTEST_ADDOPTS"] = "--ignore=tests/broker"
