@@ -9,10 +9,11 @@ warning does not fail validation: an agent writing there is about to be refused
 ``lane-quota-exceeded``, and this is how the operator hears it first.
 
 ``serve --socket PATH`` runs the broker on a Unix socket whose callers are authenticated by their
-peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` (its access
-token given by secret reference, ``--notify-token``) it pages approval requests and lane-quota
-notices through ntfy (:func:`notifier_from_args`); ``mcp --socket PATH`` runs the agent-facing
-MCP tool server (stdio) against it (:mod:`homelabnext.broker.mcp_tools`).
+peer credentials (:mod:`homelabnext.broker.server`); with ``--notify-topic T`` and the channel's
+``--notify-ceiling LABEL`` (its access token given by secret reference, ``--notify-token``) it
+pages approval requests and lane-quota notices through ntfy (:func:`notifier_from_args`);
+``mcp --socket PATH`` runs the agent-facing MCP tool server (stdio) against it
+(:mod:`homelabnext.broker.mcp_tools`).
 
 ``relay --state DIR --events-target FILE --stream S --subject-prefix P`` publishes the state
 directory's outbox to the event bus, at least once and in order (:mod:`homelabnext.broker.relay`);
@@ -139,12 +140,11 @@ def _parser() -> argparse.ArgumentParser:
     srv.add_argument("--notify-topic-file", help="read the ntfy topic from this file's first line")
     srv.add_argument(
         "--notify-ceiling",
-        default="red",
         type=ceiling_arg,
         metavar="LABEL",
-        help="the channel's TLP ceiling (ADR-0033): a message labelled above it (one claiming "
-        "no label is red) is replaced by a content-free withheld notice; default red, a channel "
-        "only the operators read",
+        help="the channel's TLP ceiling (ADR-0033), required with a notify topic: a message "
+        "labelled above it (one claiming no label is red) is replaced by a content-free withheld "
+        "notice; red for a channel only the operators read",
     )
     srv.add_argument(
         "--notify-token",
@@ -346,6 +346,7 @@ def notifier_from_args(args) -> Any:
     from homelabnext.registry.model import secret_env_name
     from homelabnext.state import StateStore
 
+    ceiling = ceiling_from_flag(getattr(args, "notify_ceiling", None))
     ref = getattr(args, "notify_token", None)
     auth = None
     if ref:
@@ -365,7 +366,6 @@ def notifier_from_args(args) -> Any:
         from homelabnext.registry.resolver import Resolver
 
         resolver = Resolver(load(args.registry))
-    ceiling = ceiling_from_flag(getattr(args, "notify_ceiling", None))
     sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
         raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")

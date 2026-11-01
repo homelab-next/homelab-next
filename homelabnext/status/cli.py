@@ -5,7 +5,7 @@
     hnx status catalog generate|check [--registry FILE] [--out FILE]   docs/status/sources.md
     hnx status views check [VIEWS] [--registry FILE]        views.yml against schema + registry
     hnx status collect [--registry FILE] [--root DIR] [--state FILE] [--all | --source ID ...]
-                       [--notify-topic T [--notify-pairs-dir DIR] [--notify-ceiling LABEL]]
+                       [--notify-topic T --notify-ceiling LABEL [--notify-pairs-dir DIR]]
                        [--secrets-dir DIR]
                        [--site SITE [--site-guests DIR]]
     hnx status render --out DIR [--state FILE] [--views FILE] [--registry FILE] [--now TIME]
@@ -222,12 +222,11 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p.add_argument("--notify-topic", help="page transitions through the registry's notify service")
     p.add_argument(
         "--notify-ceiling",
-        default="red",
         type=ceiling_arg,
         metavar="LABEL",
-        help="the channel's TLP ceiling (ADR-0033): a message labelled above it (one claiming "
-        "no label is red) is replaced by a content-free withheld notice; default red, a channel "
-        "only the operators read",
+        help="the channel's TLP ceiling (ADR-0033), required with a notify topic: a message "
+        "labelled above it (one claiming no label is red) is replaced by a content-free withheld "
+        "notice; red for a channel only the operators read",
     )
     p.add_argument(
         "--notify-pairs-dir",
@@ -352,6 +351,9 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         print(f"hnx status: {exc}", file=sys.stderr)
         return 2
     if args.cmd == "collect":
+        if args.notify_topic and args.notify_ceiling is None:
+            print("hnx status collect: --notify-topic needs --notify-ceiling", file=sys.stderr)
+            return 2
         return _collect(args, reg, specs, clock, store)
     if args.cmd == "ingest":
         return _ingest(args, agents_cfg, store, clock)

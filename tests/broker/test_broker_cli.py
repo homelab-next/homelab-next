@@ -11,6 +11,7 @@ import pytest
 
 from homelabnext.broker.cli import main
 from homelabnext.cli import main as hnx
+from homelabnext.tlp import Label
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "broker" / "manifest.yml"
@@ -215,14 +216,16 @@ def test_serve_pages_through_ntfy_with_a_token_by_secret_reference(tmp_path, mon
     args = argparse.Namespace(
         manifest=str(EXAMPLE), state=str(tmp_path / "state"), data_root=None,
         approvals_url=None, notify_topic="broker", notify_token="secret:broker/ntfy-token",
-        registry=None, cmd="serve",
+        registry=None, cmd="serve", notify_ceiling=Label.RED,
     )  # fmt: skip
     svc = _service(args)
     assert svc.notifier is not None and svc._scoped, "per-agent budgets"
     req = svc.notifier.sender.inner.build_request(Message(key="k", title="t", body="b"))
     assert req.full_url == f"{override}/broker"
     assert req.get_header("Authorization") == "Bearer fake-ntfy-token-3c1"
-    assert str(svc.notifier.sender.ceiling) == "red", "the channel ceiling defaults to red"
+    assert svc.notifier.sender.ceiling is Label.RED
+    with pytest.raises(ValueError, match="must declare its TLP ceiling"):
+        notifier_from_args(argparse.Namespace(**{**vars(args), "notify_ceiling": None}))
     assert "fake-ntfy-token-3c1" not in repr(vars(args))
     with pytest.raises(ValueError, match="secret reference"):
         notifier_from_args(argparse.Namespace(**{**vars(args), "notify_token": "fake-literal"}))
@@ -243,7 +246,7 @@ def test_serve_records_the_notify_pairs_it_holds_for_the_census(tmp_path, monkey
     args = argparse.Namespace(
         manifest=str(EXAMPLE), state=str(tmp_path / "state"), data_root=None,
         approvals_url=None, notify_topic="broker", notify_token=None, registry=None,
-        cmd="serve", notify_pairs_dir=str(pairs),
+        cmd="serve", notify_pairs_dir=str(pairs), notify_ceiling=Label.RED,
     )  # fmt: skip
     _service(args)
     held = parse_record((pairs / "broker" / "pairs.json").read_text(), "broker").pairs
@@ -273,7 +276,8 @@ def _notify_args(tmp_path, **over):
     import argparse
 
     doc = {"state": str(tmp_path / "state"), "notify_topic": "broker", "notify_topic_file": None,
-           "notify_token": "secret:broker/ntfy-token", "registry": None}  # fmt: skip
+           "notify_token": "secret:broker/ntfy-token", "registry": None,
+           "notify_ceiling": Label.RED}  # fmt: skip
     return argparse.Namespace(**{**doc, **over})
 
 
