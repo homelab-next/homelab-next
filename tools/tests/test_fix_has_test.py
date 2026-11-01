@@ -225,7 +225,7 @@ def test_an_unknown_keyword_the_fix_adds_counts_as_failing(tmp_path, test):
     new = CAPPED.format(field="    strict: bool = False\n", param="hi=10, lo=None")
     sha = commit("fix: cap", **{"mod.py": new, "tests/test_mod.py": PY_PATH + test})
     (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
-    assert gate.added_symbols(c, cwd=r).keywords == {"strict", "lo"}
+    assert gate.added_symbols(c, cwd=r).keywords == {("Cap", "strict"), ("clamp", "lo")}
     assert gate.prove(c, cwd=r) is None
 
 
@@ -249,8 +249,78 @@ def test_a_type_error_that_names_no_keyword_is_not_a_missing_name(tmp_path):
         "TypeError: Cap.__init__() takes 1 positional argument but 2 were given"
         "</error></testcase></testsuite>"
     )
-    out = gate.python_outcome(report, gate.Added(keywords={"strict"}))
+    out = gate.python_outcome(report, gate.Added(keywords={("Cap", "strict")}))
     assert out.errors and not out.failed and not out.missing
+
+
+def _keyword_report(tmp_path, callee: str, kw: str):
+    report = tmp_path / "r.xml"
+    report.write_text(
+        '<testsuite><testcase name="m"><error message="collection failure">'
+        f"TypeError: {callee}() got an unexpected keyword argument '{kw}'"
+        "</error></testcase></testsuite>"
+    )
+    return report
+
+
+def test_a_keyword_the_fix_adds_to_another_callee_cannot_prove_it(tmp_path):
+    """The keyword must be gained by the callee the TypeError names: ``strict`` added to a brand
+    new function does not explain ``C.__init__()`` refusing ``strict``."""
+    old = "class C:\n    def __init__(self, x):\n        self.x = x\n"
+    new = old + "\n\ndef brand_new(x, strict=False):\n    return x\n"
+    test = "from mod import C\n\nOBJ = C(1, strict=True)\n\ndef test_v():\n    assert OBJ\n"
+    r, commit = _repo(tmp_path)
+    commit("feat: c", **{"mod.py": old})
+    sha = commit("fix: c", **{"mod.py": new, "tests/test_mod.py": PY_PATH + test})
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.added_symbols(c, cwd=r).keywords == {("brand_new", "x"), ("brand_new", "strict")}
+    problem = gate.prove(c, cwd=r)
+    assert problem and "which the fix does not add" in problem and "C(strict=)" in problem
+
+
+@pytest.mark.parametrize(
+    "callee, added",
+    [
+        ("C.__init__", {("brand_new", "strict")}),  # same keyword, another function
+        ("C.__init__", {("D", "strict")}),  # same keyword, another class
+        ("f", {("g", "strict")}),
+        ("pkg.mod.f", {("mod", "strict")}),  # a qualified callee is its last segment only
+    ],
+)
+def test_a_same_named_keyword_on_another_owner_stays_cannot_prove(tmp_path, callee, added):
+    out = gate.python_outcome(
+        _keyword_report(tmp_path, callee, "strict"), gate.Added(keywords=added)
+    )
+    assert out.missing and not out.failed
+
+
+@pytest.mark.parametrize(
+    "callee, owner",
+    [
+        ("Cap.__init__", "Cap"),  # a dataclass field is an __init__ keyword of the class
+        ("Cap.__new__", "Cap"),
+        ("pkg.mod.f", "f"),  # a qualified callee matches on its last segment
+        ("f", "f"),
+    ],
+)
+def test_the_right_owner_proves_the_keyword(tmp_path, callee, owner):
+    out = gate.python_outcome(
+        _keyword_report(tmp_path, callee, "strict"), gate.Added(keywords={(owner, "strict")})
+    )
+    assert out.failed == 1 and not out.missing and not out.errors
+
+
+def test_an_explicit_init_parameter_belongs_to_its_class(tmp_path):
+    # a parameter the fix adds to ``C.__init__`` proves ``C.__init__()`` refusing it on the parent
+    old = "class C:\n    def __init__(self, x):\n        self.x = x\n"
+    new = "class C:\n    def __init__(self, x, strict=False):\n        self.x = x\n"
+    test = "from mod import C\n\ndef test_v():\n    assert C(1, strict=True).x == 1\n"
+    r, commit = _repo(tmp_path)
+    commit("feat: c", **{"mod.py": old})
+    sha = commit("fix: c", **{"mod.py": new, "tests/test_mod.py": PY_PATH + test})
+    (c,) = gate.commits_in(f"{sha}^..{sha}", cwd=r)
+    assert gate.added_symbols(c, cwd=r).keywords == {("C", "strict")}
+    assert gate.prove(c, cwd=r) is None
 
 
 def test_an_error_that_is_not_a_failing_test_cannot_prove_the_fix(tmp_path):
