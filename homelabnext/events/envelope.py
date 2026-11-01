@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import paths
+from homelabnext.schema_registry import schema_registry
 
 _VALIDATORS: dict[str, Any] = {}
 _LOADED: set[str] = set()  # the schema files load_validator has built and resolved
@@ -56,29 +57,13 @@ def schema_for_type(event_type: str) -> Path | None:
     return p if p.is_file() else None
 
 
-def _registry():
-    from referencing import Registry, Resource
-    from referencing.jsonschema import DRAFT202012
-
-    reg: Registry = Registry()
-    for p in sorted(paths.schemas_dir().rglob("*.json")):
-        if "_frozen" in p.parts or p.parent.name in ("examples", "negative"):
-            continue
-        d = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(d, dict) and "$id" in d:
-            reg = reg.with_resource(
-                d["$id"], Resource.from_contents(d, default_specification=DRAFT202012)
-            )
-    return reg
-
-
 def _validator(path: Path):
     key = str(path)
     if key not in _VALIDATORS:
         from jsonschema import Draft202012Validator
 
         schema = json.loads(path.read_text(encoding="utf-8"))
-        _VALIDATORS[key] = Draft202012Validator(schema, registry=_registry())
+        _VALIDATORS[key] = Draft202012Validator(schema, registry=schema_registry())
     return _VALIDATORS[key]
 
 
@@ -94,7 +79,7 @@ def load_validator(event_type: str) -> None:
         return
     schema = _validator(path).schema
     seen: set[int] = set()
-    todo = [(schema, _registry().resolver(base_uri=schema.get("$id", "")))]
+    todo = [(schema, schema_registry().resolver(base_uri=schema.get("$id", "")))]
     while todo:
         node, resolver = todo.pop()
         if isinstance(node, list):

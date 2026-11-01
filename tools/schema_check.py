@@ -74,8 +74,7 @@ from typing import Any
 
 import yaml
 from jsonschema import Draft202012Validator
-from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
+from referencing import Registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -83,6 +82,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from homelabnext.gitbase import ZERO_SHA, ci_base  # noqa: E402, F401 (the --ci-base rule)
 from homelabnext.ids.lint import scan_document  # noqa: E402
+from homelabnext.schema_registry import registry_of  # noqa: E402
 
 ID_RE = re.compile(r"^https://schemas\.example\.internal/homelabnext/([a-z0-9_./-]+)/(\d+)\.(\d+)$")
 INSTANCE_EXTS = {".json", ".yaml", ".yml", ".md"}
@@ -161,23 +161,17 @@ def build_registry(root: Path) -> Registry:
     """Every live schema by ``$id``, then every frozen copy whose ``$id`` no live schema carries:
     a frozen schema refers to the version it was published against (events/alert.created 1.0 to
     events/envelope 1.0), which is only a baseline once the live one moves on."""
-    reg: Registry = Registry()
-    live: set[str] = set()
-    for p in schema_files(root):
-        doc = json.loads(p.read_text(encoding="utf-8"))
-        if "$id" in doc:
-            live.add(doc["$id"])
-            reg = reg.with_resource(
-                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-            )
-    for copies in frozen_index(root).values():
-        for _, _, f in copies:
-            doc = json.loads(f.read_text(encoding="utf-8"))
-            if isinstance(doc.get("$id"), str) and doc["$id"] not in live:
-                reg = reg.with_resource(
-                    doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-                )
-    return reg
+    docs = [json.loads(p.read_text(encoding="utf-8")) for p in schema_files(root)]
+    live = {d["$id"] for d in docs if isinstance(d, dict) and isinstance(d.get("$id"), str)}
+    frozen = (
+        json.loads(f.read_text(encoding="utf-8"))
+        for copies in frozen_index(root).values()
+        for _, _, f in copies
+    )
+    return registry_of(
+        (d for d in frozen if isinstance(d, dict) and d.get("$id") not in live),
+        registry_of(docs),
+    )
 
 
 def known_ids(root: Path) -> frozenset[str]:
