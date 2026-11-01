@@ -261,10 +261,13 @@ USER_FLOW_BINDINGS = ("browserFlow", "directGrantFlow")
 #: the user-facing flows a realm flag gates: the flag must be off, and a flow the render binds
 #: there anyway is held to the same password-and-OTP rule, so turning the flag back on cannot open
 #: a way in that skips the second factor
-GATED_FLOW_BINDINGS = {
-    "registrationAllowed": "registrationFlow",
-    "resetPasswordAllowed": "resetCredentialsFlow",
-}
+GATED_FLOW_BINDINGS = dict(
+    zip(
+        ("registrationAllowed", "resetPasswordAllowed"),
+        ("registrationFlow", "resetCredentialsFlow"),
+        strict=True,
+    )
+)
 
 
 def _flow_problems(flows: dict, binding: str, alias) -> list[str]:
