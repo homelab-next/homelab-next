@@ -10,7 +10,11 @@ This stub understands only the minimal shape below and is meant to be replaced
 by the full registry resolver behind the same lookup name and arguments.
 
     services:
-      <logical-id>: {host: <fqdn>, port: <int>, scheme: <http|https|tcp>, capability: <name>}
+      <logical-id>: {host: <fqdn>, port: <int>, scheme: <name>, capability: <name>}
+
+``scheme`` is free text (``https``, ``http``, ``tcp``, ``udp``, ``ldaps``, ``ssh`` in the example
+registry) and defaults to ``https`` in a url; ``host`` and ``port`` are required for ``url`` and
+for the field asked, and a row without one is refused by name.
 
 ``field='capability'`` is what the service provides (empty when the row does not say), so a role
 can refuse an id that resolves to the wrong kind of service.
@@ -56,10 +60,19 @@ class LookupModule(LookupBase):
             row = services.get(term)
             if row is None:
                 raise AnsibleLookupError(f"hnx_registry: unknown service id '{term}'")
+            if not isinstance(row, dict):
+                raise AnsibleLookupError(f"hnx_registry: service '{term}' is not a mapping")
+            if field == "capability":
+                out.append(str(row.get("capability", "")))
+                continue
+            needs = ("host", "port") if field == "url" else (field,)
+            missing = [k for k in needs if row.get(k) in (None, "")]
+            if missing:
+                raise AnsibleLookupError(
+                    f"hnx_registry: service '{term}' has no {' or '.join(missing)}"
+                )
             if field == "url":
                 out.append(f"{row.get('scheme', 'https')}://{row['host']}:{row['port']}")
-            elif field == "capability":
-                out.append(str(row.get("capability", "")))
             else:
                 out.append(row[field])
         return out
