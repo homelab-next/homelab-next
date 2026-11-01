@@ -9,8 +9,11 @@ default).  Nothing a classifier says can drop, merge, reorder or rewrite a recor
   edited);
 * an annotation column that would overwrite an existing column is refused up front
   (:class:`AnnotationCollision`), before any record is classified;
-* a record the cascade cannot classify (a missing or non-string text field, a cascade fault) is
-  still emitted, annotated ``verdict: human`` with the reason in ``<prefix>error``.
+* a record the cascade cannot classify (a missing or non-string text field, an ``impact`` that is
+  not one of :data:`~homelabnext.decide.spec.IMPACTS`, a cascade fault) is still emitted,
+  annotated ``verdict: human`` with the reason in ``<prefix>error``.  An unknown impact is never
+  read as ``low``: impact can be raised, never lowered, so a value nobody can rank escalates.
+  Case and surrounding whitespace do not matter (``" High "`` is ``high``).
 
 Filtering on the annotations is a downstream query's choice, made on data that is all still there.
 """
@@ -21,6 +24,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from .cascade import Cascade
+from .spec import IMPACTS
 from .tiers import Item
 
 #: the annotation columns, without their prefix
@@ -55,10 +59,15 @@ def _annotation(cascade: Cascade, row: Mapping[str, Any], n: int, text_field: st
     text = row.get(text_field)
     rid = row.get(id_field) if id_field else None
     item_id = str(rid) if rid not in (None, "") else f"row-{n}"
+    raw = row.get("impact")
+    impact = raw.strip().lower() if isinstance(raw, str) else raw
+    if impact in (None, ""):
+        impact = "low"  # no impact declared: the spec floor and the keyword scan still apply
     if not isinstance(text, str):
         reason = f"field {text_field!r} missing or not text"
+    elif impact not in IMPACTS:
+        reason = f"impact {raw!r} is not one of {', '.join(IMPACTS)}"
     else:
-        impact = row.get("impact") if isinstance(row.get("impact"), str) else "low"
         try:
             d = cascade.decide(Item(item_id, text, impact))
         except Exception as exc:  # the cascade is exception-safe; never lose the row if not
