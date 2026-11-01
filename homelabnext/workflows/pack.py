@@ -18,11 +18,11 @@ from typing import Any
 
 from homelabnext import paths
 from homelabnext.agent.digest import digest_of
+from homelabnext.schema_registry import schema_registry
 
 PACK_SUFFIXES = (".yml", ".yaml", ".json")
 SKIP_PARTS = ("negative", "_frozen")
 SKIP_TOP = ("schemas",)
-_SCHEMA_DIRS = ("ids", "broker", "workflows")
 
 
 class WorkflowError(Exception):
@@ -77,27 +77,11 @@ def pack_digest(doc: Any) -> str:
 
 
 @cache
-def _registry():
-    from referencing import Registry, Resource
-    from referencing.jsonschema import DRAFT202012
-
-    reg = Registry()
-    base = paths.schemas_dir()
-    for d in _SCHEMA_DIRS:
-        for f in sorted((base / d).glob("*.json")):
-            doc = json.loads(f.read_text(encoding="utf-8"))
-            reg = reg.with_resource(
-                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-            )
-    return reg
-
-
-@cache
 def _validator(directory: str, name: str):
     from jsonschema import Draft202012Validator
 
     f = paths.schema_file(directory, f"{name}.schema.json")
-    return Draft202012Validator(json.loads(f.read_text("utf-8")), registry=_registry())
+    return Draft202012Validator(json.loads(f.read_text("utf-8")), registry=schema_registry())
 
 
 def schema_errors(directory: str, name: str, doc: Any) -> list[str]:

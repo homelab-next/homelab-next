@@ -31,7 +31,10 @@ Enrichment (`homelabnext.events.enrich`) sets three declared, optional extension
 These three were added at envelope 1.1 (1.0 declared none of them): the envelope's `$id` moved to 1.1
 and every event type's schema refers to it by that id, so each type took its next minor (a type's
 schema at a lower minor still refers to the envelope it was published against, and its frozen copy
-keeps resolving it). `agent.job.finished`'s `dataschema` stays the 1.0 id: it names the data contract
+keeps resolving it). Envelope 1.2 adds two more optional extensions (ADR-0033): `tlp`, the event's
+TLP 2.0 label in its canonical spelling (absent reads `red`: `homelabnext.events.envelope.event_label`),
+and `derivedfrom`, the ids of the events or records it was derived from; every type took its next
+minor again to refer to it. `agent.job.finished`'s `dataschema` stays the 1.0 id: it names the data contract
 as first published, which a 1.0 producer still sends.
 
 Every type here gets a publisher and a consumer contract test automatically

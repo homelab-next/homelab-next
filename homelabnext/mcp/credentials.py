@@ -643,10 +643,10 @@ def safe_schema_errors(directory: str, name: str, doc: object) -> list[str]:
     from jsonschema import Draft202012Validator
 
     from homelabnext import paths
-    from homelabnext.agent.schemas import _registry
+    from homelabnext.schema_registry import schema_registry
 
     schema = json.loads(paths.schema_file(directory, f"{name}.schema.json").read_text("utf-8"))
-    v = Draft202012Validator(schema, registry=_registry())
+    v = Draft202012Validator(schema, registry=schema_registry())
     return [
         f"{'/'.join(map(str, e.absolute_path)) or '$'}: {schema_message(e)}"
         for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))

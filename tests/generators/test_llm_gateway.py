@@ -998,7 +998,8 @@ def test_a_raised_role_keeps_its_ceiling_at_the_gateway(tmp_path):
 def test_a_role_table_ceiling_the_rules_refuse_is_refused(tmp_path):
     roles = _roles_with(tlp_ceiling="amber")
     roles["roles"]["cloud-reasoner"]["bindings"][0]["leaves_lab"] = True
-    with pytest.raises(gw.GatewaySpecError, match="amber and above are never granted"):
+    # the role table's schema refuses it before the rules see it (RoleTable.load)
+    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: 'amber' is not one of"):
         gw.load_spec(make_spec(tmp_path, roles))
 
 

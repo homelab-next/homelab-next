@@ -10,14 +10,12 @@ RFC 3339 UTC strings (``...Z``) in every document it writes.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
 
-from homelabnext import paths
 from homelabnext.registry.model import Registry
 
 STATES = ("ok", "warn", "fail", "unknown", "stale")
@@ -231,19 +229,9 @@ class Observation:
 
 @cache
 def _validator(name: str = "observation.schema.json"):
-    import jsonschema
-    from referencing import Registry as RefRegistry
-    from referencing import Resource
-    from referencing.jsonschema import DRAFT202012
+    from homelabnext.schema_registry import validator
 
-    refs: RefRegistry = RefRegistry()
-    for family, fname in (("ids", "common.schema.json"), ("status", name)):
-        doc = json.loads(paths.schema_file(family, fname).read_text(encoding="utf-8"))
-        refs = refs.with_resource(
-            doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-        )
-    schema = json.loads(paths.schema_file("status", name).read_text("utf-8"))
-    return jsonschema.Draft202012Validator(schema, registry=refs)
+    return validator("status", name)
 
 
 def schema_problems(name: str, doc: Any) -> list[str]:

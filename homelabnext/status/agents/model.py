@@ -26,13 +26,10 @@ from the last event and an injected clock (never stored), so a session that stop
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from typing import Any
-
-from homelabnext import paths
 
 from ..model import iso, parse_iso
 
@@ -51,20 +48,9 @@ DEFAULT_STUCK_AFTER_S = 900
 
 @cache
 def _validator(name: str):
-    import jsonschema
-    from referencing import Registry as RefRegistry
-    from referencing import Resource
-    from referencing.jsonschema import DRAFT202012
+    from homelabnext.schema_registry import validator
 
-    refs: RefRegistry = RefRegistry()
-    docs = {}
-    for family, fname in (("ids", "common.schema.json"), ("status", name)):
-        doc = json.loads(paths.schema_file(family, fname).read_text(encoding="utf-8"))
-        docs[fname] = doc
-        refs = refs.with_resource(
-            doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-        )
-    return jsonschema.Draft202012Validator(docs[name], registry=refs)
+    return validator("status", name)
 
 
 def _problems(name: str, doc: Any) -> list[str]:

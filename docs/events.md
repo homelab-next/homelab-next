@@ -47,8 +47,12 @@ stays typed RPC. Every type under `schemas/events/` has its class here
 | `homelabnext.proposal.created` | decision |
 | `homelabnext.proposal.decided` | decision |
 
-The envelope carries no TLP label yet (ADR-0033), so every event reads `red` to a TLP check, and
-the bus is an egress point whose content is not yet checked (`docs/modules.md`, the egress table).
+Since envelope 1.2 an event may carry its TLP label (ADR-0033) in the optional `tlp` extension
+attribute (one of the five canonical spellings) and the ids of its inputs in `derivedfrom`;
+`build_event(..., label=, derived_from=)` writes them and `event_label` reads them, an absent or
+unreadable label as `red`. No producer labels its events yet, so every event still reads `red` to
+a TLP check, and the bus is an egress point whose content is not yet checked (`docs/modules.md`,
+the egress table): a subscriber can now compute a ceiling from the event, but nothing filters on it.
 
 ## Publisher protocol
 
