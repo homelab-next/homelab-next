@@ -14,7 +14,7 @@ firewall_rules:
   inbound_allow:
     - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
     - {name: https, proto: tcp, ports: "443", source: "any"}
-capability: cap:idp
+capability: cap:edge
 capability_groups: [cap_edge]
 tags: [prod]
 owners: {primary: platform-team}

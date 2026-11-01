@@ -13,29 +13,31 @@ from __future__ import annotations
 import ipaddress
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from functools import cache
 from typing import Any, Protocol, runtime_checkable
 
-#: The eighteen capabilities named in docs/interfaces.md (``hnx conform --list``).
-KNOWN_CAPABILITIES: tuple[str, ...] = (
-    "lake-query",
-    "lake-catalog",
-    "object-store",
-    "inference",
-    "fast-classifier",
-    "notify",
-    "cases",
-    "events",
-    "orchestration",
-    "broker",
-    "secrets",
-    "idp",
-    "records",
-    "detections",
-    "context",
-    "projects",
-    "codemode-executor",
-    "codemode-runner",
-)
+from homelabnext.conform.registry import CAPABILITIES
+
+#: The eighteen core conformance capabilities (``hnx conform list``): the harness's own list,
+#: re-exported, never a copy of it.  A guest's ``capability`` may be any of
+#: :func:`guest_capabilities`, a wider set.
+KNOWN_CAPABILITIES: tuple[str, ...] = CAPABILITIES
+
+
+@cache
+def guest_capabilities() -> frozenset[str]:
+    """The ``cap:`` ids a guest may declare as its ``capability``: every capability the platform
+    names, read from the one vocabulary the agent and MCP rules use
+    (:func:`homelabnext.mcp.servers.known_capabilities`: the capability-class table
+    ``homelabnext/agent/tool_classes.yml``, which classes every capability the registry, the
+    conformance contracts, ``capabilities.yml`` and the module slots name, plus the core and
+    extended conformance suites).  So an edge, DNS, backup or hypervisor guest declares
+    ``cap:edge``, ``cap:dns``, ``cap:backup`` or ``cap:hypervisor`` instead of the nearest of the
+    eighteen, and a capability added to the platform is a guest capability without a third list."""
+    from homelabnext.mcp.servers import known_capabilities
+
+    return frozenset(known_capabilities())
+
 
 #: The capability inventory groups named in docs/role-interface.md section 5.
 ROLE_GROUPS: tuple[str, ...] = (
@@ -66,7 +68,7 @@ def group_for_capability(capability: str) -> str:
 
 
 def allowed_groups() -> frozenset[str]:
-    return frozenset(ROLE_GROUPS) | {group_for_capability(f"cap:{c}") for c in KNOWN_CAPABILITIES}
+    return frozenset(ROLE_GROUPS) | {group_for_capability(c) for c in guest_capabilities()}
 
 
 @dataclass(frozen=True)
