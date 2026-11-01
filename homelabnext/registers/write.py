@@ -68,13 +68,12 @@ def _now() -> dt.datetime:
 def _policy(src: pathlib.Path, policy):
     if policy is not None:
         return None if policy is False else policy
-    from homelabnext.reviews import ReviewError, load_policy
+    from homelabnext.reviews import ReviewError, require_policy
 
     from .render import find_policy
 
-    pp = find_policy(src)
-    try:
-        return load_policy(pp) if pp else None
+    try:  # none found fails closed; policy=False is the explicit opt-out
+        return require_policy(find_policy(src))
     except ReviewError as ex:
         raise RegisterError("review policy", ex.problems) from None
 
@@ -208,7 +207,7 @@ def check_page(
     the review identity rules, and the policy's tiers when the page claims ``reviewed``."""
     import yaml
 
-    from homelabnext.reviews import evaluate, load_policy, missing_message
+    from homelabnext.reviews import ReviewError, evaluate, missing_message, require_policy
     from homelabnext.sop.pages import FRONT_RE, page_digest
 
     from .render import repo_root
@@ -222,9 +221,13 @@ def check_page(
     problems: list[str] = []
     events = ev.read_events(ev.events_dir(p), problems, p.name) + _pending(p, new_events)
     entry = ev.derive(fm, events, "system-page", problems, p.name)
-    if policy is None:
-        pp = repo_root(p.parent) / "examples" / "review-policy.yml"
-        policy = load_policy(pp) if pp.is_file() else None
+    if policy is None:  # none found fails closed; policy=False is the explicit opt-out
+        try:
+            policy = require_policy(repo_root(p.parent) / "examples" / "review-policy.yml")
+        except ReviewError as ex:
+            raise RegisterError("review policy", ex.problems) from None
+    elif policy is False:
+        policy = None
     status = fm.get("status", "draft")
     digest = page_digest(text)
     res = evaluate(

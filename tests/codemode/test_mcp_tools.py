@@ -56,6 +56,27 @@ def test_search_ranks_by_words_and_describe_gives_the_schema():
         _index("profile:nobody").search("")
 
 
+def test_the_search_server_and_the_runner_share_one_index_loader(tmp_path):
+    """Both refuse an index another user may write; both read <slug>/ as profile:<slug>'s."""
+    import shutil
+
+    from homelabnext.codemode.runner import load_index
+
+    for slug in ("triage", "reader"):
+        shutil.copytree(INDEX / slug, tmp_path / slug)
+    (tmp_path / "reader" / "search.json").chmod(0o666)
+    assert "profile:reader" not in load_index(tmp_path)
+    with pytest.raises(IndexRefused):
+        CodemodeIndex(tmp_path, lambda: ("profile:reader", {"service.status"})).search("")
+    assert CodemodeIndex(tmp_path, lambda: ("profile:triage", set(TRIAGE))).search("")["total"]
+    # an index in another profile's directory is not that profile's, for the runner too
+    (tmp_path / "reader" / "search.json").chmod(0o644)
+    shutil.rmtree(tmp_path / "triage")
+    (tmp_path / "triage").mkdir()
+    shutil.copy(tmp_path / "reader" / "search.json", tmp_path / "triage" / "search.json")
+    assert set(load_index(tmp_path)) == {"profile:reader"}
+
+
 def test_the_catalog_record_classes_the_tools_and_acts_on_nothing():
     from homelabnext.agent.readers import default_classes
     from homelabnext.mcp.servers import load
