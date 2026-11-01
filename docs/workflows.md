@@ -24,13 +24,23 @@ less strict than the table (a different tier, an approval dropped, a grant widen
 approvers admitted). `tests/broker/test_broker_manifests_in_tree.py` loads every broker manifest
 the tree names and holds the table to failing for its site handlers only.
 
-StackStorm runs the pinned packs on events and schedules: [stackstorm.md](stackstorm.md)
-([[stackstorm]]), `hnx workflows st2 render | check`.
+The pack is the product-neutral spec, and `hnx workflows validate` stays a blocking gate. The
+playbook engine that runs the pinned packs on events and schedules is StackStorm
+([stackstorm.md](stackstorm.md), [[stackstorm]], `hnx workflows st2 render | check`), which is
+**experimental** since 2026-10-31 (`tools/experimental.yml`): its render check and tests run in
+`make experimental` and CI's non-blocking `experimental` job, not in `make check`, until a lab
+host runs it.
+
+The playbook engine and the [orchestration controller](orchestration-controller.md)
+([[orchestration-controller]]) do different jobs and do not compete. The engine decides *when* a
+pack runs and drives its steps; the controller (the operator's Go controller) schedules *agent
+sessions*: queue, admission against live engine load, leases, failover. A pack reaches the
+controller only through the broker action `agent.job.submit`, which puts one job on its queue.
 
 Checklist rows: R-01 (workflows are code), R-03 (deterministic steps first), R-04 (risky actions
-need bound approval), R-07 (fixtures round-trip). R-02, R-05 and R-06 need the running
-orchestrator (SERVER); the `orchestration` conformance suite covers the job-runner contract a real
-adapter maps packs onto.
+need bound approval), R-07 (fixtures round-trip). R-02, R-05 and R-06 need a running playbook
+engine and broker (SERVER). The `orchestration` conformance suite measures the controller's
+agent-session contract, not the engine that runs packs.
 
 ## The pack
 

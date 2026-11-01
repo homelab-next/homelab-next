@@ -97,12 +97,9 @@ def make_spec(tmp_path, roles=None, **over):
 # --- render --------------------------------------------------------------------------------------
 
 
-def test_render_both_gateways_from_one_spec(tmp_path):
+def test_render_the_gateway_from_one_spec(tmp_path):
     files = gw.render_file(make_spec(tmp_path))
-    assert sorted(files) == [
-        "bifrost/config.json",
-        "bifrost/model-parameters.json",
-        "bifrost/pricing.json",
+    assert sorted(files) == [  # LiteLLM only: the second gateway was removed (ADR-0022, amended)
         "litellm/config.yaml",
         "litellm/keys.json",
     ]
@@ -121,28 +118,6 @@ def test_render_both_gateways_from_one_spec(tmp_path):
     assert keys["local-agent"]["models"] == ["agent-local", "small-local"]
     assert keys["cloud-tool"]["rpm_limit"] == 10
     assert keys["local-agent"]["key_env"] == "HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT"
-
-
-def test_bifrost_serves_roles_as_key_aliases_and_routes_the_fallback(tmp_path):
-    doc = json.loads(gw.render_file(make_spec(tmp_path))["bifrost/config.json"])
-    prov = doc["providers"]["hnx-infer-a"]
-    assert prov["keys"][0]["aliases"] == {"agent-local": "example-27b"}
-    want = "http://infer-a.svc.example.internal:8000"  # no-raw-endpoint: allow rendered alias
-    assert prov["network_config"]["base_url"] == want
-    assert prov["custom_provider_config"] == {"base_provider_type": "openai"}
-    gov = doc["governance"]
-    (rule,) = gov["routing_rules"]
-    assert rule["cel_expression"] == "model == 'agent-local'"  # Bifrost's CEL names it `model`
-    assert rule["fallbacks"] == ["hnx-infer-b/small-local"]
-    vks = {v["name"]: v for v in gov["virtual_keys"]}
-    assert {p["provider"] for p in vks["local-agent"]["provider_configs"]} == {
-        "hnx-infer-a",
-        "hnx-infer-b",
-    }
-    assert vks["cloud-tool"]["value"] == "env.HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL"
-    rl = {r["id"]: r for r in gov["rate_limits"]}
-    assert rl["rl-role-small-local"]["request_reset_duration"] == "1h"
-    assert doc["framework"]["pricing"]["pricing_url"] == "file:///app/data/pricing.json"
 
 
 def test_render_is_deterministic(tmp_path):
@@ -328,10 +303,17 @@ def test_audit_refuses_a_self_declared_local_backend():
     )
 
 
-# --- one Bifrost provider per backend, one model per role and provider ---------------------------
+# --- no second gateway (ADR-0022, amended 2026-10-31) ---------------------------------------------
 
 
-def test_two_cloud_backends_of_one_provider_are_refused(tmp_path):
+def test_a_spec_with_a_bifrost_block_is_refused(tmp_path):
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.render_file(make_spec(tmp_path, bifrost={"data_dir": "/app/data"}))
+    assert any("bifrost" in p for p in exc.value.problems), exc.value.problems
+
+
+def test_two_cloud_backends_of_one_provider_render_as_two_deployments(tmp_path):
+    # refused only while a second gateway kept one provider per name; the proxy keeps each apart
     roles = copy.deepcopy(ROLES)
     roles["roles"]["second-cloud"] = {
         "tier": "large",
@@ -344,17 +326,25 @@ def test_two_cloud_backends_of_one_provider_are_refused(tmp_path):
             "api_key": "secret:llm-gateway/anthropic-team-b",
         }
     }
-    with pytest.raises(gw.GatewaySpecError, match="svc:cloud, svc:cloud-b are all provider"):
-        gw.render_file(make_spec(tmp_path, roles, backends=backends))
+    files = gw.render_file(make_spec(tmp_path, roles, backends=backends))
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    by_role = {d["model_name"]: d[DEPLOY_PARAMS] for d in lt["model_list"]}
+    assert by_role["second-cloud"]["model"] == "anthropic/example-cloud-2"
+    assert by_role["cloud-reasoner"]["model"] == "anthropic/example-cloud-1"
+    assert by_role["second-cloud"]["api_key"] != by_role["cloud-reasoner"]["api_key"]
 
 
-def test_a_role_bound_twice_on_one_provider_is_refused(tmp_path):
+def test_a_role_bound_twice_on_one_backend_renders_both_bindings(tmp_path):
     roles = copy.deepcopy(ROLES)
     roles["roles"]["small-local"]["bindings"].append(
-        {"backend": "svc:infer-b", "model_id": "example-4b-alt"}
+        {"backend": "svc:infer-b", "model_id": "small-model-alt"}
     )
-    with pytest.raises(gw.GatewaySpecError, match="mdl:small-local: two bindings on provider"):
-        gw.render_file(make_spec(tmp_path, roles))
+    files = gw.render_file(make_spec(tmp_path, roles))
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    models = [
+        d[DEPLOY_PARAMS]["model"] for d in lt["model_list"] if d["model_name"] == "small-local"
+    ]
+    assert len(models) == 2 and models[1] == "openai/small-model-alt"
 
 
 # --- one secret, one credential ------------------------------------------------------------------
@@ -468,10 +458,6 @@ def test_a_role_limit_is_split_over_its_proxy_deployments(tmp_path):
     assert sum(d["rpm"] for d in deps) <= 7 and [d["rpm"] for d in deps] == [3, 3]
     assert sum(d["tpm"] for d in deps) <= 1001
     assert sum(d["max_budget"] for d in deps) <= 3.0
-    # Bifrost limits the role once, at the declared figure
-    gov = json.loads(files["bifrost/config.json"])["governance"]
-    rl = next(r for r in gov["rate_limits"] if r["id"] == "rl-role-small-local")
-    assert rl["request_max_limit"] == 7
 
 
 def test_a_role_limit_too_small_to_split_over_its_bindings_is_refused(tmp_path):
@@ -488,9 +474,6 @@ def test_a_whole_minute_window_renders_its_exact_or_tighter_share(tmp_path):
     )
     keys = {k["key_alias"]: k for k in json.loads(files["litellm/keys.json"])["keys"]}
     assert keys["cloud-tool"]["rpm_limit"] == 2  # 25 per 10 min: 2 a minute, never 3
-    vks = json.loads(files["bifrost/config.json"])["governance"]["rate_limits"]
-    rl = next(r for r in vks if r["id"] == "rl-key-cloud-tool")
-    assert (rl["request_max_limit"], rl["request_reset_duration"]) == (25, "10m")  # exact
 
 
 def test_duration_refuses_a_fraction_of_a_second():
@@ -546,48 +529,6 @@ def test_audit_catches_a_cloud_deployment_and_a_default_fallback_in_litellm():
     assert "default_fallbacks names non-local elsewhere" in problems
 
 
-def test_audit_catches_cloud_routes_and_keys_in_bifrost():
-    spec, files = lab_files()
-    doc = json.loads(files["bifrost/config.json"])
-    doc["providers"]["anthropic"] = {"keys": [{"models": ["main-reasoner"], "value": "env.X"}]}
-    doc["governance"]["routing_rules"][0]["fallbacks"].append("anthropic/main-reasoner")
-    vk = next(v for v in doc["governance"]["virtual_keys"] if v["name"] == "agent-reader")
-    vk["provider_configs"].append({"provider": "anthropic", "allowed_models": ["*"]})
-    files["bifrost/config.json"] = json.dumps(doc)
-    problems = "\n".join(gw.audit(files, spec))
-    assert (
-        "main-reasoner (profile:responder is data_tier local-only) is served by non-local anthropic"
-        in problems
-    )
-    assert "routing rule route-main-reasoner sends main-reasoner to non-local anthropic" in problems
-    assert "local-only key agent-reader may call non-local anthropic" in problems
-
-
-def test_bifrost_admin_api_needs_a_login_and_the_file_is_authoritative():
-    spec, files = lab_files()
-    doc = json.loads(files["bifrost/config.json"])
-    assert doc["source_of_truth"] == "config.json"
-    assert doc["governance"]["auth_config"] == {
-        "admin_username": "admin",
-        "admin_password": "env.HNX_SECRET_LLM_GATEWAY_BIFROST_ADMIN_PASSWORD",
-        "is_enabled": True,
-    }
-    del doc["governance"]["auth_config"]
-    doc["source_of_truth"] = "split"
-    files["bifrost/config.json"] = json.dumps(doc)
-    problems = "\n".join(gw.audit(files, spec))
-    assert "the admin API has no login" in problems
-    assert 'source_of_truth is not "config.json"' in problems
-
-
-def test_bifrost_admin_password_is_a_secret_of_its_own(tmp_path):
-    with pytest.raises(gw.GatewaySpecError, match="must be a secret:"):
-        gw.render_file(make_spec(tmp_path, bifrost={"admin_password": "fake-literal"}))
-    shared = {"admin_password": "secret:llm-gateway/master-key"}
-    with pytest.raises(gw.GatewaySpecError, match=r"master_key and bifrost\.admin_password use"):
-        gw.render_file(make_spec(tmp_path, bifrost=shared))
-
-
 def test_check_fails_on_a_tampered_output_dir_and_on_drift(tmp_path, capsys):
     out = tmp_path / "out"
     shutil.copytree(LAB, out)
@@ -607,7 +548,7 @@ def test_render_writes_and_is_idempotent(tmp_path, capsys):
     out = tmp_path / "out"
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
-    assert "wrote 0, unchanged 5" in capsys.readouterr().out
+    assert "wrote 0, unchanged 2" in capsys.readouterr().out
 
 
 def test_bad_spec_exits_1(tmp_path, capsys):

@@ -39,8 +39,9 @@ _GENERATED = re.compile(r"(?i)\bgenerated\b")
 _DO_NOT_EDIT = re.compile(r"(?i)\bdo not (?:edit|modify)\b|\bnot this page\b")
 _FROM_KEY = re.compile(r'^\s*"generated_from"\s*:')
 
-#: (glob of committed files, evidence the check runs: "ci:<text of a CI run line>" or
-#: "test:<path of a CI-run test module>")
+#: (glob of committed files, evidence the check runs: "ci:<text of a CI run line>",
+#: "test:<path of a CI-run test module>", or "experimental:<text of a gate>" of a component in
+#: tools/experimental.yml, which CI's non-blocking experimental job runs)
 DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/capabilities/*.md", "ci:docs capabilities check"),
     ("docs/scripts/catalog.md", "ci:scripts catalog --check"),
@@ -49,7 +50,7 @@ DERIVED: tuple[tuple[str, str], ...] = (
     ("docs/terms.md", "test:tests/agent/test_agent_terms.py"),
     ("detections/det_map.yml", "ci:homelabnext.detections map --check"),
     ("examples/keyring/keyring.json", "ci:agent keyring check"),
-    ("examples/codemode/*/*", "ci:codemode gen --check"),
+    ("examples/codemode/*/*", "experimental:codemode gen --check"),
     ("examples/mcp/clients/*/*", "ci:make mcp-check"),
     (
         "compose/lab-in-a-box/config/llm-gateway/litellm/*",
@@ -146,12 +147,23 @@ def test_every_row_matches_a_file_and_its_check_exists():
         kind, _, what = evidence.partition(":")
         if kind == "ci":
             assert _ci_runs(ci, what), f"{glob}: CI has no step running '{what}'"
+        elif kind == "experimental":
+            assert any(what in g for g in _experimental_gates()), (
+                f"{glob}: no component of tools/experimental.yml has a gate running '{what}'"
+            )
+            assert _ci_runs(ci, "make experimental"), "CI does not run make experimental"
         else:
             assert kind == "test", f"{glob}: unknown evidence {evidence}"
             module = ROOT / what
             assert module.is_file() and re.search(
                 r"^def test_", module.read_text(encoding="utf-8"), re.M
             ), f"{glob}: no tests in {what}"
+
+
+def _experimental_gates() -> list[str]:
+    from tests.experimental_marker import experimental
+
+    return [g for c in experimental.load() for g in c.gates]
 
 
 def test_an_unlisted_generated_file_is_reported(tmp_path):

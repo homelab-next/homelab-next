@@ -39,8 +39,10 @@ GUARDED_COMMANDS = ("pytest", "ruff check", "tools/leak_scan.py", "gitleaks")
 NARROWING = ("paths", "paths-ignore", "branches-ignore", "types")
 #: GitHub's default pull_request activity types: a `types:` list holding all of them narrows nothing
 PR_DEFAULT_TYPES = {"opened", "synchronize", "reopened"}
-#: the flag-value pairs of CI's pytest selection
-PAIRS = {("-m", "not live"), ("--deselect", FLOOR_TEST)}
+#: the flag-value pairs of CI's pytest selection: the tests of the experimental and frozen
+#: components (tools/experimental.yml) run in the non-blocking experimental job instead
+#: (tools/tests/test_experimental.py holds that job and the marker to the list)
+PAIRS = {("-m", "not live and not experimental"), ("--deselect", FLOOR_TEST)}
 #: the shard flags: which shard (the job's own, of N) and where its report goes
 SHARD = re.compile(r"^\$SHARD/([1-9][0-9]*)$")
 
@@ -77,7 +79,8 @@ def trigger_problems(doc) -> list[str]:
 
 
 def pytest_problems(run: str) -> list[str]:
-    """The test job's pytest is ``python -m pytest -q -m "not live" --deselect FLOOR_TEST``,
+    """The test job's pytest is ``python -m pytest -q -m "not live and not experimental"
+    --deselect FLOOR_TEST``,
     in any order, with optionally ``--shard "$SHARD/N" --shard-report FILE`` (checked against
     the job by :func:`shard_problems`): an allowlist, so any other flag, value or word
     (``--ignore``, ``-k``, ``-p no:...``, a path, ``|| true``) is a problem."""
@@ -100,7 +103,7 @@ def pytest_problems(run: str) -> list[str]:
             out.append(f"pytest argument {w!r} is not part of CI's selection")
             i += 1
     if rest.count("-m") != 1:
-        out.append('pytest must select exactly -m "not live"')
+        out.append('pytest must select exactly -m "not live and not experimental"')
     if rest.count("--shard") > 1 or rest.count("--shard-report") != rest.count("--shard"):
         out.append("pytest takes --shard and --shard-report once each, or neither")
     return out
@@ -227,7 +230,7 @@ def test_lint_and_both_secret_scans_run():
 
 # --- negative self-tests: each edit that narrows what CI runs is caught --------------------------
 
-BASE_RUN = f'python -m pytest -q -m "not live" --deselect {FLOOR_TEST}'
+BASE_RUN = f'python -m pytest -q -m "not live and not experimental" --deselect {FLOOR_TEST}'
 
 
 @pytest.mark.parametrize(
@@ -242,10 +245,12 @@ BASE_RUN = f'python -m pytest -q -m "not live" --deselect {FLOOR_TEST}'
         BASE_RUN + " tests/broker",
         BASE_RUN + " || true",
         'python -m pytest -q -m "not live and not slow"',
+        'python -m pytest -q -m "not live and not experimental and not slow"',
         "python -m pytest -q -m live",
         "python -m pytest -q",
         BASE_RUN + ' -m "not live"',
-        f'python -m pytest -q -m="not live" --deselect {FLOOR_TEST}',
+        BASE_RUN.replace("not live and not experimental", "not experimental"),
+        f'python -m pytest -q -m="not live and not experimental" --deselect {FLOOR_TEST}',
         BASE_RUN.replace("python -m pytest", "pytest"),
         BASE_RUN + ' --shard "1/4" --shard-report r.json',  # a fixed shard, not the job's own
         BASE_RUN + ' --shard "$SHARD/4"',  # no report: nothing can count it
@@ -257,7 +262,8 @@ def test_a_narrowed_pytest_line_is_caught(run):
 
 
 def test_ci_s_own_line_passes_in_any_order():
-    assert pytest_problems(f'python -m pytest --deselect {FLOOR_TEST} -m "not live" -q') == []
+    line = f'python -m pytest --deselect {FLOOR_TEST} -m "not live and not experimental" -q'
+    assert pytest_problems(line) == []
 
 
 def _edited(edit):

@@ -347,6 +347,25 @@
     },
     {
       "exit": {
+        "0": "every gate and test of every listed component passed (list and validate, the file is valid)",
+        "1": "a gate or a test failed",
+        "2": "the list is invalid or unreadable"
+      },
+      "id": "experimental",
+      "inputs": "tools/experimental.yml (or --file)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per gate and the pytest run of the components' tests; `list` prints the components",
+      "owner": "maintainers",
+      "path": "tools/experimental.py",
+      "purpose": "Run the gates and tests of the experimental and frozen components listed in tools/experimental.yml, outside the blocking set.",
+      "status": "active",
+      "trigger": [
+        "make:experimental"
+      ]
+    },
+    {
+      "exit": {
         "0": "stopped cleanly",
         "2": "a host other than loopback without --allow-any-host"
       },

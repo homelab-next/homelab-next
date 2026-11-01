@@ -24,8 +24,8 @@ from homelabnext.conform.target import load_target
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = ROOT / "compose" / "lab-in-a-box" / "targets"
-ADMIN = "sk-bf-fake-master-key-0000"
-THROTTLE = "sk-bf-fake-throttle-0000"
+ADMIN = "sk-fake-master-key-0000"
+THROTTLE = "sk-fake-throttle-0000"
 ROLES = ["fast-classifier", "main-reasoner"]  # schemas/platform/examples/model_roles.valid.json
 GATEWAY_CHECKS = [
     "gateway-rejects-bad-key",
@@ -96,7 +96,6 @@ def failing(run):
     "target, var",
     [
         ("inference-gateway.yml", "HNX_ENDPOINT_LLM_GATEWAY"),
-        ("inference-gateway-bifrost.yml", "HNX_ENDPOINT_LLM_GATEWAY_BIFROST"),
     ],
 )
 def test_the_lab_targets_pass_every_check_against_a_conforming_gateway(monkeypatch, target, var):
@@ -249,7 +248,7 @@ def test_target_files_name_no_url_and_no_literal_secret():
         assert "sk-" not in text, path
 
 
-OVER = "sk-bf-fake-over-ceiling-0000"
+OVER = "sk-fake-over-ceiling-0000"
 CEILING_CHECK = "gateway-refuses-role-above-key-ceiling"
 
 

@@ -4,6 +4,18 @@ summary_of: outline:sha256:d051baa570de47de
 ---
 # Projects: project management as a capability
 
+**Projects and tasks live in OpenProject only (operator decision, 2026-10-31).** OpenProject,
+through the adapter below, is the one backend for a lab's projects and tasks. The home-built
+Markdown store (`homelabnext/projects/store.py`, `hnx projects`, `examples/projects/`) is
+**frozen**, not removed (`tools/experimental.yml`, component `projects-store`): removing it would
+break the `projects` conformance suite's reference target, the status hub's Projects page and the
+knowledge graph, which read it. So it stays as the reference implementation of the contract, is
+not built on, and holds no lab's work. `hnx projects check`, its tests
+(`tests/projects/test_projects_store.py`, `tests/projects/test_projects_cli.py`) and invariant
+P-08 (skipped by `make invariants`) are out of `make check` and CI's required jobs; they still run in `make experimental` and
+CI's non-blocking `experimental` job. The contract, the OpenProject adapter and its tests stay
+blocking.
+
 `projects` is the sixteenth capability (ADR-0020): projects, their ordered steps and one-off
 tasks, under a few board rules, linked by uid to the strategy records they serve
 ([strategy.md](strategy.md)). The contract is `conformance/protocols/projects.py`; the reference
@@ -94,8 +106,8 @@ not exist (exit 2) rather than reading an empty board.
 
 `--dir` defaults to `examples/projects` and `--strategy` (the records links may name) to
 `examples/strategy`; a lab keeps both in its private repository (ADR-0011). Exit codes: 0 ok, 1 a
-rule refused the change or `check` found problems, 2 usage or input error. `make check` runs
-`hnx projects check` over the examples.
+rule refused the change or `check` found problems, 2 usage or input error. `make experimental`
+(frozen; no longer `make check`) runs `hnx projects check` over the examples.
 
 ## The hub page
 

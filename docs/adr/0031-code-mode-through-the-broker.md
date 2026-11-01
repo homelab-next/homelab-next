@@ -4,8 +4,14 @@ summary_of: outline:sha256:5146fc805abce2f1
 ---
 # ADR-0031: Agents may compose broker actions as sandboxed programs (Code Mode)
 
-- **Status:** proposed
+- **Status:** proposed (frozen 2026-10-31: resumes after the core lab runs)
 - **Date:** 2026-10-25
+- **Frozen:** 2026-10-31, operator decision (v0 cuts): Code Mode stays at CM-6 with phase 2's
+  CM-10 to CM-12; CM-7 and CM-8 (the sandbox spike and the real executor) are not built until the
+  core lab runs ([build order](../build-order.md), "The v0 slice"). The code is kept, not
+  deleted; agents use normal broker actions meanwhile. Its gates and tests are out of the blocking
+  set (`tools/experimental.yml`, component `code-mode`): `make experimental` and CI's
+  non-blocking `experimental` job still run them, so they do not rot.
 - **Related:** ADR-0017 (broker service), ADR-0022 (LLM gateway), ADR-0024 (MCP catalog),
   ADR-0027 (modules), ADR-0028 (Veritas), ADR-0030 (agents act only through the broker),
   [Code Mode build plan](../codemode.md), [broker](../broker.md), [agent profiles](../agent.md),

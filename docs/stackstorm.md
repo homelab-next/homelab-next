@@ -10,11 +10,21 @@ decides *when*: it takes events from the bus and ticks from its own clock, filte
 criteria, holds a burst back, and starts one run per admitted event. Everything a run changes goes
 through the [broker](broker.md) ([[broker]]). StackStorm holds no credential for any target.
 
+**Experimental** (operator decision, 2026-10-31; `tools/experimental.yml`, component
+`stackstorm`): no lab host runs StackStorm yet, so `hnx workflows st2 check` and the StackStorm
+tests (`tests/workflows/test_workflows_st2.py`, `tests/workflows/test_st2_bridge.py`) are out of
+`make check` and CI's required jobs, and `make invariants` skips invariant R-09. They still run, in
+`make experimental` and CI's non-blocking `experimental` job, so the render does not rot; they
+return to the blocking set when a lab host runs the rendered pack. The packs themselves stay the
+product-neutral spec ([workflows](workflows.md)), and the orchestration controller stays the
+agent-session scheduler: the two do different jobs (the table below).
+
 Command: `hnx workflows st2 render | check | bridge`. Library: `homelabnext.workflows.st2` (the renderer
 and its checks), `homelabnext.workflows.st2_runtime` (what a run executes) and
 `homelabnext.workflows.st2_bridge` (the event bridge). Binding:
 `workflows/stackstorm.yml` (`schemas/workflows/stackstorm`). Rendered pack, committed:
-`workflows/stackstorm/`. `make workflows` fails when that tree drifts from its inputs.
+`workflows/stackstorm/`. `make experimental` (not `make workflows`, since 2026-10-31) fails when
+that tree drifts from its inputs.
 
 ## Who owns what
 

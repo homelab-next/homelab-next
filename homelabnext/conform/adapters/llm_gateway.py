@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ``inference`` contract through an LLM gateway (LiteLLM proxy or Bifrost), stdlib HTTP.
+"""The ``inference`` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 ``make(**config)`` returns a :class:`GatewayTarget`: the library's own
 :class:`~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
@@ -18,8 +18,8 @@ admin key, plus the three methods of feature ``gateway``
   (``over_ceiling_model``) and one it may call (``over_ceiling_served``).
 
 Keys are ``secret:`` references, read from ``HNX_SECRET_<NAME>`` at every call (never held).
-Nothing here is product specific: the same target file shape serves LiteLLM and Bifrost, so a
-gateway swap is a target file plus this suite (docs/llm-gateway.md).
+Nothing here is product specific: the target file shape is the gateway contract, so a gateway
+swap (ADR-0022 names the documented exit) is a target file plus this suite (docs/llm-gateway.md).
 """
 
 from __future__ import annotations

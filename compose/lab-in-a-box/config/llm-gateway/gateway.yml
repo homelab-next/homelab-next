@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# The lab's LLM gateway, as data (docs/llm-gateway.md).  litellm/ and bifrost/ next to this file
-# are generated from it and never edited by hand:
+# The lab's LLM gateway, as data (docs/llm-gateway.md).  litellm/ next to this file is
+# generated from it and never edited by hand:
 #   hnx gen gateway render compose/lab-in-a-box/config/llm-gateway/gateway.yml \
 #     compose/lab-in-a-box/config/llm-gateway
 # and `make gateway-check` fails on drift or on a local-only role that could reach a cloud model.
@@ -26,5 +26,3 @@ keys:
     roles: [mdl:fast-classifier]
     data_tier: local-only
     limits: {window_s: 60, max_requests: 3}
-bifrost:
-  data_dir: /app/data
