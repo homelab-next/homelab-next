@@ -28,16 +28,31 @@ class Tree(Protocol):
 
 
 class DirTree:
-    """Read-only walk of real directories."""
+    """Read-only walk of real directories.
+
+    With one root, paths are relative to it.  With several, each path is prefixed with its
+    root's name (``src/playbooks/site.yml``, ``overlay/playbooks/site.yml``; a repeated name
+    gets ``.2``, ``.3``), so two roots' files of the same relative path both reach the planes
+    instead of one silently replacing the other."""
 
     def __init__(self, *roots: str | Path) -> None:
         self.roots = [Path(r) for r in roots]
         for r in self.roots:
             if not r.exists():
                 raise FileNotFoundError(f"scan root {r} does not exist")
+        self.labels: list[str] = []
+        if len(self.roots) > 1:
+            for r in self.roots:
+                base = r.resolve().name or "root"
+                label, n = base, 1
+                while label in self.labels:
+                    n += 1
+                    label = f"{base}.{n}"
+                self.labels.append(label)
 
     def files(self) -> Iterator[tuple[str, str]]:
-        for root in self.roots:
+        for i, root in enumerate(self.roots):
+            prefix = f"{self.labels[i]}/" if self.labels else ""
             paths = [root] if root.is_file() else sorted(root.rglob("*"))
             for p in paths:
                 rel_parts = p.relative_to(root).parts if root.is_dir() else ()
@@ -51,7 +66,8 @@ class DirTree:
                     text = p.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError):
                     continue
-                yield (p.relative_to(root).as_posix() if root.is_dir() else p.name), text
+                rel = p.relative_to(root).as_posix() if root.is_dir() else p.name
+                yield prefix + rel, text
 
 
 class MemTree:
@@ -81,7 +97,11 @@ class _Section:
     def _get(self, key: str) -> Any:
         if "unreachable" in self.data:
             raise Unreachable(str(self.data["unreachable"]))
-        return self.data.get(key, [])
+        if key not in self.data:
+            # a present section without its key (a mistyped key, an exporter that changed
+            # shape) was not measured: SKIP, never an empty list that reads as CLEAN
+            raise Unreachable(f"snapshot section has no {key!r}")
+        return self.data[key]
 
 
 class SnapshotHypervisor(_Section):
