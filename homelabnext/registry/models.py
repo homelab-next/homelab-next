@@ -12,7 +12,18 @@ alias table and the backend (K-14; :mod:`homelabnext.registry.serving` turns res
 state-diffed alerts).  Every binding can carry a pin (``version`` + ``digest``, G-11; checked by
 :mod:`homelabnext.golden.pins`) and every role a rate/cost budget (``limits``, G-10; enforced by
 :mod:`homelabnext.registry.limits`).  :class:`ModelClient` is a small stdlib
-OpenAI-compatible client used by the golden runner and by the decision cascade.
+OpenAI-compatible client used by the golden runner.
+
+Two ways to reach a role (ADR-0007 decisions 2 and 3):
+
+* **through the gateway** (:class:`GatewayResolver`, the default for anything that tests what a
+  consumer calls): the endpoint is the ``llm-gateway`` capability, the model is the role name,
+  and the client sends the consumer's own gateway key (``api_key``), so key scope, limits and
+  the TLP key-scope backstop apply;
+* **direct to one backend** (:class:`ModelResolver`): host-side verification of a binding only
+  (the K-14 probe, the egress canary and pin reports, which test a binding the gateway would
+  hide).  A keyed backend (vLLM with ``vllm_server_api_key_ref``) answers 401 without its key,
+  so these callers pass the backend's key as ``api_key``.
 """
 
 from __future__ import annotations
@@ -31,11 +42,11 @@ from typing import Any
 from .model import Registry
 from .resolver import Endpoint, ResolutionError, Resolver
 
-ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
-MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
+ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
+MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 KINDS = ("chat", "completion", "embedding")
-DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 LIMIT_KEYS = ("window_s", "max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 #: keys an OpenAI-compatible ``/v1/models`` entry uses for the loaded context length, by engine
 CONTEXT_KEYS = ("loaded_context_length", "max_model_len", "context_length", "max_context_length")
@@ -68,7 +79,9 @@ class Binding:
     model_id: str
     priority: int = 0
     version: str | None = None  # G-11 pin: the release the backend must serve
-    digest: str | None = None  # G-11 pin: sha256:<hex> of the weights
+    # G-11 pin: the model store's digest of the entry, sha256:<hex> of its sha256sum listing
+    # (ADR-0023; `hnx models store list` prints it), not a hash of one weights file
+    digest: str | None = None
 
     @property
     def pinned(self) -> bool:
@@ -110,7 +123,18 @@ class RoleTable:
                 problems.append(f"role {name}: must be a mapping")
                 continue
             bindings: list[Binding] = []
-            for i, b in enumerate(r.get("bindings") or []):
+            raw_bindings = r.get("bindings") or []
+            if not isinstance(raw_bindings, list):
+                problems.append(f"role {name}: bindings must be a list")
+                raw_bindings = []
+            for i, b in enumerate(raw_bindings):
+                if not isinstance(b, dict):
+                    problems.append(f"role {name}: bindings[{i}] must be a mapping")
+                    continue
+                prio = b.get("priority", 0)
+                if isinstance(prio, bool) or not isinstance(prio, int):
+                    problems.append(f"role {name}: bindings[{i}].priority must be an integer")
+                    continue
                 m = SVC_RE.match(str(b.get("backend", "")))
                 if not m:
                     problems.append(f"role {name}: bindings[{i}].backend must be a svc: id")
@@ -125,7 +149,7 @@ class RoleTable:
                     Binding(
                         m.group(1),
                         str(b["model_id"]),
-                        int(b.get("priority", 0)),
+                        prio,
                         str(b["version"]) if b.get("version") is not None else None,
                         str(digest) if digest is not None else None,
                     )
@@ -136,13 +160,27 @@ class RoleTable:
             if kind not in KINDS:
                 problems.append(f"role {name}: kind {kind!r} not in {KINDS}")
             fb = r.get("fallback")
-            fbm = MDL_RE.match(fb) if fb else None
+            fbm = MDL_RE.match(fb) if isinstance(fb, str) and fb else None
             if fb is not None and not fbm:
                 problems.append(f"role {name}: fallback {fb!r} must be an mdl: id")
             probe_cfg = r.get("probe") or {}
+            if not isinstance(probe_cfg, dict):
+                problems.append(f"role {name}: probe must be a mapping")
+                probe_cfg = {}
+            params = r.get("params") or {}
+            if not isinstance(params, dict):
+                problems.append(f"role {name}: params must be a mapping")
+                params = {}
+            mct = r.get("max_context_tokens")
+            if mct is not None and (isinstance(mct, bool) or not isinstance(mct, int) or mct < 1):
+                problems.append(f"role {name}: max_context_tokens must be a positive integer")
+                mct = None
             limits = r.get("limits") or {}
             bad = sorted(set(limits) - set(LIMIT_KEYS)) if isinstance(limits, dict) else ["?"]
-            if bad or (limits and not limits.get("window_s")):
+            numeric = isinstance(limits, dict) and all(
+                isinstance(v, int | float) and not isinstance(v, bool) for v in limits.values()
+            )
+            if bad or not numeric or (limits and not limits.get("window_s")):
                 problems.append(f"role {name}: limits needs window_s and only {LIMIT_KEYS}")
                 limits = {}
             roles[name] = Role(
@@ -152,8 +190,8 @@ class RoleTable:
                 kind=kind,
                 fallback=fbm.group(1) if fbm else None,
                 description=str(r.get("description", "")),
-                max_context_tokens=r.get("max_context_tokens"),
-                params=dict(r.get("params") or {}),
+                max_context_tokens=mct,
+                params=dict(params),
                 dimensions=r.get("dimensions"),
                 logprobs=bool(r.get("logprobs", False)),
                 require_model_served=bool(probe_cfg.get("require_model_served", True)),
@@ -275,6 +313,55 @@ class ModelResolver:
         )
 
 
+#: the registry capability consumers reach the LLM gateway by (ADR-0007 decision 2)
+GATEWAY_CAPABILITY = "llm-gateway"
+
+
+class GatewayResolver:
+    """Role alias -> the LLM gateway, the path every consumer takes (ADR-0007 decisions 2-3).
+
+    The endpoint is the ``llm-gateway`` capability and the model is the role name, so the gateway
+    applies the caller's key scope, its limits and fallbacks, and the TLP key-scope backstop; no
+    backend address or model id is resolved here.  A role the table does not hold is refused
+    before any request.  Use :class:`ModelResolver` only to check one binding host-side."""
+
+    def __init__(
+        self,
+        registry: Registry,
+        table: RoleTable,
+        resolver: Resolver | None = None,
+        *,
+        capability: str = GATEWAY_CAPABILITY,
+    ):
+        self.registry = registry
+        self.table = table
+        self.resolver = resolver or Resolver(registry)
+        self.capability = capability
+
+    def resolve(self, role: str) -> ResolvedModel:
+        r = self.table.get(role)
+        ep = self.resolver.resolve(self.capability)
+        return ResolvedModel(
+            role=r.name,
+            asked=r.name,
+            kind=r.kind,
+            model_id=r.name,  # the gateway's model name is the role
+            backend=self.capability,
+            endpoint=ep,
+            params=dict(r.params),
+            logprobs=r.logprobs,
+            require_model_served=r.require_model_served,
+            dimensions=r.dimensions,
+            max_context_tokens=r.max_context_tokens,
+        )
+
+    def resolve_binding(self, role: str, binding: Binding) -> ResolvedModel:
+        raise ResolutionError(
+            f"mdl:{normalize_role(role)}",
+            "the gateway hides bindings; check one binding with ModelResolver (direct mode)",
+        )
+
+
 def _resolved(
     r: Role, asked: str, b: Binding, ep: Endpoint, trail: tuple[str, ...]
 ) -> ResolvedModel:
@@ -309,10 +396,19 @@ class ModelError(Exception):
 Transport = Callable[[str, str, "dict | None", float], "tuple[int, Any]"]
 
 
-def urllib_transport(method: str, url: str, body: dict | None, timeout: float):
+def urllib_transport(
+    method: str,
+    url: str,
+    body: dict | None,
+    timeout: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+):
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw, status = resp.read(), resp.status
@@ -330,6 +426,21 @@ def urllib_transport(method: str, url: str, body: dict | None, timeout: float):
         return status, (json.loads(raw.decode("utf-8")) if raw else None)
     except ValueError as exc:
         raise ModelError("malformed", f"non-JSON body (HTTP {status})", status) from exc
+
+
+def authorized(api_key: str | None, transport: Transport | None = None) -> Transport:
+    """``transport`` (default :func:`urllib_transport`) sending ``Authorization: Bearer
+    <api_key>``; ``transport`` itself when there is no key.  A transport given here must take a
+    ``headers=`` keyword.  The key never appears in an error or a result."""
+    tr = transport or urllib_transport
+    if not api_key:
+        return tr
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    def send(method: str, url: str, body: dict | None, timeout: float):
+        return tr(method, url, body, timeout, headers=auth)  # type: ignore[call-arg]
+
+    return send
 
 
 @dataclass(frozen=True)
@@ -352,11 +463,18 @@ class ModelClient:
     """Minimal OpenAI-compatible client bound to a resolved role."""
 
     def __init__(
-        self, model: ResolvedModel, *, timeout: float = 30.0, transport: Transport | None = None
+        self,
+        model: ResolvedModel,
+        *,
+        timeout: float = 30.0,
+        transport: Transport | None = None,
+        api_key: str | None = None,
     ):
+        """``api_key``: the caller's gateway key (:class:`GatewayResolver`), or the backend's
+        own key for a direct call to a keyed backend (:class:`ModelResolver`)."""
         self.model = model
         self.timeout = timeout
-        self.transport = transport or urllib_transport
+        self.transport = authorized(api_key, transport)
 
     def _call(self, path: str, body: dict) -> Any:
         status, doc = self.transport("POST", f"{self.model.base_url}{path}", body, self.timeout)
@@ -437,14 +555,20 @@ def served_context(entry: Mapping[str, Any]) -> int | None:
 
 
 def probe(
-    model: ResolvedModel, *, timeout: float = 5.0, transport: Transport | None = None
+    model: ResolvedModel,
+    *,
+    timeout: float = 5.0,
+    transport: Transport | None = None,
+    api_key: str | None = None,
 ) -> ProbeResult:
     """Compare the alias's bound model id (and declared context length) with what is served.
 
     A role that declares ``max_context_tokens`` is a mismatch when the backend reports a
     different loaded context length, or reports none at all (it cannot be verified, K-14).
+    This is the host-side K-14 probe: it asks the backend itself (direct mode), so a keyed
+    backend needs its own key as ``api_key`` (without it the answer is a 401, status ``error``).
     """
-    tr = transport or urllib_transport
+    tr = authorized(api_key, transport)
     want_ctx = model.max_context_tokens
     try:
         status, doc = tr("GET", f"{model.base_url}/v1/models", None, timeout)
@@ -475,7 +599,11 @@ def probe(
 
 
 def probe_all(
-    resolver: ModelResolver, *, timeout: float = 5.0, transport: Transport | None = None
+    resolver: ModelResolver,
+    *,
+    timeout: float = 5.0,
+    transport: Transport | None = None,
+    api_key: str | None = None,
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
     for name in sorted(resolver.table.roles):
@@ -484,5 +612,5 @@ def probe_all(
         except ResolutionError as exc:
             out.append(ProbeResult(name, "", "unreachable", detail=str(exc).splitlines()[0]))
             continue
-        out.append(probe(rm, timeout=timeout, transport=transport))
+        out.append(probe(rm, timeout=timeout, transport=transport, api_key=api_key))
     return out

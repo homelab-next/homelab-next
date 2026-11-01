@@ -446,11 +446,17 @@ def plan_from_dict(doc: Any, *, base: Path, source: str = "<serving>") -> Plan:
                 if table.roles[r].max_context_tokens is not None
             }
         )
-        if engine == "vllm" and len(ctx) != 1:
+        undeclared = [r for r in role_names if table.roles[r].max_context_tokens is None]
+        if engine == "vllm" and (len(ctx) != 1 or undeclared):
             problems.append(
                 f"{where}: the roles it serves ({', '.join('mdl:' + r for r in role_names)}) must "
-                f"declare one max_context_tokens for --max-model-len (found {ctx or 'none'}); "
-                "the K-14 probe checks the loaded context against it"
+                f"declare one max_context_tokens for --max-model-len (found {ctx or 'none'}"
+                + (
+                    f"; undeclared on {', '.join('mdl:' + r for r in undeclared)}"
+                    if undeclared
+                    else ""
+                )
+                + "); the K-14 probe checks the loaded context against it"
             )
             continue
         plan.backends[name] = Backend(

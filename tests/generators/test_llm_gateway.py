@@ -26,6 +26,10 @@ LAB = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"
 LAB_SPEC = LAB / "gateway.yml"
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 
+#: the proxy config file and the per-deployment parameter key it renders
+PROXY_CONFIG = "litellm/config.yaml"
+DEPLOY_PARAMS = "litellm_params"
+
 ROLES = {
     "version": 1,
     "roles": {
@@ -102,8 +106,8 @@ def test_render_both_gateways_from_one_spec(tmp_path):
         "litellm/config.yaml",
         "litellm/keys.json",
     ]
-    lt = yaml.safe_load(files["litellm/config.yaml"])
-    names = {d["model_name"]: d["litellm_params"] for d in lt["model_list"]}
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    names = {d["model_name"]: d[DEPLOY_PARAMS] for d in lt["model_list"]}
     assert sorted(names) == ["agent-local", "cloud-reasoner", "small-local"]  # role = alias
     assert names["agent-local"]["model"] == "openai/example-27b"
     want = "http://infer-a.svc.example.internal:8000/v1"  # no-raw-endpoint: allow rendered alias
@@ -200,6 +204,14 @@ def test_an_agent_role_may_not_fall_back_across_providers_even_cloud_allowed(tmp
     (tmp_path / "profile.researcher.json").write_text(json.dumps(prof))
     with pytest.raises(gw.GatewaySpecError, match="falls back across providers to mdl:small-local"):
         gw.render_file(make_spec(tmp_path, roles, profiles=["profile.*.json"]))
+
+
+def test_render_reports_an_unreadable_profile_as_unreadable_input(tmp_path, capsys):
+    """A profile that is not JSON used to escape the CLI as a traceback."""
+    (tmp_path / "profile.broken.json").write_text("{not json")
+    spec = make_spec(tmp_path, profiles=["profile.*.json"])
+    assert hnx(["gen", "gateway", "render", str(spec), str(tmp_path / "out")]) == 2
+    assert "gateway: cannot read spec" in capsys.readouterr().err
 
 
 def test_a_non_agent_cloud_role_may_fall_back_to_local(tmp_path):
@@ -439,19 +451,19 @@ def test_a_role_limit_that_would_render_looser_is_refused(tmp_path):
 def _two_binding_roles(limits):
     roles = copy.deepcopy(ROLES)
     roles["roles"]["small-local"]["bindings"].append(
-        {"backend": "svc:infer-a", "model_id": "example-4b", "priority": 1}
+        dict(roles["roles"]["small-local"]["bindings"][0], backend="svc:infer-a", priority=1)
     )
     roles["roles"]["small-local"]["limits"] = limits
     return roles
 
 
-def test_a_role_limit_is_split_over_its_litellm_deployments(tmp_path):
-    """LiteLLM limits each deployment and moves an over-limit request to the next one, so the
+def test_a_role_limit_is_split_over_its_proxy_deployments(tmp_path):
+    """The proxy limits each deployment and moves an over-limit request to the next one, so the
     role's declared figure is shared out: the sum over its deployments is never above it."""
     limits = {"window_s": 60, "max_requests": 7, "max_tokens": 1001, "max_cost": 3.0}
     files = gw.render_file(make_spec(tmp_path, _two_binding_roles(limits)))
-    lt = yaml.safe_load(files["litellm/config.yaml"])
-    deps = [d["litellm_params"] for d in lt["model_list"] if d["model_name"] == "small-local"]
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    deps = [d[DEPLOY_PARAMS] for d in lt["model_list"] if d["model_name"] == "small-local"]
     assert len(deps) == 2
     assert sum(d["rpm"] for d in deps) <= 7 and [d["rpm"] for d in deps] == [3, 3]
     assert sum(d["tpm"] for d in deps) <= 1001

@@ -73,7 +73,7 @@ from homelabnext import tlp
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.models.store import ProblemsError
 from homelabnext.modules import rules as module_rules
-from homelabnext.registry.model import secret_env_name
+from homelabnext.registry.model import RegistryError, secret_env_name
 from homelabnext.registry.model_tlp import send_ceiling, tier_disagreement
 from homelabnext.registry.models import RoleTable, RoleTableError
 
@@ -91,12 +91,12 @@ __all__ = [
     "render_file",
 ]
 
-SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*$")
-SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
-MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)$")
-SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*\Z")
+SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
+MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
+SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
-HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
 LOCALITIES = ("local", "cloud")
 DATA_TIERS = ("local-only", "cloud-allowed")
 #: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
@@ -334,7 +334,7 @@ def _deployment_share_problems(rname: str, role: Any) -> list[str]:
         if share is not None and share // n < 1:
             out.append(
                 f"mdl:{rname}: limits.{k} {count:g} per {role.limits['window_s']:g}s is {share} a "
-                f"minute, which cannot be split over its {n} bindings (LiteLLM limits each "
+                f"minute, which cannot be split over its {n} bindings (the proxy limits each "
                 "deployment) without loosening it: raise the count or bind fewer backends"
             )
     return out
@@ -939,7 +939,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
     notes: list[str] = []
     for rname, role in sorted(spec.table.roles.items()):
         lim = role.limits
-        n = len(role.bindings)  # LiteLLM limits each deployment: each gets 1/n of the role's
+        n = len(role.bindings)  # the proxy limits each deployment: each gets 1/n of the role's
         for i, b in enumerate(role.bindings):
             be = spec.backends[b.backend]
             params: dict[str, Any] = {}
@@ -974,7 +974,7 @@ def render_litellm(spec: Spec) -> tuple[str, str]:
             )
         if n > 1 and lim:
             notes.append(
-                f"mdl:{rname}: LiteLLM limits each deployment, so each of its {n} gets 1/{n} of "
+                f"mdl:{rname}: the proxy limits each deployment, so each of its {n} gets 1/{n} of "
                 "the role's rpm/tpm (rounded down) and max_budget: the sum is never looser"
             )
     fallbacks = [
@@ -1838,7 +1838,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     except GatewaySpecError as exc:
         print(f"gateway: {exc}", file=sys.stderr)
         return 1
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, yaml.YAMLError, RegistryError) as exc:
+        # an unreadable spec, profile or registry (a profile that is not JSON is a ValueError)
         print(f"gateway: cannot read spec: {exc}", file=sys.stderr)
         return 2
     out = Path(args.out_dir)
