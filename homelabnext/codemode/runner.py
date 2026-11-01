@@ -123,6 +123,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -279,7 +280,7 @@ def unwrap(result: Any, kind: str | None = "exec") -> tuple[str, Any]:
 _NOFOLLOW = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
-def _read_index(profile_dir: Path) -> Any:
+def read_index(profile_dir: Path) -> Any:
     """``<profile_dir>/search.json`` as JSON: the directory opened without following a symlink
     (``O_DIRECTORY``), the file opened relative to that descriptor (``dir_fd``) without
     following one either, so nothing is resolved by path twice; and only when it is a regular
@@ -302,16 +303,22 @@ def _read_index(profile_dir: Path) -> Any:
 
 
 def _indexes(directory: str | os.PathLike[str]) -> list[Any]:
-    """Every readable ``<profile>/search.json`` under ``directory`` (see :func:`_read_index`);
-    a profile directory or file that is a symlink, or a file refused or malformed, is skipped
-    (logged)."""
+    """Every readable ``<profile>/search.json`` under ``directory`` (see :func:`read_index`);
+    a profile directory or file that is a symlink, a file refused or malformed, or one whose
+    ``profile`` is not its directory's (``<slug>/`` holds ``profile:<slug>``'s index, as the
+    generator writes it and the search server reads it) is skipped (logged)."""
     out = []
     root = Path(directory)
     for path in sorted(root.glob("*/search.json")):
         try:
-            out.append(_read_index(path.parent))
+            doc = read_index(path.parent)
         except (OSError, ValueError) as exc:
             log.warning("codemode: a search index under %s is refused (%s); skipped", root, exc)
+            continue
+        if not isinstance(doc, Mapping) or doc.get("profile") != f"profile:{path.parent.name}":
+            log.warning("codemode: the index in %s/ is not that profile's; skipped", root)
+            continue
+        out.append(doc)
     return out
 
 
@@ -1146,8 +1153,8 @@ class Runner:
         if isinstance(schema, Mapping):
             try:
                 bad = validation.inline_errors(schema, value)
-            except Exception:  # a schema the validator cannot use checks nothing
-                bad = []
+            except Exception:  # a schema the validator cannot use: fail closed, never unchecked
+                bad = ["the result schema cannot be used"]
             if bad:
                 return _err("result-schema-mismatch"), "result-schema-mismatch"
         return {"ok": True, "value": value}, None
@@ -1245,6 +1252,14 @@ class _Relay:
 
     def __init__(self, runner: Runner, run: _Run, bind: tuple[str, int]) -> None:
         self.runner, self.run = runner, run
+        try:  # the relay and its peer-uid check (/proc/net/tcp) are IPv4 TCP only
+            ipaddress.IPv4Address(str(bind[0]))
+        except ValueError:
+            raise ExecutorError(
+                "broker_bind must be an IPv4 address: the Code Mode relay listens on IPv4 TCP "
+                "only (its relay_uids check reads /proc/net/tcp, so the runner and the sandbox "
+                "share a network namespace)"
+            ) from None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((bind[0], int(bind[1])))

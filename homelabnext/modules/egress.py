@@ -15,17 +15,20 @@ module role's processes open.  :func:`render` returns, per placed host (``<host>
 
   - DNS (udp and tcp 53) to the hosts of every selected ``dns`` instance (its rows' ports when its
     provider contributes rows);
-  - each slot the module requires or prefers, and a preference's fallback when the preferred slot
-    is not selected: the selected instance's provider rows for that slot at their placed host's
+  - each slot the module requires or prefers (for the roles its ``hosts`` names, every role when
+    it names none), and a preference's fallback when the preferred slot is not selected: the selected instance's provider rows for that slot at their placed host's
     addresses and ports, or every port of the provider's placed hosts when it contributes no row
     (address-granular: give the provider rows to narrow it).  A provider with no host role runs
     outside the lab and is reached only over ``internet``;
   - each ``svc:`` target: the row of that name (a selected feature or core module's) at its placed
     host's addresses and port, or a slot or instance name as above;
-  - ``internet``: global unicast only, except DNS over TLS and over QUIC (port 853, tcp and udp,
-    so the role resolves through the lab's resolvers), and never a lab host: every special-purpose range (private,
-    shared, loopback, link-local, documentation, benchmarking, multicast, reserved, NAT64 and the
-    other IPv4-embedding IPv6 prefixes), ``scope.trusted.nets``, every host's ``addresses`` and,
+  - ``internet``: global unicast only, except DNS (port 53) and DNS over TLS and over QUIC (port
+    853), tcp and udp, so the role resolves through the lab's resolvers (the ``dns`` allows above;
+    a ``dns`` provider that runs outside the lab is not reached), and never a lab host: every
+    special-purpose range (private, shared, loopback, link-local, documentation, benchmarking,
+    multicast, reserved, NAT64 and the other IPv4-embedding IPv6 prefixes),
+    ``scope.trusted.nets``, ``scope.trusted.wan`` (the lab's own public addresses, so not the
+    port forwards behind them either), every host's ``addresses`` and,
     when the network model is given (``hnx modules render --network FILE``), every zone's
     ``subnet6`` and every ``delegated_prefixes6`` prefix are excluded.  Over IPv6 the accept also
     requires ``2000::/3`` (global unicast), so nothing outside it passes whatever the deny-list
@@ -57,8 +60,8 @@ hosts, and run them unprivileged.
 
 Every input is checked before it reaches the ruleset: addresses are strings parsed by
 :mod:`ipaddress` (no scope id, no IPv4-embedding form) and printed back, ``scope.trusted.nets``
-goes through the strict scope reader, ports are integers, protocols are the registry's, and every
-name matches the slug pattern.
+and ``scope.trusted.wan`` go through the strict scope reader (a dynamic WAN source is refused),
+ports are integers, protocols are the registry's, and every name matches the slug pattern.
 """
 
 from __future__ import annotations
@@ -89,6 +92,11 @@ RELOAD_S = 30
 #: DNS over TLS (tcp) and DNS over QUIC (udp): never to the internet, so a role with internet
 #: egress still resolves through the lab's resolvers
 ENCRYPTED_DNS_PORT = 853
+#: plain DNS (udp and tcp): never to the internet either, for the same reason
+DNS_PORT = 53
+#: the scope parts that are the lab, so never the internet: its own networks and its own public
+#: (WAN) addresses, whose port forwards lead back into the lab
+LAB_SCOPE_PARTS = ("trusted.nets", "trusted.wan")
 #: the registry's protocols (platform/service ``protocol``) and the transport each one uses
 PROTOCOLS: dict[str, tuple[str, ...]] = {
     "http": ("tcp",),
@@ -350,12 +358,13 @@ class _Site:
 
     def not_internet(self) -> tuple[list[str], list[str]]:
         """The never-internet sets, merged per family so no element overlaps another."""
-        try:
-            trusted = _part_networks(self.site, "trusted.nets")
-        except ScopeMissing as exc:
-            if "missing" not in str(exc):
-                raise EgressError(str(exc)) from None
-            trusted = []
+        trusted: list[Network] = []
+        for part in LAB_SCOPE_PARTS:
+            try:
+                trusted += _part_networks(self.site, part)
+            except ScopeMissing as exc:
+                if str(exc) != f"scope.{part}: missing":
+                    raise EgressError(str(exc)) from None
         nets: list[Network] = [*NOT_INTERNET, *trusted, *self.prefixes6]
         for addrs in self.addresses.values():
             nets += [ipaddress.ip_network(a) for a in addrs]
@@ -374,9 +383,17 @@ def _role_policy(s: _Site, mod: str, role: str) -> tuple[list[Allow], bool]:
         return [], False  # an isolated role has no route to the lab and no egress: nothing
     allows = s.slot(where, "dns", dns=True) if "dns" in s.choices else []
     asks: list[tuple[str, str | None]] = []
+
+    def reaches(c: Doc) -> bool:  # requires/prefers capabilities[].hosts: absent, every role
+        hosts = c.get("hosts")
+        return hosts is None or (isinstance(hosts, list) and role in hosts)
+
     for r in m.get("requires", {}).get("capabilities", []):
-        asks.append((str(r.get("cap", "")).removeprefix("cap:"), r.get("instance")))
+        if reaches(r):
+            asks.append((str(r.get("cap", "")).removeprefix("cap:"), r.get("instance")))
     for p in m.get("prefers", {}).get("capabilities", []):
+        if not reaches(p):
+            continue
         slot = str(p.get("cap", "")).removeprefix("cap:")
         if slot in s.choices:
             asks.append((slot, p.get("instance")))
@@ -458,12 +475,16 @@ def _nft(host: str, roles: list[tuple[str, str, list[Allow], bool]], lab4, lab6)
         out.append(f"  chain {_chain(mod, role)} {{")
         out += [f"    {_rule(a)}" for a in allows]
         if internet:
-            # DNS over TLS and over QUIC to a resolver outside the lab: lookups go through the
-            # lab's own resolvers (DNS over HTTPS is HTTPS on 443 and cannot be told apart)
-            dot = f"    meta l4proto {{ tcp, udp }} th dport {ENCRYPTED_DNS_PORT}"
+            # DNS, and DNS over TLS and over QUIC, to a resolver outside the lab: lookups go
+            # through the lab's own resolvers, accepted above (DNS over HTTPS is HTTPS on 443 and
+            # cannot be told apart)
+            for port, tag in ((DNS_PORT, "dns"), (ENCRYPTED_DNS_PORT, "dot")):
+                dns = f"    meta l4proto {{ tcp, udp }} th dport {port}"
+                out += [
+                    f'{dns} limit rate 10/minute log prefix "hnx-egress {mod}/{role} {tag} " drop',
+                    f"{dns} drop",
+                ]
             out += [
-                f'{dot} limit rate 10/minute log prefix "hnx-egress {mod}/{role} dot " drop',
-                f"{dot} drop",
                 "    ip daddr != @not_internet4 accept",
                 "    ip6 daddr 2000::/3 ip6 daddr != @not_internet6 accept",
             ]
@@ -607,8 +628,8 @@ def _readme(per_host, with_network: bool = False) -> str:
         "Not covered: inbound connections; loopback (modules on one host reach each other's local",
         "services); containers with their own network namespace; a process with root or",
         "CAP_NET_ADMIN; flows established before a change; DNS over HTTPS from a role with",
-        "internet egress (HTTPS on 443; DNS over TLS and QUIC, port 853, are dropped); DNS as a",
-        "channel through the resolver.",
+        "internet egress (HTTPS on 443; DNS, port 53, and DNS over TLS and QUIC, port 853, to",
+        "the internet are dropped); DNS as a channel through the resolver.",
         "Place modules that must not reach each other on different hosts, and run them",
         "unprivileged.",
         "",
@@ -633,13 +654,14 @@ def _readme(per_host, with_network: bool = False) -> str:
 def _lab_note(with_network: bool) -> list[str]:
     if with_network:
         return [
-            "Never the internet: the special-purpose ranges, `scope.trusted.nets`, every host's",
+            "Never the internet: the special-purpose ranges, `scope.trusted.nets` and",
+            "`scope.trusted.wan`, every host's",
             "`addresses`, and the network model's zone `subnet6` and `delegated_prefixes6`",
             "prefixes.",
         ]
     return [
         "Rendered with no network model (`hnx modules render --network FILE`): a lab IPv6 address",
-        "in none of the special-purpose ranges, `scope.trusted.nets` or a host's `addresses` (a",
+        "in none of the special-purpose ranges, `scope.trusted.*` or a host's `addresses` (a",
         "guest's SLAAC address, say) is treated as the internet.",
     ]
 

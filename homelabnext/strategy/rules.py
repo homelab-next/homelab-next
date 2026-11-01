@@ -182,12 +182,18 @@ def validate(
     status_ids: set[str] | None = None,
     require_reviews: bool = True,
 ) -> Report:
-    """Every problem of the tree.  ``policy`` (a review policy, ``False`` for none) and the
-    binding catalogs default to the files in or beside the root, like the registers' build."""
+    """Every problem of the tree.  ``policy`` (a review policy, ``False`` for the explicit
+    opt-out) and the binding catalogs default to the files in or beside the root, like the
+    registers' build; with ``require_reviews``, finding no policy is an error
+    (:data:`homelabnext.reviews.NO_POLICY`), never "no review required"."""
     rep = Report()
     doctrine = doctrine or load_doctrine(tree.root)
     if policy is None:
         policy = _policy(tree.root)
+        if policy is None and require_reviews:  # the write path's own check skips the tiers
+            from homelabnext.reviews import NO_POLICY
+
+            rep.errors.append(f"{tree.root}: {NO_POLICY}")
     if invariant_ids is None and status_ids is None:
         invariant_ids, status_ids = _catalogs(tree.root)
     if tree.strategy is None:

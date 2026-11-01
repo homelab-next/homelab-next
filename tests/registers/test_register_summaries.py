@@ -28,6 +28,7 @@ def src(tmp_path):
     for kind in KINDS:
         shutil.copytree(REPO / "examples/registers" / kind, d / kind)
     shutil.copy(REPO / "examples/registers/invariants.yml", d / "invariants.yml")
+    shutil.copy(REPO / "examples/review-policy.yml", d / "review-policy.yml")  # none: refused
     return d
 
 

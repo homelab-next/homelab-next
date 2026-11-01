@@ -29,7 +29,7 @@ hnx reviews digest examples/registers/lessons/<uid>.md   # the digest a review m
 hnx reviews digest lab/modules/<id>   # a fetched module's tree digest (docs/modules.md, "Supply chain")
 hnx registers events add lessons/<uid>.md event.yml   # validate, then append one event (also a strategy record)
 hnx registers events migrate examples/registers/lessons docs/systems   # inline state -> events
-hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--policy F | --no-policy] [--dry-run]
+hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--policy F | --no-review-policy | --no-policy] [--dry-run]
 hnx ids check-lost | check-dupes | check-uids                          # make ids-check
 hnx records uid | numbers examples/registers | assign-uids TREE...     # identity (ADR-0019)
 ```
@@ -256,8 +256,9 @@ Two conflicting intents (both retiring one lesson with different `retired_by`): 
 applies, the second is denied. A crash between the event and the moves (or between the two moves,
 leaving the note in `decided/approved/`) is finished, not re-decided, on the next run. It is a command, not a service: run it by hand, from CI or from a timer.
 It fails closed when it finds no `review-policy.yml` in or beside the register root (a misplaced
-private policy must not waive every tier): pass `--policy FILE`, or `--no-policy` to decide
-without tiers on purpose. `hnx registers build` warns in that case. A note whose name is already
+private policy must not waive every tier): it stops before deciding anything, exit 1. Pass
+`--policy FILE`, or `--no-review-policy` (also spelled `--no-policy`) to decide without tiers on
+purpose. `hnx registers build` and `review` refuse in that case too. A note whose name is already
 in a `decided/` lane is refused before anything applies (its event would cite the other note).
 
 ## Lessons are backlog: kinds and lifecycle
@@ -329,7 +330,16 @@ an open or partial pitfall needs nothing (recording a problem is never blocked);
 pitfall, an active practice and an active runbook need an agent check and an agent audit
 review; retiring a pitfall, and incorporating or superseding a practice, also need a human
 approve. A record whose status lacks what the policy requires fails the build, naming the
-missing tier. The policy is validated fatally: every artefact kind lists every state.
+missing tier. The policy is validated fatally: every artefact kind lists every state. **A missing
+policy fails closed**, as it does for the modules loader and the MCP catalog: when neither
+`--policy FILE` nor `review-policy.yml` in or beside the source is found, `build` and `review`
+(with lessons or runbooks to judge)
+refuse, `decide` stops before deciding anything (it never applies a transition with zero
+reviews), `hnx strategy check`, `decide` and `rfis --sweep` refuse, and so does `hnx docs systems
+check`. `--no-review-policy`, also spelled `--no-policy` (each command takes both; `--policy
+none` for the system pages; `policy=False` in the library), is the explicit opt-out for a local
+experiment. The rule and its message live once, in `homelabnext.reviews`
+(`require_policy`, `NO_POLICY`).
 
 These checks prove the files are consistent, not who typed them; authenticated sign-off is the
 broker's approval flow.

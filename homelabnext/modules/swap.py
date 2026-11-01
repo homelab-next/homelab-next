@@ -3,9 +3,10 @@
 docs/modules.md, "Swap record 1.2"), as plain functions over a swap document, the manifests and
 the site selection the swap starts from.
 
-Like :mod:`homelabnext.modules.rules`, this is the specification in executable form: ADR-0027 is
-proposed, there is no loader, and the swap kit (:mod:`homelabnext.swap`) still drives the 1.1
-record.  The contract tests apply it to the fictional examples.
+Like :mod:`homelabnext.modules.rules`, these are plain functions: ``hnx modules swap-check`` runs
+them on a 1.2 record against the loader's discovered manifests, while the swap kit
+(:mod:`homelabnext.swap`) still drives the 1.1 record (ADR-0027 is proposed).  The contract tests
+apply them to the fictional examples.
 
 :func:`dependants_report` is the re-check the cutover waits on.  Every selected module that
 requires or prefers a moving slot instance (core modules included) is checked against what the

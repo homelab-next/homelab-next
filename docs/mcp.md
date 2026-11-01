@@ -23,7 +23,8 @@ hnx mcp call section --args '{"id_or_path": "docs/graph.md", "heading": "...", "
 A client configuration starts it as a subprocess. Do not write that configuration by hand: the
 server is the `hnx-catalog` record of the [MCP catalog](mcp-catalog.md) ([[mcp-catalog]]), and
 `hnx mcp catalog render --profile build/profile.json --client claude-code --policy policy.yml`
-writes the entry, with `--scope-from-profile` pointing at the profile and `--policy`/`--lock` at
+writes the entry, with `--scope-from-profile` pointing at the profile (its absolute path: render
+refuses a relative `profile_file`, which would resolve in the client's working directory) and `--policy`/`--lock` at
 the deployed ceiling policy and lock (render refuses a profile `hnx agent verify --policy` would
 refuse, and the server verifies it again at start against the same policy and lock).
 `hnx mcp call` runs the same handler in-process, without the SDK, for scripts and debugging.
@@ -213,7 +214,10 @@ to see later edits.
 
 ## The broker's tool server (`hnx-broker`)
 
-`hnx mcp serve` only reads. The other MCP server in the package is the broker's,
+`hnx mcp serve` only reads. The package has two more first-party MCP servers: Code Mode's
+search server, `hnx codemode mcp --index DIR --socket PATH` (`hnx-codemode`: `codemode_search`
+and `codemode_describe` over the generator's index, read-only; [Code Mode](codemode.md),
+[[codemode]]), and the broker's,
 `hnx broker mcp --socket PATH` ([broker](broker.md), [[broker]]): stdio as well, built on the same
 SDK plumbing (`homelabnext/mcp/server.py`: `new_server`, `hints`, `register`, `tool_error`), but
 its tools *act*, through a running broker that authenticates the MCP process by its uid:

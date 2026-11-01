@@ -97,6 +97,7 @@ def src(tmp_path):
     for kind in KINDS:
         shutil.copytree(REPO / "examples/registers" / kind, d / kind)
     shutil.copy(REPO / "examples/registers/invariants.yml", d / "invariants.yml")
+    shutil.copy(REPO / "examples/review-policy.yml", d / "review-policy.yml")  # none: refused
     return d
 
 
@@ -210,20 +211,21 @@ def test_both_forms_at_once_is_ambiguous(src, tmp_path):
 
 
 def test_related_uids_must_resolve(src, tmp_path):
+    # the edits stale the record's reviews; this is about links, so opt out of the review tier
     ll1, rb1 = src / "lessons" / f("LL-001"), U["RB-001"]
     _edit(ll1, "status: controlled", f"status: controlled\nrelated: [{rb1}]")
     records.stale_links(src / "lessons", write=True)
     assert f"- Related: [[{rb1}]]" in ll1.read_text()  # a uid, never a number or a title
-    build_all(src, tmp_path / "ok")
+    build_all(src, tmp_path / "ok", policy_path=False)
     _edit(ll1, f"related: [{rb1}]", f"related: [{OTHER}]")
     with pytest.raises(RegisterError, match=f"related {OTHER} is not a lesson or runbook"):
-        build_all(src, tmp_path / "bad")
+        build_all(src, tmp_path / "bad", policy_path=False)
     _edit(ll1, f"related: [{OTHER}]", "related: [RB-001]")
     with pytest.raises(RegisterError, match="related 'RB-001' is a legacy numbered code"):
-        build_all(src, tmp_path / "bad")
+        build_all(src, tmp_path / "bad", policy_path=False)
     _edit(ll1, "related: [RB-001]", f"related: [{U['LL-001']}]")
     with pytest.raises(RegisterError, match="names the entry itself"):
-        build_all(src, tmp_path / "bad")
+        build_all(src, tmp_path / "bad", policy_path=False)
 
 
 def test_a_top_level_retired_block_is_refused_in_a_records_register():

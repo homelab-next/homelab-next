@@ -8,7 +8,13 @@ resolver, nothing here touches a network or a model.  Contracts: ``schemas/agent
 ``docs/agent.md``.
 """
 
-from .access import ACCESS_SECTION, access_block, render_access_block, start_session
+from .access import (
+    ACCESS_SECTION,
+    access_block,
+    render_access_block,
+    session_problems,
+    start_session,
+)
 from .compiler import (
     BUDGET_KEYS,
     TIER_RANK,
@@ -84,6 +90,7 @@ __all__ = [
     "reader_problems",
     "render_access_block",
     "screen_text",
+    "session_problems",
     "sha256_text",
     "start_session",
     "terms_text",

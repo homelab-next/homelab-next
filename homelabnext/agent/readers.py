@@ -523,15 +523,22 @@ def broker_problems(
     ``grants`` has ``mcp``, ``capabilities`` and optionally ``tier``.  ``direct`` is the ceiling
     policy's ``direct_mcp`` for this profile (:meth:`CeilingPolicy.direct_mcp`); ``None`` (no
     policy at hand) allows no ``acts_via: direct`` server.  An MCP server the catalog does not
-    hold is left to :func:`grant_problems`, which refuses it for every profile.
+    hold is refused here too (as an unknown capability or tier is): unknown is never assumed not
+    to act, so this rule fails closed on its own, whichever rules a lint runs.
     """
     classes = classes or default_classes()
     who = _shown(who)
     only = classes.broker_only
     problems: list[str] = []
-    for _, name in _entries(grants.get("mcp")):
+    for at, name in _entries(grants.get("mcp")):
         got = classes.classify("mcp", name)
-        acting = sorted(set(got or ()) & only)
+        if got is None:
+            problems.append(
+                f"{who} is granted an unknown MCP server (mcp entry {at}), which is not in the "
+                "catalog (unknown is never assumed not to act)"
+            )
+            continue
+        acting = sorted(set(got) & only)
         record = (classes.catalog or {}).get(name) or {}
         # a broker claim is judged by the broker front's own test below, not by the floor
         if record.get("below_floor") and record.get("acts_via") != "broker":
@@ -637,8 +644,13 @@ def profile_problems(
     broker problems (:func:`broker_problems`, every profile) for any agent-profile shape: a spec,
     a compiled ``agent/profile`` (grants under ``grants``) or the lean ``platform/agent_profile``
     (``mcp``/``capabilities`` at the top).  ``policy`` (a :class:`CeilingPolicy`) supplies the
-    profile's ``direct_mcp``; without one no ``acts_via: direct`` server is allowed.  ``rules``
-    picks :data:`READERS` (catalog and reader rules) and/or :data:`BROKER`.
+    profile's ``direct_mcp``; without one no ``acts_via: direct`` server is allowed.  With a
+    policy the catalog and reader rules also apply its pins: a profile the policy marks as a
+    reader is judged as one whatever it declares (and declaring ``reads_untrusted: false`` is a
+    problem), and, for a profile it has an entry for, its attestations (``data_tier``,
+    ``model_role``, ``tlp_ceiling``, local-only and internet servers) must hold.  This is the one place those rules live, so ``hnx agent
+    lint --policy``, ``verify_profile`` and the client render agree.  ``rules`` picks
+    :data:`READERS` (catalog and reader rules) and/or :data:`BROKER`.
     """
     if "reads_untrusted" in doc and not isinstance(doc["reads_untrusted"], bool):
         return ["reads_untrusted must be true or false"]
@@ -649,8 +661,19 @@ def profile_problems(
     if READERS in rules:
         problems += tlp_ceiling_problems(doc, who)
         problems += grant_problems(grants, classes, who, tier, doc.get("tlp_ceiling"))
-        if is_reader(doc):
+        pinned = policy is not None and policy.requires_reader(who)
+        if pinned and doc.get("reads_untrusted") is False:
+            problems.append(
+                f"{policy.source} marks {who} as reading untrusted content "
+                "but the profile says reads_untrusted: false"
+            )
+        if pinned or is_reader(doc):
             problems += reader_problems(grants, classes, who)
+        if policy is not None and policy.covers(who):  # no entry: verify refuses it anyway
+            problems += policy.attestation_problems(
+                who, doc.get("data_tier"), doc.get("model_role"), grants.get("mcp") or (),
+                classes, doc.get("tlp_ceiling"),
+            )  # fmt: skip
     if BROKER in rules:
         direct = policy.direct_mcp(who) if policy is not None else None
         problems += broker_problems(grants, classes, who, direct)

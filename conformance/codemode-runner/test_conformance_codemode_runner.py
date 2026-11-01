@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Conformance test for the codemode-runner capability (the handler of codemode.execute, an
-extended suite).
+"""Conformance test for the codemode-runner capability (the handler of codemode.execute, a core
+capability: the eighteenth in ``homelabnext.conform.registry.CAPABILITIES``).
 
 Runs the suite one check at a time against ``$HNX_CONFORM_TARGET`` (default: the reference
 runner over the in-memory broker).  Point it at another target with a target file, see
