@@ -176,6 +176,7 @@ def test_the_minimal_entry_parses():
         ({"gates": ["make strategy"]}, "must be `python -m <module> ...`"),
         ({"invariants": ["P8"]}, "is not a criterion id"),
         ({"owner": "x"}, "owner: unknown key"),
+        ({"conform": ["projects"]}, "no gate runs `hnx conform report --capability projects`"),
         ({"code": ["tests/strategy/conftest.py"]}, "is not a Python module outside the tests"),
         ({"code": ["docs/strategy.md"]}, "is not a Python module outside the tests"),
         ({"code": ["homelabnext/no_such_module.py"]}, "is not a path in the repository"),
@@ -247,6 +248,22 @@ def test_the_blocking_runs_deselect_exactly_the_marker():
     assert ex.BLOCKING_SELECT == "not live and not experimental"
     assert ex.SELECT == "experimental and not live"
     assert f'-m "{ex.BLOCKING_SELECT}"' in MAKEFILE.read_text(encoding="utf-8")
+
+
+def test_the_conformance_harness_leaves_out_exactly_the_listed_capabilities():
+    from homelabnext.conform.registry import CAPABILITIES, EXPERIMENTAL
+
+    listed = ex.experimental_capabilities(ex.load())
+    assert sorted(EXPERIMENTAL) == sorted(listed)
+    assert set(listed) <= set(CAPABILITIES)
+    # the frozen components own them: Code Mode its two suites. The projects suite stays blocking
+    # although the home-built store is frozen, since it also checks the OpenProject adapter
+    owner = {cap: c.name for c in ex.load() for cap in c.conform}
+    assert owner == {
+        "codemode-executor": "code-mode",
+        "codemode-runner": "code-mode",
+    }
+    assert "projects" not in listed
 
 
 def test_make_invariants_skips_exactly_the_listed_criteria():

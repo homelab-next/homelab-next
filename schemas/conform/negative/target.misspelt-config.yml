@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+capabilities:
+  secrets:
+    adapter: my_adapters.secrets:make_store
+    confg: {mount: secret}

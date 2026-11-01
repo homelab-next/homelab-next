@@ -15,12 +15,13 @@ source tree, so a deployment can add its own without touching the library.
 from __future__ import annotations
 
 from .core import Capability, CheckResult, Mutant, Skip, Suite, run_checks
-from .registry import CAPABILITIES, EXTENDED, ConformError
+from .registry import CAPABILITIES, EXPERIMENTAL, EXTENDED, ConformError
 from .report import build_report
 from .runner import CapabilityRun, run, run_capability
 
 __all__ = [
     "CAPABILITIES",
+    "EXPERIMENTAL",
     "EXTENDED",
     "Capability",
     "CapabilityRun",

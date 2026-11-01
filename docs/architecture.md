@@ -64,8 +64,10 @@ The "example tenants" are illustrations only: the reference environment in
 
 Eighteen core capabilities carry a conformance suite (fourteen at first drop, ADR-0005, then
 `context`, `projects`, `codemode-executor` and `codemode-runner`); the list is authoritative in [interfaces.md](interfaces.md).
-Extended suites (`backup`, `dns`, `edge` and others, [conformance.md](conformance.md)) ship beside
-them and run in CI too, outside the eighteen that `make conform-check` counts. The platform names
+`make conform-check` and invariant X-10 count sixteen of them: `codemode-executor` and
+`codemode-runner` belong to a frozen component ([tools/experimental.yml](../tools/experimental.yml)), so
+their suites run in `make experimental` instead. Extended suites (`backup`, `dns`, `edge` and others,
+[conformance.md](conformance.md)) ship beside them and run in CI too, outside that count. The platform names
 more capabilities than either list (`hypervisor`, `metrics`, the module slots): every one is
 classed in `homelabnext/agent/tool_classes.yml`, and a guest may declare any of them.
 

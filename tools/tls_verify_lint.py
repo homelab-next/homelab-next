@@ -54,6 +54,12 @@ from pathlib import Path
 
 import yaml
 
+REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
+
+from homelabnext.allowlist import entries  # noqa: E402
+
 DEFAULT_ALLOWLIST = "tools/tls_verify.allow.yml"
 INLINE_ALLOW = re.compile(r"tls-verify:\s*allow\s+\S")
 SKIP_DIRS = {
@@ -221,20 +227,7 @@ def lint_config(text: str, rel: str = "<string>") -> list[Finding]:
 
 
 def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
-    if path is None or not path.is_file():
-        return []
-    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    entries = doc.get("allow", [])
-    if not isinstance(entries, list):
-        raise AllowlistError(f"{path}: 'allow' must be a list")
-    out = []
-    for i, e in enumerate(entries):
-        if not isinstance(e, dict) or not str(e.get("path", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} needs a 'path' glob")
-        if not str(e.get("reason", "")).strip():
-            raise AllowlistError(f"{path}: entry {i} ({e['path']}) has no 'reason'")
-        out.append((str(e["path"]), str(e["reason"]).strip()))
-    return out
+    return [(str(e["path"]), str(e["reason"]).strip()) for e in entries(path, AllowlistError)]
 
 
 def _in_scope(rel: str) -> bool:

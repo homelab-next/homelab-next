@@ -6,17 +6,24 @@ optionally negated (single-field selections only). Anything else raises
 ``UnsupportedConstruct`` - author a native rule with a stated reason.
 The logical id is preserved as an XML comment; the engine number comes only
 from ``Target.det_map`` (the generated map), never from the rule file.
+
+Case-insensitivity is a scoped group, ``(?i:...)``, never a bare ``(?i)``: an alternation of
+bare-flag patterns is refused by Python's ``re`` and only works in PCRE2 by its looser rule.
+:meth:`WazuhStubBackend.evaluate` runs a compiled rule against an event, as the engine reads
+it (every ``field`` must be present and match, a ``negate`` field must be present and not
+match), so the fixture runner proves the compiled form fires where the rule does.
 """
 
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 from .. import attack
 from ..adapters import Artifact, MissingEngineId, Target, UnsupportedConstruct, register
-from ..sigma import Matcher, Rule
+from ..sigma import Matcher, Rule, _lookup
 
 _LEVEL = {"informational": 3, "low": 5, "medium": 8, "high": 12, "critical": 15}
 
@@ -24,13 +31,13 @@ _LEVEL = {"informational": 3, "low": 5, "medium": 8, "high": 12, "critical": 15}
 def _rx(m: Matcher, value) -> str:
     v = re.escape(str(value))
     if m.op == "equals":
-        return f"(?i)^{v.replace(chr(92) + '*', '.*').replace(chr(92) + '?', '.')}$"
+        return f"(?i:^{v.replace(chr(92) + '*', '.*').replace(chr(92) + '?', '.')}$)"
     if m.op == "contains":
-        return f"(?i){v}"
+        return f"(?i:{v})"
     if m.op == "startswith":
-        return f"(?i)^{v}"
+        return f"(?i:^{v})"
     if m.op == "endswith":
-        return f"(?i){v}$"
+        return f"(?i:{v}$)"
     return str(value)  # re
 
 
@@ -126,6 +133,27 @@ class WazuhStubBackend:
             lines.append("  <mitre>" + "".join(f"<id>{t}</id>" for t in techs) + "</mitre>")
         lines.append("</rule>")
         return Artifact(rule.det_id, self.name, "application/xml", "\n".join(lines) + "\n")
+
+    @staticmethod
+    def evaluate(artifact: Artifact, event: dict) -> bool:
+        """Whether the compiled rule matches ``event`` (field names as the artefact names them).
+
+        Each ``field`` holds only when the event has the field and the pattern matches one of
+        its values; a ``negate="yes"`` field holds only when the field is present and the
+        pattern matches none of them, since the engine skips a rule whose field is missing.
+        Patterns run under Python's ``re``, which agrees with PCRE2 on what this backend emits
+        (escaped literals, ``.*``, anchors, scoped ``(?i:...)``); a rule's own ``|re`` value is
+        the one place they could differ.
+        """
+        rule = ET.fromstring(artifact.content)
+        for f in rule.findall("field"):
+            values = [v for v in _lookup(event, f.get("name", "")) if v is not None]
+            if not values:
+                return False
+            hit = any(re.search(f.text or "", str(v), re.DOTALL) for v in values)
+            if hit == (f.get("negate") == "yes"):
+                return False
+        return True
 
     @staticmethod
     def bundle(artifacts: list[Artifact]) -> str:

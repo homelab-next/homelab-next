@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/conform/target/1.0",
+  "title": "Conformance target file",
+  "description": "Which implementation of each capability a conformance suite runs against (homelabnext/conform/target.py, docs/conformance.md). Read by load_target from conformance/targets/, $HNX_CONFORM_TARGETS or a path; a key this schema does not name is refused, never ignored. Endpoints come from the registry resolver inside the adapter, never from this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capabilities"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1, "description": "the target's name in reports (default: the file stem)"},
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/capability"},
+      "additionalProperties": {"$ref": "#/$defs/binding"}
+    }
+  },
+  "$defs": {
+    "capability": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$(?!\\n)", "maxLength": 64},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "builtin": {"type": "string", "pattern": "^(fake|broken|broken:[A-Za-z0-9][A-Za-z0-9_.-]*)$(?!\\n)", "description": "a built-in subject: the fake, or a deliberately broken fake"},
+        "fake": {"const": true, "description": "the same as builtin: fake"},
+        "adapter": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$(?!\\n)", "description": "package.module:factory, called as factory(**config)"},
+        "config": {"type": "object", "description": "keyword arguments of the factory; never a raw URL"},
+        "features": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "waive": {"type": "object", "description": "SHOULD check id -> the reason it is waived", "additionalProperties": {"type": "string", "minLength": 1}}
+      },
+      "oneOf": [
+        {"required": ["adapter"], "not": {"anyOf": [{"required": ["builtin"]}, {"required": ["fake"]}]}},
+        {"required": ["builtin"], "not": {"anyOf": [{"required": ["adapter"]}, {"required": ["fake"]}, {"required": ["config"]}]}},
+        {"required": ["fake"], "not": {"anyOf": [{"required": ["adapter"]}, {"required": ["builtin"]}, {"required": ["config"]}]}}
+      ]
+    }
+  }
+}

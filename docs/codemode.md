@@ -11,7 +11,8 @@ code is kept, and agents use normal broker actions meanwhile. `hnx codemode gen 
 golden codemode --check` and the Code Mode tests (`tests/codemode/`,
 `tests/golden/test_golden_codemode.py`) are out of `make check` and CI's required jobs; they run
 in `make experimental` and CI's non-blocking `experimental` job. The conformance suites
-`codemode-executor` and `codemode-runner` still run against their fakes in `make conform-check`.
+`codemode-executor` and `codemode-runner` are left out of `make conform-check` and invariant X-10
+too (the component's `conform` list); `make experimental` runs them against their fakes.
 
 The order in which [ADR-0031](adr/0031-code-mode-through-the-broker.md) (proposed) is built.
 CM-1, CM-2, CM-3, CM-4, CM-5a, CM-5b and CM-6 have landed (described below), and of phase 2
