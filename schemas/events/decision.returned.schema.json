@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/events/decision.returned/1.2",
+  "$id": "https://schemas.example.internal/homelabnext/events/decision.returned/1.3",
   "title": "Event homelabnext.decision.returned",
   "description": "The decision service answered. A failure or low confidence returns escalate, never a silent accept.",
   "allOf": [
     {
-      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.1"
+      "$ref": "https://schemas.example.internal/homelabnext/events/envelope/1.2"
     },
     {
       "properties": {

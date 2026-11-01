@@ -8,6 +8,10 @@ Validation uses the shipped schemas: ``schemas/events/envelope.schema.json`` for
 The ``id`` is the idempotency key.  :func:`derive_event_id` makes it a pure function of the
 event's *identity* (type, source, subject and a caller-supplied dedupe key), never of the clock or
 a random number, so the same logical occurrence always carries the same id.
+
+An event carries its TLP label (ADR-0033) in the optional ``tlp`` extension attribute (envelope
+1.2), and the ids it was derived from in ``derivedfrom``.  :func:`event_label` reads it the way
+every reader must: absent or unreadable is ``red``.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from homelabnext import paths
+from homelabnext import paths, tlp
 from homelabnext.schema_registry import schema_registry
 
 _VALIDATORS: dict[str, Any] = {}
@@ -135,6 +139,12 @@ def validate_event(event: Any) -> None:
         raise EventError("invalid event", problems)
 
 
+def event_label(event: Mapping[str, Any]) -> tlp.Label:
+    """The event's TLP label: its ``tlp`` extension attribute read as data (:func:`tlp.read`), so
+    an event without one, or with one that is not a label, is ``red`` (ADR-0033 decision 2)."""
+    return tlp.read(event.get("tlp") if isinstance(event, Mapping) else None)
+
+
 def derive_event_id(
     event_type: str, source: str, dedupe_key: str, *, subject: str | None = None
 ) -> str:
@@ -163,11 +173,16 @@ def build_event(
     severity: str | None = None,
     correlationid: str | None = None,
     dataschema: str | None = None,
+    label: str | tlp.Label | None = None,
+    derived_from: list[str] | tuple[str, ...] | None = None,
     validate: bool = True,
 ) -> dict[str, Any]:
     """Build an envelope.  Give ``id`` or ``dedupe_key`` (a derived id); one of them is required.
 
-    ``time`` defaults to now (UTC); pass it explicitly for a reproducible event.
+    ``time`` defaults to now (UTC); pass it explicitly for a reproducible event.  ``label`` is the
+    event's TLP label, a declaration (:func:`tlp.parse`: a misspelling raises), written in its
+    canonical spelling as ``tlp``; without one the event carries none and reads ``red``.
+    ``derived_from`` lists the ids of the inputs the label was computed from (``derivedfrom``).
     """
     if (id is None) == (dedupe_key is None):
         raise ValueError("give exactly one of id= or dedupe_key=")
@@ -188,6 +203,10 @@ def build_event(
     ):
         if v is not None:
             ev[k] = v
+    if label is not None:
+        ev["tlp"] = (label if isinstance(label, tlp.Label) else tlp.parse(label)).value
+    if derived_from is not None:
+        ev["derivedfrom"] = list(derived_from)
     ev["data"] = dict(data)
     if validate:
         validate_event(ev)

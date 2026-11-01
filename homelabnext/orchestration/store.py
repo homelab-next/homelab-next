@@ -133,7 +133,8 @@ STORE_ERRORS = (sqlite3.Error, OSError)
 ENVELOPE_ATTRIBUTES = frozenset(
     {
         "specversion", "id", "source", "type", "time", "subject", "severity", "datacontenttype",
-        "dataschema", "correlationid", "assetid", "assetowner", "assetcriticality", "data",
+        "dataschema", "correlationid", "assetid", "assetowner", "assetcriticality", "tlp",
+        "derivedfrom", "data",
     }
 )  # fmt: skip
 #: (table, the time column retention is measured on)
