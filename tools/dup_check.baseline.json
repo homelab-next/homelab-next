@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 34,
-  "duplicated_lines": 425,
-  "total_lines": 134395,
-  "duplicated_percent": 0.32
+  "clones": 32,
+  "duplicated_lines": 401,
+  "total_lines": 159748,
+  "duplicated_percent": 0.25
  },
  "increases": [],
  "clones": {
