@@ -583,6 +583,34 @@ criteria:
     Fix the engine adapter or the query the parity test names, or re-record the cassette if the
     change is intended (and review the diff); an engine-dependent answer means a lake swap
     silently changes results.
+- id: S-08
+  statement: Lake rows carry a TLP label and lake readers read at their ceiling.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/lake/test_ceiling.py
+    tests/lake/test_row_from_event.py tests/logpipeline/test_tlp_labels.py
+    tests/modules/test_lake_access.py tests/modules/test_module_rules_tlp.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (rows take their declared label or
+    red, and a reader below red sees no row above its ceiling); exit 100 when a test dependency
+    is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Fix the writer that stores a row without its label, or the read path that returns a row above
+    the reader's ceiling (ADR-0033 decisions 5 and 6); an unlabelled row or an unceilinged reader
+    is how lab data reaches a reader that may share it.
+- id: S-09
+  statement: Rows stored before the label are backfilled before data is copied.
+  evidence: server
+  observable: >-
+    for each lake table, the recorded label backfill (`hnx modules tlp-backfill` plans its
+    statements) has run, and no row lacks a `tlp` value, before a copy of production data is
+    taken
+  remediation: >-
+    Run the table's recorded backfill before the copy (ADR-0033 decision 5); copied rows without a
+    label read red at best and, in a store that does not default them, reach every reader.
 - id: D-04
   statement: Coverage counts only tested rules.
   evidence: auto
@@ -707,6 +735,24 @@ criteria:
   remediation: >-
     Give the timer's service the shared last-run writer (role `last_run`), or fix the mapping the
     failing test names; a timer that never reports is one whose failures nobody sees.
+- id: O-12
+  statement: Data leaves the lab only at or below the receiver's TLP ceiling.
+  evidence: auto
+  observable: >-
+    python3 -c 'import pytest, yaml, jsonschema' 2>/dev/null || exit 100;
+    python3 -m pytest -q -p no:cacheprovider tests/tlp/ tests/notify/test_notify_ceiling.py
+    tests/status/test_status_tlp.py tests/models/test_model_tlp.py
+    tests/schemas/test_module_1_0.py
+  expected: >-
+    exit 0 with every selected test passed and none skipped (each egress point refuses an item
+    above its receiver's ceiling, and an egress slot not on the egress list is refused); exit 100
+    when a test dependency is not installed, which is could-not-measure
+  expect_regex: '\b\d+ passed(, \d+ deselected)?(, \d+ warnings?)? in '
+  slow: true
+  remediation: >-
+    Route the egress point through homelabnext.tlp_egress with the receiver's declared ceiling
+    (ADR-0033 decision 13), or add the slot to the egress list with its check; an egress point
+    that does not compare labels sends red data wherever it goes.
 - id: O-11
   statement: Every orchestration job's usage is recorded and shown, names and numbers only.
   evidence: auto

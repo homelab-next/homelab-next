@@ -17,8 +17,9 @@ recorded in the [ADR log](adr/README.md); the Python interfaces are in
    and keep is the contract at its boundary: a schema, a protocol, an event type, a CLI shape.
    Products are current tenants of those contracts.
 2. **Ports and adapters at seams, and only at seams.** Product-specific code lives in exactly one
-   place per product: an adapter (a library module, a role, a generator). Everything else talks
-   to a logical name.
+   place per product: its provider module (ADR-0027), or, for a product with none yet, an adapter
+   (a library module, a role, a generator) that the product-name lint counts in a baseline that
+   only shrinks. Everything else talks to a logical name.
 3. **Replaceability is measured, not asserted.** A capability counts as modular when a stranger
    can run its conformance test against the current implementation and it passes, the
    implementation is reachable only through a logical name, and its state has an exit in an open
@@ -88,8 +89,9 @@ generators, DNS records and YAML.
 
 ### How the pieces are meant to be adopted
 
-Registry first (names), then aliases (DNS), then the shared libraries, then the conformance
-harness, then roles. Each step is useful on its own and none requires the next.
+Registry first (names, not addresses), then aliases (capability DNS names, ADR-0002, and model
+roles, ADR-0007), then the shared libraries, then the conformance harness, then the role
+interface. Each step is useful on its own and none requires the next.
 
 ## The swap procedure
 
@@ -161,7 +163,7 @@ entrypoints need; OpenBao keeps docker's defaults). A real deployment changes ea
 | `postgres` | known password, `fsync=off` | generated password, `fsync` on, TLS, backups in the restore drill |
 | `lake-catalog` (Lakekeeper) | no authentication, known encryption key | OIDC through the IdP, encryption key from the secrets capability |
 | `lake-query` (Trino) | no authentication, plain HTTP | TLS plus OIDC or password authentication and access control (S-02) |
-| `events` (NATS) | no authentication, plain TCP | accounts with per-client credentials (NKeys or JWT) and TLS |
+| `events` (NATS) | accounts with per-user passwords and subject permissions (`config/nats/nats.conf`), plain TCP | per-client credentials (NKeys or JWT) and TLS |
 | `notify` (ntfy) | open publish and subscribe | `auth-default-access: deny-all` with per-topic users or tokens, behind the forward-auth proxy |
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |

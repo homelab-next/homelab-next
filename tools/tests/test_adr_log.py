@@ -63,6 +63,13 @@ def test_negative_missing_heading_is_detected():
     assert re.findall(r"^## (.+)$", broken, re.M) != HEADINGS[1:]
 
 
+def test_index_names_every_reserved_number():
+    """A reader of the index sees why a number is missing, not only the test that holds it."""
+    index = (ADR_DIR / "README.md").read_text()
+    for n in RESERVED:
+        assert f"**{n:04d}**" in index, f"docs/adr/README.md does not name reserved ADR-{n:04d}"
+
+
 def test_index_lists_every_adr():
     index = (ADR_DIR / "README.md").read_text()
     for p in ADRS:

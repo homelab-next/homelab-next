@@ -237,12 +237,12 @@ def _events(ns) -> int:
 
 
 def _decide(ns) -> int:
-    from homelabnext.reviews import ReviewError, load_policy
+    from homelabnext.reviews import ReviewError, require_policy
 
     from .transitions import TransitionDecider
 
     try:
-        policy = False if ns.no_review_policy else load_policy(ns.policy) if ns.policy else None
+        policy = False if ns.no_review_policy else require_policy(ns.policy) if ns.policy else None
     except ReviewError as ex:
         raise RegisterError("review policy", ex.problems) from None
     try:

@@ -13,6 +13,11 @@ The one-line column is each ADR's front-matter `summary:`, written by
 `hnx docs index generate docs/adr/README.md` and checked in CI; edit the summary, not the row.
 An ADR's status is the **Status** line in its own file.
 
+A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
+component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
+`RESERVED` in `tools/tests/test_adr_log.py` lists the reserved numbers, and the test refuses an
+index that does not name each one.
+
 | ADR | Slug | One line (the ADR's `summary:`, generated) |
 |---|---|---|
 | [0001](0001-schemas-in-git-additive-evolution.md) | schemas-in-git-additive-evolution | <!-- hnx:gen:summary:0001-schemas-in-git-additive-evolution.md -->Contracts are JSON Schema files in git, vendor schemas are pinned, and schemas evolve additively only.<!-- /hnx:gen --> |

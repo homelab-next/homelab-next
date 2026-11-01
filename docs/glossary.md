@@ -6,7 +6,17 @@ summary_of: outline:sha256:050f5dfb3c4eafcd
 
 **Capability.** A job the platform needs done, named independently of the product that does it
 (`lake-query`, `notify`, `detections`). Each capability has a contract, a fake and a conformance
-test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth, `projects` (project management) the sixteenth, `codemode-executor` (the Code Mode sandbox, ADR-0031) the seventeenth and `codemode-runner` (its runner, the handler of `codemode.execute`) the eighteenth; the list is in `docs/interfaces.md` section 3.
+test. Fourteen existed at the first drop, `context` (retrieval for agents) is the fifteenth, `projects` (project management) the sixteenth, `codemode-executor` (the Code Mode sandbox, ADR-0031) the seventeenth and `codemode-runner` (its runner, the handler of `codemode.execute`) the eighteenth; the list is in `docs/interfaces.md` section 3. Seven **extended** suites (`EXTENDED` in
+`homelabnext/conform/registry.py`: backup, dns, edge and others) also carry a conformance directory
+without being core capabilities. Not to be confused with a **`cap:` id** (a grant class in
+`homelabnext/agent/tool_classes.yml`, what an agent profile may use), a **`cap_` group** (an
+inventory group that places a role on hosts, ADR-0004) or a **slot** (below).
+
+**Module, slot, provider.** A module (ADR-0027) is one feature's declaration, a `module.yml`
+manifest: what it provides and requires, its data, grants and egress. A slot is a named place a
+module fills or reaches (`examples/modules/slots.yml`, the slot registry). A provider is the module
+that fills a slot with a product; it is the only place a product's name may appear (the
+product-name lint).
 
 **Seam.** The boundary between a capability and the consumers of it. A product can be replaced
 without touching consumers if, and only if, the seam has a testable contract.
@@ -45,8 +55,22 @@ replaced (`det:auth-failure-burst`). Prose and specs cite logical ids, never eng
 **Model role.** A named job for a language model (`main-reasoner`, `fast-classifier`, `embedder`,
 `redactor`, `summariser`). Only the gateway maps a role to a backend and model id (ADR-0007).
 
-**Tier.** A capacity class used when deciding where work runs: `fast` (small, cheap, low latency),
-`main` (larger reasoning model), `escalate` (human or cloud, only by policy).
+**Tier (decision tier).** A capacity class used when deciding where work runs: `fast` (small,
+cheap, low latency), `main` (larger reasoning model), `escalate` (human or cloud, only by policy).
+"Tier" alone means this one. Other tiers are always qualified: the **broker action tier** (`read` <
+`write` < `execute` < `privileged`, ADR-0017), the **review tier** a change needs (agent check,
+agent audit, human approve), the status hub's **summary and detail tiers**, and Veritas's
+**public and private tiers** (above).
+
+**TLP label, TLP ceiling.** A label (`clear` < `green` < `amber` < `amber+strict` < `red`) is what
+a piece of data carries from its source (ADR-0033); unlabelled data is `red`. A reader's ceiling is
+the highest label it may receive. Neither is the **ceiling policy**, which attests where an
+agent's or MCP server's data may go (`data_tier`: `local-only` or `cloud-allowed`); ADR-0033
+decision 12 derives `data_tier` from a TLP ceiling.
+
+**Lane.** A directory a writer may put files in under fixed rules: the records lanes (`inbox/`, the
+only agent-writable one, and `decided/...`, ADR-0010) and the broker's write lanes (`lanes:` in a
+broker manifest, written only by its built-in lane handler, ADR-0017).
 
 **Detection.** A Sigma rule with fixtures: `must_fire`, `must_not_fire` and `evasion` sets.
 
@@ -57,7 +81,7 @@ replayed against a gold set before it can change behaviour.
 check returns pass, fail, or "could not measure" (exit 100 or above).
 
 **Register.** Human-edited records with a strict schema from which pages and JSON are generated:
-lessons and runbooks are one Markdown file per record, invariants and boards one YAML list each
+lessons and runbooks are one Markdown file per record, invariants one YAML list
 ([registers](registers.md)).
 
 **Pitfall / practice.** The two kinds of lesson: a problem with a root cause and a control, which

@@ -178,7 +178,9 @@ implemented in whole or as a draft, as each item says, and what remains is marke
    Not done: it has not run at a real lab's deploy yet; service rows are not gathered by name (each
    is judged by whether its placed host listens on its port), and the core's own units are read
    from its roles and generators, so a running unit that is no module's or the core's is a
-   problem;
+   problem. Also not done: `provider_for(slot, instance)`, the consumer API of decision 9, has no
+   definition yet (`homelabnext/broker/cli.py` reads a conformance target file instead,
+   docs/modules.md "Site selection");
 10. the product-name lint: implemented (`tools/product_name_lint.py`, invariant X-11, in `make
     gates` and CI), with the core's existing product names as a baseline that only shrinks;
 11. the slot-level round trip (decision 8): not done. Only the migration protocol has `export` and
