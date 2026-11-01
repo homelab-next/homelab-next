@@ -580,7 +580,7 @@ def test_decision_specs_are_agent_facing_files(tmp_path):
     ):
         f = tmp_path / rel
         f.parent.mkdir(parents=True)
-        f.write_text("when: rule 100200 fires\n")
+        f.write_text("when: rule 900300 fires\n")
     found = {p.relative_to(tmp_path).as_posix() for p in lint.find_agent_files(tmp_path)}
     assert found == {
         "workflows/decisions/page.yml",

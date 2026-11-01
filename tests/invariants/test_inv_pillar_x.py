@@ -294,10 +294,10 @@ def test_x11_runs_the_product_name_lint(tmp_path):
 
 # X-06 and `detections lint-ids` are one rule with one implementation: same files, same verdict
 PARITY_FILES = {
-    "agents/triage/charters/charter.md": "Escalate when rule 100201 fires.\n",
-    "profiles/p/x.md": "sid: 100202\n",
-    "workflows/decisions/page.yml": "when: rule 100200\n",
-    "homelabnext/decide/examples/decision_spec.yml": "on: rule_id 100203\n",
+    "agents/triage/charters/charter.md": "Escalate when rule 900301 fires.\n",
+    "profiles/p/x.md": "sid: 900302\n",
+    "workflows/decisions/page.yml": "when: rule 900300\n",
+    "homelabnext/decide/examples/decision_spec.yml": "on: rule_id 900303\n",
     "schedules/s.yml": "watch: det:no-such-detection\n",
 }
 
