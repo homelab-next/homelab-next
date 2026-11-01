@@ -16,6 +16,7 @@ REG = sc.build_registry(ROOT)
 CURRENT = json.loads((ROOT / "schemas/platform/service.json").read_text())
 FROZEN_26 = json.loads((ROOT / "schemas/_frozen/2.6/platform/service.json").read_text())
 FROZEN_27 = json.loads((ROOT / "schemas/_frozen/2.7/platform/service.json").read_text())
+FROZEN_28 = json.loads((ROOT / "schemas/_frozen/2.8/platform/service.json").read_text())
 DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 
 
@@ -24,9 +25,9 @@ def _problems(doc):
 
 
 def test_version_is_2_7_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.7")
-    assert CURRENT == FROZEN_27
-    assert sc.is_additive(FROZEN_26, CURRENT) == []
+    assert FROZEN_27["$id"].endswith("/platform/service/2.7")
+    assert sc.is_additive(FROZEN_26, FROZEN_27) == []
+    assert sc.is_additive(FROZEN_27, FROZEN_28) == []
 
 
 def test_roles_validate_in_2_7_only_and_reach_the_model():

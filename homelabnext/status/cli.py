@@ -233,9 +233,10 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--notify-ceiling",
         type=ceiling_arg,
         metavar="LABEL",
-        help="the channel's TLP ceiling (ADR-0033), required with a notify topic: a message "
-        "labelled above it (one claiming no label is red) is replaced by a content-free withheld "
-        "notice; red for a channel only the operators read",
+        help="the channel's TLP ceiling (ADR-0033), required with a notify topic unless the "
+        "registry's notify row declares tlp_ceiling, and refused when it disagrees with the row: "
+        "a message labelled above it (one claiming no label is red) is replaced by a "
+        "content-free withheld notice; red for a channel only the operators read",
     )
     p.add_argument(
         "--notify-pairs-dir",
@@ -364,9 +365,14 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         print(f"hnx status: {exc}", file=sys.stderr)
         return 2
     if args.cmd == "collect":
-        if args.notify_topic and args.notify_ceiling is None:
-            print("hnx status collect: --notify-topic needs --notify-ceiling", file=sys.stderr)
-            return 2
+        if args.notify_topic:
+            from homelabnext.notify.ceiling import channel_ceiling
+
+            try:  # ADR-0033 decision 6: the channel's ceiling, from its row or the flag
+                args.notify_ceiling = channel_ceiling(args.notify_ceiling, reg)
+            except ValueError as exc:
+                print(f"hnx status collect: --notify-topic needs a ceiling: {exc}", file=sys.stderr)
+                return 2
         return _collect(args, reg, specs, clock, store)
     if args.cmd == "ingest":
         return _ingest(args, agents_cfg, store, clock)

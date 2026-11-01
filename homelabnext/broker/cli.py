@@ -153,9 +153,10 @@ def _parser() -> argparse.ArgumentParser:
         type=ceiling_arg,
         metavar="LABEL",
         help="the channel's TLP ceiling (ADR-0033), required with a notify topic (or "
-        "$HNX_BROKER_NOTIFY_CEILING): a message labelled above it (one claiming no label is "
-        "red) is replaced by a content-free withheld notice; red only for a channel only the "
-        "operators read",
+        "$HNX_BROKER_NOTIFY_CEILING) unless --registry's notify row declares tlp_ceiling, and "
+        "refused when it disagrees with the row: a message labelled above it (one claiming no "
+        "label is red) is replaced by a content-free withheld notice; red only for a channel "
+        "only the operators read",
     )
     srv.add_argument(
         "--notify-token",
@@ -381,7 +382,7 @@ def notifier_from_args(args) -> Any:
         return None
     from homelabnext._http import check_plaintext
     from homelabnext.notify import CeilingSender, Notifier, NtfySender, RateLimit
-    from homelabnext.notify.ceiling import ceiling_from_flag
+    from homelabnext.notify.ceiling import channel_ceiling
     from homelabnext.registry.model import secret_env_name
     from homelabnext.state import StateStore
 
@@ -398,19 +399,23 @@ def notifier_from_args(args) -> Any:
             value = os.environ.get(var, "").strip()
             return f"Bearer {value}" if value else None
 
-    resolver = None
+    resolver = registry = None
     if getattr(args, "registry", None):
         from homelabnext.registry import load
         from homelabnext.registry.resolver import Resolver
 
-        resolver = Resolver(load(args.registry))
+        registry = load(args.registry)
+        resolver = Resolver(registry)
     declared = getattr(args, "notify_ceiling", None)
-    if declared is None:  # ADR-0033 decision 6: a reader with no declared ceiling is refused
+    row = registry.by_capability("notify") if registry is not None else None
+    if declared is None and getattr(row, "tlp_ceiling", None) is None:
+        # ADR-0033 decision 6: a reader with no declared ceiling is refused
         raise ValueError(
-            "a notify channel needs a declared TLP ceiling: --notify-ceiling LABEL "
-            "(or HNX_BROKER_NOTIFY_CEILING); red only for a channel only the operators read"
+            "a notify channel needs a declared TLP ceiling: the registry's notify row "
+            "tlp_ceiling, or --notify-ceiling LABEL (or HNX_BROKER_NOTIFY_CEILING); red only for "
+            "a channel only the operators read"
         )
-    ceiling = ceiling_from_flag(declared)
+    ceiling = channel_ceiling(declared, registry)
     sender = NtfySender(default_topic=topic, auth=auth, resolver=resolver)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic):
         raise ValueError("the ntfy topic is 1 to 64 letters, digits, '_' or '-'")

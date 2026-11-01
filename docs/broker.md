@@ -526,8 +526,10 @@ stops it instead of failing every page; a send that fails later is logged at WAR
 every five minutes) and audited `notify-failed`. State lives in `<state>/notify.json` (a settled
 request's page is dropped from it); each agent may send 20 messages an hour on its own budget,
 and all agents together 60 an hour. Without a topic there are no notifications, and a lane-quota
-refusal is logged at WARNING once per agent and lane instead. `--notify-ceiling LABEL` (or
-`$HNX_BROKER_NOTIFY_CEILING`) is the channel's TLP ceiling, and a topic without one stops `serve`
+refusal is logged at WARNING once per agent and lane instead. The channel's TLP ceiling is the
+`tlp_ceiling` of `--registry`'s `notify` row (service schema 2.8: declared once per receiver), else
+`--notify-ceiling LABEL` (or `$HNX_BROKER_NOTIFY_CEILING`); a flag that disagrees with the row
+stops `serve`, and so does a topic with neither
 ([ADR-0033](adr/0033-data-carries-tlp-every-reader-has-a-ceiling.md) decision 6: a reader with no
 declared ceiling is refused; declare `red` only for a channel only the operators read). A page
 labelled above the ceiling is replaced by a content-free

@@ -150,8 +150,10 @@ items go `stale` after the source's `stale_after_s`, like any other reading.
 in its own thread under its own `timeout_s`: a pass takes at most the longest timeout, and a hung
 or raising source is an error for itself only. A source whose previous poll is still running is
 not started again (no thread pile-up). `--notify-topic T` pages transitions through the
-registry's `notify` service, at the channel's TLP ceiling (`--notify-ceiling LABEL`, required with
-`--notify-topic` and `red` for a channel only the operators read; a
+registry's `notify` service, at the channel's TLP ceiling (the `tlp_ceiling` of the registry's
+`notify` row, service schema 2.8, else `--notify-ceiling LABEL`, one of them required with
+`--notify-topic`, and a flag that disagrees with the row refused; `red` for a channel only the
+operators read; a
 message labelled above it, or claiming no label while the ceiling is below `red`, is replaced by a
 content-free "withheld" notice: [modules](modules.md#egress-points-adr-0033-decision-13)); with
 `--notify-pairs-dir DIR` (or `HNX_NOTIFY_PAIRS_DIR`) the notifier
