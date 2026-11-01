@@ -322,7 +322,15 @@ an open or partial pitfall needs nothing (recording a problem is never blocked);
 pitfall, an active practice and an active runbook need an agent check and an agent audit
 review; retiring a pitfall, and incorporating or superseding a practice, also need a human
 approve. A record whose status lacks what the policy requires fails the build, naming the
-missing tier. The policy is validated fatally: every artefact kind lists every state.
+missing tier. The policy is validated fatally: every artefact kind lists every state. **A missing
+policy fails closed**, as it does for the modules loader and the MCP catalog: when neither
+`--policy FILE` nor `review-policy.yml` in or beside the source is found, `build` and `review`
+(with lessons or runbooks to judge)
+refuse, `decide` leaves every intent waiting (it never applies a transition with zero reviews),
+the strategy tree's check reports it, and so does `hnx docs systems check`. `--no-review-policy`
+(`--policy none` for the system pages; `policy=False` in the library) is the explicit opt-out for
+a local experiment. The rule and its message live once, in `homelabnext.reviews`
+(`require_policy`, `NO_POLICY`).
 
 These checks prove the files are consistent, not who typed them; authenticated sign-off is the
 broker's approval flow.

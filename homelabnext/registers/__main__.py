@@ -39,6 +39,23 @@ from pathlib import Path
 from . import RegisterError, build_all, join_register, split_register, stale_links
 
 
+def _policy_args(p: argparse.ArgumentParser, where: str) -> None:
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "--policy", help=f"review policy (default review-policy.yml in or beside {where})"
+    )
+    g.add_argument(
+        "--no-review-policy",
+        action="store_true",
+        help="run without a review policy (a local experiment); without this, none found is refused",
+    )
+
+
+def _policy_path(ns):
+    """``--policy FILE``, ``False`` for ``--no-review-policy``, else None (look it up)."""
+    return False if ns.no_review_policy else ns.policy
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hnx registers", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -48,7 +65,7 @@ def main(argv=None) -> int:
     b.add_argument(
         "--results", help="invariants results JSON (default SRC/invariants.results.json)"
     )
-    b.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    _policy_args(b, "SRC")
     s = sub.add_parser("split", help="convert lessons.yml/runbooks.yml into a record directory")
     s.add_argument("src")
     s.add_argument("dir")
@@ -64,7 +81,7 @@ def main(argv=None) -> int:
     rv.add_argument("--strict", action="store_true", help="exit 1 when anything is due")
     rv.add_argument("--json", action="store_true", help="machine-readable output")
     rv.add_argument("--results", help="invariants results JSON (default SRC/...results.json)")
-    rv.add_argument("--policy", help="review policy (default review-policy.yml in or beside SRC)")
+    _policy_args(rv, "SRC")
     sm = sub.add_parser("summaries", help="lint the front-matter summaries of records and pages")
     sm.add_argument("paths", nargs="*")
     sm.add_argument("--json", action="store_true", help="machine-readable output")
@@ -90,7 +107,7 @@ def main(argv=None) -> int:
     dc.add_argument("register_root")
     dc.add_argument("records_root")
     dc.add_argument("--as", dest="decided_by", required=True, help="issuer:subject of the decider")
-    dc.add_argument("--policy", help="review policy (default review-policy.yml in or beside root)")
+    _policy_args(dc, "the register root")
     dc.add_argument("--dry-run", action="store_true", help="report, write and move nothing")
     dc.add_argument("--json", action="store_true", help="machine-readable output")
     ns = ap.parse_args(argv)
@@ -102,13 +119,13 @@ def main(argv=None) -> int:
         if ns.cmd == "summaries":
             return _summaries(ns)
         if ns.cmd == "build":
-            for p in build_all(ns.src, ns.out, ns.results, ns.policy):
+            for p in build_all(ns.src, ns.out, ns.results, _policy_path(ns)):
                 print(p)
         elif ns.cmd == "review":
             from .due import review
             from .render import load_sources
 
-            rep = review(load_sources(ns.src, ns.policy, ns.results), ns.today)
+            rep = review(load_sources(ns.src, _policy_path(ns), ns.results), ns.today)
             if ns.json:
                 print(json.dumps(rep.as_json(), indent=2, sort_keys=True))
             else:
@@ -219,7 +236,7 @@ def _decide(ns) -> int:
     from .transitions import TransitionDecider
 
     try:
-        policy = load_policy(ns.policy) if ns.policy else None
+        policy = False if ns.no_review_policy else load_policy(ns.policy) if ns.policy else None
     except ReviewError as ex:
         raise RegisterError("review policy", ex.problems) from None
     try:

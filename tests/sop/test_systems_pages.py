@@ -138,6 +138,17 @@ def test_cli(reg, tmp_path, capsys):
     assert main(["systems", "check", str(tmp_path / "nope.yml")]) == 2
     assert main(["systems", "template"]) == 0
     assert main(["bogus"]) == 2
+
+
+def test_cli_refuses_a_missing_review_policy(reg, tmp_path, monkeypatch, capsys):
+    """Run where there is no examples/review-policy.yml: the check fails closed (exit 2) rather
+    than reading every page as needing no review; ``--policy none`` is the explicit opt-out."""
+    reg_path = str(REGISTRY.resolve())
+    assert main(["systems", "generate", reg_path, str(tmp_path / "pages")]) == 0
+    monkeypatch.chdir(tmp_path)
+    assert main(["systems", "check", reg_path, "pages"]) == 2
+    assert "no review policy" in capsys.readouterr().err
+    assert main(["systems", "check", reg_path, "pages", "--policy", "none"]) == 0
     capsys.readouterr()
 
 

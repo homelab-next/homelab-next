@@ -798,3 +798,41 @@ def test_a_reused_intent_name_is_refused_before_anything_is_applied(lab, inbox):
     assert n1 not in _lanes(inbox)["inbox"] and n1 in _lanes(inbox)["decided/denied"]
     rb = lab / "runbooks" / f("RB-001")
     assert [e for e in ev.read_events(ev.events_dir(rb), []) if e.kind == "transition"] == []
+
+
+# --- a missing review policy fails closed ---------------------------------------------------------
+
+
+def test_with_no_review_policy_the_decider_applies_nothing(lab, inbox):
+    """No ``review-policy.yml`` in or beside the register root: every intent waits, naming the
+    absence, instead of applying with zero reviews; ``policy=False`` is the explicit opt-out."""
+    from homelabnext.reviews import NO_POLICY
+
+    name = _intent(
+        inbox,
+        "ll-003-partial",
+        record=U["LL-003"],
+        **{"from": "open", "to": "partial"},
+        reason="a detector exists; the backup gap is still open for new guests",
+    )
+    _give_ll_003_a_control(lab)
+    (lab.parent / "review-policy.yml").unlink()
+    [out] = _decider(lab, inbox).decide_all()
+    assert (out.result, out.reason) == ("waiting", NO_POLICY), out
+    assert load_register(lab / "lessons")["lessons"][2]["status"] == "open"
+    assert _lanes(inbox)["inbox"] == [name]
+    [out] = _decider(lab, inbox, policy=False).decide_all()
+    assert out.result == "applied", out
+
+
+def test_with_no_review_policy_build_and_review_refuse(lab, tmp_path, capsys):
+    from homelabnext.reviews import NO_POLICY
+
+    (lab.parent / "review-policy.yml").unlink()
+    with pytest.raises(RegisterError, match=r"no review policy"):
+        build_all(lab, tmp_path / "out")
+    assert not (tmp_path / "out").exists()  # nothing written
+    assert registers_main(["build", str(lab), str(tmp_path / "cli")]) != 0
+    assert NO_POLICY in capsys.readouterr().err
+    assert registers_main(["review", str(lab), "--today", "2026-10-20"]) != 0
+    assert registers_main(["build", str(lab), str(tmp_path / "ok"), "--no-review-policy"]) == 0

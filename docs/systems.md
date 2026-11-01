@@ -55,7 +55,8 @@ verdict, digest, note}`; an inline `reviews:` list still counts and `hnx registe
 docs/systems` moves it out. Same rules: the broker's identity normalization, no
 self-review, an audit review by a different agent than every check, and no agent identity
 in a human slot. The policy is `examples/review-policy.yml` (`system-page`), read by `check`
-when it exists (`--policy FILE`, or `--policy none`).
+(`--policy FILE`); finding none is refused, never read as "no review required", and `--policy
+none` is the explicit opt-out.
 
 * `status: reviewed` needs, by default, an agent check, an agent audit review and a human
   approve, all current, and no `TODO(human)` left. `check` fails on a page that claims it without

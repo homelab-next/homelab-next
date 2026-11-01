@@ -70,6 +70,7 @@ from homelabnext.broker import qualified_identity
 
 __all__ = [
     "ARTEFACT_STATES",
+    "NO_POLICY",
     "DeprecatedReviewRole",
     "Evaluation",
     "Policy",
@@ -81,6 +82,7 @@ __all__ = [
     "load_policy",
     "main",
     "normalize_role",
+    "require_policy",
     "validate_policy",
 ]
 
@@ -263,6 +265,27 @@ def policy_from(data) -> Policy:
         for art, states in data["requirements"].items()
     }
     return Policy(reviewers, reqs)  # type: ignore[arg-type]
+
+
+#: why a missing review policy is refused.  Absence fails closed everywhere a policy gates
+#: something (the modules loader, the MCP catalog, the registers' build, review and decider, the
+#: strategy tree, the system pages): without one nothing is reviewed enough.  Each caller takes an
+#: explicit opt-out for a local experiment (``--no-review-policy``, or ``policy=False``)
+NO_POLICY = (
+    "no review policy (review-policy.yml) found, so nothing is reviewed enough; give one, or opt "
+    "out explicitly (--no-review-policy) for a local experiment"
+)
+
+
+def require_policy(path) -> Policy:
+    """The policy at ``path``, failing closed when there is none: ``None`` (nothing found) or a
+    path that is not a file raises :class:`ReviewError` with :data:`NO_POLICY`, never reads as
+    "no review required".  A caller that may run without a policy says so itself, before
+    calling this."""
+    if path is None or not pathlib.Path(path).is_file():
+        where = "review policy" if path is None else str(path)
+        raise ReviewError(where, [NO_POLICY])
+    return load_policy(path)
 
 
 def load_policy(path) -> Policy:

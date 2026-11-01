@@ -209,7 +209,7 @@ def _defs() -> dict[str, Any]:
         ),
         "own_code_ref": pat(
             OWN_CODE,
-            "Code in the module's own package, hnx_modules.<own id with - as _>.<module>:<attr>; the loader puts only that package on the import path.",
+            "Code in the module's own package, hnx_modules.<own id with - as _>.<module>:<attr>; the module's python/ tree may hold only that package (homelabnext.modules.rules.code_tree_problems).",
             200,
         ),
         "secret": pat(
@@ -267,6 +267,7 @@ def _defs() -> dict[str, Any]:
                     "Which instance of the slot, when a site selects several providers of it.",
                     64,
                 ),
+                "hosts": ref("reaching_hosts"),
                 "purpose": text(200),
             },
             ["cap"],
@@ -278,6 +279,11 @@ def _defs() -> dict[str, Any]:
                     "else": {"required": ["version"]},
                 }
             ],
+        ),
+        "reaching_hosts": arr(
+            pat(SLUG, None, 64),
+            "The module's host roles that reach the slot (and a preference's fallback) over the network, in the generated egress policy; absent, every role of the module does. Each is one of the module's own host roles (loader). Name them for an authority or privileged slot (secrets, broker, idp, ...), which a requirement reaches without an overlay grant: the review tier (human for a privileged slot) is its gate, and a role left out cannot reach it.",
+            1,
         ),
         "requirement_model_role": obj(
             {"role": ref("mdl_ref"), "purpose": text(200)},
@@ -338,6 +344,7 @@ def _defs() -> dict[str, Any]:
                 "formats": ref("formats"),
                 "provisional": {"const": True},
                 "instance": pat(SLUG, None, 64),
+                "hosts": ref("reaching_hosts"),
                 "purpose": text(200),
                 "fallback": ref("fallback"),
             },
@@ -554,7 +561,7 @@ def _defs() -> dict[str, Any]:
             desc="What the module offers: slots (provider only) and interfaces (any kind).",
         ),
         "egress": {
-            "description": "Where the module's hosts may connect beyond the slots they require: none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). Enforcement by a generated network policy is specified, not implemented.",
+            "description": "Where the module's hosts may connect beyond the slots they require or prefer (those are reached by requirement, per requires.capabilities[].hosts, without a grant): none (the default when absent), or per host role (one of the module's own) a list of registry services and internet. Every internet target and every authority or privileged service named here (svc:secrets, svc:broker, ...) needs an overlay grant naming it (grants.egress.<module>.<role>), and so does every kind: external host role (external). The generated network policy enforces it (homelabnext.modules.egress, hnx modules render).",
             "default": "none",
             "oneOf": [
                 {"const": "none"},
@@ -1084,9 +1091,9 @@ def module_schema() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module/1.0",
-        "x-draft": "ADR-0027 (proposed): no loader or pilot yet; not frozen, may change before acceptance",
+        "x-draft": "ADR-0027 (proposed): the loader exists (hnx modules check), no pilot yet; not frozen, may change before acceptance",
         "title": "Module manifest",
-        "description": "One provider, feature or core module (ADR-0027, proposed; docs/modules.md): <modules>/<id>/module.yml. A provider fills slots with one product (the only place a product name may appear); a feature is an optional, removable mission naming slots, model roles, interfaces and host roles; a core module (id core-*) is always installed and is the home of the staff agents and other core consumers, so a swap's dependants re-check sees them. Every name a module claims is bound to its id; authority is never contributed. The loader that enforces the rules JSON Schema cannot express does not exist yet; docs/modules.md lists them.",
+        "description": "One provider, feature or core module (ADR-0027, proposed; docs/modules.md): <modules>/<id>/module.yml. A provider fills slots with one product (the only place a product name may appear); a feature is an optional, removable mission naming slots, model roles, interfaces and host roles; a core module (id core-*) is always installed and is the home of the staff agents and other core consumers, so a swap's dependants re-check sees them. Every name a module claims is bound to its id; authority is never contributed. The loader (homelabnext.modules.loader, hnx modules check) enforces the rules JSON Schema cannot express; docs/modules.md lists them.",
         "type": "object",
         "additionalProperties": False,
         "required": [
@@ -1545,7 +1552,7 @@ def module_selection_schema() -> dict[str, Any]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": BASE + "platform/module_selection/1.0",
-        "x-draft": "ADR-0027 (proposed): the shape only, no loader yet; not frozen",
+        "x-draft": "ADR-0027 (proposed): the loader checks it (hnx modules check); not frozen",
         "title": "Module selection",
         "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",

@@ -364,6 +364,8 @@ class StrategyDecider(TransitionDecider):
         )
         if report.errors:
             return self._deny(name, ident, "; ".join(report.errors), dry_run, digest)
+        if waiting := self.no_policy(name, ident, digest):
+            return waiting
         missing = self._missing_tiers(prospective, kind, str(fm["to"]), digest)
         if missing:
             why = f"needs {', '.join(missing)} review(s) of the prospective content {digest}"

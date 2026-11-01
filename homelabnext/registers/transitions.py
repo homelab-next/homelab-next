@@ -29,6 +29,9 @@ the record as it is *now* and the review policy:
 * the policy's tiers for the target status are not met by current reviews of the *prospective*
   content (the record as it will be once the transition applies; its digest is printed, so a
   reviewer can stamp it): **waiting**, the note stays in the inbox;
+* no review policy was given or found (``review-policy.yml`` in or beside the register root):
+  **waiting**, naming the absence -- it fails closed, never applies with zero reviews
+  (``policy=False``, ``--no-review-policy``, is the explicit opt-out for a local experiment);
 * the note does not validate (a missing field, a boolean key): **invalid**, it stays in the
   inbox for its agent to fix or withdraw, and the other intents are decided as usual;
 * otherwise **applied**: a ``transition`` event (the only writer of those) in the record's
@@ -160,7 +163,8 @@ class TransitionDecider:
         self.clock = clock
         self.reader = RecordsReader(self.records_root)
         self.movers = Decider(self.records_root, decided_by=decided_by, clock=clock)
-        self._policy = policy
+        self._policy = policy  # None: look it up; False: the explicit opt-out
+        self._absent = False
 
     @property
     def policy(self):
@@ -170,8 +174,19 @@ class TransitionDecider:
             from .render import find_policy
 
             pp = find_policy(self.register_root)
+            self._absent = pp is None
             self._policy = load_policy(pp) if pp else False
         return self._policy or None
+
+    def no_policy(self, name: str, ident: str, digest: str) -> Outcome | None:
+        """An intent waits, naming the absence, when no policy was given or found: a missing
+        policy fails closed (:data:`homelabnext.reviews.NO_POLICY`), never applies a transition
+        with zero reviews.  None when a policy is loaded or the caller opted out."""
+        from homelabnext.reviews import NO_POLICY
+
+        if self.policy is None and self._absent:
+            return Outcome(name, ident, "waiting", NO_POLICY, digest)
+        return None
 
     def _intents(self, lane: str) -> list[str]:
         """The ``register-transition`` notes of ``lane``, by a lenient read of their ``type``
@@ -314,6 +329,8 @@ class TransitionDecider:
             check_register(path, new_events=[(event, now)], policy=self.policy or False)
         except RegisterError as ex:
             return self._deny(name, ident, "; ".join(ex.problems), dry_run, digest)
+        if waiting := self.no_policy(name, ident, digest):
+            return waiting
         missing = self._missing(after, register, fm["to"], digest)
         if missing:
             why = f"needs {', '.join(missing)} review(s) of the prospective content {digest}"
