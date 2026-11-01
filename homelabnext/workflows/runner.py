@@ -33,7 +33,18 @@ from homelabnext import broker
 from homelabnext.agent.digest import digest_of
 
 MODEL_KINDS = ("decide", "prompt")
+#: a scheduler's firing: its producer is the schedule (``$event.data.schedule``), not a service
+SCHEDULE_EVENT = "homelabnext.schedule.fired"
 RISKY_TIERS = ("execute", "privileged")
+
+
+def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
+    """The producers a trigger pins (``$event.source`` ``equals``)."""
+    return [
+        c["equals"]
+        for c in trigger.get("where", [])
+        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
+    ]
 
 
 # ---------------------------------------------------------------- references and conditions

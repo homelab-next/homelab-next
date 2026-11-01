@@ -78,3 +78,19 @@ def test_an_annotation_column_never_overwrites_input():
         list(iter_annotate(rows, demo_cascade()))
     out = annotate(rows, demo_cascade(), prefix="k13_")
     assert out[1]["decide_verdict"] == "mine" and "k13_verdict" in out[1]
+
+
+def test_an_unknown_impact_escalates_and_case_does_not_matter():
+    text = generate_gold_set(1, seed=3)[0].item.text
+    rows = [
+        {"id": "a", "text": text, "impact": " High "},
+        {"id": "b", "text": text, "impact": "severe"},
+        {"id": "c", "text": text, "impact": 3},
+        {"id": "d", "text": text},
+    ]
+    out = annotate(rows, demo_cascade())
+    assert out[0]["decide_impact"] in ("high", "critical") and out[0]["decide_error"] is None
+    for r in out[1:3]:  # never silently read as low: nobody can rank it, so a person looks
+        assert (r["decide_verdict"], r["decide_escalated"]) == ("human", True)
+        assert r["decide_error"].startswith("impact ") and "not one of" in r["decide_error"]
+    assert out[3]["decide_error"] is None

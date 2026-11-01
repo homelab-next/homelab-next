@@ -123,3 +123,11 @@ def test_a_faulty_model_tier_never_lowers_or_approves():
             assert not d.acted and d.verdict in ("raise", "human")
             if d.verdict == "raise":
                 assert d.tier == "floor"
+
+
+def test_a_safety_spec_answers_and_returns_raise_or_hold_only():
+    # One vocabulary for a safety spec: its table is written in accept/escalate terms, but a
+    # tier answers raise/hold and the cascade returns raise, hold, or human - never accept.
+    s = load_spec(SPECS_DIR / "hostile-content.yml")
+    assert s.answer_labels == ("raise", "hold")
+    assert s.verdicts == ("raise", "hold", "human")
