@@ -156,23 +156,12 @@ def _name_parts(name: str, data: Mapping[str, Any]) -> tuple[str, int] | str:
 
 @cache
 def schema_validator(family: str, name: str):
-    """A Draft 2020-12 validator for ``schemas/<family>/<name>`` with the shared ``ids`` schemas
-    registered (what every register and strategy schema ``$ref``s)."""
-    from jsonschema import Draft202012Validator
-    from referencing import Registry, Resource
-    from referencing.jsonschema import DRAFT202012
+    """A Draft 2020-12 validator for ``schemas/<family>/<name>`` whose ``$ref``s (the shared
+    ``ids`` schemas every register and strategy schema uses) resolve through
+    :func:`homelabnext.schema_registry.schema_registry`."""
+    from homelabnext.schema_registry import validator
 
-    from homelabnext import paths
-
-    base = paths.schemas_dir()
-    reg = Registry()
-    for f in sorted((base / "ids").glob("*.json")):
-        doc = json.loads(f.read_text(encoding="utf-8"))
-        reg = reg.with_resource(
-            doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-        )
-    schema = json.loads(paths.schema_file(family, name).read_text("utf-8"))
-    return Draft202012Validator(schema, registry=reg)
+    return validator(family, name)
 
 
 def _validator():

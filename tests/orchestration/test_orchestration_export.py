@@ -349,12 +349,12 @@ def test_every_export_line_validates_against_the_export_schema(synced):
     from jsonschema import Draft202012Validator
 
     from conformance.protocols.inference import LABEL_PATTERN, MODEL_PATTERN, TAG, TURN_ID
-    from homelabnext.events.envelope import _registry
+    from homelabnext.schema_registry import schema_registry
 
     root = Path(__file__).resolve().parents[2]
     path = root / "schemas" / "status" / "orchestration_export.schema.json"
     schema = json.loads(path.read_text(encoding="utf-8"))
-    validator = Draft202012Validator(schema, registry=_registry())
+    validator = Draft202012Validator(schema, registry=schema_registry())
     for line in export_lines(synced):
         errors = sorted(e.message for e in validator.iter_errors(json.loads(line)))
         assert errors == [], (line[:120], errors)
@@ -399,11 +399,13 @@ def test_the_schema_and_the_import_refuse_the_same_headers(synced, tmp_path, cha
     import, and a trailing newline passed the schema ($refs to ids/ patterns without (?!\\n))."""
     from jsonschema import Draft202012Validator
 
-    from homelabnext.events.envelope import _registry
+    from homelabnext.schema_registry import schema_registry
 
     root = Path(__file__).resolve().parents[2]
     path = root / "schemas" / "status" / "orchestration_export.schema.json"
-    validator = Draft202012Validator(json.loads(path.read_text("utf-8")), registry=_registry())
+    validator = Draft202012Validator(
+        json.loads(path.read_text("utf-8")), registry=schema_registry()
+    )
     header = json.loads(next(iter(export_lines(synced)))) | change
     assert not validator.is_valid(header)
     other = TelemetryStore(tmp_path / "o.db", clock=lambda: T0)

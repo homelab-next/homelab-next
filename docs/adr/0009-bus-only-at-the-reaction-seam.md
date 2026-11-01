@@ -61,9 +61,10 @@ time the reaction layer (alert in, workflow out) benefits from decoupling.
   state file and backoff; the relay's outbox, delivered markers and attempt counts). A bus swap
   replaces the forwarder's backend and the `EventBus` adapter, and must keep the protocol's
   repeated-id answer, which the relay's crash recovery depends on.
-- The envelope carries no TLP label yet (ADR-0033), so the bus is an egress point that is
-  "not yet" checked (`docs/modules.md`); a single publish path that runs the egress check, and a
-  label on the envelope, are open work, not decided here.
+- The envelope carries an optional TLP label (`tlp`, absent reads `red`) and `derivedfrom` since
+  envelope 1.2 (ADR-0033), but no producer sets them and nothing filters on them, so the bus is an
+  egress point that is "not yet" checked (`docs/modules.md`); a single publish path that runs the
+  egress check is open work, not decided here.
 
 ## Alternatives
 

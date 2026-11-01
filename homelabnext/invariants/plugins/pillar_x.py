@@ -116,22 +116,18 @@ def _build_registry(schemas: list[pathlib.Path]):
     ``Unresolvable`` on an air-gapped runner. Register every schema under its ``$id``.
     Returns ``None`` on import failure (fall back to a bare validator).
     """
-    try:
-        from referencing import Registry, Resource
-        from referencing.jsonschema import DRAFT202012
-    except ImportError:
-        return None
-    reg = Registry()
+    from homelabnext.schema_registry import registry_of
+
+    docs = []
     for sp in schemas:
         try:
-            doc = json.loads(sp.read_text())
+            docs.append(json.loads(sp.read_text()))
         except Exception:
             continue
-        if isinstance(doc, dict) and isinstance(doc.get("$id"), str):
-            reg = reg.with_resource(
-                doc["$id"], Resource.from_contents(doc, default_specification=DRAFT202012)
-            )
-    return reg
+    try:
+        return registry_of(docs)
+    except ImportError:
+        return None
 
 
 def x03(ctx: Context) -> CheckResult:
