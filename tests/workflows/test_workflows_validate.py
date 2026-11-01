@@ -170,16 +170,45 @@ def _deploy(tmp_path, pins):
 
 
 def test_deploy_pin_must_match_the_pack_digest(tmp_path):
-    good = pack_digest(pack("case-opened-notify"))
-    files = [PACKS / "case-opened-notify.yml"]
-    ok = _deploy(tmp_path, [{"pack": "case-opened-notify", "digest": good}])
+    good = pack_digest(pack("proposal-validate"))
+    files = [PACKS / "proposal-validate.yml"]
+    ok = _deploy(tmp_path, [{"pack": "proposal-validate", "digest": good}])
     rep = validate_repo(files, root=ROOT, deploy=ok)
     # the temporary deploy file is outside git: that alone is the one problem
     assert [p.detail for p in rep.problems] == ["the deploy manifest is not tracked by git"]
     stale = "sha256:" + "0" * 64
-    bad = _deploy(tmp_path, [{"pack": "case-opened-notify", "digest": stale}])
+    bad = _deploy(tmp_path, [{"pack": "proposal-validate", "digest": stale}])
     details = [p.detail for p in validate_repo(files, root=ROOT, deploy=bad).problems]
     assert any("pinned sha256:000" in d for d in details)
+
+
+def test_deploy_pin_of_a_pack_that_cannot_run_fails(tmp_path):
+    # validates cleanly, but its handlers are site code that is not in the tree and its trigger
+    # reacts to any producer of the event: the same two things the StackStorm render refuses
+    name = "case-opened-notify"
+    d = _deploy(tmp_path, [{"pack": name, "digest": pack_digest(pack(name))}])
+    details = [
+        p.detail for p in validate_repo([PACKS / f"{name}.yml"], root=ROOT, deploy=d).problems
+    ]
+    assert (
+        f"{name}: pinned, but cannot run: the trigger does not pin its producer "
+        "($event.source equals one logical id)" in details
+    )
+    assert any(
+        x.startswith(f"{name}: pinned, but cannot run: step ") and "is not in the tree" in x
+        for x in details
+    ), details
+
+
+def test_deployable_problems_pass_a_runnable_pack():
+    from homelabnext.workflows.validate import deployable_problems
+
+    doc = pack("proposal-validate")
+    assert deployable_problems(ROOT, doc, manifest()) == []
+    doc["trigger"]["where"] = [c for c in doc["trigger"]["where"] if c["ref"] != "$event.source"]
+    assert deployable_problems(ROOT, doc, manifest()) == [
+        "the trigger does not pin its producer ($event.source equals one logical id)"
+    ]
 
 
 def test_deploy_pin_of_a_failing_pack_fails(tmp_path):
@@ -206,11 +235,18 @@ def test_deploy_unknown_and_twice_pinned(tmp_path):
     assert {"nope: no such pack", "case-opened-notify: pinned twice"} <= details
 
 
-def test_repository_deploy_manifest_pins_every_shipped_pack():
+RUNNABLE = ("proposal-validate", "agent-job-retry")  # the rest are reference packs (site handlers)
+
+
+def test_repository_deploy_manifest_pins_every_runnable_pack():
     import yaml
 
+    from homelabnext.workflows.validate import deployable_problems
+
     pins = yaml.safe_load((ROOT / "workflows" / "deploy.yml").read_text())["pins"]
-    assert {p["pack"]: p["digest"] for p in pins} == {n: pack_digest(pack(n)) for n in ALL}
+    assert {p["pack"]: p["digest"] for p in pins} == {n: pack_digest(pack(n)) for n in RUNNABLE}
+    for n in ALL:
+        assert (deployable_problems(ROOT, pack(n), manifest()) == []) == (n in RUNNABLE), n
 
 
 def test_pack_digest_ignores_comments_and_key_order():
@@ -254,6 +290,42 @@ def test_risky_action_params_from_prompt_output_fail():
     doc = pack("phishing-report")
     step(doc, "block")["params"]["domains"] = "$steps.triage.urls"
     assert "risky-params" in rules(doc)
+
+
+def _launder(doc):
+    # move the IOC extraction after the prompt and point it at the model's reply
+    steps = doc["steps"]
+    iocs = steps.pop(next(i for i, s in enumerate(steps) if s["id"] == "iocs"))
+    iocs["from"] = ["$steps.triage.urls"]
+    steps.insert(next(i for i, s in enumerate(steps) if s["id"] == "triage") + 1, iocs)
+    return doc
+
+
+def test_risky_params_laundered_through_an_enrich_step_fail():
+    found = problems(_launder(pack("phishing-report")))
+    assert any(
+        r == "risky-params" and "'$steps.iocs.domains'" in d and "dns.block-domains" in d
+        for r, d in found
+    ), found
+
+
+def test_risky_params_taint_follows_every_enrich_hop():
+    doc = _launder(pack("phishing-report"))
+    steps = doc["steps"]
+    hop = {"id": "first-domain", "kind": "enrich", "op": "pick", "from": "$steps.message.row",
+           "field": "x"}  # fmt: skip
+    hop["from"] = "$steps.iocs.domains"
+    steps.insert(next(i for i, s in enumerate(steps) if s["id"] == "iocs") + 1, hop)
+    step(doc, "block")["params"]["case_ref"] = "$steps.first-domain.first"
+    found = problems(doc)
+    assert any(r == "risky-params" and "'$steps.first-domain.first'" in d for r, d in found)
+
+
+def test_a_prompt_gate_on_an_enrich_step_does_not_taint_it():
+    # a when only decides whether the step runs; its output is still the event's data
+    doc = pack("phishing-report")
+    step(doc, "iocs")["when"] = [{"ref": "$event.data.alert_id", "exists": True}]
+    assert "risky-params" not in rules(doc)
 
 
 # ---------------------------------------------------------------- R-07: fixtures round-trip
@@ -345,3 +417,55 @@ def test_hnx_dispatches_workflows(capsys, monkeypatch):
 
     monkeypatch.chdir(ROOT)
     assert cli.main(["workflows", "validate"]) == 0
+
+
+# ---------------------------------------------------------------- decide verdict vocabulary
+def test_a_decide_fixture_speaks_the_cascade_verdicts():
+    # ``escalate`` is never a cascade verdict (an escalating tier hands the item on and the end
+    # of the line is ``human``), so a fixture saying it describes a run that cannot happen live.
+    uni = universe()
+    assert uni.spec_labels["critical-alert-page"] == ("accept", "reject", "human")
+    assert uni.spec_labels["hostile-content"] == ("raise", "hold", "human")
+    doc = pack("new-critical-alert")
+    fx = next(f for f in doc["fixtures"] if f["model"]["classify"]["label"] == "human")
+    fx["model"]["classify"]["label"] = "escalate"
+    found = problems(doc)
+    assert any(r == "fixture" and "'escalate' is not one spec" in d for r, d in found), found
+
+
+# ---------------------------------------------------------------- R-01: refs and specs named
+@pytest.mark.parametrize("ref", ["$evnt.data.note", "$foo", "$steps"])
+def test_r01_a_reference_with_an_unknown_root_fails(ref):
+    doc = pack("proposal-validate")
+    doc["steps"][0]["params"]["task_description"] = ref
+    found = problems(doc)
+    assert any(r == "ref" and repr(ref) in d and "$$" in d for r, d in found), found
+
+
+def test_r01_an_escaped_dollar_is_a_literal():
+    doc = pack("phishing-report")
+    step(doc, "triage")["slots"]["reporter-team"] = "$$5 desk"
+    assert "ref" not in rules(doc)
+
+
+def test_r01_only_tracked_parsing_specs_can_be_named(tmp_path):
+    import yaml
+
+    from homelabnext.workflows.validate import load_universe
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    good = yaml.safe_load((ROOT / "homelabnext/decide/examples/decision_spec.yml").read_text())
+    broken = {**good, "id": "broken-spec", "tiers": []}
+    (tmp_path / "broken.yml").write_text(yaml.safe_dump(broken))
+    (tmp_path / "loose.yml").write_text(yaml.safe_dump({**good, "id": "loose-spec"}))
+    subprocess.run(["git", "-C", str(tmp_path), "add", "broken.yml"], check=True)
+    uni = load_universe(tmp_path)
+    assert uni.spec_labels == {}
+    assert (uni.broken_specs, uni.untracked_specs) == ({"broken-spec"}, {"loose-spec"})
+    doc = pack("new-critical-alert")
+    details = []
+    for sid in ("broken-spec", "loose-spec"):
+        step(doc, "classify")["spec"] = sid
+        details += [d for r, d in check_pack(doc, uni) if r == "spec"]
+    assert any("'broken-spec' does not parse (see hnx decide lint)" in d for d in details)
+    assert any("'loose-spec' is not tracked by git" in d for d in details)

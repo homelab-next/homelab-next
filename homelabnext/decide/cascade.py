@@ -6,7 +6,8 @@ and a human is always the last stop.  The rules, none of which a tier can change
 
 1. A tier **answers** only when its confidence is at or above its threshold; otherwise the item
    **escalates** to the next tier.  Abstaining, an ``escalate`` label, or a label outside the
-   spec's vocabulary is not an answer.
+   spec's vocabulary (``DecisionSpec.answer_labels``: the decision table's targets, or
+   ``raise``/``hold`` in a safety spec) is not an answer.
 2. A tier that raises, times out or returns a malformed answer **escalates**.  It never answers,
    and a fault never lowers anything (``on_error: escalate``).
 3. The **impact tier** starts at the highest of the declared impact, the spec floor and the
@@ -33,7 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .impact_scan import ImpactScanner
-from .spec import IMPACTS, LABELS, SAFETY_LABELS, DecisionSpec, TierSpec, impact_rank, max_impact
+from .spec import IMPACTS, DecisionSpec, TierSpec, impact_rank, max_impact
 from .tiers import Item, Tier, TierAnswer, TierError, TierInvalidOutput, TierTimeout
 
 #: ``corroborator(item) -> evidence or None``.  Must be deterministic: the same item gives the
@@ -68,7 +69,7 @@ class Step:
 @dataclass(frozen=True)
 class Decision:
     item_id: str
-    verdict: str  # a spec label (or raise/hold in a safety spec), or "human"
+    verdict: str  # one of DecisionSpec.verdicts: an answer label, or "human"
     tier: str  # tier that answered, "human" when escalated all the way
     confidence: float
     impact: str
@@ -130,7 +131,7 @@ class Cascade:
         self.tiers = tiers
         self.scanner = scanner
         self.clock = clock
-        self._labels = SAFETY_LABELS if spec.safety else LABELS
+        self._labels = spec.answer_labels
 
     # ---------------------------------------------------------------- helpers
     def _call(self, ts: TierSpec, item: Item) -> TierAnswer:

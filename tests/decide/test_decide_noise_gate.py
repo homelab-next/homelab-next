@@ -121,3 +121,21 @@ def test_the_schema_example_noise_gate_parses_and_lints_clean():
     assert ("complete", "noise_gate.corroborators must name at least one corroborator") in lint_doc(
         json.loads(neg.read_text())
     )
+
+
+def test_a_label_outside_the_decision_table_is_not_an_answer():
+    # The table only produces reject or escalate: an ``accept`` would skip the noise gate's
+    # corroboration entirely, so it must escalate rather than stand.
+    s = spec(
+        decision_table=[{"when": "noise, corroborated", "then": "reject"},
+                        {"when": "otherwise", "then": "escalate"}],
+        noise_gate=GATE,
+        tiers=[{"name": "floor"}, {"name": "small", "model_role": "mdl:a", "min_confidence": 0.8}],
+    )  # fmt: skip
+    c = Cascade(s, {"floor": fixed("floor", None), "small": fixed("small", "accept", 0.99)}, None,
+                corroborators={"allowlist": allowlist, "seen-before": seen_before})  # fmt: skip
+    d = c.decide(Item("a", "odd login"))
+    assert (d.verdict, d.tier, d.escalated) == ("human", "human", True)
+    assert d.trace[1].outcome == "invalid" and "label not in" in d.trace[1].detail
+    assert s.answer_labels == ("reject", "escalate")
+    assert s.verdicts == ("reject", "human")

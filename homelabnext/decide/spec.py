@@ -84,6 +84,22 @@ class DecisionSpec:
         return "inline" in self.callers
 
     @property
+    def answer_labels(self) -> tuple[str, ...]:
+        """The labels a tier may answer with: the decision table's targets plus ``escalate``
+        (never an answer, always allowed), or ``raise``/``hold`` in a safety spec.  A label the
+        spec's own table never produces is not an answer (cascade rule 1)."""
+        if self.safety:
+            return SAFETY_LABELS
+        return tuple(dict.fromkeys([*(t for _, t in self.decision_table), "escalate"]))
+
+    @property
+    def verdicts(self) -> tuple[str, ...]:
+        """Every ``Decision.verdict`` the cascade can return for this spec: an answer label, or
+        ``human`` when every automatic tier declined.  ``escalate`` is never a verdict: a tier
+        that escalates hands the item on, and the end of the line is ``human``."""
+        return (*(x for x in self.answer_labels if x != "escalate"), "human")
+
+    @property
     def automatic_tiers(self) -> tuple[TierSpec, ...]:
         return self.tiers
 

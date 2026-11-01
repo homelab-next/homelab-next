@@ -44,7 +44,7 @@ fixtures: [...]
 | `enrich` `pick` | field values of the objects in a list that match `match` | `{values, first, count}` |
 | `enrich` `lookup` | one row of a `table:` by key (live: the table; offline: the fixture's `lookups`) | `{key, found, row}` |
 | `enrich` `extract-iocs` | URLs, their host names, IPv4 addresses, sha256 hashes in text; defanged forms refanged; nothing invented | `{urls, domains, ipv4, sha256, count}` |
-| `decide` | a decision spec (`homelabnext.decide`) tracked in git, by `id` | `{label, confidence}` |
+| `decide` | a decision spec (`homelabnext.decide`) tracked in git, by `id` | `{label, confidence}`; `label` is the cascade's verdict (`DecisionSpec.verdicts`): a label from the spec's decision table other than `escalate`, or `human` when every tier declined (`raise`/`hold`/`human` for a safety spec) |
 | `prompt` | a prompt template (`homelabnext.agent.template`), every required slot bound | the template's JSON reply |
 | `action` | one broker action: a request `{action, actor, target, params}` | executed / held / denied / shadow |
 
@@ -74,7 +74,8 @@ names are in the module docstring of `homelabnext/workflows/validate.py`; in sho
   not the URLs the model echoed.
 - **R-07, fixtures round-trip.** Each fixture event is valid for its type and runs through
   `run_fixture`: deterministic steps are computed, model steps return the fixture's output (a
-  decide label must be one its spec can return), actions go through the broker. The calls must
+  decide label must be a verdict its spec can return - `human`, never `escalate`, for an item
+  the cascade hands to a person), actions go through the broker. The calls must
   equal `expect` exactly. A model output for a step that never ran, a missing one, or an approval
   for a request the run never made is a stale fixture and fails.
 - **R-04, risky actions need bound approval.** Risky = the broker manifest gives the action tier
@@ -98,8 +99,15 @@ fixture fails until someone approves the new payload.
 (comments and key order do not change it). `workflows/deploy.yml` (`schemas/workflows/deploy`)
 pins each deployable pack to one digest. `hnx workflows validate` fails when the deploy manifest
 is untracked, a pin names a missing pack or names one twice, a pin's digest differs from the pack
-in the tree, or a pinned pack does not validate. To change a deployed pack: edit it, run
-`hnx workflows digest workflows/packs`, update its pin in the same commit.
+in the tree, a pinned pack does not validate, or a pinned pack cannot run
+(`deployable_problems`): an action's handler is not in the tree pinned by its
+`<handler>.handler.json`, or an event-triggered pack does not pin its producer (`$event.source`
+`equals` one logical id) and so would start for any service emitting that event type. The
+StackStorm render refuses the same two (`st2-handler`, `st2-source`), so "deployable" means one
+thing on every path. `case-opened-notify`, `new-critical-alert` and `phishing-report` are reference
+packs - their handlers are site code and their triggers pin no producer - and are not pinned. To
+change a deployed pack: edit it, run `hnx workflows digest workflows/packs`, update its pin in the
+same commit.
 
 The deployer (SERVER; the orchestrator adapter) follows one rule that is not checkable offline:
 it deploys from a commit on the protected main branch whose CI `schemas` job (which runs
