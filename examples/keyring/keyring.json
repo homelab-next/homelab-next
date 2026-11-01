@@ -1,12 +1,12 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:a454fa07c31b9722bb53474076f1d43b9a1c65b714a5f0d467e7aa0622544807",
+    "classes": "sha256:442db129e1851e94b61babfda643a4ae8c4ec86cc7c9f785ceda796c368268d0",
     "profiles": {
       "profile:reader": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
-    "registry": "5a210420bb5c5f60ed4ea6e782d268ef6a4f49633b90c8ad93a408973a6cbf89"
+    "registry": "73428ffc58f979b06c07f2162b88d9022850ad8e37bb26a7492bae5abde1239c"
   },
   "keyring_version": 1,
   "principals": [
@@ -23,6 +23,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:agent-runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:auth-proxy"
         },
         {
           "reason": "not granted (default deny)",
@@ -151,6 +155,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:auth-proxy"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:automation"
         },
         {
@@ -273,6 +281,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:agent-runtime"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:auth-proxy"
         },
         {
           "reason": "not granted (default deny)",
@@ -405,6 +417,10 @@
         },
         {
           "reason": "zone not a client (default deny)",
+          "resource": "svc:auth-proxy"
+        },
+        {
+          "reason": "zone not a client (default deny)",
           "resource": "svc:dashboards"
         },
         {
@@ -508,6 +524,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:agentmetry"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:auth-proxy"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -639,10 +659,6 @@
         },
         {
           "reason": "zone not a client (default deny)",
-          "resource": "svc:metrics"
-        },
-        {
-          "reason": "zone not a client (default deny)",
           "resource": "svc:notify"
         },
         {
@@ -656,13 +672,15 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:secrets"
-        },
-        {
-          "reason": "zone not a client (default deny)",
-          "resource": "svc:uptime"
         }
       ],
       "grants": [
+        {
+          "endpoint": "auth-proxy.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:auth-proxy"
+        },
         {
           "endpoint": "dashboards.svc.example.internal",
           "kind": "service",
@@ -688,10 +706,22 @@
           "resource": "svc:idp"
         },
         {
+          "endpoint": "metrics.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:metrics"
+        },
+        {
           "endpoint": "status-hub.svc.example.internal",
           "kind": "service",
           "level": "connect",
           "resource": "svc:status-hub"
+        },
+        {
+          "endpoint": "uptime.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:uptime"
         }
       ],
       "kind": "network",
@@ -702,6 +732,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:agent-runtime"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:auth-proxy"
         },
         {
           "reason": "zone not a client (default deny)",

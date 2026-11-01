@@ -1,14 +1,14 @@
 ---
 title: idp
 type: system
-summary: idp provides the idp capability (authentik), owned by identity-team.
+summary: idp provides the idp capability (keycloak), owned by identity-team.
 summary_generated: true
 service: idp
 capability: idp
-impl: authentik
+impl: keycloak
 owner: identity-team
 host: idp-core
-port: 9443
+port: 8443
 protocol: https
 health: http
 backup_job: daily-core
@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `idp`
 - Contract: [idp capability reference](../capabilities/idp.md) ([[capabilities/idp|idp capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `authentik` 2024.8
+- Implementation: `keycloak` 26.8.1
 - Owner: identity-team
 - Tags: core, identity
 <!-- /hnx:gen -->
@@ -36,7 +36,7 @@ author: unknown
 ## Inputs
 
 <!-- hnx:gen:inputs -->
-- Listens on `https` port `9443` on host `idp-core` (zone `mgmt`)
+- Listens on `https` port `8443` on host `idp-core` (zone `mgmt`)
 - TLS: `internal`
 - Allowed client zones: edge, data, compute
 <!-- /hnx:gen -->
@@ -65,7 +65,7 @@ author: unknown
 ## How to verify it is healthy
 
 <!-- hnx:gen:verify -->
-- Registry health probe: HTTP GET `/-/health/live/` expects status `204`
+- Registry health probe: HTTP GET `/realms/northwind/.well-known/openid-configuration` expects status `200`
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:verify -->
@@ -82,7 +82,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]])
+- Depended on by: [auth-proxy](auth-proxy.md) ([[systems/auth-proxy|auth-proxy]]), [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [edge-proxy](edge-proxy.md) ([[systems/edge-proxy|edge-proxy]]), [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [lake-query](lake-query.md) ([[systems/lake-query|lake-query]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

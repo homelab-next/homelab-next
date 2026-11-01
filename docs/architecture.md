@@ -51,7 +51,7 @@ The "example tenants" are illustrations only: the reference environment in
 | 1 | Physical compute, storage, power | Restore and rebuild | any x86 host | rebuild from git, timed restore drill |
 | 2 | Virtualisation and guest layout | Guest spec (name, id, network, cores, RAM, disks) | a hypervisor plus IaC | plan shows no diff; every guest has inventory, registry row, backup |
 | 3 | Network segmentation and sensing | Zone reachability matrix (default deny) | a router or firewall | reachability probe run from inside each zone |
-| 4 | Identity, secrets, access | OIDC; a forward-auth header set; key issue/revoke API | an IdP, a proxy, OpenBao* | each app accepts the same claim-to-role mapping |
+| 4 | Identity, secrets, access | OIDC (discovery, JWKS, token verify); one forward-auth identity-header set (`homelabnext.edge_identity`); one group-to-role table (registry `roles`); key issue/revoke API (ADR-0034) | an OIDC IdP (Keycloak by default), an auth proxy (oauth2-proxy by default) next to the edge, OpenBao* | `idp` suite; the generated realm grants each app exactly the table's roles; the edge lint (F-23) for the declared header set |
 | 5 | Telemetry collection | Syslog/JSON over TLS, OpenMetrics, a source census | agents, shippers | census plus a canary event through the first hops |
 | 6 | Data platform: storage, catalog, query | S3 API, Iceberg REST, ANSI SQL, pinned OCSF schemas | Garage*, Lakekeeper*, Trino* | `lake-query`, `lake-catalog`, `object-store` suites |
 | 7 | Detection and correlation | Sigma rules with fixtures, cited by `det:<slug>` | a SIEM or rule engine | fixture runner with an engine adapter |
@@ -186,7 +186,7 @@ entrypoints need; OpenBao keeps docker's defaults). A real deployment changes ea
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
 | `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
-| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy and Authentik with the front-door secret from the secrets capability |
+| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
 
 ## Ansible host trust
 

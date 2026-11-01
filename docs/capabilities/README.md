@@ -41,13 +41,14 @@ Every service in `examples/services.yml`, and the capability page that holds its
 |---|---|---|---|
 | [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime\|agent-runtime]]) | `agent-runtime` | `orchestrator` | no conformance suite |
 | [agentmetry](../systems/agentmetry.md) ([[systems/agentmetry\|agentmetry]]) | `agent-audit` | `agentmetry` | no conformance suite |
+| [auth-proxy](../systems/auth-proxy.md) ([[systems/auth-proxy\|auth-proxy]]) | `auth-proxy` | `oauth2-proxy` | no conformance suite |
 | [automation](../systems/automation.md) ([[systems/automation\|automation]]) | `automation` | `stackstorm` | no conformance suite |
 | [dashboards](../systems/dashboards.md) ([[systems/dashboards\|dashboards]]) | `dashboards` | `grafana` | no conformance suite |
 | [dataflow](../systems/dataflow.md) ([[systems/dataflow\|dataflow]]) | `dataflow` | `nifi` | no conformance suite |
 | [dns](../systems/dns.md) ([[systems/dns\|dns]]) | `dns` | `technitium` | no conformance suite |
 | [edge-proxy](../systems/edge-proxy.md) ([[systems/edge-proxy\|edge-proxy]]) | `edge-proxy` | `caddy` | no conformance suite |
 | [events](../systems/events.md) ([[systems/events\|events]]) | `events` | `nats` | [events](events.md) ([[capabilities/events\|events]]) |
-| [idp](../systems/idp.md) ([[systems/idp\|idp]]) | `idp` | `authentik` | [idp](idp.md) ([[capabilities/idp\|idp]]) |
+| [idp](../systems/idp.md) ([[systems/idp\|idp]]) | `idp` | `keycloak` | [idp](idp.md) ([[capabilities/idp\|idp]]) |
 | [inference](../systems/inference.md) ([[systems/inference\|inference]]) | `inference` | `vllm` | [inference](inference.md) ([[capabilities/inference\|inference]]) |
 | [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog\|lake-catalog]]) | `lake-catalog` | `lakekeeper` | [lake-catalog](lake-catalog.md) ([[capabilities/lake-catalog\|lake-catalog]]) |
 | [lake-query](../systems/lake-query.md) ([[systems/lake-query\|lake-query]]) | `lake-query` | `trino` | [lake-query](lake-query.md) ([[capabilities/lake-query\|lake-query]]) |

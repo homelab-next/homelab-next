@@ -92,7 +92,7 @@ author: unknown
 ## Credentials and access
 
 <!-- hnx:gen:access -->
-- Authentication: `none`
+- Authentication: `own`
 - Endpoint override variable: `HNX_ENDPOINT_AGENT_AUDIT`
 <!-- /hnx:gen -->
 

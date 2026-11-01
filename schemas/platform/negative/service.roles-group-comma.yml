@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# a group name holding the groups header's separator: "staff,hub-viewers" would read as two groups
+registry_version: 1
+lab: {name: northwind, domain: example.internal}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  hub-core: {address: 192.0.2.20, zone: mgmt}
+services:
+  status-hub:
+    capability: status-hub
+    impl: homelabnext
+    host: hub-core
+    protocol: http
+    port: 8099
+    owner: platform-team
+    version: "0.1.0"
+    tls: none
+    auth: idp
+    roles: {viewer: ["staff,hub-viewers"]}

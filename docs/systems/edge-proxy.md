@@ -81,7 +81,7 @@ author: unknown
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
-- Depends on: [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [idp](idp.md) ([[systems/idp|idp]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]])
+- Depends on: [auth-proxy](auth-proxy.md) ([[systems/auth-proxy|auth-proxy]]), [dashboards](dashboards.md) ([[systems/dashboards|dashboards]]), [idp](idp.md) ([[systems/idp|idp]]), [metrics](metrics.md) ([[systems/metrics|metrics]]), [status-hub](status-hub.md) ([[systems/status-hub|status-hub]]), [uptime](uptime.md) ([[systems/uptime|uptime]])
 - Depended on by: none declared
 <!-- /hnx:gen -->
 

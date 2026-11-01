@@ -208,7 +208,6 @@
    "openbao": 2
   },
   "compose/lab-in-a-box/broker_e2e.py": {
-   "authentik": 3,
    "caddy": 1,
    "stackstorm": 3
   },
@@ -420,7 +419,6 @@
    "example-4b": 1
   },
   "examples/registers/invariants.yml": {
-   "authentik": 2,
    "caddy": 8,
    "iceberg": 2,
    "stackstorm": 11,
@@ -434,7 +432,6 @@
   },
   "examples/services.yml": {
    "agentmetry": 9,
-   "authentik": 1,
    "caddy": 1,
    "grafana": 1,
    "minio": 3,
@@ -447,9 +444,6 @@
    "trino": 1,
    "uptime-kuma": 2,
    "vllm": 1
-  },
-  "examples/status/agents.yml": {
-   "authentik": 2
   },
   "examples/status/roster.yml": {
    "stackstorm": 2
@@ -513,7 +507,6 @@
    "wazuh": 1
   },
   "homelabnext/generators/builtin.py": {
-   "authentik": 7,
    "caddy": 9,
    "prometheus": 5,
    "technitium": 1
@@ -638,9 +631,6 @@
   "homelabnext/status/agents/__init__.py": {
    "agentmetry": 2
   },
-  "homelabnext/status/agents/config.py": {
-   "authentik": 2
-  },
   "homelabnext/status/agents/sources.py": {
    "agentmetry": 6
   },
@@ -724,7 +714,6 @@
   },
   "schemas/platform/examples/service.valid.yml": {
    "agentmetry": 9,
-   "authentik": 1,
    "caddy": 1,
    "grafana": 1,
    "minio": 3,
@@ -1214,9 +1203,6 @@
    "stackstorm": 1,
    "uptime-kuma": 1
   },
-  "schemas/status/agents.schema.json": {
-   "authentik": 2
-  },
   "schemas/status/examples/orchestration_export.turn.json": {
    "example-27b": 1
   },
@@ -1444,14 +1430,10 @@
    "caddy": 1
   },
   "tests/generators/golden/caddy/sites.caddy": {
-   "authentik": 5,
-   "caddy": 2
+   "caddy": 1
   },
   "tests/generators/golden/env/agentmetry.env.generated": {
    "agentmetry": 2
-  },
-  "tests/generators/golden/idp/blueprint.yaml": {
-   "authentik": 9
   },
   "tests/generators/golden/prometheus/": {
    "prometheus": 1
@@ -1465,12 +1447,10 @@
    "vllm": 47
   },
   "tests/generators/test_gen_golden.py": {
-   "authentik": 2,
-   "caddy": 16,
+   "caddy": 7,
    "prometheus": 4
   },
   "tests/generators/test_gen_injection.py": {
-   "authentik": 10,
    "caddy": 11
   },
   "tests/generators/test_llm_gateway.py": {
@@ -1787,9 +1767,6 @@
    "iceberg": 3,
    "openbao": 4
   },
-  "tests/status/agent_helpers.py": {
-   "authentik": 4
-  },
   "tests/status/fixtures/agentmetry-audit-status.json": {
    "agentmetry": 2
   },
@@ -1826,14 +1803,10 @@
   "tests/status/fixtures/uptime-kuma-status-page.json": {
    "uptime-kuma": 1
   },
-  "tests/status/test_agents_private.py": {
-   "authentik": 8
-  },
   "tests/status/test_agents_sources.py": {
    "agentmetry": 22
   },
   "tests/status/test_approvals.py": {
-   "authentik": 7,
    "caddy": 5
   },
   "tests/status/test_status_products.py": {
@@ -1887,7 +1860,6 @@
    "stackstorm": 223
   },
   "tools/caddy_lint.py": {
-   "authentik": 16,
    "caddy": 165
   },
   "tools/leak_scan.py": {
@@ -1898,8 +1870,7 @@
    "trino": 2
   },
   "tools/tests/test_caddy_lint.py": {
-   "authentik": 298,
-   "caddy": 295
+   "caddy": 291
   },
   "tools/tests/test_generated_files_have_checks.py": {
    "litellm": 1,

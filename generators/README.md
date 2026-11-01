@@ -15,8 +15,10 @@ are URL path characters), and every pattern ends in `$(?!\n)` because Python's `
 match before a trailing newline. The renderers check again, for models built without
 validation: `homelabnext/generators/safe.py` refuses control characters in any registry value
 (`generate` checks the whole model first) and each format's metacharacters (`{ } #` for Caddy,
-`| < >` for Markdown, and so on) with `UnsafeValueError`. The IdP blueprint is built as data and
-written with a YAML dumper, never by text substitution.
+`| < >` for Markdown, and so on) with `UnsafeValueError`. The IdP realm (`idp_realm`, ADR-0034) is built as data and
+written with a JSON encoder, never by text substitution; it holds no secret (each client secret
+is a secret-store reference, `$(env:HNX_SECRET_IDP_CLIENTS_<SERVICE>)`, substituted by the realm
+import).
 
 See `manifest.yml` for the list (checked against the code by
 `tests/generators/test_gen_manifest.py`).

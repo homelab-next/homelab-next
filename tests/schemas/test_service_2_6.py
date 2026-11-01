@@ -30,9 +30,9 @@ def _src(doc):
 
 
 def test_version_is_2_6_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.6")
-    assert CURRENT == FROZEN_26
-    assert sc.is_additive(FROZEN_25, CURRENT) == []
+    assert FROZEN_26["$id"].endswith("/platform/service/2.6")
+    assert sc.is_additive(FROZEN_25, FROZEN_26) == []
+    assert sc.is_additive(FROZEN_26, CURRENT) == []
 
 
 def test_job_last_run_validates_in_2_6_only_and_reaches_the_model():

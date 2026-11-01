@@ -10,11 +10,11 @@ configured with a trusted front door (``agents.yml`` ``private:`` naming a regis
 2. it carries the front door's **shared-secret header** with the right value (constant-time
    compare; the edge adds it with ``header_up`` from the secret store, so a process that can reach
    the listener cannot forge the identity header below without also holding the secret);
-3. it carries the **identity header** the forward-auth proxy sets (Authentik:
-   ``X-Authentik-Username``);
-4. that identity is in the **viewer group** (Authentik: ``X-Authentik-Groups``, ``|``-separated),
-   or in the group the caller names (the Approvals page's approver group,
-   :mod:`homelabnext.status.approvals`).
+3. it carries the **identity header** the forward-auth proxy sets (the platform's set,
+   :data:`homelabnext.edge_identity.IDENTITY_HEADERS`: ``X-Auth-Request-User``);
+4. that identity is in a **viewer group** (``X-Auth-Request-Groups``, ``,``-separated: the
+   registry row's ``roles.viewer``, ADR-0034), or in one of the groups the caller names (the
+   Approvals page's approver groups, :mod:`homelabnext.status.approvals`).
 
 Anything missing, repeated or malformed is ``403`` -- fail closed -- and the reason is never
 "open".  Every private view that is served is appended to the access log
@@ -34,12 +34,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from homelabnext.edge_identity import IDENTITY_HEADERS
+
 from ..model import iso
 from .config import FrontDoor
 
 _IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$")
-#: the separator of the groups header (Authentik's ``X-Authentik-Groups``: ``|``)
-GROUPS_SEPARATOR = "|"
+#: the separator of the groups header: the auth proxy sends one value per group and the edge's
+#: copy joins them with ``,`` (group names never hold one: the registry's pattern refuses it)
+GROUPS_SEPARATOR = IDENTITY_HEADERS.groups_separator
 
 
 class _Headers(Protocol):
@@ -71,10 +74,10 @@ def authorize(
     client: str | None,
     headers: _Headers,
     *,
-    group: str | None = None,
+    groups: frozenset[str] | None = None,
 ) -> Decision:
-    """The front-door decision for one request (see the module docstring).  ``group``: the
-    group the identity must be in (default: the front door's viewer group)."""
+    """The front-door decision for one request (see the module docstring).  ``groups``: the
+    identity must be in one of them (default: the front door's viewer groups)."""
     if front_door is None or not front_door.secret:
         return Decision(False, reason="no trusted front door is configured")
     if _addr(client) not in front_door.trusted:
@@ -85,12 +88,12 @@ def authorize(
     user = _one(headers, front_door.identity_header)
     if not user or not _IDENTITY_RE.match(user):
         return Decision(False, reason="no identity from the forward-auth proxy")
-    groups = _one(headers, front_door.groups_header) or ""
-    need = front_door.viewer_group if group is None else group
-    # ``|`` only, as the forward-auth proxy sends it: a ``,`` is part of a group name, so a
-    # group named ``staff,hub-viewers`` is never read as membership of ``hub-viewers``
-    if not need or need not in {g.strip() for g in groups.split(GROUPS_SEPARATOR)}:
-        which = "viewer" if group is None else "required"
+    sent_groups = _one(headers, front_door.groups_header) or ""
+    need = front_door.viewer_groups if groups is None else groups
+    # split on the separator only, exactly: a group is held only when one member equals it
+    held = {g.strip() for g in sent_groups.split(GROUPS_SEPARATOR)}
+    if not need or not (held & set(need)):
+        which = "viewer" if groups is None else "required"
         return Decision(False, user=user, reason=f"identity is not in the {which} group")
     return Decision(True, user=user)
 

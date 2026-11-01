@@ -106,7 +106,7 @@ def test_links_view_model_and_page_match_their_goldens():
     assert rows["db"]["href"] is None and rows["db"]["endpoint"].startswith(
         "postgres://records-db.svc."
     )
-    assert vm["counts"] == {"services": 4, "web": 3, "public": 2, "private_tier": 1}
+    assert vm["counts"] == {"services": 5, "web": 4, "public": 2, "private_tier": 1}
     golden("links.json", as_json(vm))
     html = links.render(vm)
     assert_safe(html)

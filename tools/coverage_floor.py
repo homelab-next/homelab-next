@@ -72,6 +72,8 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/status/approvals.py": ("tests/status",),
     "homelabnext/status/serve.py": ("tests/status",),
     "homelabnext/generators/safe.py": ("tests/generators",),
+    # the one identity-header declaration the edge strip, the edge lint and the hub trust
+    "homelabnext/edge_identity.py": ("tests/generators",),
     "homelabnext/tlp.py": ("tests/tlp",),
     "homelabnext/tlp_egress.py": ("tests/tlp",),
     "homelabnext/lake/ceiling.py": ("tests/lake",),

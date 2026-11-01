@@ -984,15 +984,15 @@ short:
 - the hub runs as its own user (`hnx-hub`), listed once in `approval_relays` with the issuer its
   front door authenticates (`sso`); the people who may approve are in the manifest's `approvers`;
 - the page reuses the private tier's front door (trusted proxy, shared secret header, identity
-  header), then requires the approver group (distinct from the viewer group) to decide;
+  header), then requires an approver group (none of them a viewer group) to decide;
 - the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
-  username>}`, never a form field. The username is sent **unchanged**: Authentik's usernames are
+  username>}`, never a form field. The username is sent **unchanged**: an IdP's usernames may be
   case-sensitive (`Bob` and `bob` may be two accounts), so the hub does not lower-case them, and a
   username that is not already canonical (lower-case, as the approver allowlist names it) cannot
-  decide. Name approvers in Authentik in lower case. A username can be renamed by an IdP admin;
-  pinning the approver to the IdP's immutable id (Authentik's `X-Authentik-Uid`, passed by the
-  front door next to the username) is a recommended follow-up: the hub does not receive that
-  header today;
+  decide. Name approvers in the IdP in lower case (the default IdP stores them lower case). A
+  username can be renamed by an IdP admin; pinning the approver to the IdP's immutable id (the
+  token's `sub` claim, which the auth proxy could pass next to the username) is a recommended
+  follow-up: the hub does not receive it today;
 - the form carries the request id **and the digest shown**; the hub refuses (`409`) when the
   broker's current digest differs, so a person approves exactly what they read, and the broker
   binds the approval to that digest again;
