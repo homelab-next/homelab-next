@@ -16,6 +16,7 @@ def _file(stmts, covered):
 def _report(**overrides):
     files = {
         "homelabnext/broker/__init__.py": _file(100, 95),
+        "homelabnext/grants.py": _file(10, 10),
         "homelabnext/scope/guard.py": _file(50, 45),
         "homelabnext/scope/policy.py": _file(50, 45),
         "homelabnext/records/notes.py": _file(10, 9),

@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Agent memory is controlled (checklist M-09): validated writes only, owner-scoped reads."""
 
-import copy
-
 import pytest
-from agent_support import inputs, library, manifest, spec
+from agent_support import inputs, library, lock_for, manifest, policy_for, spec, verified
 
-from homelabnext.agent import assemble_pack, compile_profile
+from homelabnext.agent import (
+    UnverifiedProfile,
+    assemble_pack,
+    compile_profile,
+    profile_digest,
+    verified_profile,
+)
 from homelabnext.agent.memory import (
     FileBackend,
     InMemoryBackend,
@@ -18,14 +22,14 @@ from homelabnext.agent.memory import (
 
 @pytest.fixture
 def reader():
-    return compile_profile(spec(), library())
+    return verified(compile_profile(spec(), library()))
 
 
 @pytest.fixture
 def other():
     s = spec()
     s["id"] = "profile:other-reader"
-    return compile_profile(s, library())
+    return verified(compile_profile(s, library()))
 
 
 def up(op, key, value=None, scope="analyst"):
@@ -91,16 +95,26 @@ def test_reading_a_scope_the_profile_lacks_is_refused(reader):
         MemoryStore().read(reader, "responder")
 
 
-def test_a_profile_edited_after_compile_gets_no_access(reader):
-    widened = copy.deepcopy(reader)
+@pytest.mark.parametrize("redigest", [False, True])
+def test_a_profile_edited_after_compile_gets_no_access(reader, redigest):
+    """Only a VerifiedProfile is accepted: a widened dict is refused even with its digest
+    recomputed (anyone holding the dict can do that)."""
+    widened = reader.data()
     widened["memory_scopes"] = ["analyst", "responder"]
+    if redigest:
+        widened["digest"] = profile_digest(widened)
     store = MemoryStore()
-    with pytest.raises(MemoryAccessError, match="digest"):
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         store.read(widened, "responder")
-    with pytest.raises(MemoryAccessError, match="digest"):
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         store.apply_updates(widened, [up("add", "k", "v", scope="responder")])
+    with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
+        store.apply_report(widened, {})
+    # and it cannot become one: the lock pins the reviewed digest
+    with pytest.raises(UnverifiedProfile, match="does not verify"):
+        verified_profile(widened, policy=policy_for(reader), lock=lock_for(reader))
     unsigned = {k: v for k, v in reader.items() if k != "digest"}
-    with pytest.raises(MemoryAccessError):
+    with pytest.raises(UnverifiedProfile):
         store.read(unsigned, "analyst")
 
 

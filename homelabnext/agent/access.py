@@ -27,7 +27,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .compiler import TIER_RANK, profile_digest
+from homelabnext.grants import TIER_RANK
+
+from .compiler import VerifiedProfile, require_verified
 from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack
@@ -163,13 +165,6 @@ def principal_access(
     return {"principal": principal, "kind": "agent", "grants": grants, "denials": denials}
 
 
-def _check_profile(profile: Mapping[str, Any]) -> None:
-    if not isinstance(profile, Mapping) or not profile.get("id") or not profile.get("digest"):
-        raise SpecError("access needs a compiled agent profile (id and digest)")
-    if profile_digest(profile) != profile["digest"]:
-        raise SpecError(f"{profile['id']}: profile digest does not match its content")
-
-
 def _runs_on(registry: Any, runs_on: str | None) -> Any:
     if runs_on is None:
         svc = registry.by_capability("agent-runtime")
@@ -183,16 +178,17 @@ def _runs_on(registry: Any, runs_on: str | None) -> Any:
 
 
 def access_block(
-    profile: Mapping[str, Any],
+    profile: VerifiedProfile,
     registry: Any,
     *,
     runs_on: str | None = None,
     broker: Mapping[str, Any] | None = None,
     classes: ToolClasses | None = None,
 ) -> dict:
-    """The structured access block for ``profile`` running on registry host ``runs_on``
+    """The structured access block for ``profile`` (a
+    :class:`~homelabnext.agent.compiler.VerifiedProfile`) running on registry host ``runs_on``
     (default: the host of the registry's ``agent-runtime`` service)."""
-    _check_profile(profile)
+    require_verified(profile, "access_block")
     host = _runs_on(registry, runs_on)
     access = principal_access(
         profile["id"], registry, profile=profile, broker=broker, classes=classes
@@ -254,8 +250,10 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
     """Why ``manifest`` may not feed a session of ``profile`` (empty: it may).
 
     The manifest is bound to a persona and the profile declares what the agent may hold, so the
-    two are only both in hand here:
+    two are only both in hand here (and in ``hnx agent lint``, for the profiles a manifest names):
 
+    * the profile's persona is the manifest's, and a manifest that names its ``profiles`` names
+      this one;
     * an actor (``reads_untrusted: false``) is never given a ``source: input`` section, the raw
       content a reader exists to turn into validated structured output (G-03/G-04);
     * every manifest tool is an MCP server the profile is granted, so the pack never lists a tool
@@ -264,6 +262,14 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
     """
     pid = profile.get("id")
     problems: list[str] = []
+    if manifest.get("persona") != profile.get("persona"):
+        problems.append(
+            f"manifest persona {manifest.get('persona')!r} is not the profile's "
+            f"{profile.get('persona')!r}"
+        )
+    named = manifest.get("profiles")
+    if named is not None and pid not in named:
+        problems.append(f"the manifest names profiles {sorted(named)}, not {pid}")
     if profile.get("reads_untrusted", True) is False:
         raw = sorted(s["name"] for s in manifest.get("sections", []) if s.get("source") == "input")
         if raw:
@@ -285,7 +291,7 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
 def start_session(
     manifest: Mapping[str, Any],
     inputs: Mapping[str, Any],
-    profile: Mapping[str, Any],
+    profile: VerifiedProfile,
     registry: Any,
     *,
     runs_on: str | None = None,
@@ -297,26 +303,25 @@ def start_session(
     """Assemble a session's context pack with the profile's access block and the project's terms
     (:mod:`homelabnext.agent.terms`) as stable sections.
 
+    ``profile`` is a :class:`~homelabnext.agent.compiler.VerifiedProfile` (verified against the
+    ceiling policy and the lock of reviewed digests); a dict is refused, digested or not.
+
     ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
     been selected for this very profile (id and digest), and goes into the volatile tier.
 
     The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
     either is refused, so a manifest cannot replace or remove what the agent is told about its
-    access and about the project's terms and scope.  The profile's persona
-    must be the manifest's, and :func:`session_problems` must find nothing.  Stable content is never cut, so a block that does not fit
+    access and about the project's terms and scope.  :func:`session_problems` must find nothing
+    (the persona is the manifest's, the manifest names this profile if it names any, and the
+    tools and memory scopes fit).  Stable content is never cut, so a block that does not fit
     ``budget_chars`` defers the pack instead of being truncated.
     """
-    _check_profile(profile)
+    require_verified(profile, "start_session")
     for s in manifest.get("sections", []):
         if s.get("name") == ACCESS_SECTION:
             raise SpecError(f"section name {ACCESS_SECTION!r} is reserved for the access block")
         if s.get("name") == TERMS_SECTION:
             raise SpecError(f"section name {TERMS_SECTION!r} is reserved for the project's terms")
-    if manifest.get("persona") != profile.get("persona"):
-        raise SpecError(
-            f"manifest persona {manifest.get('persona')!r} is not the profile's "
-            f"{profile.get('persona')!r}"
-        )
     problems = session_problems(manifest, profile)
     if problems:
         raise SpecError("; ".join(problems))

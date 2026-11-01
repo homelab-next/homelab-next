@@ -61,7 +61,7 @@ def _review(rec: Mapping[str, Any]) -> list[str]:
     return roles
 
 
-def build(cat: servers.Catalog, profiles: Iterable[Mapping[str, Any]] = ()) -> dict[str, Any]:
+def build(cat: servers.ServerCatalog, profiles: Iterable[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """The view-model: one row per server (id order), with its grants by profile id."""
     holders: dict[str, list[str]] = {}
     for p in profiles:

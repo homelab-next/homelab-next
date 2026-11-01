@@ -117,7 +117,7 @@ def test_the_mcp_line_comes_from_the_mcp_catalog(reg):
     assert "- MCP tool server `lake` (http, `/mcp`)" in render_page(reg, reg.services["lake-query"])
     assert "- MCP: none" in render_page(reg, reg.services["dns"], CATALOG)
     # a registry MCP entry no catalog record serves is said to be missing from the catalog
-    empty = servers.Catalog(ROOT / "examples" / "mcp")
+    empty = servers.ServerCatalog(ROOT / "examples" / "mcp")
     assert "not in the MCP catalog" in render_page(reg, reg.services["lake-query"], empty)
 
 

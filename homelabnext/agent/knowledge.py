@@ -60,9 +60,8 @@ from typing import Any
 
 from homelabnext.graph import Edge, Graph, dumps, is_active, related, seeds_for
 
-from .compiler import profile_digest
+from .compiler import VerifiedProfile, require_verified
 from .digest import canonical_json, sha256_text
-from .errors import SpecError
 from .include import normalise_include
 from .pack import KNOWLEDGE_PREFIX
 
@@ -343,15 +342,8 @@ def _section_name(rank: int, nid: str) -> str:
     return f"{KNOWLEDGE_PREFIX}{rank:03d}-" + re.sub(r"[^A-Za-z0-9._-]+", "-", nid).strip("-")
 
 
-def _check_profile(profile: Mapping[str, Any]) -> None:
-    if not isinstance(profile, Mapping) or not profile.get("id") or not profile.get("digest"):
-        raise SpecError("knowledge needs a compiled agent profile (id and digest)")
-    if profile_digest(profile) != profile["digest"]:
-        raise SpecError(f"{profile['id']}: profile digest does not match its content")
-
-
 def select_knowledge(
-    profile: Mapping[str, Any],
+    profile: VerifiedProfile,
     graph: Graph,
     root: str | Path,
     *,
@@ -359,12 +351,12 @@ def select_knowledge(
     task_text: str = "",
     graph_digest: str | None = None,
 ) -> Selection:
-    """Run ``profile``'s ``include`` rules over ``graph`` (built from the checkout at ``root``).
+    """Run ``profile``'s (a :class:`~homelabnext.agent.compiler.VerifiedProfile`) ``include`` rules over ``graph`` (built from the checkout at ``root``).
 
     The rules are re-checked against the profile's grants here (the compiler's check is not
     trusted), so an edited profile that seeds from an ungranted thing raises
     :class:`~homelabnext.agent.errors.IncludeViolation`."""
-    _check_profile(profile)
+    require_verified(profile, "select_knowledge")
     grants = profile.get("grants") or {}
     rules = normalise_include(profile.get("include"), grants)
     root = Path(root).resolve()

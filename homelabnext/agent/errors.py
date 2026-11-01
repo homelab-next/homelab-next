@@ -93,3 +93,13 @@ class IncludeViolation(AgentError):
             + "; ".join(self.problems)
             + " (include adds knowledge about grants the profile holds; it never adds a grant)"
         )
+
+
+class UnverifiedProfile(AgentError):
+    """A consumer that acts on a profile (session start, memory, knowledge, keyring) was handed
+    something other than a :class:`~homelabnext.agent.compiler.VerifiedProfile`, or a profile
+    that does not verify against the ceiling policy and the lock of reviewed digests."""
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = list(problems)
+        super().__init__("; ".join(self.problems))

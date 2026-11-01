@@ -73,7 +73,7 @@ from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.models.store import ProblemsError
 from homelabnext.modules import rules as module_rules
 from homelabnext.registry.model import RegistryError, secret_env_name
-from homelabnext.registry.model_tlp import send_ceiling, tier_disagreement
+from homelabnext.registry.model_tlp import DATA_TIERS, send_ceiling, tier_disagreement
 from homelabnext.registry.models import RoleTable, RoleTableError
 
 from . import agent_homes
@@ -97,7 +97,6 @@ SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 ROLE_LIMIT_KEYS = ("max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
 LOCALITIES = ("local", "cloud")
-DATA_TIERS = ("local-only", "cloud-allowed")
 #: the ``metadata`` tag on every key this generator declares: provisioning deletes a tagged key
 #: whose alias the spec no longer declares, and never touches an untagged one
 MANAGED = "hnx-managed"

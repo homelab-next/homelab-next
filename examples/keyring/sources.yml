@@ -5,5 +5,7 @@
 registry: ../services.yml
 profiles:
   - ../../schemas/agent/examples/profile.*.json
+policy: policy.yml
+lock: lock.yml
 broker: ../../schemas/broker/examples/manifest.example.json
 out: keyring.json

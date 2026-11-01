@@ -380,15 +380,28 @@ def test_lint_rules_and_policy(tmp_path, capsys, monkeypatch):
 
 
 # ---------------------------------------------------------------- every capability is classed
+def _example_registries() -> list[Path]:
+    """Every example service registry (``examples/**/services.yml`` with a ``registry_version``;
+    a module's ``registry/services.yml`` is rows it contributes, whose feature capability is the
+    module id and is classed by no packaged table)."""
+    return [
+        p
+        for p in sorted((ROOT / "examples").rglob("services.yml"))
+        if "registry_version" in (yaml.safe_load(p.read_text()) or {})
+    ]
+
+
 def _named_capabilities() -> dict[str, str]:
-    """Every capability the repository names: registry services, the conformance contracts, the
-    capability list and the module slots, each with where it was found."""
+    """Every capability the repository names: the services of every example registry, the
+    conformance contracts, the capability list and the module slots, each with where it was
+    found."""
     from homelabnext.conform.registry import CAPABILITIES, EXTENDED
     from homelabnext.registry.model import load
 
     out = {
-        f"cap:{s.capability}": f"registry svc:{n}"
-        for n, s in load(ROOT / "examples" / "services.yml").services.items()
+        f"cap:{s.capability}": f"{reg.relative_to(ROOT)} svc:{n}"
+        for reg in _example_registries()
+        for n, s in load(reg).services.items()
         if s.capability
     }
     out |= {f"cap:{c}": "conformance" for c in (*CAPABILITIES, *EXTENDED)}
@@ -411,6 +424,19 @@ def test_every_capability_the_repository_names_is_classed():
     assert missing == {}
     for cap in ("cap:automation", "cap:agent-runtime", "cap:records-db", "cap:dns", "cap:backup"):
         assert set(table.classify("capabilities", cap)) & table.broker_only, cap
+    # the network controller, endpoint forensics and the password store act or hold credentials
+    for cap in ("cap:router-console", "cap:dfir", "cap:password-manager", "cap:detonation"):
+        assert set(table.classify("capabilities", cap)) & table.broker_only, cap
+
+
+def test_the_coverage_walk_reads_every_example_registry():
+    names = {p.relative_to(ROOT).as_posix() for p in _example_registries()}
+    assert {
+        "examples/services.yml",
+        "examples/four-box-lab/services.yml",
+        "examples/lab-topology/services.yml",
+        "examples/minimal/services.yml",
+    } <= names
 
 
 def test_an_unclassified_capability_is_refused():

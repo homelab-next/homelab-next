@@ -4,8 +4,10 @@
 ``compile SPEC --library LIB [--policy POLICY]``  compile a profile spec against a parts library.
 ``verify PROFILE --policy POLICY [--lock LOCK]``  check a compiled profile against the policy.
 ``pack MANIFEST --inputs FILE [--denylist FILE]`` assemble a context pack and print its hash.
-    ``[--profile P --registry R [--runs-on HOST] [--broker M]]`` start a session: the pack gets
-                                                  the profile's access block (stable ``access``).
+    ``[--profile P --policy POLICY --lock LOCK --registry R [--runs-on HOST] [--broker M]]``
+                                                  start a session: the profile, verified against
+                                                  the policy and the lock, gives the pack its
+                                                  access block (stable ``access``).
     ``[--root DIR] [--task-path P ...] [--task-text T | --task-file F] [--explain]``
                                                   with a profile that has ``include:`` rules, add
                                                   the linked knowledge from the graph of the
@@ -20,7 +22,9 @@
 ``lint [PATH ...]``                               readers cannot act (G-03) and actors act only
                                                   through the broker (G-13): every agent profile
                                                   and context manifest under PATH (default
-                                                  ``.``); ``--rule R`` runs one of the two,
+                                                  ``.``), and every manifest against the
+                                                  profiles it names (what ``start_session``
+                                                  refuses); ``--rule R`` runs one of the three,
                                                   ``--policy P`` supplies each profile's
                                                   ``direct_mcp`` (without it no direct server).
 ``prompts lint [PATH ...]``                         G-01 template lint (default: shipped templates).
@@ -35,7 +39,8 @@ data_tier, model_role}}}``, owned and reviewed separately from the specs (``data
 profile is granted a local-only MCP server).  Lock file: ``{profiles: {<profile id>: <digest>}}``.
 Exit codes: 0 ok, 1 refused (missing part, ceiling, reader, broker or budget violation, an
 invalid spec, policy, lock, manifest or inputs document; for ``lint``, a reader holding an acting
-tool, a profile acting other than through the broker, or no profile found at all), 2 a usage
+tool, a profile acting other than through the broker, a manifest that does not fit a profile it
+names, or no profile found at all), 2 a usage
 error or a spec, library, policy, lock, manifest, inputs, profile or broker file that cannot be
 read or parsed, 3 (``pack`` only) the pack was assembled but is ``deferred``.  ``prompts lint``
 and ``injection`` exit 1 on any problem,
@@ -56,7 +61,14 @@ from homelabnext.ids import MappingResolver
 from homelabnext.registry import RegistryError
 
 from .access import start_session
-from .compiler import CeilingPolicy, PartsLibrary, compile_profile, verify_profile
+from .compiler import (
+    CeilingPolicy,
+    PartsLibrary,
+    compile_profile,
+    lock_from_mapping,
+    verified_profile,
+    verify_profile,
+)
 from .errors import AgentError
 from .pack import assemble_pack
 from .prompts_cli import add_injection_parser, add_prompts_parser, run_injection, run_prompts
@@ -98,6 +110,10 @@ def _library(path: str) -> PartsLibrary:
 
 def _policy(path: str) -> CeilingPolicy:
     return CeilingPolicy.from_mapping(_load(path) or {}, source=path)
+
+
+def _lock(path: str) -> dict[str, str]:
+    return lock_from_mapping(_load(path), source=path)
 
 
 def _emit(doc: dict, out: str | None) -> None:
@@ -143,7 +159,7 @@ def _terms(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
-def _knowledge(profile: dict, args: argparse.Namespace) -> Any:
+def _knowledge(profile: Any, args: argparse.Namespace) -> Any:
     """The profile's knowledge selection over a fresh graph of ``--root``."""
     from homelabnext.graph import build
 
@@ -195,6 +211,8 @@ def main(argv: list[str]) -> int:
         "--denylist", help="deny-list file (one term or re:<regex> per line) redacted from input"
     )
     p.add_argument("--profile", help="compiled profile: start a session with its access block")
+    p.add_argument("--policy", help="ceiling policy the --profile is verified against")
+    p.add_argument("--lock", help="reviewed digests the --profile is verified against")
     p.add_argument("--registry", help="service registry (with --profile)")
     p.add_argument("--runs-on", help="registry host the agent runs on (default: agent-runtime)")
     p.add_argument("--broker", help="broker manifest, to list the profile's broker actions")
@@ -214,7 +232,7 @@ def main(argv: list[str]) -> int:
     t.add_argument("path", nargs="?", default="docs/terms.md")
     k = sub.add_parser("keyring", help="generate the keyring from its sources, or check drift")
     k.add_argument("action", choices=("build", "check"))
-    k.add_argument("sources", help="sources file: {registry, profiles, broker, out}")
+    k.add_argument("sources", help="sources file: {registry, profiles, policy, lock, broker, out}")
     k.add_argument("--classes", help="capability-class table (default: the packaged one)")
     add_prompts_parser(sub)
     add_injection_parser(sub)
@@ -280,11 +298,7 @@ def main(argv: list[str]) -> int:
             print(f"compiled {profile['id']} {profile['digest']}", file=sys.stderr)
             return 0
         if args.cmd == "verify":
-            lock = None
-            if args.lock:
-                lock = (_load(args.lock) or {}).get("profiles")
-                if not isinstance(lock, dict):
-                    raise AgentError(f"{args.lock}: expected a 'profiles' mapping of id -> digest")
+            lock = _lock(args.lock) if args.lock else None
             problems = verify_profile(
                 _load(args.profile), policy=_policy(args.policy), lock=lock, classes=classes
             )
@@ -302,9 +316,19 @@ def main(argv: list[str]) -> int:
         if args.profile or args.registry:
             if not (args.profile and args.registry):
                 raise AgentError("--profile and --registry go together")
+            if not (args.policy and args.lock):
+                raise AgentError(
+                    "--profile needs --policy and --lock: a session starts only from a profile "
+                    "verified against the ceiling policy and the reviewed digests"
+                )
             from homelabnext.registry import load as load_registry
 
-            profile = _load(args.profile)
+            profile = verified_profile(
+                _load(args.profile) or {},
+                policy=_policy(args.policy),
+                lock=_lock(args.lock),
+                classes=classes,
+            )
             knowledge = None
             if profile.get("include") or args.explain:
                 from .knowledge import explain
@@ -325,6 +349,8 @@ def main(argv: list[str]) -> int:
         else:
             if args.explain:
                 raise AgentError("--explain needs --profile and --registry")
+            if args.policy or args.lock:
+                raise AgentError("--policy and --lock go with --profile")
             pack, digest = assemble_pack(manifest, _load(args.inputs) or {}, denylist=deny)
         if args.out or not args.explain:
             _emit({"hash": digest, "pack": pack}, args.out)

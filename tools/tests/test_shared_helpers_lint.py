@@ -91,6 +91,11 @@ def _rules(src: str) -> list[str]:
         ("import sqlite3\n", "lake"),
         ("from pyiceberg.catalog import load_catalog\n", "lake"),
         ('URL = "/v1/statement"\n', "lake"),
+        ('RANK = {"read": 0, "write": 1, "execute": 2, "privileged": 3}\n', "tiers"),
+        (
+            'def rank(t):\n    return {"privileged": 9, "read": 0, "execute": 2, "write": 1}[t]\n',
+            "tiers",
+        ),
         ("from referencing import Registry\nreg = Registry()\n", "schema"),
         ("from referencing import Registry as R\nreg = R()\n", "schema"),
         (
@@ -114,6 +119,9 @@ def test_flags_private_helpers(src, rule):
         "import json\ndef report(out, doc):\n    out.write_text(json.dumps(doc).replace('a', 'b'))\n",
         "from homelabnext.state import StateStore\nStateStore('x.json').set('k', 1)\n",
         "from homelabnext.lake import FakeLake\nFakeLake().query('SELECT 1')\n",
+        "from homelabnext.grants import TIER_RANK\nTIER_RANK['read']\n",
+        # a subset of the tiers is not a ranking of them
+        'LEVEL = {"read": "read", "write": "write"}\n',
         "from homelabnext.schema_registry import validator\nvalidator('ids', 'common.schema.json')\n",
         # a Registry that is not referencing's (the invariants' own) is not a schema registry
         "from homelabnext.invariants.api import Registry\nreg = Registry()\n",

@@ -57,6 +57,28 @@ INVALID_TABLE = "invalid-role-table"
 #: the default of a request's label: the request carried none at all
 _ABSENT: object = object()
 
+#: the data tiers a profile, a key or an MCP server may declare; this module is the one place a
+#: tier is mapped to a TLP label (``tests/models/test_data_tier_one_mapping.py`` holds the rest of
+#: the tree to it)
+DATA_TIERS = ("local-only", "cloud-allowed")
+
+
+def tier_label(data_tier: object) -> tlp.Label:
+    """The label a ``data_tier`` reads as where nothing declares one, for what is *sent* or
+    *returned* (decisions 2, 11 and 12): ``cloud-allowed`` is the cloud-role ceiling (``clear``);
+    ``local-only``, absent or unknown is ``red``, the default of unlabelled data."""
+    return CLOUD_CEILING if data_tier == "cloud-allowed" else tlp.Label.RED
+
+
+def receive_ceiling(tlp_ceiling: object = None, data_tier: object = None) -> tlp.Label:
+    """The TLP ceiling a profile *receives* data at (decision 12): its declared ``tlp_ceiling``
+    (read as data: a value that is not a label is ``red``), else what its ``data_tier`` already
+    lets it receive: ``local-only`` data (``red``) for a local-only profile, ``clear`` for any
+    other, so a profile that declares no ceiling is granted nothing it was not granted before."""
+    if tlp_ceiling is not None:
+        return tlp.read(tlp_ceiling)
+    return tlp.Label.RED if data_tier == "local-only" else CLOUD_CEILING
+
 
 def send_ceiling(tlp_ceiling: object = _ABSENT, data_tier: object = None) -> tlp.Label:
     """A sending profile's TLP ceiling, as the gateway rule reads it (decision 11).
@@ -69,7 +91,7 @@ def send_ceiling(tlp_ceiling: object = _ABSENT, data_tier: object = None) -> tlp
     """
     if tlp_ceiling is not _ABSENT and tlp_ceiling is not None:
         return tlp.read(tlp_ceiling)
-    return CLOUD_CEILING if data_tier == "cloud-allowed" else tlp.Label.RED
+    return tier_label(data_tier)
 
 
 def data_tier_of(label: tlp.Label) -> str:

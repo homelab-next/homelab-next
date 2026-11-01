@@ -18,9 +18,10 @@ agent profile that owns the memory.
 * **Owner and scope.**  Memory belongs to a compiled profile's ``id`` and is partitioned by the
   profile's ``memory_scopes``.  A write or read in a scope the profile does not hold is refused,
   and so is a read of another profile's memory (``owner=``): two profiles that both list a scope
-  named ``analyst`` still have two separate memories.  The profile must carry its ``digest`` and
-  match it.  That is internal consistency only: whoever holds the dict can re-digest it, so the
-  caller (platform code) passes a profile it checked with ``verify_profile(policy=, lock=)``.
+  named ``analyst`` still have two separate memories.  The profile must be a
+  :class:`~homelabnext.agent.compiler.VerifiedProfile` (verified against the ceiling policy and
+  the lock of reviewed digests): a dict is refused, since whoever holds one can change its ``id``
+  or ``memory_scopes`` and recompute its digest.
 
 Backends only store bytes: :class:`InMemoryBackend` (tests, one process) and
 :class:`FileBackend` (one crash-safe, locked :class:`~homelabnext.state.StateStore` file keyed by
@@ -34,7 +35,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from .compiler import profile_digest
+from .compiler import VerifiedProfile, require_verified
 from .errors import AgentError
 from .report import validate_report
 from .schemas import schema_errors
@@ -94,17 +95,9 @@ class FileBackend:
         return self._store.update(owner, lambda cur: fn(copy.deepcopy(cur or {})), default={})
 
 
-def _identity(profile: Mapping[str, Any]) -> tuple[str, frozenset[str]]:
-    """The owner id and scopes of a compiled profile whose digest checks out."""
-    if not isinstance(profile, Mapping) or not isinstance(profile.get("id"), str):
-        raise MemoryAccessError("memory needs a compiled agent profile (with an 'id')")
-    digest = profile.get("digest")
-    if not digest:
-        raise MemoryAccessError(f"{profile['id']}: profile has no digest; compile it first")
-    if profile_digest(profile) != digest:
-        raise MemoryAccessError(
-            f"{profile['id']}: profile digest does not match its content (edited after compile?)"
-        )
+def _identity(profile: VerifiedProfile) -> tuple[str, frozenset[str]]:
+    """The owner id and scopes of a verified profile."""
+    require_verified(profile, "agent memory")
     scopes = profile.get("memory_scopes") or []
     return profile["id"], frozenset(scopes)
 
@@ -163,7 +156,7 @@ class MemoryStore:
 
     def apply_updates(
         self,
-        profile: Mapping[str, Any],
+        profile: VerifiedProfile,
         updates: Any,
         *,
         pack_id: str | None = None,
@@ -185,7 +178,7 @@ class MemoryStore:
 
     def apply_report(
         self,
-        profile: Mapping[str, Any],
+        profile: VerifiedProfile,
         report: Mapping[str, Any],
         *,
         pack: Mapping[str, Any] | None = None,
@@ -216,7 +209,7 @@ class MemoryStore:
 
     def read(
         self,
-        profile: Mapping[str, Any],
+        profile: VerifiedProfile,
         scope: str,
         *,
         owner: str | None = None,
