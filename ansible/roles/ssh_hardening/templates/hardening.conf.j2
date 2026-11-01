@@ -17,3 +17,10 @@ AllowGroups {{ ssh_hardening_allow_groups | join(' ') }}
 AuthorizedKeysCommand {{ ssh_hardening_authorized_keys_command }}
 AuthorizedKeysCommandUser nobody
 {% endif %}
+{% if ssh_hardening_trusted_user_ca_keys %}
+TrustedUserCAKeys {{ ssh_hardening_trusted_user_ca_file }}
+AuthorizedPrincipalsFile {{ ssh_hardening_principals_dir }}/%u
+{% endif %}
+{% if ssh_hardening_revoked_keys %}
+RevokedKeys {{ ssh_hardening_revoked_keys_file }}
+{% endif %}

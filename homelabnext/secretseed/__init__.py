@@ -170,15 +170,10 @@ def _rule(where: str, raw: Any, *, default: bool = False) -> Rule:
 
 def load_spec(path: str | Path) -> Spec:
     """Read ``secrets.yml``: ``{secrets_version: 1, default, rules: [...], vaultwarden}``."""
-    import yaml
-
-    from homelabnext._yaml import UniqueKeyLoader
+    from homelabnext._yaml import load_unique
 
     p = Path(path)
-    try:
-        doc = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
-    except (OSError, yaml.YAMLError) as exc:
-        raise SeedError(f"cannot read {p}: {exc}") from exc
+    doc = load_unique(p, SeedError)
     if not isinstance(doc, dict) or doc.get("secrets_version") != 1:
         raise SeedError(f"{p}: expected a mapping with secrets_version: 1")
     extra = set(doc) - {"secrets_version", "default", "rules", "also", "vaultwarden"}
