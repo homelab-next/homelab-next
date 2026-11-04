@@ -31,10 +31,10 @@ field access and engine-specific functions are outside it. Results are compared 
 `normalize_result_rows`.
 
 The two expressions library code needs beyond the subset, a struct field and the UTC date of a
-timestamp, come from `dialect.py`: each adapter that runs SQL declares `sql_dialect` (`sqlite`
-for `FakeLake`, `duckdb` for `DuckDBLake` and `IcebergLake`, `trino` for `TrinoLake` and
-`TrinoRestLake`), and only `CeilingReader.count_by` uses it. `CassetteLake` declares none, so a
-grouped read on it is refused rather than replayed in some other engine's SQL.
+timestamp, come from `dialect.py`: each adapter that runs SQL declares `sql_dialect`
+(`json-text` for `FakeLake`, whose SQLite stores structs as JSON text; `struct` for every adapter
+over native struct columns), and only `CeilingReader.count_by` uses it. `CassetteLake` declares
+none, so a grouped read on it is refused rather than replayed in some other engine's SQL.
 
 ## Idempotent write: commit, then checkpoint (`checkpoint.py`)
 

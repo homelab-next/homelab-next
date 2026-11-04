@@ -109,7 +109,7 @@ def schema_diffs(expected: TableSchema, ice_schema: Any) -> list[str]:
 # ---------------------------------------------------------------- the lake
 class IcebergLake(AdapterBase):
     #: queries run on DuckDB over the scanned Arrow tables (``query``)
-    sql_dialect = "duckdb"
+    sql_dialect = "struct"
 
     def __init__(
         self,

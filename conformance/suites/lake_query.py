@@ -225,7 +225,7 @@ class InterpolatingLake(FakeLake):
 class WrongDialectLake(FakeLake):
     """Defect: the adapter declares a dialect its engine does not speak."""
 
-    sql_dialect = "trino"
+    sql_dialect = "struct"
 
 
 MUTANTS = {

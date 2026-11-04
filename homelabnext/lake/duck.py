@@ -58,7 +58,7 @@ def run_duckdb(sql: str, params: Mapping[str, Any] | None, tables: Mapping[str, 
 class DuckDBLake(AdapterBase):
     """Read-only :class:`LakeClient` over in-memory Arrow tables (parity reference, tests)."""
 
-    sql_dialect = "duckdb"
+    sql_dialect = "struct"
 
     def __init__(
         self,

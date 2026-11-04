@@ -229,6 +229,7 @@ Schemas the contract's own code loads (found in the source, not curated):
 | [`schemas/ocsf/detection_finding.v1.json`](../../schemas/ocsf/detection_finding.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/dns_activity.v1.json`](../../schemas/ocsf/dns_activity.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/network_activity.v1.json`](../../schemas/ocsf/network_activity.v1.json) | `homelabnext.lake.tables` |
+| [`schemas/ocsf/novelty_finding.v1.json`](../../schemas/ocsf/novelty_finding.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/vulnerability_finding.v1.json`](../../schemas/ocsf/vulnerability_finding.v1.json) | `homelabnext.lake.tables` |
 
 ## Behavioural contract

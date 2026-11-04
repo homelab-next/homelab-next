@@ -111,3 +111,9 @@ allow:
     reason: prose example using a documentation address
   - path: "tests/modules/test_egress_policy.py"
     reason: the example sites' documentation addresses (RFC 5737, RFC 3849) as the rendered ruleset names them
+  - path: "tests/novelty/*"
+    reason: novelty test data; the addresses are entity values in synthetic lake rows (documentation addresses only, RFC 5737), never endpoints
+  - path: "tests/lake/test_count_by.py"
+    reason: count_by test data; the addresses are grouped column values in synthetic rows (documentation addresses only, RFC 5737)
+  - path: "schemas/ocsf/negative/novelty_finding.v1.*.json"
+    reason: negative schema fixtures, each a copy of the table's example (a documentation address as the finding's entity)

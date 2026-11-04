@@ -168,6 +168,7 @@ def test_multiple_values_and_nulls_are_not_counted(lake):
         ({"values": ["dst_endpoint"]}, "is a struct"),
         ({"values": ["time"]}, "is a timestamp"),
         ({"values": []}, "at least one value"),
+        ({"entity": None}, "or neither"),
         ({"time_column": "user_name"}, "time column"),
         ({"where": {"nope": 1}}, "not its column"),
         ({"where": {"user_name": None}}, "None"),
@@ -190,6 +191,15 @@ def test_bad_arguments_are_refused(lake, kwargs, match):
     table, entity, values = args.pop("table"), args.pop("entity"), args.pop("values")
     with pytest.raises(CeilingError, match=match):
         _reader(lake, Label.RED).count_by(table, entity, values, **args)
+
+
+def test_no_entity_and_no_values_counts_days(lake):
+    got = _reader(lake, Label.AMBER).count_by("authentication", None, [], since=SINCE, until=UNTIL)
+    assert got == [
+        GroupCount(None, (), date(2026, 3, 1), Label.GREEN, 2),
+        GroupCount(None, (), date(2026, 3, 2), Label.AMBER, 1),
+        GroupCount(None, (), date(2026, 3, 2), Label.GREEN, 1),
+    ]
 
 
 def test_more_groups_than_the_limit_is_an_error_never_a_truncation(lake):
@@ -224,9 +234,8 @@ class _Recorder:
 @pytest.mark.parametrize(
     "dialect, field, day",
     [
-        ("sqlite", 'json_extract("dst_endpoint", \'$."port"\')', 'substr("time", 1, 10)'),
-        ("duckdb", '"dst_endpoint"."port"', 'CAST("time" AS DATE)'),
-        ("trino", '"dst_endpoint"."port"', 'CAST("time" AS DATE)'),
+        ("json-text", 'json_extract("dst_endpoint", \'$."port"\')', 'substr("time", 1, 10)'),
+        ("struct", '"dst_endpoint"."port"', 'CAST("time" AS DATE)'),
     ],
 )
 def test_the_sql_follows_the_adapter_dialect(dialect, field, day):
@@ -251,15 +260,23 @@ def test_the_sql_follows_the_adapter_dialect(dialect, field, day):
 
 
 def test_every_query_adapter_declares_a_dialect():
-    from homelabnext.lake.trino import TrinoLake
-    from homelabnext.lake.trino_rest import TrinoRestLake
+    """Every adapter in the lake package that runs SQL declares the dialect count_by renders;
+    only the cassette, which replays recorded answers, declares none."""
+    import importlib
+    import pkgutil
 
-    assert FakeLake.sql_dialect == "sqlite"
-    assert TrinoLake.sql_dialect == TrinoRestLake.sql_dialect == "trino"
-    pytest.importorskip("duckdb")
-    from homelabnext.lake.duck import DuckDBLake
+    import homelabnext.lake as pkg
+    from homelabnext.lake.base import AdapterBase
+    from homelabnext.lake.dialect import DIALECTS
 
-    assert DuckDBLake.sql_dialect == "duckdb"
+    for mod in pkgutil.iter_modules(pkg.__path__):
+        importlib.import_module(f"homelabnext.lake.{mod.name}")
+    adapters = {c.__name__: c for c in AdapterBase.__subclasses__()}
+    assert len(adapters) >= 6 and FakeLake.sql_dialect == "json-text"
+    for name, cls in adapters.items():
+        want = None if name == "CassetteLake" else cls.__dict__.get("sql_dialect")
+        assert getattr(cls, "sql_dialect", None) == want, name
+        assert want is None or want in DIALECTS, name
 
 
 def test_duckdb_agrees_with_the_fake(lake):

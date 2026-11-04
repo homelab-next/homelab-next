@@ -195,7 +195,7 @@ class CeilingReader:
     def count_by(
         self,
         table: str,
-        entity: str,
+        entity: str | None,
         values: Sequence[str],
         *,
         since: datetime,
@@ -214,10 +214,17 @@ class CeilingReader:
         are bound parameters (equality only; ``None`` is refused, as ``= NULL`` matches nothing).
         The ceiling's row filter is applied in the query and every group's label is checked
         again, as :meth:`select` does.  More than ``limit`` groups raise :class:`TooManyGroups`:
-        nothing is truncated.  Groups come back sorted by entity, values, day and label."""
+        nothing is truncated.  Groups come back sorted by entity, values, day and label.
+
+        ``entity=None`` with no ``values`` counts per day and label only (the table's history in
+        the range, as this reader sees it); its groups have ``entity`` None and ``values`` ()."""
         schema = self._table(table)
-        if type(values) not in (list, tuple) or not values:
-            raise CeilingError(f"{table}: count_by needs at least one value column")
+        if type(values) not in (list, tuple):
+            raise CeilingError(f"{table}: count_by values must be a list of column paths")
+        if (entity is None) != (not values):
+            raise CeilingError(
+                f"{table}: count_by needs an entity and at least one value column (or neither)"
+            )
         dialect = dialect_of(self._lake)
         paths = dict(iter_columns(schema.columns))
 
@@ -231,7 +238,7 @@ class CeilingReader:
                 )
             return field_expr(dialect, path.split("."))
 
-        keys = [expr(entity, KEY_TYPES, "key")] + [expr(v, KEY_TYPES, "key") for v in values]
+        keys = [expr(k, KEY_TYPES, "key") for k in ([entity, *values] if values else [])]
         tcol = expr(time_column, ("timestamp",), "time column")
         for name, when in (("since", since), ("until", until)):
             if not isinstance(when, datetime) or when.utcoffset() is None:
@@ -253,7 +260,8 @@ class CeilingReader:
         group = [*keys, day_expr(dialect, tcol)]
         if schema.labelled:
             group.append(f'"{LABEL_COLUMN}"')
-        names = ["k_entity", *(f"k_v{i}" for i in range(len(values))), "k_day"]
+        names = (["k_entity"] if values else []) + [f"k_v{i}" for i in range(len(values))]
+        names.append("k_day")
         names += ["k_tlp"] if schema.labelled else []
         sql = (
             "SELECT "
@@ -279,7 +287,7 @@ class CeilingReader:
                 continue
             out.append(
                 GroupCount(
-                    r["k_entity"],
+                    r.get("k_entity"),
                     tuple(r[f"k_v{i}"] for i in range(len(values))),
                     _as_day(r["k_day"]),
                     label,

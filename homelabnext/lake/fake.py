@@ -33,7 +33,7 @@ def _ts_text(dt: datetime) -> str:
 
 class FakeLake(AdapterBase):
     #: struct fields are JSON text and timestamps UTC text (``dialect.py``)
-    sql_dialect = "sqlite"
+    sql_dialect = "json-text"
 
     def __init__(
         self,
