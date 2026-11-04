@@ -27,6 +27,7 @@ def test_each_reader_gets_its_row_filter():
             _r("group:soc", "red"),
             _r("module:pipe", "red", write=True),
             _r("user:alice", "amber+strict"),
+            _r("analyzer:novelty", "amber"),
         )
     )
     every = {(r.get("user") or r.get("group")): r for r in doc["tables"] if r.get("table") == ".*"}
@@ -35,6 +36,9 @@ def test_each_reader_gets_its_row_filter():
     assert every["^module:pipe$"]["privileges"] == ["SELECT", "INSERT", "DELETE"]
     assert "'amber+strict'" in every["^user:alice$"]["filter"]
     assert "'red'" not in every["^user:alice$"]["filter"].split("IN")[1]
+    # a platform analyzer (ADR-0035) signs in as the engine user named by its reader id
+    assert "'amber+strict'" not in every["^analyzer:novelty$"]["filter"]
+    assert every["^analyzer:novelty$"]["privileges"] == ["SELECT"]
 
 
 def test_a_reader_name_is_matched_exactly():

@@ -61,11 +61,12 @@ and with lake readers selected, it notes that no row is filtered by its label.
 A principal matching several rules (a user in a group) gets the first, so user rules come before
 group rules and each tier runs from the lowest ceiling up: the most restrictive applies, whatever
 order the list was written in. One exception to "most restrictive": a principal that has an entry
-of its own (`user:`, `profile:` or `module:`) is judged by that entry, even when it is also in a
+of its own (`user:`, `profile:`, `module:` or `analyzer:`) is judged by that entry, even when it is also in a
 group with a stricter one, because user rules come before group rules; give such a principal the
 ceiling it should have in its own entry. A principal no rule names reads nothing. An operator step: the
 lake-query adapter must sign each reader in to the engine as the user named by its whole reader id
-(`profile:x`, `module:y`, `user:alice`), and a `group:` reader is the engine group named after the
+(`profile:x`, `module:y`, `analyzer:novelty`, `user:alice`; an `analyzer:` is a platform
+analyzer such as the novelty analyzer, ADR-0035), and a `group:` reader is the engine group named after the
 colon. Any change to the list or the catalog is human-approve (`hnx site review-tier`).
 
 `lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every

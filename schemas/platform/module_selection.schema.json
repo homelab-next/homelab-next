@@ -854,8 +854,8 @@
           "reader": {
             "type": "string",
             "maxLength": 80,
-            "pattern": "^(?:profile|module|user|group):[a-z0-9][a-z0-9._-]{0,62}$(?!\\n)",
-            "description": "Who reads the lake: an agent profile, a module (its query consumer), or a person or group signing in to the query engine."
+            "pattern": "^(?:profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}$(?!\\n)",
+            "description": "Who reads the lake: an agent profile, a module (its query consumer), a platform analyzer (analyzer:novelty, ADR-0035), or a person or group signing in to the query engine."
           },
           "ceiling": {
             "enum": [

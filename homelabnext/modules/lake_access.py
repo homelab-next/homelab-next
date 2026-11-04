@@ -18,11 +18,11 @@ the first matching rule wins and a principal no rule matches is denied:
 * ``queries``: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal can match several rules (a user in a group), and the first match wins.  Rules are
-ordered user rules (``profile:``, ``module:``, ``user:``) before group rules, each tier by
+ordered user rules (``profile:``, ``module:``, ``analyzer:``, ``user:``) before group rules, each tier by
 ascending ceiling, then by reader id, whatever order the list was written in: among groups the
 most restrictive applies, but a principal with an entry of its own is judged by that entry, even
 when it is also in a group with a stricter ceiling (group membership is the engine's, not known
-here), so its own entry must carry the ceiling it should have (docs/modules.md says the same).  A ``profile:``, ``module:`` or
+here), so its own entry must carry the ceiling it should have (docs/modules.md says the same).  A ``profile:``, ``module:``, ``analyzer:`` or
 ``user:`` reader is the engine user whose name is the whole reader id (``user:alice`` signs in as
 ``user:alice``); a ``group:`` reader is the engine group of the part after the colon.
 """
@@ -40,9 +40,9 @@ __all__ = ["FILE", "KINDS", "LakeAccessError", "render", "write"]
 
 FILE = "lake-access.json"
 #: reader kinds whose rule names an engine user, and the one that names an engine group
-USER_KINDS = ("profile", "module", "user")
+USER_KINDS = ("profile", "module", "analyzer", "user")
 KINDS = (*USER_KINDS, "group")
-READER_RE = re.compile(r"(profile|module|user|group):[a-z0-9][a-z0-9._-]{0,62}")
+READER_RE = re.compile(r"(profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}")
 CATALOG_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 READ = ["SELECT"]
 WRITE = ["SELECT", "INSERT", "DELETE"]

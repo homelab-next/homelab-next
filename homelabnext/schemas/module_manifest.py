@@ -1525,9 +1525,10 @@ def module_selection_schema() -> dict[str, Any]:
         obj(
             {
                 "reader": pat(
-                    "(?:profile|module|user|group):[a-z0-9][a-z0-9._-]{0,62}",
-                    "Who reads the lake: an agent profile, a module (its query consumer), or a "
-                    "person or group signing in to the query engine.",
+                    "(?:profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}",
+                    "Who reads the lake: an agent profile, a module (its query consumer), a "
+                    "platform analyzer (analyzer:novelty, ADR-0035), or a person or group "
+                    "signing in to the query engine.",
                     80,
                 ),
                 "ceiling": {
