@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **Tables, schemas and commit-then-checkpoint idempotent writes.**
 
 - Contract: [`conformance.protocols.lake`](../../conformance/protocols/lake.py) (`conformance.protocols.lake:LakeClient`)
-- Conformance suite: [`conformance.suites.lake_catalog`](../../conformance/suites/lake_catalog.py) (11 checks: 11 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.lake_catalog`](../../conformance/suites/lake_catalog.py) (12 checks: 12 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -218,6 +218,7 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | `WriteNotSupported` | `LakeError` | The adapter is read-only (writes go through the catalog adapter). |  |
 | `CheckpointError` | `LakeError` |  |  |
 | `EndpointNotConfigured` | `LakeError` | No endpoint is configured for a capability. There is deliberately no default to fall back to. |  |
+| `BatchSourceMismatch` | `LakeError` | A batch id already committed by another source: replaying it would report that source's commit as this one's and write nothing, so the write is refused instead. |  |
 
 ### JSON Schemas
 
@@ -249,6 +250,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `naive-timestamp-refused` | MUST | a timestamp without a UTC offset is rejected |  |
 | `unknown-column-refused` | MUST | a column outside the pinned schema is rejected |  |
 | `source-mark-recorded` | MUST | source and high-water mark are committed with the batch |  |
+| `batch-id-bound-to-its-source` | MUST | a batch id committed by one source is refused, never replayed, for another |  |
 
 ### Features an adapter may declare
 
@@ -260,6 +262,7 @@ Each is a deliberately broken fake (`hnx conform run lake-catalog --target broke
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `batch-source-ignored` | `batch-id-bound-to-its-source` | a batch id replays whichever source committed it |
 | `idempotency-key-ignored` | `replay-writes-nothing` | a retried batch key is treated as new |
 
 ## Implementations
@@ -350,4 +353,4 @@ Depended on by: [lake-query](../systems/lake-query.md) ([[systems/lake-query|lak
    hnx conform run lake-catalog --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (11) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

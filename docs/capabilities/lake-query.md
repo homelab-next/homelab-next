@@ -218,6 +218,7 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | `WriteNotSupported` | `LakeError` | The adapter is read-only (writes go through the catalog adapter). |  |
 | `CheckpointError` | `LakeError` |  |  |
 | `EndpointNotConfigured` | `LakeError` | No endpoint is configured for a capability. There is deliberately no default to fall back to. |  |
+| `BatchSourceMismatch` | `LakeError` | A batch id already committed by another source: replaying it would report that source's commit as this one's and write nothing, so the write is refused instead. |  |
 
 ### JSON Schemas
 

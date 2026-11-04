@@ -122,6 +122,21 @@ def _(lake):
     assert (mark.batch_id, mark.high_water) == (key, "hw-42"), f"mark {mark}"
 
 
+@SUITE.check(
+    "batch-id-bound-to-its-source",
+    "a batch id committed by one source is refused, never replayed, for another",
+)
+def _(lake):
+    pre, key = uniq("c"), uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-0")], idempotency_key=key, source=uniq("src-a"))
+    other = [auth_row(f"{pre}-1")]
+    raises(
+        lambda: lake.write_batch(TABLE, other, idempotency_key=key, source=uniq("src-b")),
+        "another source's batch id",
+    )
+    assert _count(lake, pre) == 1, f"expected 1 row, found {_count(lake, pre)}"
+
+
 def make_fake():
     return FakeLake()
 
@@ -137,7 +152,29 @@ class ReplayingLake(FakeLake):
         return res
 
 
+class SourceBlindLake(FakeLake):
+    """Defect: a batch id replays whichever source committed it, so one writer can suppress
+    another's batch by using its id first."""
+
+    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None):
+        seen = self._db.execute(
+            "SELECT seq FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
+        ).fetchone()
+        if seen is not None:
+            from homelabnext.lake.protocol import WriteResult
+
+            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
+        return super().write_batch(
+            table, rows, idempotency_key=idempotency_key, source=source, high_water=high_water
+        )
+
+
 MUTANTS = {
+    "batch-source-ignored": Mutant(
+        SourceBlindLake,
+        "batch-id-bound-to-its-source",
+        "a batch id replays whichever source committed it",
+    ),
     "idempotency-key-ignored": Mutant(
         ReplayingLake, "replay-writes-nothing", "a retried batch key is treated as new"
     ),

@@ -15,6 +15,7 @@ from .base import normalize_value
 from .cassette import CassetteLake, compare, record
 from .checkpoint import Checkpoint, Ingestor, SourceState
 from .errors import (
+    BatchSourceMismatch,
     CassetteMiss,
     CheckpointError,
     EndpointNotConfigured,
@@ -30,6 +31,7 @@ from .protocol import LakeClient, LakeQuery, LakeWriter, Mark, TableInfo, WriteR
 from .tables import Column, TableSchema, get_schema, load_schemas
 
 __all__ = [
+    "BatchSourceMismatch",
     "CassetteLake",
     "CassetteMiss",
     "Checkpoint",

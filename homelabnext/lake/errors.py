@@ -63,3 +63,17 @@ class CheckpointError(LakeError):
 
 class EndpointNotConfigured(LakeError, LookupError):
     """No endpoint is configured for a capability. There is deliberately no default to fall back to."""
+
+
+class BatchSourceMismatch(LakeError):
+    """A batch id already committed by another source: replaying it would report that source's
+    commit as this one's and write nothing, so the write is refused instead."""
+
+
+def check_replay_source(table: str, batch_id: str, stored: str | None, source: str | None) -> None:
+    """Refuse a replay of ``batch_id`` whose recorded source (``stored``) is not ``source``.  A
+    ledger entry that recorded no source (older entries) is not judged."""
+    if stored is not None and stored != source:
+        raise BatchSourceMismatch(
+            f"{table}: batch {batch_id!r} was committed by source {stored!r}, not {source!r}"
+        )

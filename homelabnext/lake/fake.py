@@ -18,7 +18,7 @@ from typing import Any
 
 from .base import AdapterBase
 from .ddl import sqlite_ddl
-from .errors import LakeError, UnknownTable
+from .errors import LakeError, UnknownTable, check_replay_source
 from .protocol import Mark, TableInfo, WriteResult
 from .sqlparams import check_params
 from .tables import TableSchema, load_schemas, table_name
@@ -164,9 +164,11 @@ class FakeLake(AdapterBase):
         db.execute("BEGIN IMMEDIATE")
         try:
             seen = db.execute(
-                "SELECT seq FROM _hnx_batches WHERE tbl=? AND batch_id=?", (s.name, idempotency_key)
+                "SELECT seq, source FROM _hnx_batches WHERE tbl=? AND batch_id=?",
+                (s.name, idempotency_key),
             ).fetchone()
             if seen is not None:
+                check_replay_source(s.name, idempotency_key, seen[1], source)  # rolls back
                 db.execute("COMMIT")
                 return WriteResult(len(norm), 0, len(norm), True, str(seen[0]))
             fresh: list[dict[str, Any]] = []
