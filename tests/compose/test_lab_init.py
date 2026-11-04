@@ -3,9 +3,12 @@
 
 The fake's routes and payload shapes are those of Garage v2.5.0's
 ``doc/api/garage-admin-v2.json`` (``/v2/<OperationName>``, bearer token, ``404`` with a JSON
-``code`` for an unknown key or bucket alias).  Like the real v2 server it still answers
-``GET /v1/status``, with the v2 ``GetClusterStatus`` body, which has no ``node`` field: the v1
-initialiser fails on it, every other ``/v1/`` call is a 404 here.
+``code`` for an unknown key or bucket alias, ``403 AccessDenied`` for a wrong token), with the
+behaviour of its handlers in ``src/api/admin/`` where the spec is silent: ``AllowBucketKey`` only
+sets the flags sent as true, ``ApplyClusterLayout`` checks only the version, ``ImportKey`` refuses
+any id the cluster has ever held.  Like the real v2 server (``router_v2.rs``, ``from_v1``) it
+refuses the v1 calls whose semantics changed, ``GET /v1/status`` and ``POST /v1/layout``, with
+``400 InvalidRequest`` "v1/ endpoint is no longer supported"; the v1 initialiser fails on that.
 """
 
 from __future__ import annotations
@@ -47,12 +50,21 @@ class GarageV2:
         self.roles: list[dict] = []
         self.staged: list[dict] = []
         self.keys: dict[str, dict] = {}
+        self.deleted_keys: set[str] = set()  # tombstones: invisible, but their ids stay taken
+        self.fail: dict[str, int] = {}  # path -> status to answer instead (a broken server)
         self.buckets: dict[str, dict] = {}  # id -> bucket
         self.calls: list[tuple[str, str]] = []
 
     def status(self) -> dict:
         node = {"id": NODE, "isUp": True, "draining": False, "hostname": "object-store"}
         return {"layoutVersion": self.layout_version, "nodes": [node]}
+
+
+V1_REFUSED = {"/v1/status": "GetClusterStatus", "/v1/layout": "UpdateClusterLayout"}
+
+
+def url_path(target: str) -> str:
+    return urllib.parse.urlsplit(target).path
 
 
 def make_handler(state: GarageV2, token: str = TOKEN):
@@ -73,7 +85,9 @@ def make_handler(state: GarageV2, token: str = TOKEN):
             query = dict(urllib.parse.parse_qsl(url.query))
             state.calls.append((method, url.path))
             if self.headers.get("Authorization") != f"Bearer {token}":
-                return self._error(403, "Forbidden", "invalid admin token")
+                return self._error(403, "AccessDenied", "Forbidden: invalid admin token")
+            if url.path in state.fail:
+                return self._error(state.fail[url.path], "InternalError", "injected failure")
             body = None
             if method == "POST":
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -96,6 +110,10 @@ def make_handler(state: GarageV2, token: str = TOKEN):
             pass
 
         # --- endpoints ---------------------------------------------------------------
+        def v1_refused(self, query, body):
+            name = V1_REFUSED[url_path(self.path)]
+            self._error(400, "InvalidRequest", f"v1/ endpoint is no longer supported: {name}")
+
         def get_cluster_status(self, query, body):
             self._send(200, state.status())
 
@@ -119,6 +137,7 @@ def make_handler(state: GarageV2, token: str = TOKEN):
                     "parameters": {"zoneRedundancy": "maximum"},
                     "partitionSize": 0,
                     "stagedRoleChanges": state.staged,
+                    "stagedParameters": None,
                 },
             )
 
@@ -134,9 +153,8 @@ def make_handler(state: GarageV2, token: str = TOKEN):
         def apply_cluster_layout(self, query, body):
             if not isinstance(body, dict) or body.get("version") != state.layout_version + 1:
                 return self._error(400, "InvalidRequest", "version must be current + 1")
-            if not state.staged:
-                return self._error(400, "InvalidRequest", "no staged changes")
-            state.roles, state.staged = state.staged, []
+            # like Garage, nothing staged is not an error: the next version repeats the roles
+            state.roles, state.staged = state.staged or state.roles, []
             state.layout_version += 1
             self._send(200, {"message": [], "layout": {"version": state.layout_version}})
 
@@ -146,10 +164,13 @@ def make_handler(state: GarageV2, token: str = TOKEN):
                 return self._error(404, "NoSuchAccessKey", "no such key")
             self._send(200, key)
 
+        # Garage's ImportKey looks the id up in its key table, tombstones included, and
+        # answers 409 KeyAlreadyExists for any id it has held: a key is never re-imported,
+        # not even after DeleteKey (so a new secret for the same id needs a fresh store).
         def import_key(self, query, body):
             if not isinstance(body, dict) or not {"accessKeyId", "secretAccessKey"} <= set(body):
                 return self._error(400, "InvalidRequest", "ImportKeyRequest")
-            if body["accessKeyId"] in state.keys:
+            if body["accessKeyId"] in state.keys or body["accessKeyId"] in state.deleted_keys:
                 return self._error(409, "KeyAlreadyExists", "key exists")
             state.keys[body["accessKeyId"]] = {
                 "accessKeyId": body["accessKeyId"],
@@ -182,7 +203,15 @@ def make_handler(state: GarageV2, token: str = TOKEN):
             if not alias or self._bucket_by_alias(alias):
                 return self._error(409, "BucketAlreadyExists", "bucket exists")
             bucket_id = f"{len(state.buckets) + 1:064x}"
-            state.buckets[bucket_id] = {"id": bucket_id, "globalAliases": [alias], "keys": []}
+            state.buckets[bucket_id] = {
+                "id": bucket_id,
+                "created": "2026-01-01T00:00:00Z",
+                "globalAliases": [alias],
+                "websiteAccess": False,
+                "keys": [],
+                "objects": 0,
+                "bytes": 0,
+            }
             self._send(200, state.buckets[bucket_id])
 
         def allow_bucket_key(self, query, body):
@@ -195,14 +224,26 @@ def make_handler(state: GarageV2, token: str = TOKEN):
                 return self._error(404, "NoSuchBucket", "no such bucket")
             if body["accessKeyId"] not in state.keys:
                 return self._error(404, "NoSuchAccessKey", "no such key")
-            bucket["keys"] = [k for k in bucket["keys"] if k["accessKeyId"] != body["accessKeyId"]]
-            bucket["keys"].append(
-                {"accessKeyId": body["accessKeyId"], "permissions": body["permissions"]}
-            )
+            access = body["accessKeyId"]
+            entry = next((k for k in bucket["keys"] if k["accessKeyId"] == access), None)
+            if entry is None:
+                entry = {
+                    "accessKeyId": access,
+                    "name": state.keys[access]["name"],
+                    "permissions": {"read": False, "write": False, "owner": False},
+                    "bucketLocalAliases": [],
+                }
+                bucket["keys"].append(entry)
+            # Garage (bucket.rs, handle_bucket_change_key_perm) sets only the flags sent as
+            # true; a false or missing flag leaves the current grant as it is
+            for flag in ("read", "write", "owner"):
+                if body["permissions"].get(flag):
+                    entry["permissions"][flag] = True
             self._send(200, bucket)
 
     ROUTES = {
-        ("GET", "/v1/status"): Handler.get_cluster_status,  # v2 still serves it, v2-shaped
+        ("GET", "/v1/status"): Handler.v1_refused,
+        ("POST", "/v1/layout"): Handler.v1_refused,
         ("GET", "/v2/GetClusterStatus"): Handler.get_cluster_status,
         ("GET", "/v2/GetNodeInfo"): Handler.get_node_info,
         ("GET", "/v2/GetClusterLayout"): Handler.get_cluster_layout,
@@ -241,8 +282,8 @@ def test_a_fresh_cluster_gets_layout_key_bucket_and_grant(lab_init, garage):
     assert state.keys[ACCESS]["permissions"] == {"createBucket": True}
     (bucket,) = state.buckets.values()
     assert bucket["globalAliases"] == [BUCKET]
-    assert bucket["keys"] == [
-        {"accessKeyId": ACCESS, "permissions": {"read": True, "write": True, "owner": True}}
+    assert [(k["accessKeyId"], k["permissions"]) for k in bucket["keys"]] == [
+        (ACCESS, {"read": True, "write": True, "owner": True})
     ]
     assert all(path.startswith("/v2/") for _, path in state.calls), state.calls
 
@@ -264,3 +305,41 @@ def test_negative_a_wrong_admin_token_fails_loudly(lab_init, garage):
     with pytest.raises(SystemExit, match="lab_init:"):
         lab_init.init_object_store(url, "not-the-token", ACCESS, SECRET, BUCKET)
     assert not state.keys and not state.buckets
+
+
+def test_a_failed_key_lookup_stops_instead_of_importing(lab_init, garage):
+    state, url = garage
+    state.fail["/v2/GetKeyInfo"] = 500
+    with pytest.raises(SystemExit, match="key lookup failed: 500"):
+        lab_init.init_object_store(url, TOKEN, ACCESS, SECRET, BUCKET)
+    assert ("POST", "/v2/ImportKey") not in state.calls
+
+
+def test_a_deleted_key_id_cannot_be_imported_again(lab_init, garage):
+    """Garage v2 keeps the id of a deleted key: the import is refused (409) and the run stops
+    loudly, which is why rotating the lab secret needs a fresh store (``down -v``)."""
+    state, url = garage
+    state.deleted_keys.add(ACCESS)
+    with pytest.raises(SystemExit, match="key import failed: 409"):
+        lab_init.init_object_store(url, TOKEN, ACCESS, SECRET, BUCKET)
+
+
+def test_the_fake_refuses_the_v1_calls_garage_v2_refuses(lab_init, garage):
+    _, url = garage
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    code, out = lab_init.call("GET", f"{url}/v1/status", headers=auth)
+    assert code == 400 and "no longer supported: GetClusterStatus" in out["message"]
+    code, out = lab_init.call("POST", f"{url}/v1/layout", [], auth)
+    assert code == 400 and "no longer supported: UpdateClusterLayout" in out["message"]
+
+
+def test_the_fake_grant_only_adds_flags_like_garage(lab_init, garage):
+    state, url = garage
+    lab_init.init_object_store(url, TOKEN, ACCESS, SECRET, BUCKET)
+    (bucket,) = state.buckets.values()
+    grant = {"bucketId": bucket["id"], "accessKeyId": ACCESS, "permissions": {"read": False}}
+    code, out = lab_init.call(
+        "POST", f"{url}/v2/AllowBucketKey", grant, {"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert code == 200
+    assert out["keys"][0]["permissions"] == {"read": True, "write": True, "owner": True}

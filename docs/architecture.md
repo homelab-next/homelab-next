@@ -163,7 +163,10 @@ over follows the upstream
 [migration to v2](https://garagehq.deuxfleurs.fr/documentation/working-documents/migration-2/):
 `garage repair --all-nodes --yes tables`, a metadata snapshot (`garage meta snapshot --all`, or
 a filesystem snapshot of `metadata_dir`), then stop every v1 node and start them all on v2 at
-once; any of its own tooling that calls the admin API moves to the v2 endpoints too.
+once; any of its own tooling that calls the admin API moves to the v2 endpoints too. `lab_init`
+imports the lab's S3 key once and Garage v2 refuses to import a key id it has ever held (409
+`KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
+`LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
 
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves

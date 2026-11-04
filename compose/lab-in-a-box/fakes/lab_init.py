@@ -95,9 +95,14 @@ def init_object_store(admin: str, token: str, access: str, secret: str, bucket: 
         )
         if code >= 300:
             raise SystemExit(f"lab_init: layout apply failed: {code} {out}")
+    # The key is imported once and never re-imported: Garage v2 refuses ImportKey for an id it
+    # has ever held (409 KeyAlreadyExists, even once deleted).  So a changed LAB_S3_SECRET_KEY
+    # does not reach a kept volume; rotating it needs `docker compose down -v` (a fresh store).
     key = urllib.parse.quote(access, safe="")
-    code, _ = call("GET", f"{admin}/v2/GetKeyInfo?id={key}", headers=auth)
-    if code != 200:
+    code, out = call("GET", f"{admin}/v2/GetKeyInfo?id={key}", headers=auth)
+    if code not in (200, 404):
+        raise SystemExit(f"lab_init: key lookup failed: {code} {out}")
+    if code == 404:
         code, out = call(
             "POST",
             f"{admin}/v2/ImportKey",
