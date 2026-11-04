@@ -78,3 +78,54 @@ def test_the_report_says_which_capabilities_ran_against_a_real_container(tmp_pat
         "cases": {"subject": "fake", "result": "no-suite"},
         "secrets": {"subject": "real", "result": "fail"},
     }
+
+
+def _summary(tmp_path, log: str, env: dict[str, str] | None = None) -> list[str]:
+    m = re.search(r"^conform_failure_summary\(\) \{\n.*?^\}\n", SMOKE.read_text(), re.M | re.S)
+    assert m, "smoke.sh defines conform_failure_summary"
+    f = tmp_path / "conform.log"
+    f.write_text(log)
+    p = subprocess.run(
+        [
+            shutil.which("bash"),
+            "-c",
+            m.group(0) + 'conform_failure_summary "$1"\n',
+            "smoke",
+            str(f),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": "/usr/bin:/bin", **(env or {})},
+    )
+    return p.stdout.splitlines()
+
+
+def test_a_failed_capability_names_each_failed_check_in_the_job_log(tmp_path):
+    log = "PASS-ish noise\n" + FAILED_CHECK + "  [skip] something: not applicable\n"
+    assert _summary(tmp_path, log) == [
+        "smoke.sh:   FAIL  object-store  target=lab  9 executed",
+        "smoke.sh:     [FAIL] get-missing-raises: HTTP Error 404: Not Found",
+        "smoke.sh:     [FAIL] list-paginates: table not found; feature not available",
+    ]
+
+
+def test_the_failure_summary_is_bounded(tmp_path):
+    log = "FAIL  object-store  target=lab  40 executed\n" + "".join(
+        f"  [FAIL] check-{i}: {'x' * 1000}\n" for i in range(40)
+    )
+    lines = _summary(tmp_path, log)
+    assert len(lines) == 20 and all(len(line) <= len("smoke.sh:   ") + 300 for line in lines)
+
+
+def test_output_in_another_shape_shows_its_last_lines(tmp_path):
+    log = "".join(f"line {i}\n" for i in range(10)) + "Traceback: boom\n"
+    assert _summary(tmp_path, log)[-1] == "smoke.sh:   Traceback: boom"
+    assert len(_summary(tmp_path, log)) == 5
+
+
+def test_negative_a_credential_an_adapter_echoes_is_masked(tmp_path):
+    echoed = "fade" * 3 + "0123"
+    log = f"FAIL  object-store  target=lab  1 executed\n  [FAIL] put: rejected key {echoed}\n"
+    out = _summary(tmp_path, log, env={"LAB_S3_SECRET_KEY": echoed})
+    assert echoed not in "\n".join(out) and out[-1].endswith("rejected key ***")

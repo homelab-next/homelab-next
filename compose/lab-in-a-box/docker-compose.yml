@@ -55,7 +55,7 @@ services:
   # --- object-store: S3 API ---------------------------------------------------------------
   object-store:
     <<: [*restart, *hardened]
-    image: dxflrs/garage:v1.0.1@sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
     command: ["/garage", "server"]
     environment:
       GARAGE_RPC_SECRET: ${LAB_OBJECT_STORE_RPC_SECRET:?see .env.example}

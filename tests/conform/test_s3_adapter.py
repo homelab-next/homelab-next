@@ -66,6 +66,10 @@ def test_the_suite_fails_when_the_server_breaks_pagination(server):
 
 
 def test_dot_segments_are_encoded_and_stored_verbatim(server):
+    """Sent as ``%2E`` so no hop resolves them, signed as SigV4's canonical URI (``UriEncode`` of
+    the decoded path, dots plain), which is what Garage v2 rebuilds from the path it received:
+    signing the raw ``%2E`` form is refused (``SignatureDoesNotMatch``) and the
+    ``keys-never-escape-the-bucket`` check then fails against the real store."""
     st = _store(server)
     st.create_bucket("dots")
     st.put("dots", "../x", b"1")
@@ -73,6 +77,24 @@ def test_dot_segments_are_encoded_and_stored_verbatim(server):
     paths = [p for m, p in server.requests if m == "PUT"]
     assert "/t-dots/%2E%2E/x" in paths and "/t-dots/a/%2E/b" in paths
     assert set(server.buckets["t-dots"]) == {"../x", "a/./b"}
+
+
+def test_the_canonical_uri_is_the_decoded_path_encoded_once(server):
+    """Every key the suite uses signs alike whether the server signs the raw path (Garage v1)
+    or decodes and re-encodes it (Garage v2), except a dot segment, which only v2 accepts."""
+    st = _store(server)
+    st.create_bucket("canon")
+    keys = ["a b", "a+b", "a%2Fb", "résumé.txt", "日本/語", "a//b", "a/b/", "~t_-x"]
+    for k in keys:
+        st.put("canon", k, k.encode())
+    with FakeS3(ACCESS, SECRET, REGION, canonical_uri="raw") as v1:
+        old = _store(v1)
+        old.create_bucket("canon")
+        for k in keys:
+            old.put("canon", k, k.encode())
+        with pytest.raises(ObjectStoreError, match="SignatureDoesNotMatch"):
+            old.put("canon", "../x", b"1")
+    assert set(server.buckets["t-canon"]) == set(keys)
 
 
 @pytest.mark.parametrize("encoding", ["garage", "aws"])
