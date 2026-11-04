@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `metrics`
 - Contract: none (`metrics` is not one of the conformance capabilities)
-- Implementation: `prometheus` 2.54.1
+- Implementation: `prometheus` 2.55.1
 - Owner: platform-team
 - Tags: monitoring, ops
 <!-- /hnx:gen -->
