@@ -64,7 +64,9 @@ updates:
       prefix: "ci"
 
   # The lab-in-a-box images (tag@sha256, updated in place).  Patch releases come as one pull
-  # request; a minor or major is its own, since each needs a lab rehearsal (`make lab-smoke`).
+  # request; a minor or major is its own, since each needs a lab rehearsal (`make lab-smoke`)
+  # and a fresh read of the image's licence: `make licence-check` passes a tag bump of a listed
+  # image unread, so the reviewer re-checks it and updates tools/licences.yml if it changed.
   - package-ecosystem: docker-compose
     directories:
       - "/compose/lab-in-a-box"
@@ -81,7 +83,8 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # The base image of the lab's own two images: one group, so both keep the same pin.
+  # The base image of the lab's own two images: one group, so both keep the same pin.  A minor
+  # or major base bump (a new Python or Debian release) re-checks the licence as above.
   - package-ecosystem: docker
     directories:
       - "/compose/lab-in-a-box/broker"

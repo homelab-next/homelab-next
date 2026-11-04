@@ -144,3 +144,19 @@ def test_an_unreadable_register_is_exit_2(tmp_path):
 
 def test_the_refused_families_are_the_adr_s():
     assert set(lc.REFUSED) == set(_refused_families())
+
+
+def test_a_dockerfile_base_image_is_listed_too(tmp_path):
+    root = _tree(tmp_path)
+    (root / "compose" / "lab" / "app").mkdir()
+    dockerfile = root / "compose" / "lab" / "app" / "Dockerfile"
+    dockerfile.write_text(
+        "FROM --platform=$BUILDPLATFORM plain:3@sha256:" + "0" * 64 + " AS build\n"
+        "FROM build AS test\nFROM scratch\nFROM base:1.0\n"
+    )
+    # an earlier stage and scratch are not images; the unlisted base is named with its file
+    assert lc.check(root) == [
+        "images: base (compose/lab/app/Dockerfile) has no entry in tools/licences.yml"
+    ]
+    dockerfile.write_text("FROM plain:3\n")
+    assert lc.check(root) == []

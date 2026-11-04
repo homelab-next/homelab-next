@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The licence register (tools/licence_check.py; ADR-0011 decision 4): every Python package
-# constraints/*.txt pins and every image a compose/ stack runs, with its licence (an SPDX
+# constraints/*.txt pins and every image a compose/ stack runs or builds FROM, with its licence (an SPDX
 # expression: ids joined by AND or OR, no parentheses) and how this repository uses it. Owned in
 # CODEOWNERS with the rest of tools/: an entry here is a reviewed licence decision.
 #
@@ -9,14 +9,17 @@
 #                  anything homelabnext/ imports, any extra's dependency, and what they pull in.
 #          tool:   a program run as its own process that homelabnext/ never imports (the reason
 #                  says how it runs; NOTICE names a copyleft one).
-#          service: a container image a compose file runs (the reason says where its licence
-#                  is stated).
+#          service: a container image a compose file runs, or the base image of one it builds
+#                  (the reason says where its licence is stated).
 #   reason required for tool and service.
 #
 # The Python licences are the PyPI metadata of the pinned versions (License-Expression, else the
 # License field or classifier). A new pin or image fails `make licence-check` until it is listed
 # here, and an entry nothing pins any more fails it too; a version bump of a listed package is
 # left to CI's dependency review, which reads the licence of every changed dependency.
+# An image's tag bump passes this gate unread (nothing reviews an image's licence again), so a
+# minor or major image bump re-reads its licence in that pull request and updates the entry
+# (CONTRIBUTING.md, "Keeping pins current").
 python:
   annotated-types: {spdx: MIT, kind: linked}
   ansible-core: {spdx: GPL-3.0-or-later, kind: tool, reason: "run as ansible-playbook by the role tests and deploys; homelabnext/ never imports it (NOTICE, ADR-0011)"}
@@ -129,6 +132,7 @@ images:
   nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE"}
   openbao/openbao: {spdx: MPL-2.0, kind: service, reason: "the secrets store; the project's LICENSE"}
   postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence"}
+  python: {spdx: PSF-2.0, kind: service, reason: "the base image the lab's broker and fakes images are built FROM (compose/lab-in-a-box/*/Dockerfile); the interpreter's licence, its Debian packages under their own"}
   prom/prometheus: {spdx: Apache-2.0, kind: service, reason: "the metrics service; the project's LICENSE"}
   quay.io/lakekeeper/catalog: {spdx: Apache-2.0, kind: service, reason: "the lake catalog; the project's LICENSE"}
   trinodb/trino: {spdx: Apache-2.0, kind: service, reason: "the lake query engine; the project's LICENSE"}

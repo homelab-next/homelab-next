@@ -236,6 +236,10 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   example overlay's), the hashed constraints, the lab-in-a-box compose images and Dockerfiles,
   and the pre-commit hook revisions. `tests/packaging/test_dependabot.py` fails on a listed
   directory that does not exist and on a manifest no entry watches.
+- **Licences of images**: `make licence-check` needs a reviewed entry for every image a compose
+  stack runs or builds `FROM`, but a tag bump of a listed image passes it unread. A pull request
+  that moves an image (or a Dockerfile's base) to a new minor or major release re-reads that
+  release's licence and updates `tools/licences.yml` if it changed; say so in the pull request.
 - **One version, several places**: `tools/tests/test_pin_consistency.py` fails when copies
   disagree (ruff in pre-commit and both constraints files, the lab NATS image and CI's
   nats-server, an image pinned twice, CI's caddy and the example registries, an action at two

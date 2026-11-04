@@ -686,7 +686,7 @@
         "2": "the register cannot be read"
       },
       "id": "licence-check",
-      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml and tools/licences.yml",
+      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
       "kind": "check",
       "language": "python",
       "outputs": "one line per problem; a summary line",
@@ -934,7 +934,7 @@
       "exit": {
         "0": "inventory listed, or report written (pins that are behind are reported, never a failure)",
         "1": "inventory --check found a pin with no upstream source, or a source with no pin",
-        "2": "usage error or an unreadable tree"
+        "2": "usage error, an unreadable tree or an unwritable --out file"
       },
       "id": "pin-freshness",
       "inputs": "the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
