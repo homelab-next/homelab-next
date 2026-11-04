@@ -262,7 +262,9 @@ An `object-store` adapter for S3-compatible servers (written against Garage v1.0
 Garage specifics the lab relies on: the region is the server's `s3_region` (`LAB_S3_REGION`),
 and the key must hold the `createBucket` permission for the suite's `create_bucket` calls
 (`compose/lab-in-a-box/fakes/lab_init.py` grants it).  Logical bucket names get a per-run prefix
-(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.
+(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.  The lab
+runs Garage v2, whose breaking changes are in its admin API and configuration, neither of which
+this adapter uses; the admin API v2 calls are `lab_init.py`'s.
 
 <details><summary>Full adapter notes</summary>
 
@@ -288,7 +290,9 @@ body, so a 404 there is disambiguated with a HeadBucket.
 Garage specifics the lab relies on: the region is the server's `s3_region` (`LAB_S3_REGION`),
 and the key must hold the `createBucket` permission for the suite's `create_bucket` calls
 (`compose/lab-in-a-box/fakes/lab_init.py` grants it).  Logical bucket names get a per-run prefix
-(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.
+(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.  The lab
+runs Garage v2, whose breaking changes are in its admin API and configuration, neither of which
+this adapter uses; the admin API v2 calls are `lab_init.py`'s.
 
 </details>
 

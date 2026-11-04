@@ -154,6 +154,17 @@ every service is single node. See the README "Try it" section.
 | `uptime` | Uptime Kuma, provisioned headlessly with a public status page | (status hub source) |
 | `broker`, `status-hub`, `broker-edge` | `hnx broker serve` on a Unix socket, `hnx status serve` with the Approvals page, and the edge that drives them, each as its own uid (no alias for `broker`: it has no network) | `broker` (the end-to-end check below) |
 
+The object store is Garage v2 (`dxflrs/garage:v2.5.0`). `lab_init.py` speaks Garage's admin API
+v2 (`/v2/<Operation>`: `GetNodeInfo`, `UpdateClusterLayout`, `ApplyClusterLayout`, `ImportKey`,
+`UpdateKey`, `CreateBucket`, `AllowBucketKey`, ...); the v1 admin API it used before is mostly gone
+in v2, and `replication_mode` is no longer a configuration key (the lab's `garage.toml` uses
+`replication_factor`). A fresh lab needs nothing. A site carrying a Garage v1 cluster's volumes
+over follows the upstream
+[migration to v2](https://garagehq.deuxfleurs.fr/documentation/working-documents/migration-2/):
+`garage repair --all-nodes --yes tables`, a metadata snapshot (`garage meta snapshot --all`, or
+a filesystem snapshot of `metadata_dir`), then stop every v1 node and start them all on v2 at
+once; any of its own tooling that calls the admin API moves to the v2 endpoints too.
+
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves
 `examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a

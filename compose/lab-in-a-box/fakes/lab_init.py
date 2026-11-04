@@ -12,9 +12,9 @@
 #     "1": a step failed or a variable is missing
 """One-shot initialiser for the lab-in-a-box stack (stdlib only, idempotent).
 
-1. object store: assign the single-node layout, import the fixed fake access key (allowed to
-   create buckets, for the conformance suite), create the
-   bucket and grant the key on it;
+1. object store (Garage admin API v2): assign the single-node layout, import the fixed fake
+   access key (allowed to create buckets, for the conformance suite), create the bucket and
+   grant the key on it;
 2. catalog: bootstrap the Iceberg REST catalog and create the warehouse that points at that
    bucket.
 
@@ -29,6 +29,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -73,46 +74,56 @@ def wait_for(url: str, headers: dict[str, str] | None = None, tries: int = 60) -
 
 
 def init_object_store(admin: str, token: str, access: str, secret: str, bucket: str) -> None:
+    """Garage admin API v2 (Garage >= 2.0): every call is ``/v2/<OperationName>``, as listed in
+    Garage's ``doc/api/garage-admin-v2.json``."""
     auth = {"Authorization": f"Bearer {token}"}
-    wait_for(f"{admin}/v1/status", auth)
-    _, status = call("GET", f"{admin}/v1/status", headers=auth)
-    node = status["node"]
-    _, layout = call("GET", f"{admin}/v1/layout", headers=auth)
+    wait_for(f"{admin}/v2/GetClusterStatus", auth)
+    code, info = call("GET", f"{admin}/v2/GetNodeInfo?node=self", headers=auth)
+    if code != 200 or not isinstance(info, dict) or len(info.get("success") or {}) != 1:
+        raise SystemExit(f"lab_init: node info failed: {code} {info}")
+    node = next(iter(info["success"].values()))["nodeId"]
+    code, layout = call("GET", f"{admin}/v2/GetClusterLayout", headers=auth)
+    if code != 200 or not isinstance(layout, dict):
+        raise SystemExit(f"lab_init: layout read failed: {code} {layout}")
     if not layout.get("roles"):
-        change = [{"id": node, "zone": "lab", "capacity": 1_000_000_000, "tags": []}]
-        code, out = call("POST", f"{admin}/v1/layout", change, auth)
+        role = {"id": node, "zone": "lab", "capacity": 1_000_000_000, "tags": []}
+        code, out = call("POST", f"{admin}/v2/UpdateClusterLayout", {"roles": [role]}, auth)
         if code >= 300:
             raise SystemExit(f"lab_init: layout stage failed: {code} {out}")
         code, out = call(
-            "POST", f"{admin}/v1/layout/apply", {"version": layout["version"] + 1}, auth
+            "POST", f"{admin}/v2/ApplyClusterLayout", {"version": layout["version"] + 1}, auth
         )
         if code >= 300:
             raise SystemExit(f"lab_init: layout apply failed: {code} {out}")
-    code, _ = call("GET", f"{admin}/v1/key?id={access}", headers=auth)
+    key = urllib.parse.quote(access, safe="")
+    code, _ = call("GET", f"{admin}/v2/GetKeyInfo?id={key}", headers=auth)
     if code != 200:
         code, out = call(
             "POST",
-            f"{admin}/v1/key/import",
+            f"{admin}/v2/ImportKey",
             {"accessKeyId": access, "secretAccessKey": secret, "name": "lab-fake-key"},
             auth,
         )
         if code >= 300:
             raise SystemExit(f"lab_init: key import failed: {code} {out}")
     # the object-store conformance suite creates its own buckets through the S3 API
-    code, out = call("POST", f"{admin}/v1/key?id={access}", {"allow": {"createBucket": True}}, auth)
+    code, out = call(
+        "POST", f"{admin}/v2/UpdateKey?id={key}", {"allow": {"createBucket": True}}, auth
+    )
     if code >= 300:
         raise SystemExit(f"lab_init: key permission update failed: {code} {out}")
-    code, info = call("GET", f"{admin}/v1/bucket?globalAlias={bucket}", headers=auth)
+    alias = urllib.parse.quote(bucket, safe="")
+    code, info = call("GET", f"{admin}/v2/GetBucketInfo?globalAlias={alias}", headers=auth)
     if code == 404:
-        code, info = call("POST", f"{admin}/v1/bucket", {"globalAlias": bucket}, auth)
-        if code >= 300:
-            raise SystemExit(f"lab_init: bucket create failed: {code} {info}")
+        code, info = call("POST", f"{admin}/v2/CreateBucket", {"globalAlias": bucket}, auth)
+    if code >= 300:
+        raise SystemExit(f"lab_init: bucket lookup or create failed: {code} {info}")
     grant = {
         "bucketId": info["id"],
         "accessKeyId": access,
         "permissions": {"read": True, "write": True, "owner": True},
     }
-    code, out = call("POST", f"{admin}/v1/bucket/allow", grant, auth)
+    code, out = call("POST", f"{admin}/v2/AllowBucketKey", grant, auth)
     if code >= 300:
         raise SystemExit(f"lab_init: bucket allow failed: {code} {out}")
     print("lab_init: object store ready", flush=True)
