@@ -71,9 +71,11 @@ class _Pending:
     high_water: str | None
     target: Any = None  # the component the batch is owed to; None means the current secondary
     order: int = 0  # the write order of the batch (shared by every rerouted writer)
+    #: the source the batch must be judged as on a replay (the write's ``expect_source``)
+    expect_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "table": self.table,
             "idempotency_key": self.idempotency_key,
             "source": self.source,
@@ -81,6 +83,9 @@ class _Pending:
             "order": self.order,
             "rows": self.rows,
         }
+        if self.expect_source is not None:
+            out["expect_source"] = self.expect_source
+        return out
 
 
 @dataclass
@@ -172,14 +177,13 @@ class DualWriter:
         high_water: str | None = None,
         expect_source: str | None = None,
     ) -> WriteResult:
-        extra = {} if expect_source is None else {"expect_source": expect_source}
         result = self.primary.write_batch(
             table,
             rows,
             idempotency_key=idempotency_key,
             source=source,
             high_water=high_water,
-            **extra,
+            expect_source=expect_source,
         )  # an exception here is the caller's, and the secondary is not touched
         self._order["n"] += 1
         order = self._order["n"]
@@ -187,7 +191,14 @@ class DualWriter:
         self.stats.batches += 1
         self.stats.rows += len(rows)
         self._mirror(
-            table, [dict(r) for r in rows], idempotency_key, source, high_water, result, order
+            table,
+            [dict(r) for r in rows],
+            idempotency_key,
+            source,
+            high_water,
+            result,
+            order,
+            expect_source,
         )
         return result
 
@@ -203,10 +214,13 @@ class DualWriter:
         high_water: str | None,
         primary_result: WriteResult,
         order: int = 0,
+        expect_source: str | None = None,
     ) -> None:
         if self.forward_only:  # the mirror is stopped: the secondary is owed nothing new
             return
-        parked = _Pending(table, rows, key, source, high_water, self.secondary, order)
+        parked = _Pending(
+            table, rows, key, source, high_water, self.secondary, order, expect_source
+        )
         if self.owed_to(self.secondary):  # never send a batch past older ones still parked
             self.replay_pending(owed_to=self.secondary)
             if self.owed_to(self.secondary):
@@ -215,7 +229,12 @@ class DualWriter:
                 return
         try:
             res = self.secondary.write_batch(
-                table, rows, idempotency_key=key, source=source, high_water=high_water
+                table,
+                rows,
+                idempotency_key=key,
+                source=source,
+                high_water=high_water,
+                expect_source=expect_source,
             )
         except Exception as exc:  # the secondary must never break the primary
             self.stats.secondary_failures += 1
@@ -263,7 +282,7 @@ class DualWriter:
                     high_water=None if newer else p.high_water,
                     # judged as this source's batch even when sent without its mark: a batch id
                     # another writer committed raises, so the batch stays parked, never "replayed"
-                    expect_source=p.source,
+                    expect_source=p.expect_source or p.source,
                 )
                 ok += 1
                 self.last_failure.pop(id(target), None)

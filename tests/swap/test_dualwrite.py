@@ -176,6 +176,21 @@ def test_a_replay_without_the_mark_never_settles_on_another_writers_batch():
     assert failed and "BatchSourceMismatch" in failed[-1].detail
 
 
+def test_expect_source_reaches_the_secondary_and_a_mismatch_there_is_a_divergence():
+    a, b = FakeLake(), FakeLake()
+    r = rows(2)
+    a.write_batch("dns_activity", [r[0]], idempotency_key="k", source="s")
+    b.write_batch("dns_activity", [r[1]], idempotency_key="k", source="intruder")
+    w = DualWriter(a, b)
+    res = w.write_batch("dns_activity", [r[0]], idempotency_key="k", expect_source="s")
+    assert res.replayed  # the primary holds k under s: its own batch
+    (d,) = w.divergences
+    assert d.kind == "secondary_error" and "BatchSourceMismatch" in d.detail
+    (p,) = w.pending
+    assert p.expect_source == "s" and p.to_dict()["expect_source"] == "s"
+    assert w.replay_pending() == 0 and w.status()["unresolved"] == 1  # still judged as s
+
+
 def test_discard_pending_needs_a_reason_and_returns_the_batches():
     a, b = FakeLake(), Flaky(FakeLake(), fail=1)
     w = DualWriter(a, b)
