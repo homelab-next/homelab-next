@@ -194,6 +194,28 @@ def _(lake):
     assert types == {(str, str, bool)}, f"keys must come back as their column types: {types}"
 
 
+@SUITE.check(
+    "cardinality-and-entity-lists",
+    "cardinality() names entities over a bound of distinct values; count_by keeps or drops listed entities",
+)
+def _(lake):
+    a, b = uniq("ca"), uniq("cb")
+    t = "2026-03-01T08:15:00Z"
+    rows = [auth_row(f"{a}-{i}", user=a, time=t, dst_endpoint={"ip": ip(30 + i), "port": 22}) for i in range(3)]  # fmt: skip
+    rows.append(auth_row(f"{b}-0", user=b, time=t))
+    lake.write_batch(TABLE, rows, idempotency_key=uniq("seed"))
+    grant = RedGrant("conformance", "the lake-query suite counts the rows it wrote")
+    reader = CeilingReader(lake, Label.RED, load_schemas(), grant=grant)
+    window = {"since": datetime(2026, 3, 1, tzinfo=UTC), "until": datetime(2026, 3, 2, tzinfo=UTC)}
+    noisy = reader.cardinality(TABLE, "user_name", ["dst_endpoint.ip"], above=1, **window)
+    assert noisy.get(a) == 3 and b not in noisy, f"cardinality: {noisy}"
+    mine = [a, b]
+    kept = reader.count_by(TABLE, "user_name", [], only_entities=[a], **window)
+    assert {g.entity for g in kept} == {a} and sum(g.count for g in kept) == 3, f"only: {kept}"
+    rest = reader.count_by(TABLE, "user_name", [], only_entities=mine, skip_entities=[a], **window)
+    assert [(g.entity, g.count) for g in rest] == [(b, 1)], f"skip: {rest}"
+
+
 @SUITE.check("unknown-named-query-rejected", "named() with an unregistered name is an error")
 def _(lake):
     raises(lambda: lake.named("no_such_named_query_zz"), "unknown named query")

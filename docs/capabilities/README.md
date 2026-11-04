@@ -14,7 +14,7 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 
 | Capability | What it is | Operations | MUST | SHOULD | Real-product adapters | Provided by |
 |---|---|---|---|---|---|---|
-| [lake-query](lake-query.md) ([[capabilities/lake-query\|lake-query]]) | SQL (portable subset) over the OCSF tables with bound named parameters | 6 | 13 | 0 | `lake` | [lake-query](../systems/lake-query.md) ([[systems/lake-query\|lake-query]]) |
+| [lake-query](lake-query.md) ([[capabilities/lake-query\|lake-query]]) | SQL (portable subset) over the OCSF tables with bound named parameters | 6 | 14 | 0 | `lake` | [lake-query](../systems/lake-query.md) ([[systems/lake-query\|lake-query]]) |
 | [lake-catalog](lake-catalog.md) ([[capabilities/lake-catalog\|lake-catalog]]) | tables, schemas and commit-then-checkpoint idempotent writes | 6 | 12 | 0 | `lake` | [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog\|lake-catalog]]) |
 | [object-store](object-store.md) ([[capabilities/object-store\|object-store]]) | buckets of byte objects: put/get/head/delete and ordered, paginated listing | 6 | 14 | 1 | `s3` | [object-store](../systems/object-store.md) ([[systems/object-store\|object-store]]) |
 | [inference](inference.md) ([[capabilities/inference\|inference]]) | OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias | 21 | 15 | 2 | `llm_gateway`, `openai_compat` (client) | [inference](../systems/inference.md) ([[systems/inference\|inference]]) |
