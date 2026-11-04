@@ -6,6 +6,7 @@ profiles:
   - id: host-dst-port
     description: has this source address connected to this destination port before?
     table: network_activity
+    entity_kind: ip
     entity: src_endpoint.ip
     values: [dst_endpoint.port]
     learn_days: 28
@@ -19,6 +20,7 @@ profiles:
   - id: user-src-ip
     description: has this user signed in from this source address before?
     table: authentication
+    entity_kind: user
     entity: user_name
     values: [src_endpoint.ip]
     where: {auth_protocol: ssh}

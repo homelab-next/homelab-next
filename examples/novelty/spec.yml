@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # An example novelty spec (ADR-0035, docs/novelty.md): two profiles over the example OCSF tables.
-# `hnx novelty run --spec examples/novelty/spec.yml --as-of 2026-03-29T00:00:00Z --dry-run`
+# hnx novelty run --spec examples/novelty/spec.yml --site examples/novelty/site.yml \
+#   --fixture examples/novelty/lake.yml --as-of 2026-03-11T00:00:00Z --dry-run --show-findings
 schema_version: "1.0"
 description: first-seen baselines for hosts and users in the example lab
 profiles:
   - id: host-dst-port
     description: has this source address connected to this destination port before?
     table: network_activity
+    entity_kind: ip
     entity: src_endpoint.ip
     values: [dst_endpoint.port]
     learn_days: 28
@@ -20,6 +22,7 @@ profiles:
   - id: user-src-ip
     description: has this user signed in from this source address before?
     table: authentication
+    entity_kind: user
     entity: user_name
     values: [src_endpoint.ip]
     where: {auth_protocol: ssh}

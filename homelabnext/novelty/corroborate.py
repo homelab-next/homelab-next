@@ -10,6 +10,11 @@ noisy or compromised source cannot corroborate itself.
 A row counts when its ``status`` is ``finding`` or ``unlearned`` (both say "new for this
 entity"); a ``high_cardinality`` row says the entity cannot be baselined, which is not a signal.
 A candidate's label is the strictest label of the rows behind it.
+
+Entities are matched by ``(entity_kind, entity)``, never by bare text: every source names an
+entity in the shared namespace (``ip``, ``host``, ``user``, ...; ADR-0035 decision 7), so an
+address and a host whose name is the same text are two entities.  Distinct sources are
+distinct writers: each writer writes only its own ``source`` (``engine.write_findings``).
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ SIGNALS = ("finding", "unlearned")
 
 @dataclass(frozen=True)
 class Candidate:
+    entity_kind: str
     entity: str
     sources: tuple[str, ...]
     profiles: tuple[str, ...]
@@ -39,6 +45,7 @@ class Candidate:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "entity_kind": self.entity_kind,
             "entity": self.entity,
             "sources": list(self.sources),
             "profiles": list(self.profiles),
@@ -75,31 +82,38 @@ def corroborate(
     for name, t in (("since", since), ("until", until)):
         if t is not None and (not isinstance(t, datetime) or t.utcoffset() is None):
             raise ValueError(f"{name} must be a timezone-aware datetime")
-    sources: dict[str, set[str]] = defaultdict(set)
-    profiles: dict[str, set[str]] = defaultdict(set)
-    labels: dict[str, set[tlp.Label]] = defaultdict(set)
-    uids: dict[str, set[str]] = defaultdict(set)
-    counts: dict[str, int] = defaultdict(int)
+    Key = tuple[str, str]
+    sources: dict[Key, set[str]] = defaultdict(set)
+    profiles: dict[Key, set[str]] = defaultdict(set)
+    labels: dict[Key, set[tlp.Label]] = defaultdict(set)
+    uids: dict[Key, set[str]] = defaultdict(set)
+    counts: dict[Key, int] = defaultdict(int)
     for r in findings:
         if r.get("status") not in SIGNALS or not _in_window(r, since, until):
             continue
-        e = r["entity"]
-        sources[e].add(r["source"])
-        profiles[e].add(f"{r['source']}/{r.get('profile', '')}")
-        labels[e].add(tlp.read_stored(r.get("tlp")))
-        counts[e] += int(r.get("rows", 1))
+        kind = r.get("entity_kind")
+        if type(kind) is not str or not kind:
+            raise ValueError(
+                f"a finding without an entity_kind cannot be matched: {r.get('uid')!r}"
+            )
+        k = (kind, r["entity"])
+        sources[k].add(r["source"])
+        profiles[k].add(f"{r['source']}/{r.get('profile', '')}")
+        labels[k].add(tlp.read_stored(r.get("tlp")))
+        counts[k] += int(r.get("rows", 1))
         if r.get("uid"):
-            uids[e].add(r["uid"])
+            uids[k].add(r["uid"])
     out = [
         Candidate(
-            e,
-            tuple(sorted(sources[e])),
-            tuple(sorted(profiles[e])),
-            counts[e],
-            tlp.strictest(labels[e]),
-            tuple(sorted(uids[e])),
+            k[0],
+            k[1],
+            tuple(sorted(sources[k])),
+            tuple(sorted(profiles[k])),
+            counts[k],
+            tlp.strictest(labels[k]),
+            tuple(sorted(uids[k])),
         )
-        for e in sources
-        if len(sources[e]) >= min_sources
+        for k in sources
+        if len(sources[k]) >= min_sources
     ]
-    return sorted(out, key=lambda c: (-len(c.sources), c.entity))
+    return sorted(out, key=lambda c: (-len(c.sources), c.entity_kind, c.entity))

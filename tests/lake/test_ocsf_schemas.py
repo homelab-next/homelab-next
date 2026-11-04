@@ -52,6 +52,7 @@ def test_negative_rejected_by_lake_validator(path):
         "rule-number-id",
         "bad-technique",
         "wrong-class",
+        "score-without-finding",
     }
     label = path.name.split(".v1.")[1].rsplit(".", 1)[0]
     if label in shape_only:
@@ -72,7 +73,9 @@ def test_schema_files_declare_the_lake_block_and_pin_version():
         assert doc["$id"].endswith(f"/ocsf/{name}/{version}")
         assert doc["additionalProperties"] is False
         assert s.labelled and s.column("tlp").enum == tlp.LABELS
-        assert s.key == ("uid",) and s.partition == "day(time)"
+        # a novelty finding's uid is its source's (ADR-0035): one source cannot squat another's
+        key = ("source", "uid") if name == "novelty_finding" else ("uid",)
+        assert s.key == key and s.partition == "day(time)"
 
 
 def test_detection_id_is_logical_never_a_rule_number():

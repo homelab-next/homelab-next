@@ -4,6 +4,7 @@ schema_version: "1.0"
 profiles:
   - id: host-dst-port
     table: network_activity
+    entity_kind: ip
     entity: src_endpoint.ip
     values: [dst_endpoint.port]
     learn_days: 28

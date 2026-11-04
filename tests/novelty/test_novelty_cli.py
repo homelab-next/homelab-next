@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from novelty_support import SITE, SPEC, rows
 
 from homelabnext import cli
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _iso(v):
@@ -26,6 +30,7 @@ def files(tmp_path):
             "source": source,
             "source_kind": "heuristic",
             "profile": profile,
+            "entity_kind": "ip",
             "entity": entity,
             "value": "x",
             "status": "finding",
@@ -106,7 +111,7 @@ def test_as_of_is_an_aware_time(files, capsys, extra, match):
 
 def test_a_site_without_the_reader_is_refused(files, tmp_path, capsys):
     site = tmp_path / "bare.json"
-    site.write_text(json.dumps({"tlp_readers": []}))
+    site.write_text(json.dumps({"lake_catalog": "lake", "tlp_readers": []}))
     argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
     rc, _, err = _main([*argv, "--site", str(site), "--fixture", str(files["lake"])], capsys)
     assert rc == 2 and "no declared TLP ceiling" in err
@@ -126,3 +131,81 @@ def test_an_as_of_with_an_offset_is_the_same_instant(files, capsys):
     rc, doc, _ = _main(argv, capsys)
     assert rc == 0
     assert doc["profiles"][0]["score_window"] == ["2026-03-09T00:00:00Z", "2026-03-10T00:00:00Z"]
+
+
+def _documented_command(path):
+    """The ``hnx novelty ...`` command a file documents in its leading comments."""
+    lines = [ln[2:].strip() for ln in path.read_text().splitlines() if ln.startswith("# ")]
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("hnx novelty run"))
+    cmd = [lines[start]]
+    while cmd[-1].endswith("\\"):
+        cmd[-1] = cmd[-1][:-1]
+        cmd.append(lines[start + len(cmd)])
+    return shlex.split(" ".join(cmd))
+
+
+def test_the_example_specs_documented_command_runs(capsys, monkeypatch):
+    monkeypatch.chdir(ROOT)
+    argv = _documented_command(ROOT / "examples/novelty/spec.yml")
+    assert argv[:3] == ["hnx", "novelty", "run"] and "--dry-run" in argv
+    rc, doc, _ = _main(argv[1:], capsys)
+    assert rc == 0 and doc["tlp"] == "amber"
+    assert [p["status"] for p in doc["profiles"]] == ["ok", "ok"]
+    assert {(f["entity"], f["value"], f["status"]) for f in doc["findings"]} == {
+        ("192.0.2.10", "4444", "finding"),
+        ("192.0.2.11", "443", "unlearned"),
+        ("alice", "203.0.113.7", "finding"),
+    }
+
+
+def test_writing_needs_the_analyzers_writes_grant(files, tmp_path, capsys):
+    site = tmp_path / "read-only.json"
+    reader = {"reader": "analyzer:novelty", "ceiling": "amber", "why": "reads only"}
+    site.write_text(json.dumps({"lake_catalog": "lake", "tlp_readers": [reader]}))
+    argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
+    argv += ["--site", str(site), "--fixture", str(files["lake"])]
+    rc, _, err = _main(argv, capsys)
+    assert rc == 2 and "no writes grant for novelty_finding" in err
+    rc, doc, _ = _main([*argv, "--dry-run"], capsys)
+    assert rc == 0 and doc["profiles"][0]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "site, needle",
+    [
+        (
+            {"tlp_readers": [{"reader": "analyzer:novelty", "ceiling": "amber", "why": "w"}]},
+            "lake_catalog",
+        ),
+        (
+            {
+                "lake_catalog": "lake",
+                "tlp_readers": [{"reader": "analyzer:novelty", "ceiling": "TLP:AMBER", "why": "w"}],
+            },
+            "ceiling",
+        ),
+        (
+            {
+                "lake_catalog": "lake",
+                "tlp_readers": [
+                    {"reader": "module:x", "ceiling": "red", "writes": ["t"], "why": "w"}
+                ],
+            },
+            "analyzer",
+        ),
+    ],
+)
+def test_the_site_is_held_to_the_module_selection_rules(files, tmp_path, capsys, site, needle):
+    path = tmp_path / "site.json"
+    path.write_text(json.dumps(site))
+    argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
+    rc, _, err = _main([*argv, "--site", str(path), "--fixture", str(files["lake"])], capsys)
+    assert rc == 2 and needle in err
+
+
+def test_an_unreachable_live_lake_is_a_usage_error(files, capsys, monkeypatch):
+    monkeypatch.delenv("LAB_WAREHOUSE", raising=False)
+    argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
+    argv += ["--site", str(files["site"]), "--domain", "example.internal", "--dry-run"]
+    rc, _, err = _main([*argv, "--warehouse", ""], capsys)
+    assert rc == 2 and err.startswith("hnx novelty:")

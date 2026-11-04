@@ -13,6 +13,7 @@ SPEC: dict[str, Any] = {
         {
             "id": "host-dst-port",
             "table": "network_activity",
+            "entity_kind": "ip",
             "entity": "src_endpoint.ip",
             "values": ["dst_endpoint.port"],
             "learn_days": 4,
@@ -26,7 +27,17 @@ SPEC: dict[str, Any] = {
         }
     ],
 }
-SITE = {"tlp_readers": [{"reader": "analyzer:novelty", "ceiling": "amber", "why": "tests"}]}
+SITE = {
+    "lake_catalog": "lake",
+    "tlp_readers": [
+        {
+            "reader": "analyzer:novelty",
+            "ceiling": "amber",
+            "writes": ["novelty_finding"],
+            "why": "tests",
+        }
+    ],
+}
 
 
 def net(i: int, *, day: int, src: str, port: int, hour: int = 12, tlp: str = "green"):

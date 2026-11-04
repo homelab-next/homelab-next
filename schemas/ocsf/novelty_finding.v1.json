@@ -10,6 +10,7 @@
     "ocsf_class_uid": 0,
     "ocsf_version": "1.3.0",
     "key": [
+      "source",
       "uid"
     ],
     "time_column": "time",
@@ -24,6 +25,7 @@
     "source",
     "source_kind",
     "profile",
+    "entity_kind",
     "entity",
     "status"
   ],
@@ -32,12 +34,12 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "description": "Deterministic id: a digest of the source, the profile's spec, as_of, status, entity and value. The idempotency (content) key of the table."
+      "description": "Deterministic id within its source: a digest of the source, the profile's spec, as_of, status, entity kind, entity and value. With source, the idempotency (content) key of the table, so one source cannot claim another's uid."
     },
     "time": {
       "type": "string",
       "format": "date-time",
-      "description": "When the finding was made: its as_of for the lake analyzer, the sensor's own observation time for a host source. RFC 3339 with an explicit offset; stored as UTC."
+      "description": "The start of the behaviour window the finding describes: score_since for the lake analyzer (as_of - score_hours), the observation time for a host sensor. corroborate windows on it. RFC 3339 with an explicit offset; stored as UTC."
     },
     "as_of": {
       "type": "string",
@@ -48,7 +50,7 @@
       "type": "string",
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-      "description": "What produced the finding: lake-novelty for the lake analyzer, a host sensor's own name otherwise. corroborate counts distinct sources."
+      "description": "What produced the finding: lake-novelty for the lake analyzer, a host sensor's own name otherwise. Each writer writes only its own source (checked by the writer), so distinct sources are distinct writers; corroborate counts distinct sources."
     },
     "source_kind": {
       "type": "string",
@@ -62,6 +64,18 @@
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
       "description": "The spec profile (or the host sensor's baseline) that produced the finding."
+    },
+    "entity_kind": {
+      "type": "string",
+      "enum": [
+        "ip",
+        "host",
+        "user",
+        "domain",
+        "process",
+        "other"
+      ],
+      "description": "The shared entity namespace the entity belongs to (ADR-0035 decision 7): every source names an address as ip, a host as host and so on, so corroborate matches one entity across sources by (entity_kind, entity), never by bare text."
     },
     "entity": {
       "type": "string",
@@ -99,13 +113,13 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "surprise x confidence; absent unless status is finding."
+      "description": "surprise x confidence; present only when status is finding."
     },
     "confidence": {
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "min(1, entity_total / entity_min_samples); absent unless status is finding."
+      "description": "min(1, entity_total / entity_min_samples); present only when status is finding."
     },
     "support": {
       "type": "number",
@@ -171,5 +185,41 @@
       ],
       "description": "The row's TLP 2.0 label (ADR-0033 decision 5): the strictest label among the rows that produced the finding, its learning-window rows included (ADR-0035 decision 5). The lake refuses a row without one."
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "finding"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "score",
+          "confidence"
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "score"
+              ]
+            },
+            {
+              "required": [
+                "confidence"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
 }

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS "lake"."ocsf"."novelty_finding" (
     "source" VARCHAR NOT NULL,
     "source_kind" VARCHAR NOT NULL,
     "profile" VARCHAR NOT NULL,
+    "entity_kind" VARCHAR NOT NULL,
     "entity" VARCHAR NOT NULL,
     "entity_column" VARCHAR,
     "value" VARCHAR,

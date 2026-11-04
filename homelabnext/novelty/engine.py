@@ -15,11 +15,15 @@ The rule, for a profile with scoring window ``[S, as_of)``, ``S = as_of - score_
   and its weight ``0.5 ** (age / half_life_days)``;
 * support ``s(e, v)`` is the weighted count of (entity, value) in the learning window, and the
   entity total ``T(e)`` the sum of the entity's support over all its values;
-* cold start: the history is ``date(S) - oldest day`` the table holds in the learning window (as
-  the reader sees it; 0 with none).  Below ``min_history_days`` the profile is **warming** and
-  emits nothing;
+* cold start: the history is ``min(learn_days, date(S) - oldest day)``, the oldest day the
+  table holds in ``[midnight(date(S)) - 2 * learn_days, S)`` as the reader sees it (0 with none);
+  the lookback is longer than the learning window so a sparse table's first row need not fall on
+  the window's first day.  Below ``min_history_days`` the profile is **warming** and emits
+  nothing;
 * an entity with more than ``max_values_per_entity`` distinct learned values is reported once
-  as **high_cardinality** (when it is seen in the scoring window) and not scored;
+  as **high_cardinality** (when it is seen in the scoring window) and not scored.  :func:`run`
+  finds them first with a cardinality read and leaves them out of the per-value reads, so one
+  noisy entity costs a few groups, never the whole profile;
 * a pair whose entity has ``T(e) == 0`` is **unlearned**: reported with no score;
 * otherwise ``surprise = 0 if s >= min_support else 1 - s / min_support``, ``confidence =
   min(1, T(e) / entity_min_samples)``, ``score = surprise * confidence``, and the pair is a
@@ -29,7 +33,12 @@ The rule, for a profile with scoring window ``[S, as_of)``, ``S = as_of - score_
   counted as dropped, by status;
 * a row's label is the strictest label among the rows that produced it: the pair's
   scoring-window rows and, for a scored or high-cardinality row, every learning-window row of
-  its entity (they make ``T(e)``, and so the confidence).
+  its entity (they make ``T(e)``, and so the confidence);
+* a row's ``time`` is ``S``, the start of the behaviour window it describes, so a window that
+  holds the behaviour holds the finding (``corroborate``).
+
+A writer writes only its own ``source`` (:func:`write_findings`), so distinct sources in
+``novelty_finding`` are distinct writers.
 """
 
 from __future__ import annotations
@@ -43,7 +52,13 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from homelabnext import tlp
-from homelabnext.lake.ceiling import MAX_GROUPS, CeilingError, CeilingReader, GroupCount
+from homelabnext.lake.ceiling import (
+    MAX_ENTITIES,
+    MAX_GROUPS,
+    CeilingError,
+    CeilingReader,
+    GroupCount,
+)
 from homelabnext.lake.errors import LakeError
 
 from .spec import Profile, Spec
@@ -53,10 +68,13 @@ __all__ = [
     "TABLE",
     "ProfileResult",
     "Windows",
+    "WriteRefused",
     "batch_id",
+    "history_since",
     "run",
     "score_profile",
     "windows",
+    "write_findings",
 ]
 
 #: the ``source`` of every row this analyzer writes; a host sensor writes its own
@@ -89,6 +107,33 @@ def windows(profile: Profile, as_of: datetime) -> Windows:
     end = _aware(as_of)
     start = end - timedelta(hours=profile.score_hours)
     return Windows(start - timedelta(days=profile.learn_days), start, end)
+
+
+def history_since(profile: Profile, as_of: datetime) -> datetime:
+    """Where the cold-start history read starts: ``2 * learn_days`` whole UTC days before the
+    scoring window's start day (it ends at the scoring window's start)."""
+    start_day = windows(profile, as_of).learn_until.date()
+    first = start_day - timedelta(days=2 * profile.learn_days)
+    return datetime(first.year, first.month, first.day, tzinfo=UTC)
+
+
+class WriteRefused(ValueError):
+    """A batch with a row whose ``source`` is not the writer's own; nothing was written."""
+
+
+def write_findings(
+    writer: Any, rows: Sequence[Mapping[str, Any]], *, source: str, mark: str, **kw: Any
+) -> Any:
+    """Write ``rows`` to ``novelty_finding`` as the writer of ``source``: every row must carry
+    that ``source`` and the batch's source mark (``mark``) must be ``<source>/<name>``, so a
+    writer can never write, or squat the ``(source, uid)`` key of, another source's rows.
+    ``kw`` is passed to ``write_batch`` (``idempotency_key``, ``high_water``)."""
+    if not mark.startswith(source + "/"):
+        raise WriteRefused(f"the batch mark {mark!r} is not one of source {source!r}")
+    bad = sorted({str(r.get("source")) for r in rows} - {source})
+    if bad:
+        raise WriteRefused(f"rows of other sources {bad} in a batch of {source!r}")
+    return writer.write_batch(TABLE, list(rows), source=mark, **kw)
 
 
 def _text(v: Any) -> str:
@@ -175,15 +220,20 @@ def score_profile(
     history: Iterable[GroupCount],
     *,
     spec_digest: str = "",
+    high: Mapping[Any, int] | None = None,
+    high_learn: Iterable[GroupCount] = (),
+    high_scoring: Iterable[GroupCount] = (),
 ) -> ProfileResult:
     """Score one profile (the module docstring states the rule).  ``learn`` and ``scoring`` are
     ``count_by`` groups of the profile's entity and values over the learning and scoring windows,
-    ``history`` the table's per-day groups (no entity) over the learning window."""
+    ``history`` the table's per-day groups (no entity) from :func:`history_since`.  ``high``
+    names the entities a cardinality read found over ``max_values_per_entity`` (with their
+    distinct counts), left out of ``learn`` and ``scoring``; ``high_learn`` and ``high_scoring``
+    are their per-entity groups (no values) over the two windows."""
     w = windows(profile, as_of)
     start_day = w.learn_until.date()
-    days = [g.day for g in history]
-    oldest = min(days) if days else None
-    history_days = (start_day - oldest).days if oldest is not None else 0
+    oldest = min((g.day for g in history), default=None)
+    history_days = 0 if oldest is None else min(profile.learn_days, (start_day - oldest).days)
     result = ProfileResult(
         profile.id,
         "ok",
@@ -216,7 +266,8 @@ def score_profile(
         pair_labels[(g.entity, g.values)].add(g.label)
 
     candidates: list[dict[str, Any]] = []
-    high: dict[Any, list[tuple[Any, tuple]]] = defaultdict(list)
+    pre_high = high
+    high: dict[Any, list[tuple[Any, tuple]]] = defaultdict(list)  # type: ignore[no-redef]
     for (e, v), n in sorted(seen.items(), key=lambda kv: _key_of(*kv[0])):
         if len(learned.get(e, ())) > profile.max_values_per_entity:
             high[e].append((e, v))
@@ -234,15 +285,34 @@ def score_profile(
             label = tlp.strictest(pair_labels[(e, v)] | entity_labels[e])
             row = _row(profile, w, "finding", e, v, n, s, t, score, confidence, label)
             candidates.append(row)
+    noisy: dict[Any, dict[str, Any]] = {}
     for e, pairs in high.items():
         labels = set(entity_labels[e])
         for p in pairs:
             labels |= pair_labels[p]
-        n = sum(seen[p] for p in pairs)
-        label = tlp.strictest(labels)
-        row = _row(profile, w, "high_cardinality", e, None, n, None, total[e], None, None, label)
+        noisy[e] = {"n": sum(seen[p] for p in pairs), "t": total[e], "labels": labels}
+        noisy[e]["distinct"] = len(learned[e])
+    # the entities the cardinality read set aside: their totals and labels, no values
+    pre = dict(pre_high or {})
+    pre_total: dict[Any, float] = defaultdict(float)
+    pre_labels: dict[Any, set[tlp.Label]] = defaultdict(set)
+    for g in sorted(high_learn, key=_key):
+        pre_total[g.entity] += g.count * _weight(profile, start_day, g.day)
+        pre_labels[g.entity].add(g.label)
+    for g in sorted(high_scoring, key=_key):
+        if g.entity not in pre:
+            continue
+        x = noisy.setdefault(
+            g.entity, {"n": 0, "t": pre_total[g.entity], "labels": set(pre_labels[g.entity])}
+        )
+        x["distinct"] = pre[g.entity]
+        x["n"] += g.count
+        x["labels"].add(g.label)
+    for e, x in noisy.items():
+        label = tlp.strictest(x["labels"])
+        row = _row(profile, w, "high_cardinality", e, None, x["n"], None, x["t"], None, None, label)  # fmt: skip
         row["reasons"].append(
-            f"{len(learned[e])} distinct learned values > max_values_per_entity "
+            f"{x['distinct']} distinct learned values > max_values_per_entity "
             f"{profile.max_values_per_entity}: not scored"
         )
         candidates.append(row)
@@ -277,12 +347,8 @@ def _emit_order(r: Mapping[str, Any]) -> tuple:
 
 
 def _uid(profile: Profile, as_of: datetime, r: Mapping[str, Any]) -> str:
-    return (
-        "nov-"
-        + _sha(
-            SOURCE, profile.digest, _iso(_aware(as_of)), r["status"], r["entity"], r.get("value")
-        )[:40]
-    )
+    parts = (SOURCE, profile.digest, _iso(_aware(as_of)), r["status"], r["entity_kind"])
+    return "nov-" + _sha(*parts, r["entity"], r.get("value"))[:40]
 
 
 def _num(x: float | None) -> float | None:
@@ -324,11 +390,12 @@ def _row(
         ]
     return {
         "uid": "",
-        "time": w.score_until,
+        "time": w.score_since,
         "as_of": w.score_until,
         "source": SOURCE,
         "source_kind": SOURCE_KIND,
         "profile": profile.id,
+        "entity_kind": profile.entity_kind,
         "entity": e,
         "entity_column": profile.entity,
         "value": v,
@@ -360,39 +427,58 @@ def run(
 ) -> list[ProfileResult]:
     """Score every profile of ``spec`` for ``as_of`` through ``reader`` and, with ``writer`` (a
     ``LakeClient``), write each profile's rows to ``novelty_finding`` under its batch id.  Without
-    ``writer`` nothing is written (a dry run).  A profile whose read fails (too many groups, a
-    column its reader may not read) is reported ``failed``; the others still run."""
+    ``writer`` nothing is written (a dry run).  A profile whose read or write fails (too many
+    groups, a column its reader may not read, a refused write) is reported ``failed``; the others
+    still run.
+
+    Per profile and run: a history read, a cardinality read, the learning and scoring reads,
+    and, when the cardinality read found noisy entities, two per-entity reads of those (four
+    grouped queries, or six)."""
     as_of = _aware(as_of)
     out = []
     for p in spec.profiles:
         w = windows(p, as_of)
-        common = {"time_column": p.time_column, "limit": limit}
+        common: dict[str, Any] = {"time_column": p.time_column, "limit": limit}
+        args = (p.table, p.entity, list(p.values))
+        where = dict(p.where) or None
+        learn_w = {"since": w.learn_since, "until": w.learn_until}
+        score_w = {"since": w.score_since, "until": w.score_until}
         try:
             history = reader.count_by(
-                p.table, None, [], since=w.learn_since, until=w.learn_until, **common
+                p.table, None, [], since=history_since(p, as_of), until=w.learn_until, **common
             )
-            args = (p.table, p.entity, list(p.values))
-            where = dict(p.where) or None
-            learn = reader.count_by(
-                *args, since=w.learn_since, until=w.learn_until, where=where, **common
-            )
-            scoring = reader.count_by(
-                *args, since=w.score_since, until=w.score_until, where=where, **common
-            )
+            high = reader.cardinality(
+                *args, **learn_w, above=p.max_values_per_entity, where=where,
+                time_column=p.time_column, limit=MAX_ENTITIES,
+            )  # fmt: skip
+            skip = sorted(high, key=_orderable) or None
+            learn = reader.count_by(*args, **learn_w, where=where, skip_entities=skip, **common)
+            scoring = reader.count_by(*args, **score_w, where=where, skip_entities=skip, **common)
+            high_learn: list[GroupCount] = []
+            high_scoring: list[GroupCount] = []
+            if skip:
+                one = (p.table, p.entity, [])
+                high_learn = reader.count_by(*one, **learn_w, where=where, only_entities=skip, **common)  # fmt: skip
+                high_scoring = reader.count_by(*one, **score_w, where=where, only_entities=skip, **common)  # fmt: skip
         except (CeilingError, LakeError) as exc:
             out.append(ProfileResult(p.id, "failed", w, error=f"{type(exc).__name__}: {exc}"))
             continue
-        result = score_profile(p, as_of, learn, scoring, history, spec_digest=spec.digest)
-        if writer is not None and result.status == "ok" and result.rows:
-            res = writer.write_batch(
-                TABLE,
-                result.rows,
-                idempotency_key=result.batch_id,
-                source=f"novelty:{p.id}",
-                high_water=_iso(as_of),
-            )
-            result.written, result.replayed = res.rows_written, res.replayed
-        elif writer is not None and result.status == "ok":
-            result.written, result.replayed = 0, False
+        result = score_profile(
+            p, as_of, learn, scoring, history, spec_digest=spec.digest,
+            high=high, high_learn=high_learn, high_scoring=high_scoring,
+        )  # fmt: skip
+        if writer is not None and result.status == "ok":
+            try:
+                if result.rows:
+                    res = write_findings(
+                        writer, result.rows, source=SOURCE, mark=f"{SOURCE}/{p.id}",
+                        idempotency_key=result.batch_id, high_water=_iso(as_of),
+                    )  # fmt: skip
+                    result.written, result.replayed = res.rows_written, res.replayed
+                else:
+                    result.written, result.replayed = 0, False
+            except (LakeError, WriteRefused) as exc:
+                result.status = "failed"
+                result.error = f"write: {type(exc).__name__}: {exc}"
         out.append(result)
     return out

@@ -34,6 +34,7 @@
       "required": [
         "id",
         "table",
+        "entity_kind",
         "entity",
         "values",
         "learn_days",
@@ -63,6 +64,18 @@
           "pattern": "^[a-z][a-z0-9_]{0,62}$(?!\\n)",
           "description": "The lake table read (a name load_schemas knows; checked by homelabnext.novelty.spec)."
         },
+        "entity_kind": {
+          "type": "string",
+          "enum": [
+            "ip",
+            "host",
+            "user",
+            "domain",
+            "process",
+            "other"
+          ],
+          "description": "The shared entity namespace of the entity column (ADR-0035 decision 7), written into every finding's entity_kind so corroborate matches entities across sources."
+        },
         "entity": {
           "type": "string",
           "maxLength": 255,
@@ -89,13 +102,20 @@
             "pattern": "^[a-z_][a-z0-9_]{0,62}(?:\\.[a-z_][a-z0-9_]{0,62}){0,3}$(?!\\n)"
           },
           "additionalProperties": {
-            "type": [
-              "string",
-              "integer",
-              "boolean"
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": [
+                  "integer",
+                  "boolean"
+                ]
+              }
             ]
           },
-          "description": "Equality filters on column paths, bound as parameters."
+          "description": "Equality filters on scalar, non-timestamp column paths, bound as parameters; each value must have its column's type."
         },
         "time_column": {
           "type": "string",

@@ -10,7 +10,10 @@ dropped) as JSON.  ``hnx novelty corroborate --since ISO --until ISO --site SITE
 [--min-sources N] LAKE`` prints the entities that at least two distinct sources flagged.
 
 The analyzer reads as ``analyzer:novelty`` at the ceiling ``SITE``'s ``tlp_readers`` declares
-for it (a site that declares none: refused).  ``LAKE`` is either ``--fixture FILE`` (a YAML or
+for it (a site that declares none: refused).  ``SITE`` is the lab's module selection, or any file
+with its ``tlp_readers`` and ``lake_catalog``; both are held to the module selection schema and
+to the rules ``lake-access.json`` is rendered under.  Writing needs the reader's ``writes`` to
+name ``novelty_finding``.  The summary is labelled at the analyzer's ceiling (``tlp``).  ``LAKE`` is either ``--fixture FILE`` (a YAML or
 JSON mapping of table name to rows, loaded into the in-memory fake lake: examples and tests) or
 ``--domain D --namespace NS --warehouse WH`` (the lab's ``lake-query`` and ``lake-catalog``
 endpoints, resolved from the registry's domain, signing in as ``analyzer:novelty``).  There is
@@ -110,15 +113,51 @@ def _lake(args: argparse.Namespace, schemas: Any) -> Any:
     )
 
 
-def _reader(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+def _readers(path: str) -> list[dict[str, Any]]:
+    """``path``'s ``tlp_readers``, held to the module selection's own rules: the schema's
+    ``tlp_readers`` and ``lake_catalog`` and what ``lake-access.json`` would refuse."""
+    from homelabnext.modules import lake_access
+    from homelabnext.novelty import READER
+    from homelabnext.schema_registry import validator
+
+    site = _load(path)
+    if not isinstance(site, dict) or not isinstance(site.get("tlp_readers"), list):
+        raise _Usage(f"{path}: no tlp_readers list, so {READER} has no ceiling")
+    part = {k: site[k] for k in ("tlp_readers", "lake_catalog") if k in site}
+    schema = validator("platform", "module_selection.schema.json").schema
+    sub = {
+        "$schema": schema["$schema"],
+        "type": "object",
+        "properties": {k: schema["properties"][k] for k in ("tlp_readers", "lake_catalog")},
+        "dependentRequired": {"tlp_readers": ["lake_catalog"]},
+        "$defs": schema.get("$defs", {}),
+    }
+    from jsonschema import Draft202012Validator
+
+    errors = sorted(Draft202012Validator(sub).iter_errors(part), key=lambda e: list(e.path))
+    if errors:
+        e = errors[0]
+        raise _Usage(f"{path}: {'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message}")
+    try:
+        lake_access.render(part)
+    except lake_access.LakeAccessError as exc:
+        raise _Usage(f"{path}: {exc}") from None
+    return site["tlp_readers"]
+
+
+def _reader(args: argparse.Namespace, *, writes: str | None = None) -> tuple[Any, Any, Any]:
     from homelabnext.lake import load_schemas
     from homelabnext.lake.ceiling import reader_for
     from homelabnext.novelty import READER
 
-    site = _load(args.site)
-    readers = site.get("tlp_readers") if isinstance(site, dict) else None
-    if not isinstance(readers, list):
-        raise _Usage(f"{args.site}: no tlp_readers list, so {READER} has no ceiling")
+    readers = _readers(args.site)
+    if writes is not None:
+        mine = [r for r in readers if r.get("reader") == READER]
+        if mine and writes not in (mine[0].get("writes") or []):
+            raise _Usage(
+                f"{args.site}: {READER} has no writes grant for {writes} (writes: [{writes}]);"
+                " run with --dry-run to score without writing"
+            )
     schemas = load_schemas()
     lake = _lake(args, schemas)
     return reader_for(lake, READER, readers, schemas), lake, schemas
@@ -134,12 +173,14 @@ def _json(doc: Any) -> str:
 
 
 def _run(args: argparse.Namespace) -> int:
-    from homelabnext.novelty import SOURCE, load_spec, run
+    from homelabnext.novelty import SOURCE, TABLE, load_spec, run
 
-    reader, lake, schemas = _reader(args)
+    reader, lake, schemas = _reader(args, writes=None if args.dry_run else TABLE)
     spec = load_spec(args.spec, schemas)
     results = run(reader, spec, args.as_of, writer=None if args.dry_run else lake)
     doc: dict[str, Any] = {
+        # the summary is derived from what the analyzer read: label it at its ceiling
+        "tlp": reader.ceiling.value,
         "as_of": args.as_of,
         "source": SOURCE,
         "spec_digest": spec.digest,
@@ -157,14 +198,19 @@ def _corroborate(args: argparse.Namespace) -> int:
 
     reader, _, _ = _reader(args)
     groups = reader.count_by(
-        TABLE, "entity", ["source", "profile", "status"], since=args.since, until=args.until
+        TABLE,
+        "entity",
+        ["entity_kind", "source", "profile", "status"],
+        since=args.since,
+        until=args.until,
     )
     rows = [
         {
             "entity": g.entity,
-            "source": g.values[0],
-            "profile": g.values[1],
-            "status": g.values[2],
+            "entity_kind": g.values[0],
+            "source": g.values[1],
+            "profile": g.values[2],
+            "status": g.values[3],
             "tlp": g.label.value,
             "rows": g.count,
         }
@@ -174,6 +220,7 @@ def _corroborate(args: argparse.Namespace) -> int:
     print(
         _json(
             {
+                "tlp": reader.ceiling.value,
                 "since": args.since,
                 "until": args.until,
                 "candidates": [c.as_dict() for c in found],
@@ -190,7 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         return _run(args) if args.cmd == "run" else _corroborate(args)
-    except (_Usage, SpecError, LakeError, ValueError) as exc:
+    except (_Usage, SpecError, LakeError, LookupError, ValueError) as exc:
         print(f"hnx novelty: {exc}", file=sys.stderr)
         return 2
 

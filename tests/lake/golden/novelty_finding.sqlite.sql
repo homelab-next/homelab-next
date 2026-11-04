@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS "novelty_finding" (
     "source" TEXT NOT NULL,
     "source_kind" TEXT NOT NULL,
     "profile" TEXT NOT NULL,
+    "entity_kind" TEXT NOT NULL,
     "entity" TEXT NOT NULL,
     "entity_column" TEXT,
     "value" TEXT,

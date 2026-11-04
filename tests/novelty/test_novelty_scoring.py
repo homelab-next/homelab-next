@@ -23,6 +23,7 @@ D = {n: date(2026, 3, n) for n in range(1, 11)}
 P = Profile(
     id="host-dst-port",
     table="network_activity",
+    entity_kind="ip",
     entity="src_endpoint.ip",
     values=("dst_endpoint.port",),
     where={},
@@ -45,8 +46,8 @@ def g(entity, value, day, count=1, label=Label.GREEN):
     return GroupCount(entity, (value,), D[day], label, count)
 
 
-def score(learn, scoring, history=FULL, profile=P, as_of=AS_OF):
-    return score_profile(profile, as_of, learn, scoring, history, spec_digest="sha256:spec")
+def score(learn, scoring, history=FULL, profile=P, as_of=AS_OF, **kw):
+    return score_profile(profile, as_of, learn, scoring, history, spec_digest="sha256:spec", **kw)
 
 
 def by_entity(result):
@@ -167,7 +168,10 @@ def test_same_inputs_same_rows_whatever_the_input_order():
 def test_every_row_is_heuristic_and_names_its_source_and_windows():
     (row,) = score([g("h1", 80, 7, 8)], [g("h1", 22, 9)]).rows
     assert row["source_kind"] == "heuristic" and row["source"] == "lake-novelty"
-    assert row["profile"] == "host-dst-port" and row["time"] == row["as_of"] == AS_OF
+    assert row["profile"] == "host-dst-port" and row["as_of"] == AS_OF
+    # the finding is stamped at the start of the behaviour window it describes
+    assert row["time"] == row["score_since"] == datetime(2026, 3, 9, tzinfo=UTC)
+    assert row["entity_kind"] == "ip"
     assert row["learn_until"] == row["score_since"] and row["spec_digest"] == P.digest
     assert row["message"] and row["reasons"]
 
@@ -219,3 +223,31 @@ def test_warming_is_the_same_for_the_same_as_of_and_moves_with_it():
     assert one["days_remaining"] == 2
     later = score([], [], history=hist, as_of=datetime(2026, 3, 11, tzinfo=UTC)).summary()
     assert later["days_remaining"] == 1
+
+
+def test_history_older_than_the_learning_window_counts_as_full():
+    hist = [GroupCount(None, (), D[1], Label.RED, 1)]  # 8 days before the scoring window
+    s = score([g("h1", 80, 8, 8)], [g("h1", 22, 9)], history=hist).summary()
+    assert (s["status"], s["history_days"]) == ("ok", 4)  # min(learn_days, 8)
+
+
+def test_entities_set_aside_by_the_cardinality_read_are_reported_once():
+    # h9 was left out of learn and scoring; its per-entity groups say what it did
+    high_learn = [GroupCount("h9", (), D[7], Label.AMBER, 400)]
+    high_scoring = [GroupCount("h9", (), D[9], Label.GREEN, 12)]
+    r = score(
+        [g("h1", 80, 7, 8)],
+        [g("h1", 22, 9)],
+        high={"h9": 400},
+        high_learn=high_learn,
+        high_scoring=high_scoring,
+    )
+    rows = {x["entity"]: x for x in r.rows}
+    assert rows["h1"]["status"] == "finding"
+    h9 = rows["h9"]
+    assert h9["status"] == "high_cardinality" and h9["count"] == 12 and h9["tlp"] == "amber"
+    assert h9["entity_total"] == 200.0  # 400 rows two days old
+    assert "400 distinct learned values" in h9["reasons"][-1]
+    # not seen in the scoring window: not reported
+    quiet = score([], [], high={"h9": 400}, high_learn=high_learn, high_scoring=[])
+    assert quiet.rows == []

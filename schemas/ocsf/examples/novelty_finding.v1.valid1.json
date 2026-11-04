@@ -1,10 +1,11 @@
 {
   "uid": "nov-0123456789abcdef0123456789abcdef",
-  "time": "2026-03-29T00:00:00Z",
+  "time": "2026-03-28T00:00:00Z",
   "as_of": "2026-03-29T00:00:00Z",
   "source": "lake-novelty",
   "source_kind": "heuristic",
   "profile": "host-dst-port",
+  "entity_kind": "ip",
   "entity": "192.0.2.10",
   "entity_column": "src_endpoint.ip",
   "value": "4444",

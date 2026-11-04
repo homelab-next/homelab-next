@@ -4,6 +4,7 @@ as_of: timestamp[us, tz=UTC] not null
 source: string not null
 source_kind: string not null
 profile: string not null
+entity_kind: string not null
 entity: string not null
 entity_column: string
 value: string

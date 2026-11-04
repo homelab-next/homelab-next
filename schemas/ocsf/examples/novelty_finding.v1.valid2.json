@@ -5,6 +5,7 @@
   "source": "host-kernel",
   "source_kind": "heuristic",
   "profile": "process-lineage",
+  "entity_kind": "host",
   "entity": "hv-01",
   "value": "[\"sshd\", \"sh\"]",
   "status": "unlearned",

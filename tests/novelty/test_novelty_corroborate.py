@@ -13,9 +13,10 @@ from homelabnext.tlp import Label
 T0 = datetime(2026, 3, 10, tzinfo=UTC)
 
 
-def f(entity, source, *, profile="p", status="finding", hour=1, tlp="green", uid=None):
+def f(entity, source, *, profile="p", status="finding", hour=1, tlp="green", uid=None, kind="ip"):
     return {
         "uid": uid or f"{source}-{profile}-{entity}-{hour}",
+        "entity_kind": kind,
         "entity": entity,
         "source": source,
         "profile": profile,
@@ -55,6 +56,7 @@ def test_unlearned_counts_high_cardinality_does_not():
 def test_count_by_groups_count_as_many_findings():
     rows = [
         {
+            "entity_kind": "ip",
             "entity": "e",
             "source": "a",
             "profile": "p",
@@ -62,7 +64,14 @@ def test_count_by_groups_count_as_many_findings():
             "tlp": "red",
             "rows": 3,
         },
-        {"entity": "e", "source": "b", "profile": "q", "status": "finding", "tlp": "clear"},
+        {
+            "entity_kind": "ip",
+            "entity": "e",
+            "source": "b",
+            "profile": "q",
+            "status": "finding",
+            "tlp": "clear",
+        },
     ]
     (c,) = corroborate(rows)
     assert c.findings == 4 and c.label is Label.RED and c.uids == ()
@@ -91,3 +100,17 @@ def test_a_windowed_row_needs_a_time():
     del row["time"]
     with pytest.raises(ValueError, match="aware time"):
         corroborate([row], since=T0)
+
+
+def test_entities_match_by_kind_and_text_never_by_text_alone():
+    rows = [f("192.0.2.10", "lake-novelty"), f("192.0.2.10", "host-kernel", kind="host")]
+    assert corroborate(rows) == []
+    (c,) = corroborate([*rows, f("192.0.2.10", "dns-sensor")])
+    assert (c.entity_kind, c.entity, c.sources) == ("ip", "192.0.2.10", ("dns-sensor", "lake-novelty"))  # fmt: skip
+
+
+def test_a_finding_without_an_entity_kind_is_refused():
+    row = f("e", "a")
+    del row["entity_kind"]
+    with pytest.raises(ValueError, match="entity_kind"):
+        corroborate([row, f("e", "b")])

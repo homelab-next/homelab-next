@@ -4,8 +4,8 @@
 :func:`load_spec` reads a spec file (YAML or JSON), validates it against
 ``schemas/platform/novelty_spec.schema.json`` and then checks what the schema cannot state
 against the lake's table schemas (:func:`check_spec`): the table exists, the entity and every
-value is a scalar column path of it that is not a timestamp, every ``where`` key is a scalar
-column path, ``time_column`` is a timestamp, profile ids are unique and ``min_history_days`` is
+value is a scalar column path of it that is not a timestamp, every ``where`` key is such a
+column path and its value has the column's type, ``time_column`` is a timestamp, profile ids are unique and ``min_history_days`` is
 at most ``learn_days``.  A spec that fails any of these raises :class:`SpecError` naming every
 problem; nothing is half-loaded.
 """
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.lake.ceiling import KEY_TYPES
-from homelabnext.lake.tables import SCALARS, TableSchema, iter_columns
+from homelabnext.lake.tables import TableSchema, iter_columns
 
 __all__ = ["Profile", "Spec", "SpecError", "check_spec", "digest", "load_spec", "parse_spec"]
 
@@ -43,6 +43,7 @@ class Profile:
 
     id: str
     table: str
+    entity_kind: str
     entity: str
     values: tuple[str, ...]
     where: Mapping[str, Any]
@@ -66,6 +67,7 @@ class Profile:
         return {
             "id": self.id,
             "table": self.table,
+            "entity_kind": self.entity_kind,
             "entity": self.entity,
             "values": list(self.values),
             "where": dict(self.where),
@@ -93,6 +95,7 @@ def _profile(p: Mapping[str, Any]) -> Profile:
     return Profile(
         id=p["id"],
         table=p["table"],
+        entity_kind=p["entity_kind"],
         entity=p["entity"],
         values=tuple(p["values"]),
         where=dict(p.get("where") or {}),
@@ -126,10 +129,25 @@ def _column_problems(p: Profile, table: TableSchema) -> list[str]:
         want(v, KEY_TYPES, "value")
     if p.entity in p.values:
         out.append(f"profile {p.id}: the entity {p.entity!r} is also a value")
-    for w in p.where:
-        want(w, SCALARS, "where column")
+    for w, value in p.where.items():
+        want(w, KEY_TYPES, "where column")
+        col = cols.get(w)
+        if col is not None and col.type in KEY_TYPES and not _fits(value, col.type):
+            out.append(
+                f"profile {p.id}: where {w!r} = {value!r} is not a {col.type} (it would match nothing)"
+            )
     want(p.time_column, ("timestamp",), "time_column")
     return out
+
+
+def _fits(value: Any, column_type: str) -> bool:
+    if column_type == "boolean":
+        return type(value) is bool
+    if column_type == "long":
+        return type(value) is int
+    if column_type == "double":
+        return type(value) in (int, float)
+    return type(value) is str
 
 
 def check_spec(spec: Spec, schemas: Mapping[str, TableSchema]) -> list[str]:

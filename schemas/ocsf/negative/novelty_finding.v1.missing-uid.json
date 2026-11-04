@@ -4,6 +4,7 @@
   "source": "lake-novelty",
   "source_kind": "heuristic",
   "profile": "host-dst-port",
+  "entity_kind": "ip",
   "entity": "192.0.2.10",
   "entity_column": "src_endpoint.ip",
   "value": "4444",
