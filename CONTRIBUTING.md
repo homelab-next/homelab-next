@@ -225,6 +225,33 @@ and an entry that no longer excuses anything fails the lint.
   uses it, so the summed time can exceed a whole run's. Branch protection requires `test-ok`, the
   one stable check name. Locally, `make test` still runs the suite whole.
 
+## Keeping pins current
+
+Every third-party version is pinned exactly: actions by commit SHA with a version comment,
+packages by hash (`constraints/ci.txt`), images by `tag@sha256`, downloaded tools by version and
+checksum. A release younger than 14 days is left alone (dependabot's `cooldown`, `make
+constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
+
+- **Dependabot** (`.github/dependabot.yml`) raises actions (this repository's workflows and the
+  example overlay's), the hashed constraints, the lab-in-a-box compose images and Dockerfiles,
+  and the pre-commit hook revisions. `tests/packaging/test_dependabot.py` fails on a listed
+  directory that does not exist and on a manifest no entry watches.
+- **One version, several places**: `tools/tests/test_pin_consistency.py` fails when copies
+  disagree (ruff in pre-commit and both constraints files, the lab NATS image and CI's
+  nats-server, an image pinned twice, CI's caddy and the example registries, an action at two
+  SHAs, a version a document names). A dependabot pull request that moves one copy fails it;
+  finish it in the same pull request.
+- **What dependabot cannot parse** (role `*_version`/`*_image` defaults, CI `*_VERSION` and
+  checksum pairs, `GO_VERSION`, the Terraform provider constraint, unpinned uv and trivy):
+  `tools/pin_freshness.py report` compares each with its upstream past the same cooldown, and the
+  weekly `pin-freshness` workflow keeps the result in one issue ("Pin freshness"). It never fails
+  a pull request. A new pin of that kind needs its upstream in `SOURCES` in that file
+  (`python3 tools/pin_freshness.py inventory --check`, also a unit test).
+- **Bumping by hand**: take an action's SHA from `git ls-remote https://github.com/OWNER/REPO
+  refs/tags/TAG^{} refs/tags/TAG` (the peeled `^{}` commit for an annotated tag), a binary's
+  checksum from the release's own checksums file, a Go tool's from `go mod download -json`
+  (its `Sum`, as hex), a wheel's from PyPI's file listing. Never type one in.
+
 ## Bug fixes carry a regression test
 
 A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `fix(scope): ...`) or

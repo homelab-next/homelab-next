@@ -932,6 +932,26 @@
     },
     {
       "exit": {
+        "0": "inventory listed, or report written (pins that are behind are reported, never a failure)",
+        "1": "inventory --check found a pin with no upstream source, or a source with no pin",
+        "2": "usage error or an unreadable tree"
+      },
+      "id": "pin-freshness",
+      "inputs": "the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "inventory - the pins found, as JSON; report - a Markdown report for the tracking issue",
+      "owner": "maintainers",
+      "path": "tools/pin_freshness.py",
+      "purpose": "Report the version pins dependabot cannot parse against their upstream's newest release past the 14-day cooldown.",
+      "status": "active",
+      "trigger": [
+        "ci:pin-freshness/report",
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "at least one finding",
         "2": "misconfiguration (not an overlay, unreadable .sops.yaml or marker)"
