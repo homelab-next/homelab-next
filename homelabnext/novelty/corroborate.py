@@ -7,8 +7,10 @@ least two **distinct sources** (a host sensor and a lake profile, say), as candi
 decision cascade and the analyst agents.  Two profiles of one source are one source: a single
 noisy or compromised source cannot corroborate itself.
 
-A row counts when its ``status`` is ``finding`` or ``unlearned`` (both say "new for this
-entity"); a ``high_cardinality`` row says the entity cannot be baselined, which is not a signal.
+A row counts when its ``status`` is ``finding``, ``unlearned`` or ``burst`` (each says "new for
+this entity": a rare value, an entity with no history, a sudden spread of values such as a
+scan); a ``high_cardinality`` row says the entity was too noisy to baseline while learning, which
+is not a signal.
 A candidate's label is the strictest label of the rows behind it.
 
 Entities are matched by ``(entity_kind, entity)``, never by bare text: every source names an
@@ -30,7 +32,7 @@ from homelabnext import tlp
 __all__ = ["SIGNALS", "Candidate", "corroborate"]
 
 #: the statuses that count as a novelty signal
-SIGNALS = ("finding", "unlearned")
+SIGNALS = ("finding", "unlearned", "burst")
 
 
 @dataclass(frozen=True)

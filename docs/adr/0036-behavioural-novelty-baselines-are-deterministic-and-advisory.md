@@ -72,9 +72,10 @@ Three shapes of evidence argue for how to build it:
      the score is their product. A pair is a finding when its score is at least `emit_at`.
    - An entity with more than `max_values_per_entity` distinct values in the learning window is
      reported once (when it appears in the scoring window) as **high-cardinality** and not
-     scored, so one noisy entity cannot flood the output or the memory of a run; so is one with
-     more than that many distinct values in the scoring window alone (a burst, such as a scan on
-     the scoring day), reported with its count there. A cardinality read of each window finds
+     scored, so one noisy entity cannot flood the output or the memory of a run. One with more
+     than that many distinct values in the scoring window alone is reported once as **burst**,
+     with its row count there and not scored; unlike a high-cardinality entity, a burst is new
+     behaviour (a scan on the scoring day, by an entity learned or not), so it is a signal. A cardinality read of each window finds
      such entities first (one row each, however many values), and the per-value reads leave
      them out, so one port scan costs a few groups, never the profile. Their own per-entity
      reads are bounded too: at most 1,000 entities, each giving at most one group per UTC day
@@ -82,7 +83,7 @@ Three shapes of evidence argue for how to build it:
      the profile, visibly, only when that passes the group limit; more than 1,000 noisy entities
      also fails the profile, visibly.
    - A profile emits at most `max_findings` rows per run: findings by score (highest first),
-     then high-cardinality entities, then unlearned pairs, each by entity and value; the number
+     then bursts, high-cardinality entities and unlearned pairs, each by entity and value; the number
      dropped, by status, is reported in the run summary. No cap is silent.
    - **Cold start.** A profile's history is `min(learn_days, date(S) - oldest day)`, where the
      oldest day is the oldest its table holds in `[midnight(date(S)) - 2 * learn_days, S)`, a
@@ -147,8 +148,8 @@ Three shapes of evidence argue for how to build it:
    and value, never bare text) within a time window
    and returns only entities flagged by at least two **distinct sources** (for example a host
    agent and a network profile), as candidates for the decision cascade and the analyst agents.
-   Two profiles of one source are one source. `finding` and `unlearned` rows count as signals;
-   a `high_cardinality` row (the entity cannot be baselined) does not. Distinct sources are
+   Two profiles of one source are one source. `finding`, `unlearned` and `burst` rows count as
+   signals; a `high_cardinality` row (the entity was too noisy to baseline) does not. Distinct sources are
    meant to be distinct writers: the table's key is `(source, uid)`; `write_findings` refuses a
    batch with a row of any source but the writer's own, a mark that is not the source's, or a
    batch id that does not start with the mark; and the lake binds a batch id to its source: a

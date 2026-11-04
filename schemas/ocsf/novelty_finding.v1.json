@@ -90,7 +90,7 @@
     "value": {
       "type": "string",
       "maxLength": 2048,
-      "description": "The value as text: the one value, or a JSON array when the profile has several value columns. Absent for a high-cardinality row."
+      "description": "The value as text: the one value, or a JSON array when the profile has several value columns. Absent for a burst or high-cardinality row."
     },
     "value_columns": {
       "type": "array",
@@ -105,9 +105,10 @@
       "enum": [
         "finding",
         "unlearned",
+        "burst",
         "high_cardinality"
       ],
-      "description": "finding: scored at or above emit_at; unlearned: the entity has no learned support, so no score; high_cardinality: the entity has more distinct learned values than the profile allows, reported once and not scored."
+      "description": "finding: scored at or above emit_at; unlearned: the entity has no learned support, so no score; burst: more distinct values than the profile allows in the scoring window alone (a scan), reported once with its row count there, not scored, and a signal; high_cardinality: more distinct learned values than the profile allows, reported once and not scored, not a signal."
     },
     "score": {
       "type": "number",

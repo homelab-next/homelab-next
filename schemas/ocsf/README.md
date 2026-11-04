@@ -16,8 +16,8 @@ schema, the Trino / DuckDB / SQLite DDL and row validation are all generated fro
 
 `novelty_finding` (ADR-0036, proposed; [docs/novelty.md](../../docs/novelty.md)) holds advisory
 behavioural-novelty findings: `source_kind` is always `heuristic`, `source` names what produced
-the row (`lake-novelty`, or a host sensor) and `status` is `finding`, `unlearned` or
-`high_cardinality`. It is a draft (`x-draft`), not frozen until ADR-0036 is accepted, and was born
+the row (`lake-novelty`, or a host sensor) and `status` is `finding`, `unlearned`, `burst` or
+`high_cardinality` (the first three are signals). It is a draft (`x-draft`), not frozen until ADR-0036 is accepted, and was born
 with the `tlp` column, so its version is 1.0.
 
 Conventions

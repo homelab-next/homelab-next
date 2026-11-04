@@ -261,9 +261,43 @@ def test_a_scan_seen_only_in_the_scoring_window_does_not_fail_the_profile():
     (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF, limit=40)
     assert result.status == "ok", result.error
     (burst,) = [r for r in result.rows if r["entity"] == "192.0.2.77"]
-    assert burst["status"] == "high_cardinality" and burst["count"] == 60
+    assert burst["status"] == "burst" and burst["count"] == 60 and burst["value"] is None
     assert burst["entity_total"] == 0.0 and "in the scoring window" in burst["reasons"][-1]
     assert ("192.0.2.10", "finding") in {(r["entity"], r["status"]) for r in result.rows}
+
+
+def test_a_burst_on_a_learned_entity_is_a_signal_and_corroborates(lake):
+    # 192.0.2.10 is learned (443 every day); on the scoring day it fans out over 60 ports
+    for p in range(60):
+        lake.write_batch(
+            "network_activity",
+            [net(700 + p, day=9, hour=14, src="192.0.2.10", port=2000 + p)],
+            idempotency_key=f"scan-{p}",
+        )
+    (result,) = _run(lake)
+    (burst,) = [r for r in result.rows if r["entity"] == "192.0.2.10"]
+    assert burst["status"] == "burst" and burst["count"] == 62  # 60 scan rows, 22 and 443
+    assert burst["entity_total"] > 0  # learned: still a signal, not high_cardinality
+    w = result.windows
+    host = dict(burst, source="host-kernel", profile="process-lineage", uid="host-2")
+    write_findings(lake, [host], source="host-kernel", mark="host-kernel/x", idempotency_key="host-kernel/x:2")  # fmt: skip
+    reader = reader_for(lake, READER, SITE["tlp_readers"], SCHEMAS)
+    groups = reader.count_by(
+        "novelty_finding", "entity", ["entity_kind", "source", "status"],
+        since=w.score_since, until=w.score_until,
+    )  # fmt: skip
+    found = corroborate(
+        {
+            "entity": g.entity,
+            "entity_kind": g.values[0],
+            "source": g.values[1],
+            "status": g.values[2],
+            "tlp": g.label.value,
+            "rows": g.count,
+        }
+        for g in groups
+    )
+    assert [(c.entity, c.sources) for c in found] == [("192.0.2.10", ("host-kernel", "lake-novelty"))]  # fmt: skip
 
 
 def test_the_history_read_starts_at_a_utc_midnight():

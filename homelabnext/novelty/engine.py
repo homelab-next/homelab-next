@@ -21,16 +21,17 @@ The rule, for a profile with scoring window ``[S, as_of)``, ``S = as_of - score_
   the window's first day.  Below ``min_history_days`` the profile is **warming** and emits
   nothing;
 * an entity with more than ``max_values_per_entity`` distinct learned values is reported once
-  as **high_cardinality** (when it is seen in the scoring window) and not scored, and so is one
-  with more than that many distinct values in the scoring window alone (a burst).  :func:`run`
+  as **high_cardinality** (when it is seen in the scoring window) and not scored; one with more
+  than that many distinct values in the scoring window alone is reported once as **burst**,
+  with its row count there, and is a signal (a scan on the scoring day).  :func:`run`
   finds both first with a cardinality read of each window and leaves them out of the per-value
   reads, so one noisy entity costs a few groups, never the whole profile;
 * a pair whose entity has ``T(e) == 0`` is **unlearned**: reported with no score;
 * otherwise ``surprise = 0 if s >= min_support else 1 - s / min_support``, ``confidence =
   min(1, T(e) / entity_min_samples)``, ``score = surprise * confidence``, and the pair is a
   **finding** when ``score >= emit_at``;
-* at most ``max_findings`` rows are emitted: findings by score (highest first), then
-  high-cardinality entities, then unlearned pairs, each by entity and value; the rest are
+* at most ``max_findings`` rows are emitted: findings by score (highest first), then bursts,
+  high-cardinality entities and unlearned pairs, each by entity and value; the rest are
   counted as dropped, by status;
 * a row's label is the strictest label among the rows that produced it: the pair's
   scoring-window rows and, for a scored or high-cardinality row, every learning-window row of
@@ -85,7 +86,7 @@ SOURCE = "lake-novelty"
 SOURCE_KIND = "heuristic"
 TABLE = "novelty_finding"
 #: the order rows are emitted (and so kept under the cap) by status
-ORDER = ("finding", "high_cardinality", "unlearned")
+ORDER = ("finding", "burst", "high_cardinality", "unlearned")
 
 
 @dataclass(frozen=True)
@@ -332,11 +333,13 @@ def score_profile(
         x["labels"].add(g.label)
     for e, x in noisy.items():
         label = tlp.strictest(x["labels"])
-        row = _row(profile, w, "high_cardinality", e, None, x["n"], None, x["t"], None, None, label)  # fmt: skip
-        what = "values in the scoring window" if x.get("where") == "scoring" else "learned values"
+        status = "burst" if x.get("where") == "scoring" else "high_cardinality"
+        row = _row(profile, w, status, e, None, x["n"], None, x["t"], None, None, label)
+        what = "values in the scoring window" if status == "burst" else "learned values"
         row["reasons"].append(
             f"{x['distinct']} distinct {what} > max_values_per_entity "
             f"{profile.max_values_per_entity}: not scored"
+            + (" (a signal)" if status == "burst" else "")
         )
         candidates.append(row)
 
@@ -399,6 +402,11 @@ def _row(
         message = f"{e}: {cols} {v} seen {count}x; the entity has no learned history (unlearned)"
     elif status == "high_cardinality":
         message = f"{e}: too many distinct {cols} values to baseline (high cardinality)"
+    elif status == "burst":
+        message = (
+            f"{e}: {count} rows with more than {profile.max_values_per_entity} distinct {cols} "
+            "values in the scoring window (a burst, such as a scan)"
+        )
     else:
         assert support is not None and score is not None and confidence is not None
         message = (

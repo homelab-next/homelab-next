@@ -50,6 +50,7 @@ def test_the_window_is_half_open():
 
 def test_unlearned_counts_high_cardinality_does_not():
     assert corroborate([f("e", "a", status="unlearned"), f("e", "b")])
+    assert corroborate([f("e", "a", status="burst"), f("e", "b")])
     assert corroborate([f("e", "a", status="high_cardinality"), f("e", "b")]) == []
 
 

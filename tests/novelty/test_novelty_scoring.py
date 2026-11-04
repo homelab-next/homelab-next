@@ -132,9 +132,14 @@ def test_the_cap_keeps_the_highest_scores_and_reports_what_it_dropped():
     # s(h_i, 22) = i * 0.5; T = 4 + i*0.5 >= 4 so confidence 1; scores 1, .75, .5, .25, 0
     assert [(x["entity"], x["score"]) for x in r.rows] == [("h0", 1.0), ("h1", 0.75), ("h2", 0.5)]
     s = r.summary()
-    assert s["candidates"] == {"finding": 4, "high_cardinality": 0, "unlearned": 2}
+    assert s["candidates"] == {"finding": 4, "burst": 0, "high_cardinality": 0, "unlearned": 2}
     assert s["dropped"] == 3
-    assert s["dropped_by_status"] == {"finding": 1, "high_cardinality": 0, "unlearned": 2}
+    assert s["dropped_by_status"] == {
+        "finding": 1,
+        "burst": 0,
+        "high_cardinality": 0,
+        "unlearned": 2,
+    }
 
 
 def test_the_label_is_the_strictest_contributing_row_learning_window_included():

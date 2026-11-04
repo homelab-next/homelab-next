@@ -48,12 +48,15 @@ With `S = as_of - score_hours`:
    total `T(e)` is the sum of its support over all its values.
 4. For each (entity, value) in the scoring window:
    - more than `max_values_per_entity` distinct learned values: one **high_cardinality** row for
-     the entity, not scored;
+     the entity, not scored and not a signal;
+   - more than `max_values_per_entity` distinct values in the scoring window alone: one
+     **burst** row for the entity with its row count there, not scored, and a signal (a scan on
+     the scoring day, by an entity learned or not);
    - `T(e) == 0`: **unlearned**, reported with no score (never scored 0);
    - otherwise `surprise = 0` when `s >= min_support`, else `1 - s / min_support`;
      `confidence = min(1, T(e) / entity_min_samples)`; `score = surprise * confidence`; a
      **finding** when `score >= emit_at`.
-5. At most `max_findings` rows: findings by score, then high-cardinality, then unlearned; the
+5. At most `max_findings` rows: findings by score, then bursts, high-cardinality, unlearned; the
    rest are counted in the summary as dropped, by status.
 
 A worked case: a host spoke to port 443 twice a day on each of the four learning days and never
@@ -85,8 +88,9 @@ table's per-day history, a cardinality read of each window naming the entities w
 `max_values_per_entity` distinct values there (a scan on the scoring day as much as a noisy
 learned entity), and the learning and scoring windows without those entities; when there are
 such entities, two more read their per-entity counts in both windows (seven), so one port scan
-costs a few groups rather than failing the profile. A set-aside entity is reported once as
-`high_cardinality`, with its count in the scoring window. The set-aside reads are bounded too:
+costs a few groups rather than failing the profile. A set-aside entity is reported once, with
+its count in the scoring window: `high_cardinality` when it was noisy while learning, `burst`
+when only the scoring window was. The set-aside reads are bounded too:
 more than 1,000 noisy entities, or set-aside counts past the group limit (at most `entities x
 (learn_days + 1) x 5` groups: one per entity, UTC day and label), fail the profile visibly
 rather than truncate it. Every read has the ceiling's row filter
