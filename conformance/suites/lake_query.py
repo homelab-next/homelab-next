@@ -202,6 +202,8 @@ def _(lake):
     a, b = uniq("ca"), uniq("cb")
     t = "2026-03-01T08:15:00Z"
     rows = [auth_row(f"{a}-{i}", user=a, time=t, dst_endpoint={"ip": ip(30 + i), "port": 22}) for i in range(3)]  # fmt: skip
+    # one (entity, value) twice: a count that is not of distinct values reads 4, not 3
+    rows.append(auth_row(f"{a}-dup", user=a, time=t, dst_endpoint={"ip": ip(30), "port": 22}))
     rows.append(auth_row(f"{b}-0", user=b, time=t))
     lake.write_batch(TABLE, rows, idempotency_key=uniq("seed"))
     grant = RedGrant("conformance", "the lake-query suite counts the rows it wrote")
@@ -211,7 +213,7 @@ def _(lake):
     assert noisy.get(a) == 3 and b not in noisy, f"cardinality: {noisy}"
     mine = [a, b]
     kept = reader.count_by(TABLE, "user_name", [], only_entities=[a], **window)
-    assert {g.entity for g in kept} == {a} and sum(g.count for g in kept) == 3, f"only: {kept}"
+    assert {g.entity for g in kept} == {a} and sum(g.count for g in kept) == 4, f"only: {kept}"
     rest = reader.count_by(TABLE, "user_name", [], only_entities=mine, skip_entities=[a], **window)
     assert [(g.entity, g.count) for g in rest] == [(b, 1)], f"skip: {rest}"
 

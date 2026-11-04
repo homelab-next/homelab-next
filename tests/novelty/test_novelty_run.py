@@ -318,3 +318,15 @@ def test_a_sourceless_writer_using_the_analyzers_batch_id_cannot_suppress_its_ro
     (result,) = _run(lake)
     assert result.status == "failed" and "BatchSourceMismatch" in result.error
     assert {r["uid"] for r in _stored(lake)} == {"host-squat"}
+
+
+def test_more_noisy_entities_than_the_cap_fail_the_profile_visibly(monkeypatch):
+    import homelabnext.novelty.engine as engine
+
+    scans = rows()
+    for n, src in enumerate(("192.0.2.77", "192.0.2.78")):
+        scans += [net(800 + 100 * n + p, day=9, src=src, port=3000 + p) for p in range(5)]
+    reader = reader_for(_lake_of(scans), READER, SITE["tlp_readers"], SCHEMAS)
+    monkeypatch.setattr(engine, "MAX_ENTITIES", 1)
+    (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF)
+    assert result.status == "failed" and "TooManyGroups" in result.error

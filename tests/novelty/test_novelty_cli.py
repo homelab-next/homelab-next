@@ -188,7 +188,7 @@ def test_writing_needs_the_analyzers_writes_grant(files, tmp_path, capsys):
             {
                 "lake_catalog": "lake",
                 "tlp_readers": [
-                    {"reader": "module:x", "ceiling": "red", "writes": ["t"], "why": "w"}
+                    {"reader": "module:x", "ceiling": "amber", "writes": ["novelty_finding"], "why": "w"}
                 ],
             },
             "analyzer",
