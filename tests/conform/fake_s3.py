@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A loopback S3 server shaped like Garage v1.0's path-style API, for the adapter tests.
+"""A loopback S3 server shaped like Garage's path-style API, for the adapter tests.
 
-It checks every request's SigV4 signature the way Garage does (canonical URI = the raw path as
-received, payload hash from ``x-amz-content-sha256``) and refuses a bad one with
+It checks every request's SigV4 signature the way Garage does (payload hash from
+``x-amz-content-sha256``; ``canonical_uri="garage-v2"``, the default, rebuilds the canonical URI
+by percent-decoding the received path and re-encoding it with ``UriEncode``, as Garage v2's
+``api/common/signature/payload.rs`` does; ``"raw"`` signs the raw path as received, as Garage
+v1 did) and refuses a bad one with
 ``SignatureDoesNotMatch``; keys are the percent-decoded remainder of the path, never resolved as
 paths.  Buckets, objects, user metadata, ListObjectsV2 with continuation tokens and
 ``encoding-type=url``, and the S3 error XML (``NoSuchBucket``, ``NoSuchKey``,
@@ -39,7 +42,11 @@ class FakeS3:
         allow_create: bool = True,
         tamper=None,
         list_encoding: str = "garage",
+        canonical_uri: str = "garage-v2",
     ):
+        if canonical_uri not in ("garage-v2", "raw"):
+            raise ValueError(f"canonical_uri: garage-v2 or raw, not {canonical_uri!r}")
+        self.canonical_uri = canonical_uri
         self.access, self.secret, self.region = access, secret, region
         self.quote = {"garage": urllib.parse.quote, "aws": urllib.parse.quote_plus}[list_encoding]
         self.allow_create = allow_create
@@ -108,7 +115,10 @@ class FakeS3:
             for k, _, v in (p.partition("=") for p in raw_query.split("&") if p)
         ]
         headers = [(n, h.headers[n]) for n in signed]
-        canon = sigv4.canonical_request(h.command, raw_path, pairs, headers, sha)
+        uri = raw_path
+        if self.canonical_uri == "garage-v2":
+            uri = sigv4.uri_encode(urllib.parse.unquote(raw_path), keep_slash=True)
+        canon = sigv4.canonical_request(h.command, uri, pairs, headers, sha)
         sts = sigv4.string_to_sign(when, sigv4.credential_scope(when, region, "s3"), canon)
         key = sigv4.signing_key(self.secret, when, region, "s3")
         want = hmac.new(key, sts.encode(), hashlib.sha256).hexdigest()

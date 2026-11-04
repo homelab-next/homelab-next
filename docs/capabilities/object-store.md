@@ -262,7 +262,9 @@ An `object-store` adapter for S3-compatible servers (written against Garage v1.0
 Garage specifics the lab relies on: the region is the server's `s3_region` (`LAB_S3_REGION`),
 and the key must hold the `createBucket` permission for the suite's `create_bucket` calls
 (`compose/lab-in-a-box/fakes/lab_init.py` grants it).  Logical bucket names get a per-run prefix
-(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.
+(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.  The lab
+runs Garage v2, whose breaking changes are in its admin API and configuration, neither of which
+this adapter uses; the admin API v2 calls are `lab_init.py`'s.
 
 <details><summary>Full adapter notes</summary>
 
@@ -278,8 +280,11 @@ REST API with path-style addressing and SigV4 header signing (`.sigv4`):
 
 Keys are opaque text: each is percent-encoded once, `/` kept, and a path segment that is only
 `.` or `..` has its dots encoded as `%2E` so no hop between here and the server can resolve
-it as a path; the server decodes the key back verbatim.  The signature covers the path exactly as
-sent (S3 performs no second encoding and no normalisation).
+it as a path; the server decodes the key back verbatim.  The signature covers SigV4's canonical
+URI: `UriEncode` of the decoded path, once (S3 performs no second encoding and no
+normalisation), which is the path as sent except that a dot segment sent as `%2E` is signed as
+`.`.  Garage v2 (and MinIO) rebuild it that way; Garage v1 signed the raw path, so a dot-segment
+key no longer signs alike for a v1 server.
 
 Errors map to the protocol's types: `NoSuchBucket`, `NoSuchKey`, anything else
 `ObjectStoreError` with the HTTP status and the S3 error code, never a credential.  A HEAD has no
@@ -288,7 +293,9 @@ body, so a 404 there is disambiguated with a HeadBucket.
 Garage specifics the lab relies on: the region is the server's `s3_region` (`LAB_S3_REGION`),
 and the key must hold the `createBucket` permission for the suite's `create_bucket` calls
 (`compose/lab-in-a-box/fakes/lab_init.py` grants it).  Logical bucket names get a per-run prefix
-(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.
+(`bucket_prefix="auto"`) so repeated runs against one server never share a bucket.  The lab
+runs Garage v2, whose breaking changes are in its admin API and configuration, neither of which
+this adapter uses; the admin API v2 calls are `lab_init.py`'s.
 
 </details>
 

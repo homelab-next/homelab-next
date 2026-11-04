@@ -124,7 +124,7 @@ python:
   zstandard: {spdx: BSD-3-Clause, kind: linked}
 images:
   binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
-  dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store; run as its own service, nothing of it is shipped here (NOTICE)"}
+  dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store (v2.5.0: its LICENSE is still AGPL-3.0); run as its own service, nothing of it is shipped here (NOTICE)"}
   hnx-lab-broker: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   hnx-lab-fakes: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   litellm/litellm-database: {spdx: MIT, kind: service, reason: "the LLM gateway; MIT outside the project's enterprise/ directory, which has its own licence and is not used"}

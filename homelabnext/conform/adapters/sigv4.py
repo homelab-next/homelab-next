@@ -9,9 +9,11 @@ The pieces are separate functions so each can be checked against AWS's published
 S3 rules, which differ from the generic service rules, are the caller's choice and are spelled
 out here so nobody has to rediscover them:
 
-* the canonical URI is the request path exactly as sent on the wire: encode each key once with
-  ``uri_encode(key, keep_slash=True)`` and sign that same string (no second encoding, no
-  ``.``/``..`` normalisation, which would make two keys sign alike);
+* the canonical URI is ``uri_encode(key, keep_slash=True)`` of the decoded key, once (no second
+  encoding, no ``.``/``..`` normalisation, which would make two keys sign alike).  A server
+  rebuilds it from the path it received by decoding and re-encoding (Garage v2, MinIO), so a
+  character sent encoded although ``uri_encode`` leaves it plain (a dot segment sent as ``%2E``
+  so no hop resolves it) is signed plain;
 * the payload hash is the hex SHA-256 of the body and is sent as ``x-amz-content-sha256``
   (``sign(..., content_sha256_header=True)``).
 
