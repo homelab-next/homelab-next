@@ -146,6 +146,7 @@ class LakeBackend(Backend):
                     _Pending(
                         it["table"], list(it["rows"]), it["idempotency_key"], it.get("source"),
                         it.get("high_water"), comp[it["owed_to"]], int(it["order"]),
+                        it.get("expect_source"),
                     )
                 )  # fmt: skip
             for (on, table, source), order in st.marks.items():
@@ -344,7 +345,7 @@ class LakeBackend(Backend):
         back = [
             _Pending(
                 b["table"], list(b["rows"]), b["idempotency_key"], b.get("source"),
-                b.get("high_water"), self.old, int(b["order"]),
+                b.get("high_water"), self.old, int(b["order"]), b.get("expect_source"),
             )
             for b in batches
         ]  # fmt: skip

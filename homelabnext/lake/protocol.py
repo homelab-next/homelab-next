@@ -70,6 +70,7 @@ class LakeClient(LakeQuery, LakeWriter, Protocol):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         """Commit ``rows`` atomically, at most once per ``idempotency_key``.
 
@@ -77,6 +78,13 @@ class LakeClient(LakeQuery, LakeWriter, Protocol):
         content key (the table's ``key`` columns) is already present are skipped, so a replay under
         a different batching is also safe. ``source``/``high_water`` are stored with the commit
         itself and come back in ``describe(table).committed``.
+
+        A replay is judged by ``expect_source`` when given, else by ``source``: the batch must
+        have been committed under exactly that source (none recorded is a mismatch), or
+        :class:`~homelabnext.lake.errors.BatchSourceMismatch` is raised and nothing is written.
+        ``expect_source`` lets a writer re-send a batch without its mark (``source=None``, so the
+        mark does not move back) and still have it judged as its own; with neither, the replay
+        is not judged.
         """
         ...
 

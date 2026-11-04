@@ -7,7 +7,8 @@ Subject = any object implementing ``homelabnext.lake.LakeClient``:
     named(name, params) -> list[dict]       registered queries
     describe(table) -> TableInfo            columns, key, row count, last committed mark per source
     list_tables() -> list[str]
-    write_batch(table, rows, *, idempotency_key, source=None, high_water=None) -> WriteResult
+    write_batch(table, rows, *, idempotency_key, source=None, high_water=None,
+                expect_source=None) -> WriteResult
 
 Seeding goes through ``write_batch``, so a read-only deployment either points the adapter at a
 scratch namespace or declares a seeded copy.  Adapters raise ``homelabnext.lake.LakeError``

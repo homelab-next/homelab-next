@@ -854,8 +854,8 @@
           "reader": {
             "type": "string",
             "maxLength": 80,
-            "pattern": "^(?:profile|module|user|group):[a-z0-9][a-z0-9._-]{0,62}$(?!\\n)",
-            "description": "Who reads the lake: an agent profile, a module (its query consumer), or a person or group signing in to the query engine."
+            "pattern": "^(?:profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}$(?!\\n)",
+            "description": "Who reads the lake: an agent profile, a module (its query consumer), a platform analyzer (analyzer:novelty, ADR-0036), or a person or group signing in to the query engine."
           },
           "ceiling": {
             "enum": [
@@ -871,15 +871,48 @@
             "type": "boolean",
             "description": "Also writes rows (a pipeline's writer); only a red reader may."
           },
+          "writes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "novelty_finding"
+              ]
+            },
+            "minItems": 1,
+            "description": "The analyzer-output tables an analyzer appends its own derived rows to (ADR-0036 amends ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, and no other write; only an analyzer: reader may have it, and not with write, nor at a red ceiling (its own-table rule must carry a row filter). Only declared analyzer-output tables are accepted."
+          },
           "why": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
             "description": "Who this is and why it needs this ceiling."
           }
+        },
+        "if": {
+          "required": [
+            "writes"
+          ]
+        },
+        "then": {
+          "properties": {
+            "reader": {
+              "pattern": "^analyzer:"
+            },
+            "ceiling": {
+              "not": {
+                "const": "red"
+              }
+            }
+          },
+          "not": {
+            "required": [
+              "write"
+            ]
+          }
         }
       },
-      "description": "Every reader of the lake with its TLP ceiling (ADR-0033 decision 6). With the list, every selected module that requires or prefers cap:lake-query, and every selected agent that needs it, must be listed, and hnx modules render writes the query engine's row filters (lake-access.json): a reader not listed reads nothing. A reader listed twice, or one that writes below red, is refused (loader). Any change to it is human-approve."
+      "description": "Every reader of the lake with its TLP ceiling (ADR-0033 decision 6). With the list, every selected module that requires or prefers cap:lake-query, and every selected agent that needs it, must be listed, and hnx modules render writes the query engine's row filters (lake-access.json): a reader not listed reads nothing. A reader listed twice, or one that writes below red, is refused (loader). An analyzer: reader may append to the tables its writes names at any ceiling (ADR-0036). Any change to it is human-approve."
     },
     "lake_catalog": {
       "type": "string",

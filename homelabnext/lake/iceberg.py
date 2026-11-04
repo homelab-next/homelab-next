@@ -32,7 +32,7 @@ from .base import AdapterBase
 from .ddl import _need, iceberg_partition_spec, to_iceberg, to_pyarrow
 from .duck import referenced_tables, run_duckdb
 from .endpoints import endpoint_for
-from .errors import LakeError, SchemaMismatch, UnknownTable
+from .errors import LakeError, SchemaMismatch, UnknownTable, check_replay_source, claimed_source
 from .protocol import Mark, TableInfo, WriteResult
 from .tables import CORE_NAMESPACE, Column, TableSchema, column_diffs, load_schemas, table_name
 from .validate import content_key, normalize_rows
@@ -108,6 +108,9 @@ def schema_diffs(expected: TableSchema, ice_schema: Any) -> list[str]:
 
 # ---------------------------------------------------------------- the lake
 class IcebergLake(AdapterBase):
+    #: queries run on DuckDB over the scanned Arrow tables (``query``)
+    sql_dialect = "struct"
+
     def __init__(
         self,
         catalog: Any,
@@ -244,15 +247,19 @@ class IcebergLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
+        claimed = claimed_source(source, expect_source)  # refuses a contradictory pair
         pa = _need("pyarrow")
         s = self._schema(table)
         norm = normalize_rows(s, rows)  # validate the whole batch first
         tbl = self._load(s)  # also refuses a table whose schema drifted
         prior = self._batch_committed(tbl, idempotency_key)
         if prior is not None:
+            stored = self._props(prior).get(PROP_SOURCE)
+            check_replay_source(s.name, idempotency_key, stored, claimed)
             return WriteResult(len(norm), 0, len(norm), True, str(prior.snapshot_id))
         fresh: list[dict[str, Any]] = []
         if norm:

@@ -113,7 +113,12 @@ past it: the parked ones are replayed first, and if one is still refused the new
 behind it. Replays go oldest first and stop at a component's first failure, so each component
 takes its batches in write order and the lake's per-source mark never moves to an older batch (a
 replay into a component that has already taken a newer batch of the same source is sent without
-its mark, as a second guard). `mirror_status` (the `dual-write` and `soak` gates) retries the
+its mark, as a second guard). Such a replay is still judged by `expect_source`: the component must
+hold the batch id under the batch's own source (or not at all). If another writer has committed
+that id under another source, or under none, the replay is a `replay_failed` divergence and the
+batch stays parked, which blocks a route change until it is dropped with `discard_pending` and a
+reason; it is never settled as a replay of someone else's rows. A write's `expect_source` reaches
+the secondary too, and is kept with a parked batch. `mirror_status` (the `dual-write` and `soak` gates) retries the
 batches parked for the candidate, so a transient failure clears once the candidate takes them.
 
 A route change replays what is owed to the component that becomes primary, and **is refused**

@@ -1,0 +1,1149 @@
+# SPDX-License-Identifier: Apache-2.0
+# Example lake rows for docs/novelty.md (documentation addresses only): 192.0.2.10 reaches 443
+# twice a day and alice signs in from 198.51.100.10 daily for 28 days; on 2026-03-10 the host
+# reaches 4444, a new host appears and alice signs in from a new address.
+network_activity:
+- uid: net-0000
+  tlp: green
+  time: '2026-02-10T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50000}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0001
+  tlp: green
+  time: '2026-02-10T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50001}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0003
+  tlp: green
+  time: '2026-02-11T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50003}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0004
+  tlp: green
+  time: '2026-02-11T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50004}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0006
+  tlp: green
+  time: '2026-02-12T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50006}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0007
+  tlp: green
+  time: '2026-02-12T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50007}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0009
+  tlp: green
+  time: '2026-02-13T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50009}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0010
+  tlp: green
+  time: '2026-02-13T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50010}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0012
+  tlp: green
+  time: '2026-02-14T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50012}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0013
+  tlp: green
+  time: '2026-02-14T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50013}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0015
+  tlp: green
+  time: '2026-02-15T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50015}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0016
+  tlp: green
+  time: '2026-02-15T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50016}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0018
+  tlp: green
+  time: '2026-02-16T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50018}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0019
+  tlp: green
+  time: '2026-02-16T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50019}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0021
+  tlp: green
+  time: '2026-02-17T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50021}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0022
+  tlp: green
+  time: '2026-02-17T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50022}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0024
+  tlp: green
+  time: '2026-02-18T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50024}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0025
+  tlp: green
+  time: '2026-02-18T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50025}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0027
+  tlp: green
+  time: '2026-02-19T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50027}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0028
+  tlp: green
+  time: '2026-02-19T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50028}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0030
+  tlp: green
+  time: '2026-02-20T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50030}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0031
+  tlp: green
+  time: '2026-02-20T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50031}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0033
+  tlp: green
+  time: '2026-02-21T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50033}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0034
+  tlp: green
+  time: '2026-02-21T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50034}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0036
+  tlp: green
+  time: '2026-02-22T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50036}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0037
+  tlp: green
+  time: '2026-02-22T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50037}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0039
+  tlp: green
+  time: '2026-02-23T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50039}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0040
+  tlp: green
+  time: '2026-02-23T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50040}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0042
+  tlp: green
+  time: '2026-02-24T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50042}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0043
+  tlp: green
+  time: '2026-02-24T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50043}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0045
+  tlp: green
+  time: '2026-02-25T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50045}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0046
+  tlp: green
+  time: '2026-02-25T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50046}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0048
+  tlp: green
+  time: '2026-02-26T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50048}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0049
+  tlp: green
+  time: '2026-02-26T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50049}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0051
+  tlp: green
+  time: '2026-02-27T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50051}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0052
+  tlp: green
+  time: '2026-02-27T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50052}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0054
+  tlp: green
+  time: '2026-02-28T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50054}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0055
+  tlp: green
+  time: '2026-02-28T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50055}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0057
+  tlp: green
+  time: '2026-03-01T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50057}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0058
+  tlp: green
+  time: '2026-03-01T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50058}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0060
+  tlp: green
+  time: '2026-03-02T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50060}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0061
+  tlp: green
+  time: '2026-03-02T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50061}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0063
+  tlp: green
+  time: '2026-03-03T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50063}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0064
+  tlp: green
+  time: '2026-03-03T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50064}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0066
+  tlp: green
+  time: '2026-03-04T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50066}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0067
+  tlp: green
+  time: '2026-03-04T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50067}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0069
+  tlp: green
+  time: '2026-03-05T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50069}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0070
+  tlp: green
+  time: '2026-03-05T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50070}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0072
+  tlp: green
+  time: '2026-03-06T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50072}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0073
+  tlp: green
+  time: '2026-03-06T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50073}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0075
+  tlp: green
+  time: '2026-03-07T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50075}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0076
+  tlp: green
+  time: '2026-03-07T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50076}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0078
+  tlp: green
+  time: '2026-03-08T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50078}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0079
+  tlp: green
+  time: '2026-03-08T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50079}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0081
+  tlp: green
+  time: '2026-03-09T09:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50081}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0082
+  tlp: green
+  time: '2026-03-09T15:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50082}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0084
+  tlp: green
+  time: '2026-03-10T02:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50084}
+  dst_endpoint: {ip: 203.0.113.5, port: 4444}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0085
+  tlp: green
+  time: '2026-03-10T03:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.11, port: 50085}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+- uid: net-0086
+  tlp: green
+  time: '2026-03-10T04:00:00Z'
+  class_uid: 4001
+  category_uid: 4
+  activity_id: 6
+  type_uid: 400106
+  severity_id: 1
+  src_endpoint: {ip: 192.0.2.10, port: 50086}
+  dst_endpoint: {ip: 203.0.113.5, port: 443}
+  protocol_name: tcp
+  direction_id: 2
+authentication:
+- uid: auth-0002
+  tlp: green
+  time: '2026-02-10T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40002}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0005
+  tlp: green
+  time: '2026-02-11T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40005}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0008
+  tlp: green
+  time: '2026-02-12T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40008}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0011
+  tlp: green
+  time: '2026-02-13T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40011}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0014
+  tlp: green
+  time: '2026-02-14T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40014}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0017
+  tlp: green
+  time: '2026-02-15T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40017}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0020
+  tlp: green
+  time: '2026-02-16T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40020}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0023
+  tlp: green
+  time: '2026-02-17T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40023}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0026
+  tlp: green
+  time: '2026-02-18T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40026}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0029
+  tlp: green
+  time: '2026-02-19T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40029}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0032
+  tlp: green
+  time: '2026-02-20T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40032}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0035
+  tlp: green
+  time: '2026-02-21T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40035}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0038
+  tlp: green
+  time: '2026-02-22T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40038}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0041
+  tlp: green
+  time: '2026-02-23T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40041}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0044
+  tlp: green
+  time: '2026-02-24T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40044}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0047
+  tlp: green
+  time: '2026-02-25T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40047}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0050
+  tlp: green
+  time: '2026-02-26T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40050}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0053
+  tlp: green
+  time: '2026-02-27T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40053}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0056
+  tlp: green
+  time: '2026-02-28T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40056}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0059
+  tlp: green
+  time: '2026-03-01T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40059}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0062
+  tlp: green
+  time: '2026-03-02T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40062}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0065
+  tlp: green
+  time: '2026-03-03T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40065}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0068
+  tlp: green
+  time: '2026-03-04T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40068}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0071
+  tlp: green
+  time: '2026-03-05T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40071}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0074
+  tlp: green
+  time: '2026-03-06T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40074}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0077
+  tlp: green
+  time: '2026-03-07T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40077}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0080
+  tlp: green
+  time: '2026-03-08T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40080}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0083
+  tlp: green
+  time: '2026-03-09T08:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 198.51.100.10, port: 40083}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true
+- uid: auth-0087
+  tlp: green
+  time: '2026-03-10T05:00:00Z'
+  class_uid: 3002
+  category_uid: 3
+  activity_id: 1
+  type_uid: 300201
+  severity_id: 1
+  status_id: 1
+  metadata: {version: 1.3.0, product: example-sensor}
+  user_name: alice
+  src_endpoint: {ip: 203.0.113.7, port: 40087}
+  dst_endpoint: {ip: 192.0.2.20, port: 22}
+  auth_protocol: ssh
+  is_mfa: true

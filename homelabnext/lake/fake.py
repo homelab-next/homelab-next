@@ -18,7 +18,7 @@ from typing import Any
 
 from .base import AdapterBase
 from .ddl import sqlite_ddl
-from .errors import LakeError, UnknownTable
+from .errors import LakeError, UnknownTable, check_replay_source, claimed_source
 from .protocol import Mark, TableInfo, WriteResult
 from .sqlparams import check_params
 from .tables import TableSchema, load_schemas, table_name
@@ -32,6 +32,9 @@ def _ts_text(dt: datetime) -> str:
 
 
 class FakeLake(AdapterBase):
+    #: struct fields are JSON text and timestamps UTC text (``dialect.py``)
+    sql_dialect = "json-text"
+
     def __init__(
         self,
         schemas: Iterable[TableSchema] | Mapping[str, TableSchema] | None = None,
@@ -152,18 +155,27 @@ class FakeLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
+        claimed = claimed_source(source, expect_source)  # refuses a contradictory pair
         s = self._schema(table)
         norm = normalize_rows(s, rows)  # raises before anything is written
         db = self._db
         db.execute("BEGIN IMMEDIATE")
         try:
             seen = db.execute(
-                "SELECT seq FROM _hnx_batches WHERE tbl=? AND batch_id=?", (s.name, idempotency_key)
+                "SELECT seq, source FROM _hnx_batches WHERE tbl=? AND batch_id=?",
+                (s.name, idempotency_key),
             ).fetchone()
             if seen is not None:
+                check_replay_source(
+                    s.name,
+                    idempotency_key,
+                    seen[1],
+                    claimed,
+                )  # rolls back
                 db.execute("COMMIT")
                 return WriteResult(len(norm), 0, len(norm), True, str(seen[0]))
             fresh: list[dict[str, Any]] = []

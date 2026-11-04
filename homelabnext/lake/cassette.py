@@ -87,6 +87,7 @@ class CassetteLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         raise WriteNotSupported("cassettes are read-only")
 

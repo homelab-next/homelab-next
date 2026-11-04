@@ -6,12 +6,18 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 29,
-  "duplicated_lines": 366,
-  "total_lines": 160448,
-  "duplicated_percent": 0.23
+  "clones": 34,
+  "duplicated_lines": 409,
+  "total_lines": 163501,
+  "duplicated_percent": 0.25
  },
- "increases": [],
+ "increases": [
+  {
+   "reason": "the LakeClient.write_batch signature, now with expect_source, repeated by every adapter and DualWriter as the protocol requires (it replaces the two shorter signature clones)",
+   "from": 366,
+   "to": 409
+  }
+ ],
  "clones": {
   "090a0ca506a53791": {
    "tokens": 79,
@@ -120,21 +126,6 @@
     "0f5b4e88f2"
    ]
   },
-  "84ae69d3ea6308ba": {
-   "tokens": 80,
-   "lines": 13,
-   "count": 1,
-   "files": [
-    "homelabnext/lake/fake.py",
-    "homelabnext/lake/trino_rest.py"
-   ],
-   "fingerprints": [
-    "0f975f9c48",
-    "11702ecdd6",
-    "13575ffdcf",
-    "159f9af6d5"
-   ]
-  },
   "857e36c63e2fe90a": {
    "tokens": 56,
    "lines": 5,
@@ -199,18 +190,23 @@
     "010ff94c5f"
    ]
   },
-  "b30ee47e71aac6ae": {
-   "tokens": 61,
-   "lines": 11,
-   "count": 1,
+  "b758b548b99917bd": {
+   "tokens": 56,
+   "lines": 10,
+   "count": 7,
    "files": [
+    "homelabnext/lake/cassette.py",
+    "homelabnext/lake/duck.py",
     "homelabnext/lake/fake.py",
-    "homelabnext/lake/iceberg.py"
+    "homelabnext/lake/iceberg.py",
+    "homelabnext/lake/protocol.py",
+    "homelabnext/lake/trino.py",
+    "homelabnext/lake/trino_rest.py",
+    "homelabnext/swap/dualwrite.py"
    ],
    "fingerprints": [
-    "0f975f9c48",
-    "13575ffdcf",
-    "159f9af6d5"
+    "0b5456f5ca",
+    "0cfdeb616a"
    ]
   },
   "b7f8853f4082ffbb": {

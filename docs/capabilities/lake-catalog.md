@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **Tables, schemas and commit-then-checkpoint idempotent writes.**
 
 - Contract: [`conformance.protocols.lake`](../../conformance/protocols/lake.py) (`conformance.protocols.lake:LakeClient`)
-- Conformance suite: [`conformance.suites.lake_catalog`](../../conformance/suites/lake_catalog.py) (11 checks: 11 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.lake_catalog`](../../conformance/suites/lake_catalog.py) (13 checks: 13 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -28,7 +28,8 @@ Subject = any object implementing `homelabnext.lake.LakeClient`:
     named(name, params) -> list[dict]       registered queries
     describe(table) -> TableInfo            columns, key, row count, last committed mark per source
     list_tables() -> list[str]
-    write_batch(table, rows, *, idempotency_key, source=None, high_water=None) -> WriteResult
+    write_batch(table, rows, *, idempotency_key, source=None, high_water=None,
+                expect_source=None) -> WriteResult
 
 Seeding goes through `write_batch`, so a read-only deployment either points the adapter at a
 scratch namespace or declares a seeded copy.  Adapters raise `homelabnext.lake.LakeError`
@@ -67,6 +68,7 @@ def write_batch(
     idempotency_key: str,
     source: str | None = None,
     high_water: str | None = None,
+    expect_source: str | None = None,
 ) -> WriteResult
 ```
 
@@ -77,6 +79,7 @@ def write_batch(
 | `idempotency_key` | `str` | required | keyword-only |
 | `source` | `str \| None` | `None` | keyword-only |
 | `high_water` | `str \| None` | `None` | keyword-only |
+| `expect_source` | `str \| None` | `None` | keyword-only |
 
 **Returns:** `WriteResult`
 
@@ -86,6 +89,13 @@ A key that was already committed returns `replayed=True` and writes nothing. Row
 content key (the table's `key` columns) is already present are skipped, so a replay under
 a different batching is also safe. `source`/`high_water` are stored with the commit
 itself and come back in `describe(table).committed`.
+
+A replay is judged by `expect_source` when given, else by `source`: the batch must
+have been committed under exactly that source (none recorded is a mismatch), or
+`~homelabnext.lake.errors.BatchSourceMismatch` is raised and nothing is written.
+`expect_source` lets a writer re-send a batch without its mark (`source=None`, so the
+mark does not move back) and still have it judged as its own; with neither, the replay
+is not judged.
 
 #### `LakeClient.list_tables`
 
@@ -218,6 +228,7 @@ Adapters raise these (never a bare product exception); a check that expects a re
 | `WriteNotSupported` | `LakeError` | The adapter is read-only (writes go through the catalog adapter). |  |
 | `CheckpointError` | `LakeError` |  |  |
 | `EndpointNotConfigured` | `LakeError` | No endpoint is configured for a capability. There is deliberately no default to fall back to. |  |
+| `BatchSourceMismatch` | `LakeError` | A batch id already committed by another source: replaying it would report that source's commit as this one's and write nothing, so the write is refused instead. |  |
 
 ### JSON Schemas
 
@@ -229,6 +240,7 @@ Schemas the contract's own code loads (found in the source, not curated):
 | [`schemas/ocsf/detection_finding.v1.json`](../../schemas/ocsf/detection_finding.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/dns_activity.v1.json`](../../schemas/ocsf/dns_activity.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/network_activity.v1.json`](../../schemas/ocsf/network_activity.v1.json) | `homelabnext.lake.tables` |
+| [`schemas/ocsf/novelty_finding.v1.json`](../../schemas/ocsf/novelty_finding.v1.json) | `homelabnext.lake.tables` |
 | [`schemas/ocsf/vulnerability_finding.v1.json`](../../schemas/ocsf/vulnerability_finding.v1.json) | `homelabnext.lake.tables` |
 
 ## Behavioural contract
@@ -248,6 +260,8 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `naive-timestamp-refused` | MUST | a timestamp without a UTC offset is rejected |  |
 | `unknown-column-refused` | MUST | a column outside the pinned schema is rejected |  |
 | `source-mark-recorded` | MUST | source and high-water mark are committed with the batch |  |
+| `batch-id-bound-to-its-source` | MUST | a batch id committed by one source is refused, never replayed, for another |  |
+| `replay-judged-by-expect-source` | MUST | a batch re-sent without its mark but with expect_source is judged as that source's |  |
 
 ### Features an adapter may declare
 
@@ -259,7 +273,11 @@ Each is a deliberately broken fake (`hnx conform run lake-catalog --target broke
 
 | Mutant | Must fail | Defect |
 |---|---|---|
+| `batch-source-ignored` | `batch-id-bound-to-its-source` | a batch id replays whichever source committed it |
+| `expect-source-ignored` | `replay-judged-by-expect-source` | a re-send without its mark is never judged |
+| `expected-none-not-judged` | `replay-judged-by-expect-source` | a batch committed with no source replays for a write that only expects a source |
 | `idempotency-key-ignored` | `replay-writes-nothing` | a retried batch key is treated as new |
+| `stored-none-not-judged` | `batch-id-bound-to-its-source` | a batch committed with no source replays for a sourced write |
 
 ## Implementations
 
@@ -349,4 +367,4 @@ Depended on by: [lake-query](../systems/lake-query.md) ([[systems/lake-query|lak
    hnx conform run lake-catalog --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (11) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
