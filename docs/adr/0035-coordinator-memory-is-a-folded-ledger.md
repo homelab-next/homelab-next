@@ -100,23 +100,58 @@ The same objection applies here, more strongly.
 
    Below the summary, each live entry is one line. Opening a report, a record or a document goes
    through ADR-0032's summary, outline and section. A full dump of the ledger is never the default.
-7. **Recent history is a window.** Retired entries older than the coordinator's history budget
-   leave the pack, not the store. The budget defaults to 7 days and is a profile budget. Anything
-   older is answered from git, the records and the projects history.
-8. **Judgements are written apart from tracking.** The coordinator's model may keep its own notes
+7. **The pack's history is limited by size and filled by priority, not limited by age.** The
+   ledger gets its own share of the context manifest's character budget. The renderer fills that
+   share in this order and stops when it is full:
+   1. live entries that are blocked, overdue or failed;
+   2. entries changed since the last cycle;
+   3. other live entries;
+   4. retired entries kept as exceptions (decision 8);
+   5. routine work, as counts per profile per period, never one line per item.
+
+   Within a level, newer entries go first: age only breaks ties. When entries are left out, the
+   pack says how many and at which level (M-08: never cut silently).
+8. **What the ledger keeps is limited by size, removed by priority, and classified by code.**
+   - **Retention class.** The fold gives every retired entry one class, computed from its
+     constrained fields; the model never sets it:
+     - `keep`: the item failed, was denied, went overdue, recurred or was reopened, or is linked
+       to an incident or an approval;
+     - `count`: it completed routinely;
+     - `drop`: a later state of the same item replaced it.
+   - **Hot tier.** The live keys. They are bounded by the work in flight.
+   - **Warm tier.** Retired entries, capped at a number of entries (a profile budget). When the
+     cap is passed, the fold removes `drop` entries first, then `count`, then `keep`, oldest first
+     within a class.
+   - **Cold tier.** A `count` entry leaving warm is added to a rollup key per profile and period
+     (`rollup-<profile>-<period>`: closed counts by status), so volume stays visible after the
+     items are gone. A `keep` entry leaving warm becomes a one-line exception key: id, status,
+     date and the digest of its last report. The cold tier has its own entry cap. When that is
+     full, the oldest rollups are merged into coarser periods; exception keys are never merged.
+   - **Model nominations.** The coordinator's model may nominate an item for `keep` by writing the
+     item's key into `coordinator-notes` (decision 10). The fold reads only the key, never text,
+     so a nomination cannot put free text into the ledger.
+9. **Permanent memory is a record, and a human approves it.** The coordinator's memory is not
+   where lasting knowledge lives. When the fold sees a pattern, such as the same kind of exception
+   recurring past a threshold in the warm or cold tier, the coordinator files a proposal for a
+   lesson or another record through the broker's `proposal.file` lane (the records inbox,
+   ADR-0010). The proposal cites the ledger keys and report digests it rests on. **A human
+   approves each one before it becomes a record.** The coordinator gets no grant that files a
+   record without approval. Loosening this later is a change to the broker manifest's grants and
+   tiers, recorded by amending this ADR.
+10. **Judgements are written apart from tracking.** The coordinator's model may keep its own notes
    (what to try next, what to watch) in a second scope, `coordinator-notes`, through the
    `memory_updates` of its own report, as M-09 already allows. It cannot write `fleet-ledger`: the
    fold is the only writer of that scope, and a report's update that names the scope is refused.
-9. **Every cycle leaves a journal note.** The coordinator files one Markdown note per cycle through
+11. **Every cycle leaves a journal note.** The coordinator files one Markdown note per cycle through
    the broker's finding lane. It carries a `summary:` line (ADR-0032 decision 6 rules) and names
    the ledger keys it acted on and the broker requests it filed. The ledger records *what* changed;
    the journal records *why*. A cycle that did nothing still files a note.
-10. **TLP.** The ledger and the journal take the strictest label among their inputs (ADR-0033
+12. **TLP.** The ledger and the journal take the strictest label among their inputs (ADR-0033
     decision 4). With the lab's own data that is `red`, so the coordinator's ceiling is `red`, and
     anything it passes on goes through the reader filters.
-11. **The coordinator has no `memory.write` grant.** Its durable state lives only in `MemoryStore`.
+13. **The coordinator has no `memory.write` grant.** Its durable state lives only in `MemoryStore`.
     The general decision on the `memory.write` lane stays open for other profiles.
-12. **Agent memory is never kept in model state.** Weights, recurrent state and a key-value cache
+14. **Agent memory is never kept in model state.** Weights, recurrent state and a key-value cache
     saved between sessions are not memory backends. An engine feature that offers them is not used
     for agent memory. A `MemoryBackend` (`InMemoryBackend` or `FileBackend` today) is the only
     backend.
@@ -124,8 +159,11 @@ The same objection applies here, more strongly.
 ## Consequences
 
 - **Easier:**
-  - Knowing what is going on fleet-wide is one read of one scope, at a size bounded by the items in
-    flight and the window, however many profiles run.
+  - Knowing what is going on fleet-wide is one read of one scope. The pack's share is a fixed
+    size and the store's tiers are capped, however many profiles run and however long the fleet
+    runs.
+  - What survives is chosen by what happened, not by when: an old failure outlives a new routine
+    success, and routine volume survives as counts.
   - The fold is deterministic, so it can be tested with the fakes that already exist:
     `InMemoryBackend`, the projects reference store, and event and report fixtures.
   - Changing or upgrading the coordinator's model loses no memory.
@@ -137,13 +175,22 @@ The same objection applies here, more strongly.
     deadline as `overdue`, rather than leaving it `running`.
   - Each new source needs a cursor and fold rules, in code.
   - The value object must fit in 2,000 characters.
+  - The caps and the pattern threshold have to be tuned from use. Caps that are too small evict
+    exceptions; a threshold that is too low floods the operator with lesson proposals.
+  - A `count` entry gives up per-item detail once it leaves warm. Its last report is still in the
+    broker's data and the projects history, but the coordinator no longer points at it.
+  - Every lesson the coordinator proposes waits for a human. That is deliberate for now (decision
+    9); if approvals become the bottleneck, loosening it is an amendment, not a setting.
 - **Obliges us to maintain the following, none of it built yet:**
   - the fold library and its tests (replay from an old cursor, all-or-nothing with the cursors, no
     free text copied);
   - a draft schema for a ledger value;
-  - the pack renderer for decisions 6 and 7;
-  - the history budget field in the profile;
-  - the refusal in decision 8, whether the policy expresses it or `MemoryStore` gains it.
+  - the pack renderer for decisions 6 and 7 (priority fill, reported omissions);
+  - retention classes, tier caps, eviction order and rollup merging (decision 8), with tests that
+    an entry is never removed before a lower class and that exception keys survive every merge;
+    and the warm and cold cap fields in the profile;
+  - the pattern threshold and the proposal it files (decision 9);
+  - the refusal in decision 10, whether the policy expresses it or `MemoryStore` gains it.
 - **Open:**
   - Whether the context store indexes the broker's data root, so that journal notes are served in
     levels like files in the checkout.
@@ -157,12 +204,20 @@ The same objection applies here, more strongly.
 - **Let the coordinator's model write the ledger through its report's `memory_updates`.** This is
   possible today. But it spends model turns on bookkeeping, status written by a model drifts from
   the sources, and anything injected into what the model read could become ledger state. Rejected
-  for tracking. Kept for judgements (decision 8).
+  for tracking. Kept for judgements (decision 10).
 - **Keep memory in model state** (recurrent state used as RAM, saved and restored between
   sessions). The memory would be tied to one checkpoint, unreadable, without history, and limited
   by the size of the state. Rejected, as ADR-0032 rejected a compiled context store.
 - **Re-derive fleet state each cycle by querying the sources.** The evidence above shows the cost:
   model round-trips until the timeout. Rejected; the cursors make each cycle read only what
   changed.
+- **Limit history by age (a fixed window of days).** A window holds a busy week's routine items
+  and drops an older failure that matters more, and its size depends on how busy the fleet was.
+  Rejected for a size budget filled by priority (decisions 7 and 8).
+- **Let the model choose what to keep.** It would spend turns on housekeeping, and what it chose to
+  keep would depend on prompts and could be steered by injected text. Rejected; the model may only
+  nominate a key (decision 8).
+- **File lessons from patterns without approval.** It would be faster, but a lesson changes what
+  every later session reads, so a wrong one spreads. Rejected for now (decision 9).
 - **A vector store over all fleet output.** This brings semantic recall over a corpus that is
   already structured by ids and status. ADR-0032's reasoning applies. Rejected.
