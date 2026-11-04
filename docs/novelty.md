@@ -1,10 +1,10 @@
 ---
 summary: 'The behavioural novelty analyzer: profiles in a spec, the scoring arithmetic, cold start, TLP labels, the novelty_finding table and corroboration.'
-summary_of: outline:sha256:5137753838336993
+summary_of: outline:sha256:4cbb20ef8744cc85
 ---
 # Behavioural novelty baselines
 
-[ADR-0035](adr/0035-behavioural-novelty-baselines-are-deterministic-and-advisory.md) (proposed).
+[ADR-0036](adr/0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md) (proposed).
 Detections ([detections](detections.md)) answer "does this event match a known-bad shape?".
 The novelty analyzer (`homelabnext.novelty`) answers "has *this entity* had *this value*
 before?": a host and a destination port, a user and a source address, a client and a DNS name.
@@ -14,9 +14,10 @@ findings are advisory: no gate escalates on one alone.
 ## The spec
 
 A spec (`schemas/platform/novelty_spec.schema.json`, a draft; [example](../examples/novelty/spec.yml))
-lists profiles. Each names one lake table, an `entity` column path and one or more `values`
+lists profiles. Each names one lake table, the `entity_kind` its entity belongs to (`ip`, `host`,
+`user`, `domain`, `process`, `other`), an `entity` column path and one or more `values`
 column paths (a top-level column or a dotted path into a struct, such as `src_endpoint.ip`;
-scalar, not a timestamp), optional `where` equality filters and `time_column` (default `time`),
+scalar, not a timestamp), optional `where` equality filters (each value of its column's type) and `time_column` (default `time`),
 and its parameters:
 
 | Parameter | Meaning |
@@ -63,54 +64,79 @@ cases by hand.
 
 ## Cold start
 
-A profile's history is `date(S) - oldest day` its table holds in the learning window (as the
-analyzer's ceiling lets it see the table, without the profile's filters; 0 when it holds
-nothing). Below `min_history_days` the profile is **warming**: the run writes nothing for it and
-the summary reports `status: warming`, `history_days` and `days_remaining`. A fresh lake is
-therefore `min_history_days` (by default `learn_days`) of silence per profile, by design: a
-baseline learned from one day would call nearly everything new.
+A profile's history is `min(learn_days, date(S) - oldest day)`, where the oldest day is the oldest
+its table holds in `[midnight(date(S)) - 2 * learn_days, S)` (as the analyzer's ceiling lets it
+see the table, without the profile's filters; 0 when it holds nothing). The range is day-aligned
+and longer than the learning window, so a sparse table whose first row predates the window, or an
+`as_of` that is not midnight, still counts its whole history. Below `min_history_days` the
+profile is **warming**: the run writes nothing for it and the summary reports `status: warming`,
+`history_days` and `days_remaining`. A fresh lake is therefore `min_history_days` (by default
+`learn_days`) of silence per profile, by design: a baseline learned from one day would call
+nearly everything new. A table entirely above the analyzer's ceiling reads as empty, so a profile
+over it warms for good, which its summary shows.
 
-## Reading through the ceiling
+## Reading and writing through the ceiling
 
 The analyzer is the lake reader `analyzer:novelty`; the site declares its ceiling in
 `tlp_readers` ([module selection](modules/selection.md)), and without a declaration it reads
-nothing. It reads with `CeilingReader.count_by` ([lake README](../homelabnext/lake/README.md)):
-three grouped queries per profile per run (the learning window, the scoring window, and the
-table's per-day history), each with the ceiling's row filter in the query and every group's label
-checked again. More groups than the limit fails that profile (`status: failed`), never a
-truncated baseline; the other profiles still run.
+nothing. It reads with `CeilingReader.count_by` and `CeilingReader.cardinality`
+([lake README](../homelabnext/lake/README.md)), four grouped queries per profile per run: the
+table's per-day history, a cardinality read naming the entities with more than
+`max_values_per_entity` values, and the learning and scoring windows without those entities;
+when there are such entities, two more read their per-entity counts in both windows, so one port
+scan costs a few groups rather than failing the profile. Every read has the ceiling's row filter
+in the query and checks every group's label again. More groups than the limit (`run`'s
+`limit`, 100,000 groups by default, against `count_by`'s own default of 10,000) fails that
+profile (`status: failed`), never a truncated baseline; the other profiles still run.
+
+Writing needs the entry's `writes: [novelty_finding]` (ADR-0036 amends ADR-0033 decision 6):
+`SELECT` and `INSERT` on that table only, at the analyzer's ceiling. The engine cannot check the
+label an inserted row carries; this code sets it (below), and the analyzer never reads a row above
+its ceiling. A failed write fails that profile only. `examples/novelty/site.yml` declares it.
 
 ## Findings
 
 Rows go to the lake table `novelty_finding` (`schemas/ocsf/novelty_finding.v1.json`, a draft):
-`source` (`lake-novelty`), `source_kind: heuristic`, `profile`, `entity`, `value`, `status`,
-`score`, `confidence`, `support`, `entity_total`, `count`, the windows, `as_of`, the profile's
-`spec_digest`, a `message` and `reasons` with the arithmetic. A row's `tlp` is the strictest label
-among the rows that produced it: the pair's scoring rows and, for a scored or high-cardinality
-row, every learning row of its entity. The `uid` is a digest of the source, the profile, `as_of`,
-status, entity and value, and each profile's write is one batch whose id digests the profile, the
-spec and `as_of`, so re-running a window writes nothing new and backfilling is running with an
-earlier `as_of`.
+`source` (`lake-novelty`), `source_kind: heuristic`, `profile`, `entity_kind` (the profile's:
+`ip`, `host`, `user`, `domain`, `process` or `other`), `entity`, `value`, `status`, `score` and
+`confidence` (findings only), `support`, `entity_total`, `count`, the windows, `as_of`, the
+profile's `spec_digest`, a `message` and `reasons` with the arithmetic. A row's `time` is the
+start of the scoring window, the behaviour it describes. Its `tlp` is the strictest label among
+the rows that produced it: the pair's scoring rows and, for a scored or high-cardinality row,
+every learning row of its entity. The label also bounds what a row says: support 0 on a `green`
+finding means no row at or below the analyzer's ceiling had the pair, not that none existed. The
+run summary is labelled at the analyzer's ceiling (`tlp`).
 
-A host-kernel sensor that learns its own baseline writes the same shape with its own `source`.
+The table's key is `(source, uid)`. The `uid` is a digest of the source, the profile, `as_of`,
+status, entity kind, entity and value, and each profile's write is one batch whose id digests the
+profile, the spec and `as_of`, so re-running a window writes nothing new (late data included:
+re-scoring a window needs a new spec or a later `as_of`), and backfilling is running with an
+earlier `as_of`. `write_findings` refuses a batch with a row of any source but the writer's own,
+so distinct sources are distinct writers.
+
+A host-kernel sensor that learns its own baseline writes the same shape with its own `source`,
+naming entities in the same `entity_kind` namespace.
 
 ## Corroboration
 
 `corroborate` is the one path from novelty to escalation: it groups `finding` and `unlearned`
-rows by entity within a window and returns only the entities flagged by at least two distinct
-sources, with the strictest label of the rows behind each. Two profiles of one source are one
-source.
+rows by `(entity_kind, entity)` within a window and returns only the entities flagged by at least
+two distinct sources, with the strictest label of the rows behind each. Two profiles of one
+source are one source, and an address and a host of the same text are two entities.
 
 ## Command line
 
 ```bash
-hnx novelty run --spec examples/novelty/spec.yml --as-of 2026-03-29T00:00:00Z \
-  --site lab/modules.yml --fixture rows.yml --dry-run --show-findings
-hnx novelty corroborate --since 2026-03-28T00:00:00Z --until 2026-03-29T00:00:00Z \
+hnx novelty run --spec examples/novelty/spec.yml --site examples/novelty/site.yml \
+  --fixture examples/novelty/lake.yml --as-of 2026-03-11T00:00:00Z --dry-run --show-findings
+hnx novelty corroborate --since 2026-03-10T00:00:00Z --until 2026-03-11T00:00:00Z \
   --site lab/modules.yml --domain example.internal --warehouse lab
 ```
 
-`--fixture` loads a YAML or JSON mapping of table name to rows into the in-memory fake lake;
-`--domain`, `--namespace` and `--warehouse` reach the lab's `lake-query` and `lake-catalog`
-endpoints, signing in as `analyzer:novelty`. `--as-of` is required (there is no clock). The run
-prints a JSON summary; exit 1 when a profile failed, 2 on a usage, spec, site or lake error.
+`--site` is the lab's module selection, or a file with its `tlp_readers` and `lake_catalog`, held
+to the selection's schema and the access rules' own refusals. `--fixture` loads a YAML or JSON
+mapping of table name to rows into the in-memory fake lake (`examples/novelty/lake.yml`: the first
+command above finds a new port, a new host and a new sign-in source); `--domain`, `--namespace`
+and `--warehouse` reach the lab's `lake-query` and `lake-catalog` endpoints, signing in as
+`analyzer:novelty`. `--as-of` is required (there is no clock). The run prints a JSON summary;
+exit 1 when a profile failed, 2 on a usage, spec, site or lake error.
