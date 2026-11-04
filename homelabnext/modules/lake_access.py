@@ -88,9 +88,9 @@ def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool, tuple[str, ...]]:
     if write and label is not tlp.Label.RED:
         raise LakeAccessError(f"tlp_readers: {reader} writes rows, so its ceiling is red")
     kind = reader.split(":", 1)[0]
-    writes = entry.get("writes")
-    if writes is None:
+    if "writes" not in entry:  # present but null is refused below, as the schema refuses it
         return reader, kind, label, write, ()
+    writes = entry["writes"]
     if kind != "analyzer":
         raise LakeAccessError(f"tlp_readers: {reader}: only an analyzer: reader has writes")
     if write:

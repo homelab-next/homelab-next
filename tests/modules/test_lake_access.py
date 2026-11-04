@@ -57,6 +57,10 @@ def test_a_reader_name_is_matched_exactly():
         (_r("analyzer:x", "red", write=True, writes=["t"]), "writes and write"),
         (_r("analyzer:x", "red", writes=["novelty_finding"]), "writes at a red ceiling"),
         (_r("analyzer:x", "amber", writes=[]), "distinct table names"),
+        (
+            _r("analyzer:x", "amber", writes=None),
+            "distinct table names",
+        ),  # null: refused, not absent
         (_r("analyzer:x", "amber", writes=["t", "t"]), "distinct table names"),
         (_r("analyzer:x", "amber", writes=["Bad Name"]), "distinct table names"),
         (_r("analyzer:x", "amber", writes="novelty_finding"), "distinct table names"),
@@ -204,6 +208,10 @@ def test_reader_problems_writes():
     bad = _site(*base["tlp_readers"], _r("module:pipe", "red", writes=["t"]))
     assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0036)" in (
         rules.tlp_reader_problems(bad, MODS)
+    )
+    null = _site(*base["tlp_readers"], _r("analyzer:z", "amber", writes=None))
+    assert "tlp_readers: analyzer:z: writes is a list of table names" in (
+        rules.tlp_reader_problems(null, MODS)
     )
     red = _site(*base["tlp_readers"], _r("analyzer:r", "red", writes=["novelty_finding"]))
     assert "tlp_readers: analyzer:r: writes at a red ceiling (it must read below red)" in (

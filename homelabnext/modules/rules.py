@@ -1705,7 +1705,9 @@ def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(f"tlp_readers: {reader}: ceiling {entry.get('ceiling')!r} is not a label")
         elif entry.get("write") is True and entry["ceiling"] != "red":
             out.append(f"tlp_readers: {reader} writes rows, so its ceiling is red")
-        if "writes" in entry and not str(reader).startswith("analyzer:"):
+        if "writes" in entry and not isinstance(entry["writes"], list):
+            out.append(f"tlp_readers: {reader}: writes is a list of table names")
+        elif "writes" in entry and not str(reader).startswith("analyzer:"):
             out.append(f"tlp_readers: {reader}: only an analyzer: reader has writes (ADR-0036)")
         elif "writes" in entry and entry.get("write") is True:
             out.append(f"tlp_readers: {reader}: writes and write: true together")
