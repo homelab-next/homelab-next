@@ -19,8 +19,7 @@ test refuses a one-sided pair, an unknown id, and an accepted ADR that depends o
 accepted (the status values themselves are the operator's).
 
 A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
-component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet,
-and neither has **0035** (coordinator memory as a folded ledger, planned on its own branch).
+component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
 `RESERVED` in `tools/tests/test_adr_log.py` lists the reserved numbers, and the test refuses an
 index that does not name each one.
 
@@ -59,4 +58,5 @@ index that does not name each one.
 | [0032](0032-agent-context-is-authored-markdown-in-levels.md) | agent-context-is-authored-markdown-in-levels | <!-- hnx:gen:summary:0032-agent-context-is-authored-markdown-in-levels.md -->No context database; agent context stays authored Markdown/YAML in git, served in levels (summary, outline, one section).<!-- /hnx:gen --> |
 | [0033](0033-data-carries-tlp-every-reader-has-a-ceiling.md) | data-carries-tlp-every-reader-has-a-ceiling | <!-- hnx:gen:summary:0033-data-carries-tlp-every-reader-has-a-ceiling.md -->Every source and record carries a TLP 2.0 label (unlabelled is red); derived data takes its strictest input; every view, export and model has a TLP ceiling.<!-- /hnx:gen --> |
 | [0034](0034-single-sign-on-oidc-idp-behind-a-neutral-contract.md) | single-sign-on-oidc-idp-behind-a-neutral-contract | <!-- hnx:gen:summary:0034-single-sign-on-oidc-idp-behind-a-neutral-contract.md -->The platform depends only on OIDC, one identity-header set and one group-to-role table; Keycloak is the default IdP, oauth2-proxy the edge's forward auth.<!-- /hnx:gen --> |
+| [0035](0035-coordinator-memory-is-a-folded-ledger.md) | coordinator-memory-is-a-folded-ledger | <!-- hnx:gen:summary:0035-coordinator-memory-is-a-folded-ledger.md -->The coordinator keeps a bounded ledger of fleet work, folded by code from outputs; no cross-agent memory reads, no memory kept in model state.<!-- /hnx:gen --> |
 | [0036](0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md) | behavioural-novelty-baselines-are-deterministic-and-advisory | <!-- hnx:gen:summary:0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md -->A deterministic analyzer learns per-entity first-seen baselines from the lake over a decaying window; its findings are heuristic and never escalate alone.<!-- /hnx:gen --> |
