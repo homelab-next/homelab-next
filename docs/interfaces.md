@@ -36,6 +36,7 @@ hardware that is not part of the first drop: document the interface and ship a f
 | `conformance/{protocols,suites}/codemode_executor.py conformance/fakes/{code_executor,code_executor_child}.py conformance/codemode-executor/` | codemode | ADR-0031 decision 10; docs/codemode.md CM-4 |
 | `homelabnext/codemode/{runner,journal,mcp_tools}.py conformance/{protocols,suites}/codemode_runner.py conformance/fakes/codemode_runner.py conformance/codemode-runner/ examples/mcp/hnx-codemode.yml` | codemode | ADR-0031 decisions 3, 7 and 10; docs/codemode.md CM-5b |
 | `homelabnext/projects/ conformance/{protocols,suites}/projects.py conformance/fakes/{project_store,openproject_api}.py docs/projects.md tests/projects/ examples/projects/` | projects | `hnx projects`; ADR-0020 |
+| `homelabnext/novelty/ schemas/platform/novelty_spec.schema.json schemas/ocsf/novelty_finding.v1.json docs/novelty.md tests/novelty/ examples/novelty/` | novelty | `hnx novelty`; ADR-0035 |
 
 Rules that apply to every task: Python >= 3.11, standard library first; an SPDX header on every
 source file; no network in tests; clocks and randomness injected; no real identifiers (see
@@ -66,6 +67,7 @@ homelabnext/
   parity/       parity and drift tools              (W11)  core (uses lake and notify)
   detections/   fixtures, engine adapters, det: map (W9)   extra: detections
   logpipeline/  runtime label table and enrich rule (docs/log-pipeline.md)  core
+  novelty/      novelty baselines, corroborate      (ADR-0035, docs/novelty.md)  core (+ yaml for specs; reads via lake)
   registers/    register schemas -> HTML/JSON       (W10)  core
   invariants/   runner, check plugin API            (W10)  core
   scaffold/     `hnx new ...` templates             (W8)   core
@@ -168,7 +170,7 @@ imports its package lazily). Current names, in that order: `registry`, `new`, `g
 `golden`,
 `site`, `guests`, `schema-check`, `secrets`, `swap`, `conform`, `decommission`, `docs`, `agent`, `workflows`,
 `scripts`, `events`, `status`, `graph`, `mcp`, `broker`, `codemode`, `modules`, `custom`,
-`ssh-ca`.
+`ssh-ca`, `novelty`.
 `parity` is a library only (the swap runner calls it; no sub-command).
 Exit codes everywhere: `0` ok, `1` a check failed, `2` misconfiguration or bad input, `>=100` the
 check itself could not measure.
@@ -230,6 +232,13 @@ CeilingReader.count_by(table, entity, values, *, since, until, time_column="time
 lake.ceiling.raw_query(lake, grant: RedGrant, sql, params=None)   # the one raw read outside homelabnext/lake/ (raw_named likewise)
 lake.backfill.plan(schema, *, table, sources: Mapping[str, Source], source_map, source_column=None)
     # Source(label, honour_item_labels=False, items_carried_no_labels=False): red unless recorded
+
+# homelabnext.novelty   (ADR-0035, docs/novelty.md; schemas platform/novelty_spec, ocsf/novelty_finding)
+load_spec(path, schemas) -> Spec; parse_spec(doc, schemas) -> Spec   # SpecError names every problem
+run(reader: CeilingReader, spec, as_of, *, writer=None, limit=MAX_GROUPS) -> list[ProfileResult]
+    # reader = reader_for(lake, "analyzer:novelty", tlp_readers, schemas); writer None = dry run
+score_profile(profile, as_of, learn, scoring, history, *, spec_digest="") -> ProfileResult   # pure
+corroborate(findings, *, since=None, until=None, min_sources=2) -> list[Candidate]   # >= 2 distinct sources
 
 # homelabnext.state
 StateStore(path, *, schema_version=1, migrations=None, clock=time.time)   # atomic, versioned, quarantines corrupt files
@@ -477,6 +486,7 @@ change until its ADR is accepted):
 | `ocsf/detection_finding` | 1.1 | `schemas/ocsf/detection_finding.v1.json` | stable |
 | `ocsf/dns_activity` | 1.1 | `schemas/ocsf/dns_activity.v1.json` | stable |
 | `ocsf/network_activity` | 1.1 | `schemas/ocsf/network_activity.v1.json` | stable |
+| `ocsf/novelty_finding` | 1.0 | `schemas/ocsf/novelty_finding.v1.json` | draft |
 | `ocsf/vulnerability_finding` | 1.1 | `schemas/ocsf/vulnerability_finding.v1.json` | stable |
 | `platform/agent_profile` | 1.2 | `schemas/platform/agent_profile.schema.json` | stable |
 | `platform/baseline_set` | 1.2 | `schemas/platform/baseline_set.schema.json` | stable |
@@ -496,6 +506,7 @@ change until its ADR is accepted):
 | `platform/module_lock` | 1.0 | `schemas/platform/module_lock.schema.json` | draft |
 | `platform/module_selection` | 1.0 | `schemas/platform/module_selection.schema.json` | draft |
 | `platform/module_swap` | 1.0 | `schemas/platform/module_swap.schema.json` | draft |
+| `platform/novelty_spec` | 1.0 | `schemas/platform/novelty_spec.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
 | `platform/service` | 2.7 | `schemas/platform/service.json` | stable |

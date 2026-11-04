@@ -265,6 +265,11 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         "writes: policies, SSH roles, OIDC login roles)",
         lambda a: importlib.import_module("homelabnext.sshca").main(a),
     ),
+    "novelty": (
+        "behavioural novelty baselines (ADR-0035, docs/novelty.md): run (score a spec's profiles "
+        "for --as-of, write advisory findings)|corroborate (entities flagged by >= 2 sources)",
+        lambda a: importlib.import_module("homelabnext.novelty.cli").main(a),
+    ),
 }
 
 
