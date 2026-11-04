@@ -80,19 +80,27 @@ over it warms for good, which its summary shows.
 The analyzer is the lake reader `analyzer:novelty`; the site declares its ceiling in
 `tlp_readers` ([module selection](modules/selection.md)), and without a declaration it reads
 nothing. It reads with `CeilingReader.count_by` and `CeilingReader.cardinality`
-([lake README](../homelabnext/lake/README.md)), four grouped queries per profile per run: the
-table's per-day history, a cardinality read naming the entities with more than
-`max_values_per_entity` values, and the learning and scoring windows without those entities;
-when there are such entities, two more read their per-entity counts in both windows, so one port
-scan costs a few groups rather than failing the profile. Every read has the ceiling's row filter
+([lake README](../homelabnext/lake/README.md)), five grouped queries per profile per run: the
+table's per-day history, a cardinality read of each window naming the entities with more than
+`max_values_per_entity` distinct values there (a scan on the scoring day as much as a noisy
+learned entity), and the learning and scoring windows without those entities; when there are
+such entities, two more read their per-entity counts in both windows (seven), so one port scan
+costs a few groups rather than failing the profile. A set-aside entity is reported once as
+`high_cardinality`, with its count in the scoring window. The set-aside reads are bounded too:
+more than 1,000 noisy entities, or set-aside counts past the group limit (at most `entities x
+(learn_days + 1) x 5` groups: one per entity, UTC day and label), fail the profile visibly
+rather than truncate it. Every read has the ceiling's row filter
 in the query and checks every group's label again. More groups than the limit (`run`'s
 `limit`, 100,000 groups by default, against `count_by`'s own default of 10,000) fails that
 profile (`status: failed`), never a truncated baseline; the other profiles still run.
 
 Writing needs the entry's `writes: [novelty_finding]` (ADR-0036 amends ADR-0033 decision 6):
-`SELECT` and `INSERT` on that table only, at the analyzer's ceiling. The engine cannot check the
-label an inserted row carries; this code sets it (below), and the analyzer never reads a row above
-its ceiling. A failed write fails that profile only. `examples/novelty/site.yml` declares it.
+`SELECT` and `INSERT` on that table only, in the core's namespace, at the analyzer's ceiling. The
+engine applies the row filter to an insert, so it refuses a row labelled above the ceiling; it
+cannot see a label set lower than the row's inputs, so this code sets it (below), and the analyzer
+never reads a row above its ceiling. The analyzer's catalog credential, which records the batch
+ledger as table properties, should be scoped to `novelty_finding`; where the catalog cannot scope
+it, that is a residual risk of the deployment. A failed write fails that profile only. `examples/novelty/site.yml` declares it.
 
 ## Findings
 
@@ -111,8 +119,13 @@ The table's key is `(source, uid)`. The `uid` is a digest of the source, the pro
 status, entity kind, entity and value, and each profile's write is one batch whose id digests the
 profile, the spec and `as_of`, so re-running a window writes nothing new (late data included:
 re-scoring a window needs a new spec or a later `as_of`), and backfilling is running with an
-earlier `as_of`. `write_findings` refuses a batch with a row of any source but the writer's own,
-so distinct sources are distinct writers.
+earlier `as_of`. The batch id is `<source>/<profile>:<digest>`, its writer's source mark
+followed by the digest. `write_findings` refuses a batch with a row of any source but the
+writer's own, a foreign mark, or a batch id that does not start with the mark, and the lake
+refuses a batch id another source committed, so cooperating writers are bound to their sources.
+The engine cannot see which `source` an inserted row names, so a writer that bypasses
+`write_findings` could still write under another name: distinct sources are distinct writers by
+convention, which ADR-0036 states as a residual risk.
 
 A host-kernel sensor that learns its own baseline writes the same shape with its own `source`,
 naming entities in the same `entity_kind` namespace.

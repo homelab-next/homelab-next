@@ -50,7 +50,7 @@
       "type": "string",
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-      "description": "What produced the finding: lake-novelty for the lake analyzer, a host sensor's own name otherwise. Each writer writes only its own source (checked by the writer), so distinct sources are distinct writers; corroborate counts distinct sources."
+      "description": "What produced the finding: lake-novelty for the lake analyzer, a host sensor's own name otherwise. A cooperating writer writes only its own source (write_findings checks the rows, the mark and the batch id; the lake refuses another source's batch id), so distinct sources are distinct writers; the engine cannot check which source an inserted row names, so this is a convention of the writers, not a guarantee. corroborate counts distinct sources."
     },
     "source_kind": {
       "type": "string",

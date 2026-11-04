@@ -72,9 +72,15 @@ Three shapes of evidence argue for how to build it:
      the score is their product. A pair is a finding when its score is at least `emit_at`.
    - An entity with more than `max_values_per_entity` distinct values in the learning window is
      reported once (when it appears in the scoring window) as **high-cardinality** and not
-     scored, so one noisy entity cannot flood the output or the memory of a run. A cardinality
-     read finds such entities first (one row each, however many values), and the per-value
-     reads leave them out, so one port scan costs a few groups, never the profile.
+     scored, so one noisy entity cannot flood the output or the memory of a run; so is one with
+     more than that many distinct values in the scoring window alone (a burst, such as a scan on
+     the scoring day), reported with its count there. A cardinality read of each window finds
+     such entities first (one row each, however many values), and the per-value reads leave
+     them out, so one port scan costs a few groups, never the profile. Their own per-entity
+     reads are bounded too: at most 1,000 entities, each giving at most one group per UTC day
+     and label, so a set-aside read is at most `entities x (learn_days + 1) x 5` groups and fails
+     the profile, visibly, only when that passes the group limit; more than 1,000 noisy entities
+     also fails the profile, visibly.
    - A profile emits at most `max_findings` rows per run: findings by score (highest first),
      then high-cardinality entities, then unlearned pairs, each by entity and value; the number
      dropped, by status, is reported in the run summary. No cap is silent.
@@ -107,13 +113,21 @@ Three shapes of evidence argue for how to build it:
    instead carry `writes: [<table>]`: `lake-access.json` then gives that engine user, before its
    `.*` rule, `SELECT` and `INSERT` on each named table only, never `DELETE` or `UPDATE`, with
    its own row filter; no other kind may have `writes`, nor an analyzer `writes` and `write:
-   true` together. The residual risk is stated, not hidden: the query engine cannot constrain
-   the `tlp` value an inserted row carries, so a correct label is enforced in this code
-   (decision 5), not by the engine. It is bounded: the grant is `INSERT` on one table, the
-   analyzer never receives a row above its ceiling to copy, and a mislabelled row could only
-   be one of its own findings. The batch ledger (the batch id and the source's mark) is a
-   second write: table properties set through the REST catalog by the lake's write path, as for
-   every writer (`homelabnext/lake/trino_rest.py`).
+   true` together; `writes` names only declared analyzer-output tables (`novelty_finding`), and
+   the rule is pinned to the core's namespace. The residual risk is stated, not hidden: the
+   query engine applies the row filter to an insert, so it refuses a row labelled above the
+   analyzer's ceiling, but it cannot see a label set lower than the row's inputs, so a correct
+   label is enforced in this code (decision 5), not by the engine. It is bounded: the grant is
+   `INSERT` on one table, the analyzer never receives a row above its ceiling to copy, and a
+   mislabelled row could only be one of its own findings. File-based access control checks a
+   table procedure (`ALTER TABLE ... EXECUTE`) only on a table whose rule carries a row filter;
+   the analyzer's own-table rule does, so it cannot run one, and `lake-access.json` grants no
+   `CALL` procedure to anyone. The batch ledger (the batch id and the source's mark) is a second
+   write: table properties set through the REST catalog by the lake's write path, as for every
+   writer (`homelabnext/lake/trino_rest.py`). The catalog credential the analyzer's writer
+   holds must be scoped to `novelty_finding`; where the catalog cannot scope a credential to a
+   table, that credential can set any table's properties, and that is a residual risk of the
+   deployment, not something this repository can check.
 5. **Findings are labelled data.** A finding's TLP label is the strictest label among the rows
    that produced it, its learning-window support included: the pair's scoring-window rows and,
    for a scored or high-cardinality row, every learning-window row of its entity, since they
@@ -135,9 +149,14 @@ Three shapes of evidence argue for how to build it:
    agent and a network profile), as candidates for the decision cascade and the analyst agents.
    Two profiles of one source are one source. `finding` and `unlearned` rows count as signals;
    a `high_cardinality` row (the entity cannot be baselined) does not. Distinct sources are
-   distinct writers: the table's key is `(source, uid)`, and the writer refuses a batch with a
-   row of any source but its own (checked against the batch's source mark), so one writer can
-   neither pose as two sources nor claim another source's uid.
+   meant to be distinct writers: the table's key is `(source, uid)`; `write_findings` refuses a
+   batch with a row of any source but the writer's own, a mark that is not the source's, or a
+   batch id that does not start with the mark; and the lake refuses a batch id that another
+   source committed, so no writer can suppress another's batch by taking its id. That binding
+   holds for cooperating writers only: the engine sees one `INSERT` grant, not which `source`
+   value a row carries, so a writer with the grant that bypasses `write_findings` could write
+   rows under another source's name. Like the label (decision 4), it is a residual risk,
+   bounded by who holds the grant.
 7. **Host agents report into the same table.** A host-kernel sensor that learns its own baseline
    (process lineage, file writes, privilege changes) is a second source, not a second design:
    its findings enter the lake in the `novelty_finding` shape with its own `source` value and
@@ -160,9 +179,9 @@ Three shapes of evidence argue for how to build it:
   while it warms. That is by design, not a gap: a baseline learned from a day of data would
   score nearly everything as new. The summary says how many days remain, so the silence is
   visible rather than mistaken for a quiet lab.
-- Recomputing per run costs four grouped queries per profile per run on the query engine (the
-  history, the cardinality read, the learning window, the scoring window), six when the
-  cardinality read sets entities aside (their per-entity counts in both windows). Profiles
+- Recomputing per run costs five grouped queries per profile per run on the query engine (the
+  history, a cardinality read of each window, the learning window, the scoring window), seven
+  when the cardinality reads set entities aside (their per-entity counts in both windows). Profiles
   should be few and scoped; each read is bounded like `select`.
 - Late data is not re-scored for a past `as_of`: a re-run of the same window has the same batch
   id and is replayed as written, whatever arrived since. Re-scoring a window means a new spec

@@ -9,8 +9,9 @@ summary_of: outline:sha256:91c8e47d3eaaa755
   follow-ups)
 - **Date:** 2026-10-30
 - **Amended:** 2026-11-01 (decision 11: where the request rule is enforced; see the amendment
-  under it); 2026-11-04 by ADR-0036 (decision 6: an `analyzer:` reader may append to the tables
-  its `writes` names, at its own ceiling; see ADR-0036 decision 4)
+  under it); 2026-11-04 by ADR-0036, a proposed amendment until ADR-0036 is accepted (decision 6:
+  an `analyzer:` reader may append to the tables its `writes` names, at its own ceiling; see
+  ADR-0036 decision 4)
 - **Amends:** ADR-0013
 - **Amended-by:** ADR-0036
 - **Related:** ADR-0001 (additive schemas); ADR-0011 and ADR-0021, which classify repositories
