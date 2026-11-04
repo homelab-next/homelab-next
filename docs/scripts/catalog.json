@@ -686,7 +686,7 @@
         "2": "the register cannot be read"
       },
       "id": "licence-check",
-      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml and tools/licences.yml",
+      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
       "kind": "check",
       "language": "python",
       "outputs": "one line per problem; a summary line",
@@ -927,6 +927,26 @@
       "purpose": "Print the ansible-vault password of a private overlay from the environment or OpenBao, never from a file.",
       "status": "active",
       "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "inventory listed, or report written (pins that are behind are reported, never a failure)",
+        "1": "inventory --check found a pin with no upstream source, or a source with no pin",
+        "2": "usage error, an unreadable tree or an unwritable --out file"
+      },
+      "id": "pin-freshness",
+      "inputs": "the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "inventory - the pins found, as JSON; report - a Markdown report for the tracking issue",
+      "owner": "maintainers",
+      "path": "tools/pin_freshness.py",
+      "purpose": "Report the version pins dependabot cannot parse against their upstream's newest release past the 14-day cooldown.",
+      "status": "active",
+      "trigger": [
+        "ci:pin-freshness/report",
         "manual"
       ]
     },
