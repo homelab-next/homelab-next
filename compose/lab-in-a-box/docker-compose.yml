@@ -243,7 +243,7 @@ services:
   # ==========================================================================================
   secrets:
     <<: *restart
-    image: openbao/openbao:2.1.1@sha256:af40ca17625ec44aa1ffe3698f85162d71d9cc97adc9e97821ef393ac94b6e42
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
     command: ["server", "-dev"]
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${LAB_SECRETS_DEV_TOKEN:?see .env.example}
