@@ -155,5 +155,7 @@ to the selection's schema and the access rules' own refusals. `--fixture` loads 
 mapping of table name to rows into the in-memory fake lake (`examples/novelty/lake.yml`: the first
 command above finds a new port, a new host and a new sign-in source); `--domain`, `--namespace`
 and `--warehouse` reach the lab's `lake-query` and `lake-catalog` endpoints, signing in as
-`analyzer:novelty`. `--as-of` is required (there is no clock). The run prints a JSON summary;
+`analyzer:novelty`. The analyzer's insert grant is pinned to the core's `ocsf` namespace, so with
+any other `--namespace` its writes are refused by design (a dry run still reads). `--as-of` is
+required (there is no clock). The run prints a JSON summary;
 exit 1 when a profile failed, 2 on a usage, spec, site or lake error.
