@@ -225,52 +225,47 @@ class SourceBlindLake(FakeLake):
         )
 
 
-class StoredNoneUnjudgedLake(FakeLake):
+class _ShortCircuitLake(FakeLake):
+    """Base of the mutants below: replays a committed batch whenever :meth:`_replays` says so,
+    without the lake's source judging."""
+
+    def _replays(self, stored_source, expect_source):  # pragma: no cover - overridden
+        return False
+
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
+        seen = self._db.execute(
+            "SELECT seq, source FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
+        ).fetchone()
+        if seen is not None and self._replays(seen[1], expect_source):
+            from homelabnext.lake.protocol import WriteResult
+
+            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
+        return super().write_batch(
+            table,
+            rows,
+            idempotency_key=idempotency_key,
+            source=source,
+            high_water=high_water,
+            expect_source=expect_source,
+        )
+
+
+class StoredNoneUnjudgedLake(_ShortCircuitLake):
     """Defect: a batch committed with no source replays for any write, so a writer that takes a
     sourced writer's batch id without a source still suppresses it."""
 
-    def write_batch(
-        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
-    ):
-        seen = self._db.execute(
-            "SELECT seq, source FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
-        ).fetchone()
-        if seen is not None and seen[1] is None:
-            from homelabnext.lake.protocol import WriteResult
-
-            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
-        return super().write_batch(
-            table,
-            rows,
-            idempotency_key=idempotency_key,
-            source=source,
-            high_water=high_water,
-            expect_source=expect_source,
-        )
+    def _replays(self, stored_source, expect_source):
+        return stored_source is None
 
 
-class ExpectedNoneUnjudgedLake(FakeLake):
+class ExpectedNoneUnjudgedLake(_ShortCircuitLake):
     """Defect: expect_source is judged only against a recorded source, so a batch committed
     with no source replays for a writer that only expects one."""
 
-    def write_batch(
-        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
-    ):
-        seen = self._db.execute(
-            "SELECT seq, source FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
-        ).fetchone()
-        if seen is not None and seen[1] is None and expect_source is not None:
-            from homelabnext.lake.protocol import WriteResult
-
-            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
-        return super().write_batch(
-            table,
-            rows,
-            idempotency_key=idempotency_key,
-            source=source,
-            high_water=high_water,
-            expect_source=expect_source,
-        )
+    def _replays(self, stored_source, expect_source):
+        return stored_source is None and expect_source is not None
 
 
 class ExpectSourceIgnoredLake(FakeLake):
