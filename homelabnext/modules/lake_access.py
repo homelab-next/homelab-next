@@ -23,10 +23,11 @@ the first matching rule wins and a principal no rule matches is denied:
   lower than the row's inputs, so the analyzer's code labels each row with the strictest input it
   read;
 * ``procedures``: no ``CALL`` procedure for anyone.  A table procedure (``ALTER TABLE ...
-  EXECUTE``) is not a procedure rule's business: file-based access control refuses one only on a
-  table whose rule carries a row filter.  Every rule below ``red`` carries one, an analyzer's own
-  tables included, so a reader below ``red`` cannot run one; a ``red`` reader's rule has none
-  (an open point of ADR-0033, not of this file);
+  EXECUTE``) is not a procedure rule's business: file-based access control's own check allows
+  one, and it is the query engine that refuses it on a table with a row filter.  Every rule
+  below ``red`` carries one, so a reader below ``red`` cannot run one; that is why an analyzer
+  with ``writes`` must be below ``red``.  A ``red`` reader's rule has no filter (an open point of
+  ADR-0033, not of this file);
 * ``queries``: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal can match several rules (a user in a group), and the first match wins.  Rules are
@@ -94,6 +95,11 @@ def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool, tuple[str, ...]]:
         raise LakeAccessError(f"tlp_readers: {reader}: only an analyzer: reader has writes")
     if write:
         raise LakeAccessError(f"tlp_readers: {reader}: writes and write: true together")
+    if label is tlp.Label.RED:
+        raise LakeAccessError(
+            f"tlp_readers: {reader}: writes at a red ceiling (its table rule would carry no row "
+            "filter, so nothing would refuse a table procedure on it)"
+        )
     if (
         not isinstance(writes, list)
         or not writes

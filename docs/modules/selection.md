@@ -49,7 +49,8 @@ rows to (today `novelty_finding`, in the core's `ocsf` namespace), `INSERT` only
 labelled above the analyzer's ceiling; a label set lower than the row's inputs it cannot see, so
 the analyzer's code labels each row with the strictest label it read, and the grant is bounded to
 appending to the named tables. No other kind may have `writes`, nor an
-analyzer `writes` and `write: true` together (schema and loader). `lake_catalog` (required with the list) is the engine's name for the
+analyzer `writes` and `write: true` together, nor `writes` at a `red` ceiling, so its own-table
+rule always carries a row filter (schema, loader and renderer). `lake_catalog` (required with the list) is the engine's name for the
 lake catalog. With the list, the loader requires every selected module that requires or prefers
 `cap:lake-query`, and every selected agent with a `cap:lake-query` need, to be listed (an unlisted
 one would read nothing), and refuses a reader listed twice or a writer below `red`; without it,
@@ -67,10 +68,10 @@ and with lake readers selected, it notes that no row is filtered by its label.
   `coalesce(tlp, 'red') IN (<labels at or below the ceiling>)` below `red` and no filter at `red`;
   a table without a `tlp` column cannot be read below `red` (the filter fails the query); an
   analyzer's `writes` tables come first, each `SELECT` and `INSERT` with the same filter;
-- `procedures`: no `CALL` procedure for anyone. A table procedure (`ALTER TABLE ... EXECUTE`) is
-  refused by file-based access control only on a table whose rule carries a row filter: every
-  rule below `red` has one, an analyzer's own tables included, so only a `red` reader (whose rule
-  has no filter) could run one;
+- `procedures`: no `CALL` procedure for anyone. A table procedure (`ALTER TABLE ... EXECUTE`)
+  passes file-based access control's own check; the query engine refuses it on a table with a
+  row filter. Every rule below `red` has one, so only a `red` reader (whose rule has no filter)
+  could run one, which is why an analyzer with `writes` must be below `red`;
 - `queries`: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal matching several rules (a user in a group) gets the first, so user rules come before

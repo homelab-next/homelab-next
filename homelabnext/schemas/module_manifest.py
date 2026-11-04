@@ -1545,7 +1545,8 @@ def module_selection_schema() -> dict[str, Any]:
                     "The analyzer-output tables an analyzer appends its own derived rows to (ADR-0036 "
                     "amends ADR-0033 decision 6): INSERT on each named table only, never DELETE or "
                     "UPDATE, and no other write; only an analyzer: reader may have it, and not with "
-                    "write. Only declared analyzer-output tables are accepted.",
+                    "write, nor at a red ceiling (its own-table rule must carry a row filter). Only declared "
+                    "analyzer-output tables are accepted.",
                     min_items=1,
                 ),
                 "why": text(200, "Who this is and why it needs this ceiling."),
@@ -1554,7 +1555,10 @@ def module_selection_schema() -> dict[str, Any]:
             **{
                 "if": {"required": ["writes"]},
                 "then": {
-                    "properties": {"reader": {"pattern": "^analyzer:"}},
+                    "properties": {
+                        "reader": {"pattern": "^analyzer:"},
+                        "ceiling": {"not": {"const": "red"}},
+                    },
                     "not": {"required": ["write"]},
                 },
             },

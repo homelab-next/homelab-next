@@ -120,10 +120,12 @@ Three shapes of evidence argue for how to build it:
    analyzer's ceiling, but it cannot see a label set lower than the row's inputs, so a correct
    label is enforced in this code (decision 5), not by the engine. It is bounded: the grant is
    `INSERT` on one table, the analyzer never receives a row above its ceiling to copy, and a
-   mislabelled row could only be one of its own findings. File-based access control checks a
-   table procedure (`ALTER TABLE ... EXECUTE`) only on a table whose rule carries a row filter;
-   the analyzer's own-table rule does, so it cannot run one, and `lake-access.json` grants no
-   `CALL` procedure to anyone. The batch ledger (the batch id and the source's mark) is a second
+   mislabelled row could only be one of its own findings. A table procedure (`ALTER TABLE ...
+   EXECUTE`) passes file-based access control's own check; it is the query engine that refuses
+   one on a table with a row filter. The analyzer's own-table rule carries one because an
+   analyzer with `writes` must read below `red` (the schema, the loader and the renderer refuse
+   `writes` at a `red` ceiling), so it cannot run one; `lake-access.json` grants no `CALL`
+   procedure to anyone. The batch ledger (the batch id and the source's mark) is a second
    write: table properties set through the REST catalog by the lake's write path, as for every
    writer (`homelabnext/lake/trino_rest.py`). The catalog credential the analyzer's writer
    holds must be scoped to `novelty_finding`; where the catalog cannot scope a credential to a

@@ -634,6 +634,13 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         ).__setitem__("write", True),
         "An analyzer's writes is its only write; write: true (every table) is refused with it.",
     ),
+    "tlp-reader-writes-at-red": (
+        "full",
+        lambda d: next(
+            r for r in d["tlp_readers"] if r["reader"].startswith("analyzer:")
+        ).__setitem__("ceiling", "red"),
+        "An analyzer with writes reads below red, so its own-table rule carries a row filter.",
+    ),
     "tlp-reader-writes-other-table": (
         "full",
         lambda d: next(

@@ -1709,6 +1709,8 @@ def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(f"tlp_readers: {reader}: only an analyzer: reader has writes (ADR-0036)")
         elif "writes" in entry and entry.get("write") is True:
             out.append(f"tlp_readers: {reader}: writes and write: true together")
+        elif "writes" in entry and entry.get("ceiling") == "red":
+            out.append(f"tlp_readers: {reader}: writes at a red ceiling (it must read below red)")
         elif "writes" in entry:
             from homelabnext.modules.lake_access import ANALYZER_TABLES
 

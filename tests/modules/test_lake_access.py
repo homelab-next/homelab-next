@@ -55,6 +55,7 @@ def test_a_reader_name_is_matched_exactly():
         (_r("nobody", "green"), "not a reader id"),
         (_r("module:x", "red", writes=["novelty_finding"]), "only an analyzer"),
         (_r("analyzer:x", "red", write=True, writes=["t"]), "writes and write"),
+        (_r("analyzer:x", "red", writes=["novelty_finding"]), "writes at a red ceiling"),
         (_r("analyzer:x", "amber", writes=[]), "distinct table names"),
         (_r("analyzer:x", "amber", writes=["t", "t"]), "distinct table names"),
         (_r("analyzer:x", "amber", writes=["Bad Name"]), "distinct table names"),
@@ -203,6 +204,10 @@ def test_reader_problems_writes():
     bad = _site(*base["tlp_readers"], _r("module:pipe", "red", writes=["t"]))
     assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0036)" in (
         rules.tlp_reader_problems(bad, MODS)
+    )
+    red = _site(*base["tlp_readers"], _r("analyzer:r", "red", writes=["novelty_finding"]))
+    assert "tlp_readers: analyzer:r: writes at a red ceiling (it must read below red)" in (
+        rules.tlp_reader_problems(red, MODS)
     )
     both = _site(*base["tlp_readers"], _r("analyzer:a", "red", write=True, writes=["t"]))
     assert "tlp_readers: analyzer:a: writes and write: true together" in (
