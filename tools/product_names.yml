@@ -53,6 +53,10 @@ allow:
     reason: generated (detections coverage --out); its backends map is keyed by each compiled backend's registered name, counted where the backend lives (homelabnext/detections/backends/)
   - path: "NOTICE"
     reason: the attribution notice is prose
+  - path: "tools/pin_freshness.py"
+    reason: the version-pin report maps each pin dependabot cannot parse to its product's upstream release list, as the licence register maps each image; the configuration that runs a product is counted where it lives
+  - path: "tools/tests/test_pin_*.py"
+    reason: the pin tests read the pins (role defaults, CI versions, example registries) and hold the copies of one product's version equal; the configuration they read is counted where it lives
   - path: "tools/licences.yml"
     reason: the licence register names each pinned package and compose image it reviews; the configuration that runs them is counted where it lives
   - path: "tools/experimental.yml"

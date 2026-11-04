@@ -6,7 +6,7 @@
 #   purpose: Fail when a pinned Python package or a compose image has no reviewed licence entry, or a linked one is copyleft.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:licence-check]
-#   inputs: constraints/*.txt, compose/**/docker-compose*.yml and tools/licences.yml
+#   inputs: constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml
 #   outputs: one line per problem; a summary line
 #   exit:
 #     "0": every pin and image listed, none refused
@@ -15,7 +15,8 @@
 """Gate: ADR-0011's licence rule, checked against what is pinned and deployed.
 
 Every package ``constraints/*.txt`` pins (``name==version``) and every image a compose stack
-under ``compose/`` runs (its repository, less tag and digest) must have an entry in
+under ``compose/`` runs or builds on (``image:``, and a Dockerfile's ``FROM`` other than an
+earlier stage or ``scratch``; its repository, less tag and digest) must have an entry in
 ``tools/licences.yml``: its licence as an SPDX expression and its ``kind``.  A ``linked``
 package may not be copyleft (GPL, AGPL or SSPL in every alternative of its expression; LGPL and
 MPL are allowed unmodified); a ``tool`` or ``service`` may be, and says why in its ``reason``.
@@ -43,6 +44,7 @@ REFUSED = ("GPL", "AGPL", "SSPL")
 KINDS = {"python": ("linked", "tool"), "images": ("service",)}
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", re.M)
 _IMAGE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s#]+)", re.M)
+_FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.M | re.I)
 _TERM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 
 
@@ -72,6 +74,14 @@ def images(root: Path) -> dict[str, str]:
     for f in sorted((root / "compose").glob("**/docker-compose*.yml")):
         for m in _IMAGE.finditer(f.read_text(encoding="utf-8")):
             out.setdefault(m[1], f.relative_to(root).as_posix())
+    # the base image of an image a compose stack builds ships inside it: listed too
+    for f in sorted((root / "compose").glob("**/Dockerfile")):
+        stages: set[str] = set()
+        for m in _FROM.finditer(f.read_text(encoding="utf-8")):
+            if m[1].lower() not in stages and m[1] != "scratch":
+                out.setdefault(m[1], f.relative_to(root).as_posix())
+            if m[2]:
+                stages.add(m[2].lower())
     return out
 
 

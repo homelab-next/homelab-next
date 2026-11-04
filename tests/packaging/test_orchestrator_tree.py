@@ -75,12 +75,12 @@ def _gomod_directories() -> list[str]:
     return [d for u in updates if u["package-ecosystem"] == "gomod" for d in u["directories"]]
 
 
-def test_dependabot_updates_go_modules_like_the_other_ecosystems():
-    updates = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text())["updates"]
-    (go,) = [u for u in updates if u["package-ecosystem"] == "gomod"]
-    pip = next(u for u in updates if u["package-ecosystem"] == "pip")
-    for key in ("schedule", "cooldown", "commit-message"):
-        assert go[key] == pip[key], key
+def test_dependabot_lists_no_go_module_that_does_not_exist():
+    """A gomod entry for a module that is not there updates nothing (orchestrator/ never landed);
+    the next test adds it back when one does.  Cadence and cooldown: tests/packaging/
+    test_dependabot.py, which holds every entry to the pip one."""
+    for d in _gomod_directories():
+        assert (ROOT / d.lstrip("/") / "go.mod").is_file(), d
 
 
 @pytest.mark.requires_tool("git")

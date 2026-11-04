@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+name: pin-freshness
+
+# Once a week, compares the version pins dependabot cannot parse (role defaults, CI version and
+# checksum pairs, GO_VERSION, the Terraform provider constraint, unpinned uv and trivy) with each
+# upstream's newest release past the same 14-day cooldown, and writes the result into one tracking
+# issue (tools/pin_freshness.py decides; its tests pin each case).  Scheduled and manual only, from
+# the default branch: it never runs on a pull request, so an upstream release never turns one red,
+# and being behind is reported, not failed.  The only job here that reaches the network for
+# versions; the GitHub token reads release lists and writes that one issue, nothing else.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pin-freshness
+  cancel-in-progress: false
+
+# Action pins below are full commit SHAs; the trailing comment names the release.
+
+jobs:
+  report:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # create or edit the one tracking issue
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # standard library only: the runner's own python3, nothing installed
+      - name: compare the pins with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/pin_freshness.py report --out "$RUNNER_TEMP/pins.md"
+      # the issue is found by the marker the report starts with, among the issues this workflow
+      # opened, so a person's issue is never overwritten
+      - name: update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$REPO" --state open --author "app/github-actions" \
+            --limit 100 --json number,body \
+            --jq '[.[] | select(.body | startswith("<!-- hnx:pin-freshness -->"))][0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/pins.md"
+          else
+            gh issue create --repo "$REPO" --title "Pin freshness" --body-file "$RUNNER_TEMP/pins.md"
+          fi
+          cat "$RUNNER_TEMP/pins.md" >> "$GITHUB_STEP_SUMMARY"
