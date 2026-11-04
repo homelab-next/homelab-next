@@ -92,6 +92,25 @@ conform_missing_suite() {
   grep -qE "^hnx conform: (suite for '$3' not found|unknown capability '$3')" "$2"
 }
 
+# conform_failure_summary LOG: what a failed `hnx conform run` said, for the job log (the full
+# log is only in the report directory): its verdict line and every failed, untested or erroring
+# check with its evidence, at most 20 lines of at most 300 characters; for output not in that
+# shape (a crash), its last 5 lines.  The value of every set variable whose name says it holds a
+# credential (SECRET, PASSWORD, TOKEN, _KEY) is masked, should an adapter ever echo one.
+conform_failure_summary() {
+  local out line name val
+  out="$(grep -E '^(FAIL|PASS|COULD NOT MEASURE|MISCONFIGURED)  |^  (\[(FAIL|UNTESTED)\] |ERROR |FAIL )' "$1" | head -n 20)"
+  [ -n "$out" ] || out="$(tail -n 5 "$1")"
+  while IFS= read -r line; do
+    for name in $(compgen -v); do
+      case "$name" in *SECRET*|*PASSWORD*|*TOKEN*|*_KEY) ;; *) continue ;; esac
+      val="${!name-}"
+      [ "${#val}" -ge 4 ] && line="${line//"$val"/***}"
+    done
+    printf 'smoke.sh:   %s\n' "${line:0:300}"
+  done <<<"$out"
+}
+
 collect_logs() {
   dc ps -a >"$report_dir/ps.txt" 2>&1
   dc logs --no-color --tail 200 >"$report_dir/compose.log" 2>&1
@@ -190,6 +209,7 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
         echo "$cap $subject no-suite" >>"$conform_caps_file"
       else
         echo "$cap $subject fail" >>"$conform_caps_file"
+        conform_failure_summary "$report_dir/conform-$cap.log"
         conform_note="$conform_note $cap:FAIL($rc)"
         conform_state="fail"
         status=1
