@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The novelty spec (ADR-0035 decision 2): what is learned, declared rather than inferred.
+"""The novelty spec (ADR-0036 decision 2): what is learned, declared rather than inferred.
 
 :func:`load_spec` reads a spec file (YAML or JSON), validates it against
 ``schemas/platform/novelty_spec.schema.json`` and then checks what the schema cannot state

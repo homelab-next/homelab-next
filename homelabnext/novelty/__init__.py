@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Behavioural novelty baselines (ADR-0035; docs/novelty.md).
+"""Behavioural novelty baselines (ADR-0036; docs/novelty.md).
 
 A deterministic analyzer: per-entity first-seen baselines recomputed from the lake for an
 injected ``as_of`` (:mod:`.engine`), declared by a spec (:mod:`.spec`), read through the lake's

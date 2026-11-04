@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The novelty scoring engine (ADR-0035 decisions 1, 3, 5 and 6).
+"""The novelty scoring engine (ADR-0036 decisions 1, 3, 5 and 6).
 
 :func:`score_profile` is a pure function of a profile, ``as_of`` and three lists of
 :class:`~homelabnext.lake.ceiling.GroupCount` (the learning window's counts, the scoring window's

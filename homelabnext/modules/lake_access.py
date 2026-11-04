@@ -15,7 +15,7 @@ the first matching rule wins and a principal no rule matches is denied:
   :func:`homelabnext.tlp.row_filter_sql` below ``red`` (a table without a ``tlp`` column fails
   the query, so it is not readable below ``red``) and no filter at ``red``.  A writer may insert
   and delete, never update: an update could rewrite a stored label.  An ``analyzer:`` reader
-  with ``writes`` (ADR-0035, amending ADR-0033 decision 6) gets, before its ``.*`` rule, a rule
+  with ``writes`` (ADR-0036, amending ADR-0033 decision 6) gets, before its ``.*`` rule, a rule
   per named table with ``SELECT`` and ``INSERT`` only and its own row filter: it appends its
   derived rows at any ceiling.  The engine cannot check the ``tlp`` value an insert carries; the
   analyzer's code labels each row with the strictest input it read, below its ceiling;
@@ -53,7 +53,7 @@ CATALOG_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 TABLE_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 READ = ["SELECT"]
 WRITE = ["SELECT", "INSERT", "DELETE"]
-#: an analyzer's table-scoped grant (ADR-0035): it appends its own rows, never deletes or updates
+#: an analyzer's table-scoped grant (ADR-0036): it appends its own rows, never deletes or updates
 APPEND = ["SELECT", "INSERT"]
 
 

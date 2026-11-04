@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/platform/novelty_spec/1.0",
-  "x-draft": "ADR-0035 (proposed): read by homelabnext.novelty.spec (hnx novelty run); not frozen until ADR-0035 is accepted, so an overlay pins the core commit it is validated against",
+  "x-draft": "ADR-0036 (proposed): read by homelabnext.novelty.spec (hnx novelty run); not frozen until ADR-0036 is accepted, so an overlay pins the core commit it is validated against",
   "title": "Novelty spec",
-  "description": "What the behavioural novelty analyzer learns (ADR-0035 decision 2; docs/novelty.md): profiles, each one lake table, an entity column, one or more value columns (dotted paths validated against the table's schema), optional equality filters and the scoring parameters. The rules a schema cannot state (the table exists, every path is a scalar column of it, ids are unique, min_history_days <= learn_days) are in homelabnext.novelty.spec.",
+  "description": "What the behavioural novelty analyzer learns (ADR-0036 decision 2; docs/novelty.md): profiles, each one lake table, an entity column, one or more value columns (dotted paths validated against the table's schema), optional equality filters and the scoring parameters. The rules a schema cannot state (the table exists, every path is a scalar column of it, ids are unique, min_history_days <= learn_days) are in homelabnext.novelty.spec.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -74,7 +74,7 @@
             "process",
             "other"
           ],
-          "description": "The shared entity namespace of the entity column (ADR-0035 decision 7), written into every finding's entity_kind so corroborate matches entities across sources."
+          "description": "The shared entity namespace of the entity column (ADR-0036 decision 7), written into every finding's entity_kind so corroborate matches entities across sources."
         },
         "entity": {
           "type": "string",

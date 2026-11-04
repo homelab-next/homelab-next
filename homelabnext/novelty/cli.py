@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """``hnx novelty``: run the behavioural novelty analyzer and corroborate its findings
-(ADR-0035; docs/novelty.md).
+(ADR-0036; docs/novelty.md).
 
 ``hnx novelty run --spec FILE --as-of ISO --site SITE [--dry-run] [--show-findings] LAKE``
 scores every profile for ``as_of`` and, unless ``--dry-run``, writes the rows to

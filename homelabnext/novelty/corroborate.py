@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``corroborate``: the one path from novelty to escalation (ADR-0035 decision 6).
+"""``corroborate``: the one path from novelty to escalation (ADR-0036 decision 6).
 
 A novelty finding is advisory: no deterministic gate escalates on one alone.  ``corroborate``
 groups findings by entity within a time window and returns only the entities flagged by at
@@ -12,7 +12,7 @@ entity"); a ``high_cardinality`` row says the entity cannot be baselined, which 
 A candidate's label is the strictest label of the rows behind it.
 
 Entities are matched by ``(entity_kind, entity)``, never by bare text: every source names an
-entity in the shared namespace (``ip``, ``host``, ``user``, ...; ADR-0035 decision 7), so an
+entity in the shared namespace (``ip``, ``host``, ``user``, ...; ADR-0036 decision 7), so an
 address and a host whose name is the same text are two entities.  Distinct sources are
 distinct writers: each writer writes only its own ``source`` (``engine.write_findings``).
 """

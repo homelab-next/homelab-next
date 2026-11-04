@@ -42,7 +42,7 @@ module's query consumer), `analyzer:<name>` (a platform analyzer), `user:<name>`
 `ceiling` is a canonical label; `write: true` also lets it insert and delete, never update (an
 update could rewrite a stored label), and only a `red` reader may write: a deliberate choice, since
 a writer sees what it writes. The one exception is an `analyzer:<name>` reader (a platform
-analyzer such as the novelty analyzer, ADR-0035, which amends ADR-0033 decision 6), which may
+analyzer such as the novelty analyzer, ADR-0036, which amends ADR-0033 decision 6), which may
 carry `writes: [<table>, ...]`: the tables it appends its own derived rows to, `INSERT` only (no
 `DELETE` or `UPDATE`), at any ceiling. It never reads a row above its ceiling, and its code labels
 each row it writes with the strictest label it read; the engine cannot check that label, so the
@@ -75,7 +75,7 @@ group with a stricter one, because user rules come before group rules; give such
 ceiling it should have in its own entry. A principal no rule names reads nothing. An operator step: the
 lake-query adapter must sign each reader in to the engine as the user named by its whole reader id
 (`profile:x`, `module:y`, `analyzer:novelty`, `user:alice`; an `analyzer:` is a platform
-analyzer such as the novelty analyzer, ADR-0035), and a `group:` reader is the engine group named after the
+analyzer such as the novelty analyzer, ADR-0036), and a `group:` reader is the engine group named after the
 colon. Any change to the list or the catalog is human-approve (`hnx site review-tier`).
 
 `lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every

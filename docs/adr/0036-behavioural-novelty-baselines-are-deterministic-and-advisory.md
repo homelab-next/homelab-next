@@ -1,8 +1,8 @@
 ---
 summary: A deterministic analyzer learns per-entity first-seen baselines from the lake over a decaying window; its findings are heuristic and never escalate alone.
-summary_of: outline:sha256:bb26e3bb40508401
+summary_of: outline:sha256:0365a5d172926402
 ---
-# ADR-0035: Behavioural novelty baselines are deterministic, recomputed from the lake, and advisory
+# ADR-0036: Behavioural novelty baselines are deterministic, recomputed from the lake, and advisory
 
 - **Status:** proposed
 - **Date:** 2026-11-04
@@ -10,6 +10,7 @@ summary_of: outline:sha256:bb26e3bb40508401
   labels and reader ceilings); ADR-0030 (agents act only through the broker);
   [decide](../decide.md) (the decision cascade); [log pipeline](../log-pipeline.md);
   [lake README](../../homelabnext/lake/README.md)
+- **Amends:** ADR-0033
 - **Depends-on:** ADR-0033
 
 ## Context
@@ -71,17 +72,25 @@ Three shapes of evidence argue for how to build it:
      the score is their product. A pair is a finding when its score is at least `emit_at`.
    - An entity with more than `max_values_per_entity` distinct values in the learning window is
      reported once (when it appears in the scoring window) as **high-cardinality** and not
-     scored, so one noisy entity cannot flood the output or the memory of a run.
+     scored, so one noisy entity cannot flood the output or the memory of a run. A cardinality
+     read finds such entities first (one row each, however many values), and the per-value
+     reads leave them out, so one port scan costs a few groups, never the profile.
    - A profile emits at most `max_findings` rows per run: findings by score (highest first),
      then high-cardinality entities, then unlearned pairs, each by entity and value; the number
      dropped, by status, is reported in the run summary. No cap is silent.
-   - **Cold start.** A profile's history is the number of UTC days from the oldest day its table
-     holds within the learning window (as the analyzer's ceiling lets it see the table, without
-     the profile's filters) to the scoring window's start day, `date(S) - oldest day`, and 0
-     when the window holds nothing. While the history is below `min_history_days` the profile is
-     **warming**: the run writes no findings for it and its summary reports `status: warming`,
-     the days of history so far and the days remaining. The history depends only on the lake
-     and `as_of`, so the same run warms the same way when replayed.
+   - **Cold start.** A profile's history is `min(learn_days, date(S) - oldest day)`, where the
+     oldest day is the oldest its table holds in `[midnight(date(S)) - 2 * learn_days, S)`, a
+     day-aligned range longer than the learning window (as the analyzer's ceiling lets it see the
+     table, without the profile's filters), and 0 when the range holds nothing. The longer range
+     means a sparse table whose first row predates the window, or an `as_of` that is not
+     midnight, still counts its history. While the history is below `min_history_days` the
+     profile is **warming**: the run writes no findings for it and its summary reports `status:
+     warming`, the days of history so far and the days remaining. The history depends only on
+     the lake and `as_of`, so the same run warms the same way when replayed. A table entirely
+     above the analyzer's ceiling reads as empty, so a profile over it is warming for good,
+     which its summary shows.
+   - A finding's `time` is `S`, the start of the behaviour window it describes (its `as_of` is
+     the end), so a window that holds the behaviour holds the finding.
 4. **It reads through its TLP ceiling.** The analyzer is a lake reader (`analyzer:novelty`) with
    a declared ceiling in `tlp_readers`, like any other (ADR-0033 decision 6; `analyzer:` is a
    reader kind beside `profile:`, `module:`, `user:` and `group:`). It reads with a new bounded
@@ -92,25 +101,50 @@ Three shapes of evidence argue for how to build it:
    the UTC day are not in the portable SQL subset, so each lake adapter declares its SQL
    dialect. It needs no raw SQL and so no red grant; a profile over a table above the
    analyzer's ceiling sees only the rows its ceiling allows.
+
+   **It writes through a table-scoped insert grant (amending ADR-0033 decision 6).** ADR-0033
+   lets only a `red` reader write, and every table. An `analyzer:` entry in `tlp_readers` may
+   instead carry `writes: [<table>]`: `lake-access.json` then gives that engine user, before its
+   `.*` rule, `SELECT` and `INSERT` on each named table only, never `DELETE` or `UPDATE`, with
+   its own row filter; no other kind may have `writes`, nor an analyzer `writes` and `write:
+   true` together. The residual risk is stated, not hidden: the query engine cannot constrain
+   the `tlp` value an inserted row carries, so a correct label is enforced in this code
+   (decision 5), not by the engine. It is bounded: the grant is `INSERT` on one table, the
+   analyzer never receives a row above its ceiling to copy, and a mislabelled row could only
+   be one of its own findings. The batch ledger (the batch id and the source's mark) is a
+   second write: table properties set through the REST catalog by the lake's write path, as for
+   every writer (`homelabnext/lake/trino_rest.py`).
 5. **Findings are labelled data.** A finding's TLP label is the strictest label among the rows
    that produced it, its learning-window support included: the pair's scoring-window rows and,
    for a scored or high-cardinality row, every learning-window row of its entity, since they
-   make its total and so its confidence (derived data takes its strictest input, ADR-0033). Findings are written to their own lake table, `novelty_finding`, idempotently:
-   the batch id is a digest of the profile, the spec and `as_of`, so a re-run of the same window
-   writes nothing new.
+   make its total and so its confidence (derived data takes its strictest input, ADR-0033).
+   Findings are written to their own lake table, `novelty_finding`, idempotently: the batch id
+   is a digest of the profile, the spec and `as_of`, so a re-run of the same window writes
+   nothing new. The run summary (oldest day, counts, what was dropped) is derived from what the
+   analyzer read and is labelled at its ceiling. A label bounds what a finding says, and so what
+   its absence says: a finding labelled `green` with support 0 means no row at or below the
+   analyzer's ceiling had the pair, not that none existed, and a reader of `novelty_finding` can
+   infer only that much (rows above the ceiling were never read, and say nothing).
 6. **Findings are advisory and say so.** Every finding row carries `source_kind: heuristic`, the
    `source` that produced it (`lake-novelty` here), the profile, entity, value, score, confidence,
    support, entity total, the windows and `as_of`. No Sigma rule, decide floor or other
    deterministic gate takes a novelty finding as its sole basis to escalate. The one path from
-   novelty to escalation is `corroborate`, which groups findings by entity within a time window
+   novelty to escalation is `corroborate`, which groups findings by entity (its `entity_kind`
+   and value, never bare text) within a time window
    and returns only entities flagged by at least two **distinct sources** (for example a host
    agent and a network profile), as candidates for the decision cascade and the analyst agents.
    Two profiles of one source are one source. `finding` and `unlearned` rows count as signals;
-   a `high_cardinality` row (the entity cannot be baselined) does not.
+   a `high_cardinality` row (the entity cannot be baselined) does not. Distinct sources are
+   distinct writers: the table's key is `(source, uid)`, and the writer refuses a batch with a
+   row of any source but its own (checked against the batch's source mark), so one writer can
+   neither pose as two sources nor claim another source's uid.
 7. **Host agents report into the same table.** A host-kernel sensor that learns its own baseline
    (process lineage, file writes, privilege changes) is a second source, not a second design:
    its findings enter the lake in the `novelty_finding` shape with its own `source` value and
-   `source_kind: heuristic`, so `corroborate` sees both. Such an agent runs alert-only by default;
+   `source_kind: heuristic`, so `corroborate` sees both. It names entities in the declared shared
+   namespace, `entity_kind` (`ip`, `host`, `user`, `domain`, `process`, `other`), with the same
+   text a lake profile would use for that kind (an address as written, a host by its name), so
+   both sources can name one entity. Such an agent runs alert-only by default;
    any enforcement it has is off unless the site turns it on explicitly in its configuration.
 8. **Agents interpret; they do not compute.** An analyst agent reads `novelty_finding`, explains
    and groups findings and routes the corroborated ones. It never computes or edits a baseline.
@@ -126,11 +160,13 @@ Three shapes of evidence argue for how to build it:
   while it warms. That is by design, not a gap: a baseline learned from a day of data would
   score nearly everything as new. The summary says how many days remain, so the silence is
   visible rather than mistaken for a quiet lab.
-- Writing `novelty_finding` is a write to the lake: where the query engine's access rules
-  (`lake-access.json`) give `INSERT` only to a writer declared `red`, the analyzer reads at its
-  own ceiling and writes through the lake's write path under a writer identity of its own.
-- Recomputing per run costs one grouped query per profile per run on the query engine. Profiles
-  should be few and scoped; `count_by` is bounded like `select`.
+- Recomputing per run costs four grouped queries per profile per run on the query engine (the
+  history, the cardinality read, the learning window, the scoring window), six when the
+  cardinality read sets entities aside (their per-entity counts in both windows). Profiles
+  should be few and scoped; each read is bounded like `select`.
+- Late data is not re-scored for a past `as_of`: a re-run of the same window has the same batch
+  id and is replayed as written, whatever arrived since. Re-scoring a window means a new spec
+  (a new digest) or a later `as_of`.
 - Poisoning is limited, not removed: behaviour repeated `min_support` times inside the learning
   window is normal until it decays. Shorter half-lives forget faster and alert more.
 - The `novelty_finding` table, the spec schema and `count_by` are new contracts that each adapter
@@ -152,3 +188,7 @@ Three shapes of evidence argue for how to build it:
   detections and invite a deterministic consumer to escalate on one; a separate table keeps the
   boundary structural.
 - **Run only a host agent.** It cannot see network, DNS or third-party sources; both are needed.
+- **Write findings as a separate `red` writer principal.** It would satisfy ADR-0033 as written,
+  but a writer that may insert and delete in every table, and reads everything, is a far wider
+  grant than an analyzer that reads below `red` needs; the table-scoped insert grant gives it
+  only the one table it writes. Rejected.

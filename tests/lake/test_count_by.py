@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``CeilingReader.count_by``: the bounded grouped aggregate (ADR-0035 decision 4)."""
+"""``CeilingReader.count_by``: the bounded grouped aggregate (ADR-0036 decision 4)."""
 
 from __future__ import annotations
 

@@ -85,7 +85,7 @@ One writer per `(table, source)` is assumed.
   why), and code outside this package runs raw SQL only through `raw_query`/`raw_named` with one
   (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it).
   `CeilingReader.count_by(table, entity, values, *, since, until, time_column="time", where=None,
-  limit=10000)` is the bounded grouped read (ADR-0035 decision 4): rows with
+  limit=10000)` is the bounded grouped read (ADR-0036 decision 4): rows with
   `since <= time_column < until`, counted per entity, values, UTC day and stored label, returned
   as `GroupCount(entity, values, day, label, count)`. Column refs are dotted paths into the
   table's schema (`dst_endpoint.port`); keys are scalars that are not timestamps; a row whose

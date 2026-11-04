@@ -1527,7 +1527,7 @@ def module_selection_schema() -> dict[str, Any]:
                 "reader": pat(
                     "(?:profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}",
                     "Who reads the lake: an agent profile, a module (its query consumer), a "
-                    "platform analyzer (analyzer:novelty, ADR-0035), or a person or group "
+                    "platform analyzer (analyzer:novelty, ADR-0036), or a person or group "
                     "signing in to the query engine.",
                     80,
                 ),
@@ -1541,7 +1541,7 @@ def module_selection_schema() -> dict[str, Any]:
                 },
                 "writes": arr(
                     pat("[a-z][a-z0-9_]{0,62}", None, 63),
-                    "The lake tables an analyzer appends its own derived rows to (ADR-0035 amends "
+                    "The lake tables an analyzer appends its own derived rows to (ADR-0036 amends "
                     "ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, "
                     "and no other write; only an analyzer: reader may have it, and not with write.",
                     min_items=1,
@@ -1562,7 +1562,7 @@ def module_selection_schema() -> dict[str, Any]:
         "needs it, must be listed, and hnx modules render writes the query engine's row filters "
         "(lake-access.json): a reader not listed reads nothing. A reader listed twice, or one that "
         "writes below red, is refused (loader). An analyzer: reader may append to the tables its "
-        "writes names at any ceiling (ADR-0035). Any change to it is human-approve.",
+        "writes names at any ceiling (ADR-0036). Any change to it is human-approve.",
     )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

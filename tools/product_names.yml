@@ -40,7 +40,7 @@ products:
   - {name: agentmetry, why: the agent telemetry product}
 allow:
   - path: "tests/lake/golden/novelty_finding.*"
-    reason: "the novelty_finding table's DDL goldens (ADR-0035), named like every other table's by the engine whose generated DDL each pins (the older tables' goldens are in the baseline); the generator is counted where it lives, homelabnext/lake/ddl.py"
+    reason: "the novelty_finding table's DDL goldens (ADR-0036), named like every other table's by the engine whose generated DDL each pins (the older tables' goldens are in the baseline); the generator is counted where it lives, homelabnext/lake/ddl.py"
   - path: "docs/scripts/catalog.json"
     reason: generated from the scripts' hnx-script header comments, which are prose
   - path: "tools/*.allow.yml"

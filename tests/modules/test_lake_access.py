@@ -36,7 +36,7 @@ def test_each_reader_gets_its_row_filter():
     assert every["^module:pipe$"]["privileges"] == ["SELECT", "INSERT", "DELETE"]
     assert "'amber+strict'" in every["^user:alice$"]["filter"]
     assert "'red'" not in every["^user:alice$"]["filter"].split("IN")[1]
-    # a platform analyzer (ADR-0035) signs in as the engine user named by its reader id
+    # a platform analyzer (ADR-0036) signs in as the engine user named by its reader id
     assert "'amber+strict'" not in every["^analyzer:novelty$"]["filter"]
     assert every["^analyzer:novelty$"]["privileges"] == ["SELECT"]
 
@@ -199,7 +199,7 @@ def test_reader_problems_writes():
     ok = _site(*base["tlp_readers"], _r("analyzer:novelty", "amber", writes=["novelty_finding"]))
     assert rules.tlp_reader_problems(ok, MODS) == []
     bad = _site(*base["tlp_readers"], _r("module:pipe", "red", writes=["t"]))
-    assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0035)" in (
+    assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0036)" in (
         rules.tlp_reader_problems(bad, MODS)
     )
     both = _site(*base["tlp_readers"], _r("analyzer:a", "red", write=True, writes=["t"]))

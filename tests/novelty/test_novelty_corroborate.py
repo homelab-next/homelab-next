@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``corroborate``: only entities flagged by two distinct sources (ADR-0035 decision 6)."""
+"""``corroborate``: only entities flagged by two distinct sources (ADR-0036 decision 6)."""
 
 from __future__ import annotations
 

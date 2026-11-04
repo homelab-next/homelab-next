@@ -128,7 +128,7 @@ tlp_readers:
   - reader: analyzer:novelty
     ceiling: amber
     writes: [novelty_finding]
-    why: the behavioural novelty analyzer (ADR-0035) learns from amber and below and appends its findings
+    why: the behavioural novelty analyzer (ADR-0036) learns from amber and below and appends its findings
   - reader: group:community
     ceiling: green
     why: a community partner, shown open and community-shareable rows only

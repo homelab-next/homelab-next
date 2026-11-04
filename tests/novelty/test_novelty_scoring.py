@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The scoring rule of ADR-0035 decision 3, checked against hand-computed cases.
+"""The scoring rule of ADR-0036 decision 3, checked against hand-computed cases.
 
 The profile below scores ``[2026-03-09, 2026-03-10)`` and learns from ``[2026-03-05,
 2026-03-09)``: days 03-05..03-08 are 4..1 days old, and with ``half_life_days: 2`` weigh

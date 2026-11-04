@@ -266,7 +266,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.sshca").main(a),
     ),
     "novelty": (
-        "behavioural novelty baselines (ADR-0035, docs/novelty.md): run (score a spec's profiles "
+        "behavioural novelty baselines (ADR-0036, docs/novelty.md): run (score a spec's profiles "
         "for --as-of, write advisory findings)|corroborate (entities flagged by >= 2 sources)",
         lambda a: importlib.import_module("homelabnext.novelty.cli").main(a),
     ),

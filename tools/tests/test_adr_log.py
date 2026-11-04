@@ -20,6 +20,7 @@ ADRS = sorted(p for p in ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md"))
 #: holder); an entry goes when its ADR merges, and one whose ADR exists is an error
 RESERVED = {
     26: "the orchestrator as a component of this repository (planned with it)",
+    35: "coordinator memory as a folded ledger (planned; branch docs/adr-0035-coordinator-memory)",
 }
 
 

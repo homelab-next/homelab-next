@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.example.internal/homelabnext/ocsf/novelty_finding/1.0",
-  "x-draft": "ADR-0035 (proposed): written by homelabnext.novelty (hnx novelty run) and read by its corroborate; not frozen until ADR-0035 is accepted",
+  "x-draft": "ADR-0036 (proposed): written by homelabnext.novelty (hnx novelty run) and read by its corroborate; not frozen until ADR-0036 is accepted",
   "title": "Novelty Finding",
-  "description": "An advisory behavioural-novelty finding (ADR-0035 decision 6; docs/novelty.md): the platform's own table in the OCSF conventions of this directory, not an OCSF class (ocsf_class_uid 0 is OCSF's base event). Every row is heuristic: no deterministic gate escalates on one alone. Written by the lake novelty analyzer and, in the same shape, by host-kernel sensors with their own source.",
+  "description": "An advisory behavioural-novelty finding (ADR-0036 decision 6; docs/novelty.md): the platform's own table in the OCSF conventions of this directory, not an OCSF class (ocsf_class_uid 0 is OCSF's base event). Every row is heuristic: no deterministic gate escalates on one alone. Written by the lake novelty analyzer and, in the same shape, by host-kernel sensors with their own source.",
   "x-lake": {
     "table": "novelty_finding",
     "ocsf_class": "base_event",
@@ -57,7 +57,7 @@
       "enum": [
         "heuristic"
       ],
-      "description": "Always heuristic: a novelty finding is advisory (ADR-0035 decision 6)."
+      "description": "Always heuristic: a novelty finding is advisory (ADR-0036 decision 6)."
     },
     "profile": {
       "type": "string",
@@ -75,7 +75,7 @@
         "process",
         "other"
       ],
-      "description": "The shared entity namespace the entity belongs to (ADR-0035 decision 7): every source names an address as ip, a host as host and so on, so corroborate matches one entity across sources by (entity_kind, entity), never by bare text."
+      "description": "The shared entity namespace the entity belongs to (ADR-0036 decision 7): every source names an address as ip, a host as host and so on, so corroborate matches one entity across sources by (entity_kind, entity), never by bare text."
     },
     "entity": {
       "type": "string",
@@ -183,7 +183,7 @@
         "amber+strict",
         "red"
       ],
-      "description": "The row's TLP 2.0 label (ADR-0033 decision 5): the strictest label among the rows that produced the finding, its learning-window rows included (ADR-0035 decision 5). The lake refuses a row without one."
+      "description": "The row's TLP 2.0 label (ADR-0033 decision 5): the strictest label among the rows that produced the finding, its learning-window rows included (ADR-0036 decision 5). The lake refuses a row without one."
     }
   },
   "allOf": [
