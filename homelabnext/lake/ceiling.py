@@ -214,7 +214,9 @@ class CeilingReader:
         are bound parameters (equality only; ``None`` is refused, as ``= NULL`` matches nothing).
         The ceiling's row filter is applied in the query and every group's label is checked
         again, as :meth:`select` does.  More than ``limit`` groups raise :class:`TooManyGroups`:
-        nothing is truncated.  Groups come back sorted by entity, values, day and label.
+        nothing is truncated.  Keys come back as their column's type (``bool`` for a boolean,
+        ``int`` for a long, whatever the engine returned).  Groups come back sorted by entity,
+        values, day and label.
 
         ``entity=None`` with no ``values`` counts per day and label only (the table's history in
         the range, as this reader sees it); its groups have ``entity`` None and ``values`` ()."""
@@ -238,7 +240,9 @@ class CeilingReader:
                 )
             return field_expr(dialect, path.split("."))
 
-        keys = [expr(k, KEY_TYPES, "key") for k in ([entity, *values] if values else [])]
+        key_paths = [entity, *values] if values else []
+        keys = [expr(k, KEY_TYPES, "key") for k in key_paths]
+        key_types = [paths[k].type for k in key_paths]
         tcol = expr(time_column, ("timestamp",), "time column")
         for name, when in (("since", since), ("until", until)):
             if not isinstance(when, datetime) or when.utcoffset() is None:
@@ -287,8 +291,8 @@ class CeilingReader:
                 continue
             out.append(
                 GroupCount(
-                    r.get("k_entity"),
-                    tuple(r[f"k_v{i}"] for i in range(len(values))),
+                    _as_type(r["k_entity"], key_types[0]) if values else None,
+                    tuple(_as_type(r[f"k_v{i}"], key_types[i + 1]) for i in range(len(values))),
                     _as_day(r["k_day"]),
                     label,
                     int(r["k_n"]),
@@ -319,6 +323,20 @@ class CeilingReader:
             raise CeilingError(
                 f"{what}: raw SQL is refused below red (ceiling {self.ceiling}); use select()"
             )
+
+
+def _as_type(value: Any, column_type: str) -> Any:
+    """A grouped key as its column's Python type, whatever the engine returned: a struct field
+    read from JSON text (the fake) or a SQLite boolean comes back as text or 0/1 otherwise."""
+    if column_type == "boolean":
+        if isinstance(value, str):
+            return value.lower() in ("1", "true")
+        return bool(value)
+    if column_type == "long":
+        return int(value)
+    if column_type == "double":
+        return float(value)
+    return value if isinstance(value, str) else str(value)
 
 
 def _as_day(value: Any) -> date:

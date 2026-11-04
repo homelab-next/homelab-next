@@ -438,7 +438,11 @@ class FakeLab:
         sql = re.sub(r'"\w+"\."\w+"\.("\w+")', r"\1", sql)
         # the two Trino forms beyond the portable subset (homelabnext/lake/dialect.py), in the
         # SQLite FakeLake's: a struct field ("col"."field") and the UTC day of a timestamp
-        sql = re.sub(r'"(\w+)"\."(\w+)"', r"""json_extract("\1", '$."\2"')""", sql)
+        sql = re.sub(
+            r'"(\w+)"((?:\."\w+")+)',
+            lambda m: f"""json_extract("{m[1]}", '${m[2]}')""",
+            sql,
+        )
         sql = re.sub(r'CAST\(("\w+") AS DATE\)', r"substr(\1, 1, 10)", sql)
         vals = [_ts_text(a) if isinstance(a, datetime) else a for a in args]
         try:

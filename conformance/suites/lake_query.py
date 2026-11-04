@@ -179,17 +179,19 @@ def _(lake):
     got = reader.count_by(
         TABLE,
         "user_name",
-        ["dst_endpoint.ip"],
+        ["dst_endpoint.ip", "is_mfa"],
         since=datetime(2026, 3, 1, tzinfo=UTC),
         until=datetime(2026, 3, 3, tzinfo=UTC),
         where={"user_name": user},
     )
     want = [
-        GroupCount(user, (ip(20),), date(2026, 3, 1), Label.RED, 2),
-        GroupCount(user, (ip(20),), date(2026, 3, 2), Label.GREEN, 1),
-        GroupCount(user, (ip(21),), date(2026, 3, 2), Label.RED, 1),
+        GroupCount(user, (ip(20), False), date(2026, 3, 1), Label.RED, 2),
+        GroupCount(user, (ip(20), False), date(2026, 3, 2), Label.GREEN, 1),
+        GroupCount(user, (ip(21), False), date(2026, 3, 2), Label.RED, 1),
     ]
     assert got == want, f"expected {want}, got {got}"
+    types = {(type(g.entity), *map(type, g.values)) for g in got}
+    assert types == {(str, str, bool)}, f"keys must come back as their column types: {types}"
 
 
 @SUITE.check("unknown-named-query-rejected", "named() with an unregistered name is an error")

@@ -279,6 +279,11 @@ def test_every_query_adapter_declares_a_dialect():
         assert want is None or want in DIALECTS, name
 
 
+def _typed(groups):
+    """Groups with every key's type, so 1 and True (equal in Python) are told apart."""
+    return [(g, type(g.entity), tuple(type(v) for v in g.values)) for g in groups]
+
+
 def test_duckdb_agrees_with_the_fake(lake):
     pytest.importorskip("duckdb")
     pa = pytest.importorskip("pyarrow")
@@ -292,11 +297,26 @@ def test_duckdb_agrees_with_the_fake(lake):
         _row("a4", t=datetime(2026, 3, 2, 1, tzinfo=UTC), port=443, label="amber"),
         _row("a5", t=datetime(2026, 3, 2, 2, tzinfo=UTC), user="bob", label="red"),
     ]
+    rows[0]["src_endpoint"] = {**rows[0]["src_endpoint"], "hostname": "ws-01.example.internal"}
     s = SCHEMAS["authentication"]
     tab = pa.Table.from_pylist(normalize_rows(s, rows), schema=to_pyarrow(s))
     duck = DuckDBLake({"authentication": tab}, SCHEMAS)
-    args = ("authentication", "user_name", ["dst_endpoint.ip", "dst_endpoint.port"])
-    for ceiling in (Label.GREEN, Label.AMBER, Label.RED):
-        want = _reader(_lake(rows), ceiling).count_by(*args, since=SINCE, until=UNTIL)
-        assert _reader(duck, ceiling).count_by(*args, since=SINCE, until=UNTIL) == want
-        assert want
+    cases = [
+        ("authentication", "user_name", ["dst_endpoint.ip", "dst_endpoint.port"]),
+        ("authentication", "user_name", ["is_mfa"]),  # a boolean key
+        ("authentication", "src_endpoint.hostname", ["is_mfa"]),  # a null entity is not counted
+    ]
+    for args in cases:
+        for ceiling in (Label.GREEN, Label.AMBER, Label.RED):
+            want = _reader(_lake(rows), ceiling).count_by(*args, since=SINCE, until=UNTIL)
+            got = _reader(duck, ceiling).count_by(*args, since=SINCE, until=UNTIL)
+            assert _typed(got) == _typed(want), args
+    hosts = _reader(_lake(rows), Label.RED).count_by(*cases[2], since=SINCE, until=UNTIL)
+    assert [(g.entity, g.values) for g in hosts] == [("ws-01.example.internal", (True,))]
+
+
+def test_keys_come_back_as_their_column_type(lake):
+    got = _reader(lake, Label.RED).count_by(
+        "authentication", "user_name", ["is_mfa", "dst_endpoint.port"], since=SINCE, until=UNTIL
+    )
+    assert got and all(type(g.values[0]) is bool and type(g.values[1]) is int for g in got)
