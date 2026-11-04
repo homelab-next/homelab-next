@@ -36,6 +36,8 @@ def _is_loopback(host: str) -> bool:
 
 
 class TrinoLake(AdapterBase):
+    sql_dialect = "trino"
+
     def __init__(
         self,
         *,

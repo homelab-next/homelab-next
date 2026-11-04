@@ -30,6 +30,12 @@ COALESCE, ROUND, LIKE, IN; timestamps compared with `'YYYY-MM-DD HH:MM:SS'` UTC 
 field access and engine-specific functions are outside it. Results are compared through
 `normalize_result_rows`.
 
+The two expressions library code needs beyond the subset, a struct field and the UTC date of a
+timestamp, come from `dialect.py`: each adapter that runs SQL declares `sql_dialect` (`sqlite`
+for `FakeLake`, `duckdb` for `DuckDBLake` and `IcebergLake`, `trino` for `TrinoLake` and
+`TrinoRestLake`), and only `CeilingReader.count_by` uses it. `CassetteLake` declares none, so a
+grouped read on it is refused rather than replayed in some other engine's SQL.
+
 ## Idempotent write: commit, then checkpoint (`checkpoint.py`)
 
 Encodes a real incident: a writer committed a batch, crashed before saving its read offset and,
@@ -77,7 +83,15 @@ One writer per `(table, source)` is assumed.
   its reader from `ceiling.reader_for(lake, reader, tlp_readers, schemas)`, at its declared
   ceiling (a reader with no declaration is refused); reading at `red` needs a `RedGrant` (who and
   why), and code outside this package runs raw SQL only through `raw_query`/`raw_named` with one
-  (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it). The query engine's
+  (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it).
+  `CeilingReader.count_by(table, entity, values, *, since, until, time_column="time", where=None,
+  limit=10000)` is the bounded grouped read (ADR-0035 decision 4): rows with
+  `since <= time_column < until`, counted per entity, values, UTC day and stored label, returned
+  as `GroupCount(entity, values, day, label, count)`. Column refs are dotted paths into the
+  table's schema (`dst_endpoint.port`); keys are scalars that are not timestamps; a row whose
+  entity or a value is null is not counted; `where` is equality with bound values. The ceiling's
+  filter is in the query and each group's label is checked again; more groups than `limit`
+  (at most 100,000) raise `TooManyGroups`, never a truncated answer. The query engine's
   own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.

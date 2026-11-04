@@ -29,21 +29,54 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homelabnext import tlp
 
+from .dialect import day_expr, dialect_of, field_expr
 from .errors import LakeError
-from .tables import LABEL_COLUMN, TableSchema, row_label
+from .tables import LABEL_COLUMN, SCALARS, Column, TableSchema, iter_columns, row_label
 
-__all__ = ["CeilingError", "CeilingReader", "RedGrant", "raw_named", "raw_query", "reader_for"]
+__all__ = [
+    "CeilingError",
+    "CeilingReader",
+    "GroupCount",
+    "RedGrant",
+    "TooManyGroups",
+    "raw_named",
+    "raw_query",
+    "reader_for",
+]
 
 #: the most rows one select returns
 MAX_LIMIT = 10_000
+#: the most groups one count_by may be asked for (its ``limit``)
+MAX_GROUPS = 100_000
+#: the column types a count_by key may have (a struct or list is not a key; nor is a timestamp,
+#: which the day already buckets)
+KEY_TYPES = tuple(t for t in SCALARS if t != "timestamp")
 
 
 class CeilingError(LakeError):
     """A read the reader's ceiling does not allow (raw SQL below red, an unlabelled table)."""
+
+
+class TooManyGroups(LakeError):
+    """A :meth:`CeilingReader.count_by` whose groups exceed its ``limit``: the read is refused
+    whole rather than truncated, so a caller never scores a partial count as the full one."""
+
+
+@dataclass(frozen=True)
+class GroupCount:
+    """One group of :meth:`CeilingReader.count_by`: rows of ``entity`` with ``values`` on the
+    UTC ``day``, at the stored ``label``, ``count`` of them."""
+
+    entity: Any
+    values: tuple[Any, ...]
+    day: date
+    label: tlp.Label
+    count: int
 
 
 @dataclass(frozen=True)
@@ -131,11 +164,7 @@ class CeilingReader:
         """Rows of ``table`` at or below the ceiling: ``columns`` (default all) where each
         ``where`` column equals its value.  ``tlp`` is always selected, so every row says its
         label."""
-        schema = self._schemas.get(table) if type(table) is str else None
-        if schema is None:
-            raise CeilingError(f"unknown table {table!r}")
-        if not schema.labelled and self.ceiling is not tlp.Label.RED:
-            raise CeilingError(f"{table}: has no {LABEL_COLUMN} column; only red reads it")
+        schema = self._table(table)
         known = set(schema.column_names)
         cols = list(columns) if columns is not None else list(schema.column_names)
         if not cols:
@@ -163,6 +192,110 @@ class CeilingReader:
             return rows
         return [r for r in rows if tlp.allows(self.ceiling, row_label(r))]
 
+    def count_by(
+        self,
+        table: str,
+        entity: str,
+        values: Sequence[str],
+        *,
+        since: datetime,
+        until: datetime,
+        time_column: str = "time",
+        where: Mapping[str, Any] | None = None,
+        limit: int = MAX_LIMIT,
+    ) -> list[GroupCount]:
+        """Rows of ``table`` with ``since <= time_column < until`` at or below the ceiling,
+        counted per (``entity``, ``values``, UTC day of ``time_column``, stored label).
+
+        ``entity``, each of ``values``, ``time_column`` and each ``where`` key is a column path:
+        a top-level column or a dotted path into a struct (``src_endpoint.ip``), checked against
+        the table's schema.  A key is a scalar column that is not a timestamp; ``time_column`` is
+        a timestamp.  A row whose entity or any value is null is not counted.  ``where`` values
+        are bound parameters (equality only; ``None`` is refused, as ``= NULL`` matches nothing).
+        The ceiling's row filter is applied in the query and every group's label is checked
+        again, as :meth:`select` does.  More than ``limit`` groups raise :class:`TooManyGroups`:
+        nothing is truncated.  Groups come back sorted by entity, values, day and label."""
+        schema = self._table(table)
+        if type(values) not in (list, tuple) or not values:
+            raise CeilingError(f"{table}: count_by needs at least one value column")
+        dialect = dialect_of(self._lake)
+        paths = dict(iter_columns(schema.columns))
+
+        def expr(path: object, types: tuple[str, ...], what: str) -> str:
+            col: Column | None = paths.get(path) if type(path) is str else None
+            if col is None:
+                raise CeilingError(f"{table}: not its column: {path!r}")
+            if col.type not in types:
+                raise CeilingError(
+                    f"{table}: {what} {path!r} is a {col.type}, not {'/'.join(types)}"
+                )
+            return field_expr(dialect, path.split("."))
+
+        keys = [expr(entity, KEY_TYPES, "key")] + [expr(v, KEY_TYPES, "key") for v in values]
+        tcol = expr(time_column, ("timestamp",), "time column")
+        for name, when in (("since", since), ("until", until)):
+            if not isinstance(when, datetime) or when.utcoffset() is None:
+                raise CeilingError(f"count_by: {name} must be a timezone-aware datetime")
+        if until - since <= timedelta(0):
+            raise CeilingError("count_by: until must be after since")
+        if type(limit) is not int or not 1 <= limit <= MAX_GROUPS:
+            raise CeilingError(f"count_by: limit must be 1..{MAX_GROUPS}")
+        conds = [f"{tcol} >= :since", f"{tcol} < :until", *(f"{k} IS NOT NULL" for k in keys)]
+        params: dict[str, Any] = {"since": since, "until": until}
+        for i, (col, value) in enumerate((where or {}).items()):
+            if value is None:
+                raise CeilingError(f"{table}: where {col!r} is None (equality never matches null)")
+            conds.append(f"{expr(col, SCALARS, 'where column')} = :w{i}")
+            params[f"w{i}"] = value
+        predicate = tlp.row_filter_sql(self.ceiling, LABEL_COLUMN) if schema.labelled else None
+        if predicate:
+            conds.append(predicate)
+        group = [*keys, day_expr(dialect, tcol)]
+        if schema.labelled:
+            group.append(f'"{LABEL_COLUMN}"')
+        names = ["k_entity", *(f"k_v{i}" for i in range(len(values))), "k_day"]
+        names += ["k_tlp"] if schema.labelled else []
+        sql = (
+            "SELECT "
+            + ", ".join(f"{e} AS {n}" for e, n in zip(group, names, strict=True))
+            + f", count(*) AS k_n FROM {_ident(schema.name)} WHERE "
+            + " AND ".join(conds)
+            + " GROUP BY "
+            + ", ".join(group)
+            + " ORDER BY "
+            + ", ".join(str(i) for i in range(1, len(group) + 1))
+            + f" LIMIT {limit + 1}"
+        )
+        rows = self._lake.query(sql, params)
+        if len(rows) > limit:
+            raise TooManyGroups(
+                f"{table}: more than {limit} groups for count_by({entity!r}, {list(values)!r});"
+                " narrow the window, the filters or the values, or raise the limit"
+            )
+        out = []
+        for r in rows:
+            label = row_label({LABEL_COLUMN: r.get("k_tlp")}) if schema.labelled else tlp.Label.RED
+            if not tlp.allows(self.ceiling, label):
+                continue
+            out.append(
+                GroupCount(
+                    r["k_entity"],
+                    tuple(r[f"k_v{i}"] for i in range(len(values))),
+                    _as_day(r["k_day"]),
+                    label,
+                    int(r["k_n"]),
+                )
+            )
+        return sorted(out, key=_group_order)
+
+    def _table(self, table: str) -> TableSchema:
+        schema = self._schemas.get(table) if type(table) is str else None
+        if schema is None:
+            raise CeilingError(f"unknown table {table!r}")
+        if not schema.labelled and self.ceiling is not tlp.Label.RED:
+            raise CeilingError(f"{table}: has no {LABEL_COLUMN} column; only red reads it")
+        return schema
+
     def query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
         """Raw SQL: ``red`` only (it could alias a constant as the label)."""
         self._red_only("query")
@@ -178,6 +311,26 @@ class CeilingReader:
             raise CeilingError(
                 f"{what}: raw SQL is refused below red (ceiling {self.ceiling}); use select()"
             )
+
+
+def _as_day(value: Any) -> date:
+    """A grouped day as a date: engines return a date (DuckDB, Trino) or its text (SQLite)."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return date.fromisoformat(value[:10])
+    raise LakeError(f"count_by: a day that is not a date: {value!r}")
+
+
+def _group_order(g: GroupCount) -> tuple:
+    """A total order over groups whatever the key types (``str`` sorts after numbers)."""
+
+    def k(v: Any) -> tuple:
+        return (isinstance(v, str), v if not isinstance(v, bool) else int(v))
+
+    return (k(g.entity), tuple(k(v) for v in g.values), g.day, g.label.value)
 
 
 def reader_for(

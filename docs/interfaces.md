@@ -224,6 +224,9 @@ TrinoRestLake(trino: TrinoHTTP, catalog: RestCatalog, *, namespace, trino_catalo
 lake.rows.row_from_event(event, schema) -> dict     # the row's tlp is labels.hnx_tlp, never the event's tlp
 lake.ceiling.reader_for(lake, reader, tlp_readers, schemas) -> CeilingReader  # the declared ceiling; none: refused
 lake.ceiling.CeilingReader(lake, ceiling, schemas, *, grant=None)  # .select(table, ...) filtered; raw .query only at red, which needs a RedGrant
+CeilingReader.count_by(table, entity, values, *, since, until, time_column="time", where=None, limit=10000) -> list[GroupCount]
+    # ADR-0035: (entity, values, UTC day, label, count) groups; dotted column paths checked against the schema;
+    # ceiling filter + per-group label recheck; > limit groups raises TooManyGroups; adapters declare sql_dialect
 lake.ceiling.raw_query(lake, grant: RedGrant, sql, params=None)   # the one raw read outside homelabnext/lake/ (raw_named likewise)
 lake.backfill.plan(schema, *, table, sources: Mapping[str, Source], source_map, source_column=None)
     # Source(label, honour_item_labels=False, items_carried_no_labels=False): red unless recorded

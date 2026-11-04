@@ -129,6 +129,7 @@ def rest_schema_diffs(
 # ---------------------------------------------------------------- the lake
 class TrinoRestLake(AdapterBase):
     features: tuple[str, ...] = ()
+    sql_dialect = "trino"
 
     def __init__(
         self,

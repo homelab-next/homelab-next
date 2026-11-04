@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **SQL (portable subset) over the OCSF tables with bound named parameters.**
 
 - Contract: [`conformance.protocols.lake`](../../conformance/protocols/lake.py) (`conformance.protocols.lake:LakeClient`)
-- Conformance suite: [`conformance.suites.lake_query`](../../conformance/suites/lake_query.py) (12 checks: 12 MUST, 0 SHOULD)
+- Conformance suite: [`conformance.suites.lake_query`](../../conformance/suites/lake_query.py) (13 checks: 13 MUST, 0 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -248,6 +248,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `limit-and-order-respected` | MUST | ORDER BY ... DESC LIMIT n returns the top n |  |
 | `aggregates-count-rows` | MUST | count(*) agrees with the rows written |  |
 | `struct-columns-roundtrip` | MUST | nested columns come back as objects |  |
+| `count-by-groups-nested-fields-by-utc-day` | MUST | CeilingReader.count_by over the adapter's dialect groups a nested field by UTC day and label |  |
 | `unknown-named-query-rejected` | MUST | named() with an unregistered name is an error |  |
 
 ### Features an adapter may declare
@@ -262,6 +263,7 @@ Each is a deliberately broken fake (`hnx conform run lake-query --target broken:
 |---|---|---|
 | `duplicate-rows` | `rows-unique-by-key` | query returns every row twice |
 | `interpolated-params` | `hostile-values-roundtrip-verbatim` | parameters are spliced into the SQL text with quote doubling |
+| `wrong-dialect` | `count-by-groups-nested-fields-by-utc-day` | the adapter's sql_dialect does not match its engine |
 
 ## Implementations
 
@@ -351,4 +353,4 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    hnx conform run lake-query --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (12) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (13) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

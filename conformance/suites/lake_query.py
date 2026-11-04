@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from homelabnext.conform.core import Mutant, Suite
-from homelabnext.lake import FakeLake
+from homelabnext.lake import FakeLake, load_schemas
+from homelabnext.lake.ceiling import CeilingReader, GroupCount, RedGrant
+from homelabnext.tlp import Label
 
 from ._lake import TABLE, auth_row
 from ._util import ip, raises, uniq
@@ -154,6 +156,42 @@ def _(lake):
     assert isinstance(ep, dict) and ep.get("ip") == ip(10, 1), f"got {ep!r}"
 
 
+@SUITE.check(
+    "count-by-groups-nested-fields-by-utc-day",
+    "CeilingReader.count_by over the adapter's dialect groups a nested field by UTC day and label",
+)
+def _(lake):
+    user = uniq("cb")
+    rows = [
+        auth_row(f"{user}-0", user=user, time="2026-03-01T23:59:59Z"),
+        auth_row(f"{user}-1", user=user, time="2026-03-02T00:30:00+01:00"),  # 03-01 23:30 UTC
+        auth_row(f"{user}-2", user=user, time="2026-03-02T00:00:00Z", tlp="green"),
+        auth_row(
+            f"{user}-3",
+            user=user,
+            time="2026-03-02T08:00:00Z",
+            dst_endpoint={"ip": ip(21), "port": 22},
+        ),
+    ]
+    lake.write_batch(TABLE, rows, idempotency_key=uniq("seed"))
+    grant = RedGrant("conformance", "the lake-query suite counts the rows it wrote")
+    reader = CeilingReader(lake, Label.RED, load_schemas(), grant=grant)
+    got = reader.count_by(
+        TABLE,
+        "user_name",
+        ["dst_endpoint.ip"],
+        since=datetime(2026, 3, 1, tzinfo=UTC),
+        until=datetime(2026, 3, 3, tzinfo=UTC),
+        where={"user_name": user},
+    )
+    want = [
+        GroupCount(user, (ip(20),), date(2026, 3, 1), Label.RED, 2),
+        GroupCount(user, (ip(20),), date(2026, 3, 2), Label.GREEN, 1),
+        GroupCount(user, (ip(21),), date(2026, 3, 2), Label.RED, 1),
+    ]
+    assert got == want, f"expected {want}, got {got}"
+
+
 @SUITE.check("unknown-named-query-rejected", "named() with an unregistered name is an error")
 def _(lake):
     raises(lambda: lake.named("no_such_named_query_zz"), "unknown named query")
@@ -184,7 +222,18 @@ class InterpolatingLake(FakeLake):
         return super().query(sql, {})
 
 
+class WrongDialectLake(FakeLake):
+    """Defect: the adapter declares a dialect its engine does not speak."""
+
+    sql_dialect = "trino"
+
+
 MUTANTS = {
+    "wrong-dialect": Mutant(
+        WrongDialectLake,
+        "count-by-groups-nested-fields-by-utc-day",
+        "the adapter's sql_dialect does not match its engine",
+    ),
     "duplicate-rows": Mutant(
         DuplicatingLake, "rows-unique-by-key", "query returns every row twice"
     ),
