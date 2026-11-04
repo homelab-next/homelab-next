@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `uptime`
 - Contract: none (`uptime` is not one of the conformance capabilities)
-- Implementation: `uptime-kuma` 1.23.16
+- Implementation: `uptime-kuma` 1.23.17
 - Owner: platform-team
 - Tags: monitoring, ops
 <!-- /hnx:gen -->

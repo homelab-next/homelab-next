@@ -105,7 +105,7 @@ services:
     health: {kind: http, path: /v1/sys/health, expect_status: 200}
     clients: [data, compute]
     owner: identity-team
-    version: "2.1.0"
+    version: "2.1.1"
     tls: mtls
     auth: own              # break-glass root token; OIDC login is an auth method of its own
     backup_job: daily-core
@@ -166,7 +166,7 @@ services:
     port: 5432
     health: {kind: tcp}
     owner: data-team
-    version: "16.4"
+    version: "16.15"
     tls: internal
     backup_job: daily-core
     tags: [data, database]
@@ -196,7 +196,7 @@ services:
     metrics: {path: /metrics, port: 7777}
     clients: [compute]
     owner: data-team
-    version: "2.10.20"
+    version: "2.10.29"
     tls: mtls
     tags: [data, bus]
 
@@ -295,7 +295,7 @@ services:
     metrics: {path: /metrics}
     upstreams: [notify]
     owner: platform-team
-    version: "2.54.1"
+    version: "2.55.1"
     tls: none
     auth: idp
     public_hostname: metrics.lab.example
@@ -338,7 +338,7 @@ services:
     port: 3001
     health: {kind: http, path: /api/entry-page, expect_status: 200}
     owner: platform-team
-    version: "1.23.16"
+    version: "1.23.17"
     tls: none
     auth: idp
     public_hostname: uptime.lab.example

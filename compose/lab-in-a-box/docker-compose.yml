@@ -81,7 +81,7 @@ services:
   # --- postgres: catalog metadata ---------------------------------------------------------
   postgres:
     <<: [*restart, *hardened]
-    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+    image: postgres:16.15-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     environment:
       POSTGRES_USER: lab
       POSTGRES_PASSWORD: ${LAB_POSTGRES_PASSWORD:?see .env.example}
@@ -203,7 +203,7 @@ services:
   # the broker's subjects; no client connects without a user.
   events:
     <<: [*restart, *hardened]
-    image: nats:2.10.22-alpine@sha256:73b0ba5fec5518c5f698597c58d2a3350a2b5ccae43e84c308f8d2da1242deca
+    image: nats:2.10.29-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927
     command: ["-c", "/etc/nats/nats.conf"]
     environment:
       LAB_EVENTS_BROKER_PASSWORD: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
@@ -243,7 +243,7 @@ services:
   # ==========================================================================================
   secrets:
     <<: *restart
-    image: openbao/openbao:2.1.0@sha256:7de07aa6df3937d44c96c2d65c188b2d4a70546f2a764ad4510301305af6a223
+    image: openbao/openbao:2.1.1@sha256:af40ca17625ec44aa1ffe3698f85162d71d9cc97adc9e97821ef393ac94b6e42
     command: ["server", "-dev"]
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${LAB_SECRETS_DEV_TOKEN:?see .env.example}
@@ -328,7 +328,7 @@ services:
   # sees a warning and a critical alert, the query mapping sees the self-scrape target up.
   metrics:
     <<: [*restart, *hardened]
-    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -353,7 +353,7 @@ services:
   # so it adds back exactly those capabilities.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    image: louislam/uptime-kuma:1.23.17@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9
     cap_add: [CHOWN, SETGID, SETUID]
     volumes:
       - uptime-data:/app/data
@@ -377,7 +377,7 @@ services:
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    image: louislam/uptime-kuma:1.23.17@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -522,7 +522,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.103.3@sha256:11f2537026988447f49c036bb692898b4ab697caa3b4a060bf6c668266b69659
+    image: litellm/litellm-database:v1.103.7@sha256:1c51136713f326d88a87c5202e424059e0f35fe6c14c5b49acc2fd13b3c1a601
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
