@@ -1539,15 +1539,30 @@ def module_selection_schema() -> dict[str, Any]:
                     "type": "boolean",
                     "description": "Also writes rows (a pipeline's writer); only a red reader may.",
                 },
+                "writes": arr(
+                    pat("[a-z][a-z0-9_]{0,62}", None, 63),
+                    "The lake tables an analyzer appends its own derived rows to (ADR-0035 amends "
+                    "ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, "
+                    "and no other write; only an analyzer: reader may have it, and not with write.",
+                    min_items=1,
+                ),
                 "why": text(200, "Who this is and why it needs this ceiling."),
             },
             ["reader", "ceiling", "why"],
+            **{
+                "if": {"required": ["writes"]},
+                "then": {
+                    "properties": {"reader": {"pattern": "^analyzer:"}},
+                    "not": {"required": ["write"]},
+                },
+            },
         ),
         "Every reader of the lake with its TLP ceiling (ADR-0033 decision 6). With the list, every "
         "selected module that requires or prefers cap:lake-query, and every selected agent that "
         "needs it, must be listed, and hnx modules render writes the query engine's row filters "
         "(lake-access.json): a reader not listed reads nothing. A reader listed twice, or one that "
-        "writes below red, is refused (loader). Any change to it is human-approve.",
+        "writes below red, is refused (loader). An analyzer: reader may append to the tables its "
+        "writes names at any ceiling (ADR-0035). Any change to it is human-approve.",
     )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

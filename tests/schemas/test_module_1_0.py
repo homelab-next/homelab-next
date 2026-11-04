@@ -1112,6 +1112,8 @@ SELECTION_NEGATIVES = {
     "tlp-reader-without-why": "tlp_readers/0",
     "tlp-reader-not-an-id": "tlp_readers/0/reader",
     "tlp-reader-write-not-boolean": "tlp_readers/2/write",
+    "tlp-reader-writes-not-analyzer": "tlp_readers/0/reader",
+    "tlp-reader-writes-and-write": "tlp_readers/4",
     "tlp-readers-without-catalog": "$",
 }
 

@@ -622,6 +622,18 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["tlp_readers"][2].__setitem__("write", "yes"),
         "A reader writes rows only with write: true.",
     ),
+    "tlp-reader-writes-not-analyzer": (
+        "full",
+        lambda d: d["tlp_readers"][0].__setitem__("writes", ["novelty_finding"]),
+        "Only an analyzer: reader has a table-scoped insert grant (writes).",
+    ),
+    "tlp-reader-writes-and-write": (
+        "full",
+        lambda d: next(
+            r for r in d["tlp_readers"] if r["reader"].startswith("analyzer:")
+        ).__setitem__("write", True),
+        "An analyzer's writes is its only write; write: true (every table) is refused with it.",
+    ),
     "tlp-readers-without-catalog": (
         "full",
         lambda d: d.pop("lake_catalog"),
@@ -630,7 +642,7 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
     "tlp-reader-not-an-id": (
         "full",
         lambda d: d["tlp_readers"][0].__setitem__("reader", "everyone"),
-        "A reader is a profile, module, user or group id.",
+        "A reader is a profile, module, analyzer, user or group id.",
     ),
     "cloud-model-not-a-role": (
         "full",

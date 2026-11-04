@@ -53,6 +53,12 @@ def test_a_reader_name_is_matched_exactly():
         (_r("profile:x", "Red"), "not a TLP label"),
         (_r("profile:x", "green", write=True), "ceiling is red"),
         (_r("nobody", "green"), "not a reader id"),
+        (_r("module:x", "red", writes=["novelty_finding"]), "only an analyzer"),
+        (_r("analyzer:x", "red", write=True, writes=["t"]), "writes and write"),
+        (_r("analyzer:x", "amber", writes=[]), "distinct table names"),
+        (_r("analyzer:x", "amber", writes=["t", "t"]), "distinct table names"),
+        (_r("analyzer:x", "amber", writes=["Bad Name"]), "distinct table names"),
+        (_r("analyzer:x", "amber", writes="novelty_finding"), "distinct table names"),
     ],
 )
 def test_render_refuses(entry, needle):
@@ -166,3 +172,37 @@ def test_a_prefers_only_reader_and_a_profileless_agent_are_found():
         }
     }
     assert set(rules.lake_readers(mods)) == {"module:m", "profile:m-a"}
+
+
+def test_an_analyzer_appends_to_its_own_tables_only():
+    doc = _rules(_r("analyzer:novelty", "amber", writes=["novelty_finding"]))
+    (cat, _) = doc["catalogs"]
+    assert cat["allow"] == "all"  # the engine refuses any insert into a read-only catalog
+    _, own, every = doc["tables"]
+    assert own["user"] == every["user"] == "^analyzer:novelty$"
+    # its own table first (first match wins): append, never delete or update
+    assert own["table"] == "^novelty_finding$" and own["privileges"] == ["SELECT", "INSERT"]
+    assert own["filter"] == every["filter"]
+    assert "'red'" not in own["filter"].split("IN")[1]
+    # every other table: read at the ceiling, no write
+    assert every["table"] == ".*" and every["privileges"] == ["SELECT"]
+
+
+def test_an_analyzer_without_writes_reads_only():
+    doc = _rules(_r("analyzer:novelty", "amber"))
+    assert doc["catalogs"][0]["allow"] == "read-only"
+    assert [r["privileges"] for r in doc["tables"]] == [["SELECT"], ["SELECT"]]
+
+
+def test_reader_problems_writes():
+    base = _site(_r("module:collector", "red"), _r("profile:collector-analyst", "green"))
+    ok = _site(*base["tlp_readers"], _r("analyzer:novelty", "amber", writes=["novelty_finding"]))
+    assert rules.tlp_reader_problems(ok, MODS) == []
+    bad = _site(*base["tlp_readers"], _r("module:pipe", "red", writes=["t"]))
+    assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0035)" in (
+        rules.tlp_reader_problems(bad, MODS)
+    )
+    both = _site(*base["tlp_readers"], _r("analyzer:a", "red", write=True, writes=["t"]))
+    assert "tlp_readers: analyzer:a: writes and write: true together" in (
+        rules.tlp_reader_problems(both, MODS)
+    )

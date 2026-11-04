@@ -14,17 +14,23 @@ the first matching rule wins and a principal no rule matches is denied:
   already narrows to what the reader may see), then every table with the row filter
   :func:`homelabnext.tlp.row_filter_sql` below ``red`` (a table without a ``tlp`` column fails
   the query, so it is not readable below ``red``) and no filter at ``red``.  A writer may insert
-  and delete, never update: an update could rewrite a stored label;
+  and delete, never update: an update could rewrite a stored label.  An ``analyzer:`` reader
+  with ``writes`` (ADR-0035, amending ADR-0033 decision 6) gets, before its ``.*`` rule, a rule
+  per named table with ``SELECT`` and ``INSERT`` only and its own row filter: it appends its
+  derived rows at any ceiling.  The engine cannot check the ``tlp`` value an insert carries; the
+  analyzer's code labels each row with the strictest input it read, below its ceiling;
 * ``queries``: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal can match several rules (a user in a group), and the first match wins.  Rules are
-ordered user rules (``profile:``, ``module:``, ``analyzer:``, ``user:``) before group rules, each tier by
-ascending ceiling, then by reader id, whatever order the list was written in: among groups the
+ordered user rules (``profile:``, ``module:``, ``analyzer:``, ``user:``) before group rules, each
+tier by ascending ceiling, then by reader id, whatever order the list was written in: among groups the
 most restrictive applies, but a principal with an entry of its own is judged by that entry, even
 when it is also in a group with a stricter ceiling (group membership is the engine's, not known
-here), so its own entry must carry the ceiling it should have (docs/modules.md says the same).  A ``profile:``, ``module:``, ``analyzer:`` or
-``user:`` reader is the engine user whose name is the whole reader id (``user:alice`` signs in as
-``user:alice``); a ``group:`` reader is the engine group of the part after the colon.
+here), so its own entry must carry the ceiling it should have (docs/modules.md says the same).
+A ``profile:``, ``module:``, ``analyzer:`` or ``user:`` reader is the engine user whose name is
+the whole reader id (``user:alice`` signs in as ``user:alice``); a ``group:`` reader is the engine
+group of the part after the colon.  The set of analyzers is open (any ``analyzer:<name>``), like
+the other kinds: what an id may do is only what its entry here grants.
 """
 
 from __future__ import annotations
@@ -44,15 +50,18 @@ USER_KINDS = ("profile", "module", "analyzer", "user")
 KINDS = (*USER_KINDS, "group")
 READER_RE = re.compile(r"(profile|module|analyzer|user|group):[a-z0-9][a-z0-9._-]{0,62}")
 CATALOG_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
+TABLE_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 READ = ["SELECT"]
 WRITE = ["SELECT", "INSERT", "DELETE"]
+#: an analyzer's table-scoped grant (ADR-0035): it appends its own rows, never deletes or updates
+APPEND = ["SELECT", "INSERT"]
 
 
 class LakeAccessError(ValueError):
     """The selection's TLP readers cannot be turned into access rules."""
 
 
-def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool]:
+def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool, tuple[str, ...]]:
     if not isinstance(entry, dict):
         raise LakeAccessError("tlp_readers: an entry is not a mapping")
     reader = entry.get("reader")
@@ -65,7 +74,22 @@ def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool]:
     write = entry.get("write") is True
     if write and label is not tlp.Label.RED:
         raise LakeAccessError(f"tlp_readers: {reader} writes rows, so its ceiling is red")
-    return reader, reader.split(":", 1)[0], label, write
+    kind = reader.split(":", 1)[0]
+    writes = entry.get("writes")
+    if writes is None:
+        return reader, kind, label, write, ()
+    if kind != "analyzer":
+        raise LakeAccessError(f"tlp_readers: {reader}: only an analyzer: reader has writes")
+    if write:
+        raise LakeAccessError(f"tlp_readers: {reader}: writes and write: true together")
+    if (
+        not isinstance(writes, list)
+        or not writes
+        or len(set(writes)) != len(writes)
+        or not all(type(t) is str and TABLE_RE.fullmatch(t) for t in writes)
+    ):
+        raise LakeAccessError(f"tlp_readers: {reader}: writes is a list of distinct table names")
+    return reader, kind, label, write, tuple(sorted(writes))
 
 
 def _who(reader: str, kind: str) -> dict[str, str]:
@@ -96,15 +120,23 @@ def render(site: dict[str, Any]) -> dict[str, Any] | None:
     parsed.sort(key=lambda p: (p[1] == "group", p[2].rank, p[0]))
     cat = f"^{re.escape(catalog)}$"
     catalogs, tables = [], []
-    for reader, kind, label, write in parsed:
+    for reader, kind, label, write, writes in parsed:
         who = _who(reader, kind)
-        catalogs.append({**who, "catalog": cat, "allow": "all" if write else "read-only"})
+        allow = "all" if write or writes else "read-only"
+        catalogs.append({**who, "catalog": cat, "allow": allow})
         tables.append(
             {**who, "catalog": cat, "schema": "^information_schema$", "privileges": ["SELECT"]}
         )
+        predicate = tlp.row_filter_sql(label)
+        # an analyzer's own tables first (first match wins): append, read at its ceiling
+        for table in writes:
+            own: dict[str, Any] = {**who, "catalog": cat, "schema": ".*"}
+            own.update(table=f"^{re.escape(table)}$", privileges=APPEND)
+            if predicate is not None:
+                own["filter"] = predicate
+            tables.append(own)
         rule: dict[str, Any] = {**who, "catalog": cat, "schema": ".*", "table": ".*"}
         rule["privileges"] = WRITE if write else READ
-        predicate = tlp.row_filter_sql(label)
         if predicate is not None:
             rule["filter"] = predicate
         tables.append(rule)
