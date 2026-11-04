@@ -186,7 +186,8 @@ anything that needs hardware is documented as SERVER rather than implemented.
 class LakeClient(LakeQuery, LakeWriter, Protocol):
     def describe(self, table: str) -> TableInfo
     def list_tables(self) -> list[str]
-    def write_batch(self, table, rows, *, idempotency_key: str, source=None, high_water=None) -> WriteResult
+    def write_batch(self, table, rows, *, idempotency_key: str, source=None, high_water=None,
+                    expect_source=None) -> WriteResult   # a replay is judged by expect_source, else source
 FakeLake(schemas=None, *, named_queries=None)                # in-memory, same contract as the adapters
 DuckDBLake(tables, schemas=None, ...)  IcebergLake(catalog, schemas=None, *, namespace="ocsf")
 TrinoLake(*, catalog, schema, user, resolver=None, ...)     # endpoint via the registry resolver

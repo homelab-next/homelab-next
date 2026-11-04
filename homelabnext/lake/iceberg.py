@@ -247,6 +247,7 @@ class IcebergLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
@@ -257,7 +258,9 @@ class IcebergLake(AdapterBase):
         prior = self._batch_committed(tbl, idempotency_key)
         if prior is not None:
             stored = self._props(prior).get(PROP_SOURCE)
-            check_replay_source(s.name, idempotency_key, stored, source)
+            check_replay_source(
+                s.name, idempotency_key, stored, source if expect_source is None else expect_source
+            )
             return WriteResult(len(norm), 0, len(norm), True, str(prior.snapshot_id))
         fresh: list[dict[str, Any]] = []
         if norm:

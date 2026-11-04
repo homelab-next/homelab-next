@@ -16,7 +16,9 @@ Rules (each is a test):
   them (``queued``).  Replays go oldest first and stop at a component's first failure.  So a
   component takes its batches in write order, and the lake's per-source mark never moves to an
   older batch.  As a second line of defence, a replay into a component that has already taken a
-  newer batch of the same source is sent without its source mark.
+  newer batch of the same source is sent without its source mark, but still with
+  ``expect_source``, so a batch id another writer committed is a ``replay_failed`` divergence
+  and the batch stays parked, never a silent replay of someone else's rows.
 * :meth:`DualWriter.discard_pending` drops parked batches on purpose, with a reason, and returns
   them (rows included) for the caller to keep as evidence; nothing else ever drops one.
 * A secondary that "succeeds" but wrote a different number of rows than the primary is a
@@ -168,9 +170,16 @@ class DualWriter:
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
+        extra = {} if expect_source is None else {"expect_source": expect_source}
         result = self.primary.write_batch(
-            table, rows, idempotency_key=idempotency_key, source=source, high_water=high_water
+            table,
+            rows,
+            idempotency_key=idempotency_key,
+            source=source,
+            high_water=high_water,
+            **extra,
         )  # an exception here is the caller's, and the secondary is not touched
         self._order["n"] += 1
         order = self._order["n"]
@@ -252,6 +261,9 @@ class DualWriter:
                     idempotency_key=p.idempotency_key,
                     source=None if newer else p.source,
                     high_water=None if newer else p.high_water,
+                    # judged as this source's batch even when sent without its mark: a batch id
+                    # another writer committed raises, so the batch stays parked, never "replayed"
+                    expect_source=p.source,
                 )
                 ok += 1
                 self.last_failure.pop(id(target), None)

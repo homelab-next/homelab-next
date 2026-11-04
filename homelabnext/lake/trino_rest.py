@@ -327,6 +327,7 @@ class TrinoRestLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
@@ -336,7 +337,12 @@ class TrinoRestLake(AdapterBase):
         prior = (meta.get("properties") or {}).get(PROP_BATCH + _digest(idempotency_key, 32))
         if prior is not None:
             entry = json.loads(prior)
-            check_replay_source(s.name, idempotency_key, entry.get("source"), source)
+            check_replay_source(
+                s.name,
+                idempotency_key,
+                entry.get("source"),
+                source if expect_source is None else expect_source,
+            )
             return WriteResult(len(norm), 0, len(norm), True, entry.get("snapshot_id"))
         fresh: list[dict[str, Any]] = []
         if norm:

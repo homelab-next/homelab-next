@@ -12,7 +12,7 @@ class LakeClient(Protocol):          # LakeQuery + LakeWriter + the rest
     def query(self, sql, params=None) -> list[dict]
     def named(self, name, params=None) -> list[dict]
     def describe(self, table) -> TableInfo            # columns, key, row_count, committed marks
-    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None) -> WriteResult
+    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None) -> WriteResult
     def write(self, table, rows, *, batch_id) -> int  # interfaces.md alias
     def list_tables(self) -> list[str]
 ```
@@ -52,12 +52,17 @@ restarted, replayed a rotated log tail from the stale offset, duplicating every 
    rows whose content key (`uid`) already exist are skipped. Replay is idempotent.
 
 A batch id is bound to the source that committed it (`errors.check_replay_source`, every
-adapter): a write that names a source replays only a batch committed under exactly that source;
-one committed under another source, or under none (a legacy ledger entry without a source
-included), raises `BatchSourceMismatch` and writes nothing, so no writer can make a sourced
-writer's batch replay by committing its id first. A write that names no source is not judged
-and replays as before (the dual-write queue re-sends a parked batch without its mark), so a
-source-less writer can only drop its own rows.
+adapter). A write is judged by the source it claims: its `expect_source` when given, else its
+`source`. It replays only a batch committed under exactly that source; one committed under
+another source, or under none (a legacy ledger entry without a source included), raises
+`BatchSourceMismatch` and writes nothing, so no writer can make a sourced writer's batch replay
+by committing its id first. `expect_source` separates judging from marking: the dual-write queue
+re-sends an older parked batch with `source=None` (so the mark never moves back) and
+`expect_source` set to its source, so another writer's batch under that id is a refusal it
+reports, not a silent replay. A fresh commit with `source=None` is recorded without a mark,
+whatever `expect_source` says; so if such a mark-less commit lands and the batch is later re-sent
+with its source, that re-send fails loudly by design. A write that claims no source at all is not
+judged and replays as before: such a writer can only drop its own rows.
 
 One writer per `(table, source)` is assumed.
 

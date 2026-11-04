@@ -95,6 +95,7 @@ class DuckDBLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         raise WriteNotSupported("DuckDBLake is read-only; write through IcebergLake or FakeLake")
 

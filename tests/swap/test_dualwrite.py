@@ -158,6 +158,24 @@ def test_a_lost_ack_rerouted_and_replayed_without_the_mark_settles():
     assert (mark.batch_id, mark.high_water) == ("b2", "200")
 
 
+def test_a_replay_without_the_mark_never_settles_on_another_writers_batch():
+    # the round-4 audit's sequence: b1 parked for B, the route flips, B takes b2 with the mark,
+    # then another writer commits b1 on B under its own source; the mark-less replay of b1 must
+    # not settle as "replayed" with its rows lost: it stays parked and is reported
+    a, b = FakeLake(), Flaky(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    r = rows(3)
+    w.write_batch("dns_activity", [r[0]], idempotency_key="b1", source="s", high_water="100")
+    w2 = w.rerouted(b, a)
+    w2.write_batch("dns_activity", [r[1]], idempotency_key="b2", source="s", high_water="200")
+    b.inner.write_batch("dns_activity", [r[2]], idempotency_key="b1", source="intruder")
+    assert w2.replay_pending(owed_to=b) == 0
+    assert [p.idempotency_key for p in w2.pending] == ["b1"]
+    assert w2.status()["unresolved"] == 1
+    failed = [d for d in w2.divergences if d.kind == "replay_failed"]
+    assert failed and "BatchSourceMismatch" in failed[-1].detail
+
+
 def test_discard_pending_needs_a_reason_and_returns_the_batches():
     a, b = FakeLake(), Flaky(FakeLake(), fail=1)
     w = DualWriter(a, b)

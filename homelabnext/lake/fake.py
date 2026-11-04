@@ -155,6 +155,7 @@ class FakeLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
@@ -168,7 +169,12 @@ class FakeLake(AdapterBase):
                 (s.name, idempotency_key),
             ).fetchone()
             if seen is not None:
-                check_replay_source(s.name, idempotency_key, seen[1], source)  # rolls back
+                check_replay_source(
+                    s.name,
+                    idempotency_key,
+                    seen[1],
+                    source if expect_source is None else expect_source,
+                )  # rolls back
                 db.execute("COMMIT")
                 return WriteResult(len(norm), 0, len(norm), True, str(seen[0]))
             fresh: list[dict[str, Any]] = []

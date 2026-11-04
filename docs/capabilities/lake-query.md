@@ -28,7 +28,8 @@ Subject = any object implementing `homelabnext.lake.LakeClient`:
     named(name, params) -> list[dict]       registered queries
     describe(table) -> TableInfo            columns, key, row count, last committed mark per source
     list_tables() -> list[str]
-    write_batch(table, rows, *, idempotency_key, source=None, high_water=None) -> WriteResult
+    write_batch(table, rows, *, idempotency_key, source=None, high_water=None,
+                expect_source=None) -> WriteResult
 
 Seeding goes through `write_batch`, so a read-only deployment either points the adapter at a
 scratch namespace or declares a seeded copy.  Adapters raise `homelabnext.lake.LakeError`
@@ -67,6 +68,7 @@ def write_batch(
     idempotency_key: str,
     source: str | None = None,
     high_water: str | None = None,
+    expect_source: str | None = None,
 ) -> WriteResult
 ```
 
@@ -77,6 +79,7 @@ def write_batch(
 | `idempotency_key` | `str` | required | keyword-only |
 | `source` | `str \| None` | `None` | keyword-only |
 | `high_water` | `str \| None` | `None` | keyword-only |
+| `expect_source` | `str \| None` | `None` | keyword-only |
 
 **Returns:** `WriteResult`
 
@@ -86,6 +89,13 @@ A key that was already committed returns `replayed=True` and writes nothing. Row
 content key (the table's `key` columns) is already present are skipped, so a replay under
 a different batching is also safe. `source`/`high_water` are stored with the commit
 itself and come back in `describe(table).committed`.
+
+A replay is judged by `expect_source` when given, else by `source`: the batch must
+have been committed under exactly that source (none recorded is a mismatch), or
+`~homelabnext.lake.errors.BatchSourceMismatch` is raised and nothing is written.
+`expect_source` lets a writer re-send a batch without its mark (`source=None`, so the
+mark does not move back) and still have it judged as its own; with neither, the replay
+is not judged.
 
 #### `LakeClient.list_tables`
 
