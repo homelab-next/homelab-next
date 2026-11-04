@@ -209,3 +209,16 @@ def test_an_unreachable_live_lake_is_a_usage_error(files, capsys, monkeypatch):
     argv += ["--site", str(files["site"]), "--domain", "example.internal", "--dry-run"]
     rc, _, err = _main([*argv, "--warehouse", ""], capsys)
     assert rc == 2 and err.startswith("hnx novelty:")
+
+
+def test_a_lake_that_cannot_be_resolved_is_a_usage_error(files, capsys, monkeypatch):
+    import homelabnext.conform.adapters.lake as adapter
+
+    def unresolved(**kw):
+        raise LookupError("lake-query: no endpoint for example.internal")
+
+    monkeypatch.setattr(adapter, "make_lake", unresolved)
+    argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
+    argv += ["--site", str(files["site"]), "--domain", "example.internal", "--warehouse", "lab"]
+    rc, _, err = _main([*argv, "--dry-run"], capsys)
+    assert rc == 2 and "no endpoint for example.internal" in err

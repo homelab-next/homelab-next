@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import copy
 import math
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from novelty_support import AS_OF, SITE, SPEC, net, rows
@@ -13,7 +13,7 @@ from novelty_support import AS_OF, SITE, SPEC, net, rows
 from homelabnext.lake import FakeLake, LakeError, load_schemas
 from homelabnext.lake.ceiling import CeilingError, reader_for
 from homelabnext.novelty import READER, corroborate, parse_spec, run
-from homelabnext.novelty.engine import WriteRefused, write_findings
+from homelabnext.novelty.engine import WriteRefused, history_since, write_findings
 
 SCHEMAS = load_schemas()
 
@@ -182,7 +182,7 @@ def test_the_analyzer_then_corroborate_over_its_window_finds_the_candidate(lake)
         "confidence": 1.0,
         "tlp": "green",
     }
-    write_findings(lake, [host], source="host-kernel", mark="host-kernel/lineage", idempotency_key="h1")  # fmt: skip
+    write_findings(lake, [host], source="host-kernel", mark="host-kernel/lineage", idempotency_key="host-kernel/lineage:h1")  # fmt: skip
     reader = reader_for(lake, READER, SITE["tlp_readers"], SCHEMAS)
     groups = reader.count_by(
         "novelty_finding", "entity", ["entity_kind", "source", "status"],
@@ -206,16 +206,18 @@ def test_the_analyzer_then_corroborate_over_its_window_finds_the_candidate(lake)
 def test_a_writer_writes_only_its_own_source(lake):
     (result,) = _run(lake, write=False)
     with pytest.raises(WriteRefused, match="other sources"):
-        write_findings(lake, result.rows, source="host-kernel", mark="host-kernel/x", idempotency_key="k")  # fmt: skip
+        write_findings(lake, result.rows, source="host-kernel", mark="host-kernel/x", idempotency_key="host-kernel/x:k")  # fmt: skip
     with pytest.raises(WriteRefused, match="mark"):
-        write_findings(lake, result.rows, source="lake-novelty", mark="host-kernel/x", idempotency_key="k")  # fmt: skip
+        write_findings(lake, result.rows, source="lake-novelty", mark="host-kernel/x", idempotency_key="host-kernel/x:k")  # fmt: skip
     assert _stored(lake) == []
 
 
 def test_one_source_cannot_squat_anothers_uid(lake):
     (result,) = _run(lake)
     row = dict(result.rows[0], source="host-kernel", profile="process-lineage")
-    write_findings(lake, [row], source="host-kernel", mark="host-kernel/x", idempotency_key="k")
+    write_findings(
+        lake, [row], source="host-kernel", mark="host-kernel/x", idempotency_key="host-kernel/x:k"
+    )
     stored = _stored(lake)
     assert len(stored) == len(result.rows) + 1  # same uid, other source: a row of its own
 
@@ -230,3 +232,44 @@ def test_a_failed_write_fails_that_profile_only(lake):
     reader = reader_for(lake, READER, SITE["tlp_readers"], SCHEMAS)
     a, b = run(reader, parse_spec(spec, SCHEMAS), AS_OF, writer=Broken(SCHEMAS))
     assert a.status == b.status == "failed" and "catalog unavailable" in a.error
+
+
+def test_a_batch_id_must_carry_the_writers_mark(lake):
+    (result,) = _run(lake, write=False)
+    host = [dict(r, source="host-kernel") for r in result.rows]
+    with pytest.raises(WriteRefused, match="does not start with"):
+        write_findings(lake, host, source="host-kernel", mark="host-kernel/x", idempotency_key=result.batch_id)  # fmt: skip
+    assert result.batch_id.startswith("lake-novelty/host-dst-port:")
+
+
+def test_another_writer_using_the_analyzers_batch_id_cannot_suppress_its_rows(lake):
+    """The security re-audit's proof of concept: a host writer commits first under the
+    analyzer's batch id; the analyzer's write must not be reported as a replay of it."""
+    (dry,) = _run(lake, write=False)
+    squat = dict(dry.rows[0], source="host-kernel", uid="host-squat")
+    lake.write_batch(
+        "novelty_finding", [squat], idempotency_key=dry.batch_id, source="host-kernel/x"
+    )
+    (result,) = _run(lake)
+    assert result.status == "failed" and "BatchSourceMismatch" in result.error
+    assert {r["uid"] for r in _stored(lake)} == {"host-squat"}  # refused loudly, not suppressed
+
+
+def test_a_scan_seen_only_in_the_scoring_window_does_not_fail_the_profile():
+    scan = rows() + [net(500 + p, day=9, src="192.0.2.77", port=1000 + p) for p in range(60)]
+    reader = reader_for(_lake_of(scan), READER, SITE["tlp_readers"], SCHEMAS)
+    (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF, limit=40)
+    assert result.status == "ok", result.error
+    (burst,) = [r for r in result.rows if r["entity"] == "192.0.2.77"]
+    assert burst["status"] == "high_cardinality" and burst["count"] == 60
+    assert burst["entity_total"] == 0.0 and "in the scoring window" in burst["reasons"][-1]
+    assert ("192.0.2.10", "finding") in {(r["entity"], r["status"]) for r in result.rows}
+
+
+def test_the_history_read_starts_at_a_utc_midnight():
+    (p,) = parse_spec(SPEC, SCHEMAS).profiles
+    since = history_since(p, AS_OF + timedelta(hours=13, minutes=7))
+    assert since == datetime(2026, 3, 1, tzinfo=UTC)  # date(S) 03-09 minus 2 * 4 days
+    assert history_since(p, AS_OF) == datetime(2026, 3, 1, tzinfo=UTC)
+    early = history_since(p, AS_OF + timedelta(minutes=30))  # S is 03-09 00:30
+    assert early == datetime(2026, 3, 1, tzinfo=UTC) and early.utcoffset() == timedelta(0)
