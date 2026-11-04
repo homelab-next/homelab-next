@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from homelabnext.modules import authority
+from homelabnext.modules.lake_access import ANALYZER_TABLES
 from homelabnext.modules.scope import (
     DYNAMIC_PARTS,
     EMPTY_ALLOWED,
@@ -1540,10 +1541,11 @@ def module_selection_schema() -> dict[str, Any]:
                     "description": "Also writes rows (a pipeline's writer); only a red reader may.",
                 },
                 "writes": arr(
-                    pat("[a-z][a-z0-9_]{0,62}", None, 63),
-                    "The lake tables an analyzer appends its own derived rows to (ADR-0036 amends "
-                    "ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, "
-                    "and no other write; only an analyzer: reader may have it, and not with write.",
+                    {"enum": list(ANALYZER_TABLES)},
+                    "The analyzer-output tables an analyzer appends its own derived rows to (ADR-0036 "
+                    "amends ADR-0033 decision 6): INSERT on each named table only, never DELETE or "
+                    "UPDATE, and no other write; only an analyzer: reader may have it, and not with "
+                    "write. Only declared analyzer-output tables are accepted.",
                     min_items=1,
                 ),
                 "why": text(200, "Who this is and why it needs this ceiling."),

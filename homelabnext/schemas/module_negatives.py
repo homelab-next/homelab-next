@@ -634,6 +634,13 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         ).__setitem__("write", True),
         "An analyzer's writes is its only write; write: true (every table) is refused with it.",
     ),
+    "tlp-reader-writes-other-table": (
+        "full",
+        lambda d: next(
+            r for r in d["tlp_readers"] if r["reader"].startswith("analyzer:")
+        ).__setitem__("writes", ["authentication"]),
+        "An analyzer appends only to a declared analyzer-output table, never to a source table.",
+    ),
     "tlp-readers-without-catalog": (
         "full",
         lambda d: d.pop("lake_catalog"),

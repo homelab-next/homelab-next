@@ -17,8 +17,16 @@ the first matching rule wins and a principal no rule matches is denied:
   and delete, never update: an update could rewrite a stored label.  An ``analyzer:`` reader
   with ``writes`` (ADR-0036, amending ADR-0033 decision 6) gets, before its ``.*`` rule, a rule
   per named table with ``SELECT`` and ``INSERT`` only and its own row filter: it appends its
-  derived rows at any ceiling.  The engine cannot check the ``tlp`` value an insert carries; the
-  analyzer's code labels each row with the strictest input it read, below its ceiling;
+  derived rows at any ceiling, only to a declared analyzer-output table
+  (:data:`ANALYZER_TABLES`) in the core's namespace.  The engine applies the row filter to an
+  insert, so it refuses a row labelled above the analyzer's ceiling; it cannot see a label set
+  lower than the row's inputs, so the analyzer's code labels each row with the strictest input it
+  read;
+* ``procedures``: no ``CALL`` procedure for anyone.  A table procedure (``ALTER TABLE ...
+  EXECUTE``) is not a procedure rule's business: file-based access control refuses one only on a
+  table whose rule carries a row filter.  Every rule below ``red`` carries one, an analyzer's own
+  tables included, so a reader below ``red`` cannot run one; a ``red`` reader's rule has none
+  (an open point of ADR-0033, not of this file);
 * ``queries``: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal can match several rules (a user in a group), and the first match wins.  Rules are
@@ -41,6 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext import tlp
+from homelabnext.lake.tables import CORE_NAMESPACE
 
 __all__ = ["FILE", "KINDS", "LakeAccessError", "render", "write"]
 
@@ -55,6 +64,9 @@ READ = ["SELECT"]
 WRITE = ["SELECT", "INSERT", "DELETE"]
 #: an analyzer's table-scoped grant (ADR-0036): it appends its own rows, never deletes or updates
 APPEND = ["SELECT", "INSERT"]
+#: the tables an analyzer may append to: the declared analyzer-output tables, all in the core's
+#: namespace (a new analyzer table joins this list, the schema's enum and its ADR together)
+ANALYZER_TABLES = ("novelty_finding",)
 
 
 class LakeAccessError(ValueError):
@@ -89,6 +101,12 @@ def _reader(entry: Any) -> tuple[str, str, tlp.Label, bool, tuple[str, ...]]:
         or not all(type(t) is str and TABLE_RE.fullmatch(t) for t in writes)
     ):
         raise LakeAccessError(f"tlp_readers: {reader}: writes is a list of distinct table names")
+    other = sorted(set(writes) - set(ANALYZER_TABLES))
+    if other:
+        raise LakeAccessError(
+            f"tlp_readers: {reader}: writes {other}: not an analyzer-output table "
+            f"({', '.join(ANALYZER_TABLES)})"
+        )
     return reader, kind, label, write, tuple(sorted(writes))
 
 
@@ -130,7 +148,7 @@ def render(site: dict[str, Any]) -> dict[str, Any] | None:
         predicate = tlp.row_filter_sql(label)
         # an analyzer's own tables first (first match wins): append, read at its ceiling
         for table in writes:
-            own: dict[str, Any] = {**who, "catalog": cat, "schema": ".*"}
+            own: dict[str, Any] = {**who, "catalog": cat, "schema": f"^{CORE_NAMESPACE}$"}
             own.update(table=f"^{re.escape(table)}$", privileges=APPEND)
             if predicate is not None:
                 own["filter"] = predicate
@@ -145,6 +163,8 @@ def render(site: dict[str, Any]) -> dict[str, Any] | None:
         "catalogs": catalogs,
         "schemas": [{"owner": False}],
         "tables": tables,
+        # no CALL procedure for anyone (table procedures: refused by the row filters above)
+        "procedures": [{"procedure": ".*", "privileges": []}],
         "queries": [{"allow": ["execute"]}],
     }
 

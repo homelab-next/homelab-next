@@ -875,12 +875,12 @@
             "type": "array",
             "uniqueItems": true,
             "items": {
-              "type": "string",
-              "maxLength": 63,
-              "pattern": "^[a-z][a-z0-9_]{0,62}$(?!\\n)"
+              "enum": [
+                "novelty_finding"
+              ]
             },
             "minItems": 1,
-            "description": "The lake tables an analyzer appends its own derived rows to (ADR-0036 amends ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, and no other write; only an analyzer: reader may have it, and not with write."
+            "description": "The analyzer-output tables an analyzer appends its own derived rows to (ADR-0036 amends ADR-0033 decision 6): INSERT on each named table only, never DELETE or UPDATE, and no other write; only an analyzer: reader may have it, and not with write. Only declared analyzer-output tables are accepted."
           },
           "why": {
             "type": "string",

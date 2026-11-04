@@ -1709,6 +1709,12 @@ def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(f"tlp_readers: {reader}: only an analyzer: reader has writes (ADR-0036)")
         elif "writes" in entry and entry.get("write") is True:
             out.append(f"tlp_readers: {reader}: writes and write: true together")
+        elif "writes" in entry:
+            from homelabnext.modules.lake_access import ANALYZER_TABLES
+
+            other = sorted(set(entry["writes"] or ()) - set(ANALYZER_TABLES))
+            if other:
+                out.append(f"tlp_readers: {reader}: writes {other}: not an analyzer-output table")
     for reader, what in sorted(lake_readers(sel).items()):
         if reader not in seen:
             out.append(

@@ -59,6 +59,7 @@ def test_a_reader_name_is_matched_exactly():
         (_r("analyzer:x", "amber", writes=["t", "t"]), "distinct table names"),
         (_r("analyzer:x", "amber", writes=["Bad Name"]), "distinct table names"),
         (_r("analyzer:x", "amber", writes="novelty_finding"), "distinct table names"),
+        (_r("analyzer:x", "amber", writes=["authentication"]), "not an analyzer-output table"),
     ],
 )
 def test_render_refuses(entry, needle):
@@ -182,6 +183,7 @@ def test_an_analyzer_appends_to_its_own_tables_only():
     assert own["user"] == every["user"] == "^analyzer:novelty$"
     # its own table first (first match wins): append, never delete or update
     assert own["table"] == "^novelty_finding$" and own["privileges"] == ["SELECT", "INSERT"]
+    assert own["schema"] == "^ocsf$"  # pinned to the core's namespace, where the table lives
     assert own["filter"] == every["filter"]
     assert "'red'" not in own["filter"].split("IN")[1]
     # every other table: read at the ceiling, no write
@@ -205,4 +207,21 @@ def test_reader_problems_writes():
     both = _site(*base["tlp_readers"], _r("analyzer:a", "red", write=True, writes=["t"]))
     assert "tlp_readers: analyzer:a: writes and write: true together" in (
         rules.tlp_reader_problems(both, MODS)
+    )
+
+
+def test_no_one_may_run_a_procedure():
+    """No CALL procedure for anyone; a table procedure (ALTER TABLE ... EXECUTE) is refused by
+    the row filter every rule below red carries, an analyzer's own-table rule included."""
+    doc = _rules(_r("analyzer:novelty", "amber", writes=["novelty_finding"]), _r("user:a", "red"))
+    assert doc["procedures"] == [{"procedure": ".*", "privileges": []}]
+    own = [r for r in doc["tables"] if r.get("table") == "^novelty_finding$"]
+    assert own and all("filter" in r for r in own)
+
+
+def test_reader_problems_writes_only_analyzer_tables():
+    base = _site(_r("module:collector", "red"), _r("profile:collector-analyst", "green"))
+    bad = _site(*base["tlp_readers"], _r("analyzer:n", "amber", writes=["authentication"]))
+    assert "tlp_readers: analyzer:n: writes ['authentication']: not an analyzer-output table" in (
+        rules.tlp_reader_problems(bad, MODS)
     )

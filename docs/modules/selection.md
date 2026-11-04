@@ -43,10 +43,12 @@ module's query consumer), `analyzer:<name>` (a platform analyzer), `user:<name>`
 update could rewrite a stored label), and only a `red` reader may write: a deliberate choice, since
 a writer sees what it writes. The one exception is an `analyzer:<name>` reader (a platform
 analyzer such as the novelty analyzer, ADR-0036, which amends ADR-0033 decision 6), which may
-carry `writes: [<table>, ...]`: the tables it appends its own derived rows to, `INSERT` only (no
-`DELETE` or `UPDATE`), at any ceiling. It never reads a row above its ceiling, and its code labels
-each row it writes with the strictest label it read; the engine cannot check that label, so the
-grant is bounded to appending to the named tables. No other kind may have `writes`, nor an
+carry `writes: [<table>, ...]`: the declared analyzer-output tables it appends its own derived
+rows to (today `novelty_finding`, in the core's `ocsf` namespace), `INSERT` only (no `DELETE` or
+`UPDATE`), at any ceiling. The engine applies the row filter to an insert too, so it refuses a row
+labelled above the analyzer's ceiling; a label set lower than the row's inputs it cannot see, so
+the analyzer's code labels each row with the strictest label it read, and the grant is bounded to
+appending to the named tables. No other kind may have `writes`, nor an
 analyzer `writes` and `write: true` together (schema and loader). `lake_catalog` (required with the list) is the engine's name for the
 lake catalog. With the list, the loader requires every selected module that requires or prefers
 `cap:lake-query`, and every selected agent with a `cap:lake-query` need, to be listed (an unlisted
@@ -65,6 +67,10 @@ and with lake readers selected, it notes that no row is filtered by its label.
   `coalesce(tlp, 'red') IN (<labels at or below the ceiling>)` below `red` and no filter at `red`;
   a table without a `tlp` column cannot be read below `red` (the filter fails the query); an
   analyzer's `writes` tables come first, each `SELECT` and `INSERT` with the same filter;
+- `procedures`: no `CALL` procedure for anyone. A table procedure (`ALTER TABLE ... EXECUTE`) is
+  refused by file-based access control only on a table whose rule carries a row filter: every
+  rule below `red` has one, an analyzer's own tables included, so only a `red` reader (whose rule
+  has no filter) could run one;
 - `queries`: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal matching several rules (a user in a group) gets the first, so user rules come before
