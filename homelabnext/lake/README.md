@@ -51,9 +51,13 @@ restarted, replayed a rotated log tail from the stale offset, duplicating every 
 3. If the tail is read again anyway (lost checkpoint, expired snapshots, different batching),
    rows whose content key (`uid`) already exist are skipped. Replay is idempotent.
 
-A batch id is bound to the source that committed it: replaying it with another source (or none)
-raises `BatchSourceMismatch` and writes nothing, so one writer cannot suppress another's batch by
-committing its id first. A ledger entry that recorded no source is not judged.
+A batch id is bound to the source that committed it (`errors.check_replay_source`, every
+adapter): a write that names a source replays only a batch committed under exactly that source;
+one committed under another source, or under none (a legacy ledger entry without a source
+included), raises `BatchSourceMismatch` and writes nothing, so no writer can make a sourced
+writer's batch replay by committing its id first. A write that names no source is not judged
+and replays as before (the dual-write queue re-sends a parked batch without its mark), so a
+source-less writer can only drop its own rows.
 
 One writer per `(table, source)` is assumed.
 

@@ -129,6 +129,35 @@ def test_a_late_replay_never_moves_a_components_source_mark_back():
     assert b.inner.describe("dns_activity").row_count == 2
 
 
+class LostAck(Flaky):
+    """Writes the next N batches, then raises as if the acknowledgement were lost."""
+
+    def write_batch(self, *a, **kw):
+        if self.fail:
+            self.fail -= 1
+            self.inner.write_batch(*a, **kw)
+            raise self.exc
+        return self.inner.write_batch(*a, **kw)
+
+
+def test_a_lost_ack_rerouted_and_replayed_without_the_mark_settles():
+    # B took b1 with source s, but its answer was lost, so b1 is parked; after the flip B takes
+    # b2 with the mark, and the replay of b1 (without the mark, being older) must settle as a
+    # replay of what B already holds: nothing parked, nothing blocking later batches
+    a, b = FakeLake(), LostAck(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    r = rows(2)
+    w.write_batch("dns_activity", [r[0]], idempotency_key="b1", source="s", high_water="100")
+    assert len(w.pending) == 1
+    w2 = w.rerouted(b, a)
+    w2.write_batch("dns_activity", [r[1]], idempotency_key="b2", source="s", high_water="200")
+    assert w2.replay_pending(owed_to=b) == 1
+    assert w2.pending == [] and w2.status()["unresolved"] == 0
+    assert b.inner.describe("dns_activity").row_count == 2
+    mark = b.inner.describe("dns_activity").committed["s"]
+    assert (mark.batch_id, mark.high_water) == ("b2", "200")
+
+
 def test_discard_pending_needs_a_reason_and_returns_the_batches():
     a, b = FakeLake(), Flaky(FakeLake(), fail=1)
     w = DualWriter(a, b)

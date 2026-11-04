@@ -151,8 +151,12 @@ Three shapes of evidence argue for how to build it:
    a `high_cardinality` row (the entity cannot be baselined) does not. Distinct sources are
    meant to be distinct writers: the table's key is `(source, uid)`; `write_findings` refuses a
    batch with a row of any source but the writer's own, a mark that is not the source's, or a
-   batch id that does not start with the mark; and the lake refuses a batch id that another
-   source committed, so no writer can suppress another's batch by taking its id. That binding
+   batch id that does not start with the mark; and the lake binds a batch id to its source: a
+   write that names a source replays only a batch committed under exactly that source, and one
+   committed under another source or under none raises (fail closed), so no writer can suppress
+   the analyzer's batch by taking its id, with or without a source. A write that names no
+   source is not judged and replays as before (the dual-write queue re-sends parked batches
+   that way), so a source-less writer can only drop its own rows. That binding
    holds for cooperating writers only: the engine sees one `INSERT` grant, not which `source`
    value a row carries, so a writer with the grant that bypasses `write_findings` could write
    rows under another source's name. Like the label (decision 4), it is a residual risk,

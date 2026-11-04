@@ -71,9 +71,16 @@ class BatchSourceMismatch(LakeError):
 
 
 def check_replay_source(table: str, batch_id: str, stored: str | None, source: str | None) -> None:
-    """Refuse a replay of ``batch_id`` whose recorded source (``stored``) is not ``source``.  A
-    ledger entry that recorded no source (older entries) is not judged."""
-    if stored is not None and stored != source:
+    """Judge a replay of ``batch_id`` committed by ``stored`` (``None``: no source recorded,
+    a legacy ledger entry included) for a write by ``source``.
+
+    A write that names a source must find exactly that source recorded; anything else, a
+    recorded ``None`` included, raises :class:`BatchSourceMismatch` (fail closed), so no writer
+    can make a sourced writer's batch replay by committing its id first, with or without a
+    source.  A write that names no source is not judged and replays as before (the dual-write
+    queue re-sends a parked batch without its mark): a source-less writer can only drop its own
+    rows, never another source's."""
+    if source is not None and stored != source:
         raise BatchSourceMismatch(
             f"{table}: batch {batch_id!r} was committed by source {stored!r}, not {source!r}"
         )

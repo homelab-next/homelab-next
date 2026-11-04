@@ -135,6 +135,20 @@ def _(lake):
         "another source's batch id",
     )
     assert _count(lake, pre) == 1, f"expected 1 row, found {_count(lake, pre)}"
+    # the other order: a batch id committed with no source does not replay for a sourced write
+    key2 = uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-2")], idempotency_key=key2)
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-3")], idempotency_key=key2, source=uniq("src-c")
+        ),
+        "a sourced write of a batch id committed without a source",
+    )
+    # a write that names no source is not judged: it replays
+    assert lake.write_batch(
+        TABLE, [auth_row(f"{pre}-4")], idempotency_key=key, source=None
+    ).replayed
+    assert _count(lake, pre) == 2, f"expected 2 rows, found {_count(lake, pre)}"
 
 
 def make_fake():

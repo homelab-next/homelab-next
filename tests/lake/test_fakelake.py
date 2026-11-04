@@ -131,7 +131,22 @@ def test_a_batch_id_replays_only_for_the_source_that_committed_it():
     lake.write_batch("authentication", rows[:1], idempotency_key="b", source="a")
     with pytest.raises(BatchSourceMismatch, match="committed by source 'a', not 'b'"):
         lake.write_batch("authentication", rows[1:], idempotency_key="b", source="b")
-    with pytest.raises(BatchSourceMismatch):
-        lake.write_batch("authentication", rows[1:], idempotency_key="b")
     assert lake.write_batch("authentication", rows[:1], idempotency_key="b", source="a").replayed
+    # a write that names no source is not judged: it replays (the dual-write queue re-sends a
+    # parked batch without its mark), and can only drop its own rows
+    assert lake.write_batch("authentication", rows[1:], idempotency_key="b").replayed
+    assert lake.describe("authentication").row_count == 1
+
+
+def test_a_batch_id_committed_without_a_source_does_not_replay_for_a_sourced_write():
+    """The other order: a writer that commits a sourced writer's batch id with no source must
+    not make that writer's batch replay silently (fail closed)."""
+    from homelabnext.lake import BatchSourceMismatch
+
+    lake = FakeLake()
+    rows = synthetic.authentication(2)
+    lake.write_batch("authentication", rows[:1], idempotency_key="b")
+    with pytest.raises(BatchSourceMismatch, match="committed by source None, not 'a'"):
+        lake.write_batch("authentication", rows[1:], idempotency_key="b", source="a")
+    assert lake.write_batch("authentication", rows[1:], idempotency_key="b").replayed
     assert lake.describe("authentication").row_count == 1

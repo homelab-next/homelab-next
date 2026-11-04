@@ -273,3 +273,14 @@ def test_the_history_read_starts_at_a_utc_midnight():
     assert history_since(p, AS_OF) == datetime(2026, 3, 1, tzinfo=UTC)
     early = history_since(p, AS_OF + timedelta(minutes=30))  # S is 03-09 00:30
     assert early == datetime(2026, 3, 1, tzinfo=UTC) and early.utcoffset() == timedelta(0)
+
+
+def test_a_sourceless_writer_using_the_analyzers_batch_id_cannot_suppress_its_rows(lake):
+    """The round-3 audit's order: the squatter commits the analyzer's batch id with no source;
+    the analyzer's sourced write must fail loudly, not replay."""
+    (dry,) = _run(lake, write=False)
+    squat = dict(dry.rows[0], source="host-kernel", uid="host-squat")
+    lake.write_batch("novelty_finding", [squat], idempotency_key=dry.batch_id)
+    (result,) = _run(lake)
+    assert result.status == "failed" and "BatchSourceMismatch" in result.error
+    assert {r["uid"] for r in _stored(lake)} == {"host-squat"}
