@@ -27,7 +27,7 @@ and its parameters:
 | `score_hours` | the scoring window, `[as_of - score_hours, as_of)` |
 | `min_support` | decayed support at or above which a value is normal for its entity |
 | `entity_min_samples` | decayed entity total at which confidence reaches 1 |
-| `max_values_per_entity` | above this many distinct learned values, the entity is high-cardinality |
+| `max_values_per_entity` | above this many distinct values, the entity is set aside: learned values make it high-cardinality, values in the scoring window alone a burst |
 | `emit_at` | the score at or above which a pair is a finding |
 | `max_findings` | the most rows the profile emits per run |
 | `min_history_days` | days of history before the profile scores at all (default `learn_days`) |
@@ -58,6 +58,10 @@ With `S = as_of - score_hours`:
      **finding** when `score >= emit_at`.
 5. At most `max_findings` rows: findings by score, then bursts, high-cardinality, unlearned; the
    rest are counted in the summary as dropped, by status.
+
+A burst or high-cardinality row stands in for all that entity's per-value rows: it names the
+entity and counts its rows, not its values (that would be the flood the bound prevents). An
+analyst looks the values up in the source table, for the entity and the scoring window.
 
 A worked case: a host spoke to port 443 twice a day on each of the four learning days and never
 to port 22, with `half_life_days: 2`. Its total is `2 * (0.25 + 0.354 + 0.5 + 0.707) = 3.62`;
@@ -114,7 +118,7 @@ Rows go to the lake table `novelty_finding` (`schemas/ocsf/novelty_finding.v1.js
 `confidence` (findings only), `support`, `entity_total`, `count`, the windows, `as_of`, the
 profile's `spec_digest`, a `message` and `reasons` with the arithmetic. A row's `time` is the
 start of the scoring window, the behaviour it describes. Its `tlp` is the strictest label among
-the rows that produced it: the pair's scoring rows and, for a scored or high-cardinality row,
+the rows that produced it: the pair's scoring rows and, for a scored, burst or high-cardinality row,
 every learning row of its entity. The label also bounds what a row says: support 0 on a `green`
 finding means no row at or below the analyzer's ceiling had the pair, not that none existed. The
 run summary is labelled at the analyzer's ceiling (`tlp`).

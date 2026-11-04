@@ -330,3 +330,19 @@ def test_more_noisy_entities_than_the_cap_fail_the_profile_visibly(monkeypatch):
     monkeypatch.setattr(engine, "MAX_ENTITIES", 1)
     (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF)
     assert result.status == "failed" and "TooManyGroups" in result.error
+
+
+def test_the_engines_own_cap_counts_the_union_of_both_windows(monkeypatch):
+    """Each cardinality read finds one entity (within a cap of one); together they are two,
+    which only the engine's own check of the union catches."""
+    import homelabnext.novelty.engine as engine
+
+    lake_rows = rows()
+    lake_rows += [net(900 + p, day=6, src="192.0.2.70", port=4000 + p) for p in range(5)]
+    lake_rows += [net(950 + p, day=9, src="192.0.2.71", port=5000 + p) for p in range(5)]
+    reader = reader_for(_lake_of(lake_rows), READER, SITE["tlp_readers"], SCHEMAS)
+    (ok,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF)
+    assert {(r["entity"], r["status"]) for r in ok.rows} >= {("192.0.2.71", "burst")}
+    monkeypatch.setattr(engine, "MAX_ENTITIES", 1)
+    (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF)
+    assert result.status == "failed" and "2 noisy entities > 1" in result.error

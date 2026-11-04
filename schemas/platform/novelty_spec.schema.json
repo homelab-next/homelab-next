@@ -155,7 +155,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 100000,
-          "description": "Distinct learned values above which an entity is reported once as high-cardinality and not scored."
+          "description": "Distinct values above which an entity is set aside and not scored: over it among learned values, it is reported once as high-cardinality (not a signal); over it in the scoring window alone, once as a burst (a signal)."
         },
         "emit_at": {
           "type": "number",

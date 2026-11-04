@@ -34,7 +34,7 @@ The rule, for a profile with scoring window ``[S, as_of)``, ``S = as_of - score_
   high-cardinality entities and unlearned pairs, each by entity and value; the rest are
   counted as dropped, by status;
 * a row's label is the strictest label among the rows that produced it: the pair's
-  scoring-window rows and, for a scored or high-cardinality row, every learning-window row of
+  scoring-window rows and, for a scored, burst or high-cardinality row, every learning-window row of
   its entity (they make ``T(e)``, and so the confidence);
 * a row's ``time`` is ``S``, the start of the behaviour window it describes, so a window that
   holds the behaviour holds the finding (``corroborate``).

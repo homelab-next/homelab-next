@@ -75,7 +75,10 @@ Three shapes of evidence argue for how to build it:
      scored, so one noisy entity cannot flood the output or the memory of a run. One with more
      than that many distinct values in the scoring window alone is reported once as **burst**,
      with its row count there and not scored; unlike a high-cardinality entity, a burst is new
-     behaviour (a scan on the scoring day, by an entity learned or not), so it is a signal. A cardinality read of each window finds
+     behaviour (a scan on the scoring day, by an entity learned or not), so it is a signal. A
+     burst or high-cardinality row stands in for all that entity's per-value rows: it names the
+     entity and counts its rows, not its values, which an analyst looks up in the source
+     table. A cardinality read of each window finds
      such entities first (one row each, however many values), and the per-value reads leave
      them out, so one port scan costs a few groups, never the profile. Their own per-entity
      reads are bounded too: at most 1,000 entities, each giving at most one group per UTC day
@@ -133,7 +136,7 @@ Three shapes of evidence argue for how to build it:
    deployment, not something this repository can check.
 5. **Findings are labelled data.** A finding's TLP label is the strictest label among the rows
    that produced it, its learning-window support included: the pair's scoring-window rows and,
-   for a scored or high-cardinality row, every learning-window row of its entity, since they
+   for a scored, burst or high-cardinality row, every learning-window row of its entity, since they
    make its total and so its confidence (derived data takes its strictest input, ADR-0033).
    Findings are written to their own lake table, `novelty_finding`, idempotently: the batch id
    is a digest of the profile, the spec and `as_of`, so a re-run of the same window writes

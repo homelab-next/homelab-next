@@ -256,3 +256,20 @@ def test_entities_set_aside_by_the_cardinality_read_are_reported_once():
     # not seen in the scoring window: not reported
     quiet = score([], [], high={"h9": 400}, high_learn=high_learn, high_scoring=[])
     assert quiet.rows == []
+
+
+def test_a_burst_outranks_high_cardinality_and_unlearned_under_the_cap():
+    p = dataclasses.replace(P, max_findings=2, emit_at=0.01)
+    r = score_profile(
+        p, AS_OF,
+        [g("h1", 80, 7, 8)] + [g("h5", port, 7) for port in (1, 2, 3, 4)],
+        [g("h1", 22, 9), g("h5", 9, 9), g("new", 1, 9)],
+        FULL, burst={"b9": 50}, high_scoring=[GroupCount("b9", (), D[9], Label.GREEN, 50)],
+    )  # fmt: skip
+    assert [x["status"] for x in r.rows] == ["finding", "burst"]
+    assert r.summary()["dropped_by_status"] == {
+        "finding": 0,
+        "burst": 0,
+        "high_cardinality": 1,
+        "unlearned": 1,
+    }
