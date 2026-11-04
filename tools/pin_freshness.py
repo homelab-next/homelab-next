@@ -11,7 +11,7 @@
 #   exit:
 #     "0": inventory listed, or report written (pins that are behind are reported, never a failure)
 #     "1": inventory --check found a pin with no upstream source, or a source with no pin
-#     "2": usage error or an unreadable tree
+#     "2": usage error, an unreadable tree or an unwritable --out file
 """Which pins are behind upstream, for the ones dependabot cannot see.
 
     python tools/pin_freshness.py inventory [--check]
@@ -46,6 +46,8 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -56,10 +58,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = "<!-- hnx:pin-freshness -->"
 COOLDOWN_DAYS = 14
-GITHUB_API = "https://api.github.com"
+GITHUB_HOST = "api.github.com"
+GITHUB_API = f"https://{GITHUB_HOST}"
 PYPI = "https://pypi.org/pypi"
 GO_PROXY = "https://proxy.golang.org"
 TIMEOUT = 30
+MAX_BYTES = 20 * 1024 * 1024  # the largest answer read; the PyPI JSON of a big project is ~5 MB
+MAX_ERROR = 200  # characters of an upstream error shown in the issue
 
 # Where each pin's releases are published: ("github", "owner/repo") for GitHub releases,
 # ("pypi", "name"), ("go-toolchain", "") or ("none", "why it is not compared").
@@ -218,17 +223,52 @@ def check_inventory(
 Fetch = Callable[[str], Any]
 
 
-def http_fetch(url: str) -> Any:
-    """GET ``url`` as JSON (or text, for a plain-text response); the token goes to GitHub only."""
+class _GitHubOnlyAuth(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to https, and carry the token only to the GitHub API host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl)
+        if target.scheme != "https":
+            raise urllib.error.HTTPError(
+                newurl, code, "redirect away from https refused", headers, fp
+            )
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and target.hostname != GITHUB_HOST:
+            new.remove_header("Authorization")
+        return new
+
+
+def opener(*handlers: urllib.request.BaseHandler) -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_GitHubOnlyAuth, *handlers)
+
+
+def http_fetch(url: str, open_with: urllib.request.OpenerDirector | None = None) -> Any:
+    """GET ``url`` as JSON (or text, for a plain-text response).
+
+    The token goes to the GitHub API only, and not along a redirect to another host; an answer
+    over :data:`MAX_BYTES` is refused."""
     headers = {"User-Agent": "homelabnext-pin-freshness", "Accept": "application/json"}
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token and url.startswith(GITHUB_API + "/"):
         headers["Authorization"] = f"Bearer {token}"
         headers["Accept"] = "application/vnd.github+json"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # only the https URLs built above
-        body = r.read().decode()
+    with (open_with or opener()).open(req, timeout=TIMEOUT) as r:  # only the https URLs above
+        raw = r.read(MAX_BYTES + 1)
+        if len(raw) > MAX_BYTES:
+            raise ValueError(f"answer larger than {MAX_BYTES // (1024 * 1024)} MB refused")
+        body = raw.decode()
         return json.loads(body) if "json" in r.headers.get("Content-Type", "") else body
+
+
+def describe(exc: BaseException) -> str:
+    """An upstream failure as one short line safe to put in the issue: the exception type and,
+    for HTTP, the status; any other message capped and stripped of what Markdown would act on."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{type(exc).__name__} {exc.code}"
+    text = " ".join(str(exc).split())
+    text = re.sub(r"[`|<>\[\]@]", "", text)[:MAX_ERROR]
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
 def _utcnow() -> datetime:
@@ -347,7 +387,7 @@ def build(
             f = assess(pin, [], now, cooldown)  # unpinned and loose stay so; the rest is unknown
             if f.status.startswith(("current", "behind")):
                 f.status = "not checked"
-            f.error = f"{type(got).__name__}: {got}"
+            f.error = describe(got)
             out.append(f)
         else:
             out.append(assess(pin, got, now, cooldown))
@@ -388,7 +428,7 @@ def render(findings: list[Finding], now: datetime, cooldown: int = COOLDOWN_DAYS
             for x in (
                 f"bump `{p.checksum}` with it" if p.checksum else "",
                 NOTES.get(p.id, ""),
-                f.error or "",
+                f"`{f.error.replace('`', '')}`" if f.error else "",
             )
             if x
         )
@@ -422,7 +462,7 @@ def main(
     args = ap.parse_args(argv)
     try:
         pins = inventory(root)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(f"pin_freshness: cannot read the tree: {exc}", file=sys.stderr)
         return 2
     if args.cmd == "inventory":
@@ -445,7 +485,11 @@ def main(
     now = now or _utcnow()
     text = render(build(pins, fetch, now, args.cooldown_days), now, args.cooldown_days)
     if args.out:
-        args.out.write_text(text)
+        try:
+            args.out.write_text(text)
+        except OSError as exc:
+            print(f"pin_freshness: cannot write {args.out}: {exc}", file=sys.stderr)
+            return 2
     else:
         sys.stdout.write(text)
     return 0

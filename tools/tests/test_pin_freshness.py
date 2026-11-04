@@ -5,9 +5,13 @@ nothing reaches the network."""
 
 from __future__ import annotations
 
+import email.message
 import io
 import json
 import sys
+import urllib.error
+import urllib.request
+import urllib.response
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -338,16 +342,33 @@ def test_inventory_check_exit_status(tmp_path, monkeypatch, capsys):
     assert "tool:uv has no upstream" in capsys.readouterr().err
 
 
-class _Response(io.BytesIO):
-    def __init__(self, body: bytes, ctype: str):
-        super().__init__(body)
-        self.headers = {"Content-Type": ctype}
+class FakeHTTPS(urllib.request.HTTPSHandler):
+    """Answers https requests from a table instead of the network: url -> (status, headers, body),
+    and records every request it was given."""
 
-    def __enter__(self):
-        return self
+    def __init__(self, table: dict[str, tuple[int, dict[str, str], bytes]]):
+        super().__init__()
+        self.table, self.seen = table, []
 
-    def __exit__(self, *exc):
-        return False
+    def https_open(self, req):
+        self.seen.append(req)
+        status, headers, body = self.table[req.full_url]
+        msg = email.message.Message()
+        for k, v in headers.items():
+            msg[k] = v
+        resp = urllib.response.addinfourl(io.BytesIO(body), msg, req.full_url, status)
+        resp.msg = "fixture"  # the reason phrase urllib's error processor reads
+        return resp
+
+
+JSON = {"Content-Type": "application/json; charset=utf-8"}
+
+
+def fetch_with(table, url, monkeypatch, token="fixture-token"):
+    if token:
+        monkeypatch.setenv("GH_TOKEN", token)
+    fake = FakeHTTPS(table)
+    return pf.http_fetch(url, pf.opener(fake)), fake
 
 
 @pytest.mark.parametrize(
@@ -359,16 +380,80 @@ class _Response(io.BytesIO):
     ],
 )
 def test_the_token_goes_to_the_github_api_only(monkeypatch, url, authorised):
-    seen = []
+    got, fake = fetch_with({url: (200, JSON, b'{"ok": true}')}, url, monkeypatch)
+    assert got == {"ok": True}
+    assert fake.seen[0].has_header("Authorization") is authorised
 
-    def urlopen(req, timeout):
-        seen.append(req)
-        return _Response(b'{"ok": true}', "application/json; charset=utf-8")
 
-    monkeypatch.setenv("GH_TOKEN", "fixture-token")
-    monkeypatch.setattr(pf.urllib.request, "urlopen", urlopen)
-    assert pf.http_fetch(url) == {"ok": True}
-    assert (seen[0].get_header("Authorization") is not None) is authorised
+def test_a_redirect_to_another_host_drops_the_token(monkeypatch):
+    start = "https://api.github.com/repos/o/r/releases?per_page=100"
+    moved = "https://api.github.com/repositories/1/releases?per_page=100"
+    away = "https://objects.example.test/releases.json"
+    table = {
+        start: (301, {"Location": moved}, b""),
+        moved: (302, {"Location": away}, b""),
+        away: (200, JSON, b"[]"),
+    }
+    got, fake = fetch_with(table, start, monkeypatch)
+    assert got == []
+    assert [r.full_url for r in fake.seen] == [start, moved, away]
+    assert [r.has_header("Authorization") for r in fake.seen] == [True, True, False]
+
+
+def test_a_redirect_away_from_https_is_refused(monkeypatch):
+    start = "https://api.github.com/repos/o/r/releases?per_page=100"
+    table = {start: (302, {"Location": "http://api.github.com/x"}, b"")}
+    with pytest.raises(urllib.error.HTTPError, match="away from https"):
+        fetch_with(table, start, monkeypatch)
+
+
+def test_an_oversized_answer_is_refused(monkeypatch):
+    monkeypatch.setattr(pf, "MAX_BYTES", 10)
+    url = "https://pypi.org/pypi/x/json"
+    assert fetch_with({url: (200, JSON, b'"0123456"')}, url, monkeypatch, token="")[0] == "0123456"
+    with pytest.raises(ValueError, match="larger than"):
+        fetch_with({url: (200, JSON, b'"0123456789"')}, url, monkeypatch, token="")
+
+
+HOSTILE = (
+    "see @octocat <img src=x onerror=y> [click](https://evil.example.test) `code` | col\n" * 20
+)
+
+
+def test_an_upstream_error_reaches_the_issue_short_and_inert():
+    pin = pf.Pin("role:agent/agent_version", "p", 1, "1.2.3")
+
+    def fetch(url):
+        raise ValueError(HOSTILE)
+
+    (f,) = pf.build([pin], fetch, NOW, sources=SOURCES)
+    assert f.status == "not checked"
+    assert len(f.error) <= pf.MAX_ERROR + len("ValueError: ")
+    assert not set("`|<>[]@\n") & set(f.error)
+    row = next(x for x in pf.render([f], NOW).splitlines() if x.startswith("| `role:"))
+    note = row.rsplit(" | ", 1)[1]
+    assert note.startswith("`ValueError: ") and note.count("`") == 2  # one inert code span
+
+
+def test_an_http_error_is_its_type_and_status_only():
+    exc = urllib.error.HTTPError("https://x", 403, "<b>@admin</b>", None, None)
+    assert pf.describe(exc) == "HTTPError 403"
+
+
+def test_an_unreadable_tree_or_out_file_is_exit_2(tmp_path):
+    root = make_tree(tmp_path / "t")
+    bad = root / "ansible/roles/agent/defaults/main.yml"
+    bad.write_bytes(b"agent_version: \xff\xfe\n")
+    assert pf.main(["inventory"], root=root) == 2
+    root = make_tree(tmp_path / "u")
+    out = tmp_path / "missing-dir" / "pins.md"
+    rc = pf.main(
+        ["report", "--out", str(out)],
+        fetch=FakeUpstream({}, fail=("https://",)),
+        root=root,
+        now=NOW,
+    )
+    assert rc == 2
 
 
 # --- the workflow ------------------------------------------------------------------------
