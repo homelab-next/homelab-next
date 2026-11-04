@@ -56,7 +56,8 @@ adapter). A write is judged by the source it claims: its `expect_source` when gi
 `source`. It replays only a batch committed under exactly that source; one committed under
 another source, or under none (a legacy ledger entry without a source included), raises
 `BatchSourceMismatch` and writes nothing, so no writer can make a sourced writer's batch replay
-by committing its id first. `expect_source` separates judging from marking: the dual-write queue
+by committing its id first. A write naming both `source` and a different `expect_source` is refused
+(`errors.claimed_source`). `expect_source` separates judging from marking: the dual-write queue
 re-sends an older parked batch with `source=None` (so the mark never moves back) and
 `expect_source` set to its source, so another writer's batch under that id is a refusal it
 reports, not a silent replay. A fresh commit with `source=None` is recorded without a mark,

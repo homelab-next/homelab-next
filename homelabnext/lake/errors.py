@@ -86,3 +86,12 @@ def check_replay_source(table: str, batch_id: str, stored: str | None, source: s
         raise BatchSourceMismatch(
             f"{table}: batch {batch_id!r} was committed by source {stored!r}, not {source!r}"
         )
+
+
+def claimed_source(source: str | None, expect_source: str | None) -> str | None:
+    """The source a write claims, for :func:`check_replay_source`: ``expect_source`` when given,
+    else ``source``.  A write that names both, differently, is refused: it would mark one source
+    and be judged as another."""
+    if source is not None and expect_source is not None and source != expect_source:
+        raise LakeError(f"a write naming source {source!r} cannot expect source {expect_source!r}")
+    return source if expect_source is None else expect_source

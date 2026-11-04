@@ -169,7 +169,24 @@ def _(lake):
         ),
         "a re-send expecting another source",
     )
-    assert _count(lake, pre) == 1, f"expected 1 row, found {_count(lake, pre)}"
+    # a batch committed with no source is not another's to replay, even when only expected
+    bare = uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-2")], idempotency_key=bare)
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-3")], idempotency_key=bare, expect_source=src
+        ),
+        "a re-send expecting a source, of a batch committed with none",
+    )
+    # a write naming two different sources is refused outright
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-4")], idempotency_key=uniq("k"), source=src,
+            expect_source=uniq("src-c"),
+        ),
+        "a write naming two sources",
+    )  # fmt: skip
+    assert _count(lake, pre) == 2, f"expected 2 rows, found {_count(lake, pre)}"
 
 
 def make_fake():
@@ -232,6 +249,30 @@ class StoredNoneUnjudgedLake(FakeLake):
         )
 
 
+class ExpectedNoneUnjudgedLake(FakeLake):
+    """Defect: expect_source is judged only against a recorded source, so a batch committed
+    with no source replays for a writer that only expects one."""
+
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
+        seen = self._db.execute(
+            "SELECT seq, source FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
+        ).fetchone()
+        if seen is not None and seen[1] is None and expect_source is not None:
+            from homelabnext.lake.protocol import WriteResult
+
+            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
+        return super().write_batch(
+            table,
+            rows,
+            idempotency_key=idempotency_key,
+            source=source,
+            high_water=high_water,
+            expect_source=expect_source,
+        )
+
+
 class ExpectSourceIgnoredLake(FakeLake):
     """Defect: expect_source is ignored, so a mark-less re-send is never judged."""
 
@@ -248,6 +289,11 @@ MUTANTS = {
         StoredNoneUnjudgedLake,
         "batch-id-bound-to-its-source",
         "a batch committed with no source replays for a sourced write",
+    ),
+    "expected-none-not-judged": Mutant(
+        ExpectedNoneUnjudgedLake,
+        "replay-judged-by-expect-source",
+        "a batch committed with no source replays for a write that only expects a source",
     ),
     "expect-source-ignored": Mutant(
         ExpectSourceIgnoredLake,

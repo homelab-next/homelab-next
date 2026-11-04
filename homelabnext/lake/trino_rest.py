@@ -53,7 +53,7 @@ from typing import Any
 
 from .base import AdapterBase
 from .ddl import _trino_type, trino_ddl
-from .errors import LakeError, SchemaMismatch, UnknownTable, check_replay_source
+from .errors import LakeError, SchemaMismatch, UnknownTable, check_replay_source, claimed_source
 from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
 from .sqlparams import check_params, to_qmark
@@ -331,6 +331,7 @@ class TrinoRestLake(AdapterBase):
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
+        claimed = claimed_source(source, expect_source)  # refuses a contradictory pair
         s = self._schema(table)
         norm = normalize_rows(s, rows)  # the whole batch is validated before anything is sent
         meta = self._meta(s)
@@ -341,7 +342,7 @@ class TrinoRestLake(AdapterBase):
                 s.name,
                 idempotency_key,
                 entry.get("source"),
-                source if expect_source is None else expect_source,
+                claimed,
             )
             return WriteResult(len(norm), 0, len(norm), True, entry.get("snapshot_id"))
         fresh: list[dict[str, Any]] = []

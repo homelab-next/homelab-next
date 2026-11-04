@@ -275,6 +275,7 @@ Each is a deliberately broken fake (`hnx conform run lake-catalog --target broke
 |---|---|---|
 | `batch-source-ignored` | `batch-id-bound-to-its-source` | a batch id replays whichever source committed it |
 | `expect-source-ignored` | `replay-judged-by-expect-source` | a re-send without its mark is never judged |
+| `expected-none-not-judged` | `replay-judged-by-expect-source` | a batch committed with no source replays for a write that only expects a source |
 | `idempotency-key-ignored` | `replay-writes-nothing` | a retried batch key is treated as new |
 | `stored-none-not-judged` | `batch-id-bound-to-its-source` | a batch committed with no source replays for a sourced write |
 
