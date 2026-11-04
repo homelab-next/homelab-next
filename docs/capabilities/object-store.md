@@ -280,8 +280,11 @@ REST API with path-style addressing and SigV4 header signing (`.sigv4`):
 
 Keys are opaque text: each is percent-encoded once, `/` kept, and a path segment that is only
 `.` or `..` has its dots encoded as `%2E` so no hop between here and the server can resolve
-it as a path; the server decodes the key back verbatim.  The signature covers the path exactly as
-sent (S3 performs no second encoding and no normalisation).
+it as a path; the server decodes the key back verbatim.  The signature covers SigV4's canonical
+URI: `UriEncode` of the decoded path, once (S3 performs no second encoding and no
+normalisation), which is the path as sent except that a dot segment sent as `%2E` is signed as
+`.`.  Garage v2 (and MinIO) rebuild it that way; Garage v1 signed the raw path, so a dot-segment
+key no longer signs alike for a v1 server.
 
 Errors map to the protocol's types: `NoSuchBucket`, `NoSuchKey`, anything else
 `ObjectStoreError` with the HTTP status and the S3 error code, never a credential.  A HEAD has no
