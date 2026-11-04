@@ -227,7 +227,8 @@ and an entry that no longer excuses anything fails the lint.
 
 ## Keeping pins current
 
-Every third-party version is pinned exactly: actions by commit SHA with a version comment,
+Every third-party version is pinned exactly where it can be (the exceptions, such as uv and
+trivy, are reported as unpinned below): actions by commit SHA with a version comment,
 packages by hash (`constraints/ci.txt`), images by `tag@sha256`, downloaded tools by version and
 checksum. A release younger than 14 days is left alone (dependabot's `cooldown`, `make
 constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
