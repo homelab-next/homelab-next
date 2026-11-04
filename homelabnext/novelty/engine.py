@@ -132,14 +132,15 @@ def write_findings(
     source: str,
     mark: str,
     idempotency_key: str,
-    **kw: Any,
+    high_water: str | None = None,
 ) -> Any:
     """Write ``rows`` to ``novelty_finding`` as the writer of ``source``: every row must carry
     that ``source``, the batch's source mark (``mark``) must be ``<source>/<name>`` and its
     idempotency key must start with ``<mark>:``, so a cooperating writer can neither write, nor
     squat the ``(source, uid)`` key of, another source's rows, nor suppress another source's
     batch by reusing its id (the lake also refuses a batch id another source committed).
-    ``kw`` is passed to ``write_batch`` (``high_water``)."""
+    ``high_water`` is the only other thing passed to ``write_batch``: the source, the mark and
+    the judging (``expect_source``) are this function's, never the caller's."""
     if not mark.startswith(source + "/"):
         raise WriteRefused(f"the batch mark {mark!r} is not one of source {source!r}")
     if not idempotency_key.startswith(mark + ":"):
@@ -147,7 +148,9 @@ def write_findings(
     bad = sorted({str(r.get("source")) for r in rows} - {source})
     if bad:
         raise WriteRefused(f"rows of other sources {bad} in a batch of {source!r}")
-    return writer.write_batch(TABLE, list(rows), idempotency_key=idempotency_key, source=mark, **kw)
+    return writer.write_batch(
+        TABLE, list(rows), idempotency_key=idempotency_key, source=mark, high_water=high_water
+    )
 
 
 def _text(v: Any) -> str:

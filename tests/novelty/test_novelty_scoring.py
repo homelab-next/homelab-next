@@ -273,3 +273,18 @@ def test_a_burst_outranks_high_cardinality_and_unlearned_under_the_cap():
         "high_cardinality": 1,
         "unlearned": 1,
     }
+
+
+def test_a_burst_takes_its_entitys_learning_labels():
+    # b9 bursts on the scoring day (green) but was seen while learning under amber: the burst row
+    # is derived from both, so it is amber
+    r = score(
+        [],
+        [],
+        burst={"b9": 50},
+        high_learn=[GroupCount("b9", (), D[7], Label.AMBER, 3)],
+        high_scoring=[GroupCount("b9", (), D[9], Label.GREEN, 50)],
+    )
+    (row,) = r.rows
+    assert (row["status"], row["tlp"], row["count"]) == ("burst", "amber", 50)
+    assert row["entity_total"] == 1.5  # 3 rows two days old

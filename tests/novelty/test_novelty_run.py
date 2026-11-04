@@ -346,3 +346,15 @@ def test_the_engines_own_cap_counts_the_union_of_both_windows(monkeypatch):
     monkeypatch.setattr(engine, "MAX_ENTITIES", 1)
     (result,) = run(reader, parse_spec(SPEC, SCHEMAS), AS_OF)
     assert result.status == "failed" and "2 noisy entities > 1" in result.error
+
+
+def test_write_findings_takes_no_other_write_option(lake):
+    (result,) = _run(lake, write=False)
+    kw = {"source": "lake-novelty", "mark": "lake-novelty/host-dst-port"}
+    with pytest.raises(TypeError):
+        write_findings(lake, result.rows, **kw, idempotency_key=result.batch_id, expect_source="x")  # fmt: skip
+    res = write_findings(lake, result.rows, **kw, idempotency_key=result.batch_id, high_water="h")
+    assert res.rows_written == len(result.rows)
+    assert (
+        lake.describe("novelty_finding").committed["lake-novelty/host-dst-port"].high_water == "h"
+    )
