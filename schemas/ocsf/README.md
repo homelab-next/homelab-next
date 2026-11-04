@@ -12,6 +12,13 @@ schema, the Trino / DuckDB / SQLite DDL and row validation are all generated fro
 | `dns_activity.v1.json` | DNS Activity | 4003 | `dns_activity` |
 | `detection_finding.v1.json` | Detection Finding | 2004 | `detection_finding` |
 | `vulnerability_finding.v1.json` | Vulnerability Finding | 2002 | `vulnerability_finding` |
+| `novelty_finding.v1.json` (1.0, **draft**) | none: the platform's own, in these conventions | 0 | `novelty_finding` |
+
+`novelty_finding` (ADR-0035, proposed; [docs/novelty.md](../../docs/novelty.md)) holds advisory
+behavioural-novelty findings: `source_kind` is always `heuristic`, `source` names what produced
+the row (`lake-novelty`, or a host sensor) and `status` is `finding`, `unlearned` or
+`high_cardinality`. It is a draft (`x-draft`), not frozen until ADR-0035 is accepted, and was born
+with the `tlp` column, so its version is 1.0.
 
 Conventions
 

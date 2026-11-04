@@ -66,8 +66,10 @@ def test_negative_rejected_by_lake_validator(path):
 def test_schema_files_declare_the_lake_block_and_pin_version():
     for name, s in SCHEMAS.items():
         doc = json.loads((ROOT / f"{name}.v1.json").read_text())
-        # 1.1 adds the row's TLP label (ADR-0033 decision 5); 1.0 stays frozen beside it
-        assert doc["$id"].endswith(f"/ocsf/{name}/1.1")
+        # 1.1 adds the row's TLP label (ADR-0033 decision 5); 1.0 stays frozen beside it.  The
+        # novelty table (ADR-0035, a draft) was born labelled, at 1.0
+        version = "1.0" if name == "novelty_finding" else "1.1"
+        assert doc["$id"].endswith(f"/ocsf/{name}/{version}")
         assert doc["additionalProperties"] is False
         assert s.labelled and s.column("tlp").enum == tlp.LABELS
         assert s.key == ("uid",) and s.partition == "day(time)"

@@ -1,0 +1,24 @@
+1: uid: string not null
+2: time: timestamp not null
+3: as_of: timestamp not null
+4: source: string not null
+5: source_kind: string not null
+6: profile: string not null
+7: entity: string not null
+8: entity_column: string
+9: value: string
+10: value_columns: list<string>
+12: status: string not null
+13: score: double
+14: confidence: double
+15: support: double
+16: entity_total: double
+17: count: long
+18: learn_since: timestamp
+19: learn_until: timestamp
+20: score_since: timestamp
+21: score_until: timestamp
+22: spec_digest: string
+23: message: string
+24: reasons: list<string>
+26: tlp: string
