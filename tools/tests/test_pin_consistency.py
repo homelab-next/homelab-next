@@ -70,15 +70,22 @@ def test_ruff_check_reads_the_three_places(tmp_path):
 # --- images: the lab's NATS and the CI nats-server; one pin per image repository ---------------
 
 
+# a registry host may carry a port (host:5000/name); a pin may be a tag, a digest or both; a
+# Dockerfile FROM may take flags; a FROM naming an earlier stage (no tag, no digest) is not a pin
 IMAGE_RE = re.compile(
-    r"^\s*(?:image:|FROM|[a-z0-9_]+_image:)\s+\"?(?P<repo>[a-z0-9./_-]+):(?P<tag>[A-Za-z0-9._-]+)"
-    r"(?:@(?P<digest>sha256:[0-9a-f]{64}))?\"?",
+    r"^\s*(?:image:|FROM(?:\s+--\S+)*|[a-z0-9_]+_image:)\s+[\"']?"
+    r"(?P<repo>(?:[a-z0-9.-]+:[0-9]+/)?[a-z0-9._/-]+)"
+    r"(?::(?P<tag>[A-Za-z0-9._-]+))?(?:@(?P<digest>sha256:[0-9a-f]{64}))?(?=[\"'\s]|$)",
     re.M,
 )
 
 
 def image_pins(text: str) -> list[tuple[str, str, str | None]]:
-    return [(m["repo"], m["tag"], m["digest"]) for m in IMAGE_RE.finditer(text)]
+    return [
+        (m["repo"], m["tag"], m["digest"])
+        for m in IMAGE_RE.finditer(text)
+        if m["tag"] or m["digest"]
+    ]
 
 
 def test_the_ci_nats_server_is_the_lab_image_version():
@@ -100,7 +107,7 @@ def _image_sources() -> list[Path]:
 
 
 def test_an_image_repository_is_pinned_to_one_tag_and_digest_everywhere():
-    seen: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
+    seen: dict[str, set[tuple[str | None, str | None]]] = defaultdict(set)
     where: dict[str, set[str]] = defaultdict(set)
     for path in _image_sources():
         for repo, tag, digest in image_pins(path.read_text()):
@@ -118,12 +125,19 @@ def test_the_image_parser_reads_compose_dockerfiles_and_role_defaults():
         "FROM python:3.12-slim-bookworm@sha256:" + "b" * 64 + "\n"
         'open_webui_image: "ghcr.io/open-webui/open-webui:v0.11.4@sha256:' + "c" * 64 + '"\n'
         "    image: hnx-lab-fakes:local\n"
+        "    image: registry.example.test:5000/team/app:1.2\n"
+        "    image: registry.example.test/team/tool@sha256:" + "d" * 64 + "\n"
+        "FROM --platform=$BUILDPLATFORM base:1 AS build\n"
+        "FROM build\n"
     )
     assert image_pins(text) == [
         ("nats", "2.10.22-alpine", "sha256:" + "a" * 64),
         ("python", "3.12-slim-bookworm", "sha256:" + "b" * 64),
         ("ghcr.io/open-webui/open-webui", "v0.11.4", "sha256:" + "c" * 64),
         ("hnx-lab-fakes", "local", None),
+        ("registry.example.test:5000/team/app", "1.2", None),
+        ("registry.example.test/team/tool", None, "sha256:" + "d" * 64),
+        ("base", "1", None),
     ]
 
 
@@ -159,12 +173,14 @@ def _caddy_versions(doc) -> list[str]:
 
 def test_the_example_registries_run_the_caddy_ci_checks_with():
     ci = job_env("schemas", "CADDY_VERSION")
-    found = {}
+    found: dict[str, list[str]] = {}
     for path in sorted((ROOT / "examples").rglob("services.yml")):
-        for v in _caddy_versions(yaml.safe_load(path.read_text())):
-            found[path.relative_to(ROOT).as_posix()] = v
+        versions = _caddy_versions(yaml.safe_load(path.read_text()))
+        if versions:
+            found[path.relative_to(ROOT).as_posix()] = versions
     assert found, "no example registry runs caddy"
-    assert {p: v for p, v in found.items() if v != ci} == {}, f"CI caddy is {ci}"
+    # every caddy service of a registry, not the last one read
+    assert {p: vs for p, vs in found.items() if set(vs) != {ci}} == {}, f"CI caddy is {ci}"
     page = read("docs/systems/edge-proxy.md")
     assert f"- Implementation: `caddy` {ci}\n" in page, "regenerate docs/systems (make docs)"
 
@@ -194,9 +210,11 @@ def test_the_private_overlay_doc_names_the_pinned_tailscale_action():
 # --- actions: one action, one commit, one version comment, in every workflow tree ---------------
 
 
+# a `uses:` step key at the start of its line, so a commented-out step is not read
 USES_RE = re.compile(
-    r"uses:\s+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]*)?@(?P<ref>\S+)"
-    r"(?:\s+#\s*(?P<comment>\S+))?"
+    r"^[ \t]*(?:-[ \t]+)?uses:[ \t]+(?P<action>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/[^@\s]*)?@(?P<ref>\S+)"
+    r"(?:[ \t]+#[ \t]*(?P<comment>\S+))?",
+    re.M,
 )
 
 
@@ -205,8 +223,12 @@ def action_pins(text: str) -> list[tuple[str, str, str | None]]:
 
 
 def _workflow_files() -> list[Path]:
-    trees = [ROOT / ".github", ROOT / "examples" / "private-overlay" / ".github"]
-    return sorted(p for t in trees for p in t.rglob("*.y*ml") if p.suffix in (".yml", ".yaml"))
+    """Workflows and composite actions only (not dependabot.yml or other .github config)."""
+    out: list[Path] = []
+    for gh in (ROOT / ".github", ROOT / "examples" / "private-overlay" / ".github"):
+        out += [*(gh / "workflows").glob("*.yml"), *(gh / "workflows").glob("*.yaml")]
+        out += [*(gh / "actions").rglob("action.yml"), *(gh / "actions").rglob("action.yaml")]
+    return sorted(out)
 
 
 def test_every_action_is_one_full_sha_with_one_version_comment_everywhere():
@@ -235,6 +257,8 @@ def test_every_action_is_one_full_sha_with_one_version_comment_everywhere():
         ),
         ("      - uses: ./.github/actions/python-deps", []),
         ("        uses: owner/repo@main", [("owner/repo", "main", None)]),
+        ("      # - uses: owner/repo@main  # disabled", []),
+        ("      - run: echo uses: owner/repo@main", []),
     ],
 )
 def test_the_uses_parser(line, want):
