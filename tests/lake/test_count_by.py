@@ -10,6 +10,7 @@ import synthetic
 
 from homelabnext.lake import FakeLake, LakeError, load_schemas
 from homelabnext.lake.ceiling import (
+    MAX_ENTITIES,
     MAX_GROUPS,
     CeilingError,
     CeilingReader,
@@ -167,8 +168,10 @@ def test_multiple_values_and_nulls_are_not_counted(lake):
         ({"values": ["dst_endpoint.nope"]}, "not its column"),
         ({"values": ["dst_endpoint"]}, "is a struct"),
         ({"values": ["time"]}, "is a timestamp"),
-        ({"values": []}, "at least one value"),
-        ({"entity": None}, "or neither"),
+        ({"entity": None}, "values need an entity"),
+        ({"where": {"time": SINCE}}, "is a timestamp"),
+        ({"skip_entities": ["alice", None]}, "none of them null"),
+        ({"only_entities": ["x"] * 1001}, "at most 1000"),
         ({"time_column": "user_name"}, "time column"),
         ({"where": {"nope": 1}}, "not its column"),
         ({"where": {"user_name": None}}, "None"),
@@ -320,3 +323,69 @@ def test_keys_come_back_as_their_column_type(lake):
         "authentication", "user_name", ["is_mfa", "dst_endpoint.port"], since=SINCE, until=UNTIL
     )
     assert got and all(type(g.values[0]) is bool and type(g.values[1]) is int for g in got)
+
+
+def test_per_entity_counts_and_entity_lists(lake):
+    reader = _reader(lake, Label.RED)
+    args = {"since": SINCE, "until": UNTIL}
+    per_entity = reader.count_by("authentication", "user_name", [], **args)
+    assert [(g.entity, g.values, g.day, g.count) for g in per_entity] == [
+        ("alice", (), date(2026, 3, 1), 2),
+        ("alice", (), date(2026, 3, 2), 1),
+        ("alice", (), date(2026, 3, 2), 1),
+        ("bob", (), date(2026, 3, 2), 1),
+    ]
+    only = reader.count_by("authentication", "user_name", [], only_entities=["bob"], **args)
+    assert {g.entity for g in only} == {"bob"}
+    skip = reader.count_by("authentication", "user_name", ["dst_endpoint.port"], skip_entities=["alice"], **args)  # fmt: skip
+    assert {g.entity for g in skip} == {"bob"}
+    assert reader.count_by("authentication", "user_name", [], only_entities=[], **args) == []
+    assert (
+        reader.count_by("authentication", "user_name", [], skip_entities=[], **args) == per_entity
+    )
+    hostile = reader.count_by("authentication", "user_name", [], only_entities=["x' OR '1'='1"], **args)  # fmt: skip
+    assert hostile == []
+    with pytest.raises(CeilingError, match="needs an entity"):
+        reader.count_by("authentication", None, [], only_entities=["bob"], **args)
+
+
+def test_cardinality_names_only_the_entities_over_the_bound(lake):
+    reader = _reader(lake, Label.RED)
+    args = ("authentication", "user_name", ["dst_endpoint.port"])
+    # alice: ports 22 and 443 in range; bob: 22
+    assert reader.cardinality(*args, since=SINCE, until=UNTIL, above=1) == {"alice": 2}
+    assert reader.cardinality(*args, since=SINCE, until=UNTIL, above=0) == {"alice": 2, "bob": 1}
+    assert reader.cardinality(*args, since=SINCE, until=UNTIL, above=2) == {}
+    # the ceiling applies: below amber, alice's 443 row is not there
+    green = _reader(lake, Label.GREEN).cardinality(*args, since=SINCE, until=UNTIL, above=0)
+    assert green == {"alice": 1}
+    with pytest.raises(TooManyGroups, match="more than 1 entities"):
+        reader.cardinality(*args, since=SINCE, until=UNTIL, above=0, limit=1)
+    with pytest.raises(CeilingError, match="limit"):
+        reader.cardinality(*args, since=SINCE, until=UNTIL, above=0, limit=MAX_ENTITIES + 1)
+    with pytest.raises(CeilingError, match="entity and value"):
+        reader.cardinality("authentication", "user_name", [], since=SINCE, until=UNTIL, above=0)
+
+
+def test_cardinality_agrees_on_duckdb(lake):
+    pytest.importorskip("duckdb")
+    pa = pytest.importorskip("pyarrow")
+    from homelabnext.lake import DuckDBLake
+    from homelabnext.lake.ddl import to_pyarrow
+    from homelabnext.lake.validate import normalize_rows
+
+    rows = [_row(f"c{i}", t=SINCE + timedelta(hours=i), port=p) for i, p in enumerate([1, 2, 2, 3])]
+    rows.append(_row("c9", t=SINCE, user="bob", port=1))
+    s = SCHEMAS["authentication"]
+    duck = DuckDBLake(
+        {"authentication": pa.Table.from_pylist(normalize_rows(s, rows), schema=to_pyarrow(s))},
+        SCHEMAS,
+    )
+    args = ("authentication", "user_name", ["dst_endpoint.port"])
+    want = _reader(_lake(rows), Label.RED).cardinality(*args, since=SINCE, until=UNTIL, above=1)
+    assert want == {"alice": 3}
+    assert _reader(duck, Label.RED).cardinality(*args, since=SINCE, until=UNTIL, above=1) == want
+    only = {"only_entities": ["bob"], "since": SINCE, "until": UNTIL}
+    assert _typed(_reader(duck, Label.RED).count_by("authentication", "user_name", [], **only)) == (
+        _typed(_reader(_lake(rows), Label.RED).count_by("authentication", "user_name", [], **only))
+    )

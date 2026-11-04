@@ -91,7 +91,13 @@ One writer per `(table, source)` is assumed.
   table's schema (`dst_endpoint.port`); keys are scalars that are not timestamps; a row whose
   entity or a value is null is not counted; `where` is equality with bound values. The ceiling's
   filter is in the query and each group's label is checked again; more groups than `limit`
-  (at most 100,000) raise `TooManyGroups`, never a truncated answer. The query engine's
+  (at most 100,000) raise `TooManyGroups`, never a truncated answer. With no values it counts
+  per entity (or, with no entity either, per day: a table's history); `only_entities` and
+  `skip_entities` (at most 1,000 bound values) keep or drop entities; keys come back as their
+  column's type, whatever the engine returned. `CeilingReader.cardinality(table, entity, values,
+  *, since, until, above, ...)` names the entities with more than `above` distinct value tuples
+  (one row each, however many values), so a noisy entity can be set aside before a per-value
+  read. The query engine's
   own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.

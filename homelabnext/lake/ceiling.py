@@ -39,6 +39,7 @@ from .errors import LakeError
 from .tables import LABEL_COLUMN, SCALARS, Column, TableSchema, iter_columns, row_label
 
 __all__ = [
+    "MAX_ENTITIES",
     "CeilingError",
     "CeilingReader",
     "GroupCount",
@@ -53,6 +54,9 @@ __all__ = [
 MAX_LIMIT = 10_000
 #: the most groups one count_by may be asked for (its ``limit``)
 MAX_GROUPS = 100_000
+#: the most entities one grouped read may name (``only_entities``, ``skip_entities``) or a
+#: cardinality read return: each is a bound parameter
+MAX_ENTITIES = 1_000
 #: the column types a count_by key may have (a struct or list is not a key; nor is a timestamp,
 #: which the day already buckets)
 KEY_TYPES = tuple(t for t in SCALARS if t != "timestamp")
@@ -60,6 +64,17 @@ KEY_TYPES = tuple(t for t in SCALARS if t != "timestamp")
 
 class CeilingError(LakeError):
     """A read the reader's ceiling does not allow (raw SQL below red, an unlabelled table)."""
+
+
+@dataclass(frozen=True)
+class _Parts:
+    schema: TableSchema
+    dialect: str
+    keys: list[str]
+    types: list[str]
+    time: str
+    conds: list[str]
+    params: dict[str, Any]
 
 
 class TooManyGroups(LakeError):
@@ -202,6 +217,8 @@ class CeilingReader:
         until: datetime,
         time_column: str = "time",
         where: Mapping[str, Any] | None = None,
+        only_entities: Sequence[Any] | None = None,
+        skip_entities: Sequence[Any] | None = None,
         limit: int = MAX_LIMIT,
     ) -> list[GroupCount]:
         """Rows of ``table`` with ``since <= time_column < until`` at or below the ceiling,
@@ -212,21 +229,126 @@ class CeilingReader:
         the table's schema.  A key is a scalar column that is not a timestamp; ``time_column`` is
         a timestamp.  A row whose entity or any value is null is not counted.  ``where`` values
         are bound parameters (equality only; ``None`` is refused, as ``= NULL`` matches nothing).
-        The ceiling's row filter is applied in the query and every group's label is checked
-        again, as :meth:`select` does.  More than ``limit`` groups raise :class:`TooManyGroups`:
-        nothing is truncated.  Keys come back as their column's type (``bool`` for a boolean,
-        ``int`` for a long, whatever the engine returned).  Groups come back sorted by entity,
-        values, day and label.
+        ``only_entities`` / ``skip_entities`` (at most :data:`MAX_ENTITIES` each, bound values)
+        keep or drop the rows of those entities.  The ceiling's row filter is applied in the
+        query and every group's label is checked again, as :meth:`select` does.  More than
+        ``limit`` groups raise :class:`TooManyGroups`: nothing is truncated.  Keys come back as
+        their column's type (``bool`` for a boolean, ``int`` for a long, whatever the engine
+        returned).  Groups come back sorted by entity, values, day and label.
 
-        ``entity=None`` with no ``values`` counts per day and label only (the table's history in
-        the range, as this reader sees it); its groups have ``entity`` None and ``values`` ()."""
-        schema = self._table(table)
+        With no ``values`` it counts per entity, day and label; with ``entity=None`` as well, per
+        day and label only (the table's history in the range, as this reader sees it).  A
+        missing key is ``None`` in ``entity`` and absent from ``values``."""
         if type(values) not in (list, tuple):
             raise CeilingError(f"{table}: count_by values must be a list of column paths")
-        if (entity is None) != (not values):
-            raise CeilingError(
-                f"{table}: count_by needs an entity and at least one value column (or neither)"
+        if entity is None and values:
+            raise CeilingError(f"{table}: count_by values need an entity")
+        q = self._query_parts(
+            table, [k for k in (entity, *values) if k is not None], since, until, time_column,
+            where, only_entities, skip_entities, limit,
+        )  # fmt: skip
+        group = [*q.keys, day_expr(q.dialect, q.time)]
+        if q.schema.labelled:
+            group.append(f'"{LABEL_COLUMN}"')
+        names = ["k_entity"] if entity is not None else []
+        names += [f"k_v{i}" for i in range(len(values))] + ["k_day"]
+        names += ["k_tlp"] if q.schema.labelled else []
+        sql = (
+            "SELECT "
+            + ", ".join(f"{e} AS {n}" for e, n in zip(group, names, strict=True))
+            + f", count(*) AS k_n FROM {_ident(q.schema.name)} WHERE "
+            + " AND ".join(q.conds)
+            + " GROUP BY "
+            + ", ".join(group)
+            + " ORDER BY "
+            + ", ".join(str(i) for i in range(1, len(group) + 1))
+            + f" LIMIT {limit + 1}"
+        )
+        rows = self._lake.query(sql, q.params)
+        if len(rows) > limit:
+            raise TooManyGroups(
+                f"{table}: more than {limit} groups for count_by({entity!r}, {list(values)!r});"
+                " narrow the window, the filters or the values, or raise the limit"
             )
+        out = []
+        offset = 1 if entity is not None else 0
+        for r in rows:
+            label = self._group_label(q.schema, r)
+            if label is None:
+                continue
+            out.append(
+                GroupCount(
+                    _as_type(r["k_entity"], q.types[0]) if entity is not None else None,
+                    tuple(_as_type(r[f"k_v{i}"], q.types[i + offset]) for i in range(len(values))),
+                    _as_day(r["k_day"]),
+                    label,
+                    int(r["k_n"]),
+                )
+            )
+        return sorted(out, key=_group_order)
+
+    def cardinality(
+        self,
+        table: str,
+        entity: str,
+        values: Sequence[str],
+        *,
+        since: datetime,
+        until: datetime,
+        above: int,
+        time_column: str = "time",
+        where: Mapping[str, Any] | None = None,
+        limit: int = MAX_ENTITIES,
+    ) -> dict[Any, int]:
+        """The entities with more than ``above`` distinct ``values`` tuples among the rows
+        :meth:`count_by` would count, each with its number of distinct tuples.  It returns no
+        values and no labels (call :meth:`count_by` with no values for an entity's labels), so a
+        noisy entity costs one row however many values it has.  The ceiling's predicate is in
+        the query; with no label in the result there is nothing to check again.  More than
+        ``limit`` (at most :data:`MAX_ENTITIES`) such entities raise :class:`TooManyGroups`."""
+        if type(values) not in (list, tuple) or not values or entity is None:
+            raise CeilingError(f"{table}: cardinality needs an entity and value columns")
+        if type(above) is not int or above < 0:
+            raise CeilingError("cardinality: above must be an integer >= 0")
+        if type(limit) is not int or not 1 <= limit <= MAX_ENTITIES:
+            raise CeilingError(f"cardinality: limit must be 1..{MAX_ENTITIES}")
+        q = self._query_parts(
+            table, [entity, *values], since, until, time_column, where, None, None, limit
+        )
+        inner = ", ".join(f"{k} AS k_{i}" for i, k in enumerate(q.keys))
+        sql = (
+            f"SELECT k_0 AS k_entity, count(*) AS k_n FROM (SELECT DISTINCT {inner} FROM "
+            f"{_ident(q.schema.name)} WHERE " + " AND ".join(q.conds) + ") AS d "
+            f"GROUP BY k_0 HAVING count(*) > {above} ORDER BY 1 LIMIT {limit + 1}"
+        )
+        rows = self._lake.query(sql, q.params)
+        if len(rows) > limit:
+            raise TooManyGroups(
+                f"{table}: more than {limit} entities with over {above} distinct values"
+            )
+        return {_as_type(r["k_entity"], q.types[0]): int(r["k_n"]) for r in rows}
+
+    def _group_label(self, schema: TableSchema, row: Mapping[str, Any]) -> tlp.Label | None:
+        """A group's label checked against the ceiling again (None: above it, dropped)."""
+        label = row_label({LABEL_COLUMN: row.get("k_tlp")}) if schema.labelled else tlp.Label.RED
+        return label if tlp.allows(self.ceiling, label) else None
+
+    def _query_parts(
+        self,
+        table: str,
+        key_paths: Sequence[Any],
+        since: datetime,
+        until: datetime,
+        time_column: str,
+        where: Mapping[str, Any] | None,
+        only: Sequence[Any] | None,
+        skip: Sequence[Any] | None,
+        limit: int,
+    ) -> _Parts:
+        """The validated pieces of a grouped read: key expressions and types, the time
+        expression, the WHERE conditions (range, non-null keys, filters, entity lists, the
+        ceiling's predicate) and their bound parameters."""
+        schema = self._table(table)
         dialect = dialect_of(self._lake)
         paths = dict(iter_columns(schema.columns))
 
@@ -240,9 +362,8 @@ class CeilingReader:
                 )
             return field_expr(dialect, path.split("."))
 
-        key_paths = [entity, *values] if values else []
         keys = [expr(k, KEY_TYPES, "key") for k in key_paths]
-        key_types = [paths[k].type for k in key_paths]
+        types = [paths[k].type for k in key_paths]
         tcol = expr(time_column, ("timestamp",), "time column")
         for name, when in (("since", since), ("until", until)):
             if not isinstance(when, datetime) or when.utcoffset() is None:
@@ -256,49 +377,27 @@ class CeilingReader:
         for i, (col, value) in enumerate((where or {}).items()):
             if value is None:
                 raise CeilingError(f"{table}: where {col!r} is None (equality never matches null)")
-            conds.append(f"{expr(col, SCALARS, 'where column')} = :w{i}")
+            conds.append(f"{expr(col, KEY_TYPES, 'where column')} = :w{i}")
             params[f"w{i}"] = value
+        for tag, entities, op in (("o", only, "IN"), ("x", skip, "NOT IN")):
+            if entities is None:
+                continue
+            if not keys:
+                raise CeilingError(f"{table}: an entity list needs an entity")
+            entities = list(entities)
+            if len(entities) > MAX_ENTITIES or any(e is None for e in entities):
+                raise CeilingError(f"{table}: at most {MAX_ENTITIES} entities, none of them null")
+            if not entities:
+                if op == "IN":
+                    conds.append("1 = 0")  # no entity at all
+                continue
+            marks = ", ".join(f":{tag}{i}" for i in range(len(entities)))
+            conds.append(f"{keys[0]} {op} ({marks})")
+            params.update({f"{tag}{i}": e for i, e in enumerate(entities)})
         predicate = tlp.row_filter_sql(self.ceiling, LABEL_COLUMN) if schema.labelled else None
         if predicate:
             conds.append(predicate)
-        group = [*keys, day_expr(dialect, tcol)]
-        if schema.labelled:
-            group.append(f'"{LABEL_COLUMN}"')
-        names = (["k_entity"] if values else []) + [f"k_v{i}" for i in range(len(values))]
-        names.append("k_day")
-        names += ["k_tlp"] if schema.labelled else []
-        sql = (
-            "SELECT "
-            + ", ".join(f"{e} AS {n}" for e, n in zip(group, names, strict=True))
-            + f", count(*) AS k_n FROM {_ident(schema.name)} WHERE "
-            + " AND ".join(conds)
-            + " GROUP BY "
-            + ", ".join(group)
-            + " ORDER BY "
-            + ", ".join(str(i) for i in range(1, len(group) + 1))
-            + f" LIMIT {limit + 1}"
-        )
-        rows = self._lake.query(sql, params)
-        if len(rows) > limit:
-            raise TooManyGroups(
-                f"{table}: more than {limit} groups for count_by({entity!r}, {list(values)!r});"
-                " narrow the window, the filters or the values, or raise the limit"
-            )
-        out = []
-        for r in rows:
-            label = row_label({LABEL_COLUMN: r.get("k_tlp")}) if schema.labelled else tlp.Label.RED
-            if not tlp.allows(self.ceiling, label):
-                continue
-            out.append(
-                GroupCount(
-                    _as_type(r["k_entity"], key_types[0]) if values else None,
-                    tuple(_as_type(r[f"k_v{i}"], key_types[i + 1]) for i in range(len(values))),
-                    _as_day(r["k_day"]),
-                    label,
-                    int(r["k_n"]),
-                )
-            )
-        return sorted(out, key=_group_order)
+        return _Parts(schema, dialect, keys, types, tcol, conds, params)
 
     def _table(self, table: str) -> TableSchema:
         schema = self._schemas.get(table) if type(table) is str else None
