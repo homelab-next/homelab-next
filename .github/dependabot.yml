@@ -9,9 +9,9 @@
 #
 # Some versions live in more than one place, and dependabot moves only the copy it can parse:
 # ruff (.pre-commit-config.yaml, constraints/ci-tools.in, constraints/ci.txt), the NATS image
-# and CI's NATS_SERVER_VERSION, one action at one SHA everywhere.  tools/tests/test_pin_
-# consistency.py fails such a one-sided pull request; finish it by hand (`make constraints` for
-# ruff).  What dependabot cannot parse at all (role defaults, CI version+checksum pairs,
+# and CI's NATS_SERVER_VERSION, one action at one SHA everywhere.
+# tools/tests/test_pin_consistency.py fails such a one-sided pull request; finish it by hand
+# (`make constraints` for ruff).  What dependabot cannot parse at all (role defaults, CI version+checksum pairs,
 # GO_VERSION, the Terraform provider) is reported weekly by tools/pin_freshness.py.
 #
 # No gomod entry: there is no Go module yet.  tests/packaging/test_orchestrator_tree.py fails as
