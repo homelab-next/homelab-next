@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopback HTTP stand-in for the OpenBao API subset the ``secrets`` adapter uses.
 
-Shaped after OpenBao 2.1 (``vault/token_store.go``, the KV v2 plugin): KV v2 data/metadata
-endpoints with versions, ``?list=true`` folder listings (keys, sub-folders with a trailing ``/``,
-404 for an empty folder), ``DELETE metadata`` answering 204 whether or not the path exists,
-``sys/mounts``, ACL policies with ``path "<glob>*"`` read rules, child tokens with a TTL and
-metadata, ``lookup-accessor`` (400 ``invalid accessor``; 403 ``bad token`` once the TTL lapsed)
-and ``revoke-accessor``.  Error bodies are ``{"errors": [...]}``; with ``echo_errors`` they also
-echo the request body, so a test can prove the adapter never surfaces a server's error text.
+Shaped after OpenBao 2.7 (``internal/vault/token_store.go``, the KV v2 plugin under
+``internal/builtin/logical/kv/``; the handlers it models answer as they did in 2.1): KV v2
+data/metadata endpoints with versions, ``?list=true`` folder listings (keys, sub-folders with a
+trailing ``/``, 404 for an empty folder), ``DELETE metadata`` answering 204 whether or not the path
+exists, ``sys/mounts``, ACL policies with ``path "<glob>*"`` read rules, child tokens with a TTL and
+metadata, ``lookup-accessor`` (400 ``invalid accessor``; 403 ``bad token`` once the TTL lapsed) and
+``revoke-accessor``. Error bodies are ``{"errors": [...]}``; with ``echo_errors`` they also echo the
+request body, so a test can prove the adapter never surfaces a server's error text.
 
 Not modelled: namespaces, response wrapping, renewals, CAS, ``max_versions`` pruning.
 """
