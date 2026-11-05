@@ -49,7 +49,7 @@ author: unknown
 ## Outputs
 
 <!-- hnx:gen:outputs -->
-- Metrics: `/metrics`
+- Metrics: none declared
 - MCP: none
 <!-- /hnx:gen -->
 
