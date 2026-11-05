@@ -168,6 +168,19 @@ imports the lab's S3 key once and Garage v2 refuses to import a key id it has ev
 `KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
 `LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
 
+The catalog database is PostgreSQL 18 (`postgres:18.6-alpine`). From 18 the official image keeps
+its data at `/var/lib/postgresql/18/docker` (`PGDATA`) under a volume at `/var/lib/postgresql`,
+so the lab mounts `postgres-data` there, not at the old `/var/lib/postgresql/data`; a later major
+gets its own `<major>/docker` beside it, which is what lets `pg_upgrade --link` work inside one
+mount. A major upgrade never converts data: the entrypoint refuses a volume an older server
+initialised (after creating an empty `18/docker` in it), so a lab recreates it
+(`docker compose down -v`) and a site with data to keep dumps and restores, or runs `pg_upgrade`,
+first. For `pg_upgrade` the clusters must agree on data checksums: one the 16 image made has them
+off and 18's `initdb` turns them on, so initialise the 18 cluster with
+`POSTGRES_INITDB_ARGS=--no-data-checksums` (or `pg_checksums --enable` the stopped 16 cluster
+first); a dump and restore is unaffected. The healthcheck probes over TCP because the entrypoint's
+init server listens on the socket only, so postgres is not reported healthy mid-initialisation.
+
 The lake catalog is Lakekeeper 0.14 (`quay.io/lakekeeper/catalog:v0.14.1`; `catalog-migrate`
 runs its `migrate` before `serve`, so a kept Postgres volume from 0.9 is migrated forward on the
 first start, one way). Three upstream changes since 0.9 matter here:

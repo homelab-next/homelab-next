@@ -296,6 +296,77 @@ def test_negative_the_gateway_on_the_lab_superuser_is_caught(compose):
     assert gateway_db_problems(compose, "") != []  # an init script that creates nothing
 
 
+def postgres_data_problems(compose) -> list[str]:
+    """From 18 the official image keeps PGDATA at ``/var/lib/postgresql/<major>/docker`` and its
+    VOLUME at ``/var/lib/postgresql``; its entrypoint refuses to start over a mount at the old
+    ``/var/lib/postgresql/data``, and a volume there would leave the data in an anonymous one."""
+    pg = compose["services"]["postgres"]
+    m = re.match(r"postgres:(\d+)\.\d+-alpine@sha256:[0-9a-f]{64}$", pg["image"])
+    if not m:
+        return [f"unexpected postgres image: {pg['image']}"]
+    major = int(m.group(1))
+    data = [v for v in pg.get("volumes", []) if v.startswith("postgres-data:")]
+    want = (
+        "postgres-data:/var/lib/postgresql"
+        if major >= 18
+        else "postgres-data:/var/lib/postgresql/data"
+    )
+    if data != [want]:
+        return [f"postgres {major} mounts its data volume as {data}, not [{want!r}]"]
+    if major >= 18 and pg.get("environment", {}).get("PGDATA"):
+        return ["PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"]
+    return []
+
+
+def test_postgres_data_volume_matches_the_image_major(compose):
+    assert postgres_data_problems(compose) == []
+
+
+def test_negative_postgres_18_on_the_old_data_mount_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    vols = broken["services"]["postgres"]["volumes"]
+    vols[vols.index("postgres-data:/var/lib/postgresql")] = "postgres-data:/var/lib/postgresql/data"
+    assert postgres_data_problems(broken) == [
+        "postgres 18 mounts its data volume as ['postgres-data:/var/lib/postgresql/data'], "
+        "not ['postgres-data:/var/lib/postgresql']"
+    ]
+
+
+def test_negative_postgres_18_with_pgdata_overridden_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["postgres"]["environment"]["PGDATA"] = "/var/lib/postgresql/data/pgdata"
+    assert postgres_data_problems(broken) == [
+        "PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"
+    ]
+
+
+def test_postgres_is_healthy_only_over_tcp(compose):
+    """The entrypoint's temporary init server listens on the unix socket only; a socket probe
+    would mark postgres healthy (and start its dependants) while the init scripts still run."""
+    test = compose["services"]["postgres"]["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL" and f"pg_isready -h {LOOPBACK} " in test[1], test
+
+
+def off_lab_network(compose) -> list[str]:
+    """Services that would land on compose's implicit default network, where no lab alias
+    (``*.svc.example.internal``) resolves: each joins ``lab`` or has no network at all."""
+    return sorted(
+        name
+        for name, svc in compose["services"].items()
+        if svc.get("network_mode") != "none" and "lab" not in (svc.get("networks") or [])
+    )
+
+
+def test_every_service_is_on_the_lab_network(compose):
+    assert off_lab_network(compose) == []
+
+
+def test_negative_a_service_without_networks_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    del broken["services"]["llm-gateway-keys"]["networks"]
+    assert off_lab_network(broken) == ["llm-gateway-keys"]
+
+
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
