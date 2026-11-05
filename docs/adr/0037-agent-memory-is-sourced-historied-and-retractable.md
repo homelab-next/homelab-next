@@ -71,6 +71,11 @@ was shown, never from what the model says about its sources.
    `sources: []`.
 3. **The clock is injected.** The store takes `now=` (a callable returning UTC). `_apply` reads no
    clock of its own.
+   A batch is stamped at the later of the clock and the log's newest record when the clock lags
+   by at most five minutes; a larger lag refuses the batch and pages once, so the log's time never
+   goes backwards. If the host clock was wrong forward and has been corrected, the log holds a
+   future-stamped record and refuses writes until real time passes it; recovering sooner is an
+   operator re-stamp in `MemoryAdmin` (PR 3).
 4. **No secret enters the log.** Before the transaction, every `key` and `value` is run through
    the platform's secret screen (`homelabnext.agent.screen`, secret types) and the leak-scan
    shapes. A match refuses the whole batch; the refusal names the key's position and the type,

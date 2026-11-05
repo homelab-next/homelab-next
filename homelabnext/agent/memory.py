@@ -214,7 +214,8 @@ class MemoryClockError(MemoryUpdateError):
         super().__init__(
             [
                 f"the clock is behind {owner}'s memory log by {behind} (more than {CLOCK_SKEW}); "
-                "fix the host clock: the log's time never goes backwards"
+                "fix the host clock, or, if it is right, the log holds a record stamped in the "
+                "future (an operator re-stamp, ADR-0037 PR 3): the log's time never goes backwards"
             ]
         )
 
@@ -1012,8 +1013,9 @@ class MemoryStore:
             None
             if behind is None
             else f"{owner}'s memory refuses writes: the clock is behind its log by {behind}. "
-            "Fix the host clock; nothing is written until it is within "
-            f"{CLOCK_SKEW} of the log.",
+            "Fix the host clock; if it is already right, the log holds a record stamped in the "
+            "future and needs an operator re-stamp (ADR-0037 PR 3). Nothing is written until the "
+            f"clock is within {CLOCK_SKEW} of the log.",
             f"{owner}'s memory clock is within {CLOCK_SKEW} of its log again",
         )
 
