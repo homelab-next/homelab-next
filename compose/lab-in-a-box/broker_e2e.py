@@ -609,7 +609,9 @@ def check_bridge_acks(relay: Relay) -> str:
     """What the bus ACL must still allow: the bridge's user reads ``decision.returned`` through its
     own durable and its acks take, in whichever ack reply-subject form the server sends (ADR-15;
     the ACL grants both).  A refused ack is a publish violation the client never hears about, so
-    the step reads the consumer back: nothing it was handed may still be pending."""
+    the step reads the consumer back: nothing it was handed may still be pending.  The step owns
+    the durable and settles real deliveries on it, which is safe only because the lab runs no bridge;
+    never point it at a bus where a real bridge uses that durable."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
     wire = relay.wire(LAB_NOT_BROKER)

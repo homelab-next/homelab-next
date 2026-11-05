@@ -344,7 +344,7 @@ def test_the_acl_check_reads_and_acks_as_the_bridge(e2e, tmp_path, ack_format):
     durable = shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers[e2e.LAB_NOT_BROKER_DURABLE]
     assert durable.pending == {}
 
-    # the bridge's grants with the other form's ack grants removed: its acks are refused
+    # the bridge's grants with the in-use form's ack grants removed (only the other form kept): its acks are refused
     bridge = nats_users()[e2e.LAB_NOT_BROKER]
     allow = bridge["permissions"]["publish"]["allow"]
     other = "$JS.ACK._." if ack_format == "v1" else "$JS.ACK.HNXLAB"
