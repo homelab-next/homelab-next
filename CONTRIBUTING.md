@@ -243,8 +243,10 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   its test re-derives it from the compose file) runs CI's `lab-in-a-box` job, the nightly's smoke,
   so an image or package bump, Dependabot's included, is green only once the stack has come up
   and passed. It needs no secret, so a Dependabot run (read-only token, no Actions secrets) runs
-  it as is. `lab-ok` is its required check: it passes when the stack passed, or when nothing it
-  reads changed and the job was skipped. `make lab-smoke` runs the same locally. Most pull
+  it as is. The same decision starts `lab-gateway`, the optional LLM gateway profile (only the
+  gateway and what it depends on, 1280 MB; docs/llm-gateway.md) with the `inference` suite against
+  its target. `lab-ok` is the required check for both: it passes when both passed, or when nothing
+  they read changed and both were skipped. `make lab-smoke` runs the same locally. Most pull
   requests run it, by design: the broker image copies nearly all of `homelabnext/`, `schemas/` and
   `examples/`, so a change there changes the image under test. Do not narrow `LAB_PATHS` to save
   runner time; a skipped stack is a green check that tested nothing. Step-level inputs (`setup.py`,
