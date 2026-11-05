@@ -111,6 +111,17 @@ conform_failure_summary() {
   done <<<"$out"
 }
 
+# uptime_hint: after `up --wait` failed, one line when the uptime service is there but not
+# running healthy.  Its 2.x image is rootless (uid 1000); a volume kept from a 1.x lab (--keep,
+# make lab-up) is root-owned, so the server cannot write it and never turns healthy.
+uptime_hint() {
+  local state
+  state="$(dc ps -a --format '{{.State}} {{.Health}}' uptime 2>/dev/null | head -n 1)"
+  case "$state" in
+    ""|"running healthy") ;;
+    *) echo "smoke.sh: hint: uptime is not healthy ($state); if its uptime-data volume was kept from a 1.x lab it is root-owned and the rootless 2.x image cannot write it: make lab-down (docker compose down -v), then retry" >&2 ;;
+  esac
+}
 collect_logs() {
   dc ps -a >"$report_dir/ps.txt" 2>&1
   dc logs --no-color --tail 200 >"$report_dir/compose.log" 2>&1
@@ -151,6 +162,7 @@ up_args=(up -d --wait --wait-timeout 420)
 echo "smoke.sh: bringing the stack up"
 if ! dc "${up_args[@]}"; then
   echo "smoke.sh: the stack did not become healthy" >&2
+  uptime_hint
   status=1
   exit "$status"
 fi
