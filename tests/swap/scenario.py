@@ -12,7 +12,7 @@ from homelabnext.lake import FakeLake
 from homelabnext.parity import ParityQuery, RowRules
 from homelabnext.swap import LakeBackend, Retired, SwapRunner
 
-BEFORE = {"host": "lake-core", "port": 8443, "impl": "trino", "version": "450.0"}
+BEFORE = {"host": "lake-core", "port": 8443, "impl": "trino", "version": "484.0"}
 AFTER = {"host": "lake-core-2", "port": 8443, "impl": "duckdb", "version": "1.5"}
 RETIRED = Retired(
     "trino-lake",
