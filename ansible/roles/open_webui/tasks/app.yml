@@ -19,6 +19,8 @@
             digest: "{{ open_webui_digest }}"
             environment: >-
               {{ open_webui_extra_env | combine(open_webui_fixed_env)
+                 | combine({'WEBUI_URL': open_webui_public_url, 'CORS_ALLOW_ORIGIN': open_webui_public_url}
+                           if open_webui_public_url | length > 0 else {})
                  | combine({'OPENAI_API_BASE_URLS': lookup('hnx_registry', open_webui_gateway_id, field='url') ~ '/v1'}) }}
             ports: ["{{ open_webui_bind }}:{{ open_webui_port | int }}:8080"]
             volumes: ["{{ open_webui_dir }}/data:/app/backend/data"]
