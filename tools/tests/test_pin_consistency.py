@@ -207,52 +207,69 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
 
 # --- metrics: the scrape target each pinned version really serves -------------------------------
 
+ISSUES = "https://github.com/homelab-next/homelab-next/issues/"
+ORCHESTRATOR_ADAPTER = "homelabnext/conform/adapters/llm_orchestrator.py"
+
 # What each product serves for Prometheus, read from its own source at the versions listed; a
-# registry naming another version of it fails until that version is read too.  `port` None is the
-# service's own port; `paths` None is any path but those in `not`.  `served` False: no
-# Prometheus endpoint at all, so the registry declares no metrics block (none is invented).
-#   lakekeeper: its own listener on METRICS_PORT, default 9000 (crates/lakekeeper/src/config.rs,
-#     `impl Default for Metrics`, at v0.14.1; docs/docs/configuration.md at v0.5.2), bound by
-#     metrics-exporter-prometheus, which renders every path but /health (http_listener.rs,
-#     handle_http_request, at 0.15.3 and 0.17.2, the versions those tags lock), in plain HTTP
+# registry metrics block for another version fails until that version is read and added here.
+# `port` "own" is the service's own port; "listener" is a separate listener whose port is
+# configurable (so a block must name it, and never the service port), `default_port` what it is
+# when nothing sets it.  `paths` None is any path but those in `not`.  `served` False: no
+# Prometheus endpoint at the listed versions, so the registry declares no metrics block.
+#   lakekeeper: its own plain-HTTP listener, default 9000, configurable via
+#     LAKEKEEPER__METRICS_PORT (crates/lakekeeper/src/config.rs, `impl Default for Metrics`, at
+#     v0.14.1; docs/docs/configuration.md at v0.5.2), bound by metrics-exporter-prometheus, which
+#     renders every path but /health (http_listener.rs, handle_http_request, at 0.15.3 and
+#     0.17.2, the versions those tags lock).  The example registries scrape it only once a
+#     metrics block can say plain HTTP on an https service (metrics.scheme, issue 250).
 #   trino: the coordinator's own HTTP(S) port, /metrics (Server.java installs airlift's
 #     JmxOpenMetricsModule at 450 and 484, whose MetricsResource is @Path("/metrics");
-#     docs admin/openmetrics.md), behind the server's authentication
-#   orchestrator: the controller's routes are its job API and /admin/*, and homelabnext serves
-#     nothing for it (docs/orchestration-controller.md)
+#     docs admin/openmetrics.md), behind the server's authentication: the generated job sends no
+#     credentials, so it gets 401 until scrape auth exists (issue 251)
+#   orchestrator: at the pinned a52a1c4 (the registry's 0.3.0; ORCHESTRATOR_ADAPTER names the
+#     pin) the controller's routes are its job API and /admin/*, and homelabnext serves nothing
+#     for it (docs/orchestration-controller.md).  Upstream serves GET /metrics from 0803f0f on,
+#     so a newer pin is a new version here.
 METRICS_SERVED: dict[str, dict] = {
     "lakekeeper": {
         "versions": {"0.5.2", "0.14.1"},
-        "port": 9000,
+        "port": "listener",
+        "default_port": 9000,
         "paths": None,
         "not": {"/health"},
     },
-    "trino": {"versions": {"450.0", "484.0"}, "port": None, "paths": {"/metrics"}},
-    "orchestrator": {"versions": None, "served": False},
+    "trino": {"versions": {"450.0", "484.0"}, "port": "own", "paths": {"/metrics"}},
+    "orchestrator": {"versions": {"0.3.0"}, "pin": "a52a1c4", "served": False},
 }
+FACTS = "METRICS_SERVED in tools/tests/test_pin_consistency.py"
 
 
-def metrics_mismatches(doc: dict) -> list[str]:
-    """Each metrics block (or missing one) of a registry document that its product does not serve."""
+def metrics_mismatches(doc: dict, src: str = "<registry>") -> list[str]:
+    """Each metrics block of a registry document that its product does not serve."""
     out: list[str] = []
     for name, s in sorted((doc.get("services") or {}).items()):
         fact = METRICS_SERVED.get(s.get("impl", ""))
-        if fact is None:
-            continue
         m = s.get("metrics")
-        where = f"{name} ({s['impl']} {s.get('version')})"
-        if not fact.get("served", True):
-            if m is not None:
-                out.append(f"{where}: declares metrics {m}, but serves no Prometheus endpoint")
-            continue
-        if str(s.get("version")) not in fact["versions"]:
-            out.append(f"{where}: no metrics fact for this version; read its source and add it")
-            continue
-        if m is None:
+        if fact is None or m is None:
             continue  # serving metrics is not an obligation to scrape them
-        port, want = m.get("port", s["port"]), fact["port"] or s["port"]
-        if port != want:
-            out.append(f"{where}: metrics on port {port}, served on {want}")
+        where = f"{src}: {name} ({s['impl']} {s.get('version')})"
+        if str(s.get("version")) not in fact["versions"]:
+            out.append(
+                f"{where}: {FACTS} has no fact for this version; read what it serves in its "
+                f"source at that version and add it (known: {sorted(fact['versions'])})"
+            )
+            continue
+        if not fact.get("served", True):
+            out.append(f"{where}: declares metrics {m}, but serves no Prometheus endpoint")
+            continue
+        port = m.get("port", s["port"])
+        if fact["port"] == "own" and port != s["port"]:
+            out.append(f"{where}: metrics on port {port}, served on {s['port']}")
+        if fact["port"] == "listener" and port == s["port"]:
+            out.append(
+                f"{where}: metrics on the service port {port}, served on a listener of its own "
+                f"(default {fact['default_port']})"
+            )
         path = m["path"]
         allowed = fact["paths"]
         if path in fact.get("not", ()) or (allowed is not None and path not in allowed):
@@ -260,35 +277,70 @@ def metrics_mismatches(doc: dict) -> list[str]:
     return out
 
 
-def _registries() -> list[Path]:
-    # the schema negatives are not: each exists to be rejected, so no generator reads one
+def listener_clashes(doc: dict, src: str = "<registry>") -> list[str]:
+    """Two listeners (service ports and metrics ports) on one host, port and transport."""
+    seen: dict[tuple, list[str]] = defaultdict(list)
+    for name, s in sorted((doc.get("services") or {}).items()):
+        transport = "udp" if s.get("protocol") == "udp" else "tcp"
+        seen[(s["host"], transport, s["port"])].append(name)
+        m = s.get("metrics")
+        if m and m.get("port") not in (None, s["port"]):
+            seen[(s["host"], "tcp", m["port"])].append(f"{name} metrics")
     return [
-        *sorted((ROOT / "examples").rglob("services.yml")),
-        *sorted((ROOT / "schemas" / "platform" / "examples").glob("service.*.yml")),
+        f"{src}: {host} {transport}/{port} is claimed by {', '.join(sorted(names))}"
+        for (host, transport, port), names in seen.items()
+        if len(names) > 1
     ]
 
 
-def test_every_registry_scrapes_what_its_product_serves():
-    found: dict[str, list[str]] = {}
-    for path in _registries():
+def _registries() -> list[tuple[str, dict]]:
+    # the schema negatives are not: each exists to be rejected, so no generator reads one
+    out = []
+    for path in [
+        *sorted((ROOT / "examples").rglob("services.yml")),
+        *sorted((ROOT / "schemas" / "platform" / "examples").glob("service.*.yml")),
+    ]:
         doc = yaml.safe_load(path.read_text())
-        if not (isinstance(doc, dict) and isinstance(doc.get("services"), dict)):
-            continue
-        if bad := metrics_mismatches(doc):
-            found[path.relative_to(ROOT).as_posix()] = bad
-    assert found == {}, f"metrics blocks a product does not serve: {found}"
+        if isinstance(doc, dict) and isinstance(doc.get("services"), dict):
+            out.append((path.relative_to(ROOT).as_posix(), doc))
+    return out
+
+
+def test_every_registry_scrapes_what_its_product_serves():
+    found = [bad for src, doc in _registries() for bad in metrics_mismatches(doc, src)]
+    assert found == [], "\n".join(["metrics blocks a product does not serve:", *found])
+
+
+def test_no_two_listeners_share_a_host_and_port():
+    found = [bad for src, doc in _registries() for bad in listener_clashes(doc, src)]
+    assert found == [], "\n".join(["one host port, several listeners:", *found])
 
 
 def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
     compose = COMPOSE.read_text()
+    where = COMPOSE.relative_to(ROOT).as_posix()
     tags = {r: t for r, t, _ in image_pins(compose)}
-    assert (
-        tags["quay.io/lakekeeper/catalog"].removeprefix("v")
-        in (METRICS_SERVED["lakekeeper"]["versions"])
+    lake = tags["quay.io/lakekeeper/catalog"].removeprefix("v")
+    trino = f"{tags['trinodb/trino']}.0"
+    for product, version in (("lakekeeper", lake), ("trino", trino)):
+        assert version in METRICS_SERVED[product]["versions"], (
+            f"{where} runs {product} {version}: read what it serves for metrics at that version "
+            f"and add it to {FACTS}"
+        )
+    # the lakekeeper fact's port is the default; the lab sets none
+    assert "METRICS_PORT" not in compose and "METRICS__PORT" not in compose, (
+        f"{where} sets the metrics port; {FACTS} assumes the default"
     )
-    assert f"{tags['trinodb/trino']}.0" in METRICS_SERVED["trino"]["versions"]
-    # the fact's port is the default; an override in the lab would make it say something else
-    assert "METRICS_PORT" not in compose and "METRICS__PORT" not in compose
+    pin = METRICS_SERVED["orchestrator"]["pin"]
+    assert f"pinned: ``{pin}``" in read(ORCHESTRATOR_ADAPTER), (
+        f"{ORCHESTRATOR_ADAPTER} no longer pins {pin}: read what the new pin serves for metrics "
+        f"and update the orchestrator entry of {FACTS}"
+    )
+
+
+def test_the_unscraped_metrics_link_their_issues():
+    text = read("examples/services.yml")
+    assert f"{ISSUES}250" in text and f"{ISSUES}251" in text
 
 
 @pytest.mark.parametrize(
@@ -297,7 +349,16 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
         ({"impl": "lakekeeper", "version": "0.14.1", "port": 8181}, []),
         (
             {"impl": "lakekeeper", "version": "0.14.1", "port": 8181, "metrics": {"path": "/x"}},
-            ["port 8181, served on 9000"],
+            ["on the service port 8181"],
+        ),
+        (
+            {
+                "impl": "lakekeeper",
+                "version": "0.14.1",
+                "port": 8181,
+                "metrics": {"path": "/metrics", "port": 9100},
+            },
+            [],
         ),
         (
             {
@@ -323,11 +384,16 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
         ),
         (
             {"impl": "trino", "version": "999.0", "port": 8443, "metrics": {"path": "/metrics"}},
-            ["no metrics fact for this version"],
+            ["has no fact for this version"],
         ),
+        ({"impl": "trino", "version": "999.0", "port": 8443}, []),
         (
             {"impl": "orchestrator", "version": "0.3.0", "port": 8088, "metrics": {"path": "/m"}},
             ["serves no Prometheus endpoint"],
+        ),
+        (
+            {"impl": "orchestrator", "version": "0.4.0", "port": 8088, "metrics": {"path": "/m"}},
+            ["has no fact for this version"],
         ),
         ({"impl": "unknown-product", "version": "1", "port": 1, "metrics": {"path": "/m"}}, []),
     ],
@@ -335,6 +401,29 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
 def test_the_metrics_check(service, want):
     got = metrics_mismatches({"services": {"svc": service}})
     assert len(got) == len(want) and all(w in g for w, g in zip(want, got, strict=True)), got
+
+
+def test_the_listener_check():
+    services = {
+        "store": {"host": "a", "protocol": "https", "port": 9000},
+        "catalog": {
+            "host": "a",
+            "protocol": "https",
+            "port": 8181,
+            "metrics": {"path": "/m", "port": 9000},
+        },
+        "dns": {"host": "a", "protocol": "udp", "port": 8181},
+        "other": {"host": "b", "protocol": "http", "port": 9000},
+        "same": {
+            "host": "b",
+            "protocol": "http",
+            "port": 80,
+            "metrics": {"path": "/m", "port": 80},
+        },
+    }
+    assert listener_clashes({"services": services}) == [
+        "<registry>: a tcp/9000 is claimed by catalog metrics, store"
+    ]
 
 
 # --- tools whose version a document names --------------------------------------------------

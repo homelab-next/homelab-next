@@ -129,9 +129,9 @@ services:
     protocol: https
     port: 8181
     health: {kind: http, path: /health, expect_status: 200}
-    # Lakekeeper serves Prometheus metrics on its own listener, METRICS_PORT (default 9000),
-    # not on the catalog API port
-    metrics: {path: /metrics, port: 9000}
+    # no metrics block yet: Lakekeeper serves metrics on its own plain-HTTP listener, default
+    # 9000, configurable via LAKEKEEPER__METRICS_PORT; not scraped until metrics.scheme exists
+    # (https://github.com/homelab-next/homelab-next/issues/250), and 9000 is taken by the object store in this example
     upstreams: [object-store, idp, records-db]
     owner: data-team
     version: "0.5.2"
@@ -146,7 +146,9 @@ services:
     protocol: https
     port: 8443
     health: {kind: http, path: /v1/info, expect_status: 200, interval_s: 30}
-    # Trino serves OpenMetrics at /metrics on its own HTTP(S) port, behind its authentication
+    # Trino serves OpenMetrics at /metrics on its own HTTP(S) port, behind its authentication:
+    # the generated job sends no credentials, so it gets 401 until scrape auth exists
+    # (https://github.com/homelab-next/homelab-next/issues/251)
     metrics: {path: /metrics}
     upstreams: [lake-catalog, object-store, idp]
     owner: data-team
@@ -203,7 +205,7 @@ services:
     protocol: http
     port: 8088
     health: {kind: http, path: /healthz, expect_status: 200}
-    # no metrics block: the orchestrator serves no Prometheus endpoint
+    # no metrics block: the orchestrator at the pinned a52a1c4 serves no Prometheus endpoint
     upstreams: [lake-query, inference, notify, events, secrets]
     owner: ml-team
     version: "0.3.0"

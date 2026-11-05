@@ -192,7 +192,6 @@ services:
       interval_s: 30
     metrics:
       path: /metrics
-      port: 9091
     upstreams:
     - lake-catalog
     - object-store
