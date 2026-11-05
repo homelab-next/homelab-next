@@ -250,12 +250,14 @@ def test_ntfy_builds_request_from_resolved_endpoint():
     # a longer title is cut and marked, oversized tags are refused before anything is sent
     s.send(Message("k", "x" * 1024, "b", tags=("a" * 256, " " + "b" * 256)))
     s.send(Message("k", "y" * 2000, "b"))
-    full, cut = (req.get_header("Title") for req, _ in op.calls[1:])
+    s.send(Message("k", "z" * 1025, "b"))
+    full, cut, edge = (req.get_header("Title") for req, _ in op.calls[1:])
     assert full == "x" * 1024
     assert len(cut) == 1024 and cut.endswith("...") and cut.startswith("y" * 1021)
+    assert len(edge) == 1024 and edge.endswith("...")
     with pytest.raises(SendError, match="512-byte limit"):
         s.send(Message("k", "t", "b", tags=("a" * 256, "b" * 257)))
-    assert len(op.calls) == 3, "oversized tags were sent"
+    assert len(op.calls) == 4, "oversized tags were sent"
 
 
 def test_ntfy_topic_override_and_auth_read_at_send_time():
@@ -280,6 +282,13 @@ def test_ntfy_header_injection_is_neutralised():
     s.send(Message("k", "line1\r\nX-Evil: 1", "b"))
     title = op.calls[0][0].get_header("Title")
     assert "\n" not in title and "\r" not in title
+    # other control characters (an HTTP server refuses the header) and RFC 2047 encoded words
+    # (the server decodes them, past the length counted here and back to a raw line break)
+    s.send(Message("k", "a\x1bb\x00c\x7fd", "b", tags=("e\x01f",)))
+    s.send(Message("k", "=?ISO-8859-1?B?bGluZTEKWA==?=", "b"))
+    req, enc = op.calls[1][0], op.calls[2][0]
+    assert req.get_header("Title") == "a b c d" and req.get_header("Tags") == "e f"
+    assert "=?" not in enc.get_header("Title")
 
 
 @pytest.mark.parametrize("topic", ["../x", "a b", "", "x" * 65])

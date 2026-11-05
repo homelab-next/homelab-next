@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -17,7 +18,10 @@ from .core import Message, SendError
 _TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _EMAIL_RE = re.compile(r"^[^\s@<>,;]+@[^\s@<>,;]+$")
 #: the server (since 2.28) refuses a title over 1 KB (HTTP 400, code 40057) and tags whose lengths
-#: add up to over 512 bytes (40058), both measured on the header bytes after trimming
+#: add up to over 512 bytes (40058), both measured after trimming and after decoding an RFC 2047
+#: encoded word, which ``_header`` therefore never lets through (it breaks every ``=?``).  A
+#: recovery adds the ``recovered`` tag (9 bytes and a comma) to its problem's tags, so a problem's
+#: own tags should stay within 502 bytes or its recovery is refused.
 _TITLE_LIMIT = 1024
 _TAGS_LIMIT = 512
 
@@ -41,8 +45,11 @@ class FakeSender:
 
 
 def _header(value: str) -> str:
-    """One header-safe line: no CR/LF (injection) and latin-1 encodable."""
-    one_line = " ".join(value.split())
+    """One header-safe line: no CR/LF (injection), no other control character (an HTTP server
+    refuses a header carrying one), no RFC 2047 encoded word (the server would decode it, growing
+    the value past the limits counted here and restoring what this strips), latin-1 encodable."""
+    no_controls = "".join(" " if unicodedata.category(c) == "Cc" else c for c in value)
+    one_line = " ".join(no_controls.split()).replace("=?", "= ?")
     return one_line.encode("latin-1", "replace").decode("latin-1")
 
 
