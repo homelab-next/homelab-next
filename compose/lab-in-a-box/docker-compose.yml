@@ -274,7 +274,7 @@ services:
   # --- notify: ntfy -----------------------------------------------------------------------
   notify:
     <<: [*restart, *hardened]
-    image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
+    image: binwiederhier/ntfy:v2.32.0@sha256:59250e1d8be2ee2186c4560322f625faef22ace380331f05b63f8842dbd62602
     command: ["serve"]
     environment:
       NTFY_BASE_URL: http://notify.svc.example.internal
