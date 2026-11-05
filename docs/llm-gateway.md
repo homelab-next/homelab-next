@@ -205,7 +205,7 @@ The default stack's 3584 MB budget does not include profile services, because `d
 does not start them. `tests/compose` counts the profile's 960 MB separately and checks it against
 the total stated in the compose header. It allows only `llm-gateway*` services to use a profile,
 and it fails if a gateway service is moved out of its profile. The whole default stack plus
-`gateway` needs about 4.6 GB, more than the 4 GB nightly runner, so the profiles are not in the
+`gateway` needs about 4.5 GB, more than the 4 GB nightly runner, so the profiles are not in the
 nightly. Starting only the gateway services, as above, brings up just postgres and the fake
 inference with them: 1280 MB of `mem_limit` in all, inside the 4 GB runner (`tests/compose` sums
 that `depends_on` closure against the figure stated here).
@@ -249,7 +249,7 @@ recommended:
   and virtual keys and per-key limits do not exist. `gateway-rejects-bad-key` catches this.
 - **The image is pinned by digest** (`litellm/litellm-database`), following one stable patch line
   and never `latest`. LiteLLM ships fast: 14 stable releases in the 14 days before the evidence
-  run. Pinning also blocks a repeat of the March 2026 PyPI compromise. Run the `inference` suite
+  run. Pinning also blocks a repeat of the March 2026 PyPI compromise and of 1.107.0 (October 2026, a credential stealer on PyPI and Docker Hub; `.github/dependabot.yml` ignores that version). Run the `inference` suite
   before every upgrade. A plain `pip install litellm[proxy]` does not include `prisma`, so a
   request with no key fails with a 500.
 - **`LITELLM_SALT_KEY` is set** and must not change once keys are stored.

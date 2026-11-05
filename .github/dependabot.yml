@@ -81,6 +81,9 @@ updates:
     ignore:
       # built by the compose file itself, never pulled
       - dependency-name: "hnx-lab-*"
+      # LiteLLM 1.107.0 was published with a credential stealer (2026-10-21); never propose it
+      - dependency-name: "litellm/litellm-database"
+        versions: ["v1.107.0"]
     groups:
       lab-patch:
         update-types: ["patch"]
