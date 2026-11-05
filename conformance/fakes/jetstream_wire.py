@@ -234,7 +234,7 @@ class FakeJetStreamWire:
         self.drop_advisories = drop_advisories  # a defect, for proving the suite catches it
         self.ack_format = ack_format
         self.domain = domain or "_"  # the server's placeholder when no JetStream domain is set
-        self.account_hash = "hKkTAyOX"  # HNX's real getHash on purpose: the lab ACL grants this token
+        self.account_hash = "hKkTAyOX"  # HNX's real hash on purpose: the lab ACL grants it
         self.strict = strict
         self.closed = False
 
