@@ -93,7 +93,7 @@ jobs:
           path: hnx
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
           cache: ""  # no shared cache in a deploy job
@@ -160,7 +160,7 @@ jobs:
       # deploy zones, plus the OpenBao port as a declared exception, with policy tests.
       - name: join the tailnet as tag:ci-deploy
         if: vars.HNX_DEPLOY_PATH != 'self-hosted'
-        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd  # v4.2.0
+        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf  # v4.3.0
         with:
           oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
           audience: ${{ vars.TS_AUDIENCE }}
