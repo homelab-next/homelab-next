@@ -121,9 +121,10 @@ was shown, never from what the model says about its sources.
    - a rendered knowledge item's `digest`, `file_digest`, or the uid of its record node id
      (`lesson:<uid>` gives `<uid>`);
    - a rendered input item's `digest` or `uid`, which the caller supplies per item in `inputs`
-     and the pack records (never parsed from the text). The uid must be platform-issued: the assembler resolves each
-     input uid through the records or lake reader the caller passes it and refuses one that does
-     not resolve (decision 13);
+     and the pack records (never parsed from the text). The uid must be platform-issued: the caller resolves each input
+     uid through the records or lake reader and passes the assembler a map of resolved uids (it
+     stays a pure function with no I/O), and the assembler refuses an item whose uid is not in
+     the map (decision 13);
    - an entry in the pack's `memory` block (decision 11).
 
    Text is never a source: not `cites[].ref`, not a section body, not `summary`. Anything else
@@ -166,7 +167,11 @@ was shown, never from what the model says about its sources.
    plus references to the memory revisions its `memory` block showed. It is never flattened.
    Exposure through memory is the walk over those references, which has no cycles because a pack
    references only revisions that already exist. `dependents` and `retract` do that walk at
-   operator time, and `retract` marks every record it reaches with `denied_reach: <deny id>`. The
+   operator time. `retract` records each revision it reaches as `denied_reach: <deny id>` in a
+   separate append-only index keyed by deny id and revision, never by editing the log; it walks
+   until a pass finds nothing new, so a write that lands during the walk is caught, and a rerun
+   does the same. A mark counts only while its deny id is not lifted, so a lift releases it
+   without rewriting anything. The
    write-time deny check reads only the pack's own `rendered` identifiers and that mark on the
    revisions in its `memory` block, so it stays constant-cost however large memory grows. The cap
    (1,024 identifiers) applies to `rendered` only, and the caller checks it before assembly; a
@@ -207,7 +212,8 @@ was shown, never from what the model says about its sources.
       `memory.retract`, `memory.lift`, `memory.purge` or `memory.dependents`. If it is ever
       exposed through the broker, it is an operator operation, answered only to an operator peer,
       not affected by `approvers` or `allow_agent_approvers`, and never answered to a profile.
-    - `test_cross_agent_read_is_refused` passes unchanged.
+    - `test_cross_agent_read_is_refused` keeps its assertions unchanged; only its setup passes a
+      pack, as decision 7 requires of every checked write.
 13. **`retract` denies every platform-issued name of a source, first.**
     - **Aliases come only from platform-issued pairings:**
       - a knowledge node's graph id, record uid and repository digests;
@@ -224,7 +230,8 @@ was shown, never from what the model says about its sources.
       affected owners, scopes and keys, and gives a digest of that list.
     - `retract(source, reason, by=, confirm=<dry-run digest>, revision=all|this,
       include_exposed=False)` refuses the call when `confirm` no longer matches what `dependents`
-      returns, then appends one deny record per alias
+      returns (a rerun of a retraction whose deny records already exist skips `confirm` and
+      completes it, keyed by the deny id), then appends one deny record per alias
       **before** anything else, in its own transaction.
       - With `revision=this`, it denies only that content digest. With `revision=all` (the
         default), it denies by uid. At check time, each pack's own
@@ -255,8 +262,9 @@ was shown, never from what the model says about its sources.
       block any entry whose closure reaches a denied source or that carries a `denied_reach`
       mark. Neither function reads
       the store.
-    - **Lifting a retraction.** `lift(source, reason, by=)` appends a lift record. It restores
-      nothing: retired entries stay retired until a new report adds them.
+    - **Lifting a retraction.** `lift(source, reason, by=)` appends a lift record. Its
+      `denied_reach` marks stop counting at once. It restores nothing else: retired entries stay
+      retired until a new report adds them.
     - **Purging a value.** `purge(owner | "*", value_digest | scope/key@rev, reason, by=)`
       (`"*"` with a digest finds every owner holding it):
       - retires the entry first if a purged revision is current;
