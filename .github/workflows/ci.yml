@@ -23,7 +23,7 @@ env:
   # the version its go.mod names): the Python tools' Go tests and fix_has_test's Go proofs.  There
   # may be no go.mod at all yet, so it is pinned here, exactly; Dependabot does not raise it: bump
   # it by hand to a supported release (https://go.dev/doc/devel/release).
-  GO_VERSION: "1.26.10"
+  GO_VERSION: "1.27.3"
 
 jobs:
   lint:
