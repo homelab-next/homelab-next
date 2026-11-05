@@ -27,7 +27,8 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Put your age public key in the overlay's `.sops.yaml`**, replacing the placeholders, and
   the deploy identity's public key (below). Public keys only; the deploy identity's private key
   goes only into the `production` Environment secret `SOPS_AGE_KEY`.
-- [ ] **Initialise and unseal the secrets store for the first time.**
+- [ ] **Initialise and unseal the secrets store for the first time, and create its KV version 2
+  mount (`secret/`).** `hnx secrets seed` refuses a version 1 mount.
 - [ ] **Seed the secrets store and revoke the root token**: `hnx secrets plan`, then `hnx secrets
   seed` with the overlay's `lab/secrets.yml` (docs/private-overlay.md, "Seeding the
   credentials"). Keep the break-glass material (unseal shares, the root-token recovery path, your
@@ -37,14 +38,15 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
     addresses;
   - a second age identity for the deploy, its recipient added to `.sops.yaml` (`sops
     updatekeys`).
-- [ ] **Give the deploy a path into the lab**: a mesh VPN with a federated identity scoped to the
-  `production` Environment, or an ephemeral just-in-time self-hosted runner. Never a persistent
-  runner.
+- [ ] **Give the deploy a path into the lab** (`HNX_DEPLOY_PATH` is `tailscale` or `self-hosted`):
+  the VPN with a federated identity (tag `tag:ci-deploy`, subject the `production` Environment), or
+  an ephemeral just-in-time self-hosted runner. Never a persistent runner.
 - [ ] **Create the overlay's `production` Environment**, with deployment branch `main` only.
-  - Secrets: `BAO_SECRET_ID`, `SOPS_AGE_KEY`, `DEPLOY_SSH_KEY`.
+  - Secrets: `BAO_SECRET_ID`, `SOPS_AGE_KEY`, `DEPLOY_SSH_KEY`; `ANSIBLE_VAULT_PASSWORD` only if the
+    vault password is not in the secrets store.
   - Variables: `HNX_REF` (a full commit SHA), `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`,
-    `BAO_ADDR`, `BAO_ROLE_ID`, `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and the VPN client id
-    and audience if you use one.
+    `BAO_ADDR`, `BAO_ROLE_ID`, `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and for the VPN path
+    `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`.
 - [ ] **Record host keys** in the overlay's `ansible/known_hosts`, checking each fingerprint out of
   band.
 - [ ] **Run the first deploy by hand** (`deploy.yml` on `main`, from the overlay's Actions page or
@@ -99,16 +101,6 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Accept ADR-0036 (novelty baselines).** That ends the draft status of its novelty spec
   schema and of its amendment to ADR-0033 decision 6. Accept, too, the other ADRs whose code has
   shipped but whose **Status** line still reads `proposed`.
-- [ ] **Review ADR-0037, agent memory provenance (pull request #245), then merge it or send it
-  back.** Things to know before you accept it:
-  - packs carry no TLP labels yet, so all memory reads as `red`;
-  - retraction holds fleet-wide only once the broker's free-form `memory.write` lane is routed
-    through the memory store or removed;
-  - retracting only cited facts is precise but can miss facts a poisoned source steered, while
-    `include_exposed` is complete but can retire facts that never used the source.
-
-  Its first implementation pull request may merge while it is proposed; the second only after
-  you accept it.
 - [ ] **Confirm or overturn the defaults in pull request #59 (broker-only actors).** The first is
   ADR-0030 decision 1: a site's `--classes` table may not class a packaged capability or tier
   down. The second, that there is no per-record waiver for the tool-class floors, is in #59's
