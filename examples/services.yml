@@ -196,7 +196,7 @@ services:
     metrics: {path: /metrics, port: 7777}
     clients: [compute]
     owner: data-team
-    version: "2.10.29"
+    version: "2.15.1"
     tls: mtls
     tags: [data, bus]
 

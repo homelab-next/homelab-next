@@ -206,16 +206,19 @@ services:
 
   # --- events: NATS JetStream -------------------------------------------------------------
   # Accounts and per-user permissions (config/nats/nats.conf): only the broker's user may publish
-  # the broker's subjects; no client connects without a user.
+  # the broker's subjects; no client connects without a user.  Since 2.12 the filestore's caches
+  # give memory back under GC pressure, which GOMEMLIMIT sets (Go does not derive it from the
+  # cgroup): below mem_limit, so the server frees caches before the kernel kills it.
   events:
     <<: [*restart, *hardened]
-    image: nats:2.10.29-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927
+    image: nats:2.15.1-alpine@sha256:7ae34c25dfd6fe2e01c6483eabef20d796690fdcac6c4d94ca780a6cf9877fde
     command: ["-c", "/etc/nats/nats.conf"]
     environment:
       LAB_EVENTS_BROKER_PASSWORD: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
       LAB_EVENTS_ST2_BRIDGE_PASSWORD: ${LAB_EVENTS_ST2_BRIDGE_PASSWORD:?see .env.example}
       LAB_EVENTS_ADMIN_PASSWORD: ${LAB_EVENTS_ADMIN_PASSWORD:?see .env.example}
       LAB_EVENTS_CONFORMANCE_PASSWORD: ${LAB_EVENTS_CONFORMANCE_PASSWORD:?see .env.example}
+      GOMEMLIMIT: 96MiB
     volumes:
       - events-data:/data
       - ./config/nats/nats.conf:/etc/nats/nats.conf:ro
@@ -497,6 +500,7 @@ services:
       # the bus-relay and bus-acl steps: the broker's relay publishes its outbox to the events
       # service as hnx-broker (the relay's process gets only that password); the operator
       # (hnx-lab-admin) provisions the stream and reads it back; hnx-st2-bridge tries to forge
+      # one, then reads and acks through its own durable (its acks must take)
       HNX_ENDPOINT_EVENTS: nats://events.svc.example.internal:4222
       LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/broker/events-relay.yml
       HNX_SECRET_EVENTS_BROKER: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}

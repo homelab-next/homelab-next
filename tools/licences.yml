@@ -129,7 +129,7 @@ images:
   hnx-lab-fakes: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   litellm/litellm-database: {spdx: MIT, kind: service, reason: "the LLM gateway; MIT outside the project's enterprise/ directory, which has its own licence and is not used"}
   louislam/uptime-kuma: {spdx: MIT, kind: service, reason: "the uptime monitor; the project's LICENSE"}
-  nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE"}
+  nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE (v2.15.1: still Apache-2.0, unchanged since v2.10.29)"}
   openbao/openbao: {spdx: MPL-2.0, kind: service, reason: "the secrets store; the project's LICENSE"}
   postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence (18.6: its COPYRIGHT is unchanged)"}
   python: {spdx: PSF-2.0, kind: service, reason: "the base image the lab's broker and fakes images are built FROM (compose/lab-in-a-box/*/Dockerfile); the interpreter's licence, its Debian packages under their own"}

@@ -219,9 +219,6 @@
    "example-4b": 1,
    "litellm": 3
   },
-  "compose/lab-in-a-box/config/nats/nats.conf": {
-   "stackstorm": 15
-  },
   "compose/lab-in-a-box/config/postgres/init/10-litellm.sh": {
    "litellm": 7
   },

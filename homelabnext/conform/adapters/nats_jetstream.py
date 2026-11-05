@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ``events`` contract on NATS JetStream (pinned: nats 2.10 with ``-js``).
+"""The ``events`` contract on NATS JetStream (pinned: nats 2.15 with ``-js``).
 
 ``make(**config)`` builds a :class:`JetStreamBus` on the server named by ``HNX_ENDPOINT_EVENTS``
 (``nats://host:port``).  The bus speaks the JetStream wire API (``$JS.API.*`` JSON requests,
@@ -13,7 +13,9 @@ loopback ``nats://`` endpoint, unless ``allow_plaintext=True`` says otherwise ex
 A ``tls://`` connection does the TLS handshake *first*, before the server's ``INFO`` (nats-py's
 ``tls_handshake_first``): a client that upgrades only when ``INFO`` asks for TLS sends its
 ``CONNECT``, password included, in clear to anything that answers without asking.  The server
-needs ``tls { handshake_first: true }`` (nats-server 2.10.3 or later).
+needs ``tls { handshake_first: true }`` (nats-server 2.10.3 or later).  Every ``$JS.API``
+request carries only fields of the server's own request types: since 2.12 the server refuses an
+unknown one (its default ``jetstream { strict: true }``), and the offline fake does too.
 
 How the contract maps onto JetStream:
 
@@ -39,7 +41,11 @@ How the contract maps onto JetStream:
   its subject, so a user granted exactly that subject can create that durable and no other shape.
 * **fetch** is one ``CONSUMER.MSG.NEXT`` pull with ``no_wait``: the server answers with what is
   deliverable now and a ``404``/``408`` status, so an empty consumer returns at once.  The attempt
-  number is the delivery count from the ack reply subject.
+  number is the delivery count from the ack reply subject, in either of its formats (ADR-15):
+  v1 ``$JS.ACK.<stream>.<consumer>...`` or v2, with ``<domain>.<account hash>`` after ``ACK``,
+  which nats-server 2.14+ hands out with its ``js_ack_fc_v2`` feature flag (2.15.1 still sends
+  v1; enabled in 2.16, flag removed in 2.17, on upstream main).  A user's ack grants cover both
+  forms, token for token (docs/stackstorm.md).
 * **ack / nack / term** are ``+ACK`` / ``-NAK`` / ``+TERM`` sent as *requests*: the server answers
   each one after processing it ("ack the ack"), so a following fetch cannot overtake it.  Only the
   first settlement of a delivery is sent; later ones are no-ops on the client.
@@ -191,10 +197,10 @@ def durable_name(name: str) -> str:
 
 
 def parse_ack_reply(reply: str) -> tuple[str, str, int, int]:
-    """``(stream, consumer, delivery_count, stream_seq)`` from a ``$JS.ACK`` reply subject (the
-    9-token form, and the 12+-token form with domain and account hash)."""
+    """``(stream, consumer, delivery_count, stream_seq)`` from a ``$JS.ACK`` reply subject (ADR-15:
+    the 9-token v1 form, and the v2 form with domain and account hash, 11 tokens or more)."""
     t = reply.split(".")
-    if len(t) < 9 or t[0] != "$JS" or t[1] != "ACK":
+    if (len(t) != 9 and len(t) < 11) or t[:2] != ["$JS", "ACK"]:
         raise EventsError(f"not a JetStream delivery (reply {reply!r})")
     if len(t) == 9:
         stream, consumer, dc, sseq = t[2], t[3], t[4], t[5]

@@ -59,6 +59,8 @@ allow:
     reason: the pin tests read the pins (role defaults, CI versions, example registries) and hold the copies of one product's version equal; the configuration they read is counted where it lives
   - path: "tools/licences.yml"
     reason: the licence register names each pinned package and compose image it reviews; the configuration that runs them is counted where it lives
+  - path: "compose/lab-in-a-box/config/nats/nats.conf"
+    reason: "the lab bus's ACL: each grant names the subject it allows, so the automation bridge's grants name its durables (st2-*), token for token in both ack reply-subject forms; a lint must not push an ACL toward wildcards or one ack form when the other is due (nats-server 2.16 enables v2, 2.17 removes the flag)"
   - path: "tools/experimental.yml"
     reason: the reviewed list of experimental and frozen components names each component it takes out of the blocking set, and the paths of its tests and docs; the code those name is counted where it lives
   - path: "tools/tests/test_product_name_lint.py"
