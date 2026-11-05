@@ -89,11 +89,16 @@ was shown, never from what the model says about its sources.
    - At a cap, writes to that scope are refused and the operator is paged once per crossing
      (state-diffed), never silently dropped.
    - `keep_last` (platform scopes only) compacts a key's records beyond the last N.
-   - A retired key in a platform scope may be compacted whole, to one tombstone record.
+   - A retired key in a platform scope may be compacted whole, to one tombstone record (below).
    - Compaction keeps each record's `rev`, `value_digest`, `sources`, closure, `tlp` and the
      `pack_id` that points at its exposure (decision 9), and drops only values.
+   - A profile without `memory_limits` gets code-constant defaults: 10,000 records per scope and
+     100,000 per platform scope.
+   - A retired key's tombstone keeps the last `rev`, the union of the compacted records' sources
+     and closures, and the list of their `pack_id`s.
 
-   This is what bounds ADR-0035's ledger, whose item keys are new every time.
+   `platform_scopes` (decision 7) ships in this PR with `memory_limits`. This is what bounds
+   ADR-0035's ledger, whose item keys are new every time.
 
 ### Sources and labels (PR 2, merges only after this ADR is accepted)
 
@@ -116,8 +121,9 @@ was shown, never from what the model says about its sources.
    - a rendered knowledge item's `digest`, `file_digest`, or the uid of its record node id
      (`lesson:<uid>` gives `<uid>`);
    - a rendered input item's `digest` or `uid`, which the caller supplies per item in `inputs`
-     and the pack records (never parsed from the text; the uid must be platform-issued, decision
-     13);
+     and the pack records (never parsed from the text). The uid must be platform-issued: the assembler resolves each
+     input uid through the records or lake reader the caller passes it and refuses one that does
+     not resolve (decision 13);
    - an entry in the pack's `memory` block (decision 11).
 
    Text is never a source: not `cites[].ref`, not a section body, not `summary`. Anything else
@@ -126,12 +132,15 @@ was shown, never from what the model says about its sources.
 
    **Platform scopes.** A compiled profile may list `platform_scopes` (for ADR-0035,
    `fleet-ledger`). Only `apply_updates(..., unchecked=True)` writes a platform scope, and it
-   writes nothing else. A report's update naming a platform scope is refused. An unchecked record
-   is `checked: false`, and the reverse index marks its edges as unchecked.
+   writes nothing else. A report's update naming a platform scope is refused. `apply_updates` without
+   `unchecked=True` takes `pack=` and `pack_hash=` and checks sources exactly as `apply_report`
+   does; without them it is refused. An unchecked record is `checked: false`, and the reverse index
+   marks its edges as unchecked.
 8. **An entry's label has a floor set by everything the model saw.** The pack gains labels.
    - Each rendered knowledge item and input item carries `tlp`, set by the assembler from the
-     input's declared label (a record's or page's label; an input item's label from the caller),
-     never from the text; an item with no label is `red`.
+     input's declared label (a record's or page's label; for an input item, the stored row's or record's
+     `tlp` (ADR-0033 decision 5) or its source's declaration), never from the text. A label the
+     caller supplies is clamped to be no looser than that, and an item with no label is `red`.
    - Pregate sections count as `red` (lab data, ADR-0033 decision 2). Static sections take the
      manifest's declared label, `red` when absent.
    - The pack's label is the strictest of all of these.
@@ -152,14 +161,17 @@ was shown, never from what the model says about its sources.
    profile whose ceiling is below `red` reads its whole memory as withheld. That is the intended
    conservative state, said here so it is not mistaken for a bug.
 9. **A pack that rendered a source exposes its facts to it, through memory too.** For each pack
-   whose report changed memory, the store keeps the pack's exposure once, keyed by `pack_id`,
-   and records point at it. The exposure is:
-   - every identifier the pack rendered;
-   - for each entry in the pack's `memory` block, that revision's closure and its own exposure.
-
-   So exposure propagates through memory exactly as citation does. Exposure is capped at 1,024
-   identifiers; a pack over the cap is refused at assembly. Citing is the model's claim; exposure
-   is the platform's knowledge.
+   whose report changed memory, the store keeps the pack's exposure once, keyed by `pack_id`, as
+   `{rendered: [identifiers], memory: [mem:<owner>/<scope>/<key>@<rev>]}`: what the pack rendered,
+   plus references to the memory revisions its `memory` block showed. It is never flattened.
+   Exposure through memory is the walk over those references, which has no cycles because a pack
+   references only revisions that already exist. `dependents` and `retract` do that walk at
+   operator time, and `retract` marks every record it reaches with `denied_reach: <deny id>`. The
+   write-time deny check reads only the pack's own `rendered` identifiers and that mark on the
+   revisions in its `memory` block, so it stays constant-cost however large memory grows. The cap
+   (1,024 identifiers) applies to `rendered` only, and the caller checks it before assembly; a
+   pack over it is refused. An exposure entry is dropped when no record points at it any longer.
+   Citing is the model's claim; exposure is the platform's knowledge.
 10. **Sources accumulate, and dependence is computed at write time.** An entry's **effective
     sources** are the union of the sources of every record since its last `add`: a `replace` or
     `verify` adds sources, never removes them. Each record stores its **base-source closure**: its
@@ -188,7 +200,8 @@ was shown, never from what the model says about its sources.
       `homelabnext.orchestration` never import it.
     - Each method takes an `OperatorPrincipal`. It is built only by the `hnx agent memory` command
       from the invoking operating-system user, and it refuses the uids the agent runtime and the
-      broker run as. It accepts only users in the store's operators list. Passing a
+      broker run as. It accepts only users in an operators list kept in reviewed configuration that
+      the runtime's user cannot write, not in the state file. Passing a
       `VerifiedProfile` or a string raises.
     - None of these is a broker action: `hnx broker validate` refuses an action named
       `memory.retract`, `memory.lift`, `memory.purge` or `memory.dependents`. If it is ever
@@ -209,13 +222,16 @@ was shown, never from what the model says about its sources.
 
       Unchecked edges are marked. It doubles as the dry run: it lists the alias set and the
       affected owners, scopes and keys, and gives a digest of that list.
-    - `retract(source, reason, by=, confirm=<dry-run digest>)` appends one deny record per alias
+    - `retract(source, reason, by=, confirm=<dry-run digest>, revision=all|this,
+      include_exposed=False)` refuses the call when `confirm` no longer matches what `dependents`
+      returns, then appends one deny record per alias
       **before** anything else, in its own transaction.
-      - With `revision: all` (the default), it denies by uid. At check time, each pack's own
+      - With `revision=this`, it denies only that content digest. With `revision=all` (the
+        default), it denies by uid. At check time, each pack's own
         pairing resolves a new digest to its uid, so later revisions of the same record are
         covered.
       - It then retires every live entry in **cited**, owner by owner, each with a record `op:
-        retire, reason: retracted:<source>`. With `include_exposed`, it retires **exposed** too.
+        retire, reason: retracted:<source>`. With `include_exposed=True`, it retires **exposed** too.
       - The retirements are idempotent, so re-running `retract` completes one that crashed
         part-way.
     - The deny list is an append-only log of `retract` and `lift` records, kept by the backend
@@ -226,7 +242,8 @@ was shown, never from what the model says about its sources.
       - `MemoryBackend` gains `owners()`.
       - `transact(owner, fn)` passes the deny log, read under the same lock: `FileBackend` uses
         `StateStore.rewrite`, and `InMemoryBackend` gains a lock.
-      - Every apply re-checks each record's closure and its pack's exposure against the deny log
+      - Every apply re-checks each record's closure, its pack's `rendered` identifiers and the
+        `denied_reach` marks in its `memory` block against the deny log
         inside its transaction, so a report validated before a retraction cannot land after it.
       - A report whose pack **rendered** a denied source is refused, whatever it cites.
       - A checked batch with a denied update is refused whole. An unchecked platform batch drops
@@ -235,11 +252,13 @@ was shown, never from what the model says about its sources.
     - **New packs leave denied sources out.** The caller passes the deny set (`retracted=`) to
       `select_knowledge`, which excludes those items with reason `retracted`, and to
       `assemble_pack`, which lists denied input items as omitted and leaves out of the `memory`
-      block any entry whose closure or exposure reaches a denied source. Neither function reads
+      block any entry whose closure reaches a denied source or that carries a `denied_reach`
+      mark. Neither function reads
       the store.
     - **Lifting a retraction.** `lift(source, reason, by=)` appends a lift record. It restores
       nothing: retired entries stay retired until a new report adds them.
-    - **Purging a value.** `purge(owner, value_digest | scope/key@rev, reason, by=)`:
+    - **Purging a value.** `purge(owner | "*", value_digest | scope/key@rev, reason, by=)`
+      (`"*"` with a digest finds every owner holding it):
       - retires the entry first if a purged revision is current;
       - blanks the value in every record with that digest and in the cached entry, keeping
         `value_digest`, `sources` and `tlp`;
@@ -295,7 +314,8 @@ was shown, never from what the model says about its sources.
     - **Consequences ("the store's tiers are capped"):** true with decision 6.
 18. **A report served to another profile carries its `memory_updates` as a count only.**
     Wherever a report is served to a profile other than its author, `memory_updates` is replaced
-    by `{count: n}`: the context store's level reads by digest, and ADR-0035's renderer. A test
+    by `{count: n}`: in ADR-0035's renderer, and in the context store's level reads by digest once
+    the context store serves reports (still Open in ADR-0035). A test
     reads another profile's report by digest and finds no value, source or key. Otherwise the
     report would be a cross-agent read of memory.
 
@@ -307,7 +327,8 @@ was shown, never from what the model says about its sources.
   - A wrong source is withdrawn in one operator action, after a dry run. It is denied under every
     platform-issued name it has, and kept out of new packs and new memory blocks.
   - "What did this profile believe at T" has an exact answer for incident review.
-  - Labels cannot be lowered by choosing what to cite, and no caller can set one. So memory does
+  - Labels cannot be lowered by choosing what to cite, no caller of the store sets one, and
+    an input item's label is clamped to its stored label. So memory does
     not move `amber` or `red` content into a lower context.
   - A secret cannot enter the log, and one that slips through can be purged from the store.
   - The replay turns "is this memory design better" into a test.
@@ -318,8 +339,10 @@ was shown, never from what the model says about its sources.
   - Every write adds records, and `FileBackend` rewrites one file holding every owner. So the log
     raises the cost of every write fleet-wide, not only the writer's. The per-scope caps bound
     it; a per-owner file is a later backend change.
-  - Retraction by exposure (`include_exposed`) can retire facts that never used the source. It is
-    the operator's choice, shown in the dry run.
+  - Retraction by exposure (`include_exposed`) can retire facts that never used the source. But
+    against a source that may have steered the model (poisoning), only `include_exposed` is
+    complete: a misled model chooses what it cites. The dry run shows both sets so the operator
+    chooses knowingly.
   - "A retraction sticks" holds for `MemoryStore` only. The broker's free-form `memory.write` lane
     (granted without approval in the example manifest) can still carry the same fact. Routing or
     removing that lane is a precondition of relying on retraction fleet-wide.
@@ -329,13 +352,12 @@ was shown, never from what the model says about its sources.
   - **PR 1:**
     - the log and the migration;
     - the all-or-nothing and fold-reproduces-entries tests on both backends;
-    - `memory_limits` in the profile schema (an additive minor), the per-scope caps, the
-      once-per-crossing page and compaction;
+    - `memory_limits` and `platform_scopes` in the profile schema (an additive minor), the
+      default caps, the per-scope caps, the once-per-crossing page and compaction;
     - the secret screen on keys and values.
   - **PR 2:**
     - `report_result` 1.2 and the list limits in `validate_report`;
     - per-item identities and labels in packs, including pregate and static labels;
-    - `platform_scopes` in the profile;
     - the source check and the label computation.
   - **PR 3:**
     - the pack `memory` block and the `mem:` rules;
