@@ -184,15 +184,21 @@ Both backends point at the fake inference server, which serves `example-4b` and 
 under the aliases `inference-small` and `inference-large`.
 
 The gateway services are an optional compose profile. They are not part of `make lab-up` or the
-nightly. CI's `lab-gateway` job runs the commands below on every pull request that can affect the
+nightly. CI's `lab-gateway` job runs the sequence below (its compose settings in `COMPOSE_*`
+variables instead of `$lab`) on every pull request that can affect the
 lab (the same `tools/lab_paths.py` decision as `lab-in-a-box`, summed up by the same `lab-ok`
-check), asserts that the three `gateway-*` checks below passed rather than skipped, and tears
-everything down:
+check). It fails when the key provisioning exits non-zero, when the suite fails, or when any of
+the three `gateway-*` checks below did not pass (skipped or missing included), and it tears
+everything down whatever happened:
 
 ```bash
 lab="--env-file compose/lab-in-a-box/.env.example -f compose/lab-in-a-box/docker-compose.yml"
-# just the gateway and what it depends on (postgres, the fake inference): 1280 MB of mem_limit
-docker compose $lab --profile gateway up -d --build --wait llm-gateway llm-gateway-keys
+# the gateway and what it depends on (postgres, the fake inference), then its keys one-shot:
+# 1280 MB of mem_limit in all
+docker compose $lab --profile gateway up -d --build --wait llm-gateway
+# then the key provisioning one-shot in the foreground: its exit code is the provisioning's
+# (`up --wait` returns while a one-shot still runs, so it is not a verdict on the keys)
+docker compose $lab --profile gateway run --rm --build llm-gateway-keys
 set -a; . compose/lab-in-a-box/.env.example; set +a
 export HNX_ENDPOINT_LLM_GATEWAY=http://${LAB_BIND}:${LAB_PORT_GATEWAY}
 export HNX_SECRET_LLM_GATEWAY_MASTER_KEY=$LAB_GATEWAY_MASTER_KEY

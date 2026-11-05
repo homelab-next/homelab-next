@@ -309,6 +309,9 @@ def _lab_ok(paths: str, affected: str, lab: str, gateway: str) -> int:
         ("success", "true", "success", "skipped", False),  # the gateway never ran
         ("success", "false", "success", "skipped", False),  # the decision and the run disagree
         ("success", "false", "skipped", "success", False),
+        ("success", "", "skipped", "skipped", False),  # an empty decision is not "false"
+        ("success", "True", "success", "success", False),  # nor is any other spelling of one
+        ("success", "maybe", "skipped", "skipped", False),
         ("failure", "", "skipped", "skipped", False),  # no decision is not a pass
         ("cancelled", "", "skipped", "skipped", False),
         ("skipped", "", "skipped", "skipped", False),

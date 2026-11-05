@@ -850,6 +850,10 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 25
+    # bash -eo pipefail in every step (GitHub's default without a shell: is bash -e, no pipefail)
+    defaults:
+      run:
+        shell: bash
     # docker compose reads these in every step: the lab's compose file, its throwaway env file and
     # the profile (a service named on the command line starts whatever its profile)
     env:
@@ -868,34 +872,48 @@ jobs:
           extras: core
       - name: validate the compose file with the gateway profile
         run: docker compose config --quiet
-      - name: bring up the gateway and what it depends on (postgres, the fake inference), keys provisioned
+      - name: bring up the gateway and what it depends on (postgres, the fake inference)
         run: |
           mkdir -p build/lab-gateway
-          docker compose up -d --build --wait --wait-timeout 420 llm-gateway llm-gateway-keys
-          # the one-shot must have exited 0: without its keys the throttle check has nothing to hit
-          code=$(docker compose ps -a --format '{{.ExitCode}}' llm-gateway-keys)
-          echo "llm-gateway-keys exit code: $code"
-          [ "$code" = 0 ]
+          docker compose up -d --build --wait --wait-timeout 420 llm-gateway
+      # in the foreground, not under `up --wait`: `up --wait` returns while a one-shot still runs
+      # (and fails on one that exits before its first poll); `run` returns the container's own exit
+      # code once it is done.  Without its keys the throttle check has nothing to hit.
+      - name: provision the gateway's keys (the llm-gateway-keys one-shot)
+        run: docker compose run --rm --build -T llm-gateway-keys
+      # the output is written to a file and printed after, so no pipe stands between the command
+      # and the step's exit code whatever the shell
       - name: inference conformance through the gateway (bad key 401, throttle 429, models are the role table)
         run: |
           set -a; . compose/lab-in-a-box/.env.example; set +a
           export HNX_ENDPOINT_LLM_GATEWAY="http://${LAB_BIND}:${LAB_PORT_GATEWAY}"
           export HNX_SECRET_LLM_GATEWAY_MASTER_KEY="$LAB_GATEWAY_MASTER_KEY"
           export HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE="$LAB_GATEWAY_KEY_THROTTLE"
+          rc=0
           python -m homelabnext.cli conform run inference \
             --target compose/lab-in-a-box/targets/inference-gateway.yml \
-            --out build/lab-gateway/conform-inference.json | tee build/lab-gateway/conform-inference.log
+            --out build/lab-gateway/conform-inference.json > build/lab-gateway/conform-inference.log 2>&1 || rc=$?
+          cat build/lab-gateway/conform-inference.log
+          exit "$rc"
+      # tests/compose runs this step against passing and failing results
       - name: the gateway's own checks ran and passed (none skipped)
         run: |
-          python - build/lab-gateway/conform-inference.json <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=0
+          python - build/lab-gateway/conform-inference.json > build/lab-gateway/verdict.txt 2>&1 <<'PY' || rc=$?
           import json, sys
           (run,) = json.load(open(sys.argv[1]))["runs"]
           status = {r["check"]: r["status"] for r in run["results"]}
           print("lab-gateway: inference through the gateway:", run["verdict"], run["counts"])
+          for check, st in sorted(status.items()):
+              if st != "pass":
+                  print(f"  {st}: {check}")
           want = ("gateway-rejects-bad-key", "gateway-limit-throttles", "gateway-models-match-roles")
           bad = {c: status.get(c, "missing") for c in want if status.get(c) != "pass"}
           sys.exit(f"gateway checks not passed: {bad}" if bad or run["verdict"] != "pass" else 0)
           PY
+          cat build/lab-gateway/verdict.txt
+          cat build/lab-gateway/verdict.txt >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
       - name: collect the gateway's state and logs
         if: always()
         run: |
@@ -929,7 +947,7 @@ jobs:
         run: |
           echo "lab-paths: $PATHS (affected: $AFFECTED), lab-in-a-box: $LAB, lab-gateway: $GATEWAY"
           [ "$PATHS" = success ] || exit 1
-          if [ "$AFFECTED" = true ]; then want=success; else want=skipped; fi
+          case "$AFFECTED" in true) want=success ;; false) want=skipped ;; *) exit 1 ;; esac
           [ "$LAB" = "$want" ] && [ "$GATEWAY" = "$want" ]
 
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
