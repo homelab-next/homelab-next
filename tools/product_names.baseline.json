@@ -1330,7 +1330,7 @@
    "proxmox": 5
   },
   "tests/conform/test_conform_lab_adapters.py": {
-   "ntfy": 26,
+   "ntfy": 25,
    "openbao": 35
   },
   "tests/conform/test_conform_lake_targets.py": {

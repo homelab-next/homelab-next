@@ -246,6 +246,16 @@ def test_ntfy_builds_request_from_resolved_endpoint():
     h = {k.lower(): v for k, v in req.header_items()}
     assert h["title"] == "Disk" and h["priority"] == "5" and h["tags"] == "disk,warning"
     assert h["email"] == "oncall@example.org"
+    # the server (2.28+) answers 400 (40057/40058) past 1024 title bytes / 512 tag bytes in all:
+    # a longer title is cut and marked, oversized tags are refused before anything is sent
+    s.send(Message("k", "x" * 1024, "b", tags=("a" * 256, " " + "b" * 256)))
+    s.send(Message("k", "y" * 2000, "b"))
+    full, cut = (req.get_header("Title") for req, _ in op.calls[1:])
+    assert full == "x" * 1024
+    assert len(cut) == 1024 and cut.endswith("...") and cut.startswith("y" * 1021)
+    with pytest.raises(SendError, match="512-byte limit"):
+        s.send(Message("k", "t", "b", tags=("a" * 256, "b" * 257)))
+    assert len(op.calls) == 3, "oversized tags were sent"
 
 
 def test_ntfy_topic_override_and_auth_read_at_send_time():

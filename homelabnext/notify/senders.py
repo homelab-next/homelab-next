@@ -16,6 +16,10 @@ from .core import Message, SendError
 
 _TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _EMAIL_RE = re.compile(r"^[^\s@<>,;]+@[^\s@<>,;]+$")
+#: the server (since 2.28) refuses a title over 1 KB (HTTP 400, code 40057) and tags whose lengths
+#: add up to over 512 bytes (40058), both measured on the header bytes after trimming
+_TITLE_LIMIT = 1024
+_TAGS_LIMIT = 512
 
 
 class FakeSender:
@@ -42,6 +46,15 @@ def _header(value: str) -> str:
     return one_line.encode("latin-1", "replace").decode("latin-1")
 
 
+def _title(value: str) -> str:
+    """The title header, cut to the server's limit (one byte per latin-1 character) and marked: a page
+    with a shortened title is delivered, an over-long one would be refused outright."""
+    line = _header(value)
+    if len(line) <= _TITLE_LIMIT:
+        return line
+    return line[: _TITLE_LIMIT - 3].rstrip() + "..."
+
+
 class NtfySender:
     """POST ``<endpoint>/<topic>`` with ntfy headers (Title, Priority, Tags, Email, Click).
 
@@ -52,7 +65,8 @@ class NtfySender:
     ``auth`` is an optional callable returning an ``Authorization`` header value, read at send
     time so the secret never sits in this object's repr or logs.  A token is never sent over
     plain ``http`` to a non-loopback host unless ``allow_plaintext=True``; redirects are followed
-    only within the same origin.
+    only within the same origin.  A title over the server's 1 KB limit is shortened (ending ``...``);
+    tags over its 512-byte limit are refused here, before anything is sent.
     """
 
     def __init__(
@@ -112,12 +126,16 @@ class NtfySender:
         if not topic or not _TOPIC_RE.match(topic):
             raise SendError(f"invalid or missing topic {topic!r}")
         headers = {
-            "Title": _header(message.title),
+            "Title": _title(message.title),
             "Priority": str(message.effective_priority),
             "Content-Type": "text/plain; charset=utf-8",
         }
         if message.tags:
             headers["Tags"] = _header(",".join(message.tags))
+            # counted as the server counts it: split on commas, each tag trimmed
+            size = sum(len(t.strip()) for t in headers["Tags"].split(","))
+            if size > _TAGS_LIMIT:
+                raise SendError(f"tags are {size} bytes, over the {_TAGS_LIMIT}-byte limit")
         if message.email:
             if not _EMAIL_RE.match(message.email):
                 raise SendError("invalid email target")

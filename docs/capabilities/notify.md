@@ -145,7 +145,7 @@ Each is a deliberately broken fake (`hnx conform run notify --target broken:<mut
 
 #### [`homelabnext.conform.adapters.ntfy:make`](../../homelabnext/conform/adapters/ntfy.py)
 
-The `notify` contract on ntfy (pinned: ntfy 2.11), stdlib HTTP.
+The `notify` contract on ntfy (pinned: ntfy 2.32), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/notify.yml`](../../compose/lab-in-a-box/targets/notify.yml) (target `lab-notify`)
 - Factory: `make(*, topic: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`
@@ -157,13 +157,19 @@ Findings (fidelity limits of the channel, not of this adapter):
 * ntfy strips leading and trailing whitespace from the body (`strings.TrimSpace`) and replaces an
   empty body with `triggered`; such bodies do not round-trip.
 * `NtfySender` sends the title as one latin-1 header line (whitespace folded, other characters
-  replaced) although ntfy accepts RFC 2047 encoded UTF-8 headers, so non-latin-1 titles are lossy.
+  replaced) although ntfy accepts RFC 2047 encoded UTF-8 headers, so non-ASCII titles are lossy:
+  ntfy stores the header as UTF-8 and replaces what is not (a run of such bytes with one `U+FFFD`
+  on 2.32; 2.11 replaced each byte).
+* ntfy refuses a title over 1 KB and tags over 512 bytes in all (since 2.28).  `NtfySender`
+  shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
+  the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
+  be sent through this target.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 
 <details><summary>Full adapter notes</summary>
 
-The `notify` contract on ntfy (pinned: ntfy 2.11), stdlib HTTP.
+The `notify` contract on ntfy (pinned: ntfy 2.32), stdlib HTTP.
 
 `make(**config)` returns an `NtfyTarget` on `HNX_ENDPOINT_NOTIFY`:
 
@@ -187,7 +193,13 @@ Findings (fidelity limits of the channel, not of this adapter):
 * ntfy strips leading and trailing whitespace from the body (`strings.TrimSpace`) and replaces an
   empty body with `triggered`; such bodies do not round-trip.
 * `NtfySender` sends the title as one latin-1 header line (whitespace folded, other characters
-  replaced) although ntfy accepts RFC 2047 encoded UTF-8 headers, so non-latin-1 titles are lossy.
+  replaced) although ntfy accepts RFC 2047 encoded UTF-8 headers, so non-ASCII titles are lossy:
+  ntfy stores the header as UTF-8 and replaces what is not (a run of such bytes with one `U+FFFD`
+  on 2.32; 2.11 replaced each byte).
+* ntfy refuses a title over 1 KB and tags over 512 bytes in all (since 2.28).  `NtfySender`
+  shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
+  the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
+  be sent through this target.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 

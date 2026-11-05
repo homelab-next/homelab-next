@@ -425,13 +425,34 @@ def test_received_rebuilds_messages_from_what_ntfy_stored(ntfy):
         "warn",
         ("x",),
     )
-    stored = ntfy.messages[0]
+    kept = ntfy.messages
+    stored = kept[0]
     assert stored["priority"] == 4 and stored["topic"] == t.topic
     t.fail_next(1)
     with pytest.raises(SendError):
         t.sender.send(Message(key="k", title="T", body="b"))
-    assert len(ntfy.messages) == 2, "a failed send reached ntfy"
+    assert len(kept) == 2, "a failed send reached the server"
+    # the hex key tag shares the server's 512-byte tag budget: 246 key bytes fit, 247 do not
+    t.sender.send(Message(key="k" * 246, title="T", body="b", level="crit"))
+    assert [m.key for m in t.received()][-1] == "k" * 246
+    with pytest.raises(SendError, match="512-byte limit"):
+        t.sender.send(Message(key="k" * 247, title="T", body="b", level="crit"))
+    assert len(kept) == 3, "oversized tags reached the server"
     t.close()
+
+
+def test_the_fake_enforces_the_title_and_tags_limits():
+    # as the server since 2.28: 1024 title bytes and 512 tag bytes in all, each tag trimmed
+    with FakeNtfy() as srv:
+        assert srv.publish("t", {"Title": "x" * 1024}, b"b")[0] == 200
+        assert srv.publish("t", {"Title": "x" * 1025}, b"b") == (
+            400,
+            {"code": 40057, "error": "invalid request: title is too large"},
+        )
+        assert srv.publish("t", {"Tags": "a" * 256 + ", " + "b" * 256}, b"b")[0] == 200
+        status, doc = srv.publish("t", {"Tags": "a" * 256 + "," + "b" * 257}, b"b")
+        assert (status, doc["code"]) == (400, 40058)
+        assert len(srv.messages) == 2
 
 
 def test_received_surfaces_a_failed_poll():

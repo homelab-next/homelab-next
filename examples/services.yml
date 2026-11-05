@@ -269,7 +269,7 @@ services:
     health: {kind: http, path: /v1/health, expect_status: 200}
     clients: [data, compute]
     owner: platform-team
-    version: "2.11"
+    version: "2.32"
     tls: none
     auth: own              # publishers hold per-topic tokens
     tags: [ops, notify]
