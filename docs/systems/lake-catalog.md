@@ -25,7 +25,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `lake-catalog`
 - Contract: [lake-catalog capability reference](../capabilities/lake-catalog.md) ([[capabilities/lake-catalog|lake-catalog capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `lakekeeper` 0.5.2
+- Implementation: `lakekeeper` 0.14.1
 - Owner: data-team
 - Tags: catalog, data
 <!-- /hnx:gen -->

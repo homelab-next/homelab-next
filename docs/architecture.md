@@ -173,11 +173,12 @@ runs its `migrate` before `serve`, so a kept Postgres volume from 0.9 is migrate
 first start, one way). Three upstream changes since 0.9 matter here:
 
 - **How clients reach the table files (0.11).** A client that sends no
-  `X-Iceberg-Access-Delegation` header now gets vended credentials whenever the warehouse can
-  issue them (STS on, or a Cloudflare R2 or Alibaba OSS credential), else remote signing. The
-  lab's warehouse states both modes rather than relying on that default: `lab_init.py` creates
-  it with `sts-enabled: false` and `remote-signing-enabled: true` and an access-key credential,
-  so the catalog never hands out the warehouse's static key, and Trino keeps
+  `X-Iceberg-Access-Delegation` header now gets vended credentials (always a temporary STS, R2
+  or OSS credential, never the stored key) whenever the warehouse can issue them (STS on, or a
+  Cloudflare R2 or Alibaba OSS credential), else remote signing. The lab's warehouse states both
+  modes rather than relying on that default: `lab_init.py` creates it with `sts-enabled: false`
+  and `remote-signing-enabled: true` and an access-key credential, so no credential is vended
+  and clients get remote signing (already the 0.9 behaviour) or nothing, and Trino keeps
   `iceberg.rest-catalog.vended-credentials-enabled=false` and reads the object store with its
   own keys. A production warehouse that wants vended credentials enables STS against an object
   store that offers it, with a role scoped to the warehouse's prefix.
@@ -190,8 +191,8 @@ first start, one way). Three upstream changes since 0.9 matter here:
   an unknown key under `LAKEKEEPER__OPENID_PROVIDERS__<IDP_ID>__` aborts startup; such a provider
   that enforces a scope or required claims must keep `__REQUIRE_CONNECTED_ON_STARTUP` at its
   default, `true`; Kubernetes authentication beside a provider that enforces either needs
-  `LAKEKEEPER__KUBERNETES_AUTHENTICATION_AUDIENCE`. The scope is
-  also read from `scp`. Token roles and admission gates now hold in every project, and the
+  `LAKEKEEPER__KUBERNETES_AUTHENTICATION_AUDIENCE`. The scope is read from the token's `scp`
+  claim only when `scope` carries none, and an array-shaped scope claim is accepted. Token roles and admission gates now hold in every project, and the
   permissions-check API no longer accepts the `update_storage_credential` action (use
   `update_storage`).
 

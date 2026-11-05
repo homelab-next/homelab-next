@@ -4,15 +4,22 @@
 The fake's routes and payload shapes are those of Lakekeeper v0.14.1
 (``crates/lakekeeper/src/api/management/v1/server.rs`` and ``warehouse/mod.rs``): ``GET /health``,
 ``GET /management/v1/info`` (``bootstrapped``), ``POST /management/v1/bootstrap``
-(``accept-terms-of-use``, once only), ``GET``/``POST /management/v1/warehouse``
-(``{"warehouses": [{"warehouse-id", "name", ...}]}``; a kebab-case create request, a name taken
-twice refused with ``409``).
+(``accept-terms-of-use``, ``204``; ``400 TermsOfUseNotAccepted`` without it, ``400
+CatalogAlreadyBootstrapped`` a second time), ``GET``/``POST /management/v1/warehouse``
+(``{"warehouses": [GetWarehouseResponse, ...]}``; a kebab-case create request answered ``201``
+with the whole ``GetWarehouseResponse``, an unknown storage-profile type or a missing field
+``422``, a name taken twice ``409 WarehouseAlreadyExists``, from
+``service/catalog_store/warehouse.rs``).
 
 Since 0.11 the catalog vends credentials to a client that sends no ``X-Iceberg-Access-Delegation``
 header whenever it can (``service/storage/s3.rs``, ``generate_table_config``): it can for a
 warehouse with STS on, or with a Cloudflare R2 or Alibaba OSS credential; otherwise it falls back
 to remote signing when that is enabled.  ``delegation_for_a_client_without_the_header`` is that
-decision, so the tests pin that the lab's warehouse never vends its static key.
+decision, copied from Lakekeeper v0.14.1 ``crates/lakekeeper/src/service/storage/s3.rs``,
+``S3Profile::generate_table_config``, lines 490-524 (the ``DataAccessMode::ServerDelegated``
+arm).  A vended credential is always a temporary one (STS, R2 or OSS), never the stored key; the
+tests pin that the lab's warehouse vends nothing, so clients get remote signing (as on 0.9) or
+nothing.
 """
 
 from __future__ import annotations
@@ -31,10 +38,12 @@ ROOT = Path(__file__).resolve().parents[2]
 LAB_INIT = ROOT / "compose" / "lab-in-a-box" / "fakes" / "lab_init.py"
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback only
 WAREHOUSE = "lab"
+PROJECT = "00000000-0000-0000-0000-000000000000"  # Lakekeeper's default project id
+KNOWN_TYPES = ("s3", "adls", "azdls", "onelake", "stackit", "gcs")  # StorageProfile
 S3 = {
     "bucket": "lab-lake",
     "region": "garage",
-    "endpoint": "http://object-store.svc.example.internal:3900",  # no-raw-endpoint: allow fixture
+    "endpoint": "http://object-store.svc.example.internal",
     "access": "GK000000000000000000000000",
     "secret": "0" * 64,
 }
@@ -50,7 +59,12 @@ def load_lab_init():
 
 
 def delegation_for_a_client_without_the_header(profile: dict, credential: dict) -> str:
-    """What Lakekeeper >= 0.11 hands a client that does not name an access-delegation mode."""
+    """What Lakekeeper >= 0.11 hands a client that does not name an access-delegation mode.
+
+    Lakekeeper v0.14.1 ``crates/lakekeeper/src/service/storage/s3.rs``,
+    ``S3Profile::generate_table_config``, lines 490-524: vend when STS is on or the credential is
+    Cloudflare R2 or Alibaba OSS, else remote signing when it is enabled, else nothing.
+    """
     can_vend = profile.get("sts-enabled") is True or credential.get("credential-type") in (
         "cloudflare-r2",
         "aliyun-oss",
@@ -65,7 +79,8 @@ def delegation_for_a_client_without_the_header(profile: dict, credential: dict) 
 class Lakekeeper:
     def __init__(self) -> None:
         self.bootstrapped = False
-        self.warehouses: dict[str, dict] = {}
+        self.warehouses: dict[str, dict] = {}  # id -> GetWarehouseResponse
+        self.credentials: dict[str, dict] = {}  # id -> the stored credential (never served)
         self.calls: list[tuple[str, str]] = []
         self.fail: dict[str, int] = {}
 
@@ -114,9 +129,15 @@ def make_handler(state: Lakekeeper):
         def bootstrap(self) -> None:
             body = self._body()
             if body.get("accept-terms-of-use") is not True:
-                return self._error(400, "TermsNotAccepted", "accept-terms-of-use must be true")
+                return self._error(
+                    400,
+                    "TermsOfUseNotAccepted",
+                    "You must accept the terms of use to bootstrap the catalog.",
+                )
             if state.bootstrapped:
-                return self._error(400, "CatalogAlreadyBootstrapped", "already bootstrapped")
+                return self._error(
+                    400, "CatalogAlreadyBootstrapped", "Catalog is not open for bootstrap"
+                )
             state.bootstrapped = True
             self._send(204)
 
@@ -129,21 +150,37 @@ def make_handler(state: Lakekeeper):
             body = self._body()
             profile, credential = body.get("storage-profile"), body.get("storage-credential")
             name = body.get("warehouse-name")
-            if not name or not isinstance(profile, dict) or profile.get("type") != "s3":
-                return self._error(400, "InvalidStorageProfile", "an s3 storage profile")
+            # axum's JSON extractor answers a body that does not deserialize with 422
+            if not name or not isinstance(profile, dict) or profile.get("type") not in KNOWN_TYPES:
+                return self._error(422, "UnprocessableEntity", "unknown storage profile type")
             if any(k not in profile for k in ("bucket", "region", "sts-enabled")):
                 return self._error(422, "UnprocessableEntity", "missing a required field")
             if any(name == w["name"] for w in state.warehouses.values()):
-                return self._error(409, "WarehouseNameAlreadyExists", name)
+                return self._error(
+                    409, "WarehouseAlreadyExists", f"Warehouse '{name}' already exists"
+                )
             wid = str(uuid.UUID(int=len(state.warehouses) + 1))
-            state.warehouses[wid] = {
+            response = {
+                "id": wid,  # deprecated since 0.11, still sent
                 "warehouse-id": wid,
                 "name": name,
+                "project-id": PROJECT,
                 "storage-profile": profile,
-                "storage-credential-type": (credential or {}).get("credential-type"),
-                "_credential": credential or {},
+                # adjacently tagged (service/storage/mod.rs, StorageCredentialType)
+                "storage-credential-type": {
+                    "type": (credential or {}).get("type"),
+                    "credential-type": (credential or {}).get("credential-type"),
+                },
+                "delete-profile": {"type": "hard"},
+                "status": "active",
+                "protected": False,
+                "managed-by": "self-managed",
+                "allowed-format-versions": [1, 2, 3],
+                "updated-at": None,
             }
-            self._send(201, {"warehouse-id": wid})
+            state.warehouses[wid] = response
+            state.credentials[wid] = credential or {}
+            self._send(201, response)
 
     ROUTES = {
         ("GET", "/health"): Handler.health,
@@ -179,7 +216,7 @@ def test_a_fresh_catalog_is_bootstrapped_and_gets_the_warehouse(lab_init, catalo
     profile = wh["storage-profile"]
     assert profile["bucket"] == S3["bucket"] and profile["endpoint"] == S3["endpoint"]
     assert profile["flavor"] == "s3-compat" and profile["path-style-access"] is True
-    assert wh["storage-credential-type"] == "access-key"
+    assert wh["storage-credential-type"] == {"type": "s3", "credential-type": "access-key"}
 
 
 def test_the_warehouse_states_both_access_modes_and_never_vends_its_key(lab_init, catalog):
@@ -189,9 +226,8 @@ def test_the_warehouse_states_both_access_modes_and_never_vends_its_key(lab_init
     profile = wh["storage-profile"]
     assert profile["sts-enabled"] is False
     assert profile["remote-signing-enabled"] is True  # stated, not left to a default
-    assert (
-        delegation_for_a_client_without_the_header(profile, wh["_credential"]) == "remote-signing"
-    )
+    credential = state.credentials[wh["warehouse-id"]]
+    assert delegation_for_a_client_without_the_header(profile, credential) == "remote-signing"
 
 
 def test_the_delegation_rule_bites():

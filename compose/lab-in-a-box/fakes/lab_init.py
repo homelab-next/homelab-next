@@ -144,12 +144,12 @@ def init_catalog(base: str, warehouse: str, s3: dict[str, Any]) -> None:
     _, listing = call("GET", f"{base}/management/v1/warehouse")
     names = [w.get("name") for w in (listing or {}).get("warehouses", [])]
     if warehouse not in names:
-        # How a catalog client reaches the table files (Lakekeeper >= 0.11 vends credentials by
-        # default to a client that sends no X-Iceberg-Access-Delegation header).  Both modes are
-        # stated, not left to defaults: with STS off and an access-key credential the catalog
-        # cannot vend, so it never hands out the warehouse's static key; a client that asks for
-        # delegation gets remote signing.  Trino sets vended-credentials-enabled=false and reads
-        # the object store with its own keys (config/trino/catalog/iceberg.properties).
+        # How a catalog client reaches the table files.  Lakekeeper >= 0.11 vends a temporary
+        # credential by default to a client that sends no X-Iceberg-Access-Delegation header,
+        # where it can.  Both modes are stated, not left to defaults: with STS off and an
+        # access-key credential no credential is vended, so clients get remote signing (as on
+        # 0.9) or nothing.  Trino sets vended-credentials-enabled=false and reads the object
+        # store with its own keys (config/trino/catalog/iceberg.properties).
         doc = {
             "warehouse-name": warehouse,
             "storage-profile": {
