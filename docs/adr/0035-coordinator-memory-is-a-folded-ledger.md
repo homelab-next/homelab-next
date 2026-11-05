@@ -11,6 +11,10 @@ summary_of: outline:sha256:d1336261c3f7712e
   as a component), [Agent profiles](../agent.md) ("Agent memory (M-09)", the reader -> actor
   handoff, G-04), [Broker](../broker.md), [Orchestration controller](../orchestration-controller.md)
 - **Depends-on:** ADR-0030, ADR-0032, ADR-0033
+- **Amended:** 2026-11-05 by ADR-0037 (memory entries carry sources, history, a TLP label and
+  revision, and an operator can retract a source and everything built on it; ADR-0037 decision 17
+  lists what changes in decisions 4, 5, 7, 8 and 10)
+- **Amended-by:** ADR-0037
 
 ## Context
 
