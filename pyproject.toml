@@ -164,8 +164,10 @@ suite_budgets = [
   # every suite and mutant. Until 2026-10-26 this
   # suite also held the mutant sweeps and was raised from 60 to 150 in five steps as they grew;
   # without them it measured 84.1s on a local 4-core box (2026-10-26), where it took 136s with
-  # them, so 110 leaves it the headroom it had and the sweeps no longer push it
-  "tests/conform = 110",
+  # them, so 110 leaves it the headroom it had and the sweeps no longer push it; 140 since CI
+  # measured 111.2s on 3.12 (2026-11-05) after the lake-query count_by/cardinality and lake-catalog
+  # batch-source checks (ADR-0036), about 1.25x that
+  "tests/conform = 140",
   # the sweeps: each registered mutant through its whole suite (test_conform_mutants.py, the
   # protocol mutants) and X-10 end to end over every suite (the CLI report tests, one of which
   # also runs every suite and mutant once, stay in tests/conform). They grow with
