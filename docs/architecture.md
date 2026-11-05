@@ -137,7 +137,7 @@ cutover is a defect to be recorded as a lesson.
 notification and inference seams inside a 4 GB RAM budget, addressed through the
 same `<capability>.svc.example.internal` aliases a real deployment uses. It is the place where
 the conformance suites run against real containers rather than fakes (nightly, and on every pull
-request that can affect the stack: CI's `lab-in-a-box` job, summed up by `lab-ok`). It is a rehearsal environment, not a deployment: every credential is a throwaway and
+request that can affect the stack: CI's `lab-in-a-box` job, with the LLM gateway profile in `lab-gateway`, both summed up by `lab-ok`). It is a rehearsal environment, not a deployment: every credential is a throwaway and
 every service is single node. See the README "Try it" section.
 
 | Alias | Service | Capability |

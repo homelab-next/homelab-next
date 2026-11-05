@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""tools/lab_paths.py and CI's lab-paths / lab-in-a-box / lab-ok jobs: the real stack runs on
-every change that can affect it, the list of what can is re-derived from the compose file (so a
-new COPY, bind mount or adapter it misses fails here instead of skipping the stack), and lab-ok,
-the one stable check name, passes only when the stack passed or was rightly skipped."""
+"""tools/lab_paths.py and CI's lab-paths / lab-in-a-box / lab-gateway / lab-ok jobs: the real
+stack and its gateway profile run on every change that can affect them, the list of what can is
+re-derived from the compose file (so a new COPY, bind mount or adapter it misses fails here
+instead of skipping the stack), and lab-ok, the one stable check name, passes only when both
+passed or were rightly skipped."""
 
 import os
 import re
@@ -264,17 +265,19 @@ def test_lab_paths_takes_the_base_by_the_one_rule_and_feeds_the_stack_job():
         "HNX_PUSH_BEFORE": "${{ github.event.before }}",
     }
     assert job["outputs"] == {"affected": "${{ steps.decide.outputs.affected }}"}
-    lab = JOBS["lab-in-a-box"]
-    assert lab["needs"] == "lab-paths"
-    assert lab["if"] == "needs.lab-paths.outputs.affected == 'true'"
-    assert "continue-on-error" not in lab
+    for name in ("lab-in-a-box", "lab-gateway"):
+        lab = JOBS[name]
+        assert lab["needs"] == "lab-paths", name
+        assert lab["if"] == "needs.lab-paths.outputs.affected == 'true'", name
+        assert "continue-on-error" not in lab, name
+        assert not any("continue-on-error" in s for s in lab["steps"]), name
 
 
 def test_the_lab_jobs_run_on_pull_requests_with_no_secret_and_a_read_only_token():
     on = CI.get("on") or CI.get(True)
     assert "pull_request" in on and "pull_request_target" not in on
     assert CI["permissions"] == {"contents": "read"}
-    for name in ("lab-paths", "lab-in-a-box", "lab-ok"):
+    for name in ("lab-paths", "lab-in-a-box", "lab-gateway", "lab-ok"):
         text = yaml.safe_dump(JOBS[name])
         # Dependabot's pull_request runs get no Actions secrets: the smoke must need none
         assert "secrets." not in text and "github.token" not in text, name
@@ -284,37 +287,47 @@ def test_the_lab_jobs_run_on_pull_requests_with_no_secret_and_a_read_only_token(
                 assert step["with"]["persist-credentials"] is False, name
 
 
-def _lab_ok(paths: str, affected: str, lab: str) -> int:
+def _lab_ok(paths: str, affected: str, lab: str, gateway: str) -> int:
     job = JOBS["lab-ok"]
     (step,) = job["steps"]
-    env = {**os.environ, "PATHS": paths, "AFFECTED": affected, "LAB": lab}
+    env = {**os.environ, "PATHS": paths, "AFFECTED": affected, "LAB": lab, "GATEWAY": gateway}
     return subprocess.run(
         ["bash", "-e", "-c", step["run"]], env=env, capture_output=True, check=False
     ).returncode
 
 
 @pytest.mark.parametrize(
-    ("paths", "affected", "lab", "ok"),
+    ("paths", "affected", "lab", "gateway", "ok"),
     [
-        ("success", "true", "success", True),
-        ("success", "false", "skipped", True),  # nothing the stack reads changed
-        ("success", "true", "failure", False),
-        ("success", "true", "cancelled", False),
-        ("success", "true", "skipped", False),  # affected but never ran
-        ("success", "false", "success", False),  # the decision and the run disagree
-        ("failure", "", "skipped", False),  # no decision is not a pass
-        ("cancelled", "", "skipped", False),
-        ("skipped", "", "skipped", False),
+        ("success", "true", "success", "success", True),
+        ("success", "false", "skipped", "skipped", True),  # nothing the stack reads changed
+        ("success", "true", "failure", "success", False),
+        ("success", "true", "success", "failure", False),  # the gateway profile failed
+        ("success", "true", "cancelled", "success", False),
+        ("success", "true", "success", "cancelled", False),
+        ("success", "true", "skipped", "success", False),  # affected but never ran
+        ("success", "true", "success", "skipped", False),  # the gateway never ran
+        ("success", "false", "success", "skipped", False),  # the decision and the run disagree
+        ("success", "false", "skipped", "success", False),
+        ("success", "", "skipped", "skipped", False),  # an empty decision is not "false"
+        ("success", "True", "success", "success", False),  # nor is any other spelling of one
+        ("success", "maybe", "skipped", "skipped", False),
+        ("failure", "", "skipped", "skipped", False),  # no decision is not a pass
+        ("cancelled", "", "skipped", "skipped", False),
+        ("skipped", "", "skipped", "skipped", False),
     ],
 )
-def test_lab_ok_passes_only_when_the_stack_passed_or_was_rightly_skipped(paths, affected, lab, ok):
+def test_lab_ok_passes_only_when_both_lab_jobs_passed_or_were_rightly_skipped(
+    paths, affected, lab, gateway, ok
+):
     job = JOBS["lab-ok"]
-    assert job["needs"] == ["lab-paths", "lab-in-a-box"] and job["if"] == "always()"
+    assert job["needs"] == ["lab-paths", "lab-in-a-box", "lab-gateway"] and job["if"] == "always()"
     (step,) = job["steps"]
     assert step["env"] == {
         "PATHS": "${{ needs.lab-paths.result }}",
         "AFFECTED": "${{ needs.lab-paths.outputs.affected }}",
         "LAB": "${{ needs.lab-in-a-box.result }}",
+        "GATEWAY": "${{ needs.lab-gateway.result }}",
     }
     assert not {"if", "continue-on-error", "shell"} & set(step) and "continue-on-error" not in job
-    assert (_lab_ok(paths, affected, lab) == 0) is ok
+    assert (_lab_ok(paths, affected, lab, gateway) == 0) is ok
