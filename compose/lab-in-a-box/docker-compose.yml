@@ -24,8 +24,8 @@ x-restart: &restart
   init: true
 
 # Least privilege for every container (see tests/compose).  The exceptions are spelled out where
-# they occur: postgres and uptime add back the capabilities their entrypoints need to chown the
-# data directory and switch user.
+# they occur: postgres adds back the capabilities its entrypoint needs to chown the data directory
+# and switch user.
 x-hardened: &hardened
   security_opt: ["no-new-privileges:true"]
   cap_drop: [ALL]
@@ -351,18 +351,23 @@ services:
         aliases: [metrics.svc.example.internal]
 
   # --- uptime: Uptime Kuma, provisioned headlessly by uptime-init -------------------------
-  # Its entrypoint chowns /app/data to PUID:PGID (root here) and switches to them with setpriv,
-  # so it adds back exactly those capabilities.
+  # The slim rootless image: no embedded MariaDB or Chromium (the lab uses SQLite and HTTP
+  # monitors), and it runs as the image's own `node` user (uid 1000), which owns /app/data in the
+  # image and so in a fresh volume: no capability is added back.  UPTIME_KUMA_DB_TYPE picks
+  # SQLite without the first-run "setup database" page, which would otherwise hold the server
+  # (and answer /api/entry-page with type setup-database, hence the health check reads the type).
+  # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.17@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9
-    cap_add: [CHOWN, SETGID, SETUID]
+    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    environment:
+      UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
       - uptime-data:/app/data
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_UPTIME:-3001}:3001"
     healthcheck: &kuma-health
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/entry-page', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/entry-page', r => { let b = ''; r.on('data', c => b += c); r.on('end', () => process.exit(r.statusCode === 200 && /\"type\":\"entryPage\"/.test(b) ? 0 : 1)); }).on('error', () => process.exit(1))"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -372,14 +377,14 @@ services:
       lab:
         aliases: [uptime.svc.example.internal]
 
-  # Uptime Kuma has no REST API for setup, monitors or status pages; this runs
-  # config/uptime-kuma/provision.js in the same image, with its own socket.io client (the API the
+  # Uptime Kuma (2.x as 1.x) has no REST API for setup, monitors or status pages; this runs
+  # config/uptime/provision.js in the same image, with its own socket.io client (the API the
   # UI uses): admin user, a monitor that answers (metrics) and one that cannot (a closed port),
   # their first heartbeats, then the public status page "lab".  It stays up once done and is
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.17@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9
+    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -392,7 +397,7 @@ services:
       KUMA_DOWN_URL: http://metrics.svc.example.internal:9/
       KUMA_MARKER: /tmp/provisioned.json
     volumes:
-      - ./config/uptime-kuma/provision.js:/provision/provision.js:ro
+      - ./config/uptime/provision.js:/provision/provision.js:ro
     depends_on:
       uptime:
         condition: service_healthy
