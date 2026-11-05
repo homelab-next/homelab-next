@@ -200,7 +200,7 @@ def parse_ack_reply(reply: str) -> tuple[str, str, int, int]:
     """``(stream, consumer, delivery_count, stream_seq)`` from a ``$JS.ACK`` reply subject (ADR-15:
     the 9-token v1 form, and the v2 form with domain and account hash, 11 tokens or more)."""
     t = reply.split(".")
-    if len(t) < 9 or t[0] != "$JS" or t[1] != "ACK":
+    if (len(t) != 9 and len(t) < 11) or t[:2] != ["$JS", "ACK"]:
         raise EventsError(f"not a JetStream delivery (reply {reply!r})")
     if len(t) == 9:
         stream, consumer, dc, sseq = t[2], t[3], t[4], t[5]

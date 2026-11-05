@@ -210,7 +210,11 @@ def test_fake_wire_enforces_the_servers_stream_subject_rules():
 def test_ack_reply_parsing_and_durable_names():
     assert nj.parse_ack_reply("$JS.ACK.S.c.3.17.9.1700000000.0") == ("S", "c", 3, 17)
     assert nj.parse_ack_reply("$JS.ACK.dom.acchash.S.c.2.5.4.1700000000.0.tok") == ("S", "c", 2, 5)
-    for bad in ("_INBOX.x", "$JS.ACK.S.c.x.1.1.1.0"):
+    assert nj.parse_ack_reply("$JS.ACK._.acchash.S.c.2.5.4.1700000000.0") == ("S", "c", 2, 5)
+    # neither form: v1 has exactly 9 tokens, v2 at least 11 (the server subscribes on
+    # $JS.ACK.<domain>.<hash>.<stream>.<consumer>.*.*.*.*.>), so 10 is malformed, not v2
+    for bad in ("_INBOX.x", "$JS.ACK.S.c.x.1.1.1.0", "$JS.ACK.S.c.1.2.3.4.5.6",
+                "$JS.ACK.d.h.S.c.1.2.3.4"):  # fmt: skip
         with pytest.raises(EventsError):
             nj.parse_ack_reply(bad)
     assert nj.durable_name("c-r0-1") == "c-r0-1"
