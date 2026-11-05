@@ -1,10 +1,9 @@
 # Operator to-do: standing up the lab
 
 The steps only the operator can take to stand up a lab from this repository and its private
-overlay. Agents add items here and never tick them; the operator ticks or deletes them. Nothing
-here names a real host, address or account: those live in the private overlay.
-
-Items are in rough stand-up order. Each says why it needs a person.
+overlay, in order. Agents add items here and never tick them; the operator ticks or deletes them.
+Nothing here names a real host, address or account: those live in the private overlay. The full
+procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping a new server".
 
 ## 1. Repository settings (GitHub settings no test can check)
 
@@ -13,77 +12,104 @@ Items are in rough stand-up order. Each says why it needs a person.
   real stack failing.
 - [ ] **Never require the `experimental` job.** It runs the tests of components listed in
   `tools/experimental.yml` and is allowed to fail. Before any experimental component is enabled
-  anywhere, move its security tests back into the blocking set.
-- [ ] **In the private overlay, require the `swap-gate` job** with the template's other checks. A
-  check that no rule requires gates nothing (docs/modules.md, swap-gate section).
+  anywhere, return it to the blocking set: delete its `tools/experimental.yml` entry and restore
+  its gates and invariants in one change.
+- [ ] **In the private overlay, require the `checks` job on `main`**, with pull requests and Code
+  Owners review. It is the last job of `checks.yml` and needs every other one, `swap-gate`
+  included, so it is the one check to require.
 - [ ] **In the private overlay, merge the first `lab/model_roles.json` by an owner override.**
-  `swap-gate` has no base table to hold the first one against, so it exits 2. Every later
-  change is gated normally.
+  `swap-gate` has no base table to hold the first one against, so it exits 2 and `checks` fails.
+  Every later change is gated normally ([docs/modules/swap-flow.md](docs/modules/swap-flow.md),
+  "The overlay's gate").
 
-## 2. Decisions waiting on you
+## 2. Secrets and the deploy path (before the first deploy)
 
-- [ ] **Review ADR-0037, agent memory provenance (pull request #245), then merge it or send it
-  back.** Things to know before you accept it:
-  - packs carry no TLP labels yet, so all memory reads as `red`;
-  - retraction holds fleet-wide only once the broker's free-form `memory.write` lane is routed
-    through the memory store or removed;
-  - retracting only cited facts is precise but can miss facts a poisoned source steered;
-    `include_exposed` is complete but can retire facts that never used the source.
+- [ ] **Put your age public key in the overlay's `.sops.yaml`**, replacing the placeholders, and
+  the deploy identity's public key (below). Public keys only; the deploy identity's private key
+  goes only into the `production` Environment secret `SOPS_AGE_KEY`.
+- [ ] **Initialise and unseal the secrets store for the first time.**
+- [ ] **Seed the secrets store and revoke the root token**: `hnx secrets plan`, then `hnx secrets
+  seed` with the overlay's `lab/secrets.yml` (docs/private-overlay.md, "Seeding the
+  credentials"). Keep the break-glass material (unseal shares, the root-token recovery path, your
+  age identity) off the lab, by hand.
+- [ ] **Create the deploy identity**:
+  - an AppRole that can read only the deploy's paths, with short TTLs, bound to the deploy's
+    addresses;
+  - a second age identity for the deploy, its recipient added to `.sops.yaml` (`sops
+    updatekeys`).
+- [ ] **Give the deploy a path into the lab**: a mesh VPN with a federated identity scoped to the
+  `production` Environment, or an ephemeral just-in-time self-hosted runner. Never a persistent
+  runner.
+- [ ] **Create the overlay's `production` Environment**, with deployment branch `main` only.
+  - Secrets: `BAO_SECRET_ID`, `SOPS_AGE_KEY`, `DEPLOY_SSH_KEY`.
+  - Variables: `HNX_REF` (a full commit SHA), `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`,
+    `BAO_ADDR`, `BAO_ROLE_ID`, `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and the VPN client id
+    and audience if you use one.
+- [ ] **Record host keys** in the overlay's `ansible/known_hosts`, checking each fingerprint out of
+  band.
+- [ ] **Run the first deploy by hand** (`deploy.yml` on `main`, from the overlay's Actions page or
+  `gh workflow run deploy.yml --ref main`) and watch it.
 
-  Its first implementation pull request may merge while it is proposed; the second only after
-  you accept it.
-- [ ] **Accept ADR-0036 (novelty baselines)** and the ADRs whose code has shipped but whose
-  status still reads `proposed` (each ADR's **Status** line). Once they
-  are accepted, a test can hold frozen schemas to accepted ADRs.
-- [ ] **Confirm or overturn the two defaults in pull request #59 (broker-only actors).**
-  - A site's `--classes` table may not class a packaged capability or tier down.
-  - There is no per-record waiver for the tool-class floors.
+## 3. Identity (after the first deploy)
 
-  Both are listed in ADR-0030. Changing either is a small follow-up.
-
-## 3. Secrets and identity (before the first deploy)
-
-- [ ] **Put your age public key(s) in the overlay's `.sops.yaml`**, so `lab/sealed/` can be
-  encrypted. Public keys only; never the private key.
-- [ ] **Initialise and unseal the secrets store for the first time.** Keep the unseal shares
-  offline.
 - [ ] **Stand up the identity provider and the auth proxy** (ADR-0034):
   1. choose where the identity provider runs and set the overlay's `idp` row to it;
-  2. put each OIDC client secret and the break-glass admin in the secrets store, one entry per
-     service under `idp/clients`;
-  3. import the generated `idp/realm.json`;
-  4. **create the admin group the overlay's roles name (`lab-admins` unless you renamed it) and
-     add yourself before the auth proxy goes live**: every gated site fails closed, with a 403
-     for everyone, if the group is missing;
+  2. put each OIDC client secret in the secrets store, one entry per service under `idp/clients`
+     (the auth proxy's included). Put each app's break-glass local admin under its own name in
+     the secrets store, never in the identity provider;
+  3. import the generated `idp/realm.json`, which creates every group the overlay's roles name;
+  4. **create your own user, enrol its one-time password, and add it to the admin group**
+     (`lab-admins` unless you renamed it) **before the auth proxy goes live**: a signed-in user
+     in none of a site's groups gets 403, so with nobody in the group every gated site refuses
+     everyone;
   5. deploy the auth proxy;
-  6. give users a temporary password and enrol their one-time-password device with them in
+  6. give other users a temporary password and enrol their one-time-password device with them in
      person (first-sign-in enrolment trusts whoever holds the password at that moment).
-- [ ] **Verify sign-in live**, since none of this has run against a real identity provider yet:
-  - a user with no one-time password is refused, both at the browser and on a password grant;
+- [ ] **Verify sign-in live** (none of this has run against a real identity provider yet):
+  - a user with no one-time password is refused at the browser, and on a password grant;
   - a signed-in user outside a site's groups gets 403;
   - a sign-in return link whose query contains `&` comes back intact.
 
 ## 4. Lab bring-up
 
-- [ ] **Validate the overlay with the scope check and the private leak check** and fix it until
-  both are clean (`hnx site validate`, `tools/private_leak_check.py private`, overlay CLAUDE.md).
 - [ ] **Lake readers and ceilings** (ADR-0033):
   1. declare `tlp_readers` (including `analyzer:novelty`) in the overlay;
-  2. render `lake-access.json` and load it into the query engine once;
-  3. confirm a reader below `red` sees only rows at or below its ceiling.
+  2. render `lake-access.json` (`hnx modules render`) and load it into the query engine, and
+     again after every change to `tlp_readers`;
+  3. have the lake-query adapter sign each reader in to the engine as the user named by its whole
+     reader id (`analyzer:novelty`, `profile:x`, ...), and each `group:` reader as the engine
+     group of that name;
+  4. confirm a reader below `red` sees only rows at or below its ceiling.
 
   The lake starts fresh, so there is nothing to backfill. `hnx modules tlp-backfill` is only for
   a table created before it had a `tlp` column.
-- [ ] **Re-record the lake parity cassette against the real engines**, after adding a query that
-  reads `tlp` to `tests/lake/fixtures/queries.py`. None of the recorded queries reads the
-  column yet.
+- [ ] **Check lake parity against the lab's own query engine**, once an agent pull request has
+  added a `tlp` query to `tests/lake/fixtures/queries.py` and re-recorded the cassette.
 - [ ] **Novelty baselines** (ADR-0036):
-  - in the overlay, write the first novelty spec and the timer that runs it;
+  - write the first novelty spec in the overlay;
+  - schedule `hnx novelty run` (the repository ships no timer for it);
   - set `learn_days` and `min_history_days` per profile;
   - keep lake retention at least `learn_days` for every profiled table;
   - scope the analyzer's catalog credential to the `novelty_finding` table.
 
   Profiles stay warming, with no findings, until they hold `min_history_days` of data.
-- [ ] **Host sensor trial**: build the Phage fork from a pinned commit (never its install script
-  or release binaries). Run it on one canary guest in learn mode, then alert mode, and read the
-  baseline difference before widening it.
+
+## 5. Decisions waiting on you (not blocking stand-up)
+
+- [ ] **Accept ADR-0036 (novelty baselines).** That ends the draft status of its novelty spec
+  schema and of its amendment to ADR-0033 decision 6. Accept, too, the other ADRs whose code has
+  shipped but whose **Status** line still reads `proposed`.
+- [ ] **Review ADR-0037, agent memory provenance (pull request #245), then merge it or send it
+  back.** Things to know before you accept it:
+  - packs carry no TLP labels yet, so all memory reads as `red`;
+  - retraction holds fleet-wide only once the broker's free-form `memory.write` lane is routed
+    through the memory store or removed;
+  - retracting only cited facts is precise but can miss facts a poisoned source steered, while
+    `include_exposed` is complete but can retire facts that never used the source.
+
+  Its first implementation pull request may merge while it is proposed; the second only after
+  you accept it.
+- [ ] **Confirm or overturn the defaults in pull request #59 (broker-only actors).** The first is
+  ADR-0030 decision 1: a site's `--classes` table may not class a packaged capability or tier
+  down. The second, that there is no per-record waiver for the tool-class floors, is in #59's
+  "Decisions defaulted" table, which lists nine more.
