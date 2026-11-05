@@ -564,12 +564,17 @@ record of the key. It is never restarted or reused, through `retire`, a later `a
 compaction below. Until sources and labels ship (PR 2), every record is `sources: []`,
 `checked: false`, `tlp: red`, with an empty closure. Memory stored before the log migrates once,
 on its owner's next write, to one `migrated: true` record per entry (`rev: 1`). A legacy key or
-value that holds a secret migrates as its digest only (`purged: true`; a secret key is renamed
-`purged-<digest prefix>`). The migration logs its position, never its value.
+value that holds a secret migrates as a `purged: true` marker only, with no value and no digest
+(an unsalted digest of a low-entropy secret confirms a guess offline); a secret key is renamed
+`purged-<its position>`. Folding keeps the marker. The migration logs the position, never the
+value.
 
 The clock is injected: `MemoryStore(now=...)` takes an aware UTC `datetime`, read once per batch
-inside the transaction. A batch is stamped the later of the clock and the log's latest record, so
-the log's time never goes backwards. A batch holds at most 64 updates.
+inside the transaction. The log's time never goes backwards. When the clock is up to 5 minutes
+behind the log's latest record, the batch is stamped at the log's time. Beyond that the batch is
+refused (`MemoryClockError`): nothing is written, and the operator is paged "clock behind log by
+X" once (pair `AGENT_MEMORY_CLOCK`), with the recovery on the next accepted write. A batch holds
+at most 64 updates.
 
 No secret enters the log, or an error message. Every string of the batch is screened first, at
 any depth and property names included; for `apply_report`, that is every string of the whole
@@ -577,8 +582,11 @@ report. The screen uses the screen's secret types (`homelabnext.agent.screen.SEC
 the leak scanner's credential shapes (`homelabnext.shapes`, which `tools/leak_scan.py` reads too).
 A match refuses the whole batch, naming the position and the type. Schema refusals name a path and
 a keyword (`memory_updates/0/value: fails maxLength`), never the validator's message, which
-quotes values. An access refusal shows a scope or owner name only when it is a plain name that
-passes the screen. **The screen is shape-based.** A secret that is encoded (base64, hex),
+quotes values; a property name the schema does not define shows as `#<i>`, its position. An
+access refusal shows a scope or owner name only when it is a plain name that passes the screen.
+**`apply_report` refuses the whole report when any field holds a credential shape**, not just
+its `memory_updates`. For example, an intelligence summary that quotes a leaked key has all of
+its memory updates refused; the platform must redact the key before the report is applied. **The screen is shape-based.** A secret that is encoded (base64, hex),
 disguised with confusable characters, or split across keys or updates passes it. Purge (PR 3) is
 how such a value leaves the store.
 
@@ -606,11 +614,14 @@ again. Without a notifier, the crossing is logged once.
 - **A platform scope compacts.** `memory_limits.keep_last: {<scope>: {<key glob>: N}}` (the
   largest N of the matching globs) folds a key's records beyond its last N into one range record.
   The range record keeps the rev range, value digests, the union of sources, closures and
-  `pack_ids`, and the strictest label.
+  `pack_ids`, and the strictest label. The bound covers only keys a pattern matches: a key
+  replaced without end (ADR-0035's `cursor-*`) needs one, or it reaches the cap.
 - **A retired key folds whole** into one tombstone.
-- **Tombstones age out.** Tombstones beyond the scope's budget (`memory_limits.tombstones`, by
-  default a tenth of the cap) age out oldest first into the scope's one `aged` record. That
-  record keeps the scope's high-water `rev`, so a key added again continues above it.
+- **Tombstones age out.** Tombstones beyond the scope's budget (`memory_limits.tombstones`, below
+  the cap, by default a tenth of it) age out oldest first into the scope's one `aged` record.
+  Only a retired key's tombstone ages: a key retired and added again keeps its old tombstone as
+  an earlier record, and it stays. The `aged` record keeps the scope's high-water `rev`. A key's
+  next `rev` is one above the larger of its own and that high-water `rev`, so none is reused.
 
 An aged-out key leaves `dependents` for good. It was already retired, so a retraction loses
 nothing live.

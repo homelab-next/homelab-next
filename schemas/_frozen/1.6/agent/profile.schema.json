@@ -165,7 +165,7 @@
         },
         "keep_last": {
           "type": "object",
-          "description": "Per platform scope, per key pattern (a shell-style glob over keys; the largest N of the matching patterns applies), how many of a key's records stay whole; the older ones fold into one range record that keeps the rev range, value digests, sources, closures, pack ids and the strictest label, but no value.",
+          "description": "Platform scopes only: per platform scope, per key pattern (a shell-style glob over keys; the largest N of the matching patterns applies), how many of a key's records stay whole; the older ones fold into one range record that keeps the rev range, value digests, sources, closures, pack ids and the strictest label, but no value.",
           "propertyNames": {
             "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
           },
@@ -185,7 +185,7 @@
         },
         "tombstones": {
           "type": "object",
-          "description": "Per platform scope, how many retired keys' tombstones it keeps; beyond that the oldest age out into the scope's one aged record, which keeps its high-water rev.",
+          "description": "Platform scopes only: per platform scope, how many retired keys' tombstones it keeps (fewer than its record cap); beyond that the oldest age out into the scope's one aged record, which keeps its high-water rev.",
           "propertyNames": {
             "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
           },

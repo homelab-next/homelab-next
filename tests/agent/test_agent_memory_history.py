@@ -422,10 +422,10 @@ def test_a_crossing_without_a_notifier_is_logged_once(ledger, backend, caplog):
         with pytest.raises(MemoryLimitError, match="record cap"):
             store.apply_updates(ledger, [up("add", "d", "v")])
     said = (
-        f"{ledger['id']}: memory scope analyst refuses writes: 4 records would exceed the cap of 3"
+        f"{ledger['id']}'s memory scope analyst refuses writes: 4 records would exceed the cap of 3"
     )
     assert len([r for r in caplog.records if r.message.startswith(said)]) == 1
-    assert "raise memory_limits.records in the reviewed profile" in caplog.records[0].message
+    assert "Raise memory_limits.records in the reviewed profile" in caplog.records[0].message
 
 
 def test_keep_last_folds_records_beyond_the_last_n_into_one_range(ledger, backend):

@@ -112,13 +112,18 @@ was shown, never from what the model says about its sources.
      range record keeps the rev range (`rev_from` to `rev`), the value digests, the union of the
      sources, closures and `pack_id`s, the strictest `tlp`, when the range starts (`since`) and
      the state it leaves the entry in. It drops the values. A later fold merges into it, so a key
-     holds at most N + 1 records.
+     holds at most N + 1 records. **The bound covers only keys a `keep_last` pattern matches.** A
+     key replaced without end (ADR-0035's `cursor-*` keys) needs a pattern, or it reaches the
+     record cap.
    - Whole-key tombstones in a platform scope **age out oldest first** once they exceed the
      scope's tombstone budget: `memory_limits.tombstones: {<scope>: N}` (profile schema 1.6,
-     additive), by default 10% of the scope's record cap. Aged-out tombstones fold into the
+     additive, below the scope's record cap), by default 10% of the record cap. Only a key whose
+     last record is its tombstone (a retired key) ages out. A key retired and added again keeps
+     its old tombstone as an earlier record, and it is live, so it stays. Aged-out tombstones fold
+     into the
      scope's one `aged` record. It keeps the count, the time range they cover and the scope's
-     **high-water `rev`**. A key added after its tombstone aged out continues above that
-     high-water `rev`, so `rev` is never restarted or reused. Once a key in a scope has aged out,
+     **high-water `rev`** (the largest it aged). A key's next `rev` is one above the larger of
+     its own last `rev` and that high-water `rev`, so `rev` is never restarted or reused. Once a key in a scope has aged out,
      every key first added there starts above the high-water `rev`, because the scope no longer
      knows which keys it has seen.
    - `as_of` answers `compacted` for a key whose state at `t` lies in a range record or
@@ -334,7 +339,9 @@ was shown, never from what the model says about its sources.
 17. **Amendments to ADR-0035** (it lists this ADR as amending it):
     - **Decision 4 (the fold):** the fold writes `fleet-ledger`, a platform scope, with
       `unchecked=True` and its `sources=`. Its records are `red`, which is never below a ledger
-      value's own `tlp` field. A denied update is dropped, not fatal (decision 14).
+      value's own `tlp` field. A denied update is dropped, not fatal (decision 14). The ledger's
+      profile gives its `cursor-*` keys a `keep_last` pattern (decision 6, amended); a key no
+      pattern matches is not bounded by it.
     - **Decision 5 (value fields):** `tlp` inside a ledger value stays for the coordinator's own
       reading. The renderer writes the store's label into what it renders, not the value's field.
     - **Decision 7 (pack fill order):** stale entries (decision 15) and withheld counts are
@@ -385,7 +392,10 @@ was shown, never from what the model says about its sources.
     retired, so a retraction loses nothing live. Its time range stays visible as `aged_out` in
     `as_of`.
   - Until `MemoryAdmin` ships (PR 3), nothing can erase history: a report cannot write a platform
-    scope, so it cannot cause compaction, and only platform code's own writes compact.
+    scope, so it cannot cause compaction, and only platform code's own writes compact. The one
+    exception is migration: a legacy key or value holding a secret is kept only as a `purged`
+    marker, with no value and no digest, since an unsalted digest of a low-entropy secret
+    confirms a guess.
   - Purge cannot reach copies outside the store.
 - **Obliges us to maintain:**
   - **PR 1:**

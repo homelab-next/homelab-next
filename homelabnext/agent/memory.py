@@ -37,11 +37,13 @@ History (ADR-0037 decisions 1 to 6, decision 6 as amended):
   ``tlp: red`` with an empty closure.  Memory stored before the log existed migrates once, on its
   owner's next write, to one ``migrated`` record per entry (``rev: 1``); before that record's
   time its history is unknown and :meth:`MemoryStore.as_of` answers ``compacted`` for it.  A
-  legacy key or value that holds a secret is migrated as its digest only (``purged``).
+  legacy key or value that holds a secret is migrated as a ``purged`` marker only: no value and
+  no digest.
 * **An injected clock.**  ``MemoryStore(now=...)`` (a callable returning an aware UTC
-  ``datetime``) is read once per batch, inside the transaction, and never goes backwards in the
-  log: a batch is stamped the later of the clock and the latest record.  :func:`_apply` reads
-  no clock.
+  ``datetime``) is read once per batch, inside the transaction.  The log's time never goes
+  backwards: a clock up to :data:`CLOCK_SKEW` behind the latest record is stamped at the log's
+  time, and one further behind refuses the batch (:class:`MemoryClockError`) and pages once.
+  :func:`_apply` reads no clock.
 * **No secret enters the log, or an error message.**  Every string of the batch (of the whole
   report, for :meth:`MemoryStore.apply_report`), property names included, is run through the
   platform screen's secret types (:data:`homelabnext.agent.screen.SECRET_TYPES`) and the leak
@@ -76,17 +78,17 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Iterable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from homelabnext import shapes, tlp
-from homelabnext.notify.core_pairs import AGENT_MEMORY_CAP
+from homelabnext.notify.core_pairs import AGENT_MEMORY_CAP, AGENT_MEMORY_CLOCK
 
 from .compiler import VerifiedProfile, require_verified
 from .errors import AgentError
 from .report import validate_report
-from .schemas import schema_error_shapes
+from .schemas import schema_error_shapes, schema_property_names
 from .screen import SECRET_TYPES, Screener
 
 OPS = ("add", "replace", "retire")
@@ -123,6 +125,10 @@ UNLABELLED = "red"
 
 #: the notifier pair the record cap pages with (its titles live in ``core_pairs``)
 CAP_TITLE, CAP_CLEARED = AGENT_MEMORY_CAP
+CLOCK_TITLE, CLOCK_CLEARED = AGENT_MEMORY_CLOCK
+#: how far behind its log's latest record the clock may be: within it the batch is stamped at
+#: the log's time; beyond it the batch is refused and the operator paged
+CLOCK_SKEW = timedelta(minutes=5)
 
 #: the leak scanner's credential shapes, by its pattern names (``tools/leak_scan.py``)
 _SHAPES = tuple(
@@ -139,6 +145,8 @@ _SHAPES = tuple(
         ("vault-blob", shapes.VAULT_BLOB),
     )
 )
+#: the property names a report defines: the only ones echoed in a refusal's path
+_KNOWN = schema_property_names("agent", "report_result")
 #: a name safe to echo in a message once it has passed the screen
 _SHOWN = re.compile(r"[a-z_][a-z0-9_:-]{0,63}")
 
@@ -192,6 +200,21 @@ class MemoryLimitError(MemoryUpdateError):
                 f"scope {s!r} of {owner} is at its record cap ({n} records would exceed {cap}); "
                 f"its writes are refused: {_cap_advice(s in self.platform)}"
                 for s, (n, cap) in sorted(self.scopes.items())
+            ]
+        )
+
+
+class MemoryClockError(MemoryUpdateError):
+    """The clock is more than :data:`CLOCK_SKEW` behind the log's latest record; nothing from
+    the batch was applied (a smaller lag is absorbed by stamping the batch at the log's time)."""
+
+    def __init__(self, owner: str, behind: timedelta) -> None:
+        self.owner = owner
+        self.behind = behind
+        super().__init__(
+            [
+                f"the clock is behind {owner}'s memory log by {behind} (more than {CLOCK_SKEW}); "
+                "fix the host clock: the log's time never goes backwards"
             ]
         )
 
@@ -320,7 +343,7 @@ def secret_problems(doc: Any, root: str = "") -> list[str]:
                     problems.append(
                         f"{path or '$'}: property #{i} name holds a secret ({', '.join(types)})"
                     )
-                part = k if isinstance(k, str) and _SHOWN.fullmatch(k) and not types else f"#{i}"
+                part = k if isinstance(k, str) and k in _KNOWN and not types else f"#{i}"
                 walk(v, at(path, part))
         elif isinstance(node, (list, tuple)):
             for i, v in enumerate(node):
@@ -373,6 +396,10 @@ def _stamp(t: datetime) -> str:
     return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _parse(stamp: str) -> datetime:
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -392,9 +419,10 @@ def _stored(raw: Any, at: str) -> tuple[Stored, list[str]]:
     """``raw`` in the ``{entries, log}`` shape, and the positions of legacy secrets purged.
 
     Memory stored before the log migrates to one ``migrated`` record per entry, stamped ``at``
-    (ADR-0037 decision 2).  A legacy key or value that holds a secret is migrated as its digest
-    only, the record marked ``purged`` (a secret key is renamed ``purged-<digest prefix>`` and
-    its digest kept as ``key_digest``); the positions are returned, never the values."""
+    (ADR-0037 decision 2).  A legacy key or value that holds a secret is migrated as
+    the ``purged`` marker: no value and no digest of it (an unsalted digest of a low-entropy
+    secret confirms a guess offline), and a secret key is renamed ``purged-<its position>``.
+    The positions are returned, never the values."""
     if not raw:
         return {"entries": {}, "log": []}, []
     if _is_logged(raw):
@@ -412,7 +440,11 @@ def _stored(raw: Any, at: str) -> tuple[Stored, list[str]]:
             value = e.get("value") if isinstance(e.get("value"), str) else None
             bad_key = bool(secret_types(key))
             bad_value = value is not None and bool(secret_types(value))
-            name = "purged-" + _digest(key)[7:23] if bad_key else key
+            name = key
+            if bad_key:  # named by position, never by anything derived from the secret
+                n = 0
+                while (name := f"purged-{ki}" + (f"-{n}" if n else "")) in block:
+                    n += 1
             rec = _record(
                 at,
                 scope,
@@ -425,9 +457,9 @@ def _stored(raw: Any, at: str) -> tuple[Stored, list[str]]:
             )
             rec["migrated"] = True
             if bad_key or bad_value:
+                # no digest either: an unsalted digest of a low-entropy secret confirms a guess
+                rec.pop("value_digest", None)
                 rec["purged"] = True
-                if bad_key:
-                    rec["key_digest"] = _digest(key)
                 where = " and ".join(w for w, b in (("key", bad_key), ("value", bad_value)) if b)
                 purged.append(f"scope #{si} entry #{ki} ({where})")
             out.append(rec)
@@ -554,7 +586,7 @@ def _squash(recs: list[Record], kind: str) -> Record:
         "tlp": str(tlp.strictest(r["tlp"] for r in recs)),
         "closure": _union(*(r["closure"] for r in recs)),
         "reasserted_at": state["reasserted_at"],
-    }
+    } | ({"purged": True} if any(r.get("purged") for r in recs) else {})
 
 
 def _compact_key(recs: list[Record], keep_last: int | None, whole: bool) -> list[Record] | None:
@@ -576,11 +608,20 @@ def _compact_key(recs: list[Record], keep_last: int | None, whole: bool) -> list
 def _age(records: list[Record], scope: str, budget: int, entries: Memory) -> list[Record]:
     """Age out a platform scope's oldest tombstones beyond ``budget`` into its one ``aged``
     record (the scope's high-water ``rev``, how many aged out, and the time range they cover);
-    their keys leave ``entries``."""
+    their keys leave ``entries``.
+
+    Only a key's **last** record can be its tombstone: a key retired and then added again keeps
+    its old tombstone as an earlier record, and that key is live, so it never ages out."""
+    last: dict[str, int] = {}
+    for i, r in enumerate(records):
+        if r["scope"] == scope and r["op"] != "aged":
+            last[r["key"]] = i
+    live = entries.get(scope, {})
     tombs = [
-        (r["at"], i)
-        for i, r in enumerate(records)
-        if r["scope"] == scope and r.get("compacted") == "whole"
+        (records[i]["at"], i)
+        for key, i in last.items()
+        if records[i].get("compacted") == "whole"
+        and (live.get(key) or {}).get("status", "retired") == "retired"
     ]
     if len(tombs) <= budget:
         return records
@@ -604,7 +645,9 @@ def _age(records: list[Record], scope: str, budget: int, entries: Memory) -> lis
         "closure": [],
     }
     for i in victims:
-        entries.get(scope, {}).pop(records[i]["key"], None)
+        key = records[i]["key"]
+        if (live.get(key) or {}).get("status") == "retired":  # never a live entry
+            live.pop(key, None)
     out = [r for i, r in enumerate(records) if i not in victims and r is not old]
     out.append(aged)
     return out
@@ -628,7 +671,11 @@ def _apply(
         latest = max(latest, r["at"])
         if r["op"] == "aged":
             high[r["scope"]] = r["rev"]
-    at = max(now, latest)  # the log's time never goes backwards
+    if latest > now:  # the log's time never goes backwards
+        behind = _parse(latest) - _parse(now)
+        if behind > CLOCK_SKEW:
+            raise MemoryClockError(profile["id"], behind)
+    at = max(now, latest)
     problems: list[str] = []
     touched: dict[tuple[str, str], None] = {}
     for n, u in enumerate(updates):
@@ -648,7 +695,7 @@ def _apply(
         elif u["op"] == "retire" and has_value:
             problems.append(f"{where}: retire takes no value")
         else:
-            rev = (cur["rev"] if cur else high.get(u["scope"], 0)) + 1
+            rev = max(cur["rev"] if cur else 0, high.get(u["scope"], 0)) + 1
             value = u["value"] if has_value else (cur or {}).get("value")
             rec = _record(
                 at, u["scope"], u["key"], u["op"], rev, value, pack_id, keep_value=has_value
@@ -736,6 +783,7 @@ class MemoryStore:
         self._logged: set[str] = set()
         if notifier is not None:
             notifier.register_pair(CAP_TITLE, CAP_CLEARED)
+            notifier.register_pair(CLOCK_TITLE, CLOCK_CLEARED)
 
     def apply_updates(
         self,
@@ -770,6 +818,9 @@ class MemoryStore:
 
         try:
             new = self._backend.transact(owner, fn)
+        except MemoryClockError as exc:
+            self._clock_page(owner, exc.behind)
+            raise
         except MemoryLimitError as exc:
             for scope, (n, cap) in exc.scopes.items():
                 self._page(
@@ -779,6 +830,7 @@ class MemoryStore:
                     scope in exc.platform,
                 )
             raise
+        self._clock_page(owner, None)
         for scope in sorted({u["scope"] for u in updates}):
             self._page(owner, scope, None, False)
         return new["entries"]
@@ -927,7 +979,7 @@ class MemoryStore:
         if positions and f"purged:{owner}" not in self._logged:
             self._logged.add(f"purged:{owner}")
             log.warning(
-                "memory of %s: migration kept only the digest of secrets at %s",
+                "memory of %s: migration kept only the purged marker (no value, no digest) of secrets at %s",
                 owner,
                 ", ".join(positions),
             )
@@ -936,32 +988,55 @@ class MemoryStore:
         """Report ``owner/scope`` at its cap (``problem``) or not (None), state-diffed.  The key
         is a digest of the pair, so no two pairs share one."""
         pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
-        key = f"agent-memory-cap-{pair}"
+        advice = _cap_advice(platform)
+        self._report(
+            f"agent-memory-cap-{pair}",
+            owner,
+            "at-cap",
+            CAP_TITLE if problem is not None else CAP_CLEARED,
+            None
+            if problem is None
+            else f"{owner}'s memory scope {scope} refuses writes: {problem}. "
+            f"{advice[0].upper()}{advice[1:]}.",
+            f"{owner}'s memory scope {scope} accepts writes again",
+        )
+
+    def _clock_page(self, owner: str, behind: timedelta | None) -> None:
+        """Report that the clock is behind ``owner``'s log (``behind``) or not (None)."""
+        key = "agent-memory-clock-" + hashlib.sha256(owner.encode()).hexdigest()[:16]
+        self._report(
+            key,
+            owner,
+            "clock-behind",
+            CLOCK_TITLE if behind is not None else CLOCK_CLEARED,
+            None
+            if behind is None
+            else f"{owner}'s memory refuses writes: the clock is behind its log by {behind}. "
+            "Fix the host clock; nothing is written until it is within "
+            f"{CLOCK_SKEW} of the log.",
+            f"{owner}'s memory clock is within {CLOCK_SKEW} of its log again",
+        )
+
+    def _report(
+        self, key: str, owner: str, state: str, title: str, problem: str | None, cleared: str
+    ) -> None:
+        """One state-diffed page: ``problem`` (its body) or None for the recovery.  Without a
+        notifier, a problem is logged once per process until it clears."""
         if self._notifier is None:
             if problem is None:
                 self._logged.discard(key)
             elif key not in self._logged:
                 self._logged.add(key)
-                log.warning(
-                    "%s: memory scope %s refuses writes: %s; %s",
-                    owner,
-                    scope,
-                    problem,
-                    _cap_advice(platform),
-                )
+                log.warning("%s", problem)
             return
         from homelabnext.notify import Message
 
         try:
             if problem is None:
-                body = f"{owner}'s memory scope {scope} accepts writes again"
-                self._notifier.report(key, "ok", Message(key, CAP_CLEARED, body), scope=owner)
+                self._notifier.report(key, "ok", Message(key, title, cleared), scope=owner)
             else:
-                body = f"{owner}'s memory scope {scope} refuses writes: {problem}. " + (
-                    _cap_advice(platform)[0].upper() + _cap_advice(platform)[1:] + "."
-                )
-                msg = Message(key, CAP_TITLE, body, level="warn", topic=self._topic,
+                msg = Message(key, title, problem, level="warn", topic=self._topic,
                               tags=("agent", "memory"))  # fmt: skip
-                self._notifier.report(key, "at-cap", msg, scope=owner)
+                self._notifier.report(key, state, msg, scope=owner)
         except Exception:  # the write's outcome stands; a failed page is retried next time
-            log.exception("memory cap page for %s/%s not sent", owner, scope)
+            log.exception("memory page %s for %s not sent", key, owner)

@@ -583,6 +583,15 @@ def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
         "tombstones out)"
         for s in sorted(names(limits.get("tombstones")) - platform)
     ]
+    records = limits.get("records") if isinstance(limits.get("records"), Mapping) else {}
+    tombstones = limits.get("tombstones")
+    for s, n in sorted(tombstones.items() if isinstance(tombstones, Mapping) else []):
+        cap = records.get(s, 100_000)  # the platform-scope default (agent.memory)
+        if isinstance(n, int) and isinstance(cap, int) and n >= cap:
+            problems.append(
+                f"memory_limits.tombstones: {s!r} keeps {n} tombstones, not fewer than its record "
+                f"cap {cap}; the budget must leave room for live keys"
+            )
     return problems
 
 

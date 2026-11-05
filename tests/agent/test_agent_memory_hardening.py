@@ -14,10 +14,13 @@ from agent_support import inputs, library, manifest, spec, verified
 from homelabnext.agent import assemble_pack, compile_profile
 from homelabnext.agent.memory import (
     CAP_TITLE,
+    CLOCK_CLEARED,
+    CLOCK_TITLE,
     MAX_UPDATES,
     FileBackend,
     InMemoryBackend,
     MemoryAccessError,
+    MemoryClockError,
     MemoryLimitError,
     MemoryStore,
     MemoryUpdateError,
@@ -107,7 +110,7 @@ def test_the_leak_scanners_marker_shapes_are_refused(reader, backend, kind):
 @pytest.mark.parametrize(
     ("updates", "where"),
     [
-        ([up("add", "k", None) | {"value": {"nested": JWT}}], "memory_updates/0/value/nested"),
+        ([up("add", "k", None) | {"value": {"nested": JWT}}], "memory_updates/0/value/#0"),
         ([up("add", "k", None) | {"value": ["x", JWT]}], "memory_updates/0/value/1"),
         ([up("add", "k", "v", scope=SLACK)], "memory_updates/0/scope"),
         ([{"scope": "analyst", "op": SLACK, "key": "k"}], "memory_updates/0/op"),
@@ -223,7 +226,7 @@ def test_a_batch_holds_at_most_64_updates(reader, backend):
 
 # ---------------------------------------------------------------- F2: migration keeps no secret
 @pytest.mark.parametrize("write", [False, True])
-def test_migration_keeps_legacy_secrets_as_digests_only(reader, backend, caplog, write):
+def test_migration_keeps_only_the_purged_marker_for_legacy_secrets(reader, backend, caplog, write):
     legacy = {
         "analyst": {
             "fine": {"status": "live", "op": "add", "value": "ok"},
@@ -244,30 +247,49 @@ def test_migration_keeps_legacy_secrets_as_digests_only(reader, backend, caplog,
     assert not _leaks(AWS, everything) and not _leaks(SLACK, everything)
     assert seen["fine"] == "ok" and seen["creds"] is None
     (creds,) = store.history(reader, "analyst", "creds")["records"]
-    assert creds["purged"] is True and creds["value_digest"].startswith("sha256:")
-    assert "value" not in creds
+    # no digest of either: an unsalted digest of a low-entropy secret confirms a guess offline
+    assert creds["purged"] is True and "value" not in creds and "value_digest" not in creds
     renamed = [k for k in seen if k.startswith("purged-")]
-    assert len(renamed) == 1 and seen[renamed[0]] is None
-    (rec,) = store.history(reader, "analyst", renamed[0])["records"]
-    assert rec["key_digest"].startswith("sha256:") and rec["purged"] is True
-    said = [r.message for r in caplog.records if "migration kept only the digest" in r.message]
+    assert renamed == ["purged-2"] and seen["purged-2"] is None  # named by its position
+    (rec,) = store.history(reader, "analyst", "purged-2")["records"]
+    assert rec["purged"] is True and "key_digest" not in rec and "value_digest" not in rec
+    said = [r.message for r in caplog.records if "migration kept only the" in r.message]
     assert len(said) == 1
     assert "scope #0 entry #0 (value)" in said[0] and "(key)" in said[0]
     assert not _leaks(AWS, said[0]) and not _leaks(SLACK, said[0])
 
 
 # ---------------------------------------------------------------- the clock
-def test_the_log_never_goes_backwards_when_the_clock_does(reader, backend):
+def test_a_small_clock_lag_is_absorbed_and_a_large_one_refused_and_paged(
+    reader, backend, tmp_path, caplog
+):
+    sender = FakeSender()
+    notifier = Notifier(sender, StateStore(tmp_path / "n.json"))
     clock = Clock(T0 + timedelta(hours=1))
-    store = MemoryStore(backend, now=clock)
+    store = MemoryStore(backend, now=clock, notifier=notifier)
     store.apply_updates(reader, [up("add", "a", "1")])
-    clock.t = T0  # an hour back
+    clock.t = T0 + timedelta(minutes=56)  # 4 minutes back: stamped at the log's time
     store.apply_updates(reader, [up("add", "b", "1")])
     ats = [r["at"] for r in backend.load("profile:reader")["log"]]
     assert ats == ["2026-11-05T10:00:00.000000Z", "2026-11-05T10:00:00.000000Z"]
+    before = backend.load("profile:reader")
+    clock.t = T0  # an hour back: refused, nothing written, one page
+    for _ in range(2):
+        with pytest.raises(MemoryClockError, match=r"behind .* by 1:00:00") as exc:
+            store.apply_updates(reader, [up("add", "c", "1")])
+    assert exc.value.behind == timedelta(hours=1)
+    assert backend.load("profile:reader") == before
+    assert sender.titles == [CLOCK_TITLE] and "1:00:00" in sender.sent[0].body
     clock.t = T0 + timedelta(hours=2)
     store.apply_updates(reader, [up("add", "c", "1")])
     assert backend.load("profile:reader")["log"][-1]["at"] == "2026-11-05T11:00:00.000000Z"
+    assert sender.titles == [CLOCK_TITLE, CLOCK_CLEARED]
+    # without a notifier the lag is logged once
+    quiet = MemoryStore(backend, now=lambda: T0)
+    for _ in range(2):
+        with pytest.raises(MemoryClockError):
+            quiet.apply_updates(reader, [up("add", "d", "1")])
+    assert len([r for r in caplog.records if "clock is behind its log" in r.message]) == 1
 
 
 class _Flagged:
