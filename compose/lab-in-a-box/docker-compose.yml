@@ -5,7 +5,7 @@
 # the mem_limit values sum to 3584 MB of the 3584 MB the test allows (4 GB less OS/docker headroom);
 # the broker end-to-end services took the last 256 MB.  Services under a compose profile (the LLM
 # gateway: `--profile gateway`) are not started by default and are
-# budgeted on their own: the gateway profiles' mem_limit values sum to 832 MB (tests/compose).  StackStorm (MongoDB, RabbitMQ and its own
+# budgeted on their own: the gateway profiles' mem_limit values sum to 960 MB (tests/compose).  StackStorm (MongoDB, RabbitMQ and its own
 # services) and NiFi (a 1 GB default heap) do not fit; the status hub tests them against
 # source-verified responses instead (tests/status/test_status_products.py).
 #
@@ -538,7 +538,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.103.7@sha256:1c51136713f326d88a87c5202e424059e0f35fe6c14c5b49acc2fd13b3c1a601
+    image: litellm/litellm-database:v1.106.2@sha256:35f2cec3a14bb297e08bfab56c1fc377432bc4071aaf71978fdff043a5d91e79
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
@@ -563,7 +563,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
-    mem_limit: 768m  # measured 520-550 MB RSS (proxy + prisma engine), pip install of 1.103.3
+    mem_limit: 896m  # measured 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
     networks:
       lab:
         aliases: [llm-gateway.svc.example.internal]
