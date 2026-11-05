@@ -204,10 +204,11 @@ unchanged. For a production Prometheus, 3.0 broke several things
 ([migration guide](https://prometheus.io/docs/prometheus/latest/migration/)):
 
 - A scrape whose `Content-Type` is missing or unknown fails, where 2.x read it as the text
-  format. No current target needs a fallback. The lab scrapes only itself. In the example
-  registry, each endpoint the `prometheus` generator scrapes is served by a Prometheus client
-  library that sets a supported type. For example, Lakekeeper's `metrics-exporter-prometheus`
-  sends `text/plain`. So the generated `scrape_configs` set no `fallback_scrape_protocol`.
+  format. The lab scrapes only itself, which is verified. The example registry's endpoints are
+  expected to be fine, because each is served by a Prometheus client library that sets a
+  supported type (Lakekeeper's `metrics-exporter-prometheus` sends `text/plain`, read in its
+  source); the others are inferred from the library each product uses, not tested against a
+  live endpoint. So the generated `scrape_configs` set no `fallback_scrape_protocol`.
   A generated job is "do not edit", so a site cannot add a fallback to it by hand. When a
   target does need one, the plan is an optional, pattern-validated registry field
   `metrics.fallback_protocol` that the generator copies into that job. The protocol name then
