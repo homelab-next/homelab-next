@@ -172,10 +172,16 @@ The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its im
 Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
 `/usr/lib/trino/bin/health-check` (curl and bash builtins), and the image no longer has the
 `run-trino` wrapper that set the node id, so the lab's `node.properties` sets
-`node.id=${ENV:HOSTNAME}` itself. Trino's launcher adds the JVM options JDK 25 needs
-(`--add-modules=jdk.incubator.vector`, `--sun-misc-unsafe-memory-access=allow`,
-`--enable-native-access=ALL-UNNAMED`) to whatever `jvm.config` holds, so the lab's `jvm.config`
-sets only heap and GC options. The Iceberg catalog turns on the native S3 file system by its
+`node.id=${ENV:HOSTNAME}` itself (a node id must match `[A-Za-z0-9][_A-Za-z0-9-]*`, so an
+overlay that gives the service a dotted `hostname:` fails at start). Trino's launcher (airlift
+launcher 321) appends a set of options per JDK major (21 to 28) after `jvm.config`; for JDK 25
+they are `-XX:+EnableDynamicAgentLoading`, `--add-modules=jdk.incubator.vector`,
+`--sun-misc-unsafe-memory-access=allow`, `--enable-native-access=ALL-UNNAMED` and
+`-XX:+UseCompactObjectHeaders` (plus `-XX:-RewriteBytecodes` on arm64). The lab's `jvm.config`
+therefore sets none of them: only heap, GC and diagnostics options (with the image default
+`-XX:-OmitStackTraceInFastThrow`). The mounted `config/trino/` replaces the whole `/etc/trino`, so it holds exactly
+`config.properties`, `jvm.config`, `node.properties` and `catalog/*.properties` (a
+`secrets.toml` there would replace the environment-variable resolver behind `${ENV:...}`). The Iceberg catalog turns on the native S3 file system by its
 current name, `fs.s3.enabled` (the legacy S3 file system is gone since 481, and
 `fs.native-s3.enabled` is only a deprecated alias). Releases 471 to 484 also changed SQL
 semantics the repository's adapters do not rely on: decimal arithmetic precision (477), `char` to

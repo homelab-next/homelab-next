@@ -332,9 +332,37 @@ def test_lake_query_node_id_is_the_container_hostname(compose):
     assert node.get("node.id") == "${ENV:HOSTNAME}"
 
 
+def test_lake_query_etc_holds_only_the_expected_files(compose):
+    # the directory is mounted as the whole /etc/trino, so any file in it is read: a stray
+    # secrets.toml, for one, replaces Airlift's environment-variable secrets resolver, and every
+    # ${ENV:...} the catalog and node.properties use stops resolving
+    etc = _query_etc(compose)
+    found = {p.relative_to(etc).as_posix() for p in etc.rglob("*") if p.is_file()}
+    catalogs = {f for f in found if f.startswith("catalog/")}
+    assert catalogs and all(f.count("/") == 1 and f.endswith(".properties") for f in catalogs), (
+        catalogs
+    )
+    assert found - catalogs == {"config.properties", "jvm.config", "node.properties"}, found
+
+
+def test_lake_query_http_port_is_the_one_the_health_check_reads(compose):
+    # the image's health check reads the literal `http-server.http.port=<n>` line of
+    # config.properties (bash prefix match: no spaces around `=`), defaulting to 8080
+    etc = _query_etc(compose)
+    lines = [
+        ln
+        for ln in (etc / "config.properties").read_text().splitlines()
+        if ln.strip().startswith("http-server.http")
+    ]
+    assert lines == ["http-server.http.port=8080"], lines
+    targets = {str(p).rsplit(":", 1)[-1] for p in compose["services"]["lake-query"]["ports"]}
+    assert targets == {"8080"}, targets
+
+
 def test_lake_query_config_names_no_removed_property(compose):
     # properties releases 471-484 removed or made defunct (a defunct one stops the server at
-    # start), and the legacy S3 file system removed in 481
+    # start), the legacy S3 file system removed in 481 (hive.s3.*), and fs.hadoop.enabled, which
+    # still exists in 484 but only for HDFS: unwanted in a lab with object storage only
     removed = re.compile(
         r"^(task\.statistics-cpu-timer-enabled|enable-large-dynamic-filters"
         r"|dynamic-filtering\.(small|large-broadcast)|fs\.cache\.(directories|max-sizes"
