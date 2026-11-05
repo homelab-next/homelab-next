@@ -1,16 +1,17 @@
 ---
 summary: Every agent memory entry records its sources, TLP and revision history; an operator retracts a bad source and everything built on it.
-summary_of: outline:sha256:6a503131303d6a02
+summary_of: outline:sha256:cc0b15786d3b8d62
 ---
 # ADR-0037: Agent memory is sourced, historied and retractable
 
-- **Status:** proposed
+- **Status:** accepted (2026-11-05, by the operator; defects found on the first real deploy are
+  fixed as they come)
 - **Date:** 2026-11-05
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
   `homelabnext/agent/knowledge.py`, `schemas/agent/report_result.schema.json`
-- **Depends-on:** ADR-0033, ADR-0035
+- **Depends-on:** ADR-0033
 - **Amends:** ADR-0035
 
 ## Context
@@ -47,7 +48,7 @@ was shown, never from what the model says about its sources.
 
 ## Decision
 
-### History (PR 1, may merge while this ADR is proposed)
+### History (PR 1)
 
 1. **Every applied update appends a change record.** Per owner, the store keeps an append-only
    log. A record holds `at` (apply time, from the injected clock; not the report's `finished_at`),
@@ -100,7 +101,7 @@ was shown, never from what the model says about its sources.
    `platform_scopes` (decision 7) ships in this PR with `memory_limits`. This is what bounds
    ADR-0035's ledger, whose item keys are new every time.
 
-### Sources and labels (PR 2, merges only after this ADR is accepted)
+### Sources and labels (PR 2)
 
 7. **An update names its sources, and only identifiers the platform wrote count.** A
    `memory_updates` item gains an optional `sources` list: at most 16 unique items, each matching
