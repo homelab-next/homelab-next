@@ -296,6 +296,42 @@ def test_negative_the_gateway_on_the_lab_superuser_is_caught(compose):
     assert gateway_db_problems(compose, "") != []  # an init script that creates nothing
 
 
+def postgres_data_problems(compose) -> list[str]:
+    """From 18 the official image keeps PGDATA at ``/var/lib/postgresql/<major>/docker`` and its
+    VOLUME at ``/var/lib/postgresql``; its entrypoint refuses to start over a mount at the old
+    ``/var/lib/postgresql/data``, and a volume there would leave the data in an anonymous one."""
+    pg = compose["services"]["postgres"]
+    m = re.match(r"postgres:(\d+)\.\d+-alpine@sha256:[0-9a-f]{64}$", pg["image"])
+    if not m:
+        return [f"unexpected postgres image: {pg['image']}"]
+    major = int(m.group(1))
+    data = [v for v in pg.get("volumes", []) if v.startswith("postgres-data:")]
+    want = (
+        "postgres-data:/var/lib/postgresql"
+        if major >= 18
+        else "postgres-data:/var/lib/postgresql/data"
+    )
+    if data != [want]:
+        return [f"postgres {major} mounts its data volume as {data}, not [{want!r}]"]
+    if major >= 18 and pg.get("environment", {}).get("PGDATA"):
+        return ["PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"]
+    return []
+
+
+def test_postgres_data_volume_matches_the_image_major(compose):
+    assert postgres_data_problems(compose) == []
+
+
+def test_negative_postgres_18_on_the_old_data_mount_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    vols = broken["services"]["postgres"]["volumes"]
+    vols[vols.index("postgres-data:/var/lib/postgresql")] = "postgres-data:/var/lib/postgresql/data"
+    assert postgres_data_problems(broken) == [
+        "postgres 18 mounts its data volume as ['postgres-data:/var/lib/postgresql/data'], "
+        "not ['postgres-data:/var/lib/postgresql']"
+    ]
+
+
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
