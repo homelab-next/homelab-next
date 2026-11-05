@@ -184,7 +184,10 @@ Both backends point at the fake inference server, which serves `example-4b` and 
 under the aliases `inference-small` and `inference-large`.
 
 The gateway services are an optional compose profile. They are not part of `make lab-up` or the
-nightly:
+nightly. CI's `lab-gateway` job runs the commands below on every pull request that can affect the
+lab (the same `tools/lab_paths.py` decision as `lab-in-a-box`, summed up by the same `lab-ok`
+check), asserts that the three `gateway-*` checks below passed rather than skipped, and tears
+everything down:
 
 ```bash
 lab="--env-file compose/lab-in-a-box/.env.example -f compose/lab-in-a-box/docker-compose.yml"

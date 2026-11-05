@@ -229,6 +229,45 @@ def test_the_documented_gateway_only_path_fits_the_runner(compose):
     assert total <= RUNNER_MB
 
 
+GATEWAY_TARGET = "compose/lab-in-a-box/targets/inference-gateway.yml"
+GATEWAY_CHECKS = (
+    "gateway-rejects-bad-key",
+    "gateway-limit-throttles",
+    "gateway-models-match-roles",
+)
+
+
+def test_pull_requests_run_the_documented_gateway_only_path():
+    """ci.yml's lab-gateway job brings up exactly the documented gateway-only path (so the 1280 MB
+    it is budgeted at is what runs), runs the inference suite against the gateway target, fails
+    unless the gateway's own checks passed rather than skipped, and always tears down."""
+    job = yaml.safe_load((WORKFLOW.parent / "ci.yml").read_text())["jobs"]["lab-gateway"]
+    assert job["env"] == {
+        "COMPOSE_FILE": "compose/lab-in-a-box/docker-compose.yml",
+        "COMPOSE_ENV_FILES": "compose/lab-in-a-box/.env.example",  # throwaway values, no secret
+        "COMPOSE_PROFILES": "gateway",
+    }
+    steps = job["steps"]
+    runs = [s.get("run", "") for s in steps]
+    (up,) = [r for r in runs if "docker compose up " in r]
+    names, _ = documented_gateway_path()
+    m = re.search(r"docker compose up -d --build --wait (?:--wait-timeout \d+ )?([\w -]+)\n", up)
+    assert m and m[1].split() == names, up
+    assert "ExitCode" in up and "llm-gateway-keys" in up  # the one-shot provisioned the keys
+    (conform,) = [r for r in runs if "conform run inference" in r]
+    assert f"--target {GATEWAY_TARGET}" in conform
+    assert "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE" in conform
+    (verdict,) = [r for r in runs if all(c in r for c in GATEWAY_CHECKS)]
+    assert '!= "pass"' in verdict and "sys.exit" in verdict
+    suite = (ROOT / "conformance" / "suites" / "inference.py").read_text()
+    assert all(f'"{c}"' in suite for c in GATEWAY_CHECKS)  # the names CI asserts are the suite's
+    target = yaml.safe_load((ROOT / GATEWAY_TARGET).read_text())
+    assert "gateway" in target["capabilities"]["inference"]["features"]
+    (down,) = [s for s in steps if "docker compose down" in s.get("run", "")]
+    assert down["if"] == "always()" and "--volumes" in down["run"]
+    assert steps.index(down) > max(i for i, r in enumerate(runs) if r in (up, conform, verdict))
+
+
 def test_negative_a_new_gateway_dependency_is_counted(compose):
     broken = json.loads(json.dumps(compose))
     broken["services"]["llm-gateway"]["depends_on"]["lake-query"] = {"condition": "service_healthy"}
