@@ -15,8 +15,6 @@
       - open_webui_extra_env | list | select('search', open_webui_reserved_env_pattern) | list | length == 0
       - open_webui_extra_env | list | reject('match', '^[A-Z][A-Z0-9_]*\Z') | list | length == 0
       - open_webui_extra_env.values() | reject('string') | list | length == 0
-      # a value is passed through as it is, never a template
-      - open_webui_extra_env.values() | select('search', '[{]([{]|%)') | list | length == 0
       - >-
         open_webui_extra_env.get('GLOBAL_LOG_LEVEL', 'INFO') | upper
         in open_webui_log_levels
@@ -35,8 +33,8 @@
       open_webui: the gateway's registry id (not a model backend: Open WebUI talks to the LLM
       gateway only), two distinct secret: references (this app's gateway key, the session key),
       an image pinned by tag and digest, a port, an optional public URL (https://host[:port],
-      lower-case host, port 1-65535 and not 443, no path), and extra settings (plain strings, no
-      template) named in open_webui_allowed_env ({{ open_webui_allowed_env | join(', ') }}),
+      lower-case host, port 1-65535 and not 443, no path), and extra settings (strings) named in
+      open_webui_allowed_env ({{ open_webui_allowed_env | join(', ') }}),
       none of them fixed or reserved, with GLOBAL_LOG_LEVEL one of
       {{ open_webui_log_levels | join(', ') }}; refused names:
       {{ ((open_webui_extra_env if open_webui_extra_env is mapping else {}) | list

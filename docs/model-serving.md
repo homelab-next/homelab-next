@@ -255,9 +255,11 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
   webhooks, image, audio (Realtime voice included) and code execution, external apps (`APP_*`),
   OAuth, OIDC, LDAP and SCIM, the database, MFA, `CUSTOM_NAME` (it fetches a logo from upstream
   at start), sign-in and its cookies, CORS and `WEBUI_URL`; every fixed setting is refused by
-  name. Values are plain strings: one holding `{{` or `{%` is refused. `GLOBAL_LOG_LEVEL` may be
-  `INFO`, `WARNING`, `ERROR` or `CRITICAL` only, since at `DEBUG` Open WebUI logs whole chat
-  requests and replies. To use another harmless setting, read it in the pinned release and add it
+  name. Values are ordinary Ansible input and are templated like any other variable: the overlay
+  is trusted, and the role cannot see a value's text before Ansible renders it. Put no secret
+  lookup in `open_webui_extra_env`: a value there lands in `docker-compose.yml` and in the
+  unauthenticated `/api/config`. `GLOBAL_LOG_LEVEL` may be `INFO`, `WARNING`, `ERROR` or
+  `CRITICAL` only, since at `DEBUG` Open WebUI logs whole chat requests and replies. To use another harmless setting, read it in the pinned release and add it
   to the allowlist.
 - Two admin-only routes still fetch any URL an admin gives them and return the body:
   `POST /api/v1/tools/load/url` and `POST /api/v1/functions/load/url` (0.12.3

@@ -925,13 +925,6 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         # below INFO, Open WebUI logs whole chat requests and replies
         {"open_webui_extra_env": {"GLOBAL_LOG_LEVEL": "DEBUG"}},
         {"open_webui_extra_env": {"GLOBAL_LOG_LEVEL": "debug"}},
-        # a value is never a template
-        {
-            "open_webui_extra_env": {
-                "WEBUI_NAME": "{% raw %}{{ lookup('env', 'HOME') }}{% endraw %}"
-            }
-        },
-        {"open_webui_extra_env": {"WEBUI_NAME": "{% raw %}{% if 1 %}x{% endif %}{% endraw %}"}},
     ],
 )
 @first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
@@ -1044,6 +1037,7 @@ def test_open_webui_allowlist_and_reserved_names_stay_apart():
     assert [n for n in allowed if reserved.search(n)] == []
     assert set(allowed).isdisjoint(v["open_webui_fixed_env"])
     own = ["WEBUI_URL", "CORS_ALLOW_ORIGIN", "OPENAI_API_BASE_URLS", "OPENAI_API_KEYS"]
+    own.append("WEBUI_SESSION_COOKIE_SECURE")  # every cookie setting, not only SameSite
     assert [n for n in own if not reserved.search(n)] == []
 
 
