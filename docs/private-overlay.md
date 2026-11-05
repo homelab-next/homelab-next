@@ -724,11 +724,12 @@ Rotate on a schedule, and at once when a holder leaves or a key may have leaked.
   secret_id_accessor=<old>`). Rotate the role's policy reach down if it grew.
 * **The self-hosted runner's provisioner token.** Rotate the fine-grained token that generates JIT
   configurations; it never reaches a runner VM.
-* **OpenBao unseal keys.** `bao operator rotate-keys` with a quorum of the old shares, logged in
-  with a token whose policy grants `read` and `update` on `sys/rotate/root/*` (the authenticated
-  endpoints); replace the password-manager and paper copies; destroy the old paper. Since OpenBao 2.5 a listener refuses
-  the unauthenticated `sys/rekey/*` endpoints that the deprecated `bao operator rekey` uses
-  (`disable_unauthed_rekey_endpoints` defaults to `true`); leave it so.
+* **OpenBao unseal keys.** `bao operator rotate-keys` (OpenBao 2.4 or later) with a quorum of the
+  old shares, logged in with a token whose policy grants `read` and `update` on
+  `sys/rotate/root/*` (the authenticated endpoints; `delete` too, to cancel a rotation or remove a
+  backup); replace the password-manager and paper copies; destroy the old paper. Since OpenBao 2.5
+  a listener refuses the unauthenticated `sys/rekey/*` endpoints that the deprecated
+  `bao operator rekey` uses (`disable_unauthed_rekey_endpoints` defaults to `true`); leave it so.
 * **The deploy SSH key.** Add the new public key to the deploy user first, swap
   `DEPLOY_SSH_KEY`, run a deploy, then remove the old public key.
   With [SSH certificates](#ssh-certificates-one-login-through-the-identity-provider) there is no
