@@ -117,6 +117,8 @@ class FakeCatalog:
         q = dict(urllib.parse.parse_qsl(u.query))
         parts = [urllib.parse.unquote(p) for p in u.path.split("/")[3:]]
         if parts == ["config"] and q.get("warehouse") == "lab":
+            # deliberately under `overrides`: Lakekeeper serves the prefix under `defaults`
+            # (tests/lake/fake_lab.py), so this covers RestCatalog.prefix's other branch
             return self._json(h, 200, {"defaults": {}, "overrides": {"prefix": "wh"}})
         if parts == ["wh", "namespaces"]:
             parent = tuple(q["parent"].split("\x1f")) if "parent" in q else ()

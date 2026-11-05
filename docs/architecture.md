@@ -168,6 +168,34 @@ imports the lab's S3 key once and Garage v2 refuses to import a key id it has ev
 `KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
 `LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
 
+The lake catalog is Lakekeeper 0.14 (`quay.io/lakekeeper/catalog:v0.14.1`; `catalog-migrate`
+runs its `migrate` before `serve`, so a kept Postgres volume from 0.9 is migrated forward on the
+first start, one way). Three upstream changes since 0.9 matter here:
+
+- **How clients reach the table files (0.11).** A client that sends no
+  `X-Iceberg-Access-Delegation` header now gets vended credentials (always a temporary STS, R2
+  or OSS credential, never the stored key) whenever the warehouse can issue them (STS on, or a
+  Cloudflare R2 or Alibaba OSS credential), else remote signing. The lab's warehouse states both
+  modes rather than relying on that default: `lab_init.py` creates it with `sts-enabled: false`
+  and `remote-signing-enabled: true` and an access-key credential, so no credential is vended
+  and clients get remote signing (already the 0.9 behaviour) or nothing, and Trino keeps
+  `iceberg.rest-catalog.vended-credentials-enabled=false` and reads the object store with its
+  own keys. A production warehouse that wants vended credentials enables STS against an object
+  store that offers it, with a role scoped to the warehouse's prefix.
+- **Storage layout (0.13).** A namespace created from 0.13 on keeps its tables at
+  `<warehouse base>/<table uuid>` (it was `<base>/<namespace uuid>/<table uuid>`); namespaces
+  created earlier keep the old layout, and a warehouse can set `storage-layout` explicitly.
+  Nothing here derives a path from the layout: table locations are read from the catalog.
+- **Authentication (0.14), for the production row below.** `LAKEKEEPER__OPENID_SCOPE` is a single
+  word and needs `LAKEKEEPER__OPENID_PROVIDER_URI` (an empty value no longer means "no scope");
+  an unknown key under `LAKEKEEPER__OPENID_PROVIDERS__<IDP_ID>__` aborts startup; such a provider
+  that enforces a scope or required claims must keep `__REQUIRE_CONNECTED_ON_STARTUP` at its
+  default, `true`; Kubernetes authentication beside a provider that enforces either needs
+  `LAKEKEEPER__KUBERNETES_AUTHENTICATION_AUDIENCE`. The scope is read from the token's `scp`
+  claim only when `scope` carries none, and an array-shaped scope claim is accepted. Token roles and admission gates now hold in every project, and the
+  permissions-check API no longer accepts the `update_storage_credential` action (use
+  `update_storage`).
+
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves
 `examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a

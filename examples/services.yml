@@ -137,7 +137,7 @@ services:
     metrics: {path: /metrics}
     upstreams: [object-store, idp, records-db]
     owner: data-team
-    version: "0.5.2"
+    version: "0.14.1"
     tls: internal
     backup_job: daily-core
     tags: [data, catalog]
