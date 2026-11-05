@@ -49,7 +49,7 @@ author: unknown
 ## Outputs
 
 <!-- hnx:gen:outputs -->
-- Metrics: `/metrics`
+- Metrics: `/metrics` on port 9000
 - MCP: none
 <!-- /hnx:gen -->
 

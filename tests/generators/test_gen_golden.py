@@ -149,8 +149,11 @@ def test_prometheus_and_blackbox_parse_as_yaml():
     prom = yaml.safe_load(out["prometheus"]["prometheus/scrape_configs.yml"])
     jobs = {j["job_name"] for j in prom["scrape_configs"]}
     assert jobs == {s.capability for s in REG.services.values() if s.metrics}
-    lake = next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-query")
-    assert lake["static_configs"][0]["targets"] == [REG.alias("lake-query") + ":" + "9091"]
+    # a metrics port overrides the service port; without one the service port is scraped
+    catalog = next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-catalog")
+    assert catalog["static_configs"][0]["targets"] == [REG.alias("lake-catalog") + ":" + "9000"]
+    query = next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-query")
+    assert query["static_configs"][0]["targets"] == [REG.alias("lake-query") + ":" + "8443"]
     http = yaml.safe_load(out["blackbox"]["blackbox/targets_http.yml"])
     tcp = yaml.safe_load(out["blackbox"]["blackbox/targets_tcp.yml"])
     assert len(http) + len(tcp) == sum(

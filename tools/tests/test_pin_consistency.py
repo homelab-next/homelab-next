@@ -205,6 +205,138 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
     assert f"- Implementation: `caddy` {ci}\n" in page, "regenerate docs/systems (make docs)"
 
 
+# --- metrics: the scrape target each pinned version really serves -------------------------------
+
+# What each product serves for Prometheus, read from its own source at the versions listed; a
+# registry naming another version of it fails until that version is read too.  `port` None is the
+# service's own port; `paths` None is any path but those in `not`.  `served` False: no
+# Prometheus endpoint at all, so the registry declares no metrics block (none is invented).
+#   lakekeeper: its own listener on METRICS_PORT, default 9000 (crates/lakekeeper/src/config.rs,
+#     `impl Default for Metrics`, at v0.14.1; docs/docs/configuration.md at v0.5.2), bound by
+#     metrics-exporter-prometheus, which renders every path but /health (http_listener.rs,
+#     handle_http_request, at 0.15.3 and 0.17.2, the versions those tags lock), in plain HTTP
+#   trino: the coordinator's own HTTP(S) port, /metrics (Server.java installs airlift's
+#     JmxOpenMetricsModule at 450 and 484, whose MetricsResource is @Path("/metrics");
+#     docs admin/openmetrics.md), behind the server's authentication
+#   orchestrator: the controller's routes are its job API and /admin/*, and homelabnext serves
+#     nothing for it (docs/orchestration-controller.md)
+METRICS_SERVED: dict[str, dict] = {
+    "lakekeeper": {
+        "versions": {"0.5.2", "0.14.1"},
+        "port": 9000,
+        "paths": None,
+        "not": {"/health"},
+    },
+    "trino": {"versions": {"450.0", "484.0"}, "port": None, "paths": {"/metrics"}},
+    "orchestrator": {"versions": None, "served": False},
+}
+
+
+def metrics_mismatches(doc: dict) -> list[str]:
+    """Each metrics block (or missing one) of a registry document that its product does not serve."""
+    out: list[str] = []
+    for name, s in sorted((doc.get("services") or {}).items()):
+        fact = METRICS_SERVED.get(s.get("impl", ""))
+        if fact is None:
+            continue
+        m = s.get("metrics")
+        where = f"{name} ({s['impl']} {s.get('version')})"
+        if not fact.get("served", True):
+            if m is not None:
+                out.append(f"{where}: declares metrics {m}, but serves no Prometheus endpoint")
+            continue
+        if str(s.get("version")) not in fact["versions"]:
+            out.append(f"{where}: no metrics fact for this version; read its source and add it")
+            continue
+        if m is None:
+            continue  # serving metrics is not an obligation to scrape them
+        port, want = m.get("port", s["port"]), fact["port"] or s["port"]
+        if port != want:
+            out.append(f"{where}: metrics on port {port}, served on {want}")
+        path = m["path"]
+        allowed = fact["paths"]
+        if path in fact.get("not", ()) or (allowed is not None and path not in allowed):
+            out.append(f"{where}: metrics path {path} is not served")
+    return out
+
+
+def _registries() -> list[Path]:
+    # the schema negatives are not: each exists to be rejected, so no generator reads one
+    return [
+        *sorted((ROOT / "examples").rglob("services.yml")),
+        *sorted((ROOT / "schemas" / "platform" / "examples").glob("service.*.yml")),
+    ]
+
+
+def test_every_registry_scrapes_what_its_product_serves():
+    found: dict[str, list[str]] = {}
+    for path in _registries():
+        doc = yaml.safe_load(path.read_text())
+        if not (isinstance(doc, dict) and isinstance(doc.get("services"), dict)):
+            continue
+        if bad := metrics_mismatches(doc):
+            found[path.relative_to(ROOT).as_posix()] = bad
+    assert found == {}, f"metrics blocks a product does not serve: {found}"
+
+
+def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
+    compose = COMPOSE.read_text()
+    tags = {r: t for r, t, _ in image_pins(compose)}
+    assert (
+        tags["quay.io/lakekeeper/catalog"].removeprefix("v")
+        in (METRICS_SERVED["lakekeeper"]["versions"])
+    )
+    assert f"{tags['trinodb/trino']}.0" in METRICS_SERVED["trino"]["versions"]
+    # the fact's port is the default; an override in the lab would make it say something else
+    assert "METRICS_PORT" not in compose and "METRICS__PORT" not in compose
+
+
+@pytest.mark.parametrize(
+    ("service", "want"),
+    [
+        ({"impl": "lakekeeper", "version": "0.14.1", "port": 8181}, []),
+        (
+            {"impl": "lakekeeper", "version": "0.14.1", "port": 8181, "metrics": {"path": "/x"}},
+            ["port 8181, served on 9000"],
+        ),
+        (
+            {
+                "impl": "lakekeeper",
+                "version": "0.14.1",
+                "port": 8181,
+                "metrics": {"path": "/health", "port": 9000},
+            },
+            ["path /health is not served"],
+        ),
+        (
+            {"impl": "trino", "version": "484.0", "port": 8443, "metrics": {"path": "/metrics"}},
+            [],
+        ),
+        (
+            {
+                "impl": "trino",
+                "version": "484.0",
+                "port": 8443,
+                "metrics": {"path": "/metrics", "port": 9091},
+            },
+            ["port 9091, served on 8443"],
+        ),
+        (
+            {"impl": "trino", "version": "999.0", "port": 8443, "metrics": {"path": "/metrics"}},
+            ["no metrics fact for this version"],
+        ),
+        (
+            {"impl": "orchestrator", "version": "0.3.0", "port": 8088, "metrics": {"path": "/m"}},
+            ["serves no Prometheus endpoint"],
+        ),
+        ({"impl": "unknown-product", "version": "1", "port": 1, "metrics": {"path": "/m"}}, []),
+    ],
+)
+def test_the_metrics_check(service, want):
+    got = metrics_mismatches({"services": {"svc": service}})
+    assert len(got) == len(want) and all(w in g for w, g in zip(want, got, strict=True)), got
+
+
 # --- tools whose version a document names --------------------------------------------------
 
 
