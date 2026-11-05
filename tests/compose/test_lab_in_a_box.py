@@ -301,6 +301,61 @@ def test_trino_heap_is_tiny():
     assert heap and int(heap[1]) <= 1024
 
 
+def _query_etc(compose) -> Path:
+    """The host directory the lake-query engine reads as its etc directory (one bind mount)."""
+    (src,) = [
+        v.split(":")[0] for v in compose["services"]["lake-query"]["volumes"] if v.startswith("./")
+    ]
+    return LAB / src
+
+
+def _properties(path: Path) -> dict[str, str]:
+    out = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
+def test_lake_query_healthcheck_is_the_images_own_check(compose):
+    # since 484 the engine's image (a hardened runtime) has no grep, so a `curl | grep` shell check
+    # never passes and lake-query, with everything that waits for it, never becomes healthy
+    test = compose["services"]["lake-query"]["healthcheck"]["test"]
+    assert test[0] == "CMD" and len(test) == 2 and test[1].endswith("/bin/health-check"), test
+
+
+def test_lake_query_node_id_is_the_container_hostname(compose):
+    # 484 removed the image's wrapper script that passed -Dnode.id=$HOSTNAME when the mounted
+    # node.properties named none
+    node = _properties(_query_etc(compose) / "node.properties")
+    assert node.get("node.id") == "${ENV:HOSTNAME}"
+
+
+def test_lake_query_config_names_no_removed_property(compose):
+    # properties releases 471-484 removed or made defunct (a defunct one stops the server at
+    # start), and the legacy S3 file system removed in 481
+    removed = re.compile(
+        r"^(task\.statistics-cpu-timer-enabled|enable-large-dynamic-filters"
+        r"|dynamic-filtering\.(small|large-broadcast)|fs\.cache\.(directories|max-sizes"
+        r"|max-disk-usage-percentages|ttl|page-size)|fs\.hadoop\.enabled|hive\.s3\."
+        r"|[a-z]+\.extended-statistics\.enabled|[a-z]+\.equality-deletes-blocks-hash-enabled"
+        r"|s3\.use-web-identity-token-credentials-provider)"
+    )
+    etc = _query_etc(compose)
+    catalogs = sorted((etc / "catalog").glob("*.properties"))
+    assert catalogs, "no catalog"
+    for path in [etc / "config.properties", etc / "node.properties", *catalogs]:
+        props = _properties(path)
+        bad = [k for k in props if removed.match(k)]
+        assert bad == [], f"{path.name}: {bad}"
+    for path in catalogs:
+        props = _properties(path)
+        # the native S3 file system by its current name (fs.native-s3.enabled is a legacy alias)
+        assert props.get("fs.s3.enabled") == "true", path.name
+        assert not [k for k in props if k.startswith("fs.native-")], path.name
+
+
 def test_every_capability_has_a_registry_style_alias(compose):
     aliases = {
         a

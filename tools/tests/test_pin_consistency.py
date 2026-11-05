@@ -141,6 +141,26 @@ def test_the_image_parser_reads_compose_dockerfiles_and_role_defaults():
     ]
 
 
+def test_the_lake_query_rehearsal_flips_to_the_trino_the_lab_runs():
+    (tag,) = {t for r, t, _ in image_pins(COMPOSE.read_text()) if r == "trinodb/trino"}
+    rehearsal = re.search(
+        r'^CANDIDATE = \{[^}]*"impl": "trino", "version": "([^"]+)"',
+        read("homelabnext/swap/rehearsal.py"),
+        re.M,
+    )
+    script = set(
+        re.findall(
+            r"--to-impl trino --to-version (\S+)",
+            read("compose/lab-in-a-box/rehearsals/swap-lake-query.sh"),
+        )
+    )
+    want = f"{tag}.0"
+    assert rehearsal and rehearsal.group(1) == want, f"compose runs trino {tag}: swap/rehearsal.py"
+    assert script == {want}, (
+        f"compose runs trino {tag}: rehearsals/swap-lake-query.sh says {script}"
+    )
+
+
 def test_the_open_webui_docs_name_the_role_default():
     defaults = yaml.safe_load(read("ansible/roles/open_webui/defaults/main.yml"))
     specs = yaml.safe_load(read("ansible/roles/open_webui/meta/argument_specs.yml"))

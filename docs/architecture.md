@@ -168,6 +168,24 @@ imports the lab's S3 key once and Garage v2 refuses to import a key id it has ev
 `KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
 `LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
 
+The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its image is built on
+Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
+`/usr/lib/trino/bin/health-check` (curl and bash builtins), and the image no longer has the
+`run-trino` wrapper that set the node id, so the lab's `node.properties` sets
+`node.id=${ENV:HOSTNAME}` itself. Trino's launcher adds the JVM options JDK 25 needs
+(`--add-modules=jdk.incubator.vector`, `--sun-misc-unsafe-memory-access=allow`,
+`--enable-native-access=ALL-UNNAMED`) to whatever `jvm.config` holds, so the lab's `jvm.config`
+sets only heap and GC options. The Iceberg catalog turns on the native S3 file system by its
+current name, `fs.s3.enabled` (the legacy S3 file system is gone since 481, and
+`fs.native-s3.enabled` is only a deprecated alias). Releases 471 to 484 also changed SQL
+semantics the repository's adapters do not rely on: decimal arithmetic precision (477), `char` to
+`varchar` coercion (482), typed `lower_bounds`/`upper_bounds` in the Iceberg `$files` table (482),
+and in 484 JSON values that keep numeric types and member order, UTC timestamps in the Iceberg
+`$snapshots` and `$history` tables, case-preserved user names in `GRANT`, and interval
+arithmetic. A site's own queries over the lake are worth re-reading against the
+[release notes](https://trino.io/docs/current/release.html). The redesigned Web UI is now at
+`/ui` (the previous one at `/ui/legacy`, off by default).
+
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves
 `examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a
