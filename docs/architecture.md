@@ -196,6 +196,39 @@ first start, one way). Three upstream changes since 0.9 matter here:
   permissions-check API no longer accepts the `update_storage_credential` action (use
   `update_storage`).
 
+The metrics service is Prometheus 3 (`prom/prometheus:v3.15.1`, the busybox image, so its
+`wget` healthcheck stands). Its 2-hour retention is `storage.tsdb.retention.time` in
+`config/prometheus/prometheus.yml`, since the `--storage.tsdb.retention.time` flag is deprecated.
+The status hub's `poll-prometheus` collector reads 3.x's `/api/v1/query` and `/api/v1/alerts`
+unchanged. For a production Prometheus, 3.0 broke several things
+([migration guide](https://prometheus.io/docs/prometheus/latest/migration/)):
+
+- A scrape whose `Content-Type` is missing or unknown fails, where 2.x read it as the text
+  format. The lab scrapes only itself, which is verified. The example registry's endpoints are
+  expected to be fine, because each is served by a Prometheus client library that sets a
+  supported type (Lakekeeper's `metrics-exporter-prometheus` sends `text/plain`, read in its
+  source); the others are inferred from the library each product uses, not tested against a
+  live endpoint. So the generated `scrape_configs` set no `fallback_scrape_protocol`.
+  A generated job is "do not edit", so a site cannot add a fallback to it by hand. When a
+  target does need one, the plan is an optional, pattern-validated registry field
+  `metrics.fallback_protocol` that the generator copies into that job. The protocol name then
+  lives in site data, not core code. Until that field exists, a site keeps such a target out of
+  the generated file and writes the job in its own scrape config.
+- UTF-8 metric and label names are valid by default (`metric_name_validation_scheme: legacy`
+  restores the old check).
+- Classic-histogram `le` and summary `quantile` values are normalised to floats on ingestion, so
+  a rule or dashboard matching `le="1"` must match `le="1.0"`.
+- Range selectors and lookback are left-open.
+- `holt_winters` is `double_exponential_smoothing`, behind
+  `--enable-feature=promql-experimental-functions`.
+- `scrape_classic_histograms` is `always_scrape_classic_histograms`.
+- Alertmanager's v1 API is gone (`api_version: v2`, Alertmanager 0.16 or later).
+- The `--storage.tsdb.retention` and `--alertmanager.timeout` flags are removed.
+
+Nothing in this repository's rules or generated config used any of these.
+`tests/compose/test_lab_in_a_box.py` fails if the lab's config brings one back. A kept 2.x data
+directory opens in 3.x, but after that it can be downgraded only to 2.55.
+
 The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its image is built on
 Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
 `/usr/lib/trino/bin/health-check` (curl and bash builtins), and the image no longer has the

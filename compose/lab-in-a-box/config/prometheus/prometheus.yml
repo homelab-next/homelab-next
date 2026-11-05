@@ -2,9 +2,17 @@
 # The lab's metrics service: Prometheus scraping itself, with two rules that always fire so the
 # status hub's alerts mapping has a warning and a critical alert to read (smoke_checks.py).
 # Short intervals: the smoke test should not wait a minute for the first evaluation.
+# Prometheus 3: retention is set here (its command-line flag is deprecated); metric and label
+# names are validated as UTF-8 by default, and a scrape whose Content-Type is missing or unknown
+# fails (Prometheus's own /metrics sends a valid one, so no fallback_scrape_protocol is needed).
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
+
+storage:
+  tsdb:
+    retention:
+      time: 2h
 
 rule_files:
   - /etc/prometheus/rules.yml

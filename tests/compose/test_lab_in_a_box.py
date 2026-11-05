@@ -301,6 +301,148 @@ def test_trino_heap_is_tiny():
     assert heap and int(heap[1]) <= 1024
 
 
+# flags the metrics product's 3.0 removed and ones a later 3.x deprecated, whether given as
+# `--flag=value` or as `--flag value`.  `--enable-feature` itself stays: 3.x still uses it (e.g.
+# promql-experimental-functions for double_exponential_smoothing), so only its gone names count.
+METRICS_GONE_FLAGS = {
+    "--storage.tsdb.retention",
+    "--storage.tsdb.retention.time",
+    "--storage.tsdb.retention.size",
+    "--storage.tsdb.allow-overlapping-blocks",
+    "--alertmanager.timeout",
+    "--log.level",
+}
+# --enable-feature names 2.55.1 read and 3.15.1 does not (3.0 made them defaults, dedicated
+# flags or removed them), and ones a later 3.x made a no-op
+METRICS_GONE_FEATURES = {
+    "agent",
+    "auto-gomaxprocs",
+    "auto-gomemlimit",
+    "expand-external-labels",
+    "new-service-discovery-manager",
+    "no-default-scrape-port",
+    "otlp-write-receiver",
+    "promql-at-modifier",
+    "promql-negative-offset",
+    "remote-write-receiver",
+    "utf8-names",
+    "native-histograms",  # no-op since 3.9
+    "ooo-native-histograms",  # no-op
+    "promql-duration-expr",  # no-op since 3.14
+}
+# an integer le/quantile matcher (normalised to 1.0 on ingest), in any PromQL quoting ("", '',
+# ``) and as YAML writes a double-quoted one inside a double-quoted string (\"1\")
+INTEGER_BUCKET_MATCHER = re.compile(r"""\b(?:le|quantile)\s*(?:=~|!~|!=|=)\s*(\\?"|'|`)[0-9]+\1""")
+
+
+def gone_metrics_args(command: list[str]) -> list[str]:
+    """The removed or deprecated flags and feature names in a metrics service's command."""
+    out = []
+    for i, arg in enumerate(command):
+        name, eq, value = arg.partition("=")
+        if name in METRICS_GONE_FLAGS:
+            out.append(f"flag {name}")
+        elif name == "--enable-feature":
+            if not eq:
+                value = command[i + 1] if i + 1 < len(command) else ""
+            out += [f"feature {f}" for f in value.split(",") if f.strip() in METRICS_GONE_FEATURES]
+    return out
+
+
+def metrics_mounts(service: dict) -> dict[str, Path]:
+    """The metrics service's mounted config files, by in-container name (``rules.yml``, ...)."""
+    out = {}
+    for v in service.get("volumes", []):
+        src, dst = v.split(":")[:2]
+        out[Path(dst).name] = LAB / src
+    return out
+
+
+def metrics_v3_problems(service: dict, config: dict, rules: str) -> list[str]:
+    """What in the lab's metrics service would not run, or would read differently, on the 3.x
+    line it pins (the upstream migration guide, docs/migration.md)."""
+    out = []
+    tag = service.get("image", "").partition(":")[2]
+    if not tag.startswith("v3."):
+        out.append(f"the image tag {tag!r} is not the 3.x line")
+    out += gone_metrics_args(service.get("command", []))
+    if not config.get("storage", {}).get("tsdb", {}).get("retention", {}).get("time"):
+        out.append("no storage.tsdb.retention.time in the config file")
+    for job in config.get("scrape_configs", []):
+        if "scrape_classic_histograms" in job:  # renamed always_scrape_classic_histograms
+            out.append(f"job {job.get('job_name')}: scrape_classic_histograms")
+    for am in config.get("alerting", {}).get("alertmanagers", []):
+        if am.get("api_version") == "v1":
+            out.append("an Alertmanager on the v1 API")
+    if "holt_winters" in rules:  # double_exponential_smoothing, behind a feature flag
+        out.append("holt_winters in the rules")
+    if INTEGER_BUCKET_MATCHER.search(rules):
+        out.append("an integer le/quantile matcher in the rules")
+    return out
+
+
+def test_the_metrics_service_is_configured_for_its_3_x_line(compose):
+    service = compose["services"]["metrics"]
+    files = metrics_mounts(service)
+    config = yaml.safe_load(files[Path(service["command"][0].partition("=")[2]).name].read_text())
+    rules = "".join(files[Path(r).name].read_text() for r in config["rule_files"])
+    assert metrics_v3_problems(service, config, rules) == []
+
+
+def test_negative_2_x_metrics_settings_are_caught(compose):
+    service = {**compose["services"]["metrics"]}
+    service["image"] = service["image"].split(":")[0] + ":v2.55.1"
+    service["command"] = [*service["command"], "--storage.tsdb.retention.time=2h"]
+    config = {
+        "scrape_configs": [{"job_name": "j", "scrape_classic_histograms": True}],
+        "alerting": {"alertmanagers": [{"api_version": "v1"}]},
+    }
+    rules = 'expr: holt_winters(x[5m], 0.5, 0.5) > 1 or h_bucket{le="1"} > 0'
+    assert len(metrics_v3_problems(service, config, rules)) == 7
+
+
+@pytest.mark.parametrize(
+    "command, want",
+    [
+        (["--storage.tsdb.retention=15d"], ["flag --storage.tsdb.retention"]),
+        (["--storage.tsdb.retention", "15d"], ["flag --storage.tsdb.retention"]),
+        (["--storage.tsdb.retention.size", "1GB"], ["flag --storage.tsdb.retention.size"]),
+        (["--log.level=debug"], ["flag --log.level"]),
+        (["--enable-feature=promql-experimental-functions"], []),
+        (["--enable-feature", "exemplar-storage"], []),
+        (["--enable-feature=agent,promql-experimental-functions"], ["feature agent"]),
+        (
+            ["--enable-feature", "utf8-names,native-histograms"],
+            ["feature utf8-names", "feature native-histograms"],
+        ),
+        (["--storage.tsdb.path=/data", "--web.enable-lifecycle"], []),
+    ],
+)
+def test_gone_metrics_args_reads_both_flag_forms(command, want):
+    assert gone_metrics_args(command) == want
+
+
+@pytest.mark.parametrize(
+    "rules, hit",
+    [
+        ('h_bucket{le="1"}', True),
+        ("h_bucket{le='1'}", True),
+        ("h_bucket{le=`1`}", True),
+        ('expr: "h_bucket{le=\\"1\\"} > 0"', True),  # YAML double-quoted: le=\"1\"
+        ('s{quantile = "1"}', True),
+        ('h_bucket{le!="1"}', True),
+        ('h_bucket{le=~"1"}', True),
+        ('h_bucket{le!~"1"}', True),
+        ('h_bucket{le="1.0"}', False),
+        ('h_bucket{le="+Inf"}', False),
+        ("h_bucket{le='1\"}", False),  # mismatched quotes are no matcher
+        ('handle="1"', False),
+    ],
+)
+def test_the_integer_bucket_matcher_reads_every_quoting(rules, hit):
+    assert bool(INTEGER_BUCKET_MATCHER.search(rules)) is hit
+
+
 def _query_etc(compose) -> Path:
     """The host directory the lake-query engine reads as its etc directory (one bind mount)."""
     (src,) = [
