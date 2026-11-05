@@ -12,7 +12,8 @@ open_webui_fixed_env:
   DO_NOT_TRACK: "true"
   SCARF_NO_ANALYTICS: "true"
   # 0.12.1's external apps: channel bots at an HTTPS address that Open WebUI keeps a live
-  # connection to (off by default upstream; pinned off here, as the update check is)
+  # connection to (off by default upstream). Off on every start; unlike the update check it is
+  # also an admin-UI setting, so an admin's change lasts until the next restart.
   ENABLE_APPS: "false"
   # the environment is the configuration on every start; a setting changed in the admin UI (a
   # new connection, say) is not kept in the database past a restart

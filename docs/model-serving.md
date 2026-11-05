@@ -234,7 +234,8 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 - Ollama, direct connections, sign-up, community sharing, the update check and external apps
   (`ENABLE_APPS`, Open WebUI 0.12.1's channel bots that it keeps a live connection to) are off
   (fixed in `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration
-  on every start, so a connection added in the admin UI does not outlive a restart.
+  on every start, so a connection added in the admin UI, or external apps turned on there, does
+  not outlive a restart.
   `open_webui_extra_env` may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*`
   variable, `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio (Realtime voice included)
   and code-execution settings, `ENABLE_APPS` or `APP_*` (each calls an endpoint of its own), or
