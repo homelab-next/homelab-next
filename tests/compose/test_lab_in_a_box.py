@@ -365,6 +365,89 @@ def test_negative_2_x_metrics_settings_are_caught(compose):
     assert len(metrics_v3_problems(service, config, rules)) == 7
 
 
+def _query_etc(compose) -> Path:
+    """The host directory the lake-query engine reads as its etc directory (one bind mount)."""
+    (src,) = [
+        v.split(":")[0] for v in compose["services"]["lake-query"]["volumes"] if v.startswith("./")
+    ]
+    return LAB / src
+
+
+def _properties(path: Path) -> dict[str, str]:
+    out = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
+def test_lake_query_healthcheck_is_the_images_own_check(compose):
+    # since 484 the engine's image (a hardened runtime) has no grep, so a `curl | grep` shell check
+    # never passes and lake-query, with everything that waits for it, never becomes healthy
+    test = compose["services"]["lake-query"]["healthcheck"]["test"]
+    assert test[0] == "CMD" and len(test) == 2 and test[1].endswith("/bin/health-check"), test
+
+
+def test_lake_query_node_id_is_the_container_hostname(compose):
+    # 484 removed the image's wrapper script that passed -Dnode.id=$HOSTNAME when the mounted
+    # node.properties named none
+    node = _properties(_query_etc(compose) / "node.properties")
+    assert node.get("node.id") == "${ENV:HOSTNAME}"
+
+
+def test_lake_query_etc_holds_only_the_expected_files(compose):
+    # the directory is mounted as the whole /etc/trino, so any file in it is read: a stray
+    # secrets.toml, for one, replaces Airlift's environment-variable secrets resolver, and every
+    # ${ENV:...} the catalog and node.properties use stops resolving
+    etc = _query_etc(compose)
+    found = {p.relative_to(etc).as_posix() for p in etc.rglob("*") if p.is_file()}
+    catalogs = {f for f in found if f.startswith("catalog/")}
+    assert catalogs and all(f.count("/") == 1 and f.endswith(".properties") for f in catalogs), (
+        catalogs
+    )
+    assert found - catalogs == {"config.properties", "jvm.config", "node.properties"}, found
+
+
+def test_lake_query_http_port_is_the_one_the_health_check_reads(compose):
+    # the image's health check reads the literal `http-server.http.port=<n>` line of
+    # config.properties (bash prefix match: no spaces around `=`), defaulting to 8080
+    etc = _query_etc(compose)
+    lines = [
+        ln
+        for ln in (etc / "config.properties").read_text().splitlines()
+        if ln.strip().startswith("http-server.http")
+    ]
+    assert lines == ["http-server.http.port=8080"], lines
+    targets = {str(p).rsplit(":", 1)[-1] for p in compose["services"]["lake-query"]["ports"]}
+    assert targets == {"8080"}, targets
+
+
+def test_lake_query_config_names_no_removed_property(compose):
+    # properties releases 471-484 removed or made defunct (a defunct one stops the server at
+    # start), the legacy S3 file system removed in 481 (hive.s3.*), and fs.hadoop.enabled, which
+    # still exists in 484 but only for HDFS: unwanted in a lab with object storage only
+    removed = re.compile(
+        r"^(task\.statistics-cpu-timer-enabled|enable-large-dynamic-filters"
+        r"|dynamic-filtering\.(small|large-broadcast)|fs\.cache\.(directories|max-sizes"
+        r"|max-disk-usage-percentages|ttl|page-size)|fs\.hadoop\.enabled|hive\.s3\."
+        r"|[a-z]+\.extended-statistics\.enabled|[a-z]+\.equality-deletes-blocks-hash-enabled"
+        r"|s3\.use-web-identity-token-credentials-provider)"
+    )
+    etc = _query_etc(compose)
+    catalogs = sorted((etc / "catalog").glob("*.properties"))
+    assert catalogs, "no catalog"
+    for path in [etc / "config.properties", etc / "node.properties", *catalogs]:
+        props = _properties(path)
+        bad = [k for k in props if removed.match(k)]
+        assert bad == [], f"{path.name}: {bad}"
+    for path in catalogs:
+        props = _properties(path)
+        # the native S3 file system by its current name (fs.native-s3.enabled is a legacy alias)
+        assert props.get("fs.s3.enabled") == "true", path.name
+        assert not [k for k in props if k.startswith("fs.native-")], path.name
+
+
 def test_every_capability_has_a_registry_style_alias(compose):
     aliases = {
         a

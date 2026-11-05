@@ -222,6 +222,30 @@ Nothing in this repository's rules or generated config used any of these.
 `tests/compose/test_lab_in_a_box.py` fails if the lab's config brings one back. A kept 2.x data
 directory opens in 3.x, but after that it can be downgraded only to 2.55.
 
+The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its image is built on
+Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
+`/usr/lib/trino/bin/health-check` (curl and bash builtins), and the image no longer has the
+`run-trino` wrapper that set the node id, so the lab's `node.properties` sets
+`node.id=${ENV:HOSTNAME}` itself (a node id must match `[A-Za-z0-9][_A-Za-z0-9-]*`, so an
+overlay that gives the service a dotted `hostname:` fails at start). Trino's launcher (airlift
+launcher 321) appends a set of options per JDK major (21 to 28) after `jvm.config`; for JDK 25
+they are `-XX:+EnableDynamicAgentLoading`, `--add-modules=jdk.incubator.vector`,
+`--sun-misc-unsafe-memory-access=allow`, `--enable-native-access=ALL-UNNAMED` and
+`-XX:+UseCompactObjectHeaders` (plus `-XX:-RewriteBytecodes` on arm64). The lab's `jvm.config`
+therefore sets none of them: only heap, GC and diagnostics options (with the image default
+`-XX:-OmitStackTraceInFastThrow`). The mounted `config/trino/` replaces the whole `/etc/trino`, so it holds exactly
+`config.properties`, `jvm.config`, `node.properties` and `catalog/*.properties` (a
+`secrets.toml` there would replace the environment-variable resolver behind `${ENV:...}`). The Iceberg catalog turns on the native S3 file system by its
+current name, `fs.s3.enabled` (the legacy S3 file system is gone since 481, and
+`fs.native-s3.enabled` is only a deprecated alias). Releases 471 to 484 also changed SQL
+semantics the repository's adapters do not rely on: decimal arithmetic precision (477), `char` to
+`varchar` coercion (482), typed `lower_bounds`/`upper_bounds` in the Iceberg `$files` table (482),
+and in 484 JSON values that keep numeric types and member order, UTC timestamps in the Iceberg
+`$snapshots` and `$history` tables, case-preserved user names in `GRANT`, and interval
+arithmetic. A site's own queries over the lake are worth re-reading against the
+[release notes](https://trino.io/docs/current/release.html). The redesigned Web UI is now at
+`/ui` (the previous one at `/ui/legacy`, off by default).
+
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves
 `examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a
