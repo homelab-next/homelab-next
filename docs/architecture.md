@@ -204,9 +204,15 @@ unchanged. For a production Prometheus, 3.0 broke several things
 ([migration guide](https://prometheus.io/docs/prometheus/latest/migration/)):
 
 - A scrape whose `Content-Type` is missing or unknown fails, where 2.x read it as the text
-  format. The `prometheus` generator's `scrape_configs` set no fallback, because the registry
-  does not say what an endpoint sends. A site with such a target adds
-  `fallback_scrape_protocol: PrometheusText0.0.4` to that job.
+  format. No current target needs a fallback. The lab scrapes only itself. In the example
+  registry, each endpoint the `prometheus` generator scrapes is served by a Prometheus client
+  library that sets a supported type. For example, Lakekeeper's `metrics-exporter-prometheus`
+  sends `text/plain`. So the generated `scrape_configs` set no `fallback_scrape_protocol`.
+  A generated job is "do not edit", so a site cannot add a fallback to it by hand. When a
+  target does need one, the plan is an optional, pattern-validated registry field
+  `metrics.fallback_protocol` that the generator copies into that job. The protocol name then
+  lives in site data, not core code. Until that field exists, a site keeps such a target out of
+  the generated file and writes the job in its own scrape config.
 - UTF-8 metric and label names are valid by default (`metric_name_validation_scheme: legacy`
   restores the old check).
 - Classic-histogram `le` and summary `quantile` values are normalised to floats on ingestion, so

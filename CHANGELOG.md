@@ -9,7 +9,7 @@ has no section below.
 ### Changed
 - **Breaking for overlay sites:** the lab-in-a-box metrics service is Prometheus v3.15.1 (was v2.55.1). The image is `prom/prometheus:v3.15.1`, pinned by its multi-arch index digest. That digest was read from Docker Hub with an anonymous token and checked against the sha256 of the index body. v3.15.1 (2026-10-21) is the newest release past the 14-day cooldown; v3.16.0 is still a release candidate. The example registry's `metrics` `version` follows (2.55.1 -> 3.15.1), and its schema copy, the generator goldens, the keyring and docs/systems/metrics.md are regenerated with it. The licence is still Apache-2.0 (the v3.15.1 `LICENSE`, unchanged in `tools/licences.yml`). Each 3.0 migration item was checked against this repository:
   - Retention: the lab's 2-hour retention moves from the deprecated `--storage.tsdb.retention.time` flag to `storage.tsdb.retention.time` in `config/prometheus/prometheus.yml`.
-  - Generated scrape config: the `prometheus` generator's `scrape_configs.yml` is unchanged apart from the version label. Prometheus 3 fails a scrape whose `Content-Type` is missing or unknown, where 2.x read it as the text format. The generator does not paper over this. It knows only the metrics path, and the strict reading avoids mis-parsed samples. **A site with such a target sets `fallback_scrape_protocol` on that job itself** (docs/architecture.md). A core-wide fallback would also have named the product in core code, which the product-name lint rules out (ADR-0027).
+  - Generated scrape config: the `prometheus` generator's `scrape_configs.yml` is unchanged apart from the version label. Prometheus 3 fails a scrape whose `Content-Type` is missing or unknown, where 2.x read it as the text format. No current target needs a fallback. The lab scrapes only itself, and each endpoint in the example registry is served by a Prometheus client library that sets a supported type (Lakekeeper's `metrics-exporter-prometheus`, for one, sends `text/plain`). So no `fallback_scrape_protocol` is generated. A generated job is "do not edit", so a site cannot add a fallback to it by hand. When a target needs one, the plan is an optional, pattern-validated registry field `metrics.fallback_protocol` copied into that job, so the protocol name lives in site data rather than core code. Until then, a site keeps such a target out of the generated file and writes the job in its own scrape config (docs/architecture.md).
   - Unaffected:
     - The lab's rules (`vector(1)`, `vector(0) > 0`) and the status sources' `up` query use no `holt_winters`, no integer `le`/`quantile` matcher and no range or subquery that left-open selectors change.
     - Nothing configures an Alertmanager, so the v1 API removal does not apply.
@@ -17,7 +17,14 @@ has no section below.
     - The self-scrape target names its port.
     - The image is still the busybox variant, running as `nobody`, so the `wget` healthcheck stands.
   - The status hub's `poll-prometheus` collector reads 3.x unchanged. v3.15.1's `web/api/v1` `Response`, `QueryData`, `Alert` and sample JSON fields are the same as 2.54.1's. The recorded 2.54.1 fixtures stay. The query and alerts tests now also run each fixture in a 3.x shape (`infos`/`warnings`, a UTF-8 label name, a normalised `le`, `keepFiringSince`), and both shapes map the same way.
-  - `tests/compose/test_lab_in_a_box.py` now fails on a 2.x image or setting in the lab's metrics service: a removed or deprecated flag, retention outside the config file, `scrape_classic_histograms`, an Alertmanager on the v1 API, `holt_winters`, or an integer `le`/`quantile` matcher.
+  - `tests/compose/test_lab_in_a_box.py` now fails on a 2.x image or setting in the lab's metrics service:
+    - a removed or deprecated flag, given as `--flag=value` or `--flag value`;
+    - an `--enable-feature` name that 3.x no longer reads (the 3.0 defaults and removals, and later no-ops; `--enable-feature` itself stays, since `double_exponential_smoothing` needs it);
+    - retention set outside the config file;
+    - `scrape_classic_histograms`;
+    - an Alertmanager on the v1 API;
+    - `holt_winters`;
+    - an integer `le`/`quantile` matcher in any PromQL quoting, including YAML-escaped `\"1\"`.
   - No Ansible role installs Prometheus or an exporter, so no role default or checksum moves.
 
   docs/architecture.md lists what 3.0 changes for a production Prometheus: UTF-8 names, `le`/`quantile` normalisation, left-open range selectors, `double_exponential_smoothing`, removed flags and the Alertmanager v1 API. A fresh lab needs nothing. A kept 2.x TSDB opens in 3.x, but after that it can be downgraded only to 2.55.
