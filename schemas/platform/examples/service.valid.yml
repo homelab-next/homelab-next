@@ -105,7 +105,7 @@ services:
     health: {kind: http, path: /v1/sys/health, expect_status: 200}
     clients: [data, compute]
     owner: identity-team
-    version: "2.1.1"
+    version: "2.7.1"
     tls: mtls
     auth: own              # break-glass root token; OIDC login is an auth method of its own
     backup_job: daily-core

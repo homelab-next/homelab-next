@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ``secrets`` contract on OpenBao (pinned: openbao 2.1, dev mode in the lab), stdlib HTTP.
+"""The ``secrets`` contract on OpenBao (pinned: openbao 2.7, dev mode in the lab), stdlib HTTP.
 
 ``make(**config)`` builds an :class:`OpenBaoStore` on ``HNX_ENDPOINT_SECRETS`` with the token in
 the environment variable ``token_env`` (the lab's throwaway ``LAB_SECRETS_DEV_TOKEN``), read at
