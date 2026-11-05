@@ -474,7 +474,7 @@ class FakeLab:
         q = dict(urllib.parse.parse_qsl(path.query))
         if parts == ["config"]:
             return self._json(
-                h, 200, {"defaults": {}, "overrides": {"prefix": f"wh-{q['warehouse']}"}}
+                h, 200, {"defaults": {"prefix": f"wh-{q['warehouse']}"}, "overrides": {}}
             )
         if len(parts) == 2 and parts[1] == "namespaces":
             names = sorted(self.lakes)
