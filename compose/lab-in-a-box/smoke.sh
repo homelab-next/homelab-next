@@ -18,7 +18,7 @@
 #   kind: tool
 #   purpose: Bring the lab-in-a-box up, check every service, run conformance where present, tear down.
 #   owner: lab-in-a-box
-#   trigger: [ci:nightly/lab-in-a-box, make:lab-smoke]
+#   trigger: [ci:nightly/lab-in-a-box, ci:ci/lab-in-a-box, make:lab-smoke]
 #   inputs: compose/lab-in-a-box settings (.env.example, .env, environment)
 #   outputs: build/lab-smoke/report.json (or --report-dir)
 #   exit:

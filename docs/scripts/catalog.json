@@ -545,6 +545,25 @@
     },
     {
       "exit": {
+        "0": "decided (or, with --check, every stack input is covered)",
+        "1": "with --check, a stack input no entry covers",
+        "2": "the changed paths could not be read"
+      },
+      "id": "lab-paths",
+      "inputs": "git diff --no-renames --name-only of --changed-since against HEAD (or the paths given); compose/lab-in-a-box for --check",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the matching paths, one per line; with --github-output, its `affected` line; with --check, one line per stack input no entry covers",
+      "owner": "lab-in-a-box",
+      "path": "tools/lab_paths.py",
+      "purpose": "Decide whether a change can affect the lab-in-a-box smoke, so CI runs the real stack on exactly those pull requests and pushes.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/lab-paths"
+      ]
+    },
+    {
+      "exit": {
         "0": "created",
         "1": "the password is unset or the SQL failed (postgres initialisation stops)"
       },
@@ -599,6 +618,7 @@
       "status": "active",
       "trigger": [
         "ci:nightly/lab-in-a-box",
+        "ci:ci/lab-in-a-box",
         "make:lab-smoke"
       ]
     },

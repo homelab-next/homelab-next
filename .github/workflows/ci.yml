@@ -757,6 +757,98 @@ jobs:
           echo "go-modules: $MODULES, go: $GO"
           [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; }
 
+  # The lab-in-a-box: the real stack, brought up by the nightly's smoke, on every change that can
+  # affect it.  lab-paths decides (tools/lab_paths.py: the stack's compose file, config, images and
+  # their COPY sources, the conformance adapters, the install, the jobs that run it; a test
+  # re-derives the list from the compose file), lab-in-a-box runs the nightly's steps unchanged
+  # (tests/compose/test_lab_in_a_box.py holds the two copies equal), and lab-ok is the one stable
+  # check name for branch protection: it passes when the stack ran and passed, or when nothing it
+  # reads changed and it was skipped.  No secret is used (.env.example's throwaway values), so a
+  # Dependabot pull request, which gets a read-only token and no Actions secrets, runs it as is.
+  lab-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      affected: ${{ steps.decide.outputs.affected }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # the base commit
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      # standard library only: the base rule is homelabnext.gitbase's, the one copy
+      - name: decide whether the change can affect the lab-in-a-box
+        id: decide
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base=$(python -m homelabnext.gitbase)
+          python tools/lab_paths.py --changed-since "$base" --github-output "$GITHUB_OUTPUT"
+
+  lab-in-a-box:
+    needs: lab-paths
+    if: needs.lab-paths.outputs.affected == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # the project with its core extra (so that hnx conform can read target files) and nats (the
+      # events adapter's client), hash-pinned
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: core,nats
+      - name: validate the compose file
+        run: |
+          docker compose --env-file compose/lab-in-a-box/.env.example \
+            -f compose/lab-in-a-box/docker-compose.yml config --quiet
+      - name: smoke test (up, health, checks, conformance where present, down)
+        run: compose/lab-in-a-box/smoke.sh --report-dir build/lab-smoke
+      - name: conformance suites against the built-in fakes, after the smoke
+        if: always()
+        run: |
+          mkdir -p build/lab-smoke
+          python -m homelabnext.cli conform run all --target fake --json --out build/lab-smoke/conform-all.json > /dev/null
+          python -m homelabnext.cli conform report --json > build/lab-smoke/conform-report.json
+          python -c "import json; d=json.load(open('build/lab-smoke/conform-report.json')); print('capabilities without a passing test:', d['capabilities_without_passing_test'])" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: summarise
+        if: always()
+        run: |
+          if [ -f build/lab-smoke/report.json ]; then
+            python -c "import json; d=json.load(open('build/lab-smoke/report.json')); print('ok:', d['ok']); [print(' ', c['status'], c['capability'], c['detail']) for c in d['checks']]; print('conformance:', d['conformance'])" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: lab-smoke-report
+          path: build/lab-smoke/
+          if-no-files-found: warn
+          retention-days: 14
+
+  lab-ok:
+    needs: [lab-paths, lab-in-a-box]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: the stack ran and passed, or nothing it reads changed
+        env:
+          PATHS: ${{ needs.lab-paths.result }}
+          AFFECTED: ${{ needs.lab-paths.outputs.affected }}
+          LAB: ${{ needs.lab-in-a-box.result }}
+        run: |
+          echo "lab-paths: $PATHS (affected: $AFFECTED), lab-in-a-box: $LAB"
+          [ "$PATHS" = success ] || exit 1
+          if [ "$AFFECTED" = true ]; then [ "$LAB" = success ]; else [ "$LAB" = skipped ]; fi
+
   # Build the sdist and wheel exactly as a release would and leak-scan what they contain (the
   # path allowlist for both artefacts is tests/packaging/test_artifacts.py, run by `test`).
   packaging:

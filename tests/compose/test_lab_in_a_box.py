@@ -760,6 +760,18 @@ def test_nightly_is_scheduled_and_never_runs_on_pull_requests():
     assert "pull_request" not in triggers and "push" not in triggers
 
 
+def test_pull_requests_run_the_nightly_s_smoke_unchanged():
+    """ci.yml's lab-in-a-box job (on the pull requests tools/lab_paths.py picks) is the nightly's
+    job step for step, so a pull request's green lab means what a green nightly means."""
+    nightly = yaml.safe_load(WORKFLOW.read_text())["jobs"]["lab-in-a-box"]
+    ci = yaml.safe_load((WORKFLOW.parent / "ci.yml").read_text())["jobs"]["lab-in-a-box"]
+    for key in ("runs-on", "permissions", "timeout-minutes", "steps"):
+        assert ci[key] == nightly[key], key
+    assert set(ci) - set(nightly) == {"needs", "if"}
+    assert set(nightly) - set(ci) == set()  # nothing of the nightly's job is dropped
+    assert any("smoke.sh" in s.get("run", "") for s in ci["steps"])
+
+
 def test_nightly_pins_every_action_by_full_sha():
     uses = re.findall(r"uses:\s*(\S+)", WORKFLOW.read_text())
     assert uses
