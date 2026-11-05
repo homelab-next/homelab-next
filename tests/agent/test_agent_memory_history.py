@@ -280,7 +280,7 @@ def test_a_secret_value_refuses_the_batch_naming_position_and_type_only(reader, 
     with pytest.raises(MemoryUpdateError) as exc:
         store.apply_updates(reader, [up("add", "fine", "v"), up("add", "creds", secret)])
     msg = str(exc.value)
-    assert "memory_updates/1 value: holds a secret" in msg
+    assert "memory_updates/1/value: holds a secret" in msg
     assert kind in msg or "token" in msg
     assert secret not in msg and secret.split()[-1] not in msg
     assert raw(backend) == {}
@@ -304,7 +304,7 @@ def test_a_report_carrying_a_secret_is_refused_before_validation(reader, backend
         "unknowns": [],
         "memory_updates": [up("add", "k", _secrets()["jwt"])],
     }
-    with pytest.raises(MemoryUpdateError, match=r"memory_updates/0 value: holds a secret \(jwt"):
+    with pytest.raises(MemoryUpdateError, match=r"memory_updates/0/value: holds a secret \(jwt"):
         MemoryStore(backend).apply_report(reader, report, pack=pack, pack_hash=h)
     assert raw(backend) == {}
 
@@ -363,6 +363,7 @@ def test_as_of_rebuilds_what_was_believed_at_each_time(reader, backend):
         "at": "2026-11-05T09:30:00.000000Z",
         "entries": {"a": "a2", "b": "b2"},
         "compacted": [],
+        "aged_out": False,
         "withheld": 0,
     }
     assert store.read(reader, "analyst") == at(60)["entries"]
@@ -420,12 +421,14 @@ def test_a_crossing_without_a_notifier_is_logged_once(ledger, backend, caplog):
     for _ in range(2):
         with pytest.raises(MemoryLimitError, match="record cap"):
             store.apply_updates(ledger, [up("add", "d", "v")])
-    assert [r.message for r in caplog.records].count(
+    said = (
         f"{ledger['id']}: memory scope analyst refuses writes: 4 records would exceed the cap of 3"
-    ) == 1
+    )
+    assert len([r for r in caplog.records if r.message.startswith(said)]) == 1
+    assert "raise memory_limits.records in the reviewed profile" in caplog.records[0].message
 
 
-def test_keep_last_drops_values_beyond_the_last_n_and_keeps_every_other_field(ledger, backend):
+def test_keep_last_folds_records_beyond_the_last_n_into_one_range(ledger, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     fl = "fleet-ledger"
@@ -443,18 +446,28 @@ def test_keep_last_drops_values_beyond_the_last_n_and_keeps_every_other_field(le
             ledger, [up("replace", "item-a", v, scope=fl), up("replace", "other", v, scope=fl)]
         )
     recs = store.history(ledger, fl, "item-a")["records"]
-    assert [r["rev"] for r in recs] == [1, 2, 3, 4]
-    assert [r.get("value") for r in recs] == [None, None, "v3", "v4"]
-    for r in recs[:2]:
-        assert r["compacted"] is True
-        assert {"rev", "value_digest", "sources", "closure", "tlp", "pack_id"} <= set(r)
+    assert [r["rev"] for r in recs] == [2, 3, 4]
+    assert [r.get("value") for r in recs] == [None, "v3", "v4"]
+    rng = recs[0]
+    assert rng["compacted"] == "range" and (rng["rev_from"], rng["rev"]) == (1, 2)
+    assert rng["since"] == "2026-11-05T09:00:00.000000Z"
+    assert rng["at"] == "2026-11-05T09:10:00.000000Z"
+    assert len(rng["value_digests"]) == 2 and rng["status"] == "live" and rng["op"] == "replace"
+    assert {"sources", "closure", "tlp", "pack_ids", "checked"} <= set(rng)
+    # it stays one range record however often the key is replaced
+    clock.tick(10)
+    store.apply_updates(ledger, [up("replace", "item-a", "v5", scope=fl)])
+    recs = store.history(ledger, fl, "item-a")["records"]
+    assert [(r.get("rev_from"), r["rev"]) for r in recs] == [(1, 3), (None, 4), (None, 5)]
     # a key no pattern matches keeps every value
     assert all("value" in r for r in store.history(ledger, fl, "other")["records"])
     # as_of in a compacted range answers compacted, never a wrong value
     early = store.as_of(ledger, fl, T0 + timedelta(minutes=5))
     assert early["compacted"] == ["item-a"] and early["entries"] == {"other": "o"}
-    late = store.as_of(ledger, fl, T0 + timedelta(minutes=25))
-    assert late["entries"] == {"item-a": "v3", "other": "v3"} and late["compacted"] == []
+    mid = store.as_of(ledger, fl, T0 + timedelta(minutes=25))  # inside the range since v5
+    assert mid["entries"] == {"other": "v3"} and mid["compacted"] == ["item-a"]
+    late = store.as_of(ledger, fl, T0 + timedelta(minutes=35))
+    assert late["entries"] == {"item-a": "v4", "other": "v4"} and late["compacted"] == []
 
 
 def test_keep_last_is_for_platform_scopes_only(backend):
@@ -487,6 +500,7 @@ def test_a_retired_platform_key_compacts_whole_to_one_tombstone(ledger, backend)
     store.apply_updates(ledger, [up("retire", "item-a", scope=fl)])
     (tomb,) = store.history(ledger, fl, "item-a")["records"]
     assert tomb["compacted"] == "whole" and tomb["op"] == "retire" and tomb["rev"] == 3
+    assert tomb["rev_from"] == 1 and tomb["status"] == "retired"
     assert tomb["pack_ids"] == ["sha256:" + "5" * 64, "sha256:" + "6" * 64]
     assert tomb["since"] == "2026-11-05T09:00:00.000000Z"
     assert tomb["at"] == "2026-11-05T09:20:00.000000Z"
@@ -497,6 +511,7 @@ def test_a_retired_platform_key_compacts_whole_to_one_tombstone(ledger, backend)
         "at": "2026-11-05T09:25:00.000000Z",
         "entries": {},
         "compacted": [],
+        "aged_out": False,
         "withheld": 0,
     }
     assert store.as_of(ledger, fl, T0 - timedelta(minutes=1))["compacted"] == []

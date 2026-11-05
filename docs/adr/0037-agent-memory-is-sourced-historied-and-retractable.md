@@ -7,6 +7,9 @@ summary_of: outline:sha256:cc0b15786d3b8d62
 - **Status:** accepted (2026-11-05, by the operator; defects found on the first real deploy are
   fixed as they come)
 - **Date:** 2026-11-05
+- **Amended:** 2026-11-05 (decision 6: `keep_last` folds a key's older records into one range
+  record, and tombstones in a platform scope age out past a budget, so platform scopes are
+  bounded; see the amendment under it)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -100,6 +103,27 @@ was shown, never from what the model says about its sources.
 
    `platform_scopes` (decision 7) ships in this PR with `memory_limits`. This is what bounds
    ADR-0035's ledger, whose item keys are new every time.
+
+   *Amendment (2026-11-05):* as first written, decision 6 did not bound a platform scope.
+   `keep_last` kept every record and dropped only values, and every retired key left a tombstone
+   for good, so ADR-0035's ledger (a cursor replaced on every fold, item keys new every time)
+   would reach its record cap and stall. Decision 6 now reads, for platform scopes:
+   - `keep_last` folds a key's records beyond its last N into **one range record** per key. The
+     range record keeps the rev range (`rev_from` to `rev`), the value digests, the union of the
+     sources, closures and `pack_id`s, the strictest `tlp`, when the range starts (`since`) and
+     the state it leaves the entry in. It drops the values. A later fold merges into it, so a key
+     holds at most N + 1 records.
+   - Whole-key tombstones in a platform scope **age out oldest first** once they exceed the
+     scope's tombstone budget: `memory_limits.tombstones: {<scope>: N}` (profile schema 1.6,
+     additive), by default 10% of the scope's record cap. Aged-out tombstones fold into the
+     scope's one `aged` record. It keeps the count, the time range they cover and the scope's
+     **high-water `rev`**. A key added after its tombstone aged out continues above that
+     high-water `rev`, so `rev` is never restarted or reused. Once a key in a scope has aged out,
+     every key first added there starts above the high-water `rev`, because the scope no longer
+     knows which keys it has seen.
+   - `as_of` answers `compacted` for a key whose state at `t` lies in a range record or
+     tombstone. When `t` falls in the aged range, it says `aged_out: true`: the aged keys' names
+     are gone, so any key it does not list must be read as compacted.
 
 ### Sources and labels (PR 2)
 
@@ -356,6 +380,12 @@ was shown, never from what the model says about its sources.
     (granted without approval in the example manifest) can still carry the same fact. Routing or
     removing that lane is a precondition of relying on retraction fleet-wide.
   - A key whose closure reaches 256 identifiers must be retired and added again.
+  - A retired key whose tombstone ages out of a platform scope (decision 6, amended) leaves
+    `dependents` for good: its sources, closures and `pack_id`s go with it. It was already
+    retired, so a retraction loses nothing live. Its time range stays visible as `aged_out` in
+    `as_of`.
+  - Until `MemoryAdmin` ships (PR 3), nothing can erase history: a report cannot write a platform
+    scope, so it cannot cause compaction, and only platform code's own writes compact.
   - Purge cannot reach copies outside the store.
 - **Obliges us to maintain:**
   - **PR 1:**

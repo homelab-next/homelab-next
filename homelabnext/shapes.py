@@ -24,6 +24,11 @@ AWS_ACCESS_KEY = r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"
 GITHUB_TOKEN = r"\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b"
 SLACK_TOKEN = r"\bxox[abposr]-[A-Za-z0-9-]{10,}"
 GOOGLE_KEY = r"\bAIza[0-9A-Za-z_-]{35}\b"
+# Credentials with a fixed marker: an age identity, an Ansible vault blob, and an AWS secret
+# access key named as one (a bare 40-character value is indistinguishable from other base64).
+AGE_SECRET_KEY = r"AGE-SECRET-KE[Y]-1[0-9A-Z]{58}"
+VAULT_BLOB = r"[$]ANSIBLE_VAUL[T]"
+AWS_SECRET_KEY = r"(?i)aws_?secret_?access_?key\W{1,4}[A-Za-z0-9/+=]{40}\b"
 JWT = r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
 PRIVATE_KEY_HEADER = r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"
 # ``domain`` is a named group so a consumer can apply its own domain policy.

@@ -12,7 +12,7 @@ agent profile that owns the memory.
   whole report, optionally checked against the pack it ran on with
   :func:`~homelabnext.agent.report.validate_report`) and :meth:`MemoryStore.apply_updates` are the
   only mutators.  A batch is all-or-nothing: one bad update refuses the whole report and nothing
-  is stored.  There is no ``put``.
+  is stored.  There is no ``put``.  A batch holds at most :data:`MAX_UPDATES` updates.
 * **Semantics.**  ``add`` needs a value and a key that is not live; ``replace`` needs a value and
   a live key; ``retire`` needs a live key and no value (the entry is kept as a tombstone, so a
   retired fact cannot quietly come back as the same key without an ``add``).
@@ -22,47 +22,59 @@ agent profile that owns the memory.
   named ``analyst`` still have two separate memories.  The profile must be a
   :class:`~homelabnext.agent.compiler.VerifiedProfile` (verified against the ceiling policy and
   the lock of reviewed digests): a dict is refused, since whoever holds one can change its ``id``
-  or ``memory_scopes`` and recompute its digest.
+  or ``memory_scopes`` and recompute its digest.  A report may not write one of the profile's
+  ``platform_scopes``: only platform code does, through :meth:`MemoryStore.apply_updates`.
 
-History (ADR-0037 decisions 1 to 6):
+History (ADR-0037 decisions 1 to 6, decision 6 as amended):
 
 * **A change log.**  Per owner the stored value is ``{entries, log}``.  Every applied update
   appends one record to ``log`` (:data:`RECORD_FIELDS`) in the **same backend transaction** as
   the entry, so a refused batch writes neither.  ``entries`` is a cache of the log:
   :func:`fold` rebuilds it, and the store refolds every key a batch touches.  An entry carries
-  ``rev`` (1 on a key's first ``add``, one more on every record of the key, never restarted,
-  even by ``retire`` and a later ``add``), ``updated_at`` and ``reasserted_at`` (set by ``add``
-  and ``replace``).  Until sources and labels ship (ADR-0037 PR 2) every record is
-  ``sources: []``, ``checked: false``, ``tlp: red`` with an empty closure.  Memory stored before
-  the log existed migrates once, on its owner's next write, to one ``migrated`` record per entry
-  (``rev: 1``); before that record's time its history is unknown and :meth:`MemoryStore.as_of`
-  answers ``compacted`` for it.
+  ``rev`` (1 on a key's first ``add``, one more on every record of the key, never restarted or
+  reused), ``updated_at`` and ``reasserted_at`` (set by ``add`` and ``replace``).  Until sources
+  and labels ship (ADR-0037 PR 2) every record is ``sources: []``, ``checked: false``,
+  ``tlp: red`` with an empty closure.  Memory stored before the log existed migrates once, on its
+  owner's next write, to one ``migrated`` record per entry (``rev: 1``); before that record's
+  time its history is unknown and :meth:`MemoryStore.as_of` answers ``compacted`` for it.  A
+  legacy key or value that holds a secret is migrated as its digest only (``purged``).
 * **An injected clock.**  ``MemoryStore(now=...)`` (a callable returning an aware UTC
-  ``datetime``) is read once per batch, inside the transaction; :func:`_apply` reads no clock.
-* **No secret enters the log.**  Every key and value is run through the platform screen's secret
-  types (:data:`homelabnext.agent.screen.SECRET_TYPES`) and the leak scanner's credential shapes
-  (:mod:`homelabnext.shapes`) before anything else, the schema check included (its messages
-  quote values).  A match refuses the whole batch; the refusal names the update's position, the
-  field and the type, never the value.
+  ``datetime``) is read once per batch, inside the transaction, and never goes backwards in the
+  log: a batch is stamped the later of the clock and the latest record.  :func:`_apply` reads
+  no clock.
+* **No secret enters the log, or an error message.**  Every string of the batch (of the whole
+  report, for :meth:`MemoryStore.apply_report`), property names included, is run through the
+  platform screen's secret types (:data:`homelabnext.agent.screen.SECRET_TYPES`) and the leak
+  scanner's credential shapes (:mod:`homelabnext.shapes`) before anything else.  A match refuses
+  the whole batch naming the position and the type.  Schema problems are reported by path and
+  keyword only, never by the validator's message, which quotes values.  The screen is
+  shape-based: an encoded (base64, hex), disguised (confusables) or split secret passes it.
 * **History reads.**  :meth:`MemoryStore.history` and :meth:`MemoryStore.as_of` are owner-scoped
   like :meth:`MemoryStore.read`.  Both return ``withheld: 0`` today: the reader's TLP ceiling is
-  applied in :func:`_readable` once records carry labels (PR 2).
+  applied in :func:`_readable` once records carry labels (PR 2).  Every read loads the owner's
+  whole stored value, log included (the file backend reads its whole file on every call anyway).
 * **Bounded per scope.**  A profile's ``memory_limits.records`` caps each scope's records
   (default :data:`DEFAULT_RECORDS`, :data:`DEFAULT_PLATFORM_RECORDS` for a scope in its
   ``platform_scopes``).  A batch that would take a scope past its cap is refused whole
   (:class:`MemoryLimitError`) and the operator is paged through the state-diffed notifier, once
-  per crossing (its recovery when a write to the scope is accepted again).  In a platform scope,
-  ``memory_limits.keep_last`` drops the values of a key's records beyond its last N, and a key
-  that is retired is compacted whole to one tombstone record (:func:`_compact`).
+  per crossing (its recovery when a write to the scope is accepted again).  A platform scope
+  compacts (:func:`_compact_key`): ``memory_limits.keep_last`` folds a key's records beyond its
+  last N into one range record, a retired key folds whole into one tombstone, and tombstones
+  beyond the scope's budget (``memory_limits.tombstones``, default a tenth of the record cap)
+  age out oldest first into the scope's one ``aged`` record, which keeps the scope's high-water
+  ``rev`` so a key added again later continues above it.  There is no byte cap: every field of a
+  PR 1 record is bounded by the report schema (a value is at most 2,000 characters, a key 64,
+  and sources and closures are empty), so the record cap bounds the bytes.  PR 2, which fills
+  closures of up to 256 identifiers, adds one.
 """
 
 from __future__ import annotations
 
-import copy
 import fnmatch
 import hashlib
 import logging
 import re
+import threading
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,16 +86,20 @@ from homelabnext.notify.core_pairs import AGENT_MEMORY_CAP
 from .compiler import VerifiedProfile, require_verified
 from .errors import AgentError
 from .report import validate_report
-from .schemas import schema_errors
+from .schemas import schema_error_shapes
 from .screen import SECRET_TYPES, Screener
 
 OPS = ("add", "replace", "retire")
+#: updates in one batch (ADR-0037 decision 7 keeps list limits in code)
+MAX_UPDATES = 64
 _PLACEHOLDER_HASH = "sha256:" + "0" * 64
 log = logging.getLogger("homelabnext.agent.memory")
 
 #: record caps of a profile without ``memory_limits.records`` for the scope (ADR-0037 decision 6)
 DEFAULT_RECORDS = 10_000
 DEFAULT_PLATFORM_RECORDS = 100_000
+#: a platform scope's default tombstone budget: this share of its record cap (decision 6, amended)
+TOMBSTONE_SHARE = 0.1
 
 #: the fields of a change record (ADR-0037 decision 1); ``value`` is absent on ``retire`` and on
 #: a compacted record, ``reason`` only on a record an operator causes (none yet)
@@ -114,12 +130,24 @@ _SHAPES = tuple(
     for name, rx in (
         ("private-key-block", shapes.PRIVATE_KEY_HEADER),
         ("aws-access-key", shapes.AWS_ACCESS_KEY),
+        ("aws-secret-key", shapes.AWS_SECRET_KEY),
         ("github-token", shapes.GITHUB_TOKEN),
         ("slack-token", shapes.SLACK_TOKEN),
         ("google-api-key", shapes.GOOGLE_KEY),
         ("jwt", shapes.JWT),
+        ("age-secret-key", shapes.AGE_SECRET_KEY),
+        ("vault-blob", shapes.VAULT_BLOB),
     )
 )
+#: a name safe to echo in a message once it has passed the screen
+_SHOWN = re.compile(r"[a-z_][a-z0-9_:-]{0,63}")
+
+
+def _name(text: Any) -> str:
+    """``text`` quoted when it is a plain name that holds no secret, else a placeholder."""
+    if isinstance(text, str) and _SHOWN.fullmatch(text) and not secret_types(text):
+        return repr(text)
+    return "<a name not shown>"
 
 
 class MemoryAccessError(AgentError):
@@ -134,17 +162,35 @@ class MemoryUpdateError(AgentError):
         super().__init__("memory updates refused: " + "; ".join(self.problems))
 
 
+def _cap_advice(platform: bool) -> str:
+    if platform:
+        return (
+            "set memory_limits.keep_last for keys that are replaced and retire finished keys so "
+            "the scope compacts, or raise memory_limits.records in the reviewed profile"
+        )
+    return (
+        "raise memory_limits.records in the reviewed profile (or an operator purge, ADR-0037 PR 3)"
+    )
+
+
 class MemoryLimitError(MemoryUpdateError):
     """A batch that would take a scope past its record cap; nothing from it was applied.
-    ``scopes`` maps each such scope to ``(records it would hold, cap)``."""
+    ``scopes`` maps each such scope to ``(records it would hold, cap)``; ``platform`` names the
+    ones that are platform scopes."""
 
-    def __init__(self, owner: str, scopes: Mapping[str, tuple[int, int]]) -> None:
+    def __init__(
+        self,
+        owner: str,
+        scopes: Mapping[str, tuple[int, int]],
+        platform: Iterable[str] = (),
+    ) -> None:
         self.owner = owner
         self.scopes = dict(scopes)
+        self.platform = frozenset(platform)
         super().__init__(
             [
                 f"scope {s!r} of {owner} is at its record cap ({n} records would exceed {cap}); "
-                "writes to it are refused until memory_limits.records is raised or it is compacted"
+                f"its writes are refused: {_cap_advice(s in self.platform)}"
                 for s, (n, cap) in sorted(self.scopes.items())
             ]
         )
@@ -152,6 +198,7 @@ class MemoryLimitError(MemoryUpdateError):
 
 Memory = dict[str, dict[str, dict[str, Any]]]  # scope -> key -> entry
 Stored = dict[str, Any]  # {"entries": Memory, "log": [record, ...]}
+Record = dict[str, Any]
 
 
 class MemoryBackend(Protocol):
@@ -161,18 +208,24 @@ class MemoryBackend(Protocol):
 
 
 class InMemoryBackend:
-    """Process-local backend (the fake)."""
+    """Process-local backend (the fake); one lock around every read and transaction."""
 
     def __init__(self) -> None:
+        import copy
+
+        self._copy = copy.deepcopy
         self._data: dict[str, Any] = {}
+        self._lock = threading.Lock()
 
     def load(self, owner: str) -> Any:
-        return copy.deepcopy(self._data.get(owner, {}))
+        with self._lock:
+            return self._copy(self._data.get(owner, {}))
 
     def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
-        new = fn(copy.deepcopy(self._data.get(owner, {})))  # raises before anything is stored
-        self._data[owner] = copy.deepcopy(new)
-        return new
+        with self._lock:
+            new = fn(self._copy(self._data.get(owner, {})))  # raises before anything is stored
+            self._data[owner] = self._copy(new)
+            return new
 
 
 class FileBackend:
@@ -187,8 +240,9 @@ class FileBackend:
         return self._store.get(owner, {}) or {}
 
     def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
-        # StateStore.update writes only after fn returns: a raising fn leaves the file as it was
-        return self._store.update(owner, lambda cur: fn(copy.deepcopy(cur or {})), default={})
+        # StateStore.update loads a fresh copy under its lock and writes only after fn returns,
+        # so a raising fn leaves the file as it was
+        return self._store.update(owner, lambda cur: fn(cur or {}), default={})
 
 
 # ---------------------------------------------------------------- identity and limits
@@ -203,40 +257,39 @@ def _platform_scopes(profile: VerifiedProfile) -> frozenset[str]:
     return frozenset(profile.get("platform_scopes") or [])
 
 
+def _limits(profile: VerifiedProfile, name: str) -> Mapping[str, Any]:
+    return (profile.get("memory_limits") or {}).get(name) or {}
+
+
 def record_cap(profile: VerifiedProfile, scope: str) -> int:
     """The record cap of ``scope`` for ``profile``: its ``memory_limits.records`` entry, else the
     code-constant default (higher for a platform scope)."""
-    limits = (profile.get("memory_limits") or {}).get("records") or {}
+    limits = _limits(profile, "records")
     if scope in limits:
         return int(limits[scope])
     return DEFAULT_PLATFORM_RECORDS if scope in _platform_scopes(profile) else DEFAULT_RECORDS
 
 
+def tombstone_budget(profile: VerifiedProfile, scope: str) -> int:
+    """How many whole-key tombstones a platform scope keeps before the oldest age out: its
+    ``memory_limits.tombstones`` entry, else a tenth of its record cap (at least 1)."""
+    limits = _limits(profile, "tombstones")
+    if scope in limits:
+        return int(limits[scope])
+    return max(1, int(record_cap(profile, scope) * TOMBSTONE_SHARE))
+
+
 def _keep_last(profile: VerifiedProfile, scope: str, key: str) -> int | None:
-    """How many of ``key``'s records keep their values (platform scopes only): the largest N of
-    the ``keep_last`` patterns (shell-style globs) that match the key, or None."""
+    """How many of ``key``'s records stay whole (platform scopes only): the largest N of the
+    ``keep_last`` patterns (shell-style globs) that match the key, or None."""
     if scope not in _platform_scopes(profile):
         return None
-    pats = ((profile.get("memory_limits") or {}).get("keep_last") or {}).get(scope) or {}
+    pats = _limits(profile, "keep_last").get(scope) or {}
     hits = [int(n) for pat, n in pats.items() if fnmatch.fnmatchcase(key, pat)]
     return max(hits) if hits else None
 
 
-# ---------------------------------------------------------------- validation
-def update_errors(updates: Any, profile_id: str = "profile:memory-check") -> list[str]:
-    """Schema problems of a ``memory_updates`` list, validated exactly as inside a report."""
-    doc = {
-        "pack_id": _PLACEHOLDER_HASH,
-        "profile": profile_id,
-        "status": "partial",
-        "summary": "memory update validation",
-        "cites": [],
-        "unknowns": [],
-        "memory_updates": updates,
-    }
-    return [e for e in schema_errors("agent", "report_result", doc) if e.startswith("memory")]
-
-
+# ---------------------------------------------------------------- the secret screen
 def secret_types(text: str) -> list[str]:
     """The secret types found in ``text``: the platform screen's secret types and the leak
     scanner's credential shapes.  Names only, never the matched value."""
@@ -245,33 +298,78 @@ def secret_types(text: str) -> list[str]:
     return sorted(found)
 
 
-def secret_problems(updates: Any) -> list[str]:
-    """One problem per key or value of ``updates`` that holds a secret, naming the update's
-    position, the field and the types (never the value).  Runs on whatever is there, before the
-    schema check, whose messages would quote the value."""
-    if not isinstance(updates, list):
-        return []
+def secret_problems(doc: Any, root: str = "") -> list[str]:
+    """One problem per string of ``doc`` (every leaf and every property name, at any depth) that
+    holds a secret, naming its position and the types, never the value.  Run before anything
+    that could echo the document."""
     problems: list[str] = []
-    for n, u in enumerate(updates):
-        if not isinstance(u, Mapping):
-            continue
-        for field in ("key", "value"):
-            text = u.get(field)
-            if isinstance(text, str):
-                types = secret_types(text)
+
+    def at(path: str, part: str) -> str:
+        return f"{path}/{part}" if path else part
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, str):
+            types = secret_types(node)
+            if types:
+                problems.append(f"{path or '$'}: holds a secret ({', '.join(types)})")
+        elif isinstance(node, Mapping):
+            for i, (k, v) in enumerate(node.items()):
+                name = k if isinstance(k, str) else str(k)
+                types = secret_types(name)
                 if types:
                     problems.append(
-                        f"memory_updates/{n} {field}: holds a secret ({', '.join(types)}); "
-                        "a secret may never enter memory or its log"
+                        f"{path or '$'}: property #{i} name holds a secret ({', '.join(types)})"
                     )
+                part = k if isinstance(k, str) and _SHOWN.fullmatch(k) and not types else f"#{i}"
+                walk(v, at(path, part))
+        elif isinstance(node, (list, tuple)):
+            for i, v in enumerate(node):
+                walk(v, at(path, str(i)))
+
+    walk(doc, root)
     return problems
+
+
+def _refuse_secrets(doc: Any, root: str) -> None:
+    problems = secret_problems(doc, root)
+    if problems:
+        raise MemoryUpdateError(
+            [*problems, "a secret may never enter memory or its log; nothing was applied"]
+        )
+
+
+# ---------------------------------------------------------------- validation
+def _report_doc(updates: Any, profile_id: str) -> dict[str, Any]:
+    return {
+        "pack_id": _PLACEHOLDER_HASH,
+        "profile": profile_id,
+        "status": "partial",
+        "summary": "memory update validation",
+        "cites": [],
+        "unknowns": [],
+        "memory_updates": updates,
+    }
+
+
+def update_errors(updates: Any, profile_id: str = "profile:memory-check") -> list[str]:
+    """Schema problems of a ``memory_updates`` list, validated exactly as inside a report, by
+    path and keyword only (never quoting a value)."""
+    doc = _report_doc(updates, profile_id)
+    return [e for e in schema_error_shapes("agent", "report_result", doc) if e.startswith("memory")]
+
+
+def _too_many(updates: Any) -> None:
+    if isinstance(updates, list) and len(updates) > MAX_UPDATES:
+        raise MemoryUpdateError(
+            [f"memory_updates: {len(updates)} updates; at most {MAX_UPDATES} in one batch"]
+        )
 
 
 # ---------------------------------------------------------------- time
 def _stamp(t: datetime) -> str:
     """Fixed-width UTC stamp, so stamps order as strings."""
     if not isinstance(t, datetime) or t.tzinfo is None or t.utcoffset() is None:
-        raise ValueError(f"memory clock must give an aware UTC datetime, got {t!r}")
+        raise ValueError("memory clock must give an aware UTC datetime")
     return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
@@ -284,33 +382,56 @@ def _digest(value: str) -> str:
 
 
 # ---------------------------------------------------------------- the log and its fold
-def _stored(raw: Any, at: str) -> Stored:
-    """``raw`` in the ``{entries, log}`` shape; memory stored before the log migrates to one
-    ``migrated`` record per entry, stamped ``at`` (ADR-0037 decision 2)."""
+def _is_logged(raw: Any) -> bool:
+    return (
+        isinstance(raw, Mapping) and set(raw) == {"entries", "log"} and isinstance(raw["log"], list)
+    )
+
+
+def _stored(raw: Any, at: str) -> tuple[Stored, list[str]]:
+    """``raw`` in the ``{entries, log}`` shape, and the positions of legacy secrets purged.
+
+    Memory stored before the log migrates to one ``migrated`` record per entry, stamped ``at``
+    (ADR-0037 decision 2).  A legacy key or value that holds a secret is migrated as its digest
+    only, the record marked ``purged`` (a secret key is renamed ``purged-<digest prefix>`` and
+    its digest kept as ``key_digest``); the positions are returned, never the values."""
     if not raw:
-        return {"entries": {}, "log": []}
-    if set(raw) == {"entries", "log"} and isinstance(raw["log"], list):
-        return raw
+        return {"entries": {}, "log": []}, []
+    if _is_logged(raw):
+        return raw, []
     # pre-log memory: {scope: {key: {status, op, value, pack_id?}}} (a scope is a dict, never a
     # list, so a legacy scope named "log" cannot be mistaken for the new shape)
-    out: list[dict[str, Any]] = []
-    for scope in sorted(raw):
-        for key in sorted(raw[scope]):
-            e = raw[scope][key]
-            value = e.get("value")
+    out: list[Record] = []
+    purged: list[str] = []
+    for si, scope in enumerate(sorted(raw)):
+        block = raw[scope]
+        if not isinstance(block, Mapping):
+            continue
+        for ki, key in enumerate(sorted(block)):
+            e = block[key] if isinstance(block[key], Mapping) else {}
+            value = e.get("value") if isinstance(e.get("value"), str) else None
+            bad_key = bool(secret_types(key))
+            bad_value = value is not None and bool(secret_types(value))
+            name = "purged-" + _digest(key)[7:23] if bad_key else key
             rec = _record(
                 at,
                 scope,
-                key,
+                name,
                 e.get("op") or ("retire" if e.get("status") == "retired" else "add"),
                 1,
                 value,
                 e.get("pack_id"),
-                keep_value=True,
+                keep_value=not (bad_key or bad_value),
             )
             rec["migrated"] = True
+            if bad_key or bad_value:
+                rec["purged"] = True
+                if bad_key:
+                    rec["key_digest"] = _digest(key)
+                where = " and ".join(w for w, b in (("key", bad_key), ("value", bad_value)) if b)
+                purged.append(f"scope #{si} entry #{ki} ({where})")
             out.append(rec)
-    return {"entries": fold(out), "log": out}
+    return {"entries": fold(out), "log": out}, purged
 
 
 def _record(
@@ -323,8 +444,8 @@ def _record(
     pack_id: str | None,
     *,
     keep_value: bool,
-) -> dict[str, Any]:
-    rec: dict[str, Any] = {"at": at, "scope": scope, "key": key, "op": op, "rev": rev}
+) -> Record:
+    rec: Record = {"at": at, "scope": scope, "key": key, "op": op, "rev": rev}
     if keep_value and value is not None:
         rec["value"] = value
     if value is not None:
@@ -341,15 +462,17 @@ def _record(
     return rec
 
 
-def _union(*lists: Iterable[str]) -> list[str]:
+def _union(*lists: Iterable[Any]) -> list[Any]:
     return list(dict.fromkeys(x for xs in lists for x in xs))
 
 
 def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any]:
     """The entry after ``rec`` (one step of the fold)."""
     op = rec["op"]
-    if rec.get("compacted") == "whole":  # a retired key compacted to its tombstone
+    status = "retired" if op == "retire" else "live"
+    if rec.get("compacted") in ("whole", "range"):  # folded records: their state, no value
         value, sources, reasserted = None, list(rec["sources"]), rec.get("reasserted_at")
+        status = rec["status"]
     elif rec.get("migrated"):
         value, sources, reasserted = rec.get("value"), list(rec["sources"]), None
     elif op == "add":
@@ -362,7 +485,7 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
         sources = _union(entry["sources"] if entry else [], rec["sources"])
         reasserted = entry.get("reasserted_at") if entry else None
     out: dict[str, Any] = {
-        "status": "retired" if op == "retire" else "live",
+        "status": status,
         "op": op,
         "value": value,
         "rev": rec["rev"],
@@ -378,84 +501,134 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
 
 
 def fold(records: Iterable[Mapping[str, Any]]) -> Memory:
-    """The entries a log describes (``entries`` is a cache of exactly this)."""
+    """The entries a log describes (``entries`` is a cache of exactly this).  The scope's
+    ``aged`` record names no key and adds no entry."""
     entries: Memory = {}
     for rec in records:
+        if rec["op"] == "aged":
+            continue
         scope = entries.setdefault(rec["scope"], {})
         scope[rec["key"]] = _step(scope.get(rec["key"]), rec)
     return entries
 
 
-def _compact(
-    records: list[dict[str, Any]], scope: str, key: str, keep_last: int | None, whole: bool
-) -> list[dict[str, Any]]:
-    """``records`` with ``scope/key`` compacted (ADR-0037 decision 6).
+def _start(rec: Mapping[str, Any]) -> str | None:
+    """When ``rec``'s history starts: its own time, a folded record's ``since`` (None: unknown,
+    because it holds a migrated record whose earlier history was never logged)."""
+    if rec.get("migrated"):
+        return None
+    if rec.get("compacted"):
+        return rec.get("since")
+    return rec["at"]
 
-    ``whole`` (a retired key in a platform scope) replaces the key's records with one tombstone
-    at the place of the last: the last ``rev``, the union of their sources and closures, their
-    ``pack_id`` and value digests, the strictest label, and ``since`` (the first record's time,
-    None when one was migrated and so had unknown history before it).  Otherwise the values of
-    the key's records beyond the last ``keep_last`` are dropped, every other field kept."""
-    mine = [i for i, r in enumerate(records) if r["scope"] == scope and r["key"] == key]
-    if not mine:
-        return records
+
+def _squash(recs: list[Record], kind: str) -> Record:
+    """One record standing for ``recs`` (one key's, in order): ``whole`` (a retired key's
+    tombstone) or ``range`` (records beyond ``keep_last``).  It keeps the rev range, the value
+    digests, the union of sources, closures and pack ids, the strictest label, when the range
+    starts (``since``), and the state the records leave the entry in."""
+    first, last = recs[0], recs[-1]
+    starts = [_start(r) for r in recs]
+    state = fold(recs)[last["scope"]][last["key"]]
+    return {
+        "at": last["at"],
+        "scope": last["scope"],
+        "key": last["key"],
+        "op": "retire" if kind == "whole" else last["op"],
+        "rev": last["rev"],
+        "rev_from": first.get("rev_from", first["rev"]),
+        "compacted": kind,
+        "status": "retired" if kind == "whole" else state["status"],
+        "since": None if any(s is None for s in starts) else min(starts),  # type: ignore[type-var]
+        "value_digests": [
+            d
+            for d in _union(*(r.get("value_digests") or [r.get("value_digest")] for r in recs))
+            if d
+        ],
+        "pack_id": last.get("pack_id"),
+        "pack_ids": [
+            p for p in _union(*(r.get("pack_ids") or [r.get("pack_id")] for r in recs)) if p
+        ],
+        "sources": _union(*(r["sources"] for r in recs)),
+        "checked": all(r["checked"] for r in recs),
+        "tlp": str(tlp.strictest(r["tlp"] for r in recs)),
+        "closure": _union(*(r["closure"] for r in recs)),
+        "reasserted_at": state["reasserted_at"],
+    }
+
+
+def _compact_key(recs: list[Record], keep_last: int | None, whole: bool) -> list[Record] | None:
+    """One key's records compacted (ADR-0037 decision 6, amended), or None when there is
+    nothing to do: ``whole`` folds them all into a tombstone; otherwise every record beyond the
+    last ``keep_last`` folds into one range record."""
     if whole:
-        old = [records[i] for i in mine]
-        if len(old) == 1 and old[0].get("compacted") == "whole":
-            return records
-        last = old[-1]
-        firsts = [
-            r.get("since", r["at"]) if r.get("compacted") == "whole" else r["at"] for r in old
-        ]
-        unknown = any(
-            r.get("migrated") or (r.get("compacted") == "whole" and r.get("since") is None)
-            for r in old
-        )
-        packs = _union(*((r.get("pack_ids") or [r.get("pack_id")]) for r in old))
-        tomb: dict[str, Any] = {
-            "at": last["at"],
-            "scope": scope,
-            "key": key,
-            "op": "retire",
-            "rev": last["rev"],
-            "compacted": "whole",
-            "since": None if unknown else min(firsts),
-            "value_digests": _union(
-                *((r.get("value_digests") or [r.get("value_digest")]) for r in old)
-            ),
-            "pack_id": last.get("pack_id"),
-            "pack_ids": [p for p in packs if p],
-            "sources": _union(*(r["sources"] for r in old)),
-            "checked": all(r["checked"] for r in old),
-            "tlp": str(tlp.strictest(r["tlp"] for r in old)),
-            "closure": _union(*(r["closure"] for r in old)),
-            "reasserted_at": fold(old)[scope][key]["reasserted_at"],
-        }
-        tomb["value_digests"] = [d for d in tomb["value_digests"] if d]
-        drop = set(mine[:-1])
-        out = [r for i, r in enumerate(records) if i not in drop]
-        out[mine[-1] - len(drop)] = tomb
-        return out
-    if keep_last is None:
+        if len(recs) == 1 and recs[0].get("compacted") == "whole":
+            return None
+        return [_squash(recs, "whole")]
+    if keep_last is None or len(recs) <= keep_last:
+        return None
+    older = recs[:-keep_last]
+    if len(older) == 1 and older[0].get("compacted"):
+        return None
+    return [_squash(older, "range"), *recs[-keep_last:]]
+
+
+def _age(records: list[Record], scope: str, budget: int, entries: Memory) -> list[Record]:
+    """Age out a platform scope's oldest tombstones beyond ``budget`` into its one ``aged``
+    record (the scope's high-water ``rev``, how many aged out, and the time range they cover);
+    their keys leave ``entries``."""
+    tombs = [
+        (r["at"], i)
+        for i, r in enumerate(records)
+        if r["scope"] == scope and r.get("compacted") == "whole"
+    ]
+    if len(tombs) <= budget:
         return records
-    for i in mine[: max(0, len(mine) - keep_last)]:
-        if "value" in records[i]:
-            records[i] = {k: v for k, v in records[i].items() if k != "value"}
-            records[i]["compacted"] = True
-    return records
+    victims = {i for _, i in sorted(tombs)[: len(tombs) - budget]}
+    old = next((r for r in records if r["scope"] == scope and r["op"] == "aged"), None)
+    gone = [records[i] for i in sorted(victims)] + ([old] if old else [])
+    starts = [r.get("since") for r in gone]
+    aged: Record = {
+        "at": max(r["at"] for r in gone),
+        "scope": scope,
+        "key": None,
+        "op": "aged",
+        "rev": max(r["rev"] for r in gone),
+        "compacted": "aged",
+        "since": None if any(s is None for s in starts) else min(starts),  # type: ignore[type-var]
+        "count": len(victims) + (old["count"] if old else 0),
+        "pack_id": None,
+        "sources": [],
+        "checked": all(r["checked"] for r in gone),
+        "tlp": str(tlp.strictest(r["tlp"] for r in gone)),
+        "closure": [],
+    }
+    for i in victims:
+        entries.get(scope, {}).pop(records[i]["key"], None)
+    out = [r for i, r in enumerate(records) if i not in victims and r is not old]
+    out.append(aged)
+    return out
 
 
 def _apply(
     stored: Stored,
     updates: Iterable[Mapping[str, Any]],
     pack_id: str | None,
-    at: str,
+    now: str,
     profile: VerifiedProfile,
 ) -> Stored:
-    """Apply ``updates`` at time ``at``: append their records, compact, refold the touched keys
-    and check the record caps.  Raises on any problem, so the backend stores nothing."""
+    """Apply ``updates`` stamped no earlier than ``now`` or the log's latest record: append
+    their records, compact, refold the touched keys and check the record caps.  Raises on any
+    problem, so the backend stores nothing."""
     entries: Memory = stored["entries"]
-    records: list[dict[str, Any]] = stored["log"]
+    records: list[Record] = stored["log"]
+    high: dict[str, int] = {}  # scope -> high-water rev of its aged-out keys
+    latest = ""
+    for r in records:
+        latest = max(latest, r["at"])
+        if r["op"] == "aged":
+            high[r["scope"]] = r["rev"]
+    at = max(now, latest)  # the log's time never goes backwards
     problems: list[str] = []
     touched: dict[tuple[str, str], None] = {}
     for n, u in enumerate(updates):
@@ -475,7 +648,7 @@ def _apply(
         elif u["op"] == "retire" and has_value:
             problems.append(f"{where}: retire takes no value")
         else:
-            rev = (cur["rev"] if cur else 0) + 1
+            rev = (cur["rev"] if cur else high.get(u["scope"], 0)) + 1
             value = u["value"] if has_value else (cur or {}).get("value")
             rec = _record(
                 at, u["scope"], u["key"], u["op"], rev, value, pack_id, keep_value=has_value
@@ -485,14 +658,37 @@ def _apply(
             touched[(u["scope"], u["key"])] = None
     if problems:
         raise MemoryUpdateError(problems)
+
     platform = _platform_scopes(profile)
-    for scope, key in touched:
-        whole = scope in platform and entries[scope][key]["status"] == "retired"
-        records = _compact(records, scope, key, _keep_last(profile, scope, key), whole)
+    hot = {k for k in touched if k[0] in platform}
+    if hot:  # compaction: one pass to index the touched keys, one to rebuild the log
+        where_at: dict[tuple[str, str], list[int]] = {k: [] for k in hot}
+        for i, r in enumerate(records):
+            k = (r["scope"], r["key"])
+            if k in where_at:
+                where_at[k].append(i)
+        swap: dict[int, list[Record]] = {}
+        drop: set[int] = set()
+        for (scope, key), pos in where_at.items():
+            new = _compact_key(
+                [records[i] for i in pos],
+                _keep_last(profile, scope, key),
+                entries[scope][key]["status"] == "retired",
+            )
+            if new is not None:
+                swap[pos[-1]] = new
+                drop.update(pos[:-1])
+        if swap:
+            records = [x for i, r in enumerate(records) if i not in drop for x in swap.get(i, [r])]
+        for scope in sorted({s for s, _ in hot}):
+            records = _age(records, scope, tombstone_budget(profile, scope), entries)
+
     # refold the touched keys from the log (compaction may have dropped a value the cache held),
-    # so the cache is the fold by construction; one pass over the log
+    # so the cache is the fold by construction; one pass, which also counts each scope's records
     counts: dict[str, int] = {}
-    refolded: dict[tuple[str, str], dict[str, Any] | None] = dict.fromkeys(touched)
+    refolded: dict[tuple[str, str], dict[str, Any] | None] = {
+        k: None for k in touched if k[1] in entries.get(k[0], {})
+    }
     for r in records:
         counts[r["scope"]] = counts.get(r["scope"], 0) + 1
         k = (r["scope"], r["key"])
@@ -503,16 +699,14 @@ def _apply(
     over = {
         s: (counts[s], record_cap(profile, s))
         for s in sorted({s for s, _ in touched})
-        if counts[s] > record_cap(profile, s)
+        if counts.get(s, 0) > record_cap(profile, s)
     }
     if over:
-        raise MemoryLimitError(profile["id"], over)
+        raise MemoryLimitError(profile["id"], over, platform & set(over))
     return {"entries": entries, "log": records}
 
 
-def _readable(
-    profile: VerifiedProfile, records: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], int]:
+def _readable(profile: VerifiedProfile, records: list[Record]) -> tuple[list[Record], int]:
     """The records ``profile`` may read and how many it may not.  The hook for the reader's TLP
     ceiling (ADR-0037 decision 8, PR 2): until records carry labels, an owner reads all of its
     own records and nothing is withheld."""
@@ -551,11 +745,11 @@ class MemoryStore:
         pack_id: str | None = None,
     ) -> Memory:
         """Validate and apply ``updates`` for ``profile``; all or nothing.  Returns the new
-        entries."""
+        entries.  Platform code may write any of the profile's scopes, platform scopes included;
+        a report goes through :meth:`apply_report`, which refuses platform scopes."""
         owner, scopes = _identity(profile)
-        secrets = secret_problems(updates)
-        if secrets:
-            raise MemoryUpdateError(secrets)
+        _too_many(updates)
+        _refuse_secrets(updates, "memory_updates")
         errs = update_errors(updates, owner)
         if errs:
             raise MemoryUpdateError(errs)
@@ -569,17 +763,24 @@ class MemoryStore:
             return self._load(owner)["entries"]
 
         def fn(raw: Any) -> Stored:
-            at = _stamp(self._now())  # read under the backend's lock, so the log stays in order
-            return _apply(_stored(raw, at), updates, pack_id, at, profile)
+            now = _stamp(self._now())  # read under the backend's lock, inside the transaction
+            stored, purged = _stored(raw, now)
+            self._purged(owner, purged)
+            return _apply(stored, updates, pack_id, now, profile)
 
         try:
             new = self._backend.transact(owner, fn)
         except MemoryLimitError as exc:
             for scope, (n, cap) in exc.scopes.items():
-                self._page(owner, scope, f"{n} records would exceed the cap of {cap}")
+                self._page(
+                    owner,
+                    scope,
+                    f"{n} records would exceed the cap of {cap}",
+                    scope in exc.platform,
+                )
             raise
         for scope in sorted({u["scope"] for u in updates}):
-            self._page(owner, scope, None)
+            self._page(owner, scope, None, False)
         return new["entries"]
 
     def apply_report(
@@ -593,18 +794,19 @@ class MemoryStore:
     ) -> Memory:
         """Apply a report's ``memory_updates`` after validating the report.
 
-        With ``pack`` and ``pack_hash`` the report is checked against the pack it ran on
-        (:func:`validate_report`); otherwise against its schema.  The report must be the
-        profile's own, and a ``deferred`` report (no work done) may not change memory.
+        The whole report is screened for secrets first, then checked against its schema (by
+        path and keyword only), and, with ``pack`` and ``pack_hash``, against the pack it ran on
+        (:func:`validate_report`).  The report must be the profile's own, a ``deferred`` report
+        (no work done) may not change memory, and no update may name a platform scope.
         """
         owner, _ = _identity(profile)
-        secrets = secret_problems(report.get("memory_updates"))
-        if secrets:
-            raise MemoryUpdateError(secrets)
-        if pack is not None and pack_hash is not None:
+        if not isinstance(report, Mapping):
+            raise MemoryUpdateError(["$: a report is a mapping"])
+        _too_many(report.get("memory_updates"))
+        _refuse_secrets(report, "")
+        problems = schema_error_shapes("agent", "report_result", report)
+        if not problems and pack is not None and pack_hash is not None:
             problems = validate_report(report, pack, pack_hash, manifest)
-        else:
-            problems = schema_errors("agent", "report_result", report)
         if problems:
             raise MemoryUpdateError(problems)
         if report["profile"] != owner:
@@ -614,6 +816,15 @@ class MemoryStore:
             )
         if report["status"] == "deferred" and report["memory_updates"]:
             raise MemoryUpdateError(["a deferred report did no work and may not update memory"])
+        platform = _platform_scopes(profile)
+        reserved = [
+            f"memory_updates/{n}: scope {u['scope']!r} is a platform scope; only the platform "
+            "writes it"
+            for n, u in enumerate(report["memory_updates"])
+            if u["scope"] in platform
+        ]
+        if reserved:
+            raise MemoryUpdateError(reserved)
         return self.apply_updates(profile, report["memory_updates"], pack_id=report["pack_id"])
 
     def read(
@@ -640,7 +851,8 @@ class MemoryStore:
         self, profile: VerifiedProfile, scope: str, key: str, *, owner: str | None = None
     ) -> dict[str, Any]:
         """``{"records": [...], "withheld": n}``: the change records of ``scope/key`` in order
-        (a compacted record has no ``value``; a key compacted whole is one tombstone record)."""
+        (folded records have no ``value``; a key compacted whole is one tombstone record, and a
+        key whose tombstone aged out has none)."""
         me = self._reader(profile, scope, owner)
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope and r["key"] == key]
         shown, withheld = _readable(profile, mine)
@@ -650,37 +862,43 @@ class MemoryStore:
         self, profile: VerifiedProfile, scope: str, t: datetime, *, owner: str | None = None
     ) -> dict[str, Any]:
         """What ``profile`` believed in ``scope`` at ``t`` (an aware datetime), rebuilt from the
-        log: ``{"at", "entries": {key: value}, "compacted": [keys], "withheld": n}``.
+        log: ``{"at", "entries": {key: value}, "compacted": [keys], "aged_out": bool,
+        "withheld": n}``.
 
-        A key whose state at ``t`` lies in compacted records (a value dropped by ``keep_last``,
-        a key compacted whole, or history from before the migration) is listed in ``compacted``,
-        never given a value."""
+        A key whose state at ``t`` lies in folded records (a range, a tombstone, or history
+        from before the migration) is listed in ``compacted``, never given a value.
+        ``aged_out`` is true when ``t`` falls in the time range of keys whose tombstones aged
+        out: their names are gone, so any key not listed must then be read as compacted."""
         me = self._reader(profile, scope, owner)
         when = _stamp(t)
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope]
         shown, withheld = _readable(profile, mine)
         state: dict[str, dict[str, Any]] = {}
-        held: dict[str, bool] = {}  # key -> the value in effect at t was dropped
+        held: dict[str, bool] = {}  # key -> the value in effect at t is not in the log
         unknown: set[str] = set()
+        aged_out = False
         for rec in shown:
+            if rec["op"] == "aged":
+                since = rec.get("since")
+                aged_out = (since is None or since <= when) and when <= rec["at"]
+                continue
             k = rec["key"]
             if rec["at"] > when:
-                whole = rec.get("compacted") == "whole"
-                since = rec.get("since")
-                if (rec.get("migrated") or (whole and (since is None or since <= when))) and (
-                    k not in state
-                ):
+                start = _start(rec)
+                folded = rec.get("migrated") or rec.get("compacted")
+                if folded and (start is None or start <= when) and k not in state:
                     unknown.add(k)
                 continue
             state[k] = _step(state.get(k), rec)
-            if rec["op"] in ("add", "replace") or rec.get("migrated"):
-                held[k] = "value" not in rec
+            if rec.get("compacted") or rec["op"] in ("add", "replace") or rec.get("migrated"):
+                held[k] = bool(rec.get("compacted")) or "value" not in rec
         live = {k for k, e in state.items() if e["status"] == "live"}
         compacted = sorted(unknown | {k for k in live if held.get(k)})
         return {
             "at": when,
             "entries": {k: state[k]["value"] for k in sorted(live) if k not in compacted},
             "compacted": compacted,
+            "aged_out": aged_out,
             "withheld": withheld,
         }
 
@@ -688,27 +906,49 @@ class MemoryStore:
     def _reader(self, profile: VerifiedProfile, scope: str, owner: str | None) -> str:
         me, scopes = _identity(profile)
         if owner is not None and owner != me:
-            raise MemoryAccessError(f"{me} may not read the memory of {owner} (cross-agent read)")
+            raise MemoryAccessError(
+                f"{me} may not read the memory of {_name(owner)} (cross-agent read)"
+            )
         if scope not in scopes:
-            raise MemoryAccessError(f"{me}: scope {scope!r} is not in its memory_scopes")
+            raise MemoryAccessError(f"{me}: scope {_name(scope)} is not in its memory_scopes")
         return me
 
     def _load(self, owner: str) -> Stored:
         raw = self._backend.load(owner)
-        if raw and not (set(raw) == {"entries", "log"} and isinstance(raw["log"], list)):
+        if raw and not _is_logged(raw):
             # not yet migrated (that happens on the owner's next write): read it as migrated now
-            return _stored(raw, _stamp(self._now()))
-        return _stored(raw, "")
+            stored, purged = _stored(raw, _stamp(self._now()))
+            self._purged(owner, purged)
+            return stored
+        return _stored(raw, "")[0]
 
-    def _page(self, owner: str, scope: str, problem: str | None) -> None:
-        """Report ``owner/scope`` at its cap (``problem``) or not (None), state-diffed."""
-        key = "agent-memory-cap-" + re.sub(r"[^a-z0-9-]+", "-", f"{owner}-{scope}".lower())
+    def _purged(self, owner: str, positions: list[str]) -> None:
+        """Say, once per process and owner, that migration kept legacy secrets as digests."""
+        if positions and f"purged:{owner}" not in self._logged:
+            self._logged.add(f"purged:{owner}")
+            log.warning(
+                "memory of %s: migration kept only the digest of secrets at %s",
+                owner,
+                ", ".join(positions),
+            )
+
+    def _page(self, owner: str, scope: str, problem: str | None, platform: bool) -> None:
+        """Report ``owner/scope`` at its cap (``problem``) or not (None), state-diffed.  The key
+        is a digest of the pair, so no two pairs share one."""
+        pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
+        key = f"agent-memory-cap-{pair}"
         if self._notifier is None:
             if problem is None:
                 self._logged.discard(key)
             elif key not in self._logged:
                 self._logged.add(key)
-                log.warning("%s: memory scope %s refuses writes: %s", owner, scope, problem)
+                log.warning(
+                    "%s: memory scope %s refuses writes: %s; %s",
+                    owner,
+                    scope,
+                    problem,
+                    _cap_advice(platform),
+                )
             return
         from homelabnext.notify import Message
 
@@ -717,9 +957,8 @@ class MemoryStore:
                 body = f"{owner}'s memory scope {scope} accepts writes again"
                 self._notifier.report(key, "ok", Message(key, CAP_CLEARED, body), scope=owner)
             else:
-                body = (
-                    f"{owner}'s memory scope {scope} refuses writes: {problem}. Raise "
-                    "memory_limits.records in the profile spec, or retire and compact keys."
+                body = f"{owner}'s memory scope {scope} refuses writes: {problem}. " + (
+                    _cap_advice(platform)[0].upper() + _cap_advice(platform)[1:] + "."
                 )
                 msg = Message(key, CAP_TITLE, body, level="warn", topic=self._topic,
                               tags=("agent", "memory"))  # fmt: skip

@@ -529,8 +529,13 @@ def compile_profile(
         raise SpecError("platform_scopes must be a list of memory scopes")
     if platform_scopes:
         profile["platform_scopes"] = sorted(set(platform_scopes))
-    if spec.get("memory_limits") is not None:
-        profile["memory_limits"] = copy.deepcopy(spec["memory_limits"])
+    limits = spec.get("memory_limits")
+    if isinstance(limits, Mapping):  # empty parts normalise away, like platform_scopes: []
+        limits = {k: copy.deepcopy(v) for k, v in limits.items() if v != {}}
+    if limits:
+        profile["memory_limits"] = limits
+    elif limits is not None and not isinstance(limits, Mapping):
+        profile["memory_limits"] = limits  # the schema refuses it
     mproblems = memory_limit_problems(profile)
     if mproblems:
         raise SpecError("; ".join(mproblems))
@@ -551,7 +556,7 @@ def compile_profile(
 def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
     """Where a profile's ``platform_scopes`` and ``memory_limits`` name scopes they may not
     (ADR-0037 decision 6): every platform scope and every capped scope is one of its
-    ``memory_scopes``, and ``keep_last`` compacts platform scopes only."""
+    ``memory_scopes``, and ``keep_last`` and ``tombstones`` apply to platform scopes only."""
 
     def names(x: Any) -> set[str]:  # a malformed value is the schema's to report
         return set(x) if isinstance(x, (list, Mapping)) else set()
@@ -572,6 +577,11 @@ def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
         f"memory_limits.keep_last: {s!r} is not a platform scope (keep_last compacts platform "
         "scopes only)"
         for s in sorted(names(limits.get("keep_last")) - platform)
+    ]
+    problems += [
+        f"memory_limits.tombstones: {s!r} is not a platform scope (only platform scopes age "
+        "tombstones out)"
+        for s in sorted(names(limits.get("tombstones")) - platform)
     ]
     return problems
 

@@ -21,7 +21,7 @@ ceiling:
   - records
   tier: execute
 data_tier: local-only
-digest: sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e
+digest: sha256:8cf336a4f6b7e2e5c4d4baf520af2f7999e964024a10d95cc781100ebaa10fc9
 grants:
   capabilities:
   - cap:broker
@@ -43,6 +43,8 @@ memory_limits:
   keep_last:
     fleet-ledger:
       item-*: 3
+  tombstones:
+    fleet-ledger: 5000
 model_role: mdl:main-reasoner
 parts:
   capabilities:
