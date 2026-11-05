@@ -784,7 +784,12 @@ def test_nightly_pins_every_action_by_full_sha():
 
 
 # --- hardening and the bind guard ---------------------------------------------------------------
-HARDENED_EXCEPTIONS = {"secrets"}  # OpenBao's entrypoint needs its default capabilities
+HARDENED_EXCEPTIONS: set[str] = set()  # none: OpenBao (2.6+) starts as its own user
+
+
+def test_the_secrets_service_adds_no_capability_back(compose):
+    # OpenBao dropped mlock in 2.0 and starts as its own user since 2.6: IPC_LOCK must not return.
+    assert "cap_add" not in compose["services"]["secrets"]
 
 
 def test_containers_drop_capabilities_and_forbid_new_privileges(compose):
