@@ -16,7 +16,7 @@ argument_specs:
       vllm_server_version: &version
         type: str
         description: "The pinned vLLM release; main refuses any other installed version."
-        default: "0.31.0"
+        default: "0.32.0"
       vllm_server_bin: &bin
         type: path
         description: "The vllm command in its virtualenv."

@@ -421,7 +421,7 @@ def vllm_vars(tmp_path: Path, **kw) -> dict:
         )["vllm_server_exposure"],
         "vllm_server_listen_address": ZONE_ADDRESS,
         "vllm_server_store_root": str(tmp_path / "srv"),
-        "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.31.0\n"),
+        "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.32.0\n"),
         "vllm_server_systemctl_cli": logging_fake(tmp_path, "systemctl"),
         "vllm_server_unit_dir": str(tmp_path / "units"),
         "vllm_server_verify_bin": str(tmp_path / "hnx-model-verify"),
@@ -550,14 +550,14 @@ def test_vllm_server_retires_a_unit_the_plan_no_longer_has(first):
 
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
-    logging_fake(tmp_path, "vllm", "0.30.0\n")  # the installed one is not the pin
+    logging_fake(tmp_path, "vllm", "0.31.0\n")  # the installed one is not the pin
     return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
 
 
 @first_run(_first)
 def test_vllm_server_refuses_a_vllm_that_is_not_the_pinned_one(first):
     r, tmp_path = first
-    assert r.returncode != 0 and "the pin is 0.31.0" in r.stdout
+    assert r.returncode != 0 and "the pin is 0.32.0" in r.stdout
     assert not any(c.startswith("systemctl") for c in calls(tmp_path))
 
 
@@ -744,7 +744,7 @@ def _first(tmp_path):
     return {
         "role": "vllm_server",
         "tasks_from": "upgrade",
-        "extra_vars": {**v, "vllm_server_target_version": "0.32.0"},
+        "extra_vars": {**v, "vllm_server_target_version": "0.33.0"},
         "setup": {"v": v},
     }
 
@@ -754,8 +754,8 @@ def test_vllm_server_upgrade_hook(first):
     ok, tmp_path = first
     v = first.setup["v"]
     assert ok.returncode == 0, ok.stdout
-    assert (tmp_path / "state" / "pending-version").read_text() == "0.32.0\n"
-    for target in ("0.30.0", "0.31.0", "latest"):
+    assert (tmp_path / "state" / "pending-version").read_text() == "0.33.0\n"
+    for target in ("0.31.0", "0.32.0", "latest"):
         bad = run_role(
             tmp_path, "vllm_server", "upgrade", {**v, "vllm_server_target_version": target}
         )
@@ -801,8 +801,8 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["open-webui"]
     assert svc["image"] == (
-        "ghcr.io/open-webui/open-webui:v0.11.4@sha256:"
-        "9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f"
+        "ghcr.io/open-webui/open-webui:v0.12.3@sha256:"
+        "a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def"
     )
     env = svc["environment"]
     gateway = "https://gateway-01.example.internal:4000"  # no-raw-endpoint: allow the stub registry
@@ -810,6 +810,7 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     assert env["ENABLE_OLLAMA_API"] == "false" and env["ENABLE_DIRECT_CONNECTIONS"] == "false"
     assert env["ENABLE_SIGNUP"] == "false" and env["OFFLINE_MODE"] == "true"
     assert env["ENABLE_PERSISTENT_CONFIG"] == "false"  # the environment wins on every start
+    assert env["ENABLE_APPS"] == "false"  # 0.12.1's external apps keep a live connection out
     assert not any("KEY" in k for k in env)  # the keys are only in the env_file
     published = "127.0.0.1:3000:8080"  # no-raw-endpoint: allow the published loopback port
     assert svc["ports"] == [published]
@@ -846,6 +847,10 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_extra_env": {"IMAGES_OPENAI_API_KEY": "key-fake"}},
         {"open_webui_extra_env": {"AUDIO_STT_ENGINE": "openai"}},
         {"open_webui_extra_env": {"ENABLE_PERSISTENT_CONFIG": "true"}},
+        # 0.12: external apps and Realtime voice calls each connect to an address of their own
+        {"open_webui_extra_env": {"ENABLE_APPS": "true"}},
+        {"open_webui_extra_env": {"APP_ALLOWED_PRIVATE_ORIGINS": "https://apps.example.internal"}},
+        {"open_webui_extra_env": {"AUDIO_REALTIME_ENABLED": "true"}},
         {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
     ],
 )
