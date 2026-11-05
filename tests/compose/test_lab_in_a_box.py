@@ -768,6 +768,7 @@ def test_pull_requests_run_the_nightly_s_smoke_unchanged():
     for key in ("runs-on", "permissions", "timeout-minutes", "steps"):
         assert ci[key] == nightly[key], key
     assert set(ci) - set(nightly) == {"needs", "if"}
+    assert set(nightly) - set(ci) == set()  # nothing of the nightly's job is dropped
     assert any("smoke.sh" in s.get("run", "") for s in ci["steps"])
 
 

@@ -244,7 +244,11 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   so an image or package bump, Dependabot's included, is green only once the stack has come up
   and passed. It needs no secret, so a Dependabot run (read-only token, no Actions secrets) runs
   it as is. `lab-ok` is its required check: it passes when the stack passed, or when nothing it
-  reads changed and the job was skipped. `make lab-smoke` runs the same locally.
+  reads changed and the job was skipped. `make lab-smoke` runs the same locally. Most pull
+  requests run it, by design: the broker image copies nearly all of `homelabnext/`, `schemas/` and
+  `examples/`, so a change there changes the image under test. Do not narrow `LAB_PATHS` to save
+  runner time; a skipped stack is a green check that tested nothing. Step-level inputs (`setup.py`,
+  `capabilities.yml`, `registry/`) are listed by hand: a new step that reads another file adds it.
 - **Licences of images**: `make licence-check` needs a reviewed entry for every image a compose
   stack runs or builds `FROM`, but a tag bump of a listed image passes it unread. A pull request
   that moves an image (or a Dockerfile's base) to a new minor or major release re-reads that

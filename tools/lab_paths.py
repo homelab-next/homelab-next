@@ -32,6 +32,20 @@ does not cover fails rather than silently skipping the stack:
   the ``targets/*.yml`` name (inside ``homelabnext/``);
 * the jobs that run it (``ci.yml``'s and ``nightly.yml``'s) and this file.
 
+The **step-level** inputs are listed by hand, because no file declares them: what the job's steps
+read outside the images (``setup.py``, which ``python-deps`` installs with ``pip install -e .``;
+``capabilities.yml`` and ``registry/``, which ``hnx conform report`` reads through
+``homelabnext/conform/registry.py``, so a capability added there without a suite fails the job).
+``--check`` re-derives only the compose side; a new step that reads another file needs its entry
+here, by hand, in the same change.
+
+Most pull requests run the stack, by design: the broker image copies nearly the whole package,
+the schemas and the examples, so a change there is a change to the image under test.  Do not
+narrow the list to save runner time; a skipped stack is a green check that tested nothing.
+
+A Dockerfile line ``--check`` cannot read (a heredoc, a variable in a source, a ``RUN --mount``
+of the build context, malformed JSON) fails the check instead of being skipped.
+
 An entry ending in ``/`` covers everything below it; any other entry is one file.  Renames are
 read as a deletion and an addition (``--no-renames``), so moving a file out of a covered
 directory counts too.
@@ -42,6 +56,7 @@ Usage: python tools/lab_paths.py --changed-since REV [--github-output FILE] | PA
 from __future__ import annotations
 
 import argparse
+import json
 import posixpath
 import subprocess
 import sys
@@ -62,6 +77,10 @@ LAB_PATHS: tuple[str, ...] = (
     "examples/",
     "pyproject.toml",
     "constraints/",
+    # step-level inputs (hand-listed: see above): the editable install and the capability registry
+    "setup.py",
+    "capabilities.yml",
+    "registry/",
     # the runner's install of the project and the jobs that run the smoke
     ".github/actions/python-deps/",
     ".github/workflows/ci.yml",
@@ -89,38 +108,99 @@ def affected(paths: Iterable[str]) -> list[str]:
 
 
 def changed_since(rev: str, root: Path = REPO_ROOT) -> list[str]:
-    """The paths that differ between ``rev`` and ``HEAD`` (both sides of a rename)."""
+    """The paths that differ between ``rev`` and ``HEAD`` (both sides of a rename).  Read
+    NUL-separated (``-z``): without it git quotes a path with a non-ASCII byte, a tab or a quote
+    (``"caf\\303\\251.toml"``), and the quoted spelling matches no entry."""
     r = subprocess.run(
-        ["git", "-C", str(root), "diff", "--no-renames", "--name-only", rev, "HEAD", "--"],
+        ["git", "-C", str(root), "diff", "-z", "--no-renames", "--name-only", rev, "HEAD", "--"],
         capture_output=True,
-        text=True,
         check=False,
     )
     if r.returncode != 0:
-        raise OSError(r.stderr.strip() or f"git diff {rev} HEAD failed")
-    return [line for line in r.stdout.splitlines() if line]
+        err = r.stderr.decode("utf-8", "replace").strip()
+        raise OSError(err or f"git diff {rev} HEAD failed")
+    return [p for p in r.stdout.decode("utf-8", "surrogateescape").split("\0") if p]
 
 
 # --- the derivation the list is checked against ------------------------------------------------
 
 
-def _copy_sources(dockerfile: Path) -> list[str]:
-    """The build-context paths a Dockerfile's ``COPY``/``ADD`` lines read (not ``--from`` copies
-    out of another stage, which read no context)."""
-    out = []
-    for line in dockerfile.read_text(encoding="utf-8").splitlines():
-        words = line.split()
-        if len(words) < 3 or words[0].upper() not in ("COPY", "ADD"):
+def _instructions(text: str) -> list[tuple[int, str]]:
+    """A Dockerfile's instructions as (first line number, text), comments dropped and backslash
+    continuations joined."""
+    out: list[tuple[int, str]] = []
+    buf: list[str] = []
+    start = 0
+    for n, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not buf and (not stripped or stripped.startswith("#")):
             continue
-        args = words[1:]
-        if any(a.startswith("--from") for a in args):
+        if buf and stripped.startswith("#"):
+            continue  # a comment inside a continued instruction
+        if not buf:
+            start = n
+        if stripped.endswith("\\"):
+            buf.append(stripped[:-1])
             continue
-        args = [a for a in args if not a.startswith("--")]
-        out += args[:-1]  # every source; the last word is the destination
+        buf.append(stripped)
+        out.append((start, " ".join(w for w in buf if w)))
+        buf = []
+    if buf:
+        out.append((start, " ".join(buf)))
     return out
 
 
-def stack_inputs(root: Path = REPO_ROOT) -> set[str]:
+def _copy_sources(dockerfile: Path) -> tuple[list[str], list[str]]:
+    """The build-context paths a Dockerfile's ``COPY``/``ADD`` instructions read (not ``--from``
+    copies out of another stage, which read no context), shell or JSON form, and one problem per
+    instruction that reads the context in a way this cannot follow."""
+    sources: list[str] = []
+    problems: list[str] = []
+    name = dockerfile.name
+    for n, ins in _instructions(dockerfile.read_text(encoding="utf-8")):
+        words = ins.split()
+        op = words[0].upper()
+        where = f"{dockerfile.as_posix()}:{n}"
+        if op == "RUN":
+            for w in words[1:]:
+                if not w.startswith("--"):
+                    break
+                if w.startswith("--mount=") and "type=bind" in w and "from=" not in w:
+                    problems.append(f"{where}: RUN --mount of the build context ({name})")
+            continue
+        if op not in ("COPY", "ADD"):
+            continue
+        flags = []
+        rest = words[1:]
+        while rest and rest[0].startswith("--"):
+            flags.append(rest.pop(0))
+        if any(f.startswith("--from") for f in flags):
+            continue
+        tail = ins.split(None, 1 + len(flags))[-1] if rest else ""
+        if tail.startswith("["):
+            try:
+                args = json.loads(tail)
+            except ValueError:
+                args = None
+            if not (isinstance(args, list) and all(isinstance(a, str) for a in args)):
+                problems.append(f"{where}: {op} in JSON form that is not a list of strings")
+                continue
+        else:
+            args = rest
+        if len(args) < 2 or any(a.startswith("<<") or "$" in a for a in args[:-1]):
+            problems.append(f"{where}: {op} whose sources cannot be read ({ins[:60]})")
+            continue
+        sources += args[:-1]  # every source; the last argument is the destination
+    return sources, problems
+
+
+def scan(root: Path = REPO_ROOT) -> tuple[set[str], list[str]]:
+    """:func:`stack_inputs` and the Dockerfile lines it could not read."""
+    problems: list[str] = []
+    return stack_inputs(root, problems), problems
+
+
+def stack_inputs(root: Path = REPO_ROOT, problems: list[str] | None = None) -> set[str]:
     """Every repository path the lab-in-a-box smoke reads, from the compose file and targets:
     each built service's Dockerfile and its ``COPY`` sources, every bind-mount and ``env_file``
     source, and the module of every conformance adapter a target names."""
@@ -149,7 +229,10 @@ def stack_inputs(root: Path = REPO_ROOT) -> set[str]:
             ignore = ctx / ".dockerignore"
             if ignore.is_file():
                 out.add(rel(ctx, ".dockerignore"))
-            out |= {rel(ctx, src) for src in _copy_sources(dockerfile)}
+            sources, unread = _copy_sources(dockerfile)
+            out |= {rel(ctx, src) for src in sources}
+            if problems is not None:
+                problems += [p.replace(ctx.as_posix() + "/", "") for p in unread]
         for vol in spec.get("volumes") or []:
             src = vol.get("source", "") if isinstance(vol, dict) else str(vol).split(":", 1)[0]
             if src.startswith((".", "/")):
@@ -179,8 +262,10 @@ def _walk(node: object) -> Iterable[str]:
 
 
 def uncovered(root: Path = REPO_ROOT) -> list[str]:
-    """The stack's inputs that :data:`LAB_PATHS` does not cover (empty when the list holds)."""
-    return sorted(p for p in stack_inputs(root) if not covered(p))
+    """The stack's inputs that :data:`LAB_PATHS` does not cover, and every Dockerfile line the
+    derivation could not read (empty when the list holds)."""
+    inputs, problems = scan(root)
+    return sorted(p for p in inputs if not covered(p)) + sorted(set(problems))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -195,7 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         missing = uncovered(args.repo)
         for p in missing:
-            print(f"::error::{p}: the lab-in-a-box reads it, but no LAB_PATHS entry covers it")
+            if ": " in p:  # a Dockerfile line the derivation could not read
+                print(
+                    f"::error::{p}: cannot tell what it reads; make it readable or extend lab_paths"
+                )
+            else:
+                print(f"::error::{p}: the lab-in-a-box reads it, but no LAB_PATHS entry covers it")
         return 1 if missing else 0
 
     if args.changed_since:
