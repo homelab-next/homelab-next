@@ -332,6 +332,21 @@ def test_negative_postgres_18_on_the_old_data_mount_is_caught(compose):
     ]
 
 
+def test_negative_postgres_18_with_pgdata_overridden_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["postgres"]["environment"]["PGDATA"] = "/var/lib/postgresql/data/pgdata"
+    assert postgres_data_problems(broken) == [
+        "PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"
+    ]
+
+
+def test_postgres_is_healthy_only_over_tcp(compose):
+    """The entrypoint's temporary init server listens on the unix socket only; a socket probe
+    would mark postgres healthy (and start its dependants) while the init scripts still run."""
+    test = compose["services"]["postgres"]["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL" and f"pg_isready -h {LOOPBACK} " in test[1], test
+
+
 def off_lab_network(compose) -> list[str]:
     """Services that would land on compose's implicit default network, where no lab alias
     (``*.svc.example.internal``) resolves: each joins ``lab`` or has no network at all."""

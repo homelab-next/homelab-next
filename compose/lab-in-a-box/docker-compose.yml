@@ -96,8 +96,10 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
       - ./config/postgres/init:/docker-entrypoint-initdb.d:ro
+    # over TCP: the entrypoint's init server listens on the socket only, so a socket probe
+    # would call postgres healthy while /docker-entrypoint-initdb.d is still running
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lab -d catalog"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U lab -d catalog"]
       interval: 5s
       timeout: 5s
       retries: 20
